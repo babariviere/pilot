@@ -50,3 +50,36 @@ test("reports committed, uncommitted and untracked changes since the base", asyn
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+for (const setting of ["diff.mnemonicPrefix", "diff.noprefix"]) {
+	test(`uses client-compatible diff paths with ${setting} enabled`, async () => {
+		const root = mkdtempSync(join(tmpdir(), "pilot-changes-prefix-"));
+		try {
+			git(root, "init", "--quiet", "-b", "main");
+			git(root, "config", setting, "true");
+			writeFileSync(join(root, "a.txt"), "old\n");
+			writeFileSync(join(root, "gone.txt"), "bye\n");
+			git(root, "add", ".");
+			git(root, "commit", "--quiet", "-m", "base");
+			writeFileSync(join(root, "a.txt"), "new\n");
+			unlinkSync(join(root, "gone.txt"));
+			writeFileSync(join(root, "fresh.txt"), "fresh\n");
+
+			const changes = await collectChanges(root);
+			assert.deepEqual(
+				changes.files.map((file) => file.path),
+				["a.txt", "fresh.txt", "gone.txt"],
+			);
+			for (const path of ["a.txt", "fresh.txt", "gone.txt"]) {
+				assert.ok(changes.diff.includes(`diff --git a/${path} b/${path}\n`), changes.diff);
+			}
+			assert.ok(changes.diff.includes("+++ b/a.txt\n"));
+			assert.ok(changes.diff.includes("+++ b/fresh.txt\n"));
+			assert.match(changes.diff, /\n-old\n\+new\n/);
+			assert.match(changes.diff, /\n\+fresh\n/);
+			assert.match(changes.diff, /\n-bye\n/);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
