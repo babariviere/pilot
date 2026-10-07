@@ -273,6 +273,12 @@ reports), producing a morning summary in the app and Slack.
 - Task and chat composers complete local file and folder paths on Tab, relative to the selected project
   or session working directory; absolute paths and `~/` work too. A compact floating path picker shows
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
+- Task and chat composers accept native clipboard images with Command-V, showing removable previews
+  above the text input. Save app-owned PNG copies in Application Support and include their absolute
+  paths in the message for pi's read tool. Image-only messages are supported; sent files are retained
+  for queued delivery and later reads, and failed sends keep the attachments available for retry.
+  Abandoned unsent drafts clean up their files; submission attempts retain files even if the response
+  is lost. Accept up to eight raster images per message, 32 MiB and 24 megapixels each.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
   A subtle controls row below the message box combines a model picker with labeled context, 5h,

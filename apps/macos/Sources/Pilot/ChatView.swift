@@ -180,12 +180,16 @@ struct ChatView: View {
         guard !session.isArchived else { return }
         composer.error = nil
         let previous = composer.draft
+        composer.attachments.retainForHistory()
+        let previousAttachments = composer.attachments
         composer.draft = ""
+        composer.attachments = ImageAttachments()
         Task {
             do {
                 try await AppModel.shared.client.send(session.id, message: message, mode: mode)
             } catch {
-                composer.draft = previous
+                composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                composer.attachments.items.insert(contentsOf: previousAttachments.items, at: 0)
                 composer.error = error.localizedDescription
             }
         }
