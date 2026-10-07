@@ -26,6 +26,7 @@ import { withPilotPolicy } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
 import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
+import { TodosWatch, todosDirectory } from "./todos.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
 
@@ -60,7 +61,10 @@ export interface KernelSessionHooks {
 }
 
 export class KernelSession {
-	readonly #watches = new Map<string, { events: AgentEventStream; queue: DocumentWatch<InboxState> }>();
+	readonly #watches = new Map<
+		string,
+		{ events: AgentEventStream; queue: DocumentWatch<InboxState>; stopTodos: () => void }
+	>();
 	#working = false;
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
@@ -71,6 +75,7 @@ export class KernelSession {
 		private readonly adapter: NativeAdapter,
 		private readonly release: () => void,
 		private readonly status: AgentEventStream,
+		private readonly todos: TodosWatch,
 	) {}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
@@ -138,7 +143,14 @@ export class KernelSession {
 			// Bind before resume(), so recovered tool calls cannot race binding.
 			adapter.bindHarness(harness, conversation.id);
 			const status = await watchEvents(harness, conversation.id, context);
-			const session = new KernelSession(harness, conversation, adapter, owned.release, status);
+			const session = new KernelSession(
+				harness,
+				conversation,
+				adapter,
+				owned.release,
+				status,
+				new TodosWatch(todosDirectory(spec.cwd)),
+			);
 			session.#working = status.snapshot.run !== undefined;
 			if (!session.#working) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
@@ -235,7 +247,7 @@ export class KernelSession {
 		await this.conversation.abort(context, { background: true });
 	}
 
-	async watch(watchId: string, listener: (events: AgentEvent[]) => void): Promise<void> {
+	async watch(watchId: string, listener: (events: AgentEvent[]) => void, includeTodos = true): Promise<void> {
 		if (this.#watches.has(watchId)) return;
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
 		let queue: DocumentWatch<InboxState>;
@@ -245,8 +257,9 @@ export class KernelSession {
 			await stream.stop();
 			throw error;
 		}
-		this.#watches.set(watchId, { events: stream, queue });
 		listener([stream.snapshot, queueUpdate(queue.value)]);
+		const stopTodos = includeTodos ? this.todos.subscribe((event) => listener([event])) : () => {};
+		this.#watches.set(watchId, { events: stream, queue, stopTodos });
 		stream.start(async (events) => listener([...events]));
 		queue.start(async (inbox) => listener([queueUpdate(inbox)]));
 	}
@@ -254,7 +267,10 @@ export class KernelSession {
 	async unwatch(watchId: string): Promise<void> {
 		const stream = this.#watches.get(watchId);
 		this.#watches.delete(watchId);
-		if (stream) await Promise.all([stream.events.stop(), stream.queue.stop()]);
+		if (stream) {
+			stream.stopTodos();
+			await Promise.all([stream.events.stop(), stream.queue.stop()]);
+		}
 	}
 
 	/** Pause: pending work stays durable and resumes on the next open. */

@@ -544,6 +544,14 @@ enum Fixtures {
         ]
         """#
         if let parsed = try? JSONValue.decode(Data(events.utf8)), let list = parsed.array { transcript.apply(list) }
+        let todos = #"""
+        {"type":"todos_update","items":[
+          {"id":"TODO-deadbeef","title":"Fix the storage lease race","status":"closed","createdAt":"2026-07-01"},
+          {"id":"TODO-cafebabe","title":"Run kernel tests and verify reopening","status":"open","createdAt":"2026-07-02","assignedToSession":"\#(sessions[0].id)"},
+          {"id":"TODO-01234567","title":"Add regression coverage for worker recovery","status":"open","createdAt":"2026-07-03"}
+        ]}
+        """#
+        if let parsed = try? JSONValue.decode(Data(todos.utf8)) { transcript.apply(parsed) }
         return transcript
     }
 }

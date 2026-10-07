@@ -250,6 +250,10 @@ reports), producing a morning summary in the app and Slack.
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
+- Chat TODO panel: read-only live view of pi-extensions' file-backed TODO store (`.pi/todos`, or
+  `PI_TODO_PATH`), with this session's claimed open tasks first, titles/statuses visible above the
+  composer, and expansion for the full list. Poll only while subscribed, including during codemode
+  work; reconnects reload files without modifying extension-owned state.
 - Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI
   actor, preserve stream ordering, and publish prepared rows once per batch. Long tool groups render
   lazily; loading and startup have visible progress. Procedural home artwork renders off main as well.

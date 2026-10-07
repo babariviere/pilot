@@ -49,9 +49,13 @@ async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdo
 			await send({ type: "accepted", requestId: command.requestId });
 			break;
 		case "watch":
-			await session.watch(command.watchId, (events) => {
-				void send({ type: "events", watchId: command.watchId, events });
-			});
+			await session.watch(
+				command.watchId,
+				(events) => {
+					void send({ type: "events", watchId: command.watchId, events });
+				},
+				command.includeTodos,
+			);
 			break;
 		case "unwatch":
 			await session.unwatch(command.watchId);

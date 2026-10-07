@@ -6,6 +6,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public var working = false
     public var streaming = false
     public var queuedMessages: [QueuedMessage] = []
+    public var todos: [SessionTodo] = []
     public var queued: Int { queuedMessages.count }
     public var queuedMessagesInDeliveryOrder: [QueuedMessage] {
         queuedMessages.filter { $0.mode == .steer } + queuedMessages.filter { $0.mode == .followUp }
@@ -21,6 +22,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         working = transcript.working
         streaming = transcript.streaming != nil
         queuedMessages = transcript.queuedMessages
+        todos = transcript.todos
         retry = transcript.retry
         error = transcript.error
     }
