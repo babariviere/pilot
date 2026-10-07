@@ -13,7 +13,7 @@ const run: Runner = async (file, args, cwd, timeoutMs) => {
 export interface PullRequestSession {
 	id: string;
 	cwd: string;
-	workspace?: { branch?: string; upstream?: string };
+	workspace?: { branch?: string; upstream?: string; base?: string };
 	pullRequest?: SessionPullRequest;
 }
 
@@ -151,6 +151,9 @@ export async function discoverPullRequest(
 		branch = (await workspaceBranch(session.cwd, branch, runner)) ?? branch;
 		if (branch === undefined) return {};
 		validateBranch(branch);
+		// Direct delivery on the default branch is not a session PR. Avoid matching unrelated
+		// historical PRs (and potentially auto-archiving the session based on their merge time).
+		if (session.workspace.base === `origin/${branch}`) return { branch };
 		const head = branch;
 		const upstream =
 			session.workspace.upstream ?? (await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000));

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -30,6 +30,56 @@ test("creates, updates, persists and removes projects", async () => {
 		await store.remove(created.id);
 		assert.deepEqual(store.list(), []);
 		assert.deepEqual(changes, [1, 1, 0]);
+	} finally {
+		await rm(home, { recursive: true, force: true });
+	}
+});
+
+test("PR requirements default on for legacy projects and persist explicit settings", async () => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-project-pr-"));
+	try {
+		const legacy = { id: "legacy", name: "Legacy", path: home, createdAt: 1 };
+		await writeFile(join(home, "projects.json"), JSON.stringify([legacy]));
+		const store = new ProjectStore(home);
+		await store.load();
+		assert.notEqual(store.require(legacy.id).requirePullRequest, false);
+		await store.update(legacy.id, { requirePullRequest: false });
+		await store.update(legacy.id, { name: "Renamed" });
+		const reopened = new ProjectStore(home);
+		await reopened.load();
+		assert.equal(reopened.require(legacy.id).requirePullRequest, false);
+		await reopened.update(legacy.id, { requirePullRequest: true });
+		await store.load();
+		assert.equal(store.require(legacy.id).requirePullRequest, true);
+		await store.remove(legacy.id);
+		const created = await store.create({ path: home, requirePullRequest: false });
+		assert.equal(created.requirePullRequest, false);
+		await reopened.load();
+		assert.equal(reopened.require(created.id).requirePullRequest, false);
+	} finally {
+		await rm(home, { recursive: true, force: true });
+	}
+});
+
+test("rejects invalid PR requirement values without changing projects", async () => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-project-pr-"));
+	try {
+		const store = new ProjectStore(home);
+		await store.load();
+		for (const invalid of ["false", 0, null, {}]) {
+			// API JSON is untyped at runtime, even though callers normally supply a boolean.
+			await assert.rejects(
+				store.create({ path: home, requirePullRequest: invalid as boolean }),
+				/requirePullRequest must be a boolean/,
+			);
+		}
+		assert.deepEqual(store.list(), []);
+		const created = await store.create({ path: home });
+		await assert.rejects(
+			store.update(created.id, { requirePullRequest: "false" as unknown as boolean }),
+			/requirePullRequest must be a boolean/,
+		);
+		assert.equal(store.require(created.id).requirePullRequest, undefined);
 	} finally {
 		await rm(home, { recursive: true, force: true });
 	}

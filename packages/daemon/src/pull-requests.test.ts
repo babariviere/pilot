@@ -72,6 +72,17 @@ test("normalizes HTTPS, SSH and enterprise origins, rejecting local paths and op
 		assert.throws(() => githubRepository(remote));
 });
 
+test("direct pushes to the workspace default branch do not discover unrelated PRs", async () => {
+	const target = session();
+	target.workspace = { base: "origin/trunk", branch: "trunk", upstream: "git@github.com:octo/repo.git" };
+	const result = await discoverPullRequest(target, async (file, args) => {
+		assert.equal(file, "git");
+		assert.deepEqual(args, ["branch", "--show-current"]);
+		return "trunk";
+	});
+	assert.deepEqual(result, { branch: "trunk" });
+});
+
 test("discovers all four authoritative states, terminal state takes precedence over isDraft", async () => {
 	for (const [state, isDraft, expected] of [
 		["OPEN", false, "open"],

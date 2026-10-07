@@ -56,6 +56,7 @@ export class ProjectStore {
 	}
 
 	async create(request: ProjectRequest): Promise<Project> {
+		validatePullRequestSetting(request);
 		if (typeof request.path !== "string" || !request.path.trim()) throw new Error("path is required");
 		const path = await requireDirectory(request.path);
 		if (this.projects.some((project) => project.path === path)) throw new Error(`A project already uses ${path}`);
@@ -66,6 +67,7 @@ export class ProjectStore {
 			createdAt: Date.now(),
 			...(request.model?.trim() ? { model: request.model.trim() } : {}),
 			...(request.workspace === "direct" ? { workspace: "direct" } : {}),
+			...(request.requirePullRequest !== undefined ? { requirePullRequest: request.requirePullRequest } : {}),
 		};
 		this.projects.push(project);
 		await this.persist();
@@ -73,6 +75,7 @@ export class ProjectStore {
 	}
 
 	async update(id: string, request: Partial<ProjectRequest>): Promise<Project> {
+		validatePullRequestSetting(request);
 		const project = this.require(id);
 		const next: Project = { ...project };
 		if (request.name !== undefined) {
@@ -88,6 +91,7 @@ export class ProjectStore {
 			if (request.workspace === "direct") next.workspace = "direct";
 			else delete next.workspace;
 		}
+		if (request.requirePullRequest !== undefined) next.requirePullRequest = request.requirePullRequest;
 		this.projects = this.projects.map((existing) => (existing.id === id ? next : existing));
 		await this.persist();
 		return next;
@@ -113,4 +117,9 @@ export class ProjectStore {
 		for (const listener of this.listeners) listener(projects);
 		return this.saving;
 	}
+}
+
+function validatePullRequestSetting(request: Partial<ProjectRequest>): void {
+	if (request.requirePullRequest !== undefined && typeof request.requirePullRequest !== "boolean")
+		throw new Error("requirePullRequest must be a boolean");
 }

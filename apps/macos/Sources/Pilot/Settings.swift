@@ -222,7 +222,23 @@ final class ProjectEditor: ObservableObject {
     @Published var name = ""
     @Published var model = ""
     @Published var privateClones = true
+    @Published var requirePullRequest = true
     @Published var error: String?
+
+    func load(_ project: Project) {
+        name = project.name
+        model = project.model ?? ""
+        privateClones = project.usesPrivateClones
+        requirePullRequest = project.effectiveRequirePullRequest
+        error = nil
+    }
+
+    var request: ProjectRequest {
+        ProjectRequest(
+            name: name, model: model, workspace: privateClones ? "clone" : "direct",
+            requirePullRequest: requirePullRequest
+        )
+    }
 }
 
 private struct ProjectSettings: View {
@@ -259,7 +275,11 @@ private struct ProjectSettings: View {
                         LabeledContent("Folder") { Text(project.path.abbreviatingHome).textSelection(.enabled) }
                         TextField("Default model", text: $editor.model, prompt: Text("pi default"))
                         Toggle("Run each session in a private clone", isOn: $editor.privateClones)
-                        Text("Sessions get their own clone, so they never touch your checkout. The agent chooses a descriptive branch or bookmark. Turn off to run in the folder itself.")
+                        Text("Sessions get their own clone, so they never touch your checkout. Turn off to run in the folder itself.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Toggle("Require PR", isOn: $editor.requirePullRequest)
+                        Text("Require a pull request when publishing changes. Disabling permits direct pushes to the default branch. Changes take effect when a session worker next starts.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if let error = editor.error { Text(error).foregroundStyle(.red) }
@@ -270,8 +290,8 @@ private struct ProjectSettings: View {
                         }
                     }
                     .formStyle(.grouped)
-                    .onAppear { load(project) }
-                    .onChange(of: project) { _, updated in load(updated) }
+                    .onAppear { editor.load(project) }
+                    .onChange(of: project) { _, updated in editor.load(updated) }
                 } else {
                     Text(client.projects.isEmpty ? "Add a project to group sessions by repository." : "Select a project")
                         .foregroundStyle(.secondary)
@@ -282,18 +302,11 @@ private struct ProjectSettings: View {
         }
     }
 
-    private func load(_ project: Project) {
-        editor.name = project.name
-        editor.model = project.model ?? ""
-        editor.privateClones = project.usesPrivateClones
-        editor.error = nil
-    }
-
     private func save(_ project: Project) async {
         do {
             _ = try await client.updateProject(
                 project.id,
-                ProjectRequest(name: editor.name, model: editor.model, workspace: editor.privateClones ? "clone" : "direct")
+                editor.request
             )
             editor.error = nil
         } catch {

@@ -1,4 +1,4 @@
-/** Private working copies: each project session works in its own clone, on its own branch. */
+/** Private working copies: each project session works in its own clone. */
 import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir } from "node:fs/promises";
@@ -159,7 +159,7 @@ export async function workspaceBranch(
 
 /**
  * Clone `source` into `destination` (a fresh directory), point `origin` at the source's real remote,
- * fetch it, and start detached from the remote's default branch. The agent chooses its own branch.
+ * fetch it, and start detached from the remote's default branch. Delivery policy determines the agent's branch.
  * Ignored mise local configuration
  * is copied too; other uncommitted changes in the user's checkout stay there.
  */

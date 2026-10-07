@@ -555,6 +555,33 @@ test("restart after clone but before ready reuses the workspace and recovers idl
 	assert.equal(f.workers[1]!.spec.pilot?.workspace?.jj, true);
 });
 
+for (const workspace of ["clone", "direct"] as const) {
+	test(`${workspace} workers receive the project's PR policy, refreshed on restart`, async (t) => {
+		const f = await fixture(t);
+		const sessions = await f.manager({
+			workspace: async (_source, path) => ({ path, base: "origin/main", jj: true }),
+		});
+		await f.projects.update(f.project.id, { workspace });
+		const required = await sessions.spawn({ projectId: f.project.id, message: "default policy" });
+		await until(() => sessions.get(required.id)?.state === "working");
+		assert.equal(f.workers[0]!.spec.pilot?.requirePullRequest, true);
+		await f.projects.update(f.project.id, { requirePullRequest: false });
+		const direct = await sessions.spawn({ projectId: f.project.id, message: "direct push allowed" });
+		await until(() => sessions.get(direct.id)?.state === "working");
+		assert.equal(f.workers[1]!.spec.pilot?.requirePullRequest, false);
+		assert.equal(Boolean(f.workers[1]!.spec.pilot?.workspace), workspace === "clone");
+		// Saving settings never changes a running worker's policy midway through its task.
+		await f.projects.update(f.project.id, { requirePullRequest: true });
+		assert.equal(f.workers[1]!.spec.pilot?.requirePullRequest, false);
+		await sessions.stop(required.id);
+		await sessions.stop(direct.id);
+		await sessions.shutdown();
+		const reopened = await f.manager();
+		await reopened.send(direct.id, "use updated policy");
+		assert.equal(f.workers[2]!.spec.pilot?.requirePullRequest, true);
+	});
+}
+
 test("accepted input with a lost acknowledgement replays the same ID and deduplicates after restart", async (t) => {
 	const f = await fixture(t);
 	const ack = deferred();

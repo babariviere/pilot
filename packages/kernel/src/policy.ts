@@ -12,6 +12,8 @@ export interface WorkspaceContext {
 
 export interface PilotContext {
 	workspace?: WorkspaceContext;
+	/** Project delivery policy, read when the worker starts. Omitted means PR delivery for private clones. */
+	requirePullRequest?: boolean;
 }
 
 /** Commands that would post on GitHub. Reads (`gh pr view`, `gh api …/comments` without a write) stay allowed. */
@@ -46,23 +48,42 @@ function strings(value: unknown): string[] {
 export function pilotPrompt(context: PilotContext): string {
 	const lines = ["You are running inside Pilot as a background agent. The user reviews your work in the Pilot app."];
 	const workspace = context.workspace;
+	const requirePullRequest = context.requirePullRequest !== false;
 	if (workspace) {
 		lines.push(
 			`- Your working directory is a private clone of ${workspace.source}, started from \`${workspace.base}\`${workspace.branch ? `, with branch/bookmark \`${workspace.branch}\`` : ", initially detached with no task branch or bookmark"}. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
-			"- Choose or create a descriptive branch or bookmark for this task before making changes. New names must use `<type>/<short-description>`, with a conventional prefix matching the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/`, or `revert/` (for example, `fix/branch-prefix-policy`). Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention. Do not use a `pilot/` prefix for new names. Never push the default branch.",
 		);
-		if (workspace.jj) {
+		if (requirePullRequest && workspace.jj) {
 			lines.push(
 				"- The clone is a colocated jj repository. Use jj for version-control changes. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`; after committing, move the chosen bookmark with `jj bookmark set <name> -r @-`, and push with `jj git push --bookmark <name>`.",
 			);
-		} else {
+		} else if (requirePullRequest) {
 			lines.push(
 				"- If a new branch is needed, create it with `git switch -c <name>`. Commit on the chosen branch and push it with `git push -u origin <name>`.",
 			);
 		}
-		lines.push(
-			"- When the work is ready, open a pull request with `gh pr create`. It is opened as the user. Never merge.",
-		);
+	}
+	if (workspace || context.requirePullRequest !== undefined) {
+		if (requirePullRequest) {
+			lines.push(
+				"- Choose or create a descriptive branch or bookmark for this task before making changes. New names must use `<type>/<short-description>`, with a conventional prefix matching the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/`, or `revert/` (for example, `fix/branch-prefix-policy`). Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention. Do not use a `pilot/` prefix for new names. Never push the default branch.",
+				"- When the work is ready, open a pull request with `gh pr create`. It is opened as the user. Never merge.",
+			);
+		} else {
+			lines.push(
+				"- This project does not require a pull request. You may commit and push completed, verified work directly to the remote's default branch. Do not open a PR unless the user asks for one; a separate task branch is not required.",
+				"- Identify the remote's current default branch before making changes; do not assume it is named main. Fetch and reconcile concurrent upstream changes before pushing. Never force-push or overwrite others' commits. Stop and report if branch protection or a conflict prevents safe delivery.",
+			);
+			if (workspace?.jj) {
+				lines.push(
+					"- The clone is a colocated jj repository. Use jj for version-control changes. Track the remote default-branch bookmark with `jj bookmark track <default-branch>@origin`. After committing, move that bookmark to the completed commit and push it with `jj git push --bookmark <default-branch>`.",
+				);
+			} else if (workspace) {
+				lines.push(
+					"- The clone starts detached. Check out the remote's default branch locally before committing, then push it with `git push origin <default-branch>`.",
+				);
+			}
+		}
 	}
 	lines.push(
 		"- Before your final response, call pilot_report_status to report the task outcome, not merely that your reply is finished. Use done only when the requested work is complete. Use needs_input when an answer, decision, approval or missing information blocks further work, including an ongoing design discussion awaiting a decision or permission to implement. Do not mark an unfinished task done just because you proposed a plan or answered one part of it. A fully answered standalone question can be done; optional offers after completed work are not blockers. Briefly explain the blocker in the reason, and put the actual question in your final response. A new user message starts work again; do not keep running while waiting for an answer.",

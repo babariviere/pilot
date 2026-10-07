@@ -93,3 +93,26 @@ test("status guidance distinguishes completed work from an unfinished discussion
 		assert.match(guidance, /actual question in your final response/);
 	}
 });
+
+test("opting out of PR delivery permits safe default-branch pushes for Git and jj clones", () => {
+	for (const jj of [false, true]) {
+		const prompt = pilotPrompt({
+			workspace: { source: "/src/chezmoi", base: "origin/trunk", jj },
+			requirePullRequest: false,
+		});
+		assert.match(prompt, /does not require a pull request/);
+		assert.match(prompt, /directly to the remote's default branch/);
+		assert.match(prompt, /Never force-push or overwrite others' commits/);
+		assert.match(prompt, /branch protection or a conflict/);
+		assert.match(prompt, jj ? /jj git push --bookmark <default-branch>/ : /git push origin <default-branch>/);
+		if (jj) assert.match(prompt, /jj bookmark track <default-branch>@origin/);
+		assert.doesNotMatch(prompt, /Never push the default branch|gh pr create|Choose or create a descriptive/);
+	}
+});
+
+test("explicit project delivery policy also applies without a private workspace", () => {
+	assert.match(pilotPrompt({ requirePullRequest: false }), /does not require a pull request/);
+	assert.match(pilotPrompt({ requirePullRequest: true }), /gh pr create/);
+	assert.match(pilotPrompt({ requirePullRequest: true }), /Never push the default branch/);
+	assert.doesNotMatch(pilotPrompt({}), /gh pr create/);
+});
