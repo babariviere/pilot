@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { branchSlug, createWorkspace } from "./workspaces.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -184,6 +185,115 @@ test("does not overwrite remote files or copy through checked-out symlinks", asy
 		assert.equal(existsSync(join(external, "config.local.toml")), false);
 		assert.equal(git(destination, "status", "--porcelain"), "");
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("cancelled fetch never proceeds to branch creation", async () => {
+	const signal = new AbortController();
+	const commands: string[] = [];
+	await assert.rejects(
+		createWorkspace(
+			"source",
+			"destination",
+			"pilot/task",
+			async (_file, args, _cwd, _timeout, received) => {
+				assert.equal(received, signal.signal);
+				commands.push(args[0]!);
+				if (args[0] === "rev-parse") return "true";
+				if (args[0] === "remote" && args[1] === "get-url") return "remote";
+				if (args[0] === "fetch") {
+					signal.abort();
+					throw new Error("aborted fetch");
+				}
+				return "";
+			},
+			signal.signal,
+		),
+	);
+	assert.equal(commands.includes("fetch"), true);
+	assert.equal(commands.includes("switch"), false);
+});
+
+test("aborting workspace preparation waits for its fetch process and helpers to close", {
+	skip: process.platform === "win32",
+	timeout: 20_000,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-abort-"));
+	const bin = join(root, "bin");
+	mkdirSync(bin);
+	const helperPid = join(root, "helper.pid");
+	const fetchPid = join(root, "fetch.pid");
+	const fetchScript = join(root, "fetch.cjs");
+	const helper = `process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(${JSON.stringify(helperPid)}, String(process.pid)); setInterval(() => {}, 1000);`;
+	writeFileSync(
+		fetchScript,
+		`
+const fs = require('node:fs');
+process.on('SIGTERM', () => {});
+fs.writeFileSync(${JSON.stringify(fetchPid)}, String(process.pid));
+require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(helper)}], { stdio: 'inherit' })
+ .once('error', error => { console.error(error); process.exit(1); });
+setInterval(() => {}, 1000);
+`,
+	);
+	writeFileSync(
+		join(bin, "git"),
+		`#!/bin/sh
+case "$1" in
+ rev-parse) echo true ;;
+ remote) if [ "$2" = get-url ]; then echo fake-upstream; fi ;;
+ clone) /bin/mkdir "$4" ;;
+ fetch) exec "${process.execPath}" "${fetchScript}" ;;
+esac
+`,
+		{ mode: 0o700 },
+	);
+	const oldPath = process.env.PATH;
+	process.env.PATH = `${bin}:${oldPath}`;
+	const signal = new AbortController();
+	const preparing = createWorkspace(root, join(root, "workspace"), "pilot/task", undefined, signal.signal);
+	let completed = false;
+	let preparationError: unknown;
+	preparing.then(
+		() => {
+			completed = true;
+		},
+		(error) => {
+			completed = true;
+			preparationError = error;
+		},
+	);
+	try {
+		// Wait for the helper's own handshake, after its SIGTERM handler is installed.
+		// Shell builtins above avoid several cold Node starts unrelated to the cancellation assertion.
+		const deadline = Date.now() + 10_000;
+		while (!existsSync(helperPid)) {
+			assert.equal(completed, false, `Preparation ended before helper startup: ${String(preparationError)}`);
+			assert.ok(Date.now() < deadline, "fetch helper did not start");
+			await delay(5);
+		}
+		signal.abort();
+		await assert.rejects(preparing, /aborted/);
+		for (const file of [fetchPid, helperPid]) {
+			const pid = Number(readFileSync(file, "utf8"));
+			// A terminated helper can briefly remain a zombie until its new parent reaps it.
+			const reapingDeadline = Date.now() + 3_000;
+			for (;;) {
+				try {
+					process.kill(pid, 0);
+				} catch (error) {
+					assert.equal((error as NodeJS.ErrnoException).code, "ESRCH");
+					break;
+				}
+				assert.ok(Date.now() < reapingDeadline, `Cancelled process ${pid} was not reaped`);
+				await delay(5);
+			}
+		}
+	} finally {
+		signal.abort();
+		await preparing.catch(() => undefined);
+		process.env.PATH = oldPath;
 		rmSync(root, { recursive: true, force: true });
 	}
 });

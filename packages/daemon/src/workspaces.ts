@@ -1,11 +1,8 @@
 /** Private working copies: each project session works in its own clone, on its own branch. */
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
-
-const exec = promisify(execFile);
 
 export interface Workspace {
 	path: string;
@@ -18,12 +15,75 @@ export interface Workspace {
 	jj: boolean;
 }
 
-export type Runner = (file: string, args: string[], cwd: string, timeoutMs?: number) => Promise<string>;
+export type Runner = (
+	file: string,
+	args: string[],
+	cwd: string,
+	timeoutMs?: number,
+	signal?: AbortSignal,
+) => Promise<string>;
 
-const run: Runner = async (file, args, cwd, timeoutMs = 120_000) => {
-	const { stdout } = await exec(file, args, { cwd, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
-	return stdout.trim();
-};
+const run: Runner = (file, args, cwd, timeoutMs = 120_000, signal) =>
+	new Promise((resolve, reject) => {
+		let failure: Error | undefined;
+		let output = "";
+		let stderr = "";
+		let bytes = 0;
+		let forceKill: ReturnType<typeof setTimeout> | undefined;
+		const child = spawn(file, args, {
+			cwd,
+			detached: process.platform !== "win32",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		const kill = (killSignal: NodeJS.Signals) => {
+			try {
+				// Git can spawn fetch/SSH helpers. Stop the whole private process group on Unix.
+				if (process.platform !== "win32" && child.pid) process.kill(-child.pid, killSignal);
+				else child.kill(killSignal);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill(killSignal);
+			}
+		};
+		const abort = () => {
+			failure ??= new Error("Workspace preparation aborted");
+			kill("SIGTERM");
+			forceKill = setTimeout(() => kill("SIGKILL"), 1_000);
+		};
+		const timeout = setTimeout(() => {
+			failure = new Error(`Workspace command timed out: ${file} ${args.join(" ")}`);
+			abort();
+		}, timeoutMs);
+		for (const [stream, isError] of [
+			[child.stdout, false],
+			[child.stderr, true],
+		] as const) {
+			stream.on("data", (chunk: Buffer) => {
+				bytes += chunk.length;
+				if (bytes > 16 * 1024 * 1024) {
+					if (!failure) {
+						failure = new Error("Workspace command output exceeded 16 MiB");
+						abort();
+					}
+					return;
+				}
+				if (isError) stderr += chunk.toString();
+				else output += chunk.toString();
+			});
+		}
+		child.once("error", (error) => {
+			failure = error;
+		});
+		signal?.addEventListener("abort", abort, { once: true });
+		if (signal?.aborted) abort();
+		// Wait for process and stdio closure before clone cleanup/restart, not just an abort notification.
+		child.once("close", (code) => {
+			signal?.removeEventListener("abort", abort);
+			clearTimeout(timeout);
+			clearTimeout(forceKill);
+			if (code !== 0) failure ??= new Error(`${file} ${args.join(" ")} failed: ${stderr.trim() || code}`);
+			failure ? reject(failure) : resolve(output.trim());
+		});
+	});
 
 async function attempt(runner: Runner, file: string, args: string[], cwd: string): Promise<string | undefined> {
 	try {
@@ -90,8 +150,13 @@ export async function createWorkspace(
 	source: string,
 	destination: string,
 	branch: string,
-	runner: Runner = run,
+	providedRunner: Runner = run,
+	signal?: AbortSignal,
 ): Promise<Workspace> {
+	const runner: Runner = (file, args, cwd, timeoutMs) => {
+		signal?.throwIfAborted();
+		return providedRunner(file, args, cwd, timeoutMs, signal);
+	};
 	if ((await attempt(runner, "git", ["rev-parse", "--is-inside-work-tree"], source)) !== "true")
 		throw new Error(`Project is not a git repository: ${source}`);
 	const upstream = await attempt(runner, "git", ["remote", "get-url", "origin"], source);
@@ -132,5 +197,6 @@ export async function createWorkspace(
 	) {
 		jj = true;
 	}
+	signal?.throwIfAborted();
 	return { path: destination, branch, base, ...(upstream ? { upstream } : {}), jj };
 }

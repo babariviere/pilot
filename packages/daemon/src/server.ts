@@ -180,12 +180,14 @@ export function createDaemonServer(
 			case "terminal.attach": {
 				const session = sessions.get(sessionId);
 				if (!session) throw new NotFound(`Unknown session: ${sessionId}`);
+				// A terminal must not start before the private clone is ready.
+				const { cwd } = sessions.changeBase(sessionId);
 				attached.get(sessionId)?.();
 				attached.set(
 					sessionId,
 					terminals.attach(
 						sessionId,
-						session.cwd,
+						cwd,
 						message.cols,
 						message.rows,
 						{

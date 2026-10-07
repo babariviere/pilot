@@ -160,6 +160,7 @@ public struct ModelList: Codable, Equatable, Sendable {
 }
 
 /// Needs a projectId, a cwd, or both (cwd overrides the project's path).
+/// POST returns a durable `starting` session while its workspace and kernel initialize.
 public struct SpawnRequest: Codable, Sendable {
     public var projectId: String?
     public var cwd: String?

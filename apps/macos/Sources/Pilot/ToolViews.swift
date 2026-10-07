@@ -6,9 +6,9 @@ struct ToolGroupView: View {
     let items: [ToolItem]
 
     var body: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                if index > 0 { Divider().opacity(0.5) }
+        LazyVStack(spacing: 0) {
+            ForEach(items) { item in
+                if item.id != items.first?.id { Divider().opacity(0.5) }
                 ToolRowView(item: item)
             }
         }

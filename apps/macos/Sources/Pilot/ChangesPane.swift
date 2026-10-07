@@ -20,9 +20,12 @@ final class ChangesModel: ObservableObject {
         do {
             let changes = try await AppModel.shared.client.changes(sessionId)
             if changes != self.changes {
+                let diffs = await Task.detached(priority: .userInitiated) {
+                    Dictionary(Diff.parseUnified(changes.diff).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+                }.value
                 let firstLoad = self.changes == nil
                 self.changes = changes
-                diffs = Dictionary(Diff.parseUnified(changes.diff).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+                self.diffs = diffs
                 // Small change sets open fully: that is the review.
                 if firstLoad, changes.files.reduce(0, { $0 + $1.additions + $1.deletions }) <= 400 {
                     expanded = Set(changes.files.map(\.path))
@@ -54,8 +57,11 @@ struct ChangesPane: View {
             content
         }
         .background(Theme.background)
-        .onAppear { Task { await model.load() } }
-        .onReceive(timer) { _ in Task { await model.load() } }
+        .onAppear { if session.state != "starting" { Task { await model.load() } } }
+        .onChange(of: session.state) { _, state in
+            if state != "starting" { Task { await model.load() } }
+        }
+        .onReceive(timer) { _ in if session.state != "starting" { Task { await model.load() } } }
     }
 
     private var header: some View {
@@ -83,7 +89,9 @@ struct ChangesPane: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let error = model.error, model.changes == nil {
+        if session.state == "starting", model.changes == nil {
+            ProgressView("Preparing task…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let error = model.error, model.changes == nil {
             placeholder(icon: "exclamationmark.triangle", text: error)
         } else if let changes = model.changes, changes.files.isEmpty {
             placeholder(icon: "checkmark.circle", text: "The working copy matches \(changes.base).")

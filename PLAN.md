@@ -144,6 +144,11 @@ Credentials resolve through fnox references.
 
 Start from the app with a directory, optional model, and task. Chat, steer, follow up, stop, terminal.
 
+Task creation durably records its initial input and returns a `starting` session before workspace
+preparation and kernel startup complete. Interrupted preparation resumes after a daemon restart;
+startup failures remain visible in the session. Workspace tools and terminals are unavailable until
+the isolated working copy is ready.
+
 ### 6.2 GitHub: CI failures and review comments (M3)
 
 **Triggers**
@@ -216,6 +221,9 @@ reports), producing a morning summary in the app and Slack.
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
+- Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI
+  actor, preserve stream ordering, and publish prepared rows once per batch. Long tool groups render
+  lazily; loading and startup have visible progress. Procedural home artwork renders off main as well.
 - Questions panel: answer `ask_human` gates inline.
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.

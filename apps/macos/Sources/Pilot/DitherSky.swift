@@ -8,32 +8,89 @@ struct DitherSky: View {
     var cell: CGFloat = 2
     var fade: Double = 0.45
 
+    @StateObject private var sky = SkyImageState()
+
     var body: some View {
         GeometryReader { geometry in
             let width = max(1, Int(geometry.size.width / cell))
             let height = max(1, Int(geometry.size.height / cell))
-            if let image = SkyRenderer.image(width: width, height: height, fade: fade) {
-                Image(decorative: image, scale: 1)
-                    .interpolation(.none)
-                    .resizable()
-                    .frame(width: CGFloat(width) * cell, height: CGFloat(height) * cell)
+            let key = SkyRenderKey(width: width, height: height, fade: fade)
+            ZStack(alignment: .topLeading) {
+                // Geometry can change before its task starts. Never display the old size's image.
+                if let rendered = sky.rendered, rendered.key == key {
+                    Image(decorative: rendered.image, scale: 1)
+                        .interpolation(.none)
+                        .resizable()
+                        .frame(width: CGFloat(width) * cell, height: CGFloat(height) * cell)
+                }
             }
+            .task(id: key) { await sky.load(key) }
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
 
-@MainActor
-enum SkyRenderer {
-    private static var cache: [String: CGImage] = [:]
+private struct SkyRenderKey: Hashable, Sendable {
+    let width: Int
+    let height: Int
+    let fade: Double
+}
 
-    static func image(width: Int, height: Int, fade: Double) -> CGImage? {
-        let key = "\(width)x\(height)x\(fade)"
-        if let cached = cache[key] { return cached }
-        let image = render(width: width, height: height, fade: fade)
-        if cache.count > 8 { cache.removeAll() }
-        cache[key] = image
+@MainActor
+private final class SkyImageState: ObservableObject {
+    struct Rendered {
+        let key: SkyRenderKey
+        let image: CGImage
+    }
+
+    @Published private(set) var rendered: Rendered?
+    private var requestedKey: SkyRenderKey?
+
+    func load(_ key: SkyRenderKey) async {
+        guard !Task.isCancelled else { return }
+        requestedKey = key
+        rendered = nil
+        let image = await SkyRenderer.shared.image(for: key)
+        guard !Task.isCancelled, requestedKey == key, let image else { return }
+        rendered = Rendered(key: key, image: image)
+    }
+}
+
+/// Serial actor isolation keeps pixel generation off the main actor, and limits concurrent
+/// allocations. The caller's task cancellation is checked while rendering and before caching.
+private actor SkyRenderer {
+    static let shared = SkyRenderer()
+
+    private struct Entry {
+        let key: SkyRenderKey
+        let image: CGImage
+        let bytes: Int
+    }
+
+    private var cache: [Entry] = [] // Least recently used first.
+    private var cachedBytes = 0
+    private let maximumEntries = 8
+    private let maximumBytes = 16 * 1024 * 1024
+
+    func image(for key: SkyRenderKey) -> CGImage? {
+        guard !Task.isCancelled else { return nil }
+        if let index = cache.firstIndex(where: { $0.key == key }) {
+            let entry = cache.remove(at: index)
+            cache.append(entry)
+            return entry.image
+        }
+        guard let image = Self.render(width: key.width, height: key.height, fade: key.fade),
+              !Task.isCancelled else { return nil }
+        let bytes = image.bytesPerRow * image.height
+        // Oversized images can still be displayed, but must not expand the shared cache.
+        if bytes <= maximumBytes {
+            while cache.count >= maximumEntries || cachedBytes + bytes > maximumBytes {
+                cachedBytes -= cache.removeFirst().bytes
+            }
+            cache.append(Entry(key: key, image: image, bytes: bytes))
+            cachedBytes += bytes
+        }
         return image
     }
 
@@ -43,7 +100,11 @@ enum SkyRenderer {
     ].map { ($0 + 0.5) / 64 }
 
     private static func render(width: Int, height: Int, fade: Double) -> CGImage? {
-        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        guard width > 0, height > 0, fade.isFinite, !Task.isCancelled else { return nil }
+        let (pixelCount, pixelOverflow) = width.multipliedReportingOverflow(by: height)
+        let (byteCount, byteOverflow) = pixelCount.multipliedReportingOverflow(by: 4)
+        guard !pixelOverflow, !byteOverflow else { return nil }
+        var pixels = [UInt8](repeating: 0, count: byteCount)
         let top = (0.36, 0.58, 0.87)
         let horizon = (0.84, 0.91, 0.98)
         let sea = (0.70, 0.80, 0.91)
@@ -51,6 +112,7 @@ enum SkyRenderer {
         // Same scene at any width: sample in a fixed-height space.
         let scale = 150.0 / Double(height)
         for y in 0 ..< height {
+            guard !Task.isCancelled else { return nil }
             let t = Double(y) / Double(max(1, height - 1))
             for x in 0 ..< width {
                 let u = Double(x) * scale
@@ -95,6 +157,7 @@ enum SkyRenderer {
                 pixels[index + 3] = UInt8(clamping: Int(alpha * 255))
             }
         }
+        guard !Task.isCancelled else { return nil }
         let data = Data(pixels) as CFData
         guard let provider = CGDataProvider(data: data) else { return nil }
         return CGImage(

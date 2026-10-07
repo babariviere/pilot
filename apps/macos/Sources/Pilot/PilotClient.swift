@@ -17,6 +17,7 @@ final class PilotClient: ObservableObject {
     private var baseURL: URL?
     private var task: URLSessionWebSocketTask?
     private var retry = 0
+    private var awaitingList: [String: SessionSummary] = [:]
     private var listeners: [String: [UUID: ([JSONValue]) -> Void]] = [:]
     private var terminals: [String: TerminalAttachment] = [:]
 
@@ -53,7 +54,14 @@ final class PilotClient: ObservableObject {
     // MARK: Commands
 
     func spawn(_ request: SpawnRequest) async throws -> SessionSummary {
-        try await call("api/sessions", body: request)
+        let session: SessionSummary = try await call("api/sessions", body: request)
+        // REST can win the race with the list stream. Navigation needs the session immediately,
+        // but must not overwrite a newer state already received over the WebSocket.
+        if self.session(session.id) == nil {
+            awaitingList[session.id] = session
+            update(session)
+        }
+        return session
     }
 
     func send(_ sessionId: String, message: String, mode: DeliveryMode) async throws {
@@ -114,7 +122,9 @@ final class PilotClient: ObservableObject {
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
         }
-        return try JSONDecoder().decode(SessionChanges.self, from: data)
+        return try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(SessionChanges.self, from: data)
+        }.value
     }
 
     private struct Ack: Decodable {}
@@ -217,6 +227,17 @@ final class PilotClient: ObservableObject {
                 guard let self, self.task === task else { return }
                 switch result {
                 case let .success(message):
+                    let decoded = await Task.detached(priority: .userInitiated) {
+                        let data: Data
+                        switch message {
+                        case let .string(text): data = Data(text.utf8)
+                        case let .data(value): data = value
+                        @unknown default: return ServerUpdate?.none
+                        }
+                        return try? ServerUpdate.decode(data)
+                    }.value
+                    // A reconnect may have replaced this socket while decoding a large snapshot.
+                    guard self.task === task else { return }
                     if !self.connected {
                         self.connected = true
                         self.retry = 0
@@ -224,11 +245,8 @@ final class PilotClient: ObservableObject {
                         for id in self.listeners.keys { self.post(["type": .string("subscribe"), "sessionId": .string(id)]) }
                         for id in self.terminals.keys { self.sendAttach(id, restart: false) }
                     }
-                    switch message {
-                    case let .string(text): self.handle(Data(text.utf8))
-                    case let .data(data): self.handle(data)
-                    @unknown default: break
-                    }
+                    if let decoded { self.handle(decoded) }
+                    // Receive serially so snapshots and following deltas cannot be reordered.
                     self.receive(on: task)
                 case .failure:
                     self.connected = false
@@ -249,34 +267,32 @@ final class PilotClient: ObservableObject {
         }
     }
 
-    private func handle(_ data: Data) {
-        guard let message = try? JSONValue.decode(data) else { return }
-        switch message["type"]?.string {
-        case "projects":
-            if let list = try? message["projects"]?.decode([Project].self) {
-                projects = list.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            }
-        case "sessions":
-            if let list = try? message["sessions"]?.decode([SessionSummary].self) {
-                sessions = list.sorted { $0.updatedAt > $1.updatedAt }
-            }
-        case "session":
-            guard let session = try? message["session"]?.decode(SessionSummary.self) else { return }
-            let previous = self.session(session.id)
-            sessions.removeAll { $0.id == session.id }
-            sessions.append(session)
-            sessions.sort { $0.updatedAt > $1.updatedAt }
-            if previous?.state != session.state { onTransition?(previous, session) }
-        case "events":
-            guard let id = message["sessionId"]?.string, let events = message["events"]?.array else { return }
+    private func update(_ session: SessionSummary) {
+        let previous = self.session(session.id)
+        sessions.removeAll { $0.id == session.id }
+        sessions.append(session)
+        sessions.sort { $0.updatedAt > $1.updatedAt }
+        if previous?.state != session.state { onTransition?(previous, session) }
+    }
+
+    private func handle(_ message: ServerUpdate) {
+        switch message {
+        case let .projects(list): projects = list
+        case let .sessions(list):
+            for session in list { awaitingList[session.id] = nil }
+            // A list captured before POST completed must not undo immediate navigation.
+            sessions = (list + Array(awaitingList.values)).sorted { $0.updatedAt > $1.updatedAt }
+        case let .session(session):
+            awaitingList[session.id] = nil
+            update(session)
+        case let .events(id, events):
             for listener in listeners[id]?.values ?? [:].values { listener(events) }
-        case "terminal.data":
-            guard let id = message["sessionId"]?.string, let data = message["data"]?.string else { return }
+        case let .terminalData(id, data):
             terminals[id]?.onData(data)
-        case "terminal.exit":
-            guard let id = message["sessionId"]?.string else { return }
-            terminals[id]?.onExit(message["code"]?.int ?? 0)
-        default:
+        case let .terminalExit(id, code):
+            terminals[id]?.onExit(code)
+        case .error:
+            // These also include terminal-command failures, not agent transcript events.
             break
         }
     }
