@@ -15,7 +15,11 @@ export class ModelCatalog {
 	private runtime?: Promise<ModelRuntime>;
 	private readonly cache = new Map<string, { at: number; list: Promise<ModelList> }>();
 
-	constructor(private readonly agentDir = getAgentDir()) {}
+	private readonly agentDir: string;
+
+	constructor(agentDir = getAgentDir()) {
+		this.agentDir = agentDir;
+	}
 
 	/** A separate, tool-free completion. Scoped thinking suffixes never apply to titles. */
 	async generateTitle(cwd: string, message: string, signal?: AbortSignal): Promise<string | undefined> {

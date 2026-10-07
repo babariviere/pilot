@@ -24,6 +24,9 @@
 		"artifacts:browser": "playwright install chromium",
 		"typecheck": "tsgo -p tsconfig.json",
 		"test": "node --import tsx --test 'packages/*/src/**/*.test.ts'",
+		"bench:workspace": "node scripts/bench/workspace.ts",
+		"bench:reopen": "node scripts/bench/reopen.ts",
+		"bench:daemon-reopen": "node scripts/bench/daemon-reopen.ts",
 		"lint": "biome lint .",
 		"fmt": "biome format --write .",
 		"fmt:check": "biome format ."

@@ -13,6 +13,7 @@ const run: Runner = async (file, args, cwd, timeoutMs) => {
 export interface PullRequestSession {
 	id: string;
 	cwd: string;
+	archivedAt?: number;
 	workspace?: { branch?: string; upstream?: string; base?: string };
 	pullRequest?: SessionPullRequest;
 }
@@ -30,6 +31,11 @@ export interface PullRequestOptions {
 	runner?: Runner;
 	/** Delay between completed sweeps, not an overlapping interval. Defaults to one minute. */
 	intervalMs?: number;
+	/**
+	 * Minimum age of a merged or closed result before a sweep checks it again. Defaults to 30 minutes.
+	 * Agent activity still refreshes immediately, so a new branch in the same chat is not delayed.
+	 */
+	settledIntervalMs?: number;
 }
 
 interface Repository {
@@ -215,11 +221,19 @@ export class PullRequestTracker {
 	private stopped = false;
 	private started = false;
 
+	private readonly sessions: () => Iterable<PullRequestSession>;
+	private readonly apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>;
+	private readonly options: PullRequestOptions;
+
 	constructor(
-		private readonly sessions: () => Iterable<PullRequestSession>,
-		private readonly apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>,
-		private readonly options: PullRequestOptions = {},
-	) {}
+		sessions: () => Iterable<PullRequestSession>,
+		apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>,
+		options: PullRequestOptions = {},
+	) {
+		this.sessions = sessions;
+		this.apply = apply;
+		this.options = options;
+	}
 
 	start(): void {
 		if (this.started || this.stopped) return;
@@ -253,11 +267,20 @@ export class PullRequestTracker {
 		await this.tail;
 	}
 
+	/** Archived chats and long-settled pull requests do not need a GitHub query every minute. */
+	private due(session: PullRequestSession, now: number): boolean {
+		if (session.archivedAt !== undefined) return false;
+		const pr = session.pullRequest;
+		if (pr?.state !== "merged" && pr?.state !== "closed") return true;
+		return now - pr.checkedAt >= (this.options.settledIntervalMs ?? 30 * 60_000);
+	}
+
 	private poll(): void {
 		this.polling = (async () => {
-			for (const session of this.sessions()) {
+			const now = Date.now();
+			for (const session of [...this.sessions()]) {
 				if (this.stopped) break;
-				await this.refresh(session);
+				if (this.due(session, now)) await this.refresh(session);
 			}
 		})().finally(() => {
 			if (!this.stopped) {

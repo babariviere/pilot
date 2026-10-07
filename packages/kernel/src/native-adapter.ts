@@ -173,10 +173,12 @@ export class NativeAdapter {
 	#toolFingerprint = "";
 	#inputKey = "";
 
-	private constructor(
-		readonly session: AgentSession,
-		readonly usage: UsageTracker,
-	) {
+	readonly session: AgentSession;
+	readonly usage: UsageTracker;
+
+	private constructor(session: AgentSession, usage: UsageTracker) {
+		this.session = session;
+		this.usage = usage;
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
 		this.models = new Proxy(session.modelRuntime, {

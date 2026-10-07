@@ -14,7 +14,13 @@ import { WebSocket } from "ws";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
-import { CommandRejected, type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
+import {
+	CommandRejected,
+	type SessionFactories,
+	SessionManager,
+	type SessionManagerOptions,
+	type SessionWorker,
+} from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" }>;
@@ -60,17 +66,29 @@ class FakeWorker implements SessionWorker {
 	error?: string;
 	readonly sent: KernelCommand[] = [];
 	readonly requests: Command[] = [];
+	children = false;
+	closed = false;
+	closeGate?: Promise<void>;
 
 	get busy(): boolean {
 		return this.state === "starting" || this.state === "working";
 	}
 
+	readonly spec: Spec;
+	private readonly onPacket: (packet: KernelPacket) => void;
+	private readonly onExit: (worker: SessionWorker, code: number | null) => void;
+	private readonly admit: (command: Command) => Promise<void>;
+
 	constructor(
-		readonly spec: Spec,
-		private readonly onPacket: (packet: KernelPacket) => void,
-		private readonly onExit: (worker: SessionWorker, code: number | null) => void,
-		private readonly admit: (command: Command) => Promise<void> = async () => {},
+		spec: Spec,
+		onPacket: (packet: KernelPacket) => void,
+		onExit: (worker: SessionWorker, code: number | null) => void,
+		admit: (command: Command) => Promise<void> = async () => {},
 	) {
+		this.spec = spec;
+		this.onPacket = onPacket;
+		this.onExit = onExit;
+		this.admit = admit;
 		this.ready.catch(() => undefined);
 	}
 
@@ -97,7 +115,13 @@ class FakeWorker implements SessionWorker {
 		this.onPacket({ type: "working", working: this.state === "working" });
 	}
 
+	async hasChildren(): Promise<boolean> {
+		return this.children;
+	}
+
 	async close(): Promise<void> {
+		this.closed = true;
+		await this.closeGate;
 		this.gate.reject(new Error("closed"));
 		this.onExit(this, 0);
 	}
@@ -327,12 +351,19 @@ async function fixture(t: TestContext) {
 			if (autoReady) queueMicrotask(() => worker.open());
 			return worker;
 		};
-	const manager = async (factories: SessionFactories = {}) => {
-		const sessions = new SessionManager(home, projects, undefined, {
-			title: async () => undefined,
-			worker: workerFactory(),
-			...factories,
-		});
+	const manager = async (factories: SessionFactories = {}, options: SessionManagerOptions = {}) => {
+		const sessions = new SessionManager(
+			home,
+			projects,
+			undefined,
+			{
+				title: async () => undefined,
+				worker: workerFactory(),
+				...factories,
+			},
+			{},
+			options,
+		);
 		managers.push(sessions);
 		await sessions.load();
 		return sessions;
@@ -804,6 +835,39 @@ test("runtime worker exit publishes parked rather than the exited worker's stale
 	await f.workers[0]!.close();
 	assert.equal(sessions.get(created.id)?.state, "parked");
 	assert.equal(changes.at(-1)?.state, "parked");
+});
+
+test("idle unwatched kernels without subprocesses park, and reopen only after releasing storage", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { idleParkMs: 30 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await delay(100);
+	assert.equal(sessions.get(created.id)?.state, "working", "working kernels never park");
+	await sessions.stop(created.id);
+	await until(() => sessions.get(created.id)?.state === "idle");
+	const first = f.workers[0]!;
+	const off = sessions.subscribe(created.id, () => {});
+	await delay(100);
+	assert.equal(first.closed, false, "a viewer keeps the kernel open");
+	first.children = true;
+	off();
+	await delay(100);
+	assert.equal(first.closed, false, "background jobs and subagents keep the kernel open");
+	const release = deferred();
+	first.closeGate = release.promise;
+	first.children = false;
+	await until(() => sessions.get(created.id)?.state === "parked");
+	assert.equal(first.closed, true);
+	const events: AgentEvent[][] = [];
+	sessions.subscribe(created.id, (batch) => events.push(batch));
+	await delay(50);
+	assert.equal(f.workers.length, 1, "the next kernel waits for the parked one to release its lease");
+	release.resolve();
+	await until(() => f.workers.length === 2 && sessions.get(created.id)?.state === "idle");
+	await until(() => events.some((batch) => batch.some((event) => event.type === "snapshot")));
+	assert.equal((await f.stored(created.id)).failure, undefined);
+	assert.equal(sessions.get(created.id)?.error, undefined);
 });
 
 test("malformed preparing metadata never removes or runs in the source directory", async (t) => {

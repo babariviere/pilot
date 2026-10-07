@@ -5,7 +5,8 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 runtime="$(cd "${1:?Usage: check-runtime.sh runtime}" && pwd)"
 python3 "$here/scripts/release_metadata.py" symlinks "$runtime"
 cd "$runtime"
-./node/bin/node --import tsx --input-type=module <<'JS'
+# No loader: pilotd and its workers run on Node's native TypeScript stripping.
+./node/bin/node --input-type=module <<'JS'
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 assert.equal(process.platform, 'darwin');

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { createWorkspace, workspaceBranch } from "./workspaces.ts";
+import { createWorkspace, dissociateWorkspace, workspaceBorrowsObjects, workspaceBranch } from "./workspaces.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -67,6 +67,36 @@ test("clones a project into a private workspace detached from the remote default
 		assert.equal(git(destination, "remote", "get-url", "origin"), remote);
 		assert.equal(readFileSync(join(destination, "README.md"), "utf8"), "hello\n");
 		assert.ok(existsSync(join(source, "README.md")));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("workspaces borrow the source's objects, then become self-contained after dissociation", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-dissociate-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		for (const content of ["one\n", "two\n"]) {
+			writeFileSync(join(source, "README.md"), content);
+			git(source, "add", ".");
+			git(source, "commit", "--quiet", "-m", content.trim());
+		}
+		git(source, "push", "--quiet", "origin", "HEAD:main");
+		const workspace = await createWorkspace(source, join(root, "workspace"));
+		assert.equal(workspaceBorrowsObjects(workspace.path), true);
+		// Nothing was copied: every commit object lives in the source.
+		assert.equal(git(workspace.path, "count-objects", "-v").match(/^in-pack: (\d+)/m)?.[1], "0");
+		assert.equal(await dissociateWorkspace(workspace.path), true);
+		assert.equal(workspaceBorrowsObjects(workspace.path), false);
+		assert.equal(await dissociateWorkspace(workspace.path), true, "dissociation is idempotent");
+		rmSync(source, { recursive: true, force: true });
+		rmSync(remote, { recursive: true, force: true });
+		git(workspace.path, "fsck", "--connectivity-only", "--no-dangling");
+		assert.equal(git(workspace.path, "log", "--format=%s", "HEAD"), "two\none");
+		assert.equal(readFileSync(join(workspace.path, "README.md"), "utf8"), "two\n");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -251,18 +281,19 @@ test("does not overwrite remote files or copy through checked-out symlinks", asy
 });
 
 test("cancelled fetch never proceeds to checkout", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-cancel-"));
 	const signal = new AbortController();
 	const commands: string[] = [];
 	await assert.rejects(
 		createWorkspace(
-			"source",
-			"destination",
+			root,
+			join(root, "destination"),
 			async (_file, args, _cwd, _timeout, received) => {
 				assert.equal(received, signal.signal);
-				commands.push(args[0]!);
+				commands.push(args.find((arg) => !arg.startsWith("-") && !arg.includes("="))!);
 				if (args[0] === "rev-parse") return "true";
 				if (args[0] === "remote" && args[1] === "get-url") return "remote";
-				if (args[0] === "fetch") {
+				if (args.includes("fetch") && args.includes("origin")) {
 					signal.abort();
 					throw new Error("aborted fetch");
 				}
@@ -271,8 +302,8 @@ test("cancelled fetch never proceeds to checkout", async () => {
 			signal.signal,
 		),
 	);
-	assert.equal(commands.includes("fetch"), true);
-	assert.equal(commands.includes("switch"), false);
+	rmSync(root, { recursive: true, force: true });
+	assert.equal(commands.includes("checkout"), false);
 });
 
 test("aborting workspace preparation waits for its fetch process and helpers to close", {
@@ -303,7 +334,7 @@ setInterval(() => {}, 1000);
 case "$1" in
  rev-parse) echo true ;;
  remote) if [ "$2" = get-url ]; then echo fake-upstream; fi ;;
- clone) /bin/mkdir "$4" ;;
+ -c) exec "${process.execPath}" "${fetchScript}" ;;
  fetch) exec "${process.execPath}" "${fetchScript}" ;;
 esac
 `,

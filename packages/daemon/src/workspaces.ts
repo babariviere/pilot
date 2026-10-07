@@ -1,7 +1,7 @@
 /** Private working copies: each project session works in its own clone. */
 import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
-import { appendFile, copyFile, lstat, mkdir } from "node:fs/promises";
+import { appendFile, copyFile, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 
 export interface Workspace {
@@ -141,6 +141,9 @@ export async function workspaceBranch(
 			"jj",
 			[
 				"log",
+				// Bookmarks live in the operation log. Snapshotting the working copy would scan the whole tree
+				// on every poll and race the agent's own jj commands.
+				"--ignore-working-copy",
 				"--no-graph",
 				"-r",
 				"heads(::@ & bookmarks())",
@@ -160,8 +163,11 @@ export async function workspaceBranch(
 /**
  * Clone `source` into `destination` (a fresh directory), point `origin` at the source's real remote,
  * fetch it, and start detached from the remote's default branch. Delivery policy determines the agent's branch.
- * Ignored mise local configuration
- * is copied too; other uncommitted changes in the user's checkout stay there.
+ * Ignored mise local configuration is copied too; other uncommitted changes in the user's checkout stay there.
+ *
+ * The clone borrows the source's object store through Git alternates, so preparation never copies or
+ * hardlinks objects (tens of thousands of loose objects make that take minutes). Call
+ * {@link dissociateWorkspace} afterwards to make the clone self-contained.
  */
 export async function createWorkspace(
 	source: string,
@@ -175,40 +181,62 @@ export async function createWorkspace(
 	};
 	if ((await attempt(runner, "git", ["rev-parse", "--is-inside-work-tree"], source)) !== "true")
 		throw new Error(`Project is not a git repository: ${source}`);
-	const upstream = await attempt(runner, "git", ["remote", "get-url", "origin"], source);
-	// Local clones hardlink objects, so this is fast and does not touch the source's working copy.
-	await runner("git", ["clone", "--quiet", source, destination], source);
+	const [upstream, commonDir, sourceHead] = await Promise.all([
+		attempt(runner, "git", ["remote", "get-url", "origin"], source),
+		runner("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], source),
+		runner("git", ["rev-parse", "--verify", "HEAD"], source),
+	]);
+	await mkdir(destination, { recursive: true });
+	await runner("git", ["init", "--quiet", destination], source);
+	const gitDir = join(destination, ".git");
+	await mkdir(join(gitDir, "objects", "info"), { recursive: true });
+	await writeFile(join(gitDir, "objects", "info", "alternates"), `${resolve(source, commonDir, "objects")}\n`);
+	await runner("git", ["remote", "add", "origin", upstream ?? source], destination);
+	// Borrowed refs are not needed for negotiation once remote-tracking refs are seeded, and listing a
+	// jj-managed source's refs (tens of thousands of refs/jj/keep entries) costs seconds per fetch.
+	await runner("git", ["config", "core.alternateRefsCommand", "true"], destination);
+	// Seed remote-tracking refs from the source's own view of origin. Objects are already shared, so this
+	// transfers nothing, and an offline fetch below still leaves the remote's branches available.
+	await runner(
+		"git",
+		[
+			...noMaintenance,
+			"fetch",
+			"--quiet",
+			"--no-tags",
+			"--no-write-fetch-head",
+			source,
+			upstream ? "+refs/remotes/origin/*:refs/remotes/origin/*" : "+refs/heads/*:refs/remotes/origin/*",
+		],
+		destination,
+	);
 
-	let base = "HEAD";
+	let base: string | undefined;
 	if (upstream) {
-		await runner("git", ["remote", "set-url", "origin", upstream], destination);
-		// Offline is fine: fall back to what the local clone already has.
-		const fetched = (await attempt(runner, "git", ["fetch", "--quiet", "origin"], destination)) !== undefined;
-		if (fetched) {
-			await attempt(runner, "git", ["remote", "set-head", "origin", "--auto"], destination);
-			const head = await attempt(
+		// Offline is fine: fall back to what the source already knows about its remote.
+		await attempt(runner, "git", [...noMaintenance, "fetch", "--quiet", "origin"], destination);
+		// Recent Git records the remote HEAD during fetch. Otherwise ask the source, which has the same remote.
+		const head =
+			(await attempt(
 				runner,
 				"git",
-				["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+				["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
 				destination,
-			);
-			for (const candidate of [head, "origin/main", "origin/master"]) {
-				if (
-					candidate &&
-					(await attempt(runner, "git", ["rev-parse", "--verify", "--quiet", candidate], destination))
-				) {
-					base = candidate;
-					break;
-				}
+			)) ||
+			(await attempt(runner, "git", ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], source));
+		for (const candidate of [head, "origin/main", "origin/master"]) {
+			if (
+				candidate &&
+				(await attempt(runner, "git", ["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`], destination))
+			) {
+				base = candidate;
+				break;
 			}
 		}
 	}
 	// Pin the fallback before the agent commits: HEAD would otherwise move the diff's base with it.
-	if (base === "HEAD") base = await runner("git", ["rev-parse", "HEAD"], destination);
-	const clonedBranch = await runner("git", ["branch", "--show-current"], destination);
-	await runner("git", ["switch", "--quiet", "--detach", base], destination);
-	// A cloned source branch is not an agent choice. Do not import it as a local jj bookmark.
-	if (clonedBranch) await runner("git", ["branch", "-D", "--", clonedBranch], destination);
+	base ??= sourceHead;
+	await runner("git", ["checkout", "--quiet", "--detach", base], destination);
 	await copyLocalConfigs(source, destination, runner);
 
 	let jj = false;
@@ -220,4 +248,50 @@ export async function createWorkspace(
 	}
 	signal?.throwIfAborted();
 	return { path: destination, base, ...(upstream ? { upstream } : {}), jj };
+}
+
+// Background maintenance would write commit-graphs that index borrowed commits the clone may not keep.
+const noMaintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false"];
+
+/** Whether the workspace still borrows objects from its source project. */
+export function workspaceBorrowsObjects(path: string): boolean {
+	return existsSync(join(path, ".git", "objects", "info", "alternates"));
+}
+
+/**
+ * Copy every object the workspace can reach into its own store, then stop borrowing from the source.
+ * Safe while the agent works: repacking is how `git gc` runs too. Refs created during the repack are
+ * caught by repeating it until they settle.
+ */
+export async function dissociateWorkspace(path: string, providedRunner: Runner = run, signal?: AbortSignal) {
+	const alternates = join(path, ".git", "objects", "info", "alternates");
+	if (!existsSync(alternates)) return true;
+	const runner: Runner = (file, args, cwd, timeoutMs) => {
+		signal?.throwIfAborted();
+		return providedRunner(file, args, cwd, timeoutMs, signal);
+	};
+	const refs = async () =>
+		`${await attempt(runner, "git", ["rev-parse", "--verify", "--quiet", "HEAD"], path)}\n${await runner(
+			"git",
+			["for-each-ref", "--format=%(objectname) %(refname)"],
+			path,
+		)}`;
+	let before = await refs();
+	for (let round = 0; round < 5; round++) {
+		// Without --local, repack copies borrowed objects reachable from HEAD, refs, reflogs and the index.
+		await runner("git", [...noMaintenance, "repack", "-a", "-d", "--quiet"], path, 60 * 60_000);
+		const after = await refs();
+		if (after === before) {
+			signal?.throwIfAborted();
+			await rm(alternates, { force: true });
+			// A commit-graph is only a cache. One written while borrowing may index commits no longer present.
+			const info = join(path, ".git", "objects", "info");
+			await rm(join(info, "commit-graph"), { force: true });
+			await rm(join(info, "commit-graphs"), { recursive: true, force: true });
+			return true;
+		}
+		before = after;
+	}
+	// Refs kept moving. Keep borrowing, which is always correct, and try again later.
+	return false;
 }
