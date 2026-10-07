@@ -142,12 +142,19 @@ private struct RecentCard: View {
             ForEach(sessions) { session in
                 Button { app.selectedSessionId = session.id } label: {
                     HStack(spacing: 8) {
-                        SessionStatusIcon(state: session.state).frame(width: 12)
-                        Text(session.title).font(.system(size: 13)).lineLimit(1)
+                        SessionStatusIcon(status: session.status).frame(width: 12)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(session.title).font(.system(size: 13)).lineLimit(1)
+                            Text(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.faintForeground)
+                                .lineLimit(1)
+                        }
                         Spacer()
-                        Text(app.client.project(session.projectId)?.name ?? "")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.faintForeground)
+                        Text(session.status.rawValue)
+                            .font(.system(size: 11))
+                            .foregroundStyle(session.status.color)
+                        if app.isUnread(session) { UnreadBadge() }
                     }
                     .contentShape(Rectangle())
                 }

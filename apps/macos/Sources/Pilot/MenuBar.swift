@@ -13,7 +13,7 @@ struct MenuBarContent: View {
         Text(statusText)
         Divider()
         ForEach(client.sessions.prefix(8)) { session in
-            Button("\(symbol(for: session.state)) \(session.title)") {
+            Button("\(symbol(for: session.status)) \(session.title) · \(session.status.rawValue)\(model.isUnread(session) ? " · unread" : "")") {
                 model.openWindowAction = { openWindow(id: MainWindow.id) }
                 model.open(session: session.id)
             }
@@ -39,19 +39,27 @@ struct MenuBarContent: View {
         switch daemon.status {
         case .running:
             let working = client.workingCount
-            return working == 0 ? "pilotd running · idle" : "pilotd running · \(working) working"
+            let unread = client.sessions.filter { model.isUnread($0) }.count
+            let needsInput = client.sessions.filter { $0.status == .needsInput }.count
+            var activity: [String] = []
+            if working > 0 { activity.append("\(working) working") }
+            if needsInput > 0 { activity.append("\(needsInput) need input") }
+            if unread > 0 { activity.append("\(unread) unread") }
+            return "pilotd running · \(activity.isEmpty ? "idle" : activity.joined(separator: " · "))"
         case .starting, .unknown: return "pilotd starting…"
         case .stopped: return "pilotd stopped"
         case .failed: return "pilotd failed"
         }
     }
 
-    private func symbol(for state: String) -> String {
-        switch state {
-        case "working", "starting": "●"
-        case "failed": "✕"
-        case "idle": "○"
-        default: "·"
+    private func symbol(for status: SessionStatus) -> String {
+        switch status {
+        case .working: "●"
+        case .done: "✓"
+        case .needsInput: "?"
+        case .failed: "✕"
+        case .stopped: "■"
+        case .idle: "○"
         }
     }
 }

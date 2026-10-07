@@ -1,4 +1,6 @@
+// biome-ignore-all lint/complexity/useLiteralKeys: Bracket access tests private supervision seams.
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
@@ -7,7 +9,7 @@ import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
-import type { AgentEvent, SessionState, SessionSummary, SessionUsage } from "@pilot/protocol";
+import type { AgentEvent, SessionCompletion, SessionState, SessionSummary, SessionUsage } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -796,3 +798,205 @@ for (const recovery of ["restart", "demand"] as const) {
 		assert.deepEqual((await f.stored(created.id)).pending, []);
 	});
 }
+
+// Exercise supervision without forking a kernel or loading a model.
+type Meta = Parameters<SessionManager["save"]>[0];
+type Worker = Parameters<SessionManager["onPacket"]>[1];
+const fakeWorker = (_exitCode: number | null = null): Worker => ({
+	ready: Promise.resolve(),
+	state: "idle",
+	send: () => {},
+	request: async () => {},
+	close: async () => {},
+});
+
+async function outcomeFixture(run: (manager: SessionManager, meta: Meta, home: string) => Promise<void>) {
+	const home = await mkdtemp(join(tmpdir(), "pilot-outcomes-"));
+	const manager = new SessionManager(home, new ProjectStore(home));
+	const meta: Meta = { id: randomUUID(), title: "Session", cwd: home, createdAt: 1, updatedAt: 1 };
+	try {
+		await manager.load();
+		await mkdir(join(home, "sessions", meta.id));
+		await manager["save"](meta);
+		await run(manager, meta, home);
+	} finally {
+		await manager.shutdown();
+		await rm(home, { recursive: true, force: true });
+	}
+}
+
+async function flush(manager: SessionManager) {
+	await Promise.all(manager["saving"].values());
+}
+
+test("ready and working completions survive restart parked, replay does not change completion version", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		const worker = fakeWorker();
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		const completion: SessionCompletion = { outcome: "needs_input", outcomeAt: 42, outcomeReason: "Approval" };
+		manager["onPacket"](meta, worker, { type: "ready", model: "test/model", working: false, usage: {}, completion });
+		await flush(manager);
+		const reopened = new SessionManager(home, new ProjectStore(home));
+		await reopened.load();
+		assert.equal(reopened.get(meta.id)?.state, "parked");
+		assert.equal(reopened.get(meta.id)?.outcome, "needs_input");
+		assert.equal(reopened.get(meta.id)?.outcomeAt, 42);
+		assert.equal(reopened.get(meta.id)?.outcomeReason, "Approval");
+		assert.equal(reopened["workers"].size, 0);
+		manager["onPacket"](meta, worker, { type: "working", working: false, completion });
+		assert.equal(meta.outcomeAt, 42);
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		assert.equal(manager.get(meta.id)?.outcome, undefined);
+		assert.equal(manager.get(meta.id)?.outcomeAt, undefined);
+		assert.equal(manager.get(meta.id)?.outcomeReason, undefined);
+		manager["onPacket"](meta, worker, { type: "working", working: false });
+		assert.equal(meta.outcome, undefined, "idle alone cannot imply done");
+		manager["onPacket"](meta, worker, {
+			type: "working",
+			working: false,
+			completion: { outcome: "stopped", outcomeAt: 43 },
+		});
+		await flush(manager);
+		const stopped = new SessionManager(home, new ProjectStore(home));
+		await stopped.load();
+		assert.equal(stopped.get(meta.id)?.outcome, "stopped");
+		assert.equal(stopped.get(meta.id)?.outcomeAt, 43);
+		assert.equal(stopped.get(meta.id)?.outcomeReason, undefined);
+		assert.equal(changes.at(-1)?.outcome, "stopped");
+	});
+});
+
+test("errors and fatal exits persist failures, keeping the original error when its worker exits", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		const worker = fakeWorker();
+		worker.state = "failed";
+		manager["onPacket"](meta, worker, { type: "error", message: "Missing credentials" });
+		const version = meta.outcomeAt;
+		manager["onExit"](meta, worker, 1, null);
+		await flush(manager);
+		assert.equal(meta.outcome, "failed");
+		assert.equal(meta.outcomeAt, version);
+		assert.equal(meta.outcomeReason, "Missing credentials");
+		const reopened = new SessionManager(home, new ProjectStore(home));
+		await reopened.load();
+		assert.equal(reopened.get(meta.id)?.outcomeReason, "Missing credentials");
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		manager["onExit"](meta, fakeWorker(), null, "SIGKILL");
+		assert.ok(meta.outcomeAt! > version!);
+		assert.equal(meta.outcomeReason, "Kernel exited with signal SIGKILL");
+	});
+});
+
+test("request errors do not complete active work or prevent restart resumption", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		const worker = fakeWorker();
+		worker.state = "working";
+		manager["workers"].set(meta.id, worker);
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		worker.error = "Input admission rejected";
+		manager["onPacket"](meta, worker, { type: "error", requestId: "input", message: worker.error });
+		assert.equal(meta.working, true);
+		assert.equal(meta.outcome, undefined);
+		assert.equal(manager.get(meta.id)?.state, "working");
+		assert.equal(manager.get(meta.id)?.error, worker.error);
+		manager["workers"].delete(meta.id);
+		await flush(manager);
+		const reopened = new SessionManager(home, new ProjectStore(home));
+		const resumed: string[] = [];
+		reopened["ensureWorker"] = (id) => {
+			resumed.push(id);
+			return fakeWorker();
+		};
+		await reopened.load();
+		assert.deepEqual(resumed, [meta.id]);
+		assert.equal(reopened.get(meta.id)?.outcome, undefined);
+	});
+});
+
+test("nonfatal unscoped errors and clean idle exits do not create failed outcomes", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		const worker = fakeWorker(0);
+		manager["onPacket"](meta, worker, { type: "working", working: false });
+		manager["onPacket"](meta, worker, { type: "error", message: "Watch failed" });
+		assert.equal(meta.outcome, undefined);
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		manager["onExit"](meta, worker, 0, null);
+		assert.equal(meta.outcome, undefined);
+		assert.equal(changes.at(-1)?.state, "parked");
+	});
+});
+
+test("abort acknowledgements do not imply stopped, only a settled completion does", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		const worker = fakeWorker();
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		manager["onPacket"](meta, worker, { type: "aborted", requestId: "abort" });
+		assert.equal(meta.outcome, undefined);
+		assert.equal(meta.working, true);
+		manager["onPacket"](meta, worker, {
+			type: "working",
+			working: false,
+			completion: { outcome: "stopped", outcomeAt: 100 },
+		});
+		assert.equal(meta.outcome, "stopped");
+	});
+});
+
+test("shutdown errors and exits do not create outcomes, and shutdown drains queued metadata", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		manager["onPacket"](meta, fakeWorker(), {
+			type: "working",
+			working: false,
+			completion: { outcome: "done", outcomeAt: 10 },
+		});
+		await manager.shutdown();
+		manager["onPacket"](meta, fakeWorker(), { type: "error", message: "Shutdown failed" });
+		manager["onExit"](meta, fakeWorker(), 1, null);
+		assert.equal(meta.outcome, "done");
+		assert.equal(meta.outcomeAt, 10);
+		const saved = JSON.parse(await readFile(join(home, "sessions", meta.id, "meta.json"), "utf8"));
+		assert.equal(saved.outcome, "done");
+	});
+});
+
+test("queued metadata writes capture each transition instead of serializing live objects", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		let releaseFirst!: () => void;
+		let releaseSecond!: () => void;
+		const firstGate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const secondGate = new Promise<void>((resolve) => {
+			releaseSecond = resolve;
+		});
+		manager["saving"].set(meta.id, firstGate);
+		meta.outcome = "done";
+		meta.outcomeAt = 10;
+		const first = manager["save"](meta);
+		manager["saving"].set(
+			meta.id,
+			first.then(() => secondGate),
+		);
+		delete meta.outcome;
+		delete meta.outcomeAt;
+		meta.working = true;
+		const second = manager["save"](meta);
+		try {
+			releaseFirst();
+			await first;
+			const file = join(home, "sessions", meta.id, "meta.json");
+			assert.equal(JSON.parse(await readFile(file, "utf8")).outcome, "done");
+			releaseSecond();
+			await second;
+			const latest = JSON.parse(await readFile(file, "utf8"));
+			assert.equal(latest.outcome, undefined);
+			assert.equal(latest.working, true);
+		} finally {
+			releaseFirst();
+			releaseSecond();
+			await second;
+		}
+	});
+});

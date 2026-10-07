@@ -19,12 +19,17 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let model: String?
     public let usage: SessionUsage?
     public let error: String?
+    public let outcome: SessionOutcome?
+    /// Stable completion version, in milliseconds. Unlike updatedAt, survives parking.
+    public let outcomeAt: Double?
+    public let outcomeReason: String?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
 
     public init(
         id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,
-        updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil
+        updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
+        outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -37,6 +42,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.model = model
         self.usage = usage
         self.error = error
+        self.outcome = outcome
+        self.outcomeAt = outcomeAt
+        self.outcomeReason = outcomeReason
     }
 }
 

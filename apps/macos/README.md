@@ -35,7 +35,10 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   `~/.config/ghostty/config`, which can be turned off), and projects.
 - **Menu bar.** Daemon status, recent sessions, open, restart/stop pilotd, open the log. The icon is the app
   icon's plane, with its contrail while agents are working.
-- **Notifications.** When a session finishes or fails (bundled app only).
+- **Results.** Working, Done, Needs your input, Failed and Stopped labels are separate from lifecycle.
+  Unread result dots persist until the loaded outcome card is visible in an active chat, or you choose
+  "Mark as reviewed" in the sidebar. Reviewing never answers a question or clears Needs your input.
+- **Notifications.** New completion versions (bundled app only), deduplicated across reconnects.
 
 ## Layout
 
@@ -57,7 +60,7 @@ scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from 
 scripts/test.sh              # PilotCore tests
 .build/debug/Pilot --queue-edit-test  # native inline editing keys, focus, drafts, failed/stale saves
 swift run Pilot              # unbundled dev run (no notifications)
-.build/debug/Pilot --snapshot /tmp/pilot-snap   # render home, session and settings with fixtures to PNGs
+.build/debug/Pilot --snapshot /tmp/pilot-snap   # home, session, changes, settings, needs-input-unread, done-unread PNGs
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
                              # and menubar-idle.png / menubar-working.png: the menu bar plane glyph

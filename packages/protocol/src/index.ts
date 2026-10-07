@@ -13,6 +13,16 @@ export type {
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
 
+/** Result of the latest settled run, independent of whether a worker is parked. */
+export type SessionOutcome = "done" | "needs_input" | "failed" | "stopped";
+
+export interface SessionCompletion {
+	outcome: SessionOutcome;
+	/** Stable completion version, in milliseconds. Reopening a session does not change it. */
+	outcomeAt: number;
+	outcomeReason?: string;
+}
+
 /** How a message joins a busy session: steer the current run, or queue a follow-up run. */
 export type DeliveryMode = "steer" | "followUp";
 
@@ -46,6 +56,9 @@ export interface SessionSummary {
 	createdAt: number;
 	updatedAt: number;
 	state: SessionState;
+	outcome?: SessionOutcome;
+	outcomeAt?: number;
+	outcomeReason?: string;
 	/** Resolved "provider/modelId", once the kernel has started. */
 	model?: string;
 	/** Latest context estimate and optional pi-extensions subscription snapshot. */

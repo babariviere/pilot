@@ -17,7 +17,8 @@ import {
 	type Storage,
 	watchEvents,
 } from "@earendil-works/pi-durable";
-import type { AgentEvent, DeliveryMode, SessionUsage } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
+import { reconcileCompletion, withAttention } from "./attention.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
 import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
@@ -50,13 +51,14 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
-	onWorking(working: boolean): void;
+	onWorking(working: boolean, completion?: SessionCompletion): void;
 	onUsageChanged?(usage: SessionUsage): void;
 }
 
 export class KernelSession {
 	readonly #watches = new Map<string, { events: AgentEventStream; queue: DocumentWatch<InboxState> }>();
 	#working = false;
+	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
 
 	private constructor(
@@ -83,7 +85,8 @@ export class KernelSession {
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
-			const prepare = (extension: Extension) => replayUnsafe(withPilotPolicy(extension, spec.pilot ?? {}));
+			const prepare = (extension: Extension) =>
+				withAttention(replayUnsafe(withPilotPolicy(extension, spec.pilot ?? {})));
 			const registry = createRegistry();
 			registry.install(prepare(adapter.extension));
 			harness = await Harness.open(
@@ -107,20 +110,40 @@ export class KernelSession {
 			const status = await watchEvents(harness, conversation.id, context);
 			const session = new KernelSession(harness, conversation, adapter, owned.release, status);
 			session.#working = status.snapshot.run !== undefined;
+			if (!session.#working) {
+				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
+			}
 			status.start(async (events, deliveryContext) => {
+				let working = session.#working;
+				let completion = session.#completion;
 				for (const event of events) {
-					const working =
+					working =
 						event.type === "snapshot"
 							? event.run !== undefined
 							: event.type === "run_start"
 								? true
 								: event.type === "run_end"
 									? false
-									: session.#working;
-					if (working !== session.#working) {
-						session.#working = working;
-						hooks.onWorking(working);
+									: working;
+					if (event.type === "run_end" || (event.type === "snapshot" && !working)) {
+						completion = await reconcileCompletion(
+							owned.storage,
+							harness!,
+							conversation,
+							context,
+							event.type === "run_end" ? event.inputs : undefined,
+						);
 					}
+				}
+				// A queued follow-up may start in the same commit as the preceding run ends.
+				// Only publish attention when the session actually becomes idle.
+				if (
+					working !== session.#working ||
+					(!working && completion?.outcomeAt !== session.#completion?.outcomeAt)
+				) {
+					session.#working = working;
+					session.#completion = working ? undefined : completion;
+					hooks.onWorking(working, session.#completion);
 				}
 				if (
 					events.some((event) =>
@@ -158,6 +181,10 @@ export class KernelSession {
 
 	get usage(): SessionUsage {
 		return this.adapter.usage.current;
+	}
+
+	get completion(): SessionCompletion | undefined {
+		return this.#completion;
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
