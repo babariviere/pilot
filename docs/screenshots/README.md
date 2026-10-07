@@ -43,3 +43,17 @@ cp /tmp/pilot-todos-screenshots/session.png docs/screenshots/tasks-chat.png
 
 These also use deterministic fixtures. Regenerate with the snapshot command above, then copy
 the `usage-*.png` images from its output directory.
+
+## Project artifact browser
+
+`artifacts-sidebar.png` shows the compact artifact browser button beside Archive in each
+project header, replacing the separate Browse artifacts row. It is cropped from the
+deterministic home-screen fixture.
+
+Regenerate on macOS (with ImageMagick installed):
+
+```sh
+swift build --package-path apps/macos
+apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-artifacts-screenshots
+magick /tmp/pilot-artifacts-screenshots/home.png -crop 280x430+0+0 +repage docs/screenshots/artifacts-sidebar.png
+```
