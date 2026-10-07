@@ -26,6 +26,8 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
     private var observation: AnyCancellable?
     private var token: String?
     private var feedURL: URL?
+    // Short-lived signed CDN URL, never persisted or given GitHub Authorization headers.
+    private var resolvedFeedURL: URL?
     private var archiveURL: URL?
     private var installTask: Task<Void, Never>?
     private var started = false
@@ -133,18 +135,20 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
             guard let assets = release.updateAssets() else {
                 throw updateError("The latest release does not contain a complete Apple Silicon update.")
             }
+            guard let token else { throw updateError("GitHub authentication is required.") }
             feedURL = repository.assetURL(id: assets.feed.id)
             archiveURL = repository.assetURL(id: assets.archive.id)
+            resolvedFeedURL = nil
+            resolvedFeedURL = try await UpdateFeed.resolve(repository: repository, assetURL: repository.assetURL(id: assets.feed.id), token: token)
             UserDefaults.standard.set(feedURL?.absoluteString, forKey: "PilotUpdateFeed")
             UserDefaults.standard.set(archiveURL?.absoluteString, forKey: "PilotUpdateArchive")
-            controller?.updater.httpHeaders = token.map { ["Authorization": "Bearer \($0)", "Accept": "application/octet-stream"] }
             if userInitiated { controller?.updater.checkForUpdates() }
             else { controller?.updater.checkForUpdatesInBackground() }
         } catch {
             status = error.localizedDescription
             askForToken = authorizationFailed(error) && token == nil
             // A latest-release lookup is not necessary to resume Sparkle's cached download.
-            if feedURL != nil && (token != nil || waitingToInstall) {
+            if waitingToInstall {
                 if userInitiated { controller?.updater.checkForUpdates() }
                 else { controller?.updater.checkForUpdatesInBackground() }
             }
@@ -167,7 +171,6 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
             authenticated = false
             status = error.localizedDescription
         }
-        controller?.updater.httpHeaders = token.map { ["Authorization": "Bearer \($0)", "Accept": "application/octet-stream"] }
     }
 
     private func releaseWithAccess() async throws -> UpdateRelease {
@@ -229,7 +232,6 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
         guard controller == nil else { return }
         let controller = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: self, userDriverDelegate: nil)
         self.controller = controller
-        controller.updater.httpHeaders = token.map { ["Authorization": "Bearer \($0)", "Accept": "application/octet-stream"] }
         observation = controller.updater.publisher(for: \.sessionInProgress)
             .receive(on: RunLoop.main)
             .sink { [weak self] value in self?.sessionInProgress = value }
@@ -254,15 +256,15 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
         }
     }
 
-    // Sparkle never receives browser download URLs, credentials in URLs, or external release notes.
+    // Sparkle gets a short-lived signed CDN feed URL, but never the GitHub token for that feed.
     func feedURLString(for updater: SPUUpdater) -> String? {
         // This bootstrap URL makes configuration valid before discovery. It is not an appcast:
         // no update can be offered from it, but cached installers can resume without a network feed.
-        (feedURL ?? repository?.latestReleaseURL)?.absoluteString
+        (resolvedFeedURL ?? feedURL ?? repository?.latestReleaseURL)?.absoluteString
     }
 
     func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
-        guard waitingToInstall || (token != nil && feedURL != nil && archiveURL != nil) else {
+        guard waitingToInstall || (token != nil && resolvedFeedURL != nil && archiveURL != nil) else {
             throw updateError("GitHub update access is not ready.")
         }
     }
