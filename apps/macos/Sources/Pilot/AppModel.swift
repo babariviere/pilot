@@ -28,6 +28,10 @@ final class AppModel: ObservableObject {
     /// One-shot prefill consumed by the new-session composer, never submitted automatically.
     @Published var draftMessage: String?
     @Published var collapsedProjects: Set<String> = []
+    /// Sidebar-only grouping. Repository paths and daemon project records are unchanged.
+    @Published var projectFolders: ProjectFolders {
+        didSet { projectFolders.save(defaults: projectFolderDefaults) }
+    }
     @Published var showingArchive = false
     /// nil browses every project's archived chats.
     @Published var archiveProjectId: String?
@@ -38,6 +42,12 @@ final class AppModel: ObservableObject {
     var openWindowAction: (() -> Void)?
 
     private var started = false
+    private let projectFolderDefaults: UserDefaults
+
+    init(projectFolderDefaults: UserDefaults = .standard) {
+        self.projectFolderDefaults = projectFolderDefaults
+        projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
+    }
 
     var selectedSession: SessionSummary? {
         selectedSessionId.flatMap { client.session($0) }

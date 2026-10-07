@@ -240,6 +240,11 @@ reports), producing a morning summary in the app and Slack.
 ## 7. App (macOS)
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
+- Projects can be grouped into user-created, collapsible sidebar folders. Create, rename and delete
+  folders, and move projects via their context menu. Ungrouped projects remain visible; deleting a
+  folder only ungroups its projects. Folder membership and collapse state are local app preferences
+  retained across restarts, never filesystem moves or daemon project changes. Search temporarily
+  expands matching folders and projects without changing saved collapse state.
 - Manual sessions show a text-colored animated braille spinner while working, and colored status icons
   (done checkmark, needs-input raised hand, failed warning triangle, stopped stop symbol, idle sleeping moon),
   with the status

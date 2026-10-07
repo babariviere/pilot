@@ -13,6 +13,11 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   new sessions pick a project (or another folder) and inherit its default model. Manage them in Settings.
   **Require PR** defaults to on, including for older projects. Disabling it permits direct pushes to the
   default branch. Saved PR policy changes apply when a session worker next starts.
+- **Sidebar folders.** Use the sidebar **+** menu to create a folder, then right-click a project and
+  choose **Move to Folder**. Folder headers expand/collapse and offer Rename/Delete via their context
+  menu. Deleting a folder ungroups its projects. Grouping and folder collapse state persist locally
+  across app restarts, without moving repositories or changing sessions. Search reveals matches in
+  collapsed folders automatically.
 - **Chat.** Native transcript fed by pilotd's agent event stream: block Markdown (headings, lists, code
   blocks with copy), collapsible thinking, grouped tool rows with summaries ("Ran command npm test"),
   live output and stop. Return steers the current run (or sends when idle), Option-Return queues a
@@ -98,6 +103,8 @@ swift run Pilot              # unbundled dev run (no notifications)
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
                              # and menubar-idle.png / menubar-working.png: the menu bar plane glyph
                              # also pr-open.png, pr-merged.png, pr-stale.png and pr-dashboard.png
+                             # also sidebar-folders.png, sidebar-folders-collapsed.png and sidebar-folders-search.png
+                             # add --sidebar-folders-only to stop after the folder previews
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 # Run from the repository root, after building:
