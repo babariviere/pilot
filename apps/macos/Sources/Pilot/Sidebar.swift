@@ -17,6 +17,7 @@ struct SessionSidebar: View {
                 let sessions = visible.filter { $0.projectId == project.id }
                 if !searching || !sessions.isEmpty {
                 Section(isExpanded: searching ? .constant(true) : expanded(project.id)) {
+                    ProjectArtifactsEntry(project: project, client: client)
                     ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
                     if sessions.isEmpty {
                         Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
@@ -34,6 +35,9 @@ struct SessionSidebar: View {
                 Section(client.projects.isEmpty ? "Sessions" : "Other") {
                     ForEach(unassigned) { SessionRow(session: $0).tag($0.id) }
                 }
+            }
+            if let sessionId = model.selectedSessionId {
+                SessionArtifactsSection(sessionId: sessionId, client: client).id(sessionId)
             }
         }
         .listStyle(.sidebar)

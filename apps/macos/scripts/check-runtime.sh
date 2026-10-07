@@ -12,6 +12,14 @@ assert.equal(process.platform, 'darwin');
 assert.equal(process.arch, 'arm64');
 assert.equal(Number(process.versions.node.split('.')[0]), 24);
 await import('@pilot/kernel');
+const { prepareArtifact, getLibrary } = await import('@pilot/artifacts');
+const artifact = await prepareArtifact({
+  title: 'Runtime smoke test',
+  kind: 'react',
+  source: 'export default function Artifact() { return <p>pilot-artifact-runtime-ok</p>; }',
+});
+assert.match(artifact.html, /artifact-root/);
+assert.ok((await getLibrary('mermaid')).length > 0);
 await import('ws');
 const pty = createRequire(import.meta.url)('node-pty');
 const terminal = pty.spawn('/bin/echo', ['pilot-runtime-ok'], { cwd: process.cwd(), env: process.env });

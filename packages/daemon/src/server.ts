@@ -1,6 +1,8 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { getLibrary, isArtifactLibrary } from "@pilot/artifacts";
 import type {
+	ArtifactLibrary,
 	ClientMessage,
 	EditQueuedMessageRequest,
 	ProjectRequest,
@@ -51,6 +53,36 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 	}
 }
 
+/** Treat WebSocket JSON as untrusted input, not as an already-validated protocol union. */
+function isClientMessage(value: unknown): value is ClientMessage {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const message = value as Record<string, unknown>;
+	if (typeof message.type !== "string" || typeof message.sessionId !== "string" || !message.sessionId.trim())
+		return false;
+	switch (message.type) {
+		case "subscribe":
+		case "unsubscribe":
+		case "terminal.detach":
+		case "terminal.close":
+			return true;
+		case "terminal.input":
+			return typeof message.data === "string";
+		case "terminal.attach":
+		case "terminal.resize":
+			if (
+				message.type === "terminal.attach" &&
+				message.restart !== undefined &&
+				typeof message.restart !== "boolean"
+			)
+				return false;
+			return [message.cols, message.rows].every(
+				(size) => typeof size === "number" && Number.isInteger(size) && size > 0 && size <= 1000,
+			);
+		default:
+			return false;
+	}
+}
+
 export function createDaemonServer(
 	_config: DaemonConfig,
 	sessions: SessionManager,
@@ -65,6 +97,13 @@ export function createDaemonServer(
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());
+		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {
+			const name = parts[2]!;
+			if (!isArtifactLibrary(name)) throw new HttpError(404, "Unknown artifact library");
+			const source = await getLibrary(name as ArtifactLibrary);
+			res.writeHead(200, { "content-type": "text/javascript", "x-content-type-options": "nosniff" });
+			return res.end(source);
+		}
 		if (parts[1] === "models" && parts.length === 2 && req.method === "GET") {
 			const projectId = url.searchParams.get("projectId");
 			const cwd = projectId ? projects.require(projectId).path : expandHome(url.searchParams.get("cwd") || "~");
@@ -84,6 +123,8 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 		}
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "artifacts" && req.method === "GET")
+			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
 				const archived = url.searchParams.get("archived") ?? "false";
@@ -105,6 +146,23 @@ export function createDaemonServer(
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
 			const { cwd, base } = sessions.changeBase(parts[2]!);
 			return json(res, 200, await collectChanges(cwd, base));
+		}
+		if (parts[1] === "sessions" && parts[3] === "artifacts" && req.method === "GET") {
+			if (parts.length === 4) return json(res, 200, await sessions.artifacts(parts[2]!));
+			if (parts.length === 5) {
+				const revisions = url.searchParams.getAll("revision");
+				const value = revisions[0];
+				if (
+					revisions.length > 1 ||
+					(value !== undefined && (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))))
+				)
+					throw new HttpError(400, "revision must be a positive integer");
+				return json(
+					res,
+					200,
+					await sessions.artifact(parts[2]!, parts[4]!, value === undefined ? undefined : Number(value)),
+				);
+			}
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;
@@ -158,6 +216,7 @@ export function createDaemonServer(
 	});
 
 	const clients = new Set<WebSocket>();
+	const artifactVersions = new Map<string, number>();
 	const send = (ws: WebSocket, message: ServerMessage) => {
 		if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
 	};
@@ -167,6 +226,10 @@ export function createDaemonServer(
 	projects.onChange((list) => {
 		for (const ws of clients) send(ws, { type: "projects", projects: list });
 	});
+	sessions.onArtifactsChanged((sessionId, artifacts) => {
+		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
+		for (const ws of clients) send(ws, { type: "artifacts", sessionId, artifacts });
+	});
 
 	wss.on("connection", (ws: WebSocket) => {
 		clients.add(ws);
@@ -175,12 +238,13 @@ export function createDaemonServer(
 		send(ws, { type: "projects", projects: projects.list() });
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
 		ws.on("message", (raw) => {
-			let message: ClientMessage;
+			let message: unknown;
 			try {
-				message = JSON.parse(String(raw)) as ClientMessage;
+				message = JSON.parse(String(raw));
 			} catch {
 				return send(ws, { type: "error", message: "Invalid JSON" });
 			}
+			if (!isClientMessage(message)) return send(ws, { type: "error", message: "Invalid client message" });
 			const { sessionId } = message;
 			if (message.type.startsWith("terminal.")) {
 				try {
@@ -190,9 +254,25 @@ export function createDaemonServer(
 				}
 			} else if (message.type === "subscribe" && !subscriptions.has(sessionId)) {
 				try {
-					subscriptions.set(
-						sessionId,
-						sessions.subscribe(sessionId, (events) => send(ws, { type: "events", sessionId, events })),
+					const unsubscribe = sessions.subscribe(sessionId, (events) =>
+						send(ws, { type: "events", sessionId, events }),
+					);
+					subscriptions.set(sessionId, unsubscribe);
+					const version = artifactVersions.get(sessionId);
+					void sessions.artifacts(sessionId).then(
+						(artifacts) => {
+							// An update broadcast already supersedes an older in-flight snapshot.
+							if (subscriptions.get(sessionId) === unsubscribe && artifactVersions.get(sessionId) === version)
+								send(ws, { type: "artifacts", sessionId, artifacts });
+						},
+						(error: unknown) => {
+							if (subscriptions.get(sessionId) === unsubscribe)
+								send(ws, {
+									type: "error",
+									sessionId,
+									message: error instanceof Error ? error.message : String(error),
+								});
+						},
 					);
 				} catch (error) {
 					send(ws, { type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
@@ -205,6 +285,7 @@ export function createDaemonServer(
 		ws.on("close", () => {
 			clients.delete(ws);
 			for (const unsubscribe of subscriptions.values()) unsubscribe();
+			subscriptions.clear();
 			for (const detach of attachedTerminals.values()) detach();
 		});
 	});

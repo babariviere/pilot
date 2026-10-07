@@ -6,6 +6,7 @@ public enum ServerUpdate: Sendable {
     case sessions([SessionSummary])
     case session(SessionSummary)
     case events(sessionId: String, events: [JSONValue])
+    case artifacts(ArtifactListMessage)
     case terminalData(sessionId: String, data: String)
     case terminalExit(sessionId: String, code: Int)
     case error(sessionId: String?, message: String)
@@ -27,6 +28,9 @@ public enum ServerUpdate: Sendable {
         case "events":
             guard let id = json["sessionId"]?.string, let events = json["events"]?.array else { return nil }
             return .events(sessionId: id, events: events)
+        case "artifacts":
+            guard let update = ArtifactListMessage.parse(json) else { return nil }
+            return .artifacts(update)
         case "terminal.data":
             guard let id = json["sessionId"]?.string, let data = json["data"]?.string else { return nil }
             return .terminalData(sessionId: id, data: data)

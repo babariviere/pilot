@@ -62,6 +62,12 @@ struct ToolRowView: View {
             }
             .buttonStyle(.plain)
 
+            if let artifact = item.artifact {
+                ArtifactCard(reference: artifact)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
             if expansion.expanded {
                 VStack(alignment: .leading, spacing: 8) {
                     if !summary.diffs.isEmpty {

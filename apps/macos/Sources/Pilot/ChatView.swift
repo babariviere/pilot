@@ -202,6 +202,8 @@ private struct RowView: View {
             ThinkingRow(text: text, streaming: streaming)
         case let .tools(_, items):
             ToolGroupView(items: items)
+        case let .artifact(_, reference):
+            ArtifactCard(reference: reference)
         case let .error(_, text):
             ErrorRow(text: text)
         case let .notice(_, text):
