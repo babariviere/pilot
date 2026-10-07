@@ -11,7 +11,7 @@ import type {
 import { type WebSocket, WebSocketServer } from "ws";
 import { collectChanges } from "./changes.ts";
 import type { DaemonConfig } from "./config.ts";
-import { ServiceUnavailable } from "./errors.ts";
+import { Conflict, ServiceUnavailable } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
@@ -85,7 +85,16 @@ export function createDaemonServer(
 			}
 		}
 		if (parts[1] === "sessions" && parts.length === 2) {
-			if (req.method === "GET") return json(res, 200, sessions.list());
+			if (req.method === "GET") {
+				const archived = url.searchParams.get("archived") ?? "false";
+				if (archived !== "false" && archived !== "true" && archived !== "all")
+					throw new HttpError(400, "archived must be false, true or all");
+				return json(
+					res,
+					200,
+					sessions.list({ archived, projectId: url.searchParams.get("projectId") ?? undefined }),
+				);
+			}
 			if (req.method === "POST") return json(res, 201, await sessions.spawn(await readJson<SpawnRequest>(req)));
 		}
 		if (parts[1] === "sessions" && parts.length === 3 && req.method === "GET") {
@@ -99,6 +108,8 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;
+			if (parts[3] === "archive") return json(res, 200, await sessions.archive(id));
+			if (parts[3] === "restore") return json(res, 200, await sessions.restore(id));
 			if (parts[3] === "messages") {
 				const body = await readJson<SendRequest>(req);
 				await sessions.send(id, body.message, body.mode, body.requestId);
@@ -126,7 +137,9 @@ export function createDaemonServer(
 						? 503
 						: error instanceof NotFound
 							? 404
-							: 400;
+							: error instanceof Conflict
+								? 409
+								: 400;
 			const message = error instanceof Error ? error.message : String(error);
 			if (!res.headersSent) json(res, status, { error: message });
 			else res.end();
@@ -160,7 +173,7 @@ export function createDaemonServer(
 		const subscriptions = new Map<string, () => void>();
 		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
-		send(ws, { type: "sessions", sessions: sessions.list() });
+		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
 		ws.on("message", (raw) => {
 			let message: ClientMessage;
 			try {

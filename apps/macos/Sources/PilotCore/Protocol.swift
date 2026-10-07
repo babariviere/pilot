@@ -15,6 +15,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let branch: String?
     public let createdAt: Double
     public let updatedAt: Double
+    /// Epoch milliseconds; nil means the chat is not archived. History and workspace are retained.
+    public let archivedAt: Double?
     public let state: String
     public let model: String?
     public let usage: SessionUsage?
@@ -28,12 +30,16 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let pullRequestError: String?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
+    public var isArchived: Bool { archivedAt != nil }
+    /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
+    public var canArchive: Bool { !isArchived && !isWorking }
 
     public init(
         id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,
         updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
-        pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil
+        pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
+        archivedAt: Double? = nil
     ) {
         self.id = id
         self.title = title
@@ -42,6 +48,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.branch = branch
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.archivedAt = archivedAt
         self.state = state
         self.model = model
         self.usage = usage
@@ -52,6 +59,11 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.pullRequest = pullRequest
         self.pullRequestError = pullRequestError
     }
+}
+
+public extension Collection where Element == SessionSummary {
+    var unarchivedSessions: [SessionSummary] { filter { !$0.isArchived } }
+    var archivedSessions: [SessionSummary] { filter(\.isArchived) }
 }
 
 public struct SessionUsage: Codable, Equatable, Hashable, Sendable {

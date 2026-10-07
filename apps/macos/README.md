@@ -19,6 +19,11 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   scroll and survive reconnects. Edit queued messages inline with Edit or Option-Up/Option-Down.
   Return saves, Escape cancels, and Shift-Return adds a line. Arrow navigation retains unsaved drafts;
   saving preserves queue position and delivery mode. Consumed messages cannot be edited.
+- **Archives.** Archive an idle chat from its toolbar or sidebar context menu. Stop starting/working
+  sessions first. The sidebar's **Archived chats** control browses all archives; each project's
+  archive icon opens its archives, and the browser's project selector changes scope. Archived chats
+  remain readable with history and workspaces intact, but the composer is read-only until **Restore**.
+  Archives do not appear in normal sidebar, dashboard, home, or menu bar session lists/counts.
 - **Usage footer.** Above the composer, the optional session usage snapshot shows a context-window
   estimate (percent and tokens/window) and Claude (orange) or Codex (blue) subscription windows.
   Hover for reset times, snapshot fetch time, and provider errors. Missing measurements stay unknown;

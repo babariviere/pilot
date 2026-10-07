@@ -80,7 +80,7 @@ struct TaskComposer: View {
             if form.tab == .newTask {
                 newTask
             } else {
-                RunningList(sessions: client.sessions.filter(\.isWorking))
+                RunningList(sessions: client.activeSessions.filter(\.isWorking))
                     .frame(minHeight: 120, alignment: .top)
             }
         }

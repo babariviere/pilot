@@ -12,7 +12,10 @@ final class PilotClient: ObservableObject {
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
     var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
 
-    var workingCount: Int { sessions.filter(\.isWorking).count }
+    // The WebSocket includes ALL sessions, including archives, for readable subscriptions.
+    var activeSessions: [SessionSummary] { sessions.unarchivedSessions }
+    var archivedSessions: [SessionSummary] { sessions.archivedSessions }
+    var workingCount: Int { activeSessions.filter(\.isWorking).count }
 
     private var baseURL: URL?
     private var task: URLSessionWebSocketTask?
@@ -65,6 +68,7 @@ final class PilotClient: ObservableObject {
     }
 
     func send(_ sessionId: String, message: String, mode: DeliveryMode) async throws {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before sending messages.") }
         let _: Ack = try await call("api/sessions/\(sessionId)/messages", body: SendRequest(message: message, mode: mode))
     }
 
@@ -73,11 +77,27 @@ final class PilotClient: ObservableObject {
     }
 
     func editQueuedMessage(_ sessionId: String, submissionId: Int, message: String) async throws {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before editing queued messages.") }
         let _: Ack = try await call(
             "api/sessions/\(sessionId)/queue/\(submissionId)",
             method: "PATCH",
             body: EditQueuedMessageRequest(message: message)
         )
+    }
+
+    @discardableResult
+    func archive(_ sessionId: String) async throws -> SessionSummary {
+        guard session(sessionId)?.isWorking != true else { throw ClientError("Stop this session before archiving it.") }
+        let session: SessionSummary = try await call("api/sessions/\(sessionId)/archive", body: [String: String]())
+        update(session)
+        return session
+    }
+
+    @discardableResult
+    func restore(_ sessionId: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call("api/sessions/\(sessionId)/restore", body: [String: String]())
+        update(session)
+        return session
     }
 
     func createProject(_ request: ProjectRequest) async throws -> Project {

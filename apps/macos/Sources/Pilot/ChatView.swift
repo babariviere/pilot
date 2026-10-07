@@ -147,16 +147,20 @@ struct ChatView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if let usage = session.usage, usage.hasDisplayData { UsageFooter(usage: usage) }
-                Composer(
-                    state: composer,
-                    working: transcript.working || session.state == "starting",
-                    queuedMessages: transcript.queuedMessagesInDeliveryOrder,
-                    onSend: send,
-                    onStop: { Task { try? await AppModel.shared.client.stop(session.id) } },
-                    onEditQueuedMessage: { id, text in
-                        try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
-                    }
-                )
+                if session.isArchived {
+                    ArchivedComposer(session: session)
+                } else {
+                    Composer(
+                        state: composer,
+                        working: transcript.working || session.state == "starting",
+                        queuedMessages: transcript.queuedMessagesInDeliveryOrder,
+                        onSend: send,
+                        onStop: { model.stopSession(session.id) },
+                        onEditQueuedMessage: { id, text in
+                            try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
+                        }
+                    )
+                }
             }
         }
         .onAppear { feed.start() }
@@ -169,6 +173,7 @@ struct ChatView: View {
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {
+        guard !session.isArchived else { return }
         composer.error = nil
         let previous = composer.draft
         composer.draft = ""

@@ -65,6 +65,8 @@ export interface SessionSummary {
 	branch?: string;
 	createdAt: number;
 	updatedAt: number;
+	/** Epoch ms when archived. History and workspace are retained; restore before sending input. */
+	archivedAt?: number;
 	state: SessionState;
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
@@ -83,6 +85,12 @@ export interface ContextUsage {
 	tokens?: number;
 	contextWindow: number;
 	percent?: number;
+}
+
+/** GET /api/sessions. Defaults to active sessions; projectId narrows either view. */
+export interface SessionListQuery {
+	archived?: "false" | "true" | "all";
+	projectId?: string;
 }
 
 export interface SubscriptionUsage {
@@ -201,6 +209,7 @@ export type ClientMessage =
 
 /** Daemon to client, over /api/ws. */
 export type ServerMessage =
+	/** Includes both active and archived sessions, so clients can switch views locally. */
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| { type: "session"; session: SessionSummary }
 	| { type: "projects"; projects: Project[] }

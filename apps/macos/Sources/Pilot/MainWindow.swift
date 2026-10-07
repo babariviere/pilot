@@ -20,6 +20,8 @@ struct MainWindow: View {
                 if let session = model.selectedSession {
                     SessionDetail(session: session)
                         .id(session.id)
+                } else if model.showingArchive {
+                    ArchiveView()
                 } else {
                     HomeView()
                         .navigationTitle("Pilot")
@@ -32,6 +34,14 @@ struct MainWindow: View {
                 ProgressView("Starting pilotd…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .alert("Session action failed", isPresented: Binding(
+            get: { model.sessionActionError != nil },
+            set: { if !$0 { model.sessionActionError = nil } }
+        )) {
+            Button("OK") { model.sessionActionError = nil }
+        } message: {
+            Text(model.sessionActionError ?? "")
         }
         .onAppear {
             model.openWindowAction = { openWindow(id: MainWindow.id) }
@@ -67,6 +77,12 @@ struct SessionDetail: View {
                 SessionStatusIcon(status: session.status)
                 if model.isUnread(session) { UnreadBadge() }
                 PullRequestBadge(session: session)
+                if session.isArchived {
+                    Button { model.showArchive(in: model.archiveProjectId) } label: {
+                        Label("Archived chats", systemImage: "archivebox")
+                    }
+                }
+                SessionArchiveAction(session: session)
                 if let branch = session.branch {
                     Label(branch, systemImage: "arrow.triangle.branch")
                         .labelStyle(.titleAndIcon)

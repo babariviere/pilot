@@ -26,6 +26,11 @@ final class AppModel: ObservableObject {
     /// Project preselected in the new-session screen.
     @Published var draftProjectId: String?
     @Published var collapsedProjects: Set<String> = []
+    @Published var showingArchive = false
+    /// nil browses every project's archived chats.
+    @Published var archiveProjectId: String?
+    @Published var sessionActionError: String?
+    @Published var pendingSessionActions: Set<String> = []
 
     /// Captured from SwiftUI so non-view code (notifications, menu) can reopen the window.
     var openWindowAction: (() -> Void)?
@@ -44,6 +49,8 @@ final class AppModel: ObservableObject {
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }
             for notification in self.attention.observe(sessions, snapshot: snapshot) {
+                // Record completion versions for archives too, without surfacing old results.
+                guard self.client.session(notification.sessionId)?.isArchived != true else { continue }
                 self.notifier.deliver(notification)
             }
         }
@@ -55,6 +62,7 @@ final class AppModel: ObservableObject {
     }
 
     func newSession(in projectId: String?) {
+        showingArchive = false
         draftProjectId = projectId
         selectedSessionId = nil
     }
@@ -64,6 +72,36 @@ final class AppModel: ObservableObject {
     func review(_ session: SessionSummary, chatVisible: Bool = false, explicit: Bool = false) {
         if attention.review(session, chatVisible: chatVisible, appActive: NSApp.isActive, explicit: explicit) {
             reviewRevision += 1
+        }
+    }
+
+    func showArchive(in projectId: String? = nil) {
+        archiveProjectId = projectId
+        showingArchive = true
+        selectedSessionId = nil
+    }
+
+    func setArchived(_ archived: Bool, sessionId: String) {
+        guard !pendingSessionActions.contains(sessionId) else { return }
+        pendingSessionActions.insert(sessionId)
+        Task {
+            defer { pendingSessionActions.remove(sessionId) }
+            do {
+                if archived { try await client.archive(sessionId) }
+                else { try await client.restore(sessionId) }
+            } catch {
+                sessionActionError = error.localizedDescription
+            }
+        }
+    }
+
+    func stopSession(_ sessionId: String) {
+        guard !pendingSessionActions.contains(sessionId) else { return }
+        pendingSessionActions.insert(sessionId)
+        Task {
+            defer { pendingSessionActions.remove(sessionId) }
+            do { try await client.stop(sessionId) }
+            catch { sessionActionError = error.localizedDescription }
         }
     }
 
