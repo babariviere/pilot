@@ -288,18 +288,3 @@ private struct ErrorRow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.08)))
     }
 }
-
-private struct WorkingIndicator: View {
-    let retry: String?
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.mini)
-            Text(retry.map { "Retrying: \($0)" } ?? "Working…")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
