@@ -26,7 +26,7 @@ JS
 # Native dependencies must not need Homebrew or checkout-local shared libraries.
 while IFS= read -r -d '' binary; do
 	if file "$binary" | grep -q 'Mach-O'; then
-		lipo -verify_arch arm64 "$binary"
+		lipo "$binary" -verify_arch arm64
 		otool -arch arm64 -L "$binary" | awk '/^[[:space:]]/{print $1}' | while IFS= read -r dependency; do
 			case "$dependency" in
 				@*|/usr/lib/*|/System/Library/*) ;;
