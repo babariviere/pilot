@@ -2,6 +2,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ChangedFile, SessionChanges } from "@pilot/protocol";
+import { workspaceBranch } from "./workspaces.ts";
 
 const exec = promisify(execFile);
 const MAX_DIFF = 1024 * 1024;
@@ -35,7 +36,7 @@ const STATUS: Record<string, ChangedFile["status"]> = {
 export async function collectChanges(cwd: string, base = "HEAD"): Promise<SessionChanges> {
 	if ((await git(cwd, ["rev-parse", "--is-inside-work-tree"]).catch(() => "")).trim() !== "true")
 		throw new Error("Not a git repository");
-	const branch = (await git(cwd, ["branch", "--show-current"]).catch(() => "")).trim() || undefined;
+	const branch = await workspaceBranch(cwd).catch(() => undefined);
 	const mergeBase = (await git(cwd, ["merge-base", "HEAD", base]).catch(() => "")).trim() || base;
 
 	const files = new Map<string, ChangedFile>();

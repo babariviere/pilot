@@ -89,7 +89,7 @@ test("real Worker blocks accepted-before-working and queued inbox gaps until a f
 	});
 	const fork = mock.method(childProcess, "fork", () => child as unknown as ChildProcess);
 	syncBuiltinESMExports();
-	const sessions = new SessionManager(home, new ProjectStore(home));
+	const sessions = new SessionManager(home, new ProjectStore(home), undefined, { title: async () => undefined });
 	t.after(async () => {
 		await sessions.shutdown();
 		fork.mock.restore();

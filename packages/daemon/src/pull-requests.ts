@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { SessionPullRequest } from "@pilot/protocol";
-import type { Runner } from "./workspaces.ts";
+import { type Runner, workspaceBranch } from "./workspaces.ts";
 
 const exec = promisify(execFile);
 const run: Runner = async (file, args, cwd, timeoutMs) => {
@@ -13,11 +13,13 @@ const run: Runner = async (file, args, cwd, timeoutMs) => {
 export interface PullRequestSession {
 	id: string;
 	cwd: string;
-	workspace?: { branch: string; upstream?: string };
+	workspace?: { branch?: string; upstream?: string };
 	pullRequest?: SessionPullRequest;
 }
 
 export interface PullRequestResult {
+	/** Current agent-chosen branch/bookmark, also cached for session summaries. */
+	branch?: string;
 	pullRequest?: SessionPullRequest;
 	error?: string;
 }
@@ -134,10 +136,18 @@ export async function discoverPullRequest(
 	runner: Runner = run,
 ): Promise<PullRequestResult> {
 	if (!session.workspace) return {};
+	let branch = session.workspace.branch;
 	try {
-		const branch = session.workspace.branch;
-		if (!branch || branch.startsWith("-") || /[\s\x00-\x1f\x7f:~^?*[\\]/.test(branch))
-			throw new Error("Invalid workspace branch for pull request discovery");
+		const validateBranch = (name: string) => {
+			if (!name || name.startsWith("-") || /[\s\x00-\x1f\x7f:~^?*[\\]/.test(name))
+				throw new Error("Invalid workspace branch for pull request discovery");
+		};
+		if (branch !== undefined) validateBranch(branch);
+		// Keep the recorded name if a merged/deleted branch no longer has a local ref.
+		branch = (await workspaceBranch(session.cwd, branch, runner)) ?? branch;
+		if (branch === undefined) return {};
+		validateBranch(branch);
+		const head = branch;
 		const upstream =
 			session.workspace.upstream ?? (await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000));
 		const repo = githubRepository(upstream.trim());
@@ -148,7 +158,7 @@ export async function discoverPullRequest(
 					[
 						"pr",
 						"list",
-						`--head=${branch}`,
+						`--head=${head}`,
 						`--repo=${repo.identity}`,
 						`--state=${state}`,
 						"--limit=100",
@@ -157,13 +167,20 @@ export async function discoverPullRequest(
 					session.cwd,
 					10_000,
 				),
-				branch,
+				head,
 				repo,
 			);
 		// Query active PRs separately so even a long historical list cannot hide an open PR.
 		const pr = (await list("open")) ?? (await list("all"));
-		if (!pr) return session.pullRequest ? { error: "No matching pull request found; keeping last known status" } : {};
+		if (!pr)
+			return {
+				branch,
+				...(session.pullRequest && session.workspace.branch === branch
+					? { error: "No matching pull request found; keeping last known status" }
+					: {}),
+			};
 		return {
+			branch,
 			pullRequest: {
 				number: pr.number,
 				url: pr.url,
@@ -175,6 +192,7 @@ export async function discoverPullRequest(
 		};
 	} catch (error) {
 		return {
+			...(branch ? { branch } : {}),
 			error: `Pull request lookup failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512),
 		};
 	}

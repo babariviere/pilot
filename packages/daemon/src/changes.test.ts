@@ -27,14 +27,16 @@ test("reports committed, uncommitted and untracked changes since the base", asyn
 		writeFileSync(join(root, "gone.txt"), "bye\n");
 		git(root, "add", ".");
 		git(root, "commit", "--quiet", "-m", "base");
-		git(root, "switch", "--quiet", "-c", "pilot/x");
+		git(root, "switch", "--quiet", "--detach", "main");
+		assert.equal((await collectChanges(root, "main")).branch, undefined);
+		git(root, "switch", "--quiet", "-c", "fix-reopen-race");
 		writeFileSync(join(root, "a.txt"), "one\n2\nthree\n");
 		git(root, "commit", "--quiet", "-am", "edit");
 		unlinkSync(join(root, "gone.txt"));
 		writeFileSync(join(root, "new.txt"), "fresh\n");
 
 		const changes = await collectChanges(root, "main");
-		assert.equal(changes.branch, "pilot/x");
+		assert.equal(changes.branch, "fix-reopen-race");
 		assert.deepEqual(
 			changes.files.map((f) => [f.path, f.status, f.additions, f.deletions]),
 			[

@@ -6,7 +6,8 @@ import { dirname, join, resolve } from "node:path";
 
 export interface Workspace {
 	path: string;
-	branch: string;
+	/** Chosen by the agent, absent while the clone is detached. */
+	branch?: string;
 	/** What the branch started from, such as `origin/main`. */
 	base: string;
 	/** The real remote, so pushes and pull requests go upstream rather than to the local checkout. */
@@ -129,27 +130,42 @@ async function copyLocalConfigs(source: string, destination: string, runner: Run
 	}
 }
 
-/** "Fix the flaky reopen test!" -> "fix-the-flaky-reopen-test" */
-export function branchSlug(title: string): string {
-	return (
-		title
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, "-")
-			.replace(/^-+|-+$/g, "")
-			.slice(0, 40)
-			.replace(/-+$/, "") || "task"
-	);
+/** The checked-out Git branch, or the nearest local jj bookmark on the working copy's ancestry. */
+export async function workspaceBranch(
+	cwd: string,
+	previous?: string,
+	runner: Runner = run,
+): Promise<string | undefined> {
+	if (existsSync(join(cwd, ".jj"))) {
+		const output = await runner(
+			"jj",
+			[
+				"log",
+				"--no-graph",
+				"-r",
+				"heads(::@ & bookmarks())",
+				"-T",
+				'local_bookmarks.map(|b| b.name()).join("\\n") ++ "\\n"',
+			],
+			cwd,
+			10_000,
+		);
+		const names = [...new Set(output.trim().split("\n").filter(Boolean))];
+		// Several bookmarks may share a commit. Do not guess which one is this session's branch.
+		return previous && names.includes(previous) ? previous : names.length === 1 ? names[0] : undefined;
+	}
+	return (await runner("git", ["branch", "--show-current"], cwd, 10_000)).trim() || undefined;
 }
 
 /**
  * Clone `source` into `destination` (a fresh directory), point `origin` at the source's real remote,
- * fetch it, and start `branch` from the remote's default branch. Ignored mise local configuration
+ * fetch it, and start detached from the remote's default branch. The agent chooses its own branch.
+ * Ignored mise local configuration
  * is copied too; other uncommitted changes in the user's checkout stay there.
  */
 export async function createWorkspace(
 	source: string,
 	destination: string,
-	branch: string,
 	providedRunner: Runner = run,
 	signal?: AbortSignal,
 ): Promise<Workspace> {
@@ -187,7 +203,12 @@ export async function createWorkspace(
 			}
 		}
 	}
-	await runner("git", ["switch", "--quiet", "--no-track", "-c", branch, base], destination);
+	// Pin the fallback before the agent commits: HEAD would otherwise move the diff's base with it.
+	if (base === "HEAD") base = await runner("git", ["rev-parse", "HEAD"], destination);
+	const clonedBranch = await runner("git", ["branch", "--show-current"], destination);
+	await runner("git", ["switch", "--quiet", "--detach", base], destination);
+	// A cloned source branch is not an agent choice. Do not import it as a local jj bookmark.
+	if (clonedBranch) await runner("git", ["branch", "-D", "--", clonedBranch], destination);
 	await copyLocalConfigs(source, destination, runner);
 
 	let jj = false;
@@ -198,5 +219,5 @@ export async function createWorkspace(
 		jj = true;
 	}
 	signal?.throwIfAborted();
-	return { path: destination, branch, base, ...(upstream ? { upstream } : {}), jj };
+	return { path: destination, base, ...(upstream ? { upstream } : {}), jj };
 }

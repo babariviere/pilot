@@ -104,7 +104,7 @@ async function fixture() {
 					throw new Error("Archive tests must not launch a kernel");
 				},
 			},
-			{ runner: async () => "[]" },
+			{ runner: async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]") },
 		);
 		managers.push(sessions);
 		await sessions.load();
@@ -186,7 +186,7 @@ test("running, starting and in-flight input sessions cannot be archived", async 
 		meta.initializing = true;
 		await assert.rejects(sessions.archive(id), Conflict);
 		delete meta.initializing;
-		meta.preparing = { source: meta.cwd, branch: "pilot/preparing" };
+		meta.preparing = { source: meta.cwd };
 		await assert.rejects(sessions.archive(id), Conflict);
 		delete meta.preparing;
 		meta.pending = [{ type: "input", requestId: "queued", content: "Queued", mode: "followUp" }];

@@ -259,7 +259,7 @@ private struct ProjectSettings: View {
                         LabeledContent("Folder") { Text(project.path.abbreviatingHome).textSelection(.enabled) }
                         TextField("Default model", text: $editor.model, prompt: Text("pi default"))
                         Toggle("Run each session in a private clone", isOn: $editor.privateClones)
-                        Text("Sessions get their own clone and pilot/… branch, so they never touch your checkout. Turn off to run in the folder itself.")
+                        Text("Sessions get their own clone, so they never touch your checkout. The agent chooses a descriptive branch or bookmark. Turn off to run in the folder itself.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         if let error = editor.error { Text(error).foregroundStyle(.red) }
