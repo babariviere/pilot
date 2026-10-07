@@ -56,7 +56,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 - **Results.** Color-only status dots are separate from lifecycle: blue for Working, green for Done,
   orange for Needs your input, red for Failed, and gray for Stopped/Idle. Hover for the status label;
   screen readers announce it too.
-  Unread result dots persist until the loaded outcome card is visible in an active chat, or you choose
+  Chats show the working indicator, but no settled status icon or outcome-reason footer.
+  Unread result dots persist until the loaded transcript end is visible in an active chat, or you choose
   "Mark as reviewed" in the sidebar. Reviewing never answers a question or clears Needs your input.
 - **Pull requests.** Browser links in the sidebar, session header, dashboard, context menu and menu bar
   show only a colored state icon and PR number, independently of results and unread dots.

@@ -240,6 +240,9 @@ reports), producing a morning summary in the app and Slack.
   until reviewed, independently of the outcome:
   reading a question does not answer it. Native macOS notifications distinguish results, blocking
   requests and failures, and deduplicate completion versions across reconnects.
+- The chat transcript shows an activity indicator while the agent is working, but no settled
+  status icon or outcome-reason footer. Reaching the transcript end in the active window still
+  marks the latest settled outcome as reviewed; status icons remain elsewhere in the app.
 - Private-branch sessions show a linked colored PR icon and number independently of run outcome;
   tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
   Sidebar rows also show the changed-file count, added/deleted line totals since the session base,
