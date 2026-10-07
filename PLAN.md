@@ -237,7 +237,8 @@ reports), producing a morning summary in the app and Slack.
   requests and failures, and deduplicate completion versions across reconnects.
 - Private-branch sessions show a linked colored PR icon and number independently of run outcome;
   tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
-  Sidebar rows also show the changed-file count since the session base and the workspace branch,
+  Sidebar rows also show the changed-file count, added/deleted line totals since the session base,
+  and the workspace branch after a middle-dot separator,
   including before a PR exists. Visible rows refresh lightweight repository summaries every ten seconds,
   with at most four sidebar requests in flight;
   failed lookups omit the count rather than showing zero, and long branches truncate with a full-name tooltip.
@@ -315,7 +316,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `SessionSummary.pullRequest`, `.pullRequestError` | Branch-linked GitHub PR status and cached-lookup errors (done for private manual sessions) |
-| `GET /api/sessions/:id/changes/summary` | Lightweight base, branch and changed-file count for sidebar rows, without generating patches (done) |
+| `GET /api/sessions/:id/changes/summary` | Lightweight base, branch, changed-file count and added/deleted line totals for sidebar rows, without generating patches (done) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history and workspace (done) |
 | `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |

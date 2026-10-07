@@ -12,7 +12,7 @@ import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
-test("changes summary GET returns only metadata and a count and preserves route guards", async (t) => {
+test("changes summary GET returns only metadata and counts and preserves route guards", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-server-summary-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const git = (...args: string[]) =>
@@ -61,7 +61,7 @@ test("changes summary GET returns only metadata and a count and preserves route 
 	const response = await fetch(`${url}/summary`);
 	assert.equal(response.status, 200);
 	assert.match(response.headers.get("content-type") ?? "", /application\/json/);
-	assert.deepEqual(await response.json(), { base, branch: "main", fileCount: 2 });
+	assert.deepEqual(await response.json(), { base, branch: "main", fileCount: 2, additions: 2, deletions: 1 });
 	assert.deepEqual(changeBase.mock.calls[0]?.arguments, ["session-1"]);
 	const full = await fetch(url);
 	assert.equal(full.status, 200);
