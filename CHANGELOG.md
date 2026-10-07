@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0](https://github.com/babariviere/pilot/compare/v0.2.0...v0.3.0) (2026-10-07)
+
+
+### Features
+
+* **artifacts:** add versioned interactive session artifacts ([81c5f34](https://github.com/babariviere/pilot/commit/81c5f34573b7a819b311a5408334ce41237f5e64))
+* **attention:** show agent outcomes and unread result indicators ([18968d4](https://github.com/babariviere/pilot/commit/18968d410d6e970a82b8a52429fa4c61dab8560e))
+* **attention:** track pull request state for session branches ([395c64b](https://github.com/babariviere/pilot/commit/395c64b5227de771e023c67d74929c34ee5cc21e))
+* **chats:** add archiving and project/global archive browsing ([2eb68fc](https://github.com/babariviere/pilot/commit/2eb68fcd278f38bbcfcc0cc7b4af5f50b34354c5))
+* **macos:** add a polished path completion picker ([b77833b](https://github.com/babariviere/pilot/commit/b77833b51385a66def24254e1f3fd6a673f0cd72))
+* **macos:** complete file paths on Tab ([fd5b3c4](https://github.com/babariviere/pilot/commit/fd5b3c4645e4f176d5b6f628e421060fcc1a41f9))
+
+
+### Bug Fixes
+
+* **macos:** preserve scroll position during active conversations ([d6ee0fc](https://github.com/babariviere/pilot/commit/d6ee0fc667b5cb15cd70fa9a117c69858399f736))
+* **sidebar:** refresh chat ages and preserve activity timestamps ([5b8c046](https://github.com/babariviere/pilot/commit/5b8c046fecb0b9cf7275acd4c1a6783525af4a05))
+
 ## [0.2.0](https://github.com/babariviere/pilot/compare/v0.1.0...v0.2.0) (2026-10-07)
 
 
