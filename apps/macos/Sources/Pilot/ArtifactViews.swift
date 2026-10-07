@@ -183,17 +183,18 @@ private final class ArtifactSidebarState: ObservableObject {
     @Published var error: String?
 }
 
-struct ProjectArtifactsEntry: View {
+struct ProjectArtifactsButton: View {
     let project: Project
     @ObservedObject var client: PilotClient
     @StateObject private var state = ArtifactViewState()
 
     var body: some View {
         Button { state.viewer = true } label: {
-            Label("Browse artifacts", systemImage: "cube.transparent").font(.caption)
-                .foregroundStyle(.secondary)
+            Image(systemName: "cube.transparent")
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.borderless)
+        .help("Browse artifacts in \(project.name)")
+        .accessibilityLabel("Browse artifacts in \(project.name)")
         .sheet(isPresented: $state.viewer) { ProjectArtifactsBrowser(project: project, client: client) }
     }
 }

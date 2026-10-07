@@ -21,14 +21,13 @@ struct SessionSidebar: View {
                     // shrinking the header and moving its action buttons underneath the pointer.
                     Section {
                         if isExpanded.wrappedValue {
-                            ProjectArtifactsEntry(project: project, client: client)
                             ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
                             if sessions.isEmpty {
                                 Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
                             }
                         }
                     } header: {
-                        ProjectHeader(project: project, working: sessions.filter(\.isWorking).count,
+                        ProjectHeader(project: project, client: client, working: sessions.filter(\.isWorking).count,
                                       isExpanded: isExpanded, onArchive: {
                             model.showArchive(in: project.id)
                         }) {
@@ -125,6 +124,7 @@ private struct SidebarButton: View {
 
 private struct ProjectHeader: View {
     let project: Project
+    @ObservedObject var client: PilotClient
     let working: Int
     @Binding var isExpanded: Bool
     let onArchive: () -> Void
@@ -143,6 +143,7 @@ private struct ProjectHeader: View {
                     .foregroundStyle(Color.accentColor)
             }
             Spacer()
+            ProjectArtifactsButton(project: project, client: client)
             Button(action: onArchive) { Image(systemName: "archivebox") }
                 .buttonStyle(.borderless)
                 .help("Browse archived chats in \(project.name)")
