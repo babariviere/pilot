@@ -12,13 +12,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let updatedAt: Double
     public let state: String
     public let model: String?
+    public let usage: SessionUsage?
     public let error: String?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
 
     public init(
         id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,
-        updatedAt: Double, state: String, model: String? = nil, error: String? = nil
+        updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil
     ) {
         self.id = id
         self.title = title
@@ -29,6 +30,62 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.updatedAt = updatedAt
         self.state = state
         self.model = model
+        self.usage = usage
+        self.error = error
+    }
+}
+
+public struct SessionUsage: Codable, Equatable, Hashable, Sendable {
+    public let context: ContextUsage?
+    public let subscription: SubscriptionUsage?
+
+    public init(context: ContextUsage? = nil, subscription: SubscriptionUsage? = nil) {
+        self.context = context
+        self.subscription = subscription
+    }
+}
+
+public struct ContextUsage: Codable, Equatable, Hashable, Sendable {
+    public let tokens: Double?
+    public let contextWindow: Double
+    public let percent: Double?
+
+    public init(tokens: Double? = nil, contextWindow: Double, percent: Double? = nil) {
+        self.tokens = tokens
+        self.contextWindow = contextWindow
+        self.percent = percent
+    }
+}
+
+public enum SubscriptionProvider: String, Codable, Hashable, Sendable {
+    case anthropic
+    case openai
+}
+
+public struct SubscriptionWindow: Codable, Equatable, Hashable, Sendable {
+    public let label: String
+    public let usedPercent: Double
+    /// ISO 8601 reset timestamp.
+    public let resetsAt: String?
+
+    public init(label: String, usedPercent: Double, resetsAt: String? = nil) {
+        self.label = label
+        self.usedPercent = usedPercent
+        self.resetsAt = resetsAt
+    }
+}
+
+public struct SubscriptionUsage: Codable, Equatable, Hashable, Sendable {
+    /// Epoch milliseconds of the provider snapshot, not its delivery time.
+    public let fetchedAt: Double
+    public let provider: SubscriptionProvider?
+    public let windows: [SubscriptionWindow]
+    public let error: String?
+
+    public init(fetchedAt: Double, provider: SubscriptionProvider? = nil, windows: [SubscriptionWindow], error: String? = nil) {
+        self.fetchedAt = fetchedAt
+        self.provider = provider
+        self.windows = windows
         self.error = error
     }
 }

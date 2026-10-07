@@ -74,13 +74,16 @@ struct ChatView: View {
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            Composer(
-                state: composer,
-                working: transcript.working,
-                queued: transcript.queued,
-                onSend: send,
-                onStop: { Task { try? await AppModel.shared.client.stop(session.id) } }
-            )
+            VStack(spacing: 0) {
+                if let usage = session.usage, usage.hasDisplayData { UsageFooter(usage: usage) }
+                Composer(
+                    state: composer,
+                    working: transcript.working,
+                    queued: transcript.queued,
+                    onSend: send,
+                    onStop: { Task { try? await AppModel.shared.client.stop(session.id) } }
+                )
+            }
         }
         .onAppear { feed.start() }
         .onDisappear { feed.stop() }

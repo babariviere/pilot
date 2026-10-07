@@ -5,7 +5,14 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type KernelCommand, type KernelPacket, type WorkspaceContext, workerEntry } from "@pilot/kernel";
-import type { AgentEvent, DeliveryMode, SessionState, SessionSummary, SpawnRequest } from "@pilot/protocol";
+import type {
+	AgentEvent,
+	DeliveryMode,
+	SessionState,
+	SessionSummary,
+	SessionUsage,
+	SpawnRequest,
+} from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { branchSlug, createWorkspace } from "./workspaces.ts";
@@ -41,6 +48,8 @@ class Worker {
 	readonly ready: Promise<void>;
 	state: SessionState = "starting";
 	error?: string;
+	/** Ephemeral. Never persist provider quota windows as current after a daemon restart. */
+	usage?: SessionUsage;
 	private readonly pending = new Map<string, { resolve(): void; reject(error: Error): void }>();
 
 	constructor(
@@ -63,8 +72,11 @@ class Worker {
 		this.child.on("message", (message) => {
 			const packet = message as KernelPacket;
 			if (packet.type === "ready") {
+				this.usage = packet.usage;
 				this.state = packet.working ? "working" : "idle";
 				markReady();
+			} else if (packet.type === "usage") {
+				this.usage = packet.usage;
 			} else if (packet.type === "working") {
 				this.state = packet.working ? "working" : "idle";
 			} else if (packet.type === "accepted" || packet.type === "aborted") {
@@ -331,6 +343,7 @@ export class SessionManager {
 			updatedAt: meta.updatedAt,
 			state: !worker || (exited && worker.state !== "failed") ? "parked" : worker.state,
 			...(meta.model ? { model: meta.model } : {}),
+			...(!exited && worker?.usage ? { usage: worker.usage } : {}),
 			...(worker?.error ? { error: worker.error } : {}),
 		};
 	}

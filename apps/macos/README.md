@@ -15,6 +15,12 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   blocks with copy), collapsible thinking, grouped tool rows with summaries ("Ran command npm test"),
   live output and stop. Return steers the current run (or sends when idle), Option-Return queues a
   follow-up, Shift-Return adds a line.
+- **Usage footer.** Above the composer, the optional session usage snapshot shows a context-window
+  estimate (percent and tokens/window) and Claude (orange) or Codex (blue) subscription windows.
+  Hover for reset times, snapshot fetch time, and provider errors. Missing measurements stay unknown;
+  absent usage hides the footer. Providerless empty snapshots silently clear old subscription limits.
+  The app only renders daemon session updates, with no new provider requests or polling.
+  Subscription values are the latest fetched snapshot, not live measurements.
 - **Models.** The model picker lists your pi scope (`enabledModels`, resolved by pi's model runtime for the
   project's directory) grouped by provider, plus the project's or pi's default (`GET /api/models`).
 - **Terminal.** ⌘J toggles a libghostty terminal on the right, via
@@ -45,6 +51,7 @@ scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from 
 scripts/test.sh              # PilotCore tests
 swift run Pilot              # unbundled dev run (no notifications)
 .build/debug/Pilot --snapshot /tmp/pilot-snap   # render home, session and settings with fixtures to PNGs
+                             # also usage-footers.png and usage-footer-narrow.png: limits and fallback
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 ```

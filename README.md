@@ -7,6 +7,11 @@ and gives you a native macOS app to spawn, steer and stop them, with a libghostt
 Sessions load your pi configuration from `~/.pi/agent` (settings, packages, extensions, skills, MCP),
 so packages such as [pi-extensions](https://github.com/babariviere/pi-extensions) work by default.
 
+The chat footer shows the session's context-window estimate. With pi-extensions' `usage` extension
+enabled, it also shows Claude or Codex subscription windows. Hover for reset times and snapshot freshness.
+Subscription data uses the extension's existing OAuth polling; Pilot does not read credentials or poll
+usage endpoints separately. Without that extension or subscription credentials, only context is shown.
+
 See [PLAN.md](PLAN.md) for the spec and milestones (GitHub, Slack and Linear triggers, human-in-the-loop
 specs, hosting).
 

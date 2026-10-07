@@ -64,6 +64,36 @@ enum Snapshot {
             to: directory.appending(path: "session-changes.png")
         )
         await render(SettingsView().environmentObject(model), size: CGSize(width: 560, height: 420), to: directory.appending(path: "settings.png"))
+        await render(
+            VStack(alignment: .leading, spacing: 16) {
+                UsageFooter(usage: Fixtures.codexUsage)
+                UsageFooter(usage: Fixtures.claudeUsage)
+                UsageFooter(usage: SessionUsage(
+                    context: ContextUsage(contextWindow: 200_000),
+                    subscription: SubscriptionUsage(fetchedAt: Fixtures.now - 3_600_000, provider: .anthropic,
+                                                    windows: [], error: "Could not refresh subscription limits")
+                ))
+                UsageFooter(usage: SessionUsage(subscription: SubscriptionUsage(fetchedAt: Fixtures.now, provider: .openai, windows: [])))
+            }
+            .padding(.vertical, 16)
+            .background(Theme.background),
+            size: CGSize(width: 760, height: 220),
+            to: directory.appending(path: "usage-footers.png")
+        )
+        await render(
+            VStack(spacing: 16) {
+                UsageFooter(usage: Fixtures.codexUsage)
+                UsageFooter(usage: Fixtures.claudeUsage)
+                UsageFooter(usage: SessionUsage(
+                    context: ContextUsage(tokens: 0, contextWindow: 200_000),
+                    subscription: SubscriptionUsage(fetchedAt: Fixtures.now, windows: [])
+                ))
+            }
+            .padding(.vertical, 16)
+            .background(Theme.background),
+            size: CGSize(width: 360, height: 220),
+            to: directory.appending(path: "usage-footer-narrow.png")
+        )
         print("snapshots written to \(directory.path)")
         exit(0)
     }
@@ -235,6 +265,21 @@ enum Fixtures {
     static let now = Date().timeIntervalSince1970 * 1000
     static let home = FileManager.default.homeDirectoryForCurrentUser.path
 
+    static let codexUsage = SessionUsage(
+        context: ContextUsage(tokens: 42_600, contextWindow: 200_000, percent: 21.3),
+        subscription: SubscriptionUsage(fetchedAt: now - 120_000, provider: .openai, windows: [
+            SubscriptionWindow(label: "5h", usedPercent: 34, resetsAt: "2026-06-15T18:00:00Z"),
+            SubscriptionWindow(label: "Week", usedPercent: 68, resetsAt: "2026-06-22T12:00:00Z"),
+        ])
+    )
+    static let claudeUsage = SessionUsage(
+        context: ContextUsage(tokens: 182_000, contextWindow: 200_000),
+        subscription: SubscriptionUsage(fetchedAt: now - 600_000, provider: .anthropic, windows: [
+            SubscriptionWindow(label: "5h", usedPercent: 92, resetsAt: "2026-06-15T19:30:00.000Z"),
+            SubscriptionWindow(label: "Week", usedPercent: 45),
+        ])
+    )
+
     static let projects = [
         Project(id: "p1", name: "pilot", path: "\(home)/src/github.com/babariviere/pilot", model: "openai-codex/gpt-6.1-sol", createdAt: now),
         Project(id: "p2", name: "pi-extensions", path: "\(home)/src/github.com/babariviere/pi-extensions", createdAt: now),
@@ -243,11 +288,13 @@ enum Fixtures {
     static let sessions = [
         SessionSummary(id: "s1", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",
                        branch: "pilot/fix-flaky-reopen-test-55cb84",
-                       createdAt: now - 3_600_000, updatedAt: now - 133_000, state: "working", model: "openai-codex/gpt-6.1-sol"),
+                       createdAt: now - 3_600_000, updatedAt: now - 133_000, state: "working", model: "openai-codex/gpt-6.1-sol",
+                       usage: codexUsage),
         SessionSummary(id: "s2", title: "Add projects API to pilotd", cwd: projects[0].path, projectId: "p1",
                        createdAt: now - 86_400_000, updatedAt: now - 3_000_000, state: "idle", model: "openai-codex/gpt-6.1-sol"),
         SessionSummary(id: "s3", title: "Review subagents durable storage", cwd: projects[1].path, projectId: "p2",
-                       createdAt: now - 2 * 86_400_000, updatedAt: now - 600_000, state: "working", model: "anthropic/claude-opus-5-5"),
+                       createdAt: now - 2 * 86_400_000, updatedAt: now - 600_000, state: "working", model: "anthropic/claude-opus-5-5",
+                       usage: claudeUsage),
         SessionSummary(id: "s4", title: "Sandbox floor for night runs", cwd: projects[1].path, projectId: "p2",
                        createdAt: now - 4 * 86_400_000, updatedAt: now - 90_000_000, state: "failed", model: "anthropic/claude-sonnet-5",
                        error: "Kernel exited with code 1"),

@@ -15,7 +15,7 @@ import {
 	type Storage,
 	watchEvents,
 } from "@earendil-works/pi-durable";
-import type { AgentEvent, DeliveryMode } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionUsage } from "@pilot/protocol";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
@@ -48,6 +48,7 @@ async function pinnedAgent(
 
 export interface KernelSessionHooks {
 	onWorking(working: boolean): void;
+	onUsageChanged?(usage: SessionUsage): void;
 }
 
 export class KernelSession {
@@ -75,6 +76,7 @@ export class KernelSession {
 				trustDirectory: spec.trustDirectory,
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
+				onUsageChanged: hooks.onUsageChanged,
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
@@ -102,7 +104,7 @@ export class KernelSession {
 			const status = await watchEvents(harness, conversation.id, context);
 			const session = new KernelSession(harness, conversation, adapter, owned.release, status);
 			session.#working = status.snapshot.run !== undefined;
-			status.start(async (events) => {
+			status.start(async (events, deliveryContext) => {
 				for (const event of events) {
 					const working =
 						event.type === "snapshot"
@@ -117,7 +119,20 @@ export class KernelSession {
 						hooks.onWorking(working);
 					}
 				}
+				if (
+					events.some((event) =>
+						["snapshot", "entry_appended", "message_end", "tool_execution_end", "run_end"].includes(event.type),
+					)
+				) {
+					// Display-only failures must not stop the lifecycle monitor or the agent.
+					try {
+						await session.adapter.refreshUsage(deliveryContext);
+					} catch (error) {
+						console.warn("pilot: could not refresh context usage", error);
+					}
+				}
 			});
+			await adapter.refreshUsage(context);
 			harness.resume();
 			return session;
 		} catch (error) {
@@ -136,6 +151,10 @@ export class KernelSession {
 
 	get working(): boolean {
 		return this.#working;
+	}
+
+	get usage(): SessionUsage {
+		return this.adapter.usage.current;
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */

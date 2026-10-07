@@ -51,6 +51,8 @@ import {
 	type ToolRegistration,
 	ToolTask,
 } from "@earendil-works/pi-durable";
+import type { SessionUsage } from "@pilot/protocol";
+import { contextUsage, UsageTracker } from "./usage.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 export interface NativeAdapterOptions {
@@ -72,6 +74,8 @@ export interface NativeAdapterOptions {
 	 * such as pi-extensions subagents anchor their own durable storage beside it.
 	 */
 	sessionFile?: string;
+	/** Live display data, independent from the durable transcript. */
+	onUsageChanged?: (usage: SessionUsage) => void;
 	/** Dependency injection for offline tests. */
 	settingsManager?: SettingsManager;
 	loaderOptions?: LoaderOptions;
@@ -168,7 +172,10 @@ export class NativeAdapter {
 	#toolFingerprint = "";
 	#inputKey = "";
 
-	private constructor(readonly session: AgentSession) {
+	private constructor(
+		readonly session: AgentSession,
+		readonly usage: UsageTracker,
+	) {
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
 		this.models = new Proxy(session.modelRuntime, {
@@ -229,7 +236,13 @@ export class NativeAdapter {
 			retry: { enabled: false },
 		});
 		let renderPrompt: (() => string) | undefined;
+		const usage = new UsageTracker(options.onUsageChanged);
+		let stopUsage: (() => void) | undefined;
 		const capture: ExtensionFactory = (pi) => {
+			stopUsage = pi.events.on("usage:snapshot", (data) => usage.receive(data));
+			pi.on("session_shutdown", () => {
+				stopUsage?.();
+			});
 			// Last inline handler retains the public event's SDK-rendered prompt getter. Calling it
 			// after dispatch avoids duplicating the native prompt renderer or importing internals.
 			pi.on("before_agent_start", (event) => {
@@ -261,7 +274,7 @@ export class NativeAdapter {
 			resourceLoader: loader,
 			sessionManager: nativeSessionManager(cwd, options),
 		});
-		const adapter = new NativeAdapter(session);
+		const adapter = new NativeAdapter(session, usage);
 		adapter.#renderPrompt = () => renderPrompt?.() ?? session.systemPrompt;
 		const noGeneration = async (): Promise<never> => {
 			throw new Error("Only durable Harness may run the worker model loop");
@@ -313,6 +326,23 @@ export class NativeAdapter {
 			throw new Error("Native worker cannot be shared between conversations");
 		this.#harness = harness;
 		this.#conversationId = conversationId;
+	}
+	/** Read committed context without rebuilding the live native session while tools are executing. */
+	async refreshUsage(context: TaskContext): Promise<void> {
+		if (this.#closed || !this.#harness || !this.#conversationId) return;
+		const conversation = await this.#harness.conversation(this.#conversationId, context);
+		if (!conversation) return;
+		const view = await conversation.context(context);
+		let model = this.session.model;
+		if (model?.api === "pi-virtual") {
+			const latest = view.messages.findLast(
+				(message) =>
+					message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted",
+			);
+			if (latest?.role === "assistant")
+				model = this.session.modelRuntime.getPhysicalModel(latest.provider, latest.model) ?? model;
+		}
+		this.usage.setContext(contextUsage(view, model?.contextWindow));
 	}
 	private assertOpen(): void {
 		if (this.#closed) throw new Error("Native adapter is closed");
