@@ -312,7 +312,7 @@ enum Snapshot {
                         }
                         Spacer()
                         if subtitle != nil {
-                            StateBadge(status: status)
+                            SessionStatusIcon(status: status)
                             if let session {
                                 if AppModel.shared.isUnread(session) { UnreadBadge() }
                                 PullRequestBadge(session: session)

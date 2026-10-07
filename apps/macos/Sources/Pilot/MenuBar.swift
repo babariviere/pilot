@@ -13,17 +13,21 @@ struct MenuBarContent: View {
         Text(statusText)
         Divider()
         ForEach(client.sessions.prefix(8)) { session in
-            Button("\(symbol(for: session.status)) \(session.title) · \(session.status.rawValue)\(model.isUnread(session) ? " · unread" : "")") {
+            Button {
                 model.openWindowAction = { openWindow(id: MainWindow.id) }
                 model.open(session: session.id)
+            } label: {
+                Label {
+                    Text("\(session.title)\(model.isUnread(session) ? " •" : "")")
+                } icon: {
+                    Image(systemName: "circle.fill")
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(session.status.color)
+                }
             }
-            if let pr = session.pullRequest, let url = pr.browserURL {
-                Link("    PR \(pr.label)\(session.pullRequestIsStale ? " (last known)" : "") ↗", destination: url)
-                    .help(session.pullRequestHelpText ?? "")
-            } else if session.pullRequestError != nil {
-                Text("    PR lookup unavailable")
-                    .help(session.pullRequestHelpText ?? "Pull request lookup failed")
-            }
+            .help(session.status.rawValue)
+            .accessibilityLabel("\(session.title), \(session.status.rawValue)\(model.isUnread(session) ? ", unread" : "")")
+            PullRequestBadge(session: session)
         }
         if !client.sessions.isEmpty { Divider() }
         Button("Open Pilot") {
@@ -59,14 +63,4 @@ struct MenuBarContent: View {
         }
     }
 
-    private func symbol(for status: SessionStatus) -> String {
-        switch status {
-        case .working: "●"
-        case .done: "✓"
-        case .needsInput: "?"
-        case .failed: "✕"
-        case .stopped: "■"
-        case .idle: "○"
-        }
-    }
 }

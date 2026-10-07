@@ -226,12 +226,14 @@ reports), producing a morning summary in the app and Slack.
 ## 7. App (macOS)
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
-- Manual sessions show Working, Done, Needs your input, Failed or Stopped separately from worker
-  lifecycle. Unread completion badges persist until reviewed, independently of the outcome:
+- Manual sessions show color-only status dots, with Working, Done, Needs your input, Failed or Stopped
+  in tooltips and accessibility labels, separately from worker lifecycle. Unread completion dots persist
+  until reviewed, independently of the outcome:
   reading a question does not answer it. Native macOS notifications distinguish results, blocking
   requests and failures, and deduplicate completion versions across reconnects.
-- Private-branch sessions show a linked GitHub PR badge independently of run outcome: Draft, Open,
-  Merged, or Closed without merging. The daemon discovers PRs by the exact workspace branch and
+- Private-branch sessions show a linked colored PR icon and number independently of run outcome;
+  tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
+  The daemon discovers PRs by the exact workspace branch and
   repository, checks GitHub at startup, after settled work and about once a minute while idle,
   and persists the last successful status. Failed lookups retain the cache but label it as last
   known, never as a fresh merge result. Direct/shared-folder sessions are not auto-linked.

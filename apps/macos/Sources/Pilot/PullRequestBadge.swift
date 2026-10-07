@@ -4,7 +4,6 @@ import SwiftUI
 /// Browser link only. PR state never replaces outcome or unread indicators.
 struct PullRequestBadge: View {
     let session: SessionSummary
-    var compact = false
 
     var body: some View {
         Group {
@@ -16,9 +15,10 @@ struct PullRequestBadge: View {
                     badge(pr)
                 }
             } else if session.pullRequestError != nil {
-                Label("PR unavailable", systemImage: "exclamationmark.triangle")
+                Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Theme.mutedForeground)
+                    .accessibilityLabel("Pull request lookup unavailable")
             }
         }
         .help(session.pullRequestHelpText ?? "")
@@ -27,17 +27,13 @@ struct PullRequestBadge: View {
     private func badge(_ pr: SessionPullRequest) -> some View {
         HStack(spacing: 4) {
             Image(systemName: pr.state.icon)
-            Text(compact ? pr.compactLabel : pr.label)
-            if session.pullRequestIsStale {
+            Text("#\(pr.number)")
+            if session.pullRequestIsStale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
-                Text("cached")
             }
-            if pr.browserURL == nil { Image(systemName: "exclamationmark.circle") }
         }
         .font(.system(size: 10, weight: .medium))
-        .padding(.horizontal, 7)
-        .padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 5).fill(pr.state.color.opacity(0.09)))
+        .padding(.vertical, 2)
         .foregroundStyle(pr.state.color)
         .fixedSize()
         .accessibilityLabel("Pull request \(pr.number), \(session.pullRequestIsStale ? "last known " : "")\(pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")

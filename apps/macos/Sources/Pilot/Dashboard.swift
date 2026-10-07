@@ -63,10 +63,9 @@ private struct WorkingNowCard: View {
                     Button { app.selectedSessionId = session.id } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 8) {
-                                ProgressView().controlSize(.mini)
+                                SessionStatusIcon(status: session.status).frame(width: 12)
                                 Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                                 Spacer()
-                                Circle().fill(Theme.warning).frame(width: 6, height: 6)
                                 Text(elapsed(session.updatedAt)).font(.system(size: 11).monospacedDigit())
                                     .foregroundStyle(Theme.mutedForeground)
                             }
@@ -79,7 +78,7 @@ private struct WorkingNowCard: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    PullRequestBadge(session: session, compact: true).padding(.leading, 22)
+                    PullRequestBadge(session: session).padding(.leading, 22)
                 }
             }
         }
@@ -155,15 +154,12 @@ private struct RecentCard: View {
                                     .lineLimit(1)
                             }
                             Spacer()
-                            Text(session.status.rawValue)
-                                .font(.system(size: 11))
-                                .foregroundStyle(session.status.color)
                             if app.isUnread(session) { UnreadBadge() }
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    PullRequestBadge(session: session, compact: true).padding(.leading, 20)
+                    PullRequestBadge(session: session).padding(.leading, 20)
                 }
             }
         }
