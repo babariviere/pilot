@@ -1,0 +1,28 @@
+name: macOS DMG installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dmg:
+    # Only trusted main-branch dispatches may attach assets to releases.
+    if: github.ref == 'refs/heads/main' && github.event.repository.fork == false
+    runs-on: macos-15
+    timeout-minutes: 20
+    concurrency:
+      group: pilot-macos-dmg-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Create installer from latest stable release ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
+        run: bash apps/macos/scripts/publish-dmg.sh

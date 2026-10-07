@@ -1,7 +1,9 @@
 import base64
+import os
 from pathlib import Path
 import plistlib
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -11,7 +13,7 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.dont_write_bytecode = True
 from release_metadata import (
-    SPARKLE, appcast, newer_build_than_latest, newer_than_latest, prepare_runtime,
+    SPARKLE, appcast, dmg_release_tag, newer_build_than_latest, newer_than_latest, prepare_runtime,
     release_state, stable_version, validate_symlinks, write_plist,
 )
 
@@ -67,38 +69,38 @@ class ReleaseMetadataTests(unittest.TestCase):
                 stable_version(value)
         self.assertEqual(stable_version("0.1.0"), "0.1.0")
 
-    def test_dev_version_uses_commit_sha_not_workflow_build_number(self):
-        sha = '0123456789abcdef0123456789abcdef01234567'
-        write_plist(self.source, self.output, "/checkout", True,
-                    {**self.env, "RELEASE_KIND": "dev", "PILOT_BUILD_SHA": sha}, app_version="0.2.0")
-        info = plistlib.loads(self.output.read_bytes())
-        self.assertEqual(info["CFBundleShortVersionString"], "0.2.0-dev.0123456789ab")
-        self.assertEqual(info["PilotBuildCommit"], sha)
-        self.assertEqual(info["CFBundleVersion"], "12345.2")
-        for bad in ['', 'main', '123', 'a' * 41]:
-            with self.subTest(sha=bad), self.assertRaises(ValueError):
+    def test_dev_release_versions_are_rejected(self):
+        for kind in ['dev', 'unknown']:
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
                 write_plist(self.source, self.output, "/checkout", True,
-                            {**self.env, "RELEASE_KIND": "dev", "PILOT_BUILD_SHA": bad}, app_version="0.2.0")
+                            {**self.env, "RELEASE_KIND": kind}, app_version="0.2.0")
 
     def test_only_matching_drafts_can_be_modified(self):
         draft = {"isDraft": True, "isPrerelease": False, "assets": []}
-        self.assertEqual(release_state(draft, "stable"), "draft")
-        self.assertEqual(release_state({**draft, "isPrerelease": True}, "dev"), "draft")
-        for release, kind in [(draft, "dev"), ({**draft, "isPrerelease": True}, "stable"),
-                              ({**draft, "isDraft": False}, "stable")]:
-            with self.subTest(release=release, kind=kind), self.assertRaises(ValueError):
-                release_state(release, kind)
+        self.assertEqual(release_state(draft), "draft")
+        for release in [{**draft, "isPrerelease": True}, {**draft, "isDraft": False},
+                        {**draft, "isDraft": False, "isPrerelease": True}]:
+            with self.subTest(release=release), self.assertRaises(ValueError):
+                release_state(release)
 
-    def test_published_dev_sha_is_idempotent_only_when_all_assets_are_complete(self):
-        release = {"isDraft": False, "isPrerelease": True, "assets": [
-            {"name": name, "state": "uploaded"} for name in ['Pilot-arm64.zip', 'Pilot-arm64.dmg', 'appcast.xml']
+    def test_dmg_requires_a_complete_published_stable_release_without_an_installer(self):
+        release = {"tagName": "v1.2.3", "isDraft": False, "isPrerelease": False, "assets": [
+            {"name": name, "state": "uploaded"} for name in ['Pilot-arm64.zip', 'appcast.xml']
         ]}
-        self.assertEqual(release_state(release, "dev"), "complete")
+        self.assertEqual(dmg_release_tag(release), "v1.2.3")
+        for changes in [{"isDraft": True}, {"isPrerelease": True}, {"tagName": "dev-123"},
+                        {"tagName": "v1.2.3-beta.1"}, {"tagName": "v1.2.3\n"}]:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                dmg_release_tag({**release, **changes})
         for i in range(len(release['assets'])):
             with self.subTest(asset=i), self.assertRaises(ValueError):
-                release_state({**release, "assets": [a for j, a in enumerate(release['assets']) if i != j]}, "dev")
+                dmg_release_tag({**release, "assets": [a for j, a in enumerate(release['assets']) if i != j]})
         with self.assertRaises(ValueError):
-            release_state({**release, "assets": [{**a, "state": "new"} for a in release['assets']]}, "dev")
+            dmg_release_tag({**release, "assets": [{**a, "state": "new"} for a in release['assets']]})
+        for state in ['uploaded', 'new']:
+            with self.subTest(state=state), self.assertRaises(ValueError):
+                dmg_release_tag({**release, "assets": release['assets'] + [
+                    {"name": "Pilot-arm64.dmg", "state": state}]})
 
     def test_release_requires_all_configuration(self):
         for key in self.env:
@@ -177,6 +179,55 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual([p.name for p in prebuilds.iterdir()], ["darwin-arm64"])
         self.assertEqual((prebuilds / "darwin-arm64/spawn-helper").stat().st_mode & 0o777, 0o755)
         self.assertTrue((prebuilds / "darwin-arm64/LICENSE").is_file())
+
+    def test_runtime_removes_maps_and_declarations_but_retains_code_and_resources(self):
+        runtime = self.runtime()
+        dependency = runtime / "node_modules/example"
+        dependency.mkdir()
+        removed = ["index.js.map", "index.mjs.map", "index.d.ts", "index.d.ts.map", "index.d.mts", "index.d.cts"]
+        retained = ["index.js", "index.mjs", "index.cjs", "source.ts", "source.mts", "source.cts",
+                    "README.md", "LICENSE", "package.json", "theme.json", "font.woff2", "native.node"]
+        for name in removed + retained:
+            (dependency / name).write_text("fixture")
+        nested = dependency / "node_modules/nested/dist"
+        nested.mkdir(parents=True)
+        (nested / "bundle.js.map").write_text("map")
+        (nested / "bundle.js").write_text("code")
+        workspace = runtime / "packages/daemon"
+        (workspace / "main.ts").write_text("source")
+        link = runtime / "node_modules/@pilot/daemon"
+        link.symlink_to("../../packages/daemon")
+        prepare_runtime(runtime)
+        self.assertTrue(all(not (dependency / name).exists() for name in removed))
+        self.assertTrue(all((dependency / name).read_text() == "fixture" for name in retained))
+        self.assertFalse((nested / "bundle.js.map").exists())
+        self.assertEqual((nested / "bundle.js").read_text(), "code")
+        self.assertEqual((link / "main.ts").read_text(), "source")
+        self.assertTrue(link.is_symlink())
+        validate_symlinks(runtime)
+        prepare_runtime(runtime)  # Repeated preparation is harmless.
+        validate_symlinks(runtime)
+
+    def test_runtime_cleanup_does_not_follow_symlinks(self):
+        runtime = self.runtime()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "external.js.map").write_text("untouched")
+        (runtime / "node_modules/external").symlink_to(outside, target_is_directory=True)
+        # Preserve file links too, even if their names match a removable suffix.
+        link = runtime / "node_modules/alias.d.ts"
+        link.symlink_to("../packages/daemon/package.json")
+        prepare_runtime(runtime)
+        self.assertEqual((outside / "external.js.map").read_text(), "untouched")
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(link.read_text(), '{}')
+
+    def test_runtime_cleanup_preserves_special_files(self):
+        runtime = self.runtime()
+        pipe = runtime / "node_modules/stream.js.map"
+        os.mkfifo(pipe)
+        prepare_runtime(runtime)
+        self.assertTrue(stat.S_ISFIFO(pipe.lstat().st_mode))
 
     def test_latest_stable_version_never_regresses_after_old_run_rerun(self):
         self.assertFalse(newer_than_latest("0.2.0", "v0.3.0"))

@@ -5,6 +5,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
+test("dev publishing is rejected before any packaging or remote calls", () => {
+	const result = spawnSync("bash", [new URL("../publish-release.sh", import.meta.url).pathname], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			GH_TOKEN: "test-only-token",
+			PILOT_UPDATE_REPOSITORY: "owner/repo",
+			SPARKLE_PRIVATE_KEY: "test-only-key",
+			RELEASE_TAG: "dev-0123456789ab",
+			RELEASE_KIND: "dev",
+		},
+	});
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /Only stable releases can be published/);
+});
+
 test("stable draft upload looks up the numeric asset ID and allows retrying failed uploads", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-draft-test-"));
 	try {
@@ -47,7 +63,6 @@ if (args[0] === "release" && args[1] === "upload" && args.includes("--clobber"))
 					CALL_LOG: log,
 					tag: "v0.2.0",
 					archive: join(dir, "Pilot-arm64.zip"),
-					dmg: join(dir, "Pilot-arm64.dmg"),
 					PILOT_UPDATE_REPOSITORY: "owner/repo",
 					GITHUB_SHA: "test-commit",
 					build_version: "3.1",
@@ -61,7 +76,6 @@ if (args[0] === "release" && args[1] === "upload" && args.includes("--clobber"))
 			calls.map((args) => args.slice(0, 2)),
 			[
 				["release", "upload"],
-				["release", "upload"],
 				["release", "view"],
 				["api", "repos/owner/repo/releases/12345/assets"],
 			],
@@ -71,7 +85,7 @@ if (args[0] === "release" && args[1] === "upload" && args.includes("--clobber"))
 	}
 });
 
-for (const scenario of ["dev", "stable-first", "stable-upgrade", "older-app", "older-build", "api-error"]) {
+for (const scenario of ["stable-first", "stable-upgrade", "older-app", "older-build", "api-error"]) {
 	test(`publication safety: ${scenario}`, () => {
 		const dir = mkdtempSync(join(tmpdir(), "pilot-publication-test-"));
 		try {
@@ -90,7 +104,7 @@ if (args[0] === "release" && args[1] === "upload") {
   console.log("12345");
 } else if (args[0] === "api" && args[1].endsWith("/12345/assets")) {
   console.log("67890");
-} else if (args[0] === "api" && args[1].endsWith("/releases/latest") && scenario !== "dev") {
+} else if (args[0] === "api" && args[1].endsWith("/releases/latest")) {
   if (scenario === "stable-first" || scenario === "api-error") {
     console.error(scenario === "stable-first" ? "HTTP 404" : "HTTP 403");
     process.exit(1);
@@ -101,8 +115,7 @@ if (args[0] === "release" && args[1] === "upload") {
   console.log('<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><item><sparkle:version>' +
     (scenario === "older-build" ? "11.1" : "9.1") + '</sparkle:version></item></channel></rss>');
 } else if (args[0] === "release" && args[1] === "edit") {
-  const valid = scenario === "dev" ? args.includes("--prerelease") && args.includes("--latest=false") :
-    args.includes("--latest") && !args.includes("--prerelease");
+  const valid = args.includes("--latest") && !args.includes("--prerelease");
   if (!valid) process.exit(1);
 } else {
   console.error("Unexpected call: " + JSON.stringify(args));
@@ -139,9 +152,7 @@ if (args[0] === "release" && args[1] === "upload") {
 					stage: dir,
 					app,
 					archive,
-					dmg: join(dir, "Pilot-arm64.dmg"),
-					tag: scenario === "dev" ? "dev-0123456789ab" : "v0.2.0",
-					kind: scenario === "dev" ? "dev" : "stable",
+					tag: "v0.2.0",
 					app_version: "0.2.0",
 					build_version: "10.1",
 					PILOT_UPDATE_REPOSITORY: "owner/repo",
@@ -153,11 +164,10 @@ if (args[0] === "release" && args[1] === "upload") {
 			const calls = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
 			assert.deepEqual(
 				calls.filter((args) => args[1] === "upload").map((args) => args[3]),
-				[archive, join(dir, "Pilot-arm64.dmg"), join(dir, "appcast.xml")],
+				[archive, join(dir, "appcast.xml")],
 			);
 			const edits = calls.filter((args) => args[1] === "edit");
-			assert.equal(edits.length, ["dev", "stable-first", "stable-upgrade"].includes(scenario) ? 1 : 0);
-			if (scenario === "dev") assert.ok(!calls.some((args) => args[1].endsWith("/releases/latest")));
+			assert.equal(edits.length, ["stable-first", "stable-upgrade"].includes(scenario) ? 1 : 0);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

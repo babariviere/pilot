@@ -39,18 +39,26 @@ def stable_version(value):
     return value
 
 
-def release_state(release, kind):
-    if kind not in ("stable", "dev"):
-        raise ValueError("RELEASE_KIND must be stable or dev")
-    dev = kind == "dev"
-    if release["isPrerelease"] != dev:
-        raise ValueError("Release kind does not match the existing release")
-    if release["isDraft"]:
-        return "draft"
-    uploaded = {a["name"] for a in release["assets"] if a["state"] == "uploaded"}
-    if dev and {"Pilot-arm64.zip", "Pilot-arm64.dmg", "appcast.xml"} <= uploaded:
-        return "complete"
-    raise ValueError("Refusing to modify a published release")
+def release_state(release):
+    if release["isPrerelease"] or not release["isDraft"]:
+        raise ValueError("Only stable drafts can be published")
+    return "draft"
+
+
+def dmg_release_tag(release):
+    if release["isDraft"] or release["isPrerelease"]:
+        raise ValueError("DMG creation requires a published stable release")
+    tag = release["tagName"]
+    if not tag.startswith("v"):
+        raise ValueError("Release tag must start with v")
+    stable_version(tag[1:])
+    assets = release["assets"]
+    if any(a["name"] == "Pilot-arm64.dmg" for a in assets):
+        raise ValueError("This release already has a DMG; refusing to overwrite it")
+    uploaded = {a["name"] for a in assets if a["state"] == "uploaded"}
+    if not {"Pilot-arm64.zip", "appcast.xml"} <= uploaded:
+        raise ValueError("Release must have a complete update ZIP and appcast")
+    return tag
 
 
 def write_plist(source, destination, repo_path, release=False, env=None, app_version=None):
@@ -59,15 +67,8 @@ def write_plist(source, destination, repo_path, release=False, env=None, app_ver
         info = plistlib.load(handle)
     if app_version is not None:
         info["CFBundleShortVersionString"] = stable_version(app_version)
-    kind = env.get("RELEASE_KIND", "stable")
-    if kind not in ("stable", "dev"):
-        raise ValueError("RELEASE_KIND must be stable or dev")
-    if kind == "dev":
-        sha = env.get("PILOT_BUILD_SHA", "")
-        if not re.fullmatch(r"[0-9a-f]{40}", sha):
-            raise ValueError("Dev builds require PILOT_BUILD_SHA to be a full commit SHA")
-        info["CFBundleShortVersionString"] = f'{info["CFBundleShortVersionString"]}-dev.{sha[:12]}'
-        info["PilotBuildCommit"] = sha
+    if env.get("RELEASE_KIND", "stable") != "stable":
+        raise ValueError("Only stable release versions are supported")
     if release:
         info.pop("PilotRepoPath", None)
         for key in ("PILOT_UPDATE_REPOSITORY", "SPARKLE_PUBLIC_KEY", "BUNDLE_VERSION"):
@@ -124,14 +125,21 @@ def validate_symlinks(root):
 
 
 def prepare_runtime(root):
-    """Keep only macOS arm64 prebuilds and fix node-pty helper modes before signing."""
+    """Trim build-only metadata and non-arm64 prebuilds in isolated staging before signing."""
     root = Path(root)
-    for directory, dirs, _ in os.walk(root, followlinks=False):
+    for directory, dirs, files in os.walk(root, followlinks=False):
         if Path(directory).name == "prebuilds":
             for name in list(dirs):
                 if name != "darwin-arm64":
                     shutil.rmtree(Path(directory) / name)
                     dirs.remove(name)
+        # Node/tsx execute the source, not declaration files. esbuild does not need input
+        # source maps to produce the minified browser bundles we ship without output maps.
+        for name in files:
+            if name.endswith((".map", ".d.ts", ".d.mts", ".d.cts")):
+                path = Path(directory) / name
+                if not path.is_symlink() and path.is_file():
+                    path.unlink()
     for helper in root.rglob("spawn-helper"):
         if helper.is_file():
             helper.chmod(0o755)
@@ -190,7 +198,8 @@ def main():
     build.add_argument("appcast")
     state = commands.add_parser("release-state")
     state.add_argument("release_json")
-    state.add_argument("kind", choices=("stable", "dev"))
+    dmg = commands.add_parser("dmg-release")
+    dmg.add_argument("release_json")
     args = parser.parse_args()
     if args.command == "plist":
         with open(Path(args.repo_path) / "package.json") as handle:
@@ -214,7 +223,8 @@ def main():
         raise SystemExit(0 if newer_build_than_latest(args.version, args.appcast) else 1)
     else:
         with open(args.release_json) as handle:
-            print(release_state(json.load(handle), args.kind))
+            release = json.load(handle)
+        print(dmg_release_tag(release) if args.command == "dmg-release" else release_state(release))
 
 
 if __name__ == "__main__":

@@ -9,8 +9,8 @@ app="${1:-$here/build/Pilot.app}"
 : "${GH_TOKEN:?Set GH_TOKEN for release publishing}"
 : "${PILOT_UPDATE_REPOSITORY:?Set PILOT_UPDATE_REPOSITORY}"
 : "${SPARKLE_PRIVATE_KEY:?Set the base64 Sparkle private key secret}"
-: "${RELEASE_TAG:?Set RELEASE_TAG to a stable draft tag or dev-<commit SHA>}"
-kind="${RELEASE_KIND:-stable}"
+: "${RELEASE_TAG:?Set RELEASE_TAG to an existing stable draft tag}"
+[ "${RELEASE_KIND:-stable}" = stable ] || { echo "Only stable releases can be published" >&2; exit 1; }
 stage="$(mktemp -d "${TMPDIR:-/tmp}/pilot-release.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")"
@@ -18,38 +18,22 @@ build_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Conte
 tag="$RELEASE_TAG"
 # A retry may run after main advances, but it must still build exactly the tagged source.
 source_sha="$(git -C "$here/../.." rev-parse HEAD)"
-case "$kind" in
-	stable)
-		[ "$tag" = "v$app_version" ] || { echo "Release tag does not match the bundled app version" >&2; exit 1; }
-		target="$tag"
-		;;
-	dev)
-		[ "$tag" = "dev-${source_sha:0:12}" ] && [[ "$app_version" = *"-dev.${source_sha:0:12}" ]] || {
-			echo "Dev tag and app version must match the checkout SHA" >&2; exit 1;
-		}
-		target="$source_sha"
-		;;
-	*) echo "RELEASE_KIND must be stable or dev" >&2; exit 1 ;;
-esac
-tag_sha="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$target" --jq '.sha')"
+[ "$tag" = "v$app_version" ] || { echo "Release tag does not match the bundled app version" >&2; exit 1; }
+python3 - "$app_version" "$here/scripts" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[2])
+from release_metadata import stable_version
+stable_version(sys.argv[1])
+PY
+tag_sha="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$tag" --jq '.sha')"
 [ "$source_sha" = "$tag_sha" ] || { echo "Checkout does not match the release tag" >&2; exit 1; }
-# Never overwrite a published release. A completed dev SHA is idempotent on reruns.
-if gh release view "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --json isDraft,isPrerelease,assets \
-	> "$stage/release.json" 2> "$stage/release-error"; then
-	state="$(python3 "$here/scripts/release_metadata.py" release-state "$stage/release.json" "$kind")"
-	if [ "$state" = complete ]; then
-		echo "Dev release $tag is already complete."
-		exit 0
-	fi
-elif [ "$kind" = dev ] && grep -q '^release not found$' "$stage/release-error"; then
-	gh release create "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --target "$source_sha" \
-		--draft --prerelease --title "Pilot $tag (arm64)" \
-		--notes "Development build from commit $source_sha. Apple Silicon only. Ad-hoc signed, not notarized."
-else
+# Never overwrite a published release or create prereleases.
+if ! gh release view "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --json isDraft,isPrerelease,assets \
+	> "$stage/release.json"; then
 	echo "Unable to find the release draft; refusing to publish." >&2
-	cat "$stage/release-error" >&2
 	exit 1
 fi
+python3 "$here/scripts/release_metadata.py" release-state "$stage/release.json"
 python3 - <<'PY'
 import base64
 import os
@@ -61,7 +45,6 @@ if len(key) not in (32, 64, 96):
     raise SystemExit("SPARKLE_PRIVATE_KEY has an invalid size; use Sparkle generate_keys -x.")
 PY
 archive="$stage/Pilot-arm64.zip"
-dmg="$stage/Pilot-arm64.dmg"
 "$here/scripts/fetch-sparkle.sh" "$stage/sparkle"
 ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
 signature="$(printf '%s\n' "$SPARKLE_PRIVATE_KEY" | "$stage/sparkle/bin/sign_update" --ed-key-file - -p "$archive")"
@@ -72,10 +55,8 @@ node "$here/scripts/verify-update.mjs" "$archive" "$public_key" "$signature"
 ditto -x -k "$archive" "$stage/extracted"
 codesign --verify --deep --strict "$stage/extracted/Pilot.app"
 "$here/scripts/check-runtime.sh" "$stage/extracted/Pilot.app/Contents/Resources/runtime"
-"$here/scripts/create-dmg.sh" "$app" "$dmg"
 
 gh release upload "$tag" "$archive" --repo "$PILOT_UPDATE_REPOSITORY" --clobber
-gh release upload "$tag" "$dmg" --repo "$PILOT_UPDATE_REPOSITORY" --clobber
 # Draft releases may not have a Git tag yet, so the REST by-tag endpoint returns 404.
 # gh release view can find drafts; use its numeric REST ID, not its GraphQL node ID.
 release_id="$(gh release view "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --json databaseId --jq '.databaseId')"
@@ -84,11 +65,7 @@ asset_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id/assets" 
 python3 "$here/scripts/release_metadata.py" appcast "$app/Contents/Info.plist" \
 	"$archive" "$asset_id" "$signature" "$stage/appcast.xml"
 gh release upload "$tag" "$stage/appcast.xml" --repo "$PILOT_UPDATE_REPOSITORY" --clobber
-# Drafts never appear in /releases/latest. All three assets must exist before publication.
-if [ "$kind" = dev ]; then
-	gh release edit "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --draft=false --prerelease --latest=false
-	exit 0
-fi
+# Drafts never appear in /releases/latest. ZIP and appcast must exist before publication.
 if gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/latest" > "$stage/latest.json" 2> "$stage/latest-error"; then
 	latest_tag="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["tag_name"])' "$stage/latest.json")"
 else

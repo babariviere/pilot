@@ -84,13 +84,12 @@ jobs:
   release:
     needs: [verify, release-please]
     # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && needs.verify.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && (needs.release-please.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.verify.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
-    # Serialize each channel separately so a queued stable publish cannot be
-    # displaced by dev builds. Semantic-version ordering protects stable latest.
+    # Serialize stable publishing. Semantic-version ordering protects latest.
     concurrency:
-      group: pilot-macos-release-${{ github.repository }}-${{ (needs.release-please.outputs.release_created == 'true' || inputs.release_tag != '') && 'stable' || 'dev' }}
+      group: pilot-macos-release-${{ github.repository }}-stable
       cancel-in-progress: false
     permissions:
       contents: write
@@ -98,7 +97,6 @@ jobs:
       PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
       BUNDLE_VERSION: ${{ github.run_number }}.${{ github.run_attempt }}
       RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
-      RELEASE_KIND: ${{ (needs.release-please.outputs.release_created == 'true' || inputs.release_tag != '') && 'stable' || 'dev' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -112,12 +110,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          sha="$(git rev-parse HEAD)"
-          echo "PILOT_BUILD_SHA=$sha" >> "$GITHUB_ENV"
-          if [ "$RELEASE_KIND" = dev ]; then
-            echo "RELEASE_TAG=dev-${sha:0:12}" >> "$GITHUB_ENV"
-            exit 0
-          fi
           python3 - "$RELEASE_TAG" <<'PY'
           import json, re, sys
           version = json.load(open('package.json'))['version']
@@ -131,6 +123,19 @@ jobs:
           npm run typecheck
           npm test
           apps/macos/scripts/test.sh
+      - name: Load current release packaging tools
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          path: .pilot-release-tools
+          sparse-checkout: apps/macos/scripts
+      - name: Apply current packaging policy to tagged application source
+        # An older draft must still use ZIP-only publishing and runtime cleanup.
+        # Overlay only packaging helpers, keeping the app, dependencies and vendor pins tagged.
+        run: |
+          cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py
+          cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh
       - name: Require update signing configuration
         env:
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
@@ -145,7 +150,7 @@ jobs:
           BUNDLE_RUNTIME: '1'
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: apps/macos/scripts/bundle.sh
-      - name: Sign and publish complete private repository release (DMG and update ZIP)
+      - name: Sign and publish stable release (update ZIP and appcast)
         env:
           GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}

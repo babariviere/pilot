@@ -305,14 +305,20 @@ reports), producing a morning summary in the app and Slack.
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release
   PRs and changelogs on `main`; metadata-only PRs skip workflows and need no workflow approval.
-  Merging one verifies and builds a stable `vX.Y.Z` arm64 macOS release. Drafts stay
-  unpublished until the DMG installer, signed update ZIP and appcast are complete, with retries
-  against the tagged source and semantic and Sparkle build-order safeguards. App versions follow
+  CI publishes only when Release Please creates a stable `vX.Y.Z` arm64 macOS release or an existing
+  stable draft is explicitly retried. Drafts stay unpublished until the signed `Pilot-arm64.zip` and
+  `appcast.xml` are complete, with retries
+  against tagged application source using current packaging helpers, with semantic and Sparkle
+  build-order safeguards. App versions follow
   root `package.json`; build numbers remain
-  monotonic workflow numbers for Sparkle. Other main commits publish `dev-<short SHA>` GitHub
-  prereleases with SHA-based display versions, without moving the stable latest release or automatic
-  update channel. Self-contained Node
-  and pilotd runtime, ad-hoc signing without Apple membership, Sparkle Ed25519-signed archives in private
+  monotonic workflow numbers for Sparkle. Ordinary main pushes do not publish dev prereleases;
+  existing dev releases remain untouched. ZIP is the default first-time installer. The manual
+  **macOS DMG installer** workflow (`.github/workflows/macos-dmg.yml`) takes no tag input, captures the
+  latest published stable tag once, downloads its ZIP, extracts the built app, verifies codesign,
+  and attaches a DMG to that same release without rebuilding, signing, or changing appcast/latest.
+  An existing DMG errors rather than being overwritten. Self-contained Node
+  and pilotd runtime, with source maps and TypeScript declarations removed in isolated staging before
+  signing. Ad-hoc signing without Apple membership, Sparkle Ed25519-signed archives in private
   GitHub Releases. Authentication first reuses local `gh auth token`; if unavailable or denied, the app
   asks for a repository-read GitHub token and saves that manual fallback in Keychain. CLI credentials
   remain in memory and are refreshed each check. Hourly checks while the app

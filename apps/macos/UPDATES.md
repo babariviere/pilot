@@ -2,7 +2,8 @@
 
 GitHub Actions verifies changes on `main`. Release Please maintains a version/changelog PR;
 merging it builds a stable **Apple Silicon (arm64) macOS 14+** release tagged `vX.Y.Z`.
-Other verified main commits publish GitHub prereleases tagged `dev-<12-character commit SHA>`.
+CI publishes only when Release Please creates a stable release or an existing stable draft is
+explicitly retried. Ordinary main pushes do not publish dev prereleases.
 Pilot checks the private repository every hour while the app is running, first reuses local `gh`
 authentication (with a manual Keychain-token fallback), and uses Sparkle 2.8.1 to verify and install updates. Released apps bundle
 Node 24, pilotd, the kernel and their production dependencies. Your checkout is not needed at runtime.
@@ -45,20 +46,28 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    workflows, so release PRs need no workflow approval. Merging triggers full verification and
    publishing on `main`. Other PRs run verification only, without release secrets or publishing
    permissions. The release job fails with
-   a configuration message if signing keys are missing. Ordinary main commits publish dev prereleases,
-   not stable releases.
+   a configuration message if signing keys are missing. Ordinary main commits run verification and
+   Release Please without publishing unless it creates a stable release.
 
 The workflow is `.github/workflows/macos-release.yml`. It selects an arm64 macOS runner with Xcode
 26.2 (Swift 6.2), runs TypeScript and Swift checks, builds the app, stages a production runtime, and
-publishes `Pilot-arm64.dmg`, `Pilot-arm64.zip` and `appcast.xml` together in a GitHub Release. Release Please creates
-only a draft, so incomplete uploads are not offered to the app. The tagged release commit is built
-and tested even if `main` has advanced. App versions come from root `package.json`; Release Please
+publishes only the signed `Pilot-arm64.zip` and `appcast.xml` in a GitHub Release. Release Please creates
+only a draft, so incomplete uploads are not offered to the app. The tagged application source is built
+and tested even if `main` has advanced. After its tests, the workflow overlays the current release
+metadata and publisher helpers so old draft retries also use runtime cleanup and ZIP-only publishing.
+Application code, dependencies and vendor pins remain tagged. App versions come from root `package.json`; Release Please
 updates it, `package-lock.json`, `.release-please-manifest.json` and `CHANGELOG.md` in the release PR.
 The existing source plist is only a template; bundling writes the package version into the app.
-Dev builds display `X.Y.Z-dev.<short SHA>` instead of a workflow number. Published dev SHAs are
-immutable; rerunning an already complete dev release is a no-op. Dev prereleases never become
-GitHub's stable latest release and are never offered through automatic updates. To install one,
-download its DMG manually. Installing a dev build does not enable a dev update channel.
+Before signing, isolated runtime staging removes source maps and TypeScript declarations while
+preserving executable code, resources, licenses and SDK documentation. This reduces archive size
+without pruning the checkout's dependencies; bundled dependency stack traces no longer use those maps.
+Existing dev releases are left untouched and are not offered through automatic updates.
+
+For an optional installer, run **macOS DMG installer** (`.github/workflows/macos-dmg.yml`) manually.
+It takes no tag input, captures the latest published stable release tag once, downloads that release's
+ZIP, extracts the already built app, verifies its code signature, and builds `Pilot-arm64.dmg`.
+It attaches the DMG to that same release without rebuilding or signing the app, changing `appcast.xml`,
+or moving the latest release. An existing DMG causes an error instead of being overwritten.
 
 `fix:` commits bump the patch version, `feat:` commits bump the minor version, and breaking-change
 commits (`feat!:` or `BREAKING CHANGE:`) use Release Please's semantic-version rules (including its
@@ -73,17 +82,18 @@ the first stable release can replace them without changing the installed app's s
 If publication fails after draft creation, rerun the failed release job, or use **Run workflow** on
 `main` with **`release_tag`** set to the existing stable draft (for example `v0.2.0`). A new dispatch
 also fixes a draft whose Sparkle build version is older than the latest release. Retrying replaces
-only draft assets; published releases and prereleases cannot be overwritten. A failed dev draft can
-also be recovered by rerunning its failed release job. Leave `release_tag` empty to run Release Please
-normally (publishing the current dev SHA if no stable release is created). Obsolete incomplete `pilot-N.M` drafts may be deleted manually,
+only draft assets; published releases and prereleases cannot be overwritten. Leave `release_tag`
+empty to run Release Please normally, without publishing unless it creates a stable release.
+Obsolete incomplete `pilot-N.M` drafts may be deleted manually,
 but do not publish them. No workflow deletes existing releases.
 
 ## One-time app setup
 
-1. Download **`Pilot-arm64.dmg`**, open it and drag **Pilot.app** onto the **Applications** shortcut.
-   Eject the disk image, then open the installed app from `/Applications`. For a per-user install,
-   drag it to `~/Applications` instead. The ZIP is still available for manual extraction and is used
-   by Sparkle updates. Do not run the app directly from the disk image or a transient download folder.
+1. Download **`Pilot-arm64.zip`**, extract it, and move **Pilot.app** to `/Applications` (or
+   `~/Applications` for a per-user install). The ZIP is the default first-time installer and is also
+   used by Sparkle updates. If a DMG was manually generated, you can instead open **`Pilot-arm64.dmg`**,
+   drag **Pilot.app** onto the **Applications** shortcut, and eject the disk image. Open the installed
+   app, not a copy on the disk image or in a transient download folder.
 2. When migrating from a checkout-based Pilot, wait for agents to finish, then choose **Restart pilotd**
    in the new app's menu bar. This switches the launch agent to the bundled runtime. Terminal shells
    close on that initial restart. Your projects, sessions and pi configuration stay in their existing
