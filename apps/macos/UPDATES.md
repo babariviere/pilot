@@ -106,7 +106,10 @@ it does not sign out of `gh` or disable automatic checks.
 ## Installation safety
 
 - Downloads and appcasts use authenticated GitHub API asset URLs, not unauthenticated private browser
-  URLs. The app restricts downloads to the selected release's archive and disables external release notes.
+  URLs. Pilot resolves the appcast API redirect before handing its short-lived signed CDN URL to Sparkle,
+  which otherwise overrides GitHub's required Accept header and receives JSON instead of XML. The signed
+  URL stays in memory; GitHub tokens are never sent to the CDN. The app restricts archive downloads to the
+  selected release's API asset and disables external release notes.
 - Sparkle validates the archive against the public signing key **before extraction**. CI also verifies
   the archive signature against the public key actually embedded in the app before publishing.
 - A downloaded update waits for agents and queued work to finish. The daemon grants a short quiescence
