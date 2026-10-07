@@ -1,5 +1,10 @@
 import Foundation
 
+/// POST /api/update/prepare: a short quiescence lease, only granted when agents are idle.
+public struct UpdatePreparation: Codable, Sendable {
+    public let ready: Bool
+}
+
 /// Mirrors packages/protocol. Keep both sides in sync.
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String

@@ -58,3 +58,49 @@ test("queued message PATCH forwards the message ID and content and reports stale
 	await browser.arrayBuffer();
 	assert.equal(edit.mock.callCount(), 2);
 });
+
+test("prepare uses the origin-protected route and paused admissions return HTTP 503", async () => {
+	// Isolated ephemeral HTTP server. No stores are loaded, workers forked, or terminals started.
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		new TerminalManager(),
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	try {
+		const browser = await fetch(`${base}/update/prepare`, {
+			method: "POST",
+			headers: { origin: "http://localhost" },
+		});
+		assert.equal(browser.status, 403);
+		// Rejected browser preparation did not freeze admission.
+		await assert.rejects(sessions.send("missing", "hello"), /Unknown session/);
+		assert.equal((await fetch(`${base}/update/prepare`)).status, 404);
+		const ready = await fetch(`${base}/update/prepare`, { method: "POST" });
+		assert.equal(ready.status, 200);
+		assert.deepEqual(await ready.json(), { ready: true });
+		for (const [path, method] of [
+			["sessions", "POST"],
+			["sessions/missing/messages", "POST"],
+			["sessions/missing/queue/42", "PATCH"],
+		]) {
+			const response = await fetch(`${base}/${path}`, {
+				method,
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ cwd: "/unused", message: "hello" }),
+			});
+			assert.equal(response.status, 503);
+			assert.match(((await response.json()) as { error: string }).error, /temporarily paused/);
+		}
+		// Preparation never stops the server; existing read endpoints still work.
+		assert.equal((await fetch(`${base}/sessions`)).status, 200);
+	} finally {
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	}
+});

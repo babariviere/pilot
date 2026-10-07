@@ -67,13 +67,22 @@ Command Line Tools quirks handled here: libghostty-spm's `.xcstrings` catalog ne
 local state in small `ObservableObject`s; Swift Testing's macro plugin lives outside the default plugin
 path, so `scripts/test.sh` passes it explicitly.
 
-The launch agent runs `node --import tsx src/main.ts` from this checkout's `packages/daemon`. GUI apps get
+Development bundles run `node --import tsx src/main.ts` from this checkout's `packages/daemon`. Release
+bundles include Node and pilotd in `Contents/Resources/runtime` and do not require this checkout. GUI apps get
 a minimal PATH, so the installer asks your login shell (nushell, fish, zsh or bash) for its PATH and falls
 back to mise shims and Homebrew. pilotd logs to `~/Library/Logs/Pilot/pilotd.log`.
+
+## Automatic builds and private updates
+
+[UPDATES.md](UPDATES.md) covers the one-time GitHub signing-key setup, first installation and the
+local `gh` authentication, with a Keychain-backed token fallback in Settings > Updates.
+CI builds Apple Silicon releases automatically on `main`;
+Sparkle downloads and installs verified updates when agents are idle. Installation restarts pilotd
+and closes terminal shells. No Apple developer membership is needed; builds are not notarized.
 
 ## Caveats
 
 - libghostty's embedding API is not a stable ABI; the vendored package is pinned to an exact release.
-- The daemon runs from this source checkout. A distributable app would bundle pilotd and Node, and register
-  the agent with `SMAppService`.
+- Development apps run the daemon from this checkout. Personal release builds bundle pilotd and Node,
+  but still use the existing per-user launchd plist, not `SMAppService`.
 - Shells live as long as pilotd: a daemon restart ends them (sessions themselves resume).

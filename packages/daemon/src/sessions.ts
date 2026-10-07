@@ -12,9 +12,12 @@ import type {
 	SessionSummary,
 	SessionUsage,
 	SpawnRequest,
+	UpdatePreparation,
 } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
+import { UpdateGate } from "./update-gate.ts";
+import { WorkerActivity } from "./worker-activity.ts";
 import { branchSlug, createWorkspace, type Workspace } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
@@ -28,6 +31,8 @@ export class CommandRejected extends Error {}
 /** Injectable daemon boundaries for deterministic startup tests. */
 export interface SessionWorker {
 	readonly ready: Promise<void>;
+	/** Includes outstanding acknowledgements and accepted input not yet observed in the event stream. */
+	readonly busy?: boolean;
 	state: SessionState;
 	error?: string;
 	usage?: SessionUsage;
@@ -98,6 +103,17 @@ class Worker implements SessionWorker {
 	/** Ephemeral. Never persist provider quota windows as current after a daemon restart. */
 	usage?: SessionUsage;
 	private readonly pending = new Map<string, { resolve(): void; reject(error: Error): void }>();
+	private readonly activity = new WorkerActivity();
+	private activityWatchId?: string;
+
+	get busy(): boolean {
+		return (
+			this.pending.size !== 0 ||
+			this.state === "starting" ||
+			this.state === "working" ||
+			(this.state === "idle" && this.activity.busy)
+		);
+	}
 
 	constructor(
 		spec: Extract<KernelCommand, { type: "start" }>["spec"],
@@ -118,6 +134,10 @@ class Worker implements SessionWorker {
 		this.ready.catch(() => undefined);
 		this.child.on("message", (message) => {
 			const packet = message as KernelPacket;
+			if (packet.type === "events" && packet.watchId === this.activityWatchId) {
+				this.activity.observe(packet.events);
+				return;
+			}
 			if (packet.type === "ready") {
 				this.usage = packet.usage;
 				this.initialized = true;
@@ -128,6 +148,9 @@ class Worker implements SessionWorker {
 			} else if (packet.type === "working") {
 				this.state = packet.working ? "working" : "idle";
 			} else if (packet.type === "accepted" || packet.type === "aborted") {
+				// IPC acceptance can precede working=true. A fresh committed snapshot is the idle barrier,
+				// including idempotent retries which produce no new run/inbox events.
+				if (packet.type === "accepted") this.refreshActivity();
 				this.settle(packet.requestId);
 			} else if (packet.type === "error") {
 				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message));
@@ -155,6 +178,15 @@ class Worker implements SessionWorker {
 			onExit(this, code);
 		});
 		this.send({ type: "start", spec });
+		this.refreshActivity();
+	}
+
+	private refreshActivity(): void {
+		const previous = this.activityWatchId;
+		this.activityWatchId = randomUUID();
+		this.activity.reset();
+		if (previous) this.send({ type: "unwatch", watchId: previous });
+		this.send({ type: "watch", watchId: this.activityWatchId });
 	}
 
 	send(command: KernelCommand): void {
@@ -206,6 +238,7 @@ export class SessionManager {
 	private readonly starting = new Map<string, Promise<Map<string, Error>>>();
 	private readonly preparations = new Set<Promise<Workspace>>();
 	private readonly shutdownSignal = new AbortController();
+	private readonly updateGate = new UpdateGate();
 	private closing = false;
 
 	constructor(
@@ -220,6 +253,15 @@ export class SessionManager {
 	}
 
 	async load(): Promise<void> {
+		const end = this.updateGate.begin();
+		try {
+			await this.loadAdmitted();
+		} finally {
+			end();
+		}
+	}
+
+	private async loadAdmitted(): Promise<void> {
 		await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
 		for (const id of await readdir(this.sessionsDir)) {
 			if (!ID_PATTERN.test(id)) continue;
@@ -233,7 +275,8 @@ export class SessionManager {
 		}
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
-			if (!meta.failure && (meta.initializing || meta.pending?.length || meta.working)) void this.start(meta.id);
+			if (!meta.failure && (meta.initializing || meta.pending?.length || meta.working))
+				void this.start(meta.id, true);
 	}
 
 	onChange(listener: (session: SessionSummary) => void): () => void {
@@ -258,6 +301,39 @@ export class SessionManager {
 	}
 
 	async spawn(request: SpawnRequest): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			return await this.spawnAdmitted(request);
+		} finally {
+			end();
+		}
+	}
+
+	/** Acquire a bounded update lease only after every durable and in-memory admission settles. */
+	prepareUpdate(): UpdatePreparation {
+		const busy =
+			this.closing ||
+			this.starting.size !== 0 ||
+			this.preparations.size !== 0 ||
+			this.saving.size !== 0 ||
+			[...this.metas.values()].some(
+				(meta) =>
+					meta.working ||
+					// Terminal initialization failure cannot replay these commands. Uncertain admission
+					// uses inputError instead, so its durable outbox continues to block an update.
+					(!meta.failure && (meta.preparing || meta.initializing || meta.pending?.length)),
+			) ||
+			[...this.workers.values()].some(
+				(worker) =>
+					worker.state === "starting" ||
+					worker.state === "working" ||
+					// Injectable workers without an activity barrier cannot prove an idle inbox.
+					(worker.busy ?? worker.state !== "failed"),
+			);
+		return { ready: this.updateGate.prepare(busy) };
+	}
+
+	private async spawnAdmitted(request: SpawnRequest): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		const project = request.projectId ? this.projects.require(request.projectId) : undefined;
 		const directory = request.cwd?.trim() || project?.path;
@@ -291,7 +367,7 @@ export class SessionManager {
 		await this.save(meta);
 		const summary = this.summary(meta);
 		this.emit(meta);
-		void this.start(id);
+		void this.start(id, true);
 		return summary;
 	}
 
@@ -301,6 +377,15 @@ export class SessionManager {
 		mode: DeliveryMode = "followUp",
 		requestId: string = randomUUID(),
 	): Promise<void> {
+		const end = this.updateGate.begin();
+		try {
+			await this.sendAdmitted(id, message, mode, requestId);
+		} finally {
+			end();
+		}
+	}
+
+	private async sendAdmitted(id: string, message: string, mode: DeliveryMode, requestId: string): Promise<void> {
 		const meta = this.require(id);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		if (this.closing) throw new Error("pilotd is shutting down");
@@ -315,7 +400,7 @@ export class SessionManager {
 		await this.save(meta);
 		this.emit(meta);
 		const starting = meta.initializing;
-		const admission = this.start(id);
+		const admission = this.start(id, true);
 		if (!starting) {
 			const rejected = await admission;
 			if (rejected.has(requestId)) throw rejected.get(requestId);
@@ -328,6 +413,8 @@ export class SessionManager {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return;
 		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length) return;
+		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
+		if (!this.workers.has(id)) this.updateGate.assertOpen();
 		// Drop queued input, and abort anything whose acknowledgement was in flight.
 		const requestId = randomUUID();
 		meta.pending = [{ type: "abort", requestId }];
@@ -343,21 +430,30 @@ export class SessionManager {
 	}
 
 	async editQueuedMessage(id: string, submissionId: number, message: string): Promise<void> {
-		const meta = this.require(id);
-		if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
-		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
-		const worker = this.ensureWorker(id);
-		await worker.ready;
-		await worker.request({ type: "editQueuedMessage", requestId: randomUUID(), submissionId, content: message });
-		meta.updatedAt = Date.now();
-		await this.save(meta);
-		this.emit(meta);
+		const end = this.updateGate.begin();
+		try {
+			const meta = this.require(id);
+			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
+			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			await worker.request({ type: "editQueuedMessage", requestId: randomUUID(), submissionId, content: message });
+			meta.updatedAt = Date.now();
+			await this.save(meta);
+			this.emit(meta);
+		} finally {
+			end();
+		}
 	}
 
 	/** Attach a live event stream. The first batch is always a snapshot. */
 	subscribe(id: string, listener: EventListener): () => void {
 		const meta = this.require(id);
 		if (this.closing) throw new Error("pilotd is shutting down");
+		const worker = this.workers.get(id);
+		// Reject reopening before registering a listener or emitting a snapshot. Existing live
+		// subscriptions and terminal failed-session snapshots do not start new work.
+		if (!worker && !meta.failure) this.updateGate.assertOpen();
 		const watchId = randomUUID();
 		let watchers = this.watchers.get(id);
 		if (!watchers) {
@@ -366,17 +462,18 @@ export class SessionManager {
 		}
 		watchers.set(watchId, listener);
 		if (meta.failure || (meta.preparing && meta.cancelled)) listener([emptySnapshot]);
-		const worker = this.workers.get(id);
 		if (worker) worker.send({ type: "watch", watchId });
 		else if (!meta.failure)
-			void this.start(id).then(
-				() => {
-					// Demand can arrive while a crashed worker's old drain is still settling.
-					if (!this.closing && !meta.failure && !this.workers.has(id) && watchers.has(watchId))
-						void this.start(id);
-				},
-				() => undefined,
-			);
+			void this.start(id)
+				.then(
+					() => {
+						// Demand can arrive while a crashed worker's old drain is still settling.
+						if (!this.closing && !meta.failure && !this.workers.has(id) && watchers.has(watchId))
+							void this.start(id);
+					},
+					() => undefined,
+				)
+				.catch(() => undefined);
 		return () => {
 			watchers.delete(watchId);
 			this.workers.get(id)?.send({ type: "unwatch", watchId });
@@ -392,11 +489,13 @@ export class SessionManager {
 	}
 
 	/** One initializer/outbox drain per session. Save before IPC; remove only after acknowledgement. */
-	private start(id: string): Promise<Map<string, Error>> {
+	private start(id: string, admitted = false): Promise<Map<string, Error>> {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
 		if (this.closing || meta.failure) return Promise.resolve(new Map());
+		// An existing drain owns its admission. Do not recheck its gate after any await.
+		if (!admitted && !this.workers.has(id)) this.updateGate.assertOpen();
 		const rejected = new Map<string, Error>();
 		const run = async () => {
 			try {
@@ -476,7 +575,9 @@ export class SessionManager {
 				for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
 			}
 		};
-		const task = run()
+		// Publish the drain before factories/listeners can reenter prepareUpdate.
+		const task = Promise.resolve()
+			.then(run)
 			.then(() => rejected)
 			.finally(() => this.starting.delete(id));
 		this.starting.set(id, task);
@@ -585,7 +686,12 @@ export class SessionManager {
 			await writeFile(temp, `${JSON.stringify(meta, null, "\t")}\n`, { mode: 0o600 });
 			await rename(temp, file);
 		};
-		const next = (this.saving.get(meta.id) ?? Promise.resolve()).catch(() => undefined).then(write);
+		const next = (this.saving.get(meta.id) ?? Promise.resolve())
+			.catch(() => undefined)
+			.then(write)
+			.finally(() => {
+				if (this.saving.get(meta.id) === next) this.saving.delete(meta.id);
+			});
 		this.saving.set(meta.id, next);
 		return next;
 	}

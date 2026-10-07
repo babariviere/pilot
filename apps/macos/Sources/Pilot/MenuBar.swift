@@ -6,6 +6,7 @@ struct MenuBarContent: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var daemon = AppModel.shared.daemon
     @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var updater = AppUpdater.shared
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
@@ -25,10 +26,12 @@ struct MenuBarContent: View {
         .keyboardShortcut("o")
         Divider()
         Button("Restart pilotd") { Task { await daemon.restart() } }
+            .disabled(daemon.lifecycleBusy)
         Button("Stop pilotd") { Task { await daemon.stop() } }
+            .disabled(daemon.lifecycleBusy)
         Button("Open pilotd Log") { NSWorkspace.shared.open(daemon.logURL) }
         Divider()
-        Button("Quit Pilot (agents keep running)") { NSApp.terminate(nil) }
+        Button(updater.waitingToInstall ? "Quit Pilot (update waits for idle)" : "Quit Pilot (agents keep running)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 

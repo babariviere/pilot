@@ -1,0 +1,87 @@
+name: macOS arm64
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # macos-15 is the standard arm64 runner, not macos-15-intel / macos-15-large.
+  # Its default Xcode 16.4 is too old for our Swift 6.2 package manifest.
+  DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+  NODE_VERSION: 24.21.0
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Verify toolchain and architecture
+        run: |
+          test "$(uname -m)" = arm64
+          swift --version
+          node --version
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - name: Packaging and release metadata tests
+        run: |
+          for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
+          python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_*.py'
+          node --test apps/macos/scripts/tests/*.test.mjs
+      - run: apps/macos/scripts/test.sh
+      - run: swift build --package-path apps/macos -c release --product Pilot
+
+  release:
+    needs: verify
+    # No publishing job or secret access on PRs (including fork PRs) or fork pushes.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false
+    runs-on: macos-15
+    timeout-minutes: 45
+    # Serialize trusted publication, including dispatches/reruns. Obsolete commits are
+    # skipped by publish-release.sh so they can never move /releases/latest backwards.
+    concurrency:
+      group: pilot-macos-release-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    env:
+      PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
+      BUNDLE_VERSION: ${{ github.run_number }}.${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Require update signing configuration
+        env:
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$SPARKLE_PUBLIC_KEY" ] || [ -z "$SPARKLE_PRIVATE_KEY" ]; then
+            echo '::error::Configure SPARKLE_PUBLIC_KEY repository variable and SPARKLE_PRIVATE_KEY secret with apps/macos/scripts/setup-updates.sh before publishing.'
+            exit 1
+          fi
+      - name: Build self-contained Pilot.app (arm64 only)
+        env:
+          BUNDLE_RUNTIME: '1'
+          SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+        run: apps/macos/scripts/bundle.sh
+      - name: Sign and publish complete private repository release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: apps/macos/scripts/publish-release.sh

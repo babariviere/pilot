@@ -231,12 +231,21 @@ reports), producing a morning summary in the app and Slack.
 - Questions panel: answer `ask_human` gates inline.
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
+- **Private releases and updates (implemented):** arm64 macOS CI builds on `main`, self-contained Node
+  and pilotd runtime, ad-hoc signing without Apple membership, Sparkle Ed25519-signed archives in private
+  GitHub Releases. Authentication first reuses local `gh auth token`; if unavailable or denied, the app
+  asks for a repository-read GitHub token and saves that manual fallback in Keychain. CLI credentials
+  remain in memory and are refreshed each check. Hourly checks while the app
+  runs; installation waits for idle agents and queued work, acquires a bounded admission pause via
+  `POST /api/update/prepare`, stops the launch agent, installs and relaunches. Terminal shells close,
+  durable history remains. One-time key configuration and initial installation: [UPDATES.md](apps/macos/UPDATES.md).
 
 ## 8. API additions
 
 | Endpoint / message | Purpose |
 | --- | --- |
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
+| `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
 | `POST /api/sessions/:id/archive` | Release workspace, hide from lists |
