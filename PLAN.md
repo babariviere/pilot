@@ -231,7 +231,14 @@ reports), producing a morning summary in the app and Slack.
 - Questions panel: answer `ask_human` gates inline.
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
-- **Private releases and updates (implemented):** arm64 macOS CI builds on `main`, self-contained Node
+- **Private releases and updates (implemented):** Release Please generates semantic-version release
+  PRs and changelogs on `main`; merging one builds a stable `vX.Y.Z` arm64 macOS release. Drafts stay
+  unpublished until the DMG installer, signed update ZIP and appcast are complete, with retries
+  against the tagged source and semantic and Sparkle build-order safeguards. App versions follow
+  root `package.json`; build numbers remain
+  monotonic workflow numbers for Sparkle. Other main commits publish `dev-<short SHA>` GitHub
+  prereleases with SHA-based display versions, without moving the stable latest release or automatic
+  update channel. Self-contained Node
   and pilotd runtime, ad-hoc signing without Apple membership, Sparkle Ed25519-signed archives in private
   GitHub Releases. Authentication first reuses local `gh auth token`; if unavailable or denied, the app
   asks for a repository-read GitHub token and saves that manual fallback in Keychain. CLI credentials

@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing draft stable tag to retry (for example v0.2.0). Leave empty to run Release Please.'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -43,29 +48,81 @@ jobs:
       - run: apps/macos/scripts/test.sh
       - run: swift build --package-path apps/macos -c release --product Pilot
 
-  release:
+  release-please:
     needs: verify
-    # No publishing job or secret access on PRs (including fork PRs) or fork pushes.
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false
+    # Never expose write permissions or release credentials to PRs or forks.
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: pilot-release-please-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  release:
+    needs: [verify, release-please]
+    # always() permits an explicit retry when release-please is intentionally skipped.
+    if: always() && needs.verify.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && (needs.release-please.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
-    # Serialize trusted publication, including dispatches/reruns. Obsolete commits are
-    # skipped by publish-release.sh so they can never move /releases/latest backwards.
+    # Serialize each channel separately so a queued stable publish cannot be
+    # displaced by dev builds. Semantic-version ordering protects stable latest.
     concurrency:
-      group: pilot-macos-release-${{ github.repository }}
+      group: pilot-macos-release-${{ github.repository }}-${{ (needs.release-please.outputs.release_created == 'true' || inputs.release_tag != '') && 'stable' || 'dev' }}
       cancel-in-progress: false
     permissions:
       contents: write
     env:
       PILOT_UPDATE_REPOSITORY: ${{ github.repository }}
       BUNDLE_VERSION: ${{ github.run_number }}.${{ github.run_attempt }}
+      RELEASE_TAG: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
+      RELEASE_KIND: ${{ (needs.release-please.outputs.release_created == 'true' || inputs.release_tag != '') && 'stable' || 'dev' }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Build the immutable release commit, not a newer main during a retry.
+          ref: ${{ inputs.release_tag || needs.release-please.outputs.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Verify tagged release source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          echo "PILOT_BUILD_SHA=$sha" >> "$GITHUB_ENV"
+          if [ "$RELEASE_KIND" = dev ]; then
+            echo "RELEASE_TAG=dev-${sha:0:12}" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          python3 - "$RELEASE_TAG" <<'PY'
+          import json, re, sys
+          version = json.load(open('package.json'))['version']
+          if not re.fullmatch(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version) or sys.argv[1] != f'v{version}':
+              raise SystemExit('Release tag must match the stable package.json version.')
+          PY
+          test "$(git rev-parse HEAD)" = "$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
+      - name: Verify release source tests
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+          apps/macos/scripts/test.sh
       - name: Require update signing configuration
         env:
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
@@ -80,7 +137,7 @@ jobs:
           BUNDLE_RUNTIME: '1'
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
         run: apps/macos/scripts/bundle.sh
-      - name: Sign and publish complete private repository release
+      - name: Sign and publish complete private repository release (DMG and update ZIP)
         env:
           GH_TOKEN: ${{ github.token }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}

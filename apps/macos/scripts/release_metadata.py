@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -32,10 +33,41 @@ def base64_bytes(value, length):
     return value
 
 
-def write_plist(source, destination, repo_path, release=False, env=None):
+def stable_version(value):
+    if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", value):
+        raise ValueError("App version must be a stable semantic version (e.g. 0.2.0)")
+    return value
+
+
+def release_state(release, kind):
+    if kind not in ("stable", "dev"):
+        raise ValueError("RELEASE_KIND must be stable or dev")
+    dev = kind == "dev"
+    if release["isPrerelease"] != dev:
+        raise ValueError("Release kind does not match the existing release")
+    if release["isDraft"]:
+        return "draft"
+    uploaded = {a["name"] for a in release["assets"] if a["state"] == "uploaded"}
+    if dev and {"Pilot-arm64.zip", "Pilot-arm64.dmg", "appcast.xml"} <= uploaded:
+        return "complete"
+    raise ValueError("Refusing to modify a published release")
+
+
+def write_plist(source, destination, repo_path, release=False, env=None, app_version=None):
     env = os.environ if env is None else env
     with open(source, "rb") as handle:
         info = plistlib.load(handle)
+    if app_version is not None:
+        info["CFBundleShortVersionString"] = stable_version(app_version)
+    kind = env.get("RELEASE_KIND", "stable")
+    if kind not in ("stable", "dev"):
+        raise ValueError("RELEASE_KIND must be stable or dev")
+    if kind == "dev":
+        sha = env.get("PILOT_BUILD_SHA", "")
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("Dev builds require PILOT_BUILD_SHA to be a full commit SHA")
+        info["CFBundleShortVersionString"] = f'{info["CFBundleShortVersionString"]}-dev.{sha[:12]}'
+        info["PilotBuildCommit"] = sha
     if release:
         info.pop("PilotRepoPath", None)
         for key in ("PILOT_UPDATE_REPOSITORY", "SPARKLE_PUBLIC_KEY", "BUNDLE_VERSION"):
@@ -105,16 +137,31 @@ def prepare_runtime(root):
             helper.chmod(0o755)
 
 
-def newer_than_latest(build_version, latest_tag):
-    current = tuple(map(int, version(build_version).split(".")))
-    current += (0,) * (3 - len(current))
+def newer_than_latest(app_version, latest_tag):
+    current = tuple(map(int, stable_version(app_version).split(".")))
     if not latest_tag:
         return True
-    if not latest_tag.startswith("pilot-"):
+    # One-way migration from the former workflow-build tags to stable version tags.
+    if latest_tag.startswith("pilot-"):
+        version(latest_tag.removeprefix("pilot-"))
+        return True
+    if not latest_tag.startswith("v"):
         raise ValueError("Latest release has an unrecognized tag; refusing to change latest")
-    latest = tuple(map(int, version(latest_tag.removeprefix("pilot-")).split(".")))
-    latest += (0,) * (3 - len(latest))
+    latest = tuple(map(int, stable_version(latest_tag.removeprefix("v")).split(".")))
     return current > latest
+
+
+def newer_build_than_latest(build_version, latest_appcast):
+    item = ET.parse(latest_appcast).find("channel/item")
+    latest = None if item is None else item.find(f"{{{SPARKLE}}}version")
+    if latest is None or not latest.text:
+        raise ValueError("Latest appcast is missing its Sparkle build version")
+
+    def parts(value):
+        values = tuple(map(int, version(value).split(".")))
+        return values + (0,) * (3 - len(values))
+
+    return parts(build_version) > parts(latest.text)
 
 
 def main():
@@ -138,9 +185,17 @@ def main():
     latest = commands.add_parser("is-newer")
     latest.add_argument("version")
     latest.add_argument("latest_tag")
+    build = commands.add_parser("is-newer-build")
+    build.add_argument("version")
+    build.add_argument("appcast")
+    state = commands.add_parser("release-state")
+    state.add_argument("release_json")
+    state.add_argument("kind", choices=("stable", "dev"))
     args = parser.parse_args()
     if args.command == "plist":
-        write_plist(args.source, args.destination, args.repo_path, args.release)
+        with open(Path(args.repo_path) / "package.json") as handle:
+            app_version = json.load(handle)["version"]
+        write_plist(args.source, args.destination, args.repo_path, args.release, app_version=app_version)
     elif args.command == "appcast":
         with open(args.plist, "rb") as handle:
             info = plistlib.load(handle)
@@ -153,8 +208,13 @@ def main():
         validate_symlinks(args.root)
     elif args.command == "prepare-runtime":
         prepare_runtime(args.root)
-    else:
+    elif args.command == "is-newer":
         raise SystemExit(0 if newer_than_latest(args.version, args.latest_tag) else 1)
+    elif args.command == "is-newer-build":
+        raise SystemExit(0 if newer_build_than_latest(args.version, args.appcast) else 1)
+    else:
+        with open(args.release_json) as handle:
+            print(release_state(json.load(handle), args.kind))
 
 
 if __name__ == "__main__":

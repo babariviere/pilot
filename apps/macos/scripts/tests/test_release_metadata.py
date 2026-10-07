@@ -2,6 +2,7 @@ import base64
 from pathlib import Path
 import plistlib
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -9,7 +10,10 @@ import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.dont_write_bytecode = True
-from release_metadata import SPARKLE, appcast, newer_than_latest, prepare_runtime, validate_symlinks, write_plist
+from release_metadata import (
+    SPARKLE, appcast, newer_build_than_latest, newer_than_latest, prepare_runtime,
+    release_state, stable_version, validate_symlinks, write_plist,
+)
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -42,6 +46,59 @@ class ReleaseMetadataTests(unittest.TestCase):
     def test_development_retains_repo_path(self):
         write_plist(self.source, self.output, "/checkout", env={})
         self.assertEqual(plistlib.loads(self.output.read_bytes())["PilotRepoPath"], "/checkout")
+
+    def test_bundle_uses_package_version_without_changing_sparkle_build_version(self):
+        write_plist(self.source, self.output, "/checkout", True, self.env, app_version="1.2.3")
+        info = plistlib.loads(self.output.read_bytes())
+        self.assertEqual(info["CFBundleShortVersionString"], "1.2.3")
+        self.assertEqual(info["CFBundleVersion"], "12345.2")
+
+    def test_plist_cli_reads_package_version(self):
+        (self.root / "package.json").write_text('{"version":"2.3.4"}')
+        result = subprocess.run([sys.executable, "-B", str(Path(__file__).resolve().parents[1] / "release_metadata.py"),
+                                 "plist", str(self.source), str(self.output), str(self.root)],
+                                env={}, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(plistlib.loads(self.output.read_bytes())["CFBundleShortVersionString"], "2.3.4")
+
+    def test_rejects_non_stable_app_versions(self):
+        for value in ["1", "1.2", "01.2.3", "1.2.3-beta.1", "1.2.3+build", "v1.2.3", "1.2.3\n"]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                stable_version(value)
+        self.assertEqual(stable_version("0.1.0"), "0.1.0")
+
+    def test_dev_version_uses_commit_sha_not_workflow_build_number(self):
+        sha = '0123456789abcdef0123456789abcdef01234567'
+        write_plist(self.source, self.output, "/checkout", True,
+                    {**self.env, "RELEASE_KIND": "dev", "PILOT_BUILD_SHA": sha}, app_version="0.2.0")
+        info = plistlib.loads(self.output.read_bytes())
+        self.assertEqual(info["CFBundleShortVersionString"], "0.2.0-dev.0123456789ab")
+        self.assertEqual(info["PilotBuildCommit"], sha)
+        self.assertEqual(info["CFBundleVersion"], "12345.2")
+        for bad in ['', 'main', '123', 'a' * 41]:
+            with self.subTest(sha=bad), self.assertRaises(ValueError):
+                write_plist(self.source, self.output, "/checkout", True,
+                            {**self.env, "RELEASE_KIND": "dev", "PILOT_BUILD_SHA": bad}, app_version="0.2.0")
+
+    def test_only_matching_drafts_can_be_modified(self):
+        draft = {"isDraft": True, "isPrerelease": False, "assets": []}
+        self.assertEqual(release_state(draft, "stable"), "draft")
+        self.assertEqual(release_state({**draft, "isPrerelease": True}, "dev"), "draft")
+        for release, kind in [(draft, "dev"), ({**draft, "isPrerelease": True}, "stable"),
+                              ({**draft, "isDraft": False}, "stable")]:
+            with self.subTest(release=release, kind=kind), self.assertRaises(ValueError):
+                release_state(release, kind)
+
+    def test_published_dev_sha_is_idempotent_only_when_all_assets_are_complete(self):
+        release = {"isDraft": False, "isPrerelease": True, "assets": [
+            {"name": name, "state": "uploaded"} for name in ['Pilot-arm64.zip', 'Pilot-arm64.dmg', 'appcast.xml']
+        ]}
+        self.assertEqual(release_state(release, "dev"), "complete")
+        for i in range(len(release['assets'])):
+            with self.subTest(asset=i), self.assertRaises(ValueError):
+                release_state({**release, "assets": [a for j, a in enumerate(release['assets']) if i != j]}, "dev")
+        with self.assertRaises(ValueError):
+            release_state({**release, "assets": [{**a, "state": "new"} for a in release['assets']]}, "dev")
 
     def test_release_requires_all_configuration(self):
         for key in self.env:
@@ -121,15 +178,30 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertEqual((prebuilds / "darwin-arm64/spawn-helper").stat().st_mode & 0o777, 0o755)
         self.assertTrue((prebuilds / "darwin-arm64/LICENSE").is_file())
 
-    def test_latest_version_never_regresses_after_old_run_rerun(self):
-        self.assertFalse(newer_than_latest("10.2", "pilot-11.1"))
-        self.assertFalse(newer_than_latest("11.1", "pilot-11.1"))
-        self.assertTrue(newer_than_latest("11.2", "pilot-11.1"))
-        self.assertTrue(newer_than_latest("12.1", "pilot-11.99"))
-        self.assertTrue(newer_than_latest("100.1", "pilot-99.9"))
-        self.assertTrue(newer_than_latest("1.1", ""))
+    def test_latest_stable_version_never_regresses_after_old_run_rerun(self):
+        self.assertFalse(newer_than_latest("0.2.0", "v0.3.0"))
+        self.assertFalse(newer_than_latest("0.3.0", "v0.3.0"))
+        self.assertTrue(newer_than_latest("0.3.1", "v0.3.0"))
+        self.assertTrue(newer_than_latest("1.0.0", "v0.99.99"))
+        self.assertTrue(newer_than_latest("1.10.0", "v1.9.9"))
+        self.assertTrue(newer_than_latest("0.2.0", ""))
+        for latest in ["other-release", "v1.2.3-beta.1", "pilot-bad"]:
+            with self.subTest(latest=latest), self.assertRaises(ValueError):
+                newer_than_latest("1.2.3", latest)
+
+    def test_stable_release_can_replace_legacy_build_release(self):
+        self.assertTrue(newer_than_latest("0.2.0", "pilot-123.1"))
+
+    def test_delayed_stable_release_cannot_regress_sparkle_build_version(self):
+        feed = self.root / "appcast.xml"
+        feed.write_bytes(appcast("owner/repo", "123", "10.2", "0.2.0", base64.b64encode(bytes(64)).decode(), 1))
+        self.assertFalse(newer_build_than_latest("9.1", feed))
+        self.assertFalse(newer_build_than_latest("10.2", feed))
+        self.assertTrue(newer_build_than_latest("10.3", feed))
+        self.assertTrue(newer_build_than_latest("11.1", feed))
+        feed.write_text('<rss><channel><item /></channel></rss>')
         with self.assertRaises(ValueError):
-            newer_than_latest("12.1", "other-release")
+            newer_build_than_latest("11.1", feed)
 
 
 if __name__ == "__main__":
