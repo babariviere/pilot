@@ -49,7 +49,22 @@ export interface QueueUpdateEvent {
 	items: QueuedMessage[];
 }
 
-export type AgentEvent = DurableAgentEvent | QueueUpdateEvent;
+/** Read-only projection of the pi-extensions file-backed TODO store. */
+export interface SessionTodo {
+	id: string;
+	title: string;
+	status: string;
+	createdAt: string;
+	assignedToSession?: string;
+}
+
+/** Full replacement, sent on subscription and when TODO files change. */
+export interface TodosUpdateEvent {
+	type: "todos_update";
+	items: SessionTodo[];
+}
+
+export type AgentEvent = DurableAgentEvent | QueueUpdateEvent | TodosUpdateEvent;
 
 /** POST /api/update/prepare, no body. Ready holds new worker admissions for a 30-second lease. */
 export interface UpdatePreparation {

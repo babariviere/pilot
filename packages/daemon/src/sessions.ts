@@ -196,7 +196,7 @@ class Worker implements SessionWorker {
 		this.activityWatchId = randomUUID();
 		this.activity.reset();
 		if (previous) this.send({ type: "unwatch", watchId: previous });
-		this.send({ type: "watch", watchId: this.activityWatchId });
+		this.send({ type: "watch", watchId: this.activityWatchId, includeTodos: false });
 	}
 
 	send(command: KernelCommand): void {

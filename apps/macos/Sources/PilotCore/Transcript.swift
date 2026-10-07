@@ -106,6 +106,7 @@ public struct Transcript: Equatable, Sendable {
     public var tools: [String: LiveTool] = [:]
     public var working = false
     public var queuedMessages: [QueuedMessage] = []
+    public var todos: [SessionTodo] = []
     public var queued: Int { queuedMessages.count }
     public var retry: String?
     public var error: String?
@@ -138,8 +139,10 @@ public struct Transcript: Equatable, Sendable {
             // Queue contents have their own exact-frame watch. An agent stream overflow snapshot
             // must not erase them; reconnects deliver a fresh queue_update after the snapshot.
             let queue = queuedMessages
+            let savedTodos = todos
             self = Transcript()
             queuedMessages = queue
+            todos = savedTodos
             entries = (event["entries"]?.array ?? []).compactMap(Entry.init(json:)).sorted { $0.id < $1.id }
             if let message = event["generation"]?["message"], !message.isNull { streaming = ChatMessage(json: message) }
             for tool in event["tools"]?.array ?? [] {
@@ -192,6 +195,8 @@ public struct Transcript: Equatable, Sendable {
             if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
         case "queue_update":
             queuedMessages = (event["items"]?.array ?? []).compactMap(QueuedMessage.init(json:))
+        case "todos_update":
+            todos = (event["items"]?.array ?? []).compactMap(SessionTodo.init(json:))
         case "auto_retry_start":
             retry = event["errorMessage"]?.string
         case "auto_retry_end":

@@ -146,6 +146,9 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
+                if !transcript.todos.isEmpty {
+                    TodosPanel(todos: transcript.todos, sessionId: session.id)
+                }
                 if let usage = session.usage, usage.hasDisplayData { UsageFooter(usage: usage) }
                 if session.isArchived {
                     ArchivedComposer(session: session)
