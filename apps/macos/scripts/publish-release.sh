@@ -46,8 +46,11 @@ gh release create "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --target "$GITHUB_SHA
 	--draft --title "Pilot $build_version (arm64)" \
 	--notes "Apple Silicon (arm64) only. Built from commit $GITHUB_SHA. Ad-hoc signed, not notarized."
 gh release upload "$tag" "$archive" --repo "$PILOT_UPDATE_REPOSITORY"
-asset_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/tags/$tag" \
-	--jq '.assets[] | select(.name == "Pilot-arm64.zip") | .id')"
+# Draft releases may not have a Git tag yet, so the REST by-tag endpoint returns 404.
+# gh release view can find drafts; use its numeric REST ID, not its GraphQL node ID.
+release_id="$(gh release view "$tag" --repo "$PILOT_UPDATE_REPOSITORY" --json databaseId --jq '.databaseId')"
+asset_id="$(gh api "repos/$PILOT_UPDATE_REPOSITORY/releases/$release_id/assets" \
+	--jq '.[] | select(.name == "Pilot-arm64.zip") | .id')"
 python3 "$here/scripts/release_metadata.py" appcast "$app/Contents/Info.plist" \
 	"$archive" "$asset_id" "$signature" "$stage/appcast.xml"
 gh release upload "$tag" "$stage/appcast.xml" --repo "$PILOT_UPDATE_REPOSITORY"
