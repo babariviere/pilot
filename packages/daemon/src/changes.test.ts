@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectChanges } from "./changes.ts";
+import { collectChangeSummary, collectChanges } from "./changes.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -48,6 +48,81 @@ test("reports committed, uncommitted and untracked changes since the base", asyn
 		assert.match(changes.diff, /\+three/);
 		assert.match(changes.diff, /\+fresh/);
 		assert.equal(changes.truncated, false);
+		assert.deepEqual(await collectChangeSummary(root, "main"), {
+			base: changes.base,
+			branch: changes.branch,
+			fileCount: changes.files.length,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("summary counts NUL-delimited tracked and untracked paths, renames once, and excludes ignored files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-"));
+	try {
+		git(root, "init", "--quiet", "-b", "main");
+		for (const path of ["modified\tfile.txt", "deleted\nfile.txt", 'old"é.txt', "recreated.txt"])
+			writeFileSync(join(root, path), `${path}\n`);
+		writeFileSync(join(root, ".gitignore"), "ignored*\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "base");
+		const base = git(root, "rev-parse", "HEAD").trim();
+		assert.deepEqual(await collectChangeSummary(root, base), { base, branch: "main", fileCount: 0 });
+
+		renameSync(join(root, 'old"é.txt'), join(root, "renamed\n\tfile.txt"));
+		git(root, "add", "-A");
+		writeFileSync(join(root, "modified\tfile.txt"), "changed\n");
+		unlinkSync(join(root, "deleted\nfile.txt"));
+		writeFileSync(join(root, "added\n\tfile.txt"), "staged\n");
+		git(root, "add", "--", "added\n\tfile.txt");
+		writeFileSync(join(root, 'untracked\n\t"é.txt'), "untracked\n");
+		writeFileSync(join(root, "ignored\nfile.txt"), "ignored\n");
+		// A staged deletion recreated as untracked is still only one changed path.
+		git(root, "rm", "--quiet", "--", "recreated.txt");
+		writeFileSync(join(root, "recreated.txt"), "replacement\n");
+		assert.deepEqual(await collectChangeSummary(root, base), { base, branch: "main", fileCount: 6 });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("summary shares merge-base semantics with changes and omits a detached branch", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-base-"));
+	try {
+		git(root, "init", "--quiet", "-b", "main");
+		writeFileSync(join(root, "a.txt"), "base\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "base");
+		const base = git(root, "rev-parse", "HEAD").trim();
+		git(root, "switch", "--quiet", "-c", "pilot/x");
+		writeFileSync(join(root, "a.txt"), "session\n");
+		git(root, "commit", "--quiet", "-am", "session edit");
+		git(root, "switch", "--quiet", "main");
+		writeFileSync(join(root, "upstream.txt"), "upstream\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "upstream edit");
+		git(root, "switch", "--quiet", "pilot/x");
+		const changes = await collectChanges(root, "main");
+		assert.deepEqual(await collectChangeSummary(root, "main"), {
+			base: `main (${base.slice(0, 8)})`,
+			branch: changes.branch,
+			fileCount: changes.files.length,
+		});
+		assert.equal(changes.files.length, 1);
+		git(root, "checkout", "--quiet", "--detach");
+		const detached = await collectChanges(root);
+		assert.deepEqual(await collectChangeSummary(root), { base: detached.base, fileCount: 0 });
+		await assert.rejects(collectChangeSummary(root, "missing-base"));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("summary rejects directories that are not Git repositories", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-no-git-"));
+	try {
+		await assert.rejects(collectChangeSummary(root), /Not a git repository/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

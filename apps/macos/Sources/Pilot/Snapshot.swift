@@ -40,6 +40,9 @@ enum Snapshot {
 
         let model = AppModel.shared
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
+        model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sessions.map {
+            ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: $0.id == "s1" ? 2 : 0))
+        })
         model.client.fixtureModels = ModelList(
             models: [
                 ModelOption(id: "anthropic/claude-opus-5-5", provider: "anthropic", name: "Claude Opus 5.5"),
@@ -196,6 +199,10 @@ enum Snapshot {
         }
         // A separate fixture set preserves the original attention/usage/diff screenshots.
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.pullRequestSessions)
+        model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.pullRequestSessions.map {
+            ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch ?? "pilot/\($0.id)",
+                                        fileCount: $0.id == "pr-merged" ? 0 : 2))
+        })
         model.inspectorVisible = false
         model.selectedSessionId = nil
         await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "pr-dashboard.png"))

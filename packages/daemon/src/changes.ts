@@ -1,7 +1,7 @@
 /** What a session changed: its working copy against the point it branched from. */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ChangedFile, SessionChanges } from "@pilot/protocol";
+import type { ChangedFile, SessionChangeSummary, SessionChanges } from "@pilot/protocol";
 import { workspaceBranch } from "./workspaces.ts";
 
 const exec = promisify(execFile);
@@ -29,15 +29,34 @@ const STATUS: Record<string, ChangedFile["status"]> = {
 	T: "modified",
 };
 
+async function changeBase(cwd: string, base: string) {
+	if ((await git(cwd, ["rev-parse", "--is-inside-work-tree"]).catch(() => "")).trim() !== "true")
+		throw new Error("Not a git repository");
+	const branch = await workspaceBranch(cwd).catch(() => undefined);
+	const mergeBase = (await git(cwd, ["merge-base", "HEAD", base]).catch(() => "")).trim() || base;
+	return {
+		mergeBase,
+		base: mergeBase === base ? base : `${base} (${mergeBase.slice(0, 8)})`,
+		...(branch ? { branch } : {}),
+	};
+}
+
+/** Count changed paths without generating patches or line statistics. Renames count once. */
+export async function collectChangeSummary(cwd: string, base = "HEAD"): Promise<SessionChangeSummary> {
+	const { mergeBase, ...metadata } = await changeBase(cwd, base);
+	const tracked = await git(cwd, ["diff", "--name-only", "-z", "-M", mergeBase, "--"]);
+	const untracked = await git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
+	// NUL records preserve tabs, newlines and quoted/non-ASCII filenames. A rename emits only its destination.
+	const paths = new Set([...tracked.split("\0"), ...untracked.split("\0")].filter(Boolean));
+	return { ...metadata, fileCount: paths.size };
+}
+
 /**
  * Committed and uncommitted changes since `base` (default `HEAD`), including untracked files. Uses the
  * merge base, so commits that landed on the base branch afterwards are not shown as changes.
  */
 export async function collectChanges(cwd: string, base = "HEAD"): Promise<SessionChanges> {
-	if ((await git(cwd, ["rev-parse", "--is-inside-work-tree"]).catch(() => "")).trim() !== "true")
-		throw new Error("Not a git repository");
-	const branch = await workspaceBranch(cwd).catch(() => undefined);
-	const mergeBase = (await git(cwd, ["merge-base", "HEAD", base]).catch(() => "")).trim() || base;
+	const { mergeBase, ...metadata } = await changeBase(cwd, base);
 
 	const files = new Map<string, ChangedFile>();
 	for (const line of (await git(cwd, ["diff", "--name-status", "-M", mergeBase])).split("\n")) {
@@ -73,8 +92,7 @@ export async function collectChanges(cwd: string, base = "HEAD"): Promise<Sessio
 	}
 	const truncated = diff.length > MAX_DIFF;
 	return {
-		base: mergeBase === base ? base : `${base} (${mergeBase.slice(0, 8)})`,
-		...(branch ? { branch } : {}),
+		...metadata,
 		files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)),
 		diff: truncated ? diff.slice(0, MAX_DIFF) : diff,
 		truncated,

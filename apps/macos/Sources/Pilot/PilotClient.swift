@@ -21,6 +21,7 @@ final class PilotClient: ObservableObject {
 
     private var baseURL: URL?
     private let artifactSession: URLSession
+    private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
     init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
         self.baseURL = baseURL
         self.artifactSession = artifactSession
@@ -161,6 +162,22 @@ final class PilotClient: ObservableObject {
 
     var fixtureModels: ModelList?
     var fixtureChanges: SessionChanges?
+    var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
+
+    /// Sidebar metadata only, without computing or transferring full diffs.
+    func changeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
+        if let fixture = fixtureChangeSummaries[sessionId] { return fixture }
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        let url = baseURL.appending(path: "api/sessions/\(sessionId)/changes/summary")
+        let (data, response) = try await repositoryRequests.perform {
+            try await artifactSession.data(from: url)
+        }
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
+        }
+        return try JSONDecoder().decode(SessionChangeSummary.self, from: data)
+    }
 
     /// The session's working copy against the point it branched from.
     func changes(_ sessionId: String) async throws -> SessionChanges {
@@ -411,4 +428,29 @@ struct ClientError: LocalizedError {
     let message: String
     init(_ message: String) { self.message = message }
     var errorDescription: String? { message }
+}
+
+/// Expanded sidebars should not launch an unbounded burst of Git scans in the daemon.
+@MainActor
+final class RepositoryRequestLimiter {
+    private let limit: Int
+    private var active = 0
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int) {
+        precondition(limit > 0)
+        self.limit = limit
+    }
+
+    func perform<T>(_ operation: () async throws -> T) async throws -> T {
+        if active < limit { active += 1 }
+        else { await withCheckedContinuation { waiting.append($0) } }
+        defer {
+            if waiting.isEmpty { active -= 1 }
+            else { waiting.removeFirst().resume() }
+        }
+        // A disappeared row may have been queued. Release its slot without starting a request.
+        try Task.checkCancellation()
+        return try await operation()
+    }
 }

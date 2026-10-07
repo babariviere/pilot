@@ -1,12 +1,92 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+
+test("changes summary GET returns only metadata and a count and preserves route guards", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-server-summary-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	const git = (...args: string[]) =>
+		execFileSync("git", args, {
+			cwd: root,
+			encoding: "utf8",
+			env: {
+				...process.env,
+				GIT_AUTHOR_NAME: "t",
+				GIT_AUTHOR_EMAIL: "t@t",
+				GIT_COMMITTER_NAME: "t",
+				GIT_COMMITTER_EMAIL: "t@t",
+			},
+		});
+	git("init", "--quiet", "-b", "main");
+	writeFileSync(join(root, "a.txt"), "base\n");
+	git("add", ".");
+	git("commit", "--quiet", "-m", "base");
+	const base = git("rev-parse", "HEAD").trim();
+	writeFileSync(join(root, "a.txt"), "changed\n");
+	writeFileSync(join(root, "untracked.txt"), "new\n");
+	const projects = new ProjectStore(root);
+	const sessions = new SessionManager(root, projects);
+	const originalChangeBase = sessions.changeBase.bind(sessions);
+	let preparing = false;
+	const changeBase = t.mock.method(sessions, "changeBase", (id: string) => {
+		if (id !== "session-1") return originalChangeBase(id);
+		if (preparing) throw new Error("Session workspace is still preparing");
+		return { cwd: root, base };
+	});
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: root, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog(root),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/session-1/changes`;
+	const response = await fetch(`${url}/summary`);
+	assert.equal(response.status, 200);
+	assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+	assert.deepEqual(await response.json(), { base, branch: "main", fileCount: 2 });
+	assert.deepEqual(changeBase.mock.calls[0]?.arguments, ["session-1"]);
+	const full = await fetch(url);
+	assert.equal(full.status, 200);
+	const changes = (await full.json()) as { base: string; files: unknown[]; diff: string };
+	assert.equal(changes.base, base);
+	assert.equal(changes.files.length, 2);
+	assert.match(changes.diff, /\+changed/);
+	for (const [path, options, status] of [
+		[`${url}/summary`, { method: "POST" }, 404],
+		[`${url}/summary/extra`, {}, 404],
+		[`${url}/summary`, { headers: { origin: "https://example.com" } }, 403],
+	] as const) {
+		const rejected = await fetch(path, options);
+		assert.equal(rejected.status, status);
+		await rejected.arrayBuffer();
+	}
+	assert.equal(changeBase.mock.callCount(), 2, "method, path and origin guards run before resolving the session");
+	const missing = await fetch(`${url.replace("session-1", "missing")}/summary`);
+	assert.equal(missing.status, 404);
+	assert.match(((await missing.json()) as { error: string }).error, /Unknown session/);
+	preparing = true;
+	const pending = await fetch(`${url}/summary`);
+	assert.equal(pending.status, 400);
+	assert.deepEqual(await pending.json(), { error: "Session workspace is still preparing" });
+});
 
 test("queued message PATCH forwards the message ID and content and reports stale edits", async (t) => {
 	const projects = new ProjectStore("/tmp/pilot-server-test-unused");
