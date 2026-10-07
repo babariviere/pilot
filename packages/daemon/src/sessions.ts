@@ -760,10 +760,13 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "ready" || packet.type === "working") {
-			const wasWorking = meta.working;
+			const wasWorking = Boolean(meta.working);
 			const changed = applyActivity(meta, packet.working, packet.completion);
-			if (packet.type === "ready") meta.model = packet.model;
-			if (changed || packet.type === "ready") {
+			if (packet.type === "ready") {
+				// Opening a transcript or restarting its worker is not new chat activity.
+				meta.model = packet.model;
+				void this.save(meta);
+			} else if (wasWorking !== packet.working || (changed && packet.completion)) {
 				meta.updatedAt = Date.now();
 				void this.save(meta);
 			}
