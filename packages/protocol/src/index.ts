@@ -237,6 +237,13 @@ export interface SessionChanges {
 	truncated: boolean;
 }
 
+/** GET /api/sessions/:id/changes/summary: change metadata without file details or a diff. */
+export interface SessionChangeSummary {
+	base: string;
+	branch?: string;
+	fileCount: number;
+}
+
 export interface SendRequest {
 	message: string;
 	mode?: DeliveryMode;

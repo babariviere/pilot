@@ -184,7 +184,7 @@ struct SessionRow: View {
                 Text(session.title)
                     .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))
                     .lineLimit(1)
-                PullRequestBadge(session: session)
+                SessionRepositoryMetadata(session: session)
             }
             Spacer(minLength: 4)
             if model.isUnread(session) { UnreadBadge() }

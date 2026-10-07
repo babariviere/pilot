@@ -12,7 +12,7 @@ import type {
 	SpawnRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
-import { collectChanges } from "./changes.ts";
+import { collectChangeSummary, collectChanges } from "./changes.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -147,6 +147,16 @@ export function createDaemonServer(
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
 			const { cwd, base } = sessions.changeBase(parts[2]!);
 			return json(res, 200, await collectChanges(cwd, base));
+		}
+		if (
+			parts[1] === "sessions" &&
+			parts.length === 5 &&
+			parts[3] === "changes" &&
+			parts[4] === "summary" &&
+			req.method === "GET"
+		) {
+			const { cwd, base } = sessions.changeBase(parts[2]!);
+			return json(res, 200, await collectChangeSummary(cwd, base));
 		}
 		if (parts[1] === "sessions" && parts[3] === "artifacts" && req.method === "GET") {
 			if (parts.length === 4) return json(res, 200, await sessions.artifacts(parts[2]!));

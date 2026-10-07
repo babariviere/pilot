@@ -262,6 +262,22 @@ public struct RemoveQueuedMessageResponse: Codable, Sendable {
     public let ok: Bool
 }
 
+/// GET /api/sessions/:id/changes/summary. No patch content is generated or transferred.
+public struct SessionChangeSummary: Codable, Equatable, Sendable {
+    public let base: String
+    public let branch: String?
+    public let fileCount: Int
+
+    public init(base: String, branch: String? = nil, fileCount: Int) {
+        self.base = base
+        self.branch = branch
+        self.fileCount = fileCount
+    }
+
+    public var fileCountLabel: String { "\(fileCount) file\(fileCount == 1 ? "" : "s")" }
+    public var helpText: String { "\(fileCountLabel) changed since \(base), including committed, uncommitted and untracked files." }
+}
+
 /// GET /api/sessions/:id/changes
 public struct SessionChanges: Codable, Equatable, Sendable {
     public let base: String
