@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/babariviere/pilot/compare/v0.3.0...v0.4.0) (2026-10-07)
+
+
+### Features
+
+* **chat:** show live TODO tasks above the composer ([e069a4e](https://github.com/babariviere/pilot/commit/e069a4e1f60e43261d3ed72334294b91d40aa588))
+
+
+### Bug Fixes
+
+* **macos:** default to artifact previews and explain stale daemons ([afc2ea7](https://github.com/babariviere/pilot/commit/afc2ea7f8ee82a22abae9025b5fcef994459753d))
+* **macos:** keep project header buttons stable on hover ([31973d1](https://github.com/babariviere/pilot/commit/31973d15ee35aad04ba7da5d87b2845a797d540b))
+* **macos:** resolve Ghostty resources inside signed app bundles ([f561e16](https://github.com/babariviere/pilot/commit/f561e1623a4714e9f146224e9e99f08b4df34d36))
+
 ## [0.3.0](https://github.com/babariviere/pilot/compare/v0.2.0...v0.3.0) (2026-10-07)
 
 
