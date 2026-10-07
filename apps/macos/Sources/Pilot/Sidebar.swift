@@ -2,10 +2,11 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Sessions grouped by project, newest first.
+/// Sessions grouped by project and optional user-created folders, newest first.
 struct SessionSidebar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
+    @StateObject private var folderEditor = ProjectFolderEditorState()
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
@@ -13,26 +14,48 @@ struct SessionSidebar: View {
         let searching = !model.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty
         let unassigned = visible.filter { $0.projectId.map { !known.contains($0) } ?? true }
         List(selection: $model.selectedSessionId) {
-            ForEach(client.projects) { project in
-                let sessions = visible.filter { $0.projectId == project.id }
-                if !searching || !sessions.isEmpty {
-                    let isExpanded = searching ? Binding.constant(true) : expanded(project.id)
-                    // Native expandable sidebar sections insert a disclosure control on hover,
-                    // shrinking the header and moving its action buttons underneath the pointer.
+            ForEach(model.projectFolders.folders) { folder in
+                let projects = client.projects.filter { model.projectFolders.folderId(for: $0.id) == folder.id }
+                let matching = projects.filter { project in visible.contains { $0.projectId == project.id } }
+                if !searching || !matching.isEmpty {
                     Section {
-                        if isExpanded.wrappedValue {
-                            ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
-                            if sessions.isEmpty {
-                                Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
+                        if searching || !model.projectFolders.collapsed.contains(folder.id) {
+                            ForEach(searching ? matching : projects) { project in
+                                let sessions = visible.filter { $0.projectId == project.id }
+                                let isExpanded = searching ? Binding.constant(true) : expanded(project.id)
+                                projectHeader(project, sessions: sessions, isExpanded: isExpanded)
+                                    .padding(.leading, 12)
+                                    .selectionDisabled(true)
+                                if isExpanded.wrappedValue {
+                                    projectSessions(sessions, indented: true)
+                                }
+                            }
+                            if projects.isEmpty {
+                                Text("Move projects here using their context menu")
+                                    .font(.caption).foregroundStyle(Theme.faintForeground)
+                                    .padding(.leading, 12)
+                                    .selectionDisabled(true)
                             }
                         }
                     } header: {
-                        ProjectHeader(project: project, client: client, working: sessions.filter(\.isWorking).count,
-                                      isExpanded: isExpanded, onArchive: {
-                            model.showArchive(in: project.id)
-                        }) {
-                            model.newSession(in: project.id)
+                        ProjectFolderHeader(folder: folder, count: projects.count,
+                                            isExpanded: searching ? .constant(true) : folderExpanded(folder.id),
+                                            onRename: { folderEditor.begin(folder) },
+                                            onDelete: { model.projectFolders.remove(folder.id) })
+                    }
+                }
+            }
+            ForEach(client.projects.filter { model.projectFolders.folderId(for: $0.id) == nil }) { project in
+                let sessions = visible.filter { $0.projectId == project.id }
+                if !searching || !sessions.isEmpty {
+                    let isExpanded = searching ? Binding.constant(true) : expanded(project.id)
+                    // Custom disclosure buttons keep header actions from shifting on hover.
+                    Section {
+                        if isExpanded.wrappedValue {
+                            projectSessions(sessions)
                         }
+                    } header: {
+                        projectHeader(project, sessions: sessions, isExpanded: isExpanded)
                     }
                 }
             }
@@ -49,7 +72,7 @@ struct SessionSidebar: View {
         .scrollContentBackground(.hidden)
         .background(Theme.sidebar)
         .overlay {
-            if client.projects.isEmpty, client.sessions.isEmpty {
+            if client.projects.isEmpty, client.sessions.isEmpty, model.projectFolders.folders.isEmpty {
                 VStack(spacing: 10) {
                     Image(systemName: "folder.badge.plus").font(.title2).foregroundStyle(.secondary)
                     Text("Add a project to get started").font(.callout).foregroundStyle(.secondary)
@@ -64,11 +87,17 @@ struct SessionSidebar: View {
                 SidebarButton(title: "New session", icon: "square.and.pencil", selected: model.selectedSessionId == nil && !model.showingArchive) {
                     model.newSession(in: model.draftProjectId)
                 }
-                Button { model.addProject() } label: {
-                    Image(systemName: "folder.badge.plus").frame(width: 28, height: 28)
+                Menu {
+                    Button("Add Project…") { model.addProject() }
+                    Button("New Folder…") { folderEditor.begin() }
+                } label: {
+                    Image(systemName: "plus").frame(width: 28, height: 28)
                 }
-                .buttonStyle(.borderless)
-                .help("Add Project… (⇧⌘O)")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Add a project or create a folder")
+                .accessibilityLabel("Add a project or create a folder")
             }
             SidebarButton(title: "Archived chats (\(client.archivedSessions.count))", icon: "archivebox",
                           selected: model.showingArchive && model.selectedSessionId == nil) {
@@ -89,6 +118,44 @@ struct SessionSidebar: View {
                     Rectangle().fill(Theme.border).frame(height: 1)
                 }
         }
+        .sheet(isPresented: $folderEditor.presented) {
+            ProjectFolderEditor(editor: folderEditor) {
+                if let id = folderEditor.folderId {
+                    model.projectFolders.rename(id, name: folderEditor.name)
+                } else if let folder = model.projectFolders.create(name: folderEditor.name),
+                          let projectId = folderEditor.projectId {
+                    model.projectFolders.move(projectId: projectId, to: folder.id)
+                }
+                folderEditor.presented = false
+            }
+        }
+    }
+
+    private func projectHeader(_ project: Project, sessions: [SessionSummary], isExpanded: Binding<Bool>) -> some View {
+        ProjectHeader(project: project, client: client, model: model,
+                      working: sessions.filter(\.isWorking).count, isExpanded: isExpanded,
+                      onArchive: { model.showArchive(in: project.id) },
+                      onNew: { model.newSession(in: project.id) },
+                      onNewFolder: { folderEditor.begin(projectId: project.id) })
+    }
+
+    @ViewBuilder
+    private func projectSessions(_ sessions: [SessionSummary], indented: Bool = false) -> some View {
+        ForEach(sessions) { session in
+            SessionRow(session: session).padding(.leading, indented ? 20 : 0).tag(session.id)
+        }
+        if sessions.isEmpty {
+            Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
+                .padding(.leading, indented ? 20 : 0)
+                .selectionDisabled(true)
+        }
+    }
+
+    private func folderExpanded(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { !model.projectFolders.collapsed.contains(id) },
+            set: { model.projectFolders.setExpanded($0, folderId: id) }
+        )
     }
 
     private func matches(_ session: SessionSummary) -> Bool {
@@ -131,10 +198,12 @@ private struct SidebarButton: View {
 private struct ProjectHeader: View {
     let project: Project
     @ObservedObject var client: PilotClient
+    @ObservedObject var model: AppModel
     let working: Int
     @Binding var isExpanded: Bool
     let onArchive: () -> Void
     let onNew: () -> Void
+    let onNewFolder: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
@@ -169,9 +238,40 @@ private struct ProjectHeader: View {
             Button("New Session", action: onNew)
             Button("Browse Archived Chats", action: onArchive)
             Button("Open in Finder") { NSWorkspace.shared.open(URL(filePath: project.path)) }
+            Menu("Move to Folder") {
+                Button {
+                    model.projectFolders.move(projectId: project.id, to: nil)
+                } label: {
+                    if model.projectFolders.folderId(for: project.id) == nil {
+                        Label("Ungrouped", systemImage: "checkmark")
+                    } else {
+                        Text("Ungrouped")
+                    }
+                }
+                ForEach(model.projectFolders.folders) { folder in
+                    Button {
+                        model.projectFolders.move(projectId: project.id, to: folder.id)
+                    } label: {
+                        if model.projectFolders.folderId(for: project.id) == folder.id {
+                            Label(folder.name, systemImage: "checkmark")
+                        } else {
+                            Text(folder.name)
+                        }
+                    }
+                }
+                Divider()
+                Button("New Folder…", action: onNewFolder)
+            }
             Divider()
             Button("Remove Project", role: .destructive) {
-                Task { try? await AppModel.shared.client.deleteProject(project.id) }
+                Task {
+                    do {
+                        try await client.deleteProject(project.id)
+                        model.projectFolders.move(projectId: project.id, to: nil)
+                    } catch {
+                        model.sessionActionError = error.localizedDescription
+                    }
+                }
             }
         }
         .help(project.path.abbreviatingHome)

@@ -74,6 +74,27 @@ enum Snapshot {
             )
         }
 
+        // Exercise grouped, ungrouped and empty folders, then search through saved collapse state.
+        let savedFolders = model.projectFolders
+        model.projectFolders = ProjectFolders()
+        let work = model.projectFolders.create(name: "Work")!
+        model.projectFolders.move(projectId: "p1", to: work.id)
+        _ = model.projectFolders.create(name: "Ideas")
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
+                     to: directory.appending(path: "sidebar-folders.png"))
+        model.projectFolders.setExpanded(false, folderId: work.id)
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
+                     to: directory.appending(path: "sidebar-folders-collapsed.png"))
+        model.sidebarQuery = "flaky"
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
+                     to: directory.appending(path: "sidebar-folders-search.png"))
+        model.sidebarQuery = ""
+        model.projectFolders = savedFolders
+        if CommandLine.arguments.contains("--sidebar-folders-only") {
+            NSApp.terminate(nil)
+            return
+        }
+
         await render(
             VStack(spacing: 16) {
                 Text("What should Pilot work on?")
