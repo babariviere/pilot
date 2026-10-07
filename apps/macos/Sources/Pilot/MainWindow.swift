@@ -67,6 +67,7 @@ struct SessionDetail: View {
                 StateBadge(state: session.state)
                 if let branch = session.branch {
                     Label(branch, systemImage: "arrow.triangle.branch")
+                        .labelStyle(.titleAndIcon)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1)
