@@ -173,11 +173,8 @@ private struct ThinkingRow: View {
             }
             .buttonStyle(.plain)
             if expansion.expanded {
-                Text(text)
-                    .font(.callout)
+                MarkdownView(text: text)
                     .foregroundStyle(.secondary)
-                    .lineSpacing(2)
-                    .textSelection(.enabled)
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) {
                         RoundedRectangle(cornerRadius: 1).fill(.quaternary).frame(width: 2)
