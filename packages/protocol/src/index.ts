@@ -23,6 +23,16 @@ export interface SessionCompletion {
 	outcomeReason?: string;
 }
 
+/** Latest GitHub pull request for the session's private branch, read by the daemon. */
+export interface SessionPullRequest {
+	number: number;
+	url: string;
+	title: string;
+	state: "draft" | "open" | "merged" | "closed";
+	/** Last successful GitHub lookup, epoch milliseconds. Cached across restarts. */
+	checkedAt: number;
+}
+
 /** How a message joins a busy session: steer the current run, or queue a follow-up run. */
 export type DeliveryMode = "steer" | "followUp";
 
@@ -59,6 +69,9 @@ export interface SessionSummary {
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
 	outcomeReason?: string;
+	pullRequest?: SessionPullRequest;
+	/** A lookup failed; pullRequest, if present, is the last known status, not a fresh result. */
+	pullRequestError?: string;
 	/** Resolved "provider/modelId", once the kernel has started. */
 	model?: string;
 	/** Latest context estimate and optional pi-extensions subscription snapshot. */

@@ -66,6 +66,7 @@ struct SessionDetail: View {
             ToolbarItemGroup {
                 StateBadge(status: session.status)
                 if model.isUnread(session) { UnreadBadge() }
+                PullRequestBadge(session: session)
                 if let branch = session.branch {
                     Label(branch, systemImage: "arrow.triangle.branch")
                         .labelStyle(.titleAndIcon)

@@ -38,6 +38,11 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 - **Results.** Working, Done, Needs your input, Failed and Stopped labels are separate from lifecycle.
   Unread result dots persist until the loaded outcome card is visible in an active chat, or you choose
   "Mark as reviewed" in the sidebar. Reviewing never answers a question or clears Needs your input.
+- **Pull requests.** Browser links in the sidebar, session header, dashboard, context menu and menu bar
+  show Draft, Open, Merged or Closed without merging, independently of results and unread dots.
+  Compact badges shorten the last label to Closed; hover for the full state, title and last lookup time.
+  Failed lookups retain a marked cached state, or show PR unavailable if no cached PR exists.
+  Links accept HTTP(S), including GitHub Enterprise hosts, and never merge or close a PR.
 - **Notifications.** New completion versions (bundled app only), deduplicated across reconnects.
 
 ## Layout
@@ -64,6 +69,7 @@ swift run Pilot              # unbundled dev run (no notifications)
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
                              # and menubar-idle.png / menubar-working.png: the menu bar plane glyph
+                             # also pr-open.png, pr-merged.png, pr-stale.png and pr-dashboard.png
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 ```

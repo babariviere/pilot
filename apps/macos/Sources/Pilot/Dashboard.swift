@@ -59,25 +59,28 @@ private struct WorkingNowCard: View {
         DashboardCard(title: "Working now", icon: "waveform.path.ecg", count: sessions.count) {
             if sessions.isEmpty { EmptyLine(text: "Nothing running. Start a task above.") }
             ForEach(sessions.prefix(5)) { session in
-                Button { app.selectedSessionId = session.id } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 8) {
-                            ProgressView().controlSize(.mini)
-                            Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                            Spacer()
-                            Circle().fill(Theme.warning).frame(width: 6, height: 6)
-                            Text(elapsed(session.updatedAt)).font(.system(size: 11).monospacedDigit())
-                                .foregroundStyle(Theme.mutedForeground)
+                VStack(alignment: .leading, spacing: 4) {
+                    Button { app.selectedSessionId = session.id } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.mini)
+                                Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Spacer()
+                                Circle().fill(Theme.warning).frame(width: 6, height: 6)
+                                Text(elapsed(session.updatedAt)).font(.system(size: 11).monospacedDigit())
+                                    .foregroundStyle(Theme.mutedForeground)
+                            }
+                            Text("\(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome) · \(session.model ?? "default model")")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundStyle(Theme.faintForeground)
+                                .lineLimit(1)
+                                .padding(.leading, 22)
                         }
-                        Text("\(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome) · \(session.model ?? "default model")")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.faintForeground)
-                            .lineLimit(1)
-                            .padding(.leading, 22)
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    PullRequestBadge(session: session, compact: true).padding(.leading, 22)
                 }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -140,25 +143,28 @@ private struct RecentCard: View {
         DashboardCard(title: "Recent sessions", icon: "clock") {
             if sessions.isEmpty { EmptyLine(text: "No sessions yet.") }
             ForEach(sessions) { session in
-                Button { app.selectedSessionId = session.id } label: {
-                    HStack(spacing: 8) {
-                        SessionStatusIcon(status: session.status).frame(width: 12)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(session.title).font(.system(size: 13)).lineLimit(1)
-                            Text(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundStyle(Theme.faintForeground)
-                                .lineLimit(1)
+                VStack(alignment: .leading, spacing: 4) {
+                    Button { app.selectedSessionId = session.id } label: {
+                        HStack(spacing: 8) {
+                            SessionStatusIcon(status: session.status).frame(width: 12)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(session.title).font(.system(size: 13)).lineLimit(1)
+                                Text(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundStyle(Theme.faintForeground)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Text(session.status.rawValue)
+                                .font(.system(size: 11))
+                                .foregroundStyle(session.status.color)
+                            if app.isUnread(session) { UnreadBadge() }
                         }
-                        Spacer()
-                        Text(session.status.rawValue)
-                            .font(.system(size: 11))
-                            .foregroundStyle(session.status.color)
-                        if app.isUnread(session) { UnreadBadge() }
+                        .contentShape(Rectangle())
                     }
-                    .contentShape(Rectangle())
+                    .buttonStyle(.plain)
+                    PullRequestBadge(session: session, compact: true).padding(.leading, 20)
                 }
-                .buttonStyle(.plain)
             }
         }
     }

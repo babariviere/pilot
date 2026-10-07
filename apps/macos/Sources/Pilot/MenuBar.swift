@@ -17,6 +17,13 @@ struct MenuBarContent: View {
                 model.openWindowAction = { openWindow(id: MainWindow.id) }
                 model.open(session: session.id)
             }
+            if let pr = session.pullRequest, let url = pr.browserURL {
+                Link("    PR \(pr.label)\(session.pullRequestIsStale ? " (last known)" : "") ↗", destination: url)
+                    .help(session.pullRequestHelpText ?? "")
+            } else if session.pullRequestError != nil {
+                Text("    PR lookup unavailable")
+                    .help(session.pullRequestHelpText ?? "Pull request lookup failed")
+            }
         }
         if !client.sessions.isEmpty { Divider() }
         Button("Open Pilot") {

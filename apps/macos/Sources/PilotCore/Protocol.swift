@@ -23,13 +23,17 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Stable completion version, in milliseconds. Unlike updatedAt, survives parking.
     public let outcomeAt: Double?
     public let outcomeReason: String?
+    public let pullRequest: SessionPullRequest?
+    /// A lookup failed. Any retained pull request is last-known, not a fresh result.
+    public let pullRequestError: String?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
 
     public init(
         id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,
         updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
-        outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil
+        outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
+        pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -45,6 +49,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.outcome = outcome
         self.outcomeAt = outcomeAt
         self.outcomeReason = outcomeReason
+        self.pullRequest = pullRequest
+        self.pullRequestError = pullRequestError
     }
 }
 
