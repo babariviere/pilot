@@ -6,6 +6,7 @@ import SwiftUI
 final class NewSessionForm: ObservableObject {
     @Published var model = ""
     @Published var message = ""
+    @Published var attachments = ImageAttachments()
     /// A folder outside any project.
     @Published var folder = ""
     @Published var error: String?
@@ -16,6 +17,8 @@ final class NewSessionForm: ObservableObject {
 
     func consumeDraft(from app: AppModel) {
         guard let message = app.draftMessage else { return }
+        for image in attachments.items { attachments.remove(image.id) }
+        attachments.error = nil
         self.message = message
         folder = ""
         model = ""
@@ -104,18 +107,23 @@ struct TaskComposer: View {
 
     private var newTask: some View {
         VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .topLeading) {
-                if form.message.isEmpty {
-                    Text("Describe a task, a bug to fix, an idea to try…")
-                        .font(fonts.body)
-                        .foregroundStyle(Theme.faintForeground)
-                        .allowsHitTesting(false)
+            VStack(alignment: .leading, spacing: 10) {
+                ImageAttachmentPreviews(attachments: $form.attachments)
+                    .disabled(form.busy)
+                ZStack(alignment: .topLeading) {
+                    if form.message.isEmpty {
+                        Text("Describe a task, a bug to fix, an idea to try…")
+                            .font(fonts.body)
+                            .foregroundStyle(Theme.faintForeground)
+                            .allowsHitTesting(false)
+                    }
+                    ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
+                                   isEditable: !form.busy, onPasteImages: { form.attachments.paste(from: $0) },
+                                   completionDirectory: project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
+                        start()
+                    }
+                    .frame(height: form.editorHeight)
                 }
-                ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
-                               completionDirectory: project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
-                    start()
-                }
-                .frame(height: form.editorHeight)
             }
                 .padding(12)
                 .card(radius: 10)
@@ -154,7 +162,7 @@ struct TaskComposer: View {
 
     private var canStart: Bool {
         !form.busy && (project != nil || !form.folder.isEmpty)
-            && !form.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!form.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !form.attachments.items.isEmpty)
     }
 
     /// Reloads the pi model scope when the project or folder changes.
@@ -169,10 +177,11 @@ struct TaskComposer: View {
         form.busy = true
         form.error = nil
         let model = form.model.trimmingCharacters(in: .whitespaces)
+        form.attachments.retainForHistory()
         let request = SpawnRequest(
             projectId: project?.id,
             cwd: project == nil ? form.folder : nil,
-            message: form.message,
+            message: form.attachments.message(text: form.message),
             model: model.isEmpty ? nil : model
         )
         Task {
@@ -181,6 +190,7 @@ struct TaskComposer: View {
                 let session = try await app.client.spawn(request)
                 if let id = project?.id { lastProjectId = id }
                 form.message = ""
+                form.attachments = ImageAttachments()
                 app.selectedSessionId = session.id
             } catch {
                 form.error = error.localizedDescription

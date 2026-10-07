@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class ComposerState: ObservableObject {
     @Published var draft = ""
+    @Published var attachments = ImageAttachments()
     @Published var error: String?
     @Published var editorHeight: CGFloat = 18
     @Published var queueEditing = QueuedMessageEditing()
@@ -26,7 +27,7 @@ final class ComposerState: ObservableObject {
         messages.filter { !removedQueuedMessages.contains($0.id) }
     }
 
-    func canSend(changingModel: Bool) -> Bool { !changingModel && !trimmed.isEmpty }
+    func canSend(changingModel: Bool) -> Bool { !changingModel && (!trimmed.isEmpty || !attachments.items.isEmpty) }
 
     func selectQueuedMessage(_ message: QueuedMessage) {
         guard !mutatingQueue, !removedQueuedMessages.contains(message.id) else { return }
@@ -125,6 +126,7 @@ struct Composer: View {
 
     private var editor: some View {
         VStack(alignment: .leading, spacing: 10) {
+            ImageAttachmentPreviews(attachments: $state.attachments)
             ZStack(alignment: .topLeading) {
                 if state.draft.isEmpty {
                     Text(working ? "Steer the agent…" : "Reply to Pilot…")
@@ -137,6 +139,7 @@ struct Composer: View {
                     focusToken: state.composerFocus,
                     onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
                     onCancel: cancelQueueEditAction,
+                    onPasteImages: { state.attachments.paste(from: $0) },
                     completionDirectory: completionDirectory
                 ) { flags in
                     send(flags.contains(.option) ? .followUp : .steer)
@@ -185,7 +188,7 @@ struct Composer: View {
     }
 
     private func send(_ mode: DeliveryMode) {
-        let message = state.trimmed
+        let message = state.attachments.message(text: state.trimmed)
         guard state.canSend(changingModel: modelPicker.changing) else { return }
         onSend(message, mode)
     }

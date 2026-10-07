@@ -16,6 +16,7 @@ struct ChatTextEditor: NSViewRepresentable {
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Void)?
     var onRemoveQueuedMessage: (() -> Void)?
+    var onPasteImages: ((NSPasteboard) -> Bool)?
     var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
@@ -36,6 +37,7 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.font = font
         textView.isEditable = isEditable
         textView.onRemoveQueuedMessage = onRemoveQueuedMessage
+        textView.onPasteImages = onPasteImages
         textView.textColor = .labelColor
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
@@ -72,6 +74,7 @@ struct ChatTextEditor: NSViewRepresentable {
         guard let textView = scroll.documentView as? SubmitTextView else { return }
         textView.isEditable = isEditable
         textView.onRemoveQueuedMessage = onRemoveQueuedMessage
+        textView.onPasteImages = onPasteImages
         if focusToken != context.coordinator.lastFocusToken {
             context.coordinator.lastFocusToken = focusToken
             DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
@@ -122,6 +125,47 @@ final class SubmitTextView: NSTextView {
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Bool)?
     var onRemoveQueuedMessage: (() -> Void)?
+    var onPasteImages: ((NSPasteboard) -> Bool)?
+
+    override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        guard onPasteImages != nil else { return super.readablePasteboardTypes }
+        return ImageAttachments.pasteboardTypes + [.fileURL] + super.readablePasteboardTypes
+    }
+
+    func canPasteImageData(from pasteboard: NSPasteboard) -> Bool {
+        isEditable && onPasteImages != nil && pasteboard.availableType(from: ImageAttachments.pasteboardTypes) != nil
+    }
+
+    override func validateUserInterfaceItem(_ item: any NSValidatedUserInterfaceItem) -> Bool {
+        if item.action == #selector(pasteAsPlainText(_:)), canPasteImageData(from: .general) { return true }
+        return super.validateUserInterfaceItem(item)
+    }
+
+    override func paste(_ sender: Any?) {
+        guard isEditable else { return }
+        dismissPathPicker()
+        if onPasteImages?(NSPasteboard.general) == true { return }
+        super.paste(sender)
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        guard isEditable else { return }
+        dismissPathPicker()
+        if onPasteImages?(NSPasteboard.general) == true { return }
+        super.pasteAsPlainText(sender)
+    }
+
+    override func readSelection(from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard isEditable else { return false }
+        if onPasteImages?(pasteboard) == true {
+            dismissPathPicker()
+            return true
+        }
+        if type == .fileURL, onPasteImages != nil, pasteboard.availableType(from: [.string]) != nil {
+            return super.readSelection(from: pasteboard, type: .string)
+        }
+        return super.readSelection(from: pasteboard, type: type)
+    }
     var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path {
         didSet { if oldValue != completionDirectory { dismissPathPicker() } }
     }
