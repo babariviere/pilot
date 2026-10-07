@@ -114,7 +114,7 @@ struct Composer: View {
         .task(id: session?.cwd) {
             if let session { await modelPicker.loadModels(cwd: session.cwd) }
         }
-        .alert("Model picker", isPresented: Binding(
+        .alert("Model and thinking", isPresented: Binding(
             get: { modelPicker.error != nil }, set: { if !$0 { modelPicker.error = nil } }
         )) {
             Button("OK") { modelPicker.error = nil }
@@ -158,11 +158,11 @@ struct Composer: View {
             if let session {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 16) {
-                        ChatModelPicker(session: session, working: working || !queuedMessages.isEmpty, state: modelPicker)
+                        modelControls(session)
                         UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        ChatModelPicker(session: session, working: working || !queuedMessages.isEmpty, state: modelPicker)
+                        modelControls(session)
                         UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
                     }
                 }
@@ -188,6 +188,10 @@ struct Composer: View {
         let message = state.trimmed
         guard state.canSend(changingModel: modelPicker.changing) else { return }
         onSend(message, mode)
+    }
+
+    private func modelControls(_ session: SessionSummary) -> some View {
+        ChatModelControls(session: session, working: working || !queuedMessages.isEmpty, state: modelPicker)
     }
 
     private var cancelQueueEditAction: (() -> Void)? {

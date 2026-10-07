@@ -1,5 +1,6 @@
 /** Models offered to clients: the user's pi model scope (`enabledModels`), else every authenticated model. */
 import { join } from "node:path";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	getAgentDir,
 	ModelRuntime,
@@ -110,15 +111,13 @@ export async function generateChatTitle(
 	return title ? title.slice(0, 60) : undefined;
 }
 
-function option(
-	model: { provider: string; id: string; name?: string; reasoning?: boolean },
-	thinking?: string,
-): ModelOption {
+function option(model: ChatModel, thinking?: string): ModelOption {
 	return {
 		id: `${model.provider}/${model.id}`,
 		provider: model.provider,
 		name: model.name || model.id,
 		...(model.reasoning ? { reasoning: true } : {}),
+		thinkingLevels: getSupportedThinkingLevels(model),
 		...(thinking ? { thinking } : {}),
 	};
 }

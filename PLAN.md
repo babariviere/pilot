@@ -278,8 +278,9 @@ reports), producing a morning summary in the app and Slack.
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
-  A subtle controls row below the message box combines a model picker with labeled context, 5h,
-  and weekly usage gauges. Models can be changed while idle and are pinned across reopening.
+  A subtle controls row below the message box combines model and thinking-level selectors with labeled
+  context, 5h, and weekly usage gauges. Both can be changed while idle with no queued messages and are
+  pinned per chat across reopening. Thinking choices follow the selected model's supported levels.
   Click subscription usage for snapshot details and reset times. Concrete Claude/Codex models show
   an explicit unavailable state when no snapshot arrives, never a fabricated zero measurement.
 - Chat TODO panel: read-only live view of pi-extensions' file-backed TODO store (`.pi/todos`, or

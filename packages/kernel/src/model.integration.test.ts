@@ -53,6 +53,7 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 		models: [
 			{ id: "one", reasoning: true, contextWindow: 32_000 },
 			{ id: "two", reasoning: true, contextWindow: 64_000 },
+			{ id: "plain", reasoning: false },
 			{ id: "outside", reasoning: true },
 		],
 	});
@@ -62,12 +63,13 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 	});
 	runtime.registerNativeProvider(a.provider);
 	runtime.registerNativeProvider(b.provider);
+	runtime.getModel("pilot-model-a", "two")!.thinkingLevelMap = { minimal: null, xhigh: "xhigh" };
 	const bus = createEventBus();
 	const settings = SettingsManager.inMemory({
 		defaultTools: [],
 		defaultProvider: "pilot-model-a",
 		defaultModel: "one",
-		enabledModels: [first, `${second}:high`, `${third}:low`],
+		enabledModels: [first, `${second}:high`, `${third}:low`, "pilot-model-a/plain"],
 	});
 	const adapters: NativeAdapter[] = [];
 	const openAdapter = NativeAdapter.open;
@@ -203,6 +205,7 @@ test("running and queued conversations reject model changes without aborting or 
 	await session.submit("queued", "Then do more", "followUp");
 	const before = await session.harness.inspect(context);
 	await assert.rejects(session.changeModel(second), ConversationBusy);
+	await assert.rejects(session.changeModel(first, "low"), ConversationBusy);
 	assert.equal(session.model, first);
 	assert.deepEqual(await session.harness.inspect(context), before);
 	response.resolve(fauxAssistantMessage("done"));
@@ -217,6 +220,7 @@ test("running and queued conversations reject model changes without aborting or 
 		});
 	}, context);
 	await assert.rejects(session.changeModel(second), ConversationBusy);
+	await assert.rejects(session.changeModel(first, "low"), ConversationBusy);
 	assert.equal(session.model, first);
 	assert.equal((await session.conversation.agent(context)).model?.modelId, "one");
 	await session.conversation.commit(async (tx) => {
@@ -247,8 +251,66 @@ test("input preparation and model selection have synchronous admission barriers"
 	const change = session.changeModel(second);
 	await assert.rejects(session.submit("racing", "Do not admit", "followUp"), ConversationBusy);
 	await assert.rejects(session.changeModel(third), ConversationBusy);
+	await assert.rejects(session.changeModel(first, "low"), ConversationBusy);
 	resolving.resolve();
 	await change;
 	assert.equal(session.model, second);
 	assert.equal((await session.harness.inspect(context)).submissions.length, 0);
+});
+
+test("explicit thinking overrides scope defaults, edits without model reselection, and survives reopening", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const adapter = f.adapters[0]!;
+	const settings = adapter.session.settingsManager.getGlobalSettings();
+	await session.changeModel(second, "low");
+	assert.equal(session.thinkingLevel, "low", "explicit selection wins over :high scope default");
+	const select = t.mock.method(adapter.session, "setModel", () => assert.fail("thinking-only edit reselected model"));
+	await session.changeModel(second, "off");
+	assert.equal(select.mock.callCount(), 0);
+	assert.equal(session.model, second);
+	assert.equal(adapter.session.thinkingLevel, "off");
+	assert.equal((await session.conversation.agent(context)).thinkingLevel, "off");
+	assert.deepEqual(adapter.session.settingsManager.getGlobalSettings(), settings);
+	select.mock.restore();
+	await session.close();
+	const restored = await f.open(first);
+	assert.equal(restored.model, second);
+	assert.equal(restored.thinkingLevel, "off");
+	assert.equal((await restored.conversation.agent(context)).thinkingLevel, "off");
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 0);
+});
+
+test("thinking validation follows actual model capabilities, rejecting unsupported levels before mutation", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const before = await session.conversation.agent(context);
+	for (const level of ["", "unknown", "minimal", "max", " high "])
+		await assert.rejects(session.changeModel(second, level), /Thinking level is not supported/);
+	await assert.rejects(session.changeModel("pilot-model-a/plain", "low"), /Thinking level is not supported/);
+	assert.equal(session.model, first);
+	assert.deepEqual(await session.conversation.agent(context), before);
+	await session.changeModel(second, "xhigh");
+	assert.equal(session.thinkingLevel, "xhigh");
+	await session.changeModel("pilot-model-a/plain", "off");
+	assert.equal(session.thinkingLevel, "off");
+});
+
+test("failed durable thinking edits restore the native level without reselecting the model", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	await session.changeModel(second);
+	const adapter = f.adapters[0]!;
+	const before = await session.conversation.agent(context);
+	const commit = session.conversation.commit.bind(session.conversation);
+	let commits = 0;
+	t.mock.method(session.conversation, "commit", (...args: Parameters<typeof commit>) => {
+		if (++commits === 3) throw new Error("configuration commit failed");
+		return commit(...args);
+	});
+	t.mock.method(adapter.session, "setModel", () => assert.fail("thinking edit rollback reselected model"));
+	await assert.rejects(session.changeModel(second, "low"), /configuration commit failed/);
+	assert.equal(session.thinkingLevel, "high");
+	assert.equal(session.model, second);
+	assert.deepEqual(await session.conversation.agent(context), before);
 });

@@ -183,7 +183,9 @@ export function createDaemonServer(
 				const body = await readJson<ChangeModelRequest>(req);
 				if (!body || typeof body.model !== "string" || !body.model.trim())
 					throw new HttpError(400, "model is required");
-				return json(res, 200, await sessions.changeModel(id, body.model, models));
+				if (body.thinking !== undefined && (typeof body.thinking !== "string" || !body.thinking))
+					throw new HttpError(400, "thinking must be a supported level");
+				return json(res, 200, await sessions.changeModel(id, body.model, models, body.thinking));
 			}
 			if (parts[3] === "messages") {
 				const body = await readJson<SendRequest>(req);

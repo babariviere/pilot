@@ -85,8 +85,10 @@ final class PilotClient: ObservableObject {
     }
 
     @discardableResult
-    func changeModel(_ sessionId: String, model: String) async throws -> SessionSummary {
-        let session: SessionSummary = try await call("api/sessions/\(sessionId)/model", body: ChangeModelRequest(model: model))
+    func changeModel(_ sessionId: String, model: String, thinking: String? = nil) async throws -> SessionSummary {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/model", body: ChangeModelRequest(model: model, thinking: thinking)
+        )
         update(session)
         return session
     }
