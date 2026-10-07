@@ -142,15 +142,22 @@ private struct ProjectHeader: View {
 
 struct SessionRow: View {
     let session: SessionSummary
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            SessionStatusIcon(state: session.state)
+            SessionStatusIcon(status: session.status)
                 .frame(width: 12)
-            Text(session.title)
-                .font(.system(size: 13))
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(session.title)
+                    .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))
+                    .lineLimit(1)
+                Text(session.status.rawValue)
+                    .font(.system(size: 11))
+                    .foregroundStyle(session.status.color)
+            }
             Spacer(minLength: 4)
+            if model.isUnread(session) { UnreadBadge() }
             Text(relative(session.updatedAt))
                 .font(.caption)
                 .foregroundStyle(.tertiary)
@@ -158,6 +165,11 @@ struct SessionRow: View {
         }
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
+        .contextMenu {
+            if model.isUnread(session) {
+                Button("Mark as reviewed") { model.review(session, explicit: true) }
+            }
+        }
     }
 
     private func relative(_ milliseconds: Double) -> String {
@@ -173,14 +185,14 @@ struct SessionRow: View {
 }
 
 struct SessionStatusIcon: View {
-    let state: String
+    let status: SessionStatus
 
     var body: some View {
-        switch state {
-        case "working", "starting":
+        switch status {
+        case .working:
             ProgressView().controlSize(.mini)
-        case "failed":
-            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.system(size: 11))
+        case .failed, .needsInput, .done, .stopped:
+            Image(systemName: status.icon).foregroundStyle(status.color).font(.system(size: 11))
         default:
             Circle().fill(Color.secondary.opacity(0.35)).frame(width: 6, height: 6)
         }

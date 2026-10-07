@@ -127,37 +127,51 @@ struct ChipLabel: View {
 
 /// Small status capsule for headers.
 struct StateBadge: View {
-    let state: String
+    let status: SessionStatus
 
     var body: some View {
         HStack(spacing: 5) {
-            if state == "working" || state == "starting" {
+            if status == .working {
                 ProgressView().controlSize(.mini)
             } else {
-                Circle().fill(color).frame(width: 6, height: 6)
+                Image(systemName: status.icon).font(.system(size: 10))
             }
-            Text(label).font(.system(size: 11, weight: .medium))
+            Text(status.rawValue).font(.system(size: 11, weight: .medium))
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
-        .background(Capsule().fill(color.opacity(0.1)))
-        .foregroundStyle(color)
+        .background(Capsule().fill(status.color.opacity(0.1)))
+        .foregroundStyle(status.color)
     }
+}
 
-    private var label: String {
-        switch state {
-        case "working": "Working"
-        case "starting": "Starting"
-        case "failed": "Failed"
-        default: "Idle"
+extension SessionStatus {
+    var icon: String {
+        switch self {
+        case .working: "arrow.trianglehead.2.clockwise"
+        case .done: "checkmark.circle.fill"
+        case .needsInput: "questionmark.circle.fill"
+        case .failed: "exclamationmark.circle.fill"
+        case .stopped: "stop.circle"
+        case .idle: "circle"
         }
     }
 
-    private var color: Color {
-        switch state {
-        case "working", "starting": Theme.info
-        case "failed": Theme.destructive
+    var color: Color {
+        switch self {
+        case .working: Theme.info
+        case .done: Theme.success
+        case .needsInput: Theme.warning
+        case .failed: Theme.destructive
         default: Theme.mutedForeground
         }
+    }
+}
+
+struct UnreadBadge: View {
+    var body: some View {
+        Circle().fill(Theme.info).frame(width: 7, height: 7)
+            .accessibilityLabel("Unread result")
+            .help("Unread result. Open this chat or mark it as reviewed.")
     }
 }

@@ -62,6 +62,7 @@ export function pilotPrompt(context: PilotContext): string {
 		);
 	}
 	lines.push(
+		"- Before your final response, call pilot_report_status with needs_input only if you cannot proceed without the user's answer, approval or missing information, and briefly say why. Put the actual question in your final response. Otherwise report done. Optional offers (such as asking whether the user wants more work) are not needs_input. A new user message starts work again; do not keep running while waiting for an answer.",
 		"- Never post on GitHub: no comments, reviews or replies on pull requests or issues, and no merging or closing. Put results, questions and anything you decided not to do in your final answer instead.",
 	);
 	return lines.join("\n");

@@ -2,7 +2,7 @@ import Foundation
 import PilotCore
 import UserNotifications
 
-/// Native notifications when a session finishes or fails.
+/// Native delivery. PilotCore's SessionAttention owns completion-version deduplication.
 @MainActor
 final class Notifier: NSObject, UNUserNotificationCenterDelegate {
     var onOpenSession: ((String) -> Void)?
@@ -17,17 +17,14 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    func sessionChanged(from previous: SessionSummary?, to session: SessionSummary) {
-        guard available, let previous else { return }
-        let finished = previous.state == "working" && session.state == "idle"
-        let failed = session.state == "failed"
-        guard finished || failed else { return }
+    func deliver(_ notification: SessionOutcomeNotification) {
+        guard available else { return }
         let content = UNMutableNotificationContent()
-        content.title = failed ? "Session failed" : "Session finished"
-        content.body = failed ? (session.error ?? session.title) : session.title
-        content.userInfo = ["sessionId": session.id]
+        content.title = notification.title
+        content.body = notification.body
+        content.userInfo = ["sessionId": notification.sessionId]
         content.sound = .default
-        let request = UNNotificationRequest(identifier: "\(session.id)-\(session.updatedAt)", content: content, trigger: nil)
+        let request = UNNotificationRequest(identifier: notification.identifier, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(request)
     }
 

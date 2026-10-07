@@ -1,5 +1,5 @@
 /** IPC between pilotd and one kernel worker process. */
-import type { AgentEvent, DeliveryMode, SessionUsage } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
 import type { PilotContext } from "./policy.ts";
 
 export interface KernelSpec {
@@ -28,10 +28,10 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
-	| { type: "ready"; model: string; working: boolean; usage: SessionUsage }
+	| { type: "ready"; model: string; working: boolean; usage: SessionUsage; completion?: SessionCompletion }
 	| { type: "usage"; usage: SessionUsage }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
-	| { type: "working"; working: boolean }
+	| { type: "working"; working: boolean; completion?: SessionCompletion }
 	| { type: "events"; watchId: string; events: AgentEvent[] }
 	| { type: "error"; requestId?: string; message: string };

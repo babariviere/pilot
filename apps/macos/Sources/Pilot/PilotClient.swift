@@ -9,8 +9,8 @@ final class PilotClient: ObservableObject {
     @Published private(set) var projects: [Project] = []
     @Published private(set) var connected = false
 
-    /// Fires on every session state change, for notifications.
-    var onTransition: ((SessionSummary?, SessionSummary) -> Void)?
+    /// Includes full snapshots on initial connection and reconnect, not just deltas.
+    var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
 
     var workingCount: Int { sessions.filter(\.isWorking).count }
 
@@ -276,11 +276,10 @@ final class PilotClient: ObservableObject {
     }
 
     private func update(_ session: SessionSummary) {
-        let previous = self.session(session.id)
         sessions.removeAll { $0.id == session.id }
         sessions.append(session)
         sessions.sort { $0.updatedAt > $1.updatedAt }
-        if previous?.state != session.state { onTransition?(previous, session) }
+        onSessionsChanged?([session], false)
     }
 
     private func handle(_ message: ServerUpdate) {
@@ -290,6 +289,7 @@ final class PilotClient: ObservableObject {
             for session in list { awaitingList[session.id] = nil }
             // A list captured before POST completed must not undo immediate navigation.
             sessions = (list + Array(awaitingList.values)).sorted { $0.updatedAt > $1.updatedAt }
+            onSessionsChanged?(sessions, true)
         case let .session(session):
             awaitingList[session.id] = nil
             update(session)

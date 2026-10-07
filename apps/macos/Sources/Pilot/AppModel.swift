@@ -16,6 +16,8 @@ final class AppModel: ObservableObject {
     let settings = AppSettings.shared
     let terminals = TerminalStore()
     let notifier = Notifier()
+    let attention = SessionAttention()
+    @Published private(set) var reviewRevision = 0
 
     @Published var selectedSessionId: String?
     @Published var inspectorVisible = false
@@ -39,8 +41,11 @@ final class AppModel: ObservableObject {
         started = true
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
-        client.onTransition = { [weak self] previous, session in
-            self?.notifier.sessionChanged(from: previous, to: session)
+        client.onSessionsChanged = { [weak self] sessions, snapshot in
+            guard let self else { return }
+            for notification in self.attention.observe(sessions, snapshot: snapshot) {
+                self.notifier.deliver(notification)
+            }
         }
         terminals.bind(to: settings)
         Task {
@@ -52,6 +57,14 @@ final class AppModel: ObservableObject {
     func newSession(in projectId: String?) {
         draftProjectId = projectId
         selectedSessionId = nil
+    }
+
+    func isUnread(_ session: SessionSummary) -> Bool { attention.isUnread(session) }
+
+    func review(_ session: SessionSummary, chatVisible: Bool = false, explicit: Bool = false) {
+        if attention.review(session, chatVisible: chatVisible, appActive: NSApp.isActive, explicit: explicit) {
+            reviewRevision += 1
+        }
     }
 
     /// Shows the inspector on `tab`, or hides it when it already shows that tab.

@@ -135,6 +135,16 @@ enum Snapshot {
             NSGraphicsContext.restoreGraphicsState()
             try? rep.representation(using: .png, properties: [:])?.write(to: directory.appending(path: "\(name).png"))
         }
+        for session in Fixtures.sessions where session.outcome == .needsInput || session.outcome == .done {
+            model.selectedSessionId = session.id
+            await render(
+                Frame(title: session.title, subtitle: "pilot · \(session.model ?? "default model")", status: session.status) {
+                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.settledTranscript(needsInput: session.outcome == .needsInput)))
+                },
+                size: size,
+                to: directory.appending(path: session.outcome == .needsInput ? "needs-input-unread.png" : "done-unread.png")
+            )
+        }
         print("snapshots written to \(directory.path)")
         exit(0)
     }
@@ -259,6 +269,7 @@ enum Snapshot {
     private struct Frame<Content: View>: View {
         let title: String
         let subtitle: String?
+        var status: SessionStatus = .working
         @ViewBuilder let content: Content
 
         var body: some View {
@@ -285,7 +296,7 @@ enum Snapshot {
                         }
                         Spacer()
                         if subtitle != nil {
-                            StateBadge(state: "working")
+                            StateBadge(status: status)
                             Image(systemName: "folder").foregroundStyle(Theme.mutedForeground)
                             Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
                         }
@@ -332,7 +343,8 @@ enum Fixtures {
                        createdAt: now - 3_600_000, updatedAt: now - 133_000, state: "working", model: "openai-codex/gpt-6.1-sol",
                        usage: codexUsage),
         SessionSummary(id: "s2", title: "Add projects API to pilotd", cwd: projects[0].path, projectId: "p1",
-                       createdAt: now - 86_400_000, updatedAt: now - 3_000_000, state: "idle", model: "openai-codex/gpt-6.1-sol"),
+                       createdAt: now - 86_400_000, updatedAt: now - 3_000_000, state: "idle", model: "openai-codex/gpt-6.1-sol",
+                       outcome: .done, outcomeAt: now - 3_000_000, outcomeReason: "Projects API implemented and tests passed."),
         SessionSummary(id: "s3", title: "Review subagents durable storage", cwd: projects[1].path, projectId: "p2",
                        createdAt: now - 2 * 86_400_000, updatedAt: now - 600_000, state: "working", model: "anthropic/claude-opus-5-5",
                        usage: claudeUsage),
@@ -340,8 +352,25 @@ enum Fixtures {
                        createdAt: now - 4 * 86_400_000, updatedAt: now - 90_000_000, state: "failed", model: "anthropic/claude-sonnet-5",
                        error: "Kernel exited with code 1"),
         SessionSummary(id: "s5", title: "Explain the Harness task graph", cwd: "\(home)/scratch",
-                       createdAt: now - 6 * 86_400_000, updatedAt: now - 400_000_000, state: "parked"),
+                       createdAt: now - 6 * 86_400_000, updatedAt: now - 400_000_000, state: "parked",
+                       outcome: .needsInput, outcomeAt: now - 400_000_000, outcomeReason: "Which part of the task graph should I document first?"),
     ]
+
+    static func settledTranscript(needsInput: Bool) -> Transcript {
+        var transcript = Transcript()
+        let text = needsInput
+            ? "I can document either the task scheduling flow or the durable storage flow. **Which should I cover first?**"
+            : "Implemented the projects API, including create, update, list and delete. All tests passed."
+        transcript.apply(.object([
+            "type": .string("snapshot"),
+            "entries": .array([.object([
+                "id": .number(1), "kind": .string("pi.assistant"),
+                "model": .array([.object(["role": .string("assistant"), "content": .string(text)])]),
+            ])]),
+            "tools": .array([]), "inbox": .array([]), "run": .null,
+        ]))
+        return transcript
+    }
 
     static let changes = SessionChanges(
         base: "origin/main",

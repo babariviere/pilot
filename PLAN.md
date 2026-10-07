@@ -78,6 +78,14 @@ native macOS app, or from wherever the work came from.
 `parked → starting → working ⇄ waiting → idle`, plus `failed`. `waiting` is new: the run is parked on a
 human gate and costs nothing until answered.
 
+For manual sessions today, lifecycle (`parked`, `starting`, `working`, `idle`, `failed`) is separate from
+the latest settled-run outcome (`done`, `needs_input`, `failed`, `stopped`). The replay-safe
+`pilot_report_status` tool explicitly reports blocking questions, approvals or missing information
+before the final response. Optional offers are not blockers. An otherwise successful run defaults to
+`done`; errors and aborts override reported status. This is not the suspended `ask_human` gate yet:
+the run ends normally, costs nothing while idle, and an ordinary user message resumes work.
+Outcomes and their stable completion version survive worker and daemon restarts.
+
 ## 5. Shared machinery
 
 ### 5.1 Human gate (`ask_human` tool)
@@ -218,6 +226,10 @@ reports), producing a morning summary in the app and Slack.
 ## 7. App (macOS)
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
+- Manual sessions show Working, Done, Needs your input, Failed or Stopped separately from worker
+  lifecycle. Unread completion badges persist until reviewed, independently of the outcome:
+  reading a question does not answer it. Native macOS notifications distinguish results, blocking
+  requests and failures, and deduplicate completion versions across reconnects.
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
   user messages above the composer until consumed, restoring them on reconnect. Display steering before
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down

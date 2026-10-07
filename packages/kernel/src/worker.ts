@@ -70,10 +70,17 @@ process.on("message", (message: unknown) => {
 		if (initialization) return;
 		initialization = (async () => {
 			session = await KernelSession.open(command.spec, {
-				onWorking: (working) => void send({ type: "working", working }),
+				onWorking: (working, completion) =>
+					void send({ type: "working", working, ...(completion ? { completion } : {}) }),
 				onUsageChanged: (usage) => void send({ type: "usage", usage }),
 			});
-			await send({ type: "ready", model: session.model, working: session.working, usage: session.usage });
+			await send({
+				type: "ready",
+				model: session.model,
+				working: session.working,
+				usage: session.usage,
+				...(session.completion ? { completion: session.completion } : {}),
+			});
 		})();
 		initialization.catch(async (error) => {
 			await send({ type: "error", message: `Kernel failed to start: ${errorText(error)}` });

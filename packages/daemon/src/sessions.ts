@@ -18,6 +18,7 @@ import { NotFound } from "./errors.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
+import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
 import { branchSlug, createWorkspace, type Workspace } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
@@ -46,11 +47,11 @@ export interface SessionFactories {
 	worker?: (
 		spec: WorkerSpec,
 		onPacket: (packet: KernelPacket) => void,
-		onExit: (worker: SessionWorker, code: number | null) => void,
+		onExit: (worker: SessionWorker, code: number | null, signal?: NodeJS.Signals | null) => void,
 	) => SessionWorker;
 }
 
-interface SessionMeta {
+interface SessionMeta extends OutcomeMeta {
 	id: string;
 	title: string;
 	cwd: string;
@@ -61,8 +62,6 @@ interface SessionMeta {
 	updatedAt: number;
 	model?: string;
 	thinking?: string;
-	/** Last known activity, so the daemon can resume interrupted work after a restart. */
-	working?: boolean;
 	/** Cleared only after initialization and durable input admission. */
 	initializing?: boolean;
 	preparing?: { source: string; branch: string };
@@ -118,7 +117,7 @@ class Worker implements SessionWorker {
 	constructor(
 		spec: Extract<KernelCommand, { type: "start" }>["spec"],
 		private readonly onPacket: (packet: KernelPacket) => void,
-		onExit: (worker: SessionWorker, code: number | null) => void,
+		onExit: (worker: SessionWorker, code: number | null, signal?: NodeJS.Signals | null) => void,
 	) {
 		this.child = fork(fileURLToPath(workerEntry), [], {
 			execArgv: ["--import", import.meta.resolve("tsx")],
@@ -155,27 +154,29 @@ class Worker implements SessionWorker {
 			} else if (packet.type === "error") {
 				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message));
 				else if (!this.initialized) {
-					this.state = "failed";
-					this.error = packet.message;
 					markFailed(new Error(packet.message));
-				} else this.error = packet.message;
+					this.state = "failed";
+				}
+				this.error = packet.message;
 			}
+			if ((packet.type === "ready" || packet.type === "working") && packet.working) this.error = undefined;
 			this.onPacket(packet);
 		});
 		this.child.on("error", (error) => {
 			this.error = error.message;
+			this.state = "failed";
 			if (!this.initialized) {
-				this.state = "failed";
 				markFailed(error);
 			}
 			for (const id of [...this.pending.keys()]) this.settle(id, error);
+			this.onPacket({ type: "error", message: error.message });
 		});
-		this.child.on("exit", (code) => {
+		this.child.on("exit", (code, signal) => {
 			this.exited = true;
-			const error = new Error(`Kernel exited with code ${code}`);
+			const error = new Error(signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
 			markFailed(error);
 			for (const id of [...this.pending.keys()]) this.settle(id, error);
-			onExit(this, code);
+			onExit(this, code, signal);
 		});
 		this.send({ type: "start", spec });
 		this.refreshActivity();
@@ -233,7 +234,7 @@ export class SessionManager {
 	/** sessionId -> watchId -> listener */
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
-	/** Serialized metadata writes per session; the latest in-memory state always wins. */
+	/** Serialized, immutable metadata snapshots per session. */
 	private readonly saving = new Map<string, Promise<void>>();
 	private readonly starting = new Map<string, Promise<Map<string, Error>>>();
 	private readonly preparations = new Set<Promise<Workspace>>();
@@ -569,7 +570,9 @@ export class SessionManager {
 			} catch (error) {
 				if (this.closing) return;
 				meta.failure = error instanceof Error ? error.message : String(error);
-				meta.updatedAt = Date.now();
+				const now = Date.now();
+				applyFailure(meta, meta.failure, now);
+				meta.updatedAt = now;
 				await this.save(meta);
 				this.emit(meta);
 				for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
@@ -604,16 +607,7 @@ export class SessionManager {
 				pilot: meta.workspace ? { workspace: meta.workspace } : {},
 			},
 			(packet) => this.onPacket(meta, worker, packet),
-			(exited, code) => {
-				if (this.workers.get(id) === exited) this.workers.delete(id);
-				if (exited.state === "failed") {
-					// ready rejection is handled by startup. Runtime transport failures remain retryable.
-					meta.inputError = exited.error ?? `Kernel exited with code ${code}`;
-					void this.save(meta);
-				}
-				if (!this.closing && code !== 0) console.warn(`pilotd: kernel for ${id} exited with code ${code}`);
-				this.emit(meta);
-			},
+			(exited, code, signal) => this.onExit(meta, exited, code, signal),
 		);
 		this.workers.set(id, worker);
 		// Reattach existing subscribers, for example after a kernel restart.
@@ -622,19 +616,54 @@ export class SessionManager {
 		return worker;
 	}
 
+	private onExit(
+		meta: SessionMeta,
+		exited: SessionWorker,
+		code: number | null,
+		signal: NodeJS.Signals | null = null,
+	): void {
+		if (this.workers.get(meta.id) === exited) this.workers.delete(meta.id);
+		if (!this.closing) {
+			if (exited.state === "failed") {
+				// Preserve performance recovery: transport failures do not permanently disable the session.
+				meta.inputError =
+					exited.error ?? (signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
+				void this.save(meta);
+			}
+			if (code !== 0 || signal !== null || exited.state === "working" || exited.state === "starting") {
+				const reason =
+					exited.error ?? (signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
+				// Retain a kernel error's original completion version and specific reason.
+				if (meta.outcome !== "failed" || meta.working) this.fail(meta, reason);
+				if (code !== 0 || signal !== null) console.warn(`pilotd: kernel for ${meta.id} exited with code ${code}`);
+			}
+		}
+		// Never publish the exited worker's stale lifecycle state or usage.
+		this.emit(meta);
+	}
+
+	private fail(meta: SessionMeta, reason: string): void {
+		const now = Date.now();
+		if (applyFailure(meta, reason, now)) {
+			meta.updatedAt = now;
+			void this.save(meta);
+		}
+	}
+
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
 		if (packet.type === "events") {
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}
 		if (packet.type === "ready" || packet.type === "working") {
-			const working = packet.type === "ready" ? packet.working : packet.working;
+			const changed = applyActivity(meta, packet.working, packet.completion);
 			if (packet.type === "ready") meta.model = packet.model;
-			if (meta.working !== working || packet.type === "ready") {
-				meta.working = working;
+			if (changed || packet.type === "ready") {
 				meta.updatedAt = Date.now();
 				void this.save(meta);
 			}
+		} else if (packet.type === "error" && !packet.requestId && worker.state === "failed" && !this.closing) {
+			this.fail(meta, packet.message);
 		}
 		this.emit(meta, worker);
 	}
@@ -657,6 +686,9 @@ export class SessionManager {
 						: (worker?.state ?? "parked"),
 			...(meta.model ? { model: meta.model } : {}),
 			...(worker?.usage ? { usage: worker.usage } : {}),
+			...(meta.outcome ? { outcome: meta.outcome } : {}),
+			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
+			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),
 			...(meta.failure || meta.inputError || worker?.error
 				? { error: meta.failure || meta.inputError || worker?.error }
 				: {}),
@@ -680,10 +712,12 @@ export class SessionManager {
 
 	private save(meta: SessionMeta): Promise<void> {
 		this.metas.set(meta.id, meta);
+		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
+		const snapshot = `${JSON.stringify(meta, null, "\t")}\n`;
 		const write = async () => {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
-			await writeFile(temp, `${JSON.stringify(meta, null, "\t")}\n`, { mode: 0o600 });
+			await writeFile(temp, snapshot, { mode: 0o600 });
 			await rename(temp, file);
 		};
 		const next = (this.saving.get(meta.id) ?? Promise.resolve())
