@@ -1,7 +1,8 @@
 /** Private working copies: each project session works in its own clone, on its own branch. */
 import { execFile } from "node:child_process";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { constants, existsSync } from "node:fs";
+import { appendFile, copyFile, lstat, mkdir } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const exec = promisify(execFile);
@@ -32,6 +33,42 @@ async function attempt(runner: Runner, file: string, args: string[], cwd: string
 	}
 }
 
+// Deliberately bounded: ignored dependency trees, build output and unrelated secrets are not workspace inputs.
+const localConfigs = ["mise.local.toml", ".mise.local.toml", "mise/config.local.toml", ".mise/config.local.toml"];
+
+async function statIfExists(path: string) {
+	return lstat(path).catch((error: NodeJS.ErrnoException) => {
+		if (error.code !== "ENOENT") throw error;
+		return undefined;
+	});
+}
+
+async function copyLocalConfigs(source: string, destination: string, runner: Runner): Promise<void> {
+	const ignored = await runner(
+		"git",
+		["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...localConfigs],
+		source,
+	);
+	const tracked = new Set((await runner("git", ["ls-files", "-z", "--", ...localConfigs], destination)).split("\0"));
+	const copied: string[] = [];
+	for (const path of ignored.split("\0").filter((path) => localConfigs.includes(path))) {
+		const from = join(source, path);
+		const to = join(destination, path);
+		// Never replace checked-out files or follow a checked-out directory symlink.
+		const parent = await statIfExists(dirname(to));
+		if (parent && !parent.isDirectory()) continue;
+		if (tracked.has(path) || (await statIfExists(to)) || !(await lstat(from)).isFile()) continue;
+		await mkdir(dirname(to), { recursive: true });
+		await copyFile(from, to, constants.COPYFILE_EXCL);
+		copied.push(`/${path}`);
+	}
+	if (copied.length) {
+		// Source rules may live in .git/info/exclude or a global ignore file, neither of which is cloned.
+		const exclude = await runner("git", ["rev-parse", "--git-path", "info/exclude"], destination);
+		await appendFile(resolve(destination, exclude), `\n# Pilot local configuration\n${copied.join("\n")}\n`);
+	}
+}
+
 /** "Fix the flaky reopen test!" -> "fix-the-flaky-reopen-test" */
 export function branchSlug(title: string): string {
 	return (
@@ -46,8 +83,8 @@ export function branchSlug(title: string): string {
 
 /**
  * Clone `source` into `destination` (a fresh directory), point `origin` at the source's real remote,
- * fetch it, and start `branch` from the remote's default branch. Only committed history is copied:
- * uncommitted changes in the user's checkout stay there.
+ * fetch it, and start `branch` from the remote's default branch. Ignored mise local configuration
+ * is copied too; other uncommitted changes in the user's checkout stay there.
  */
 export async function createWorkspace(
 	source: string,
@@ -86,6 +123,7 @@ export async function createWorkspace(
 		}
 	}
 	await runner("git", ["switch", "--quiet", "--no-track", "-c", branch, base], destination);
+	await copyLocalConfigs(source, destination, runner);
 
 	let jj = false;
 	if (
