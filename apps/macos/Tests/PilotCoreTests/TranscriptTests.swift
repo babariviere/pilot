@@ -93,8 +93,22 @@ private func json(_ text: String) -> JSONValue {
     #expect(transcript.queuedMessages.map(\.id) == [10, 11])
     #expect(transcript.queuedMessages.map(\.mode) == [.followUp, .steer])
     #expect(transcript.queuedMessages.map(\.text) == ["Edited\nDetails", "Unchanged"])
+    #expect(transcript.queuedMessagesInDeliveryOrder.map(\.id) == [11, 10])
     #expect(transcript.entries.isEmpty)
     let request = EditQueuedMessageRequest(message: "Edited\nDetails")
     let encoded = try JSONValue.decode(JSONEncoder().encode(request))
     #expect(encoded == .object(["message": .string("Edited\nDetails")]))
+}
+
+@Test func queueDisplayPrioritizesSteeringAndPreservesOrderWithinEachMode() {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"First follow-up"},{"id":11,"mode":"steer","content":"First steering"},{"id":12,"mode":"followUp","content":"Second follow-up"},{"id":13,"mode":"steer","content":"Second steering"},{"id":14,"mode":"followUp","content":"Third follow-up"}]}"#))
+    #expect(transcript.queuedMessagesInDeliveryOrder.map(\.id) == [11, 13, 10, 12, 14])
+    #expect(transcript.queuedMessages.map(\.id) == [10, 11, 12, 13, 14])
+    #expect(transcript.queued == 5)
+
+    transcript.apply(json(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"First follow-up"},{"id":12,"mode":"followUp","content":"Second follow-up"},{"id":14,"mode":"followUp","content":"Third follow-up"}]}"#))
+    #expect(transcript.queuedMessagesInDeliveryOrder.map(\.id) == [10, 12, 14])
+    transcript.apply(json(#"{"type":"queue_update","items":[]}"#))
+    #expect(transcript.queuedMessagesInDeliveryOrder.isEmpty)
 }

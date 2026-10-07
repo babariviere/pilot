@@ -219,7 +219,8 @@ reports), producing a morning summary in the app and Slack.
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
-  user messages above the composer until consumed, restoring them on reconnect. Edit each queued message
+  user messages above the composer until consumed, restoring them on reconnect. Display steering before
+  follow-ups, preserving FIFO order within each mode. Edit each queued message
   in place with Save/Cancel, preserving order and delivery mode and rejecting edits after consumption.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).

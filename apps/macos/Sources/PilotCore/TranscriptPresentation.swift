@@ -7,6 +7,9 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public var streaming = false
     public var queuedMessages: [QueuedMessage] = []
     public var queued: Int { queuedMessages.count }
+    public var queuedMessagesInDeliveryOrder: [QueuedMessage] {
+        queuedMessages.filter { $0.mode == .steer } + queuedMessages.filter { $0.mode == .followUp }
+    }
     public var retry: String?
     public var error: String?
     public var revision = 0

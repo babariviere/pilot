@@ -108,6 +108,11 @@ public struct Transcript: Equatable, Sendable {
 
     public init() {}
 
+    /// Steering joins the current run before follow-ups. Keep FIFO order within each delivery mode.
+    public var queuedMessagesInDeliveryOrder: [QueuedMessage] {
+        queuedMessages.filter { $0.mode == .steer } + queuedMessages.filter { $0.mode == .followUp }
+    }
+
     /// Tool results by call ID; they render inside their call's card.
     public var results: [String: ChatMessage] {
         var results: [String: ChatMessage] = [:]

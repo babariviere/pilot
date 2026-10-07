@@ -61,6 +61,7 @@ private func event(_ text: String) -> JSONValue { try! JSONValue.decode(Data(tex
     let first = try await processor.apply([original])
     #expect(first.queuedMessages.map(\.id) == [10, 11])
     #expect(first.queuedMessages.map(\.text) == ["Original", "Steering"])
+    #expect(first.queuedMessagesInDeliveryOrder.map(\.id) == [11, 10])
     let edit = event(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Edited"},{"id":11,"mode":"steer","content":"Steering"}]}"#)
     let edited = try await processor.apply([edit])
     #expect(edited.queued == first.queued)
