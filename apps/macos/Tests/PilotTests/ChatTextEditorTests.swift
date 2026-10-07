@@ -13,6 +13,78 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
                                  characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
 }
 
+@Test @MainActor func pickerKeysTakePrecedenceOverQueueSaveAndCancel() throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for file in ["README.md", "Report.txt"] { try Data().write(to: directory.appendingPathComponent(file)) }
+    let editor = SubmitTextView()
+    editor.completionDirectory = directory.path
+    editor.string = "R"
+    editor.setSelectedRange(NSRange(location: 1, length: 0))
+    var saves = 0
+    var cancellations = 0
+    var queueNavigations = 0
+    editor.onSubmit = { _ in saves += 1 }
+    editor.onCancel = { cancellations += 1; return true }
+    editor.onNavigateQueue = { _ in queueNavigations += 1; return true }
+    editor.insertTab(nil)
+    editor.keyDown(with: try pickerKey(125, "\u{f701}"))
+    #expect(editor.pathPicker?.model.selected == 1)
+    editor.keyDown(with: try pickerKey(126, "\u{f700}"))
+    #expect(editor.pathPicker?.model.selected == 0)
+    editor.keyDown(with: try pickerKey(48, "\t", flags: .shift))
+    #expect(editor.pathPicker?.model.selected == 1)
+    editor.keyDown(with: try pickerKey(53, "\u{1b}"))
+    #expect(editor.pathPicker == nil)
+    #expect(editor.string == "R")
+    #expect(cancellations == 0)
+    #expect(queueNavigations == 0)
+    editor.keyDown(with: try pickerKey(53, "\u{1b}"))
+    #expect(cancellations == 1)
+    for code: UInt16 in [36, 76, 48] {
+        editor.string = "R"
+        editor.setSelectedRange(NSRange(location: 1, length: 0))
+        editor.insertTab(nil)
+        editor.keyDown(with: try pickerKey(code, code == 48 ? "\t" : "\r"))
+        #expect(editor.string == "README.md")
+        #expect(editor.pathPicker == nil)
+        #expect(saves == 0)
+    }
+    editor.keyDown(with: try pickerKey(36, "\r"))
+    #expect(saves == 1)
+}
+
+@Test @MainActor func optionArrowsStillNavigateQueueAndDismissThePicker() throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for file in ["README.md", "Report.txt"] { try Data().write(to: directory.appendingPathComponent(file)) }
+    let editor = SubmitTextView()
+    editor.completionDirectory = directory.path
+    editor.string = "R"
+    editor.setSelectedRange(NSRange(location: 1, length: 0))
+    var directions: [String] = []
+    editor.onNavigateQueue = { directions.append($0 == .up ? "up" : "down"); return true }
+    for code: UInt16 in [126, 125] {
+        editor.keyDown(with: try pickerKey(code, "", flags: .option))
+        editor.insertTab(nil)
+        #expect(editor.pathPicker != nil)
+        editor.keyDown(with: try pickerKey(code, "", flags: .option))
+        #expect(editor.pathPicker == nil)
+        #expect(editor.string == "R")
+    }
+    #expect(directions == ["up", "up", "down", "down"])
+    editor.keyDown(with: try pickerKey(126, "", flags: [.option, .shift]))
+    #expect(directions.count == 4)
+    editor.setMarkedText("候", selectedRange: NSRange(location: 1, length: 0),
+                         replacementRange: NSRange(location: NSNotFound, length: 0))
+    editor.keyDown(with: try pickerKey(126, "", flags: .option))
+    #expect(directions.count == 4)
+}
+
 @Test @MainActor func returnHandledByCompletionDoesNotAlsoSubmit() throws {
     _ = NSApplication.shared
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -78,6 +150,9 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
 }
 
 @Test @MainActor func pathPickerStaysWithinSmallAndSecondaryScreens() {
+    let compact = PathCompletionPicker.frame(caret: CGRect(x: 300, y: 600, width: 0, height: 18),
+                                             screen: CGRect(x: 0, y: 0, width: 1440, height: 900), count: 3)
+    #expect(compact.height == 184) // Three compact rows plus keyboard footer and insets, no header.
     for screen in [CGRect(x: 0, y: 0, width: 380, height: 300), CGRect(x: -1440, y: 0, width: 1440, height: 900)] {
         for caret in [CGRect(x: screen.minX, y: screen.minY, width: 0, height: 18),
                       CGRect(x: screen.maxX, y: screen.maxY, width: 0, height: 18)] {

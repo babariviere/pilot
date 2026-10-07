@@ -4,19 +4,23 @@ import SwiftUI
 @MainActor
 final class PathPickerModel: ObservableObject {
     let candidates: [String]
-    let folder: String
     @Published var selected = 0
     var choose: ((Int) -> Void)?
 
-    init(candidates: [String], folder: String) {
+    init(candidates: [String]) {
         self.candidates = candidates
-        self.folder = folder
     }
 
     func move(_ offset: Int) {
         guard !candidates.isEmpty else { return }
         selected = (selected + offset + candidates.count) % candidates.count
     }
+}
+
+private enum PathPickerMetrics {
+    static let rowHeight: CGFloat = 40
+    // Keyboard footer, list padding, and space for the card's shadow.
+    static let chromeHeight: CGFloat = 64
 }
 
 private final class PathPickerPanel: NSPanel {
@@ -33,8 +37,8 @@ final class PathCompletionPicker {
     private var resignObserver: NSObjectProtocol?
     private let onDismiss: () -> Void
 
-    init(candidates: [String], folder: String, onChoose: @escaping (Int) -> Void, onDismiss: @escaping () -> Void) {
-        model = PathPickerModel(candidates: candidates, folder: folder)
+    init(candidates: [String], onChoose: @escaping (Int) -> Void, onDismiss: @escaping () -> Void) {
+        model = PathPickerModel(candidates: candidates)
         model.choose = onChoose
         self.onDismiss = onDismiss
     }
@@ -43,7 +47,8 @@ final class PathCompletionPicker {
 
     static func frame(caret: CGRect, screen: CGRect, count: Int) -> CGRect {
         let visible = screen.insetBy(dx: 12, dy: 12)
-        let size = CGSize(width: min(420, visible.width), height: min(CGFloat(min(count, 6)) * 48 + 112, visible.height))
+        let height = CGFloat(min(count, 6)) * PathPickerMetrics.rowHeight + PathPickerMetrics.chromeHeight
+        let size = CGSize(width: min(360, visible.width), height: min(height, visible.height))
         let x = min(max(caret.minX - 12, visible.minX), visible.maxX - size.width)
         let below = caret.minY - size.height - 4
         let preferred = below >= visible.minY ? below : caret.maxY + 4
@@ -63,7 +68,7 @@ final class PathCompletionPicker {
         panel.hidesOnDeactivate = true
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .none
-        panel.contentView = NSHostingView(rootView: PathPickerView(model: model, listHeight: max(0, frame.height - 112)))
+        panel.contentView = NSHostingView(rootView: PathPickerView(model: model, listHeight: max(0, frame.height - PathPickerMetrics.chromeHeight)))
         parent.addChildWindow(panel, ordered: .above)
         panel.orderFront(nil)
         self.panel = panel
@@ -96,27 +101,6 @@ private struct PathPickerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(accent)
-                    .frame(width: 32, height: 32)
-                    .background(accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Complete path").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.foreground)
-                    Text(model.folder.abbreviatingHome)
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Theme.mutedForeground)
-                        .lineLimit(1).truncationMode(.middle)
-                }
-                Spacer(minLength: 4)
-                Text("\(model.candidates.count)")
-                    .font(.system(size: 10, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(Theme.muted, in: Capsule())
-            }
-            .padding(.horizontal, 14).frame(height: 60)
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -129,6 +113,7 @@ private struct PathPickerView: View {
                 .frame(height: listHeight)
                 .onChange(of: model.selected) { _, value in proxy.scrollTo(value) }
             }
+            .padding(.vertical, 6)
             HStack(spacing: 12) {
                 key("↑↓", "navigate")
                 key("⇥ / ↩", "insert")
@@ -160,18 +145,13 @@ private struct PathPickerView: View {
             HStack(spacing: 10) {
                 Image(systemName: directory ? "folder.fill" : "doc.text")
                     .font(.system(size: 14, weight: .medium)).foregroundStyle(tint)
-                    .frame(width: 30, height: 30)
-                    .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
-                Text(name).font(.system(size: 13, weight: selected ? .semibold : .medium))
+                    .frame(width: 18)
+                Text(name).font(.system(size: 13, weight: selected ? .medium : .regular))
                     .foregroundStyle(Theme.foreground).lineLimit(1).truncationMode(.middle)
                 if directory { Text("/").foregroundStyle(Theme.faintForeground) }
                 Spacer(minLength: 4)
-                Text(directory ? "FOLDER" : (ext.isEmpty ? "FILE" : ext.uppercased()))
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(selected ? accent : Theme.faintForeground)
-                if selected { Image(systemName: "arrow.turn.down.left").font(.system(size: 10, weight: .medium)).foregroundStyle(accent) }
             }
-            .padding(.horizontal, 10).frame(height: 42)
+            .padding(.horizontal, 10).frame(height: 34)
             .background {
                 if selected {
                     RoundedRectangle(cornerRadius: 9)
@@ -182,7 +162,7 @@ private struct PathPickerView: View {
             .contentShape(RoundedRectangle(cornerRadius: 9))
         }
         .buttonStyle(.plain)
-        .frame(height: 48)
+        .frame(height: PathPickerMetrics.rowHeight)
         .onHover { if $0 { model.selected = index } }
         .help(candidate)
         .accessibilityLabel("\(name), \(directory ? "folder" : "file")")

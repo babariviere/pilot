@@ -200,8 +200,7 @@ final class SubmitTextView: NSTextView {
         dismissPathPicker()
         let original = string
         let selection = selectedRange()
-        let parent = (candidates[0] as NSString).deletingLastPathComponent
-        let picker = PathCompletionPicker(candidates: candidates, folder: parent.isEmpty ? completionDirectory : parent) { [weak self] index in
+        let picker = PathCompletionPicker(candidates: candidates) { [weak self] index in
             guard let self else { return }
             self.dismissPathPicker()
             guard self.string == original, self.selectedRange() == selection else { return }
