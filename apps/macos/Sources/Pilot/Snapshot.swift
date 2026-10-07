@@ -15,6 +15,11 @@ enum Snapshot {
         }
         guard let index = arguments.firstIndex(of: "--snapshot"), arguments.count > index + 1 else { return false }
         let directory = URL(filePath: arguments[index + 1])
+        Task { await renderAll(to: directory) }
+        return true
+    }
+
+    private static func renderAll(to directory: URL) async {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         NSApp.appearance = NSAppearance(named: .aqua)
         for window in NSApp.windows { window.orderOut(nil) }
@@ -32,19 +37,33 @@ enum Snapshot {
         let size = CGSize(width: 1360, height: 860)
 
         model.selectedSessionId = nil
-        render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "home.png"))
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "home.png"))
 
         let session = Fixtures.sessions[0]
         model.selectedSessionId = session.id
         let feed = SessionFeed(sessionId: session.id, transcript: Fixtures.transcript)
-        render(
+        await render(
             Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")") {
                 ChatView(session: session, feed: feed)
             },
             size: size,
             to: directory.appending(path: "session.png")
         )
-        render(SettingsView().environmentObject(model), size: CGSize(width: 560, height: 420), to: directory.appending(path: "settings.png"))
+        model.client.fixtureChanges = Fixtures.changes
+        model.inspectorVisible = true
+        model.inspectorTab = .changes
+        await render(
+            Frame(title: session.title, subtitle: "pilot · \(session.branch ?? "")") {
+                HStack(spacing: 0) {
+                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.transcript))
+                    Rectangle().fill(Theme.border).frame(width: 1)
+                    Inspector(session: session).frame(width: 520)
+                }
+            },
+            size: CGSize(width: 1500, height: 860),
+            to: directory.appending(path: "session-changes.png")
+        )
+        await render(SettingsView().environmentObject(model), size: CGSize(width: 560, height: 420), to: directory.appending(path: "settings.png"))
         print("snapshots written to \(directory.path)")
         exit(0)
     }
@@ -78,7 +97,8 @@ enum Snapshot {
         else { fail("connect") }
 
         model.selectedSessionId = session.id
-        model.terminalVisible = true
+        model.inspectorVisible = true
+        model.inspectorTab = .terminal
         let size = CGSize(width: 1200, height: 700)
         let root = SessionDetail(session: session, feed: SessionFeed(sessionId: session.id, transcript: Transcript()))
             .environmentObject(model)
@@ -110,7 +130,7 @@ enum Snapshot {
         // Drop the surface and attach again, as a relaunched app would: the daemon replays scrollback.
         store.remove(session.id)
         store.ensure(session)
-        guard await wait(5, until: printed) else { fail("replay") }
+        guard await wait(10, until: printed) else { fail("replay") }
         try? await Task.sleep(for: .seconds(1))
 
         type("exit")
@@ -135,7 +155,7 @@ enum Snapshot {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
-    private static func render<V: View>(_ view: V, size: CGSize, to url: URL) {
+    private static func render<V: View>(_ view: V, size: CGSize, to url: URL) async {
         let root = view
             .environmentObject(AppModel.shared)
             .environment(\.pilotFonts, AppSettings.shared.fonts)
@@ -147,10 +167,11 @@ enum Snapshot {
         window.contentView = hosting
         window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless()
-        // Let lists, lazy stacks and images settle.
-        for _ in 0 ..< 6 {
+        // Let lists, lazy stacks, images and async loads settle. Sleeping (not spinning the run loop)
+        // lets other main-actor work, such as a pane's load, run meanwhile.
+        for _ in 0 ..< 8 {
             hosting.layoutSubtreeIfNeeded()
-            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            try? await Task.sleep(for: .milliseconds(100))
         }
         // 1x output keeps review images small.
         guard let rep = NSBitmapImageRep(
@@ -221,6 +242,7 @@ enum Fixtures {
 
     static let sessions = [
         SessionSummary(id: "s1", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",
+                       branch: "pilot/fix-flaky-reopen-test-55cb84",
                        createdAt: now - 3_600_000, updatedAt: now - 133_000, state: "working", model: "openai-codex/gpt-6.1-sol"),
         SessionSummary(id: "s2", title: "Add projects API to pilotd", cwd: projects[0].path, projectId: "p1",
                        createdAt: now - 86_400_000, updatedAt: now - 3_000_000, state: "idle", model: "openai-codex/gpt-6.1-sol"),
@@ -232,6 +254,42 @@ enum Fixtures {
         SessionSummary(id: "s5", title: "Explain the Harness task graph", cwd: "\(home)/scratch",
                        createdAt: now - 6 * 86_400_000, updatedAt: now - 400_000_000, state: "parked"),
     ]
+
+    static let changes = SessionChanges(
+        base: "origin/main",
+        branch: "pilot/fix-flaky-reopen-test-55cb84",
+        files: [
+            ChangedFile(path: "packages/kernel/src/session.ts", status: "modified", additions: 9, deletions: 1),
+            ChangedFile(path: "packages/kernel/src/session.test.ts", status: "added", additions: 4, deletions: 0),
+        ],
+        diff: [
+            "diff --git a/packages/kernel/src/session.ts b/packages/kernel/src/session.ts",
+            "--- a/packages/kernel/src/session.ts",
+            "+++ b/packages/kernel/src/session.ts",
+            "@@ -61,7 +61,15 @@ export class KernelSession {",
+            "   static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {",
+            "-    const owned = await openSessionStorage(spec.storageDir);",
+            "+    const deadline = Date.now() + 2_000;",
+            "+    let owned: OwnedStorage | undefined;",
+            "+    while (!owned) {",
+            "+      try {",
+            "+        owned = await openSessionStorage(spec.storageDir);",
+            "+      } catch (error) {",
+            "+        if (!(error instanceof StorageBusy) || Date.now() > deadline) throw error;",
+            "+        await sleep(25);",
+            "+      }",
+            "     let adapter: NativeAdapter | undefined;",
+            "diff --git a/packages/kernel/src/session.test.ts b/packages/kernel/src/session.test.ts",
+            "new file mode 100644",
+            "--- /dev/null",
+            "+++ b/packages/kernel/src/session.test.ts",
+            "@@ -0,0 +1,4 @@",
+            "+test(\"reopens while the previous owner closes\", async () => {",
+            "+  const first = await KernelSession.open(spec, hooks);",
+            "+  await Promise.all([first.close(), KernelSession.open(spec, hooks)]);",
+            "+});",
+        ].joined(separator: "\n")
+    )
 
     static var transcript: Transcript {
         var transcript = Transcript()

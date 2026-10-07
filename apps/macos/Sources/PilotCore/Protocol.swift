@@ -135,3 +135,38 @@ public struct SendRequest: Codable, Sendable {
         self.requestId = requestId
     }
 }
+
+public struct ChangedFile: Codable, Identifiable, Equatable, Sendable {
+    public var id: String { path }
+    public let path: String
+    /// "added", "modified", "deleted", "renamed" or "untracked".
+    public let status: String
+    public let additions: Int
+    public let deletions: Int
+    public let previousPath: String?
+
+    public init(path: String, status: String, additions: Int, deletions: Int, previousPath: String? = nil) {
+        self.path = path
+        self.status = status
+        self.additions = additions
+        self.deletions = deletions
+        self.previousPath = previousPath
+    }
+}
+
+/// GET /api/sessions/:id/changes
+public struct SessionChanges: Codable, Equatable, Sendable {
+    public let base: String
+    public let branch: String?
+    public let files: [ChangedFile]
+    public let diff: String
+    public let truncated: Bool
+
+    public init(base: String, branch: String? = nil, files: [ChangedFile], diff: String, truncated: Bool = false) {
+        self.base = base
+        self.branch = branch
+        self.files = files
+        self.diff = diff
+        self.truncated = truncated
+    }
+}

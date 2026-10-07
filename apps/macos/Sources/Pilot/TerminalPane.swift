@@ -143,7 +143,7 @@ struct TerminalPane: View {
                 .buttonStyle(.borderless)
                 .help("Restart shell")
                 Button {
-                    AppModel.shared.terminalVisible = false
+                    AppModel.shared.inspectorVisible = false
                 } label: {
                     Image(systemName: "xmark").font(.caption)
                 }

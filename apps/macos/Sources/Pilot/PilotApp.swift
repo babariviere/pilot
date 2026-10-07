@@ -23,11 +23,12 @@ struct PilotApp: App {
                     .keyboardShortcut("o", modifiers: [.command, .shift])
             }
             CommandGroup(after: .toolbar) {
-                Button(model.terminalVisible ? "Hide Terminal" : "Show Terminal") {
-                    model.terminalVisible.toggle()
-                }
-                .keyboardShortcut("j", modifiers: .command)
-                .disabled(model.selectedSessionId == nil)
+                Button("Toggle Changes") { model.toggleInspector(.changes) }
+                    .keyboardShortcut("d", modifiers: [.command, .shift])
+                    .disabled(model.selectedSessionId == nil)
+                Button("Toggle Terminal") { model.toggleInspector(.terminal) }
+                    .keyboardShortcut("j", modifiers: .command)
+                    .disabled(model.selectedSessionId == nil)
             }
         }
 

@@ -1,6 +1,7 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
 import type { AgentEvent } from "@earendil-works/pi-durable";
 
+export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 export type {
 	AgentEvent,
 	EntryRecord,
@@ -8,7 +9,6 @@ export type {
 	SnapshotEvent,
 	ToolSlot,
 } from "@earendil-works/pi-durable";
-export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
@@ -84,6 +84,25 @@ export interface SpawnRequest {
 }
 
 /** POST /api/sessions/:id/messages */
+/** One file in a session's changes. */
+export interface ChangedFile {
+	path: string;
+	status: "added" | "modified" | "deleted" | "renamed" | "untracked";
+	additions: number;
+	deletions: number;
+	previousPath?: string;
+}
+
+/** GET /api/sessions/:id/changes: the working copy against the point the session branched from. */
+export interface SessionChanges {
+	base: string;
+	branch?: string;
+	files: ChangedFile[];
+	/** Unified diff, capped at 1 MiB. */
+	diff: string;
+	truncated: boolean;
+}
+
 export interface SendRequest {
 	message: string;
 	mode?: DeliveryMode;

@@ -9,19 +9,23 @@ struct SessionSidebar: View {
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
-        let unassigned = client.sessions.filter { $0.projectId.map { !known.contains($0) } ?? true }
+        let visible = client.sessions.filter(matches)
+        let searching = !model.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty
+        let unassigned = visible.filter { $0.projectId.map { !known.contains($0) } ?? true }
         List(selection: $model.selectedSessionId) {
             ForEach(client.projects) { project in
-                let sessions = client.sessions.filter { $0.projectId == project.id }
-                Section(isExpanded: expanded(project.id)) {
+                let sessions = visible.filter { $0.projectId == project.id }
+                if !searching || !sessions.isEmpty {
+                Section(isExpanded: searching ? .constant(true) : expanded(project.id)) {
                     ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
                     if sessions.isEmpty {
-                        Text("No sessions").font(.caption).foregroundStyle(.tertiary)
+                        Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
                     }
                 } header: {
                     ProjectHeader(project: project, working: sessions.filter(\.isWorking).count) {
                         model.newSession(in: project.id)
                     }
+                }
                 }
             }
             if !unassigned.isEmpty {
@@ -44,6 +48,7 @@ struct SessionSidebar: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 6) {
             HStack(spacing: 6) {
                 SidebarButton(title: "New session", icon: "square.and.pencil", selected: model.selectedSessionId == nil) {
                     model.newSession(in: model.draftProjectId)
@@ -54,13 +59,22 @@ struct SessionSidebar: View {
                 .buttonStyle(.borderless)
                 .help("Add Project… (⇧⌘O)")
             }
+            SearchField(text: $model.sidebarQuery)
+            }
             .padding(.horizontal, 10)
             .padding(.top, 8)
-            .padding(.bottom, 4)
+            .padding(.bottom, 6)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionFooter(client: client)
         }
+    }
+
+    private func matches(_ session: SessionSummary) -> Bool {
+        let query = model.sidebarQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return true }
+        return [session.title, session.branch ?? "", session.cwd, session.model ?? ""]
+            .contains { $0.lowercased().contains(query) }
     }
 
     private func expanded(_ id: String) -> Binding<Bool> {
@@ -99,7 +113,8 @@ private struct ProjectHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(project.name)
+            Image(systemName: "folder").font(.system(size: 10))
+            Text(project.name).font(.system(size: 11, weight: .semibold))
             if working > 0 {
                 Text("\(working)")
                     .font(.caption2.weight(.semibold))
@@ -190,5 +205,28 @@ private struct ConnectionFooter: View {
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
+    }
+}
+
+private struct SearchField: View {
+    @Binding var text: String
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
+            TextField("Search sessions", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+            if !text.isEmpty {
+                Button { text = "" } label: {
+                    Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border))
     }
 }

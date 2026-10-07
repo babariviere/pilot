@@ -5,51 +5,51 @@
  * and the model loop; this adapter supplies the native system prompt, tools, extension hooks and
  * provider authentication from the user's pi configuration (settings, packages, extensions, MCP).
  */
-import type { Context as TaskContext, JsonValue } from "@earendil-works/chord";
+import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import {
+	type Api,
+	type AssistantMessage,
+	type AssistantMessageEventStream,
 	contentText,
 	createAssistantMessageEventStream,
 	getCurrentTools,
-	type AssistantMessage,
 	type Message,
 	type Models,
 	type ModelsApiStreamOptions,
 	type ModelsSimpleStreamOptions,
 	type ToolCall,
-	type AssistantMessageEventStream,
-	type Api,
 } from "@earendil-works/pi-ai";
 import {
+	type AgentSession,
+	type AgentToolResult,
+	type CreateAgentSessionOptions,
 	createAgentSession,
 	createCodemodeExtension,
 	createMcpExtension,
 	createToolSearchExtension,
 	DefaultResourceLoader,
+	type ExtensionFactory,
 	getAgentDir,
 	ProjectTrustStore,
 	resolveCliModel,
 	SessionManager,
 	SettingsManager,
-	type AgentSession,
-	type AgentToolResult,
-	type CreateAgentSessionOptions,
-	type ExtensionFactory,
 	wrapRegisteredTool,
 } from "@earendil-works/pi-coding-agent";
 import {
-	GenerationTask,
-	defineDoc,
-	hook,
-	section,
-	ToolTask,
 	type ConversationId,
+	defineDoc,
 	type Extension,
+	GenerationTask,
 	type Harness,
+	hook,
+	type JsonObject,
+	type ModelRef,
+	section,
 	type ToolExecutionResult,
 	type ToolRegistration,
-	type ModelRef,
-	type JsonObject,
+	ToolTask,
 } from "@earendil-works/pi-durable";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];

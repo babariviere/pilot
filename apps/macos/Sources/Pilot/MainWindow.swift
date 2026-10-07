@@ -44,7 +44,7 @@ struct MainWindow: View {
     }
 }
 
-/// Chat on the left, the session's terminal on the right.
+/// Chat on the left, the inspector (changes, terminal) on the right.
 struct SessionDetail: View {
     let session: SessionSummary
     var feed: SessionFeed?
@@ -55,9 +55,9 @@ struct SessionDetail: View {
         HSplitView {
             ChatView(session: session, feed: feed)
                 .frame(minWidth: 420, maxWidth: .infinity)
-            if model.terminalVisible {
-                TerminalPane(store: model.terminals, session: session)
-                    .frame(minWidth: 320, idealWidth: 520, maxWidth: .infinity)
+            if model.inspectorVisible {
+                Inspector(session: session)
+                    .frame(minWidth: 340, idealWidth: 520, maxWidth: .infinity)
             }
         }
         .navigationTitle(session.title)
@@ -65,23 +65,98 @@ struct SessionDetail: View {
         .toolbar {
             ToolbarItemGroup {
                 StateBadge(state: session.state)
+                if let branch = session.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1)
+                        .help("Private clone on \(branch)")
+                }
                 Button {
                     NSWorkspace.shared.open(URL(filePath: session.cwd))
                 } label: {
                     Label("Open in Finder", systemImage: "folder")
                 }
                 .help("Open \(session.cwd.abbreviatingHome) in Finder")
-                Toggle(isOn: $model.terminalVisible) {
-                    Label("Terminal", systemImage: "terminal")
-                }
-                .help("Toggle terminal (⌘J)")
+                InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
+                InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
             }
         }
     }
 
     private var subtitle: String {
         let place = client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
-        return [place, session.branch, session.model].compactMap { $0 }.joined(separator: " · ")
+        return [place, session.model].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+struct InspectorToggle: View {
+    let tab: InspectorTab
+    let icon: String
+    let help: String
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let active = model.inspectorVisible && model.inspectorTab == tab
+        Button { model.toggleInspector(tab) } label: {
+            Image(systemName: icon)
+                .foregroundStyle(active ? Theme.foreground : Theme.mutedForeground)
+                .frame(width: 26, height: 22)
+                .background(RoundedRectangle(cornerRadius: 6).fill(active ? Theme.selected : .clear))
+        }
+        .buttonStyle(.plain)
+        .help(help)
+    }
+}
+
+/// Right-hand pane with tabs. Both tabs stay mounted so the terminal keeps its surface.
+struct Inspector: View {
+    let session: SessionSummary
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 2) {
+                tab("Changes", .changes)
+                tab("Terminal", .terminal)
+                Spacer()
+                Button { model.inspectorVisible = false } label: {
+                    Image(systemName: "sidebar.right").font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .foregroundStyle(Theme.mutedForeground)
+                .help("Hide inspector")
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Theme.sidebar)
+            Rectangle().fill(Theme.border).frame(height: 1)
+            ZStack {
+                ChangesPane(session: session)
+                    .opacity(model.inspectorTab == .changes ? 1 : 0)
+                    .allowsHitTesting(model.inspectorTab == .changes)
+                // Mounted once opened, so looking at changes never starts a shell.
+                if model.inspectorTab == .terminal || model.terminals.order.contains(session.id) {
+                    TerminalPane(store: model.terminals, session: session)
+                        .opacity(model.inspectorTab == .terminal ? 1 : 0)
+                        .allowsHitTesting(model.inspectorTab == .terminal)
+                }
+            }
+        }
+        .background(Theme.background)
+    }
+
+    private func tab(_ title: String, _ value: InspectorTab) -> some View {
+        Button { model.inspectorTab = value } label: {
+            Text(title)
+                .font(.system(size: 12, weight: model.inspectorTab == value ? .semibold : .regular))
+                .foregroundStyle(model.inspectorTab == value ? Theme.foreground : Theme.mutedForeground)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(model.inspectorTab == value ? Theme.card : .clear))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(model.inspectorTab == value ? Theme.border : .clear))
+        }
+        .buttonStyle(.plain)
     }
 }
 

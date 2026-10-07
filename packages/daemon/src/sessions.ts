@@ -158,6 +158,12 @@ export class SessionManager {
 		return meta && this.summary(meta);
 	}
 
+	/** Where the session's changes start: its workspace base, else the folder's HEAD. */
+	changeBase(id: string): { cwd: string; base?: string } {
+		const meta = this.require(id);
+		return { cwd: meta.cwd, ...(meta.workspace ? { base: meta.workspace.base } : {}) };
+	}
+
 	async spawn(request: SpawnRequest): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		const project = request.projectId ? this.projects.require(request.projectId) : undefined;

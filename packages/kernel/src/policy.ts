@@ -1,5 +1,5 @@
 /** Pilot's rules for agents: where they work, how they deliver, and what they may not do on GitHub. */
-import { hook, section, ToolTask, type Extension } from "@earendil-works/pi-durable";
+import { type Extension, hook, section, ToolTask } from "@earendil-works/pi-durable";
 
 export interface WorkspaceContext {
 	/** The user's checkout this clone came from. */

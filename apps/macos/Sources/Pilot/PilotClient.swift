@@ -103,6 +103,19 @@ final class PilotClient: ObservableObject {
     }
 
     var fixtureModels: ModelList?
+    var fixtureChanges: SessionChanges?
+
+    /// The session's working copy against the point it branched from.
+    func changes(_ sessionId: String) async throws -> SessionChanges {
+        if let fixtureChanges { return fixtureChanges }
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/sessions/\(sessionId)/changes"))
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
+        }
+        return try JSONDecoder().decode(SessionChanges.self, from: data)
+    }
 
     private struct Ack: Decodable {}
     private struct APIError: Decodable { let error: String }

@@ -112,9 +112,15 @@ public struct ToolSummary: Equatable, Sendable {
     public let detail: String?
     /// The most useful argument to show expanded (a command, script or patch), else nil for JSON.
     public let body: String?
+    /// Line diffs for edits (applyPatch, edit, write), for stats and colored rendering.
+    public let diffs: [FileDiff]
+
+    public var additions: Int { diffs.reduce(0) { $0 + $1.additions } }
+    public var deletions: Int { diffs.reduce(0) { $0 + $1.deletions } }
 
     public init(name: String, arguments: JSONValue) {
         let string = { (key: String) in arguments[key]?.string }
+        var diffs: [FileDiff] = []
         switch name {
         case "bash":
             icon = "terminal"
@@ -148,11 +154,23 @@ public struct ToolSummary: Equatable, Sendable {
             title = name == "edit" ? "Edited file" : "Wrote file"
             detail = string("path")
             body = string("content") ?? string("newText")
+            let path = string("path") ?? "file"
+            if name == "write", let content = string("content") {
+                diffs = [Diff.parseEdit(path: path, old: "", new: content)]
+            } else if let old = string("oldText"), let new = string("newText") {
+                diffs = [Diff.parseEdit(path: path, old: old, new: new)]
+            } else if let edits = arguments["edits"]?.array {
+                diffs = edits.compactMap { edit in
+                    guard let old = edit["oldText"]?.string, let new = edit["newText"]?.string else { return nil }
+                    return Diff.parseEdit(path: path, old: old, new: new)
+                }
+            }
         case "applyPatch":
             icon = "pencil"
             title = "Edited files"
             detail = string("patch").flatMap(Self.patchedFiles)
             body = string("patch")
+            diffs = string("patch").map(Diff.parsePatch) ?? []
         case "web_search":
             icon = "magnifyingglass"
             title = "Searched the web"
@@ -174,6 +192,7 @@ public struct ToolSummary: Equatable, Sendable {
             detail = Self.firstStringArgument(arguments).map(Self.firstLine)
             body = nil
         }
+        self.diffs = diffs
     }
 
     private static func firstLine(_ text: String) -> String {

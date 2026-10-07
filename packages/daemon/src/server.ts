@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { ClientMessage, ProjectRequest, SendRequest, ServerMessage, SpawnRequest } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
+import { collectChanges } from "./changes.ts";
 import type { DaemonConfig } from "./config.ts";
 import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
@@ -81,6 +82,10 @@ export function createDaemonServer(
 			const session = sessions.get(parts[2]!);
 			if (!session) throw new HttpError(404, "Unknown session");
 			return json(res, 200, session);
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
+			const { cwd, base } = sessions.changeBase(parts[2]!);
+			return json(res, 200, await collectChanges(cwd, base));
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;

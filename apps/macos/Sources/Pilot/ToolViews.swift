@@ -48,6 +48,9 @@ struct ToolRowView: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 8)
+                    if summary.additions + summary.deletions > 0 {
+                        DiffStat(additions: summary.additions, deletions: summary.deletions)
+                    }
                     Image(systemName: "chevron.right")
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.tertiary)
@@ -61,7 +64,24 @@ struct ToolRowView: View {
 
             if expansion.expanded {
                 VStack(alignment: .leading, spacing: 8) {
-                    if let body = summary.body {
+                    if !summary.diffs.isEmpty {
+                        ForEach(summary.diffs) { file in
+                            VStack(alignment: .leading, spacing: 0) {
+                                Text(file.path)
+                                    .font(fonts.monoSmall)
+                                    .foregroundStyle(Theme.mutedForeground)
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Theme.muted)
+                                DiffView(file: file, showNumbers: false, maxLines: 300)
+                                    .padding(.vertical, 4)
+                            }
+                            .background(Theme.code)
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
+                        }
+                    } else if let body = summary.body {
                         CodeBlock(language: item.name == "codemode" ? "javascript" : nil, text: body)
                     } else {
                         CodeBlock(language: "arguments", text: item.arguments.prettyPrinted)

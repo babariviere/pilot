@@ -2,6 +2,11 @@ import AppKit
 import Foundation
 import PilotCore
 
+enum InspectorTab: Hashable {
+    case changes
+    case terminal
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     static let shared = AppModel()
@@ -13,7 +18,9 @@ final class AppModel: ObservableObject {
     let notifier = Notifier()
 
     @Published var selectedSessionId: String?
-    @Published var terminalVisible = false
+    @Published var inspectorVisible = false
+    @Published var inspectorTab: InspectorTab = .changes
+    @Published var sidebarQuery = ""
     /// Project preselected in the new-session screen.
     @Published var draftProjectId: String?
     @Published var collapsedProjects: Set<String> = []
@@ -45,6 +52,16 @@ final class AppModel: ObservableObject {
     func newSession(in projectId: String?) {
         draftProjectId = projectId
         selectedSessionId = nil
+    }
+
+    /// Shows the inspector on `tab`, or hides it when it already shows that tab.
+    func toggleInspector(_ tab: InspectorTab) {
+        if inspectorVisible, inspectorTab == tab {
+            inspectorVisible = false
+        } else {
+            inspectorTab = tab
+            inspectorVisible = true
+        }
     }
 
     func addProject() {
