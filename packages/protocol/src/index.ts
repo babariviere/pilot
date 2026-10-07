@@ -249,6 +249,11 @@ export interface EditQueuedMessageRequest {
 	message: string;
 }
 
+/** DELETE /api/sessions/:id/queue/:submissionId. No body. Only withdraws an input still in the durable queue. */
+export interface RemoveQueuedMessageResponse {
+	ok: true;
+}
+
 /** Client to daemon, over /api/ws. */
 export type ClientMessage =
 	| { type: "subscribe"; sessionId: string }

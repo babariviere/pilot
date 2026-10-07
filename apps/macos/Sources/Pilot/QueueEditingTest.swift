@@ -137,7 +137,8 @@ enum QueueEditingTest {
                          try await Task.sleep(for: .milliseconds(100))
                          if model.rejectSave { throw NSError(domain: "Save rejected", code: 1) }
                          model.saves.append((id, text))
-                     })
+                     },
+                     onRemoveQueuedMessage: { id in model.messages.removeAll { $0.id == id } })
         }
     }
 }

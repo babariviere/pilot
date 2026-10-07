@@ -140,6 +140,7 @@ enum Snapshot {
                     state: ComposerState(), working: true, queuedMessages: [],
                     completionDirectory: session.cwd,
                     onSend: { _, _ in }, onStop: {}, onEditQueuedMessage: { _, _ in },
+                    onRemoveQueuedMessage: { _ in },
                     session: session
                 )
                 .padding(.top, 16)

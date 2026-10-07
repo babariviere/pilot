@@ -11,8 +11,8 @@ import type {
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
-	SessionPullRequest,
 	SessionListQuery,
+	SessionPullRequest,
 	SessionState,
 	SessionSummary,
 	SessionUsage,
@@ -22,10 +22,10 @@ import type {
 import { Conflict, NotFound } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
-import { UpdateGate } from "./update-gate.ts";
-import { WorkerActivity } from "./worker-activity.ts";
 import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
 import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
+import { UpdateGate } from "./update-gate.ts";
+import { WorkerActivity } from "./worker-activity.ts";
 import { createWorkspace, type Workspace } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
@@ -725,6 +725,35 @@ export class SessionManager {
 			await this.save(meta);
 			this.emit(meta);
 		} finally {
+			end();
+		}
+	}
+
+	/** Withdraw durable queued input, never daemon outbox commands or placed messages. */
+	async removeQueuedMessage(id: string, submissionId: number): Promise<void> {
+		const end = this.updateGate.begin();
+		let admitted = false;
+		try {
+			const meta = this.require(id);
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before removing messages");
+			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
+			// Prevent archiving between the check above, worker readiness, and the acknowledgement.
+			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+			admitted = true;
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			await worker.request({ type: "removeQueuedMessage", requestId: randomUUID(), submissionId });
+			meta.updatedAt = Date.now();
+			await this.save(meta);
+			this.emit(meta);
+		} finally {
+			if (admitted) {
+				const count = (this.sending.get(id) ?? 1) - 1;
+				if (count) this.sending.set(id, count);
+				else this.sending.delete(id);
+			}
 			end();
 		}
 	}

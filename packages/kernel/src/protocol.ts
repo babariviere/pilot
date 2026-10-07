@@ -25,6 +25,7 @@ export type KernelCommand =
 	| { type: "input"; requestId: string; content: string; mode: DeliveryMode }
 	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string }
 	| { type: "changeModel"; requestId: string; model: string }
+	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
 	| { type: "abort"; requestId: string }
 	| { type: "watch"; watchId: string; includeTodos?: boolean }
 	| { type: "unwatch"; watchId: string }

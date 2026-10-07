@@ -28,7 +28,7 @@ import { reconcileCompletion, withAttention } from "./attention.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
-import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
+import { editQueuedMessage, queueUpdate, removeQueuedMessage, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
 
@@ -307,6 +307,11 @@ export class KernelSession {
 	async editQueuedMessage(submissionId: number, content: string): Promise<void> {
 		const prepared = await this.adapter.prepareInput(content);
 		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context);
+	}
+
+	/** Withdraw one queued input without stopping the active run. */
+	async removeQueuedMessage(submissionId: number): Promise<void> {
+		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context);
 	}
 
 	/** Withdraw queued input and abort the current run. The conversation stays usable. */
