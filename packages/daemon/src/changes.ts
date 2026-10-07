@@ -5,6 +5,8 @@ import type { ChangedFile, SessionChanges } from "@pilot/protocol";
 
 const exec = promisify(execFile);
 const MAX_DIFF = 1024 * 1024;
+// The client's unified-diff parser expects a/ and b/, regardless of the user's Git config.
+const PATCH_ARGS = ["diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
 
 async function git(cwd: string, args: string[], allowExitOne = false): Promise<string> {
 	try {
@@ -60,10 +62,10 @@ export async function collectChanges(cwd: string, base = "HEAD"): Promise<Sessio
 		file.deletions = Number(deleted) || 0;
 	}
 
-	let diff = await git(cwd, ["diff", "-M", "--no-color", mergeBase]);
+	let diff = await git(cwd, [...PATCH_ARGS, "-M", mergeBase]);
 	const untracked = (await git(cwd, ["ls-files", "--others", "--exclude-standard"])).split("\n").filter(Boolean);
 	for (const path of untracked) {
-		const patch = await git(cwd, ["diff", "--no-color", "--no-index", "--", "/dev/null", path], true).catch(() => "");
+		const patch = await git(cwd, [...PATCH_ARGS, "--no-index", "--", "/dev/null", path], true).catch(() => "");
 		const additions = patch.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
 		files.set(path, { path, status: "untracked", additions, deletions: 0 });
 		diff += patch;
