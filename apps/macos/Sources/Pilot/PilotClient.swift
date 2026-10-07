@@ -72,6 +72,14 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())
     }
 
+    func editQueuedMessage(_ sessionId: String, submissionId: Int, message: String) async throws {
+        let _: Ack = try await call(
+            "api/sessions/\(sessionId)/queue/\(submissionId)",
+            method: "PATCH",
+            body: EditQueuedMessageRequest(message: message)
+        )
+    }
+
     func createProject(_ request: ProjectRequest) async throws -> Project {
         let project: Project = try await call("api/projects", body: request)
         upsert(project)

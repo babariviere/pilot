@@ -85,3 +85,16 @@ private func json(_ text: String) -> JSONValue {
     ])
     #expect(reconnected.queuedMessages.isEmpty)
 }
+
+@Test func editedQueueContentUpdatesWithoutChangingIdentityOrOrder() throws {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Original"},{"id":11,"mode":"steer","content":"Unchanged"}]}"#))
+    transcript.apply(json(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Edited\nDetails"},{"id":11,"mode":"steer","content":"Unchanged"}]}"#))
+    #expect(transcript.queuedMessages.map(\.id) == [10, 11])
+    #expect(transcript.queuedMessages.map(\.mode) == [.followUp, .steer])
+    #expect(transcript.queuedMessages.map(\.text) == ["Edited\nDetails", "Unchanged"])
+    #expect(transcript.entries.isEmpty)
+    let request = EditQueuedMessageRequest(message: "Edited\nDetails")
+    let encoded = try JSONValue.decode(JSONEncoder().encode(request))
+    #expect(encoded == .object(["message": .string("Edited\nDetails")]))
+}

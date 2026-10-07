@@ -7,6 +7,7 @@ final class ComposerState: ObservableObject {
     @Published var draft = ""
     @Published var error: String?
     @Published var editorHeight: CGFloat = 18
+    @Published var editingMessage: QueuedMessage?
 
     var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 }
@@ -20,12 +21,13 @@ struct Composer: View {
     let queuedMessages: [QueuedMessage]
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
+    let onEditQueuedMessage: (Int, String) async throws -> Void
     @Environment(\.pilotFonts) private var fonts
 
     var body: some View {
         VStack(spacing: 8) {
             if !queuedMessages.isEmpty {
-                QueuedMessagesView(messages: queuedMessages)
+                QueuedMessagesView(messages: queuedMessages, onEdit: { state.editingMessage = $0 })
             }
             editor
         }
@@ -34,6 +36,9 @@ struct Composer: View {
         .padding(.bottom, 16)
         .padding(.top, 6)
         .frame(maxWidth: .infinity)
+        .sheet(item: $state.editingMessage) { message in
+            QueuedMessageEditor(message: message, onSave: onEditQueuedMessage)
+        }
     }
 
     private var editor: some View {
@@ -82,6 +87,7 @@ struct Composer: View {
 private struct QueuedMessagesView: View {
     @Environment(\.pilotFonts) private var fonts
     let messages: [QueuedMessage]
+    let onEdit: (QueuedMessage) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -105,9 +111,19 @@ private struct QueuedMessagesView: View {
         VStack(alignment: .leading, spacing: 10) {
             ForEach(messages) { message in
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(message.mode == .followUp ? "Follow-up" : "Steering")
-                        .font(.caption)
+                    HStack {
+                        Text(message.mode == .followUp ? "Follow-up" : "Steering")
+                            .font(.caption)
+                            .foregroundStyle(Theme.mutedForeground)
+                        Spacer()
+                        Button { onEdit(message) } label: {
+                            Label("Edit", systemImage: "pencil")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
                         .foregroundStyle(Theme.mutedForeground)
+                        .help("Edit this queued message")
+                    }
                     Text(message.text)
                         .font(fonts.body)
                         .textSelection(.enabled)

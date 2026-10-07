@@ -20,7 +20,7 @@ import {
 import type { AgentEvent, DeliveryMode, SessionUsage } from "@pilot/protocol";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
-import { queueUpdate, watchQueue } from "./queue.ts";
+import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
 import type { KernelSpec } from "./protocol.ts";
 import { openSessionStorage } from "./storage.ts";
 
@@ -165,6 +165,12 @@ export class KernelSession {
 		// Native input handlers (prompt templates, skill commands) expand the text first.
 		const prepared = await this.adapter.prepareInput(content);
 		await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context);
+	}
+
+	/** Edit in place only if the input is still queued when the commit runs. */
+	async editQueuedMessage(submissionId: number, content: string): Promise<void> {
+		const prepared = await this.adapter.prepareInput(content);
+		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context);
 	}
 
 	/** Withdraw queued input and abort the current run. The conversation stays usable. */

@@ -212,6 +212,13 @@ public struct ChangedFile: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// PATCH /api/sessions/:id/queue/:submissionId.
+public struct EditQueuedMessageRequest: Codable, Sendable {
+    public let message: String
+
+    public init(message: String) { self.message = message }
+}
+
 /// GET /api/sessions/:id/changes
 public struct SessionChanges: Codable, Equatable, Sendable {
     public let base: String

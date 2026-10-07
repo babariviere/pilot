@@ -15,7 +15,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   blocks with copy), collapsible thinking, grouped tool rows with summaries ("Ran command npm test"),
   live output and stop. Return steers the current run (or sends when idle), Option-Return queues a
   follow-up, Shift-Return adds a line. All queued messages appear above the composer, with their delivery
-  mode and full text; long queues scroll and survive reconnects.
+  mode and full text; long queues scroll and survive reconnects. Each queued message has an Edit action
+  with Save and Cancel. Saving preserves its position and delivery mode; consumed messages cannot be edited.
 - **Usage footer.** Above the composer, the optional session usage snapshot shows a context-window
   estimate (percent and tokens/window) and Claude (orange) or Codex (blue) subscription windows.
   Hover for reset times, snapshot fetch time, and provider errors. Missing measurements stay unknown;

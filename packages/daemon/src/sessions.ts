@@ -32,7 +32,7 @@ export interface SessionWorker {
 	error?: string;
 	usage?: SessionUsage;
 	send(command: KernelCommand): void;
-	request(command: PendingCommand): Promise<void>;
+	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void>;
 	close(): Promise<void>;
 }
 
@@ -340,6 +340,18 @@ export class SessionManager {
 			const rejected = await admission;
 			if (rejected.has(requestId)) throw rejected.get(requestId);
 		}
+	}
+
+	async editQueuedMessage(id: string, submissionId: number, message: string): Promise<void> {
+		const meta = this.require(id);
+		if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
+		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
+		const worker = this.ensureWorker(id);
+		await worker.ready;
+		await worker.request({ type: "editQueuedMessage", requestId: randomUUID(), submissionId, content: message });
+		meta.updatedAt = Date.now();
+		await this.save(meta);
+		this.emit(meta);
 	}
 
 	/** Attach a live event stream. The first batch is always a snapshot. */

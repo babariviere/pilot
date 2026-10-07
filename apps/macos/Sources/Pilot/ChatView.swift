@@ -124,7 +124,10 @@ struct ChatView: View {
                     working: transcript.working || session.state == "starting",
                     queuedMessages: transcript.queuedMessages,
                     onSend: send,
-                    onStop: { Task { try? await AppModel.shared.client.stop(session.id) } }
+                    onStop: { Task { try? await AppModel.shared.client.stop(session.id) } },
+                    onEditQueuedMessage: { id, text in
+                        try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
+                    }
                 )
             }
         }

@@ -65,6 +65,12 @@ enum Snapshot {
             to: directory.appending(path: "session-long-queue.png")
         )
         model.inspectorVisible = true
+        await render(
+            QueuedMessageEditor(message: Fixtures.queuedTranscript.queuedMessages[0], onSave: { _, _ in })
+                .background(Theme.background),
+            size: CGSize(width: 500, height: 360),
+            to: directory.appending(path: "queued-message-editor.png")
+        )
         model.inspectorTab = .changes
         await render(
             Frame(title: session.title, subtitle: "pilot · \(session.branch ?? "")") {

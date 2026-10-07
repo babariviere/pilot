@@ -147,6 +147,11 @@ export interface SendRequest {
 	requestId?: string;
 }
 
+/** PATCH /api/sessions/:id/queue/:submissionId. Keeps the message's queue position and delivery mode. */
+export interface EditQueuedMessageRequest {
+	message: string;
+}
+
 /** Client to daemon, over /api/ws. */
 export type ClientMessage =
 	| { type: "subscribe"; sessionId: string }

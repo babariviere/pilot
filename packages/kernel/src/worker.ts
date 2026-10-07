@@ -44,6 +44,10 @@ async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdo
 			await session.abort();
 			await send({ type: "aborted", requestId: command.requestId });
 			break;
+		case "editQueuedMessage":
+			await session.editQueuedMessage(command.submissionId, command.content);
+			await send({ type: "accepted", requestId: command.requestId });
+			break;
 		case "watch":
 			await session.watch(command.watchId, (events) => {
 				void send({ type: "events", watchId: command.watchId, events });
