@@ -44,6 +44,7 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 | `Sources/PilotCore` | Also: Markdown block parser, chat rows and tool summaries |
 | `Sources/Pilot` | SwiftUI app, pilotd client, launchd management, terminals |
 | `Tests/PilotCoreTests` | Swift Testing tests for the reducer |
+| `Resources/AppIcon.svg` | App icon source; `scripts/icon.sh` regenerates the committed `AppIcon.icns` |
 | `Vendor/libghostty-spm` | Fetched by `scripts/vendor-ghostty.sh` (gitignored) |
 
 ## Build

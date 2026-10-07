@@ -43,6 +43,7 @@ else
 	python3 "$here/scripts/release_metadata.py" plist "$here/Resources/Info.plist" \
 		"$app/Contents/Info.plist" "$repo"
 fi
+cp "$here/Resources/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 
 if [ "$runtime" = 1 ]; then
 	"$here/scripts/bundle-runtime.sh" "$app/Contents/Resources/runtime"
