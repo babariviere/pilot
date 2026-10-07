@@ -35,13 +35,15 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   `~/.config/ghostty/config`, which can be turned off), and projects.
 - **Menu bar.** Daemon status, recent sessions, open, restart/stop pilotd, open the log. The icon is the app
   icon's plane, with its contrail while agents are working.
-- **Results.** Working, Done, Needs your input, Failed and Stopped labels are separate from lifecycle.
+- **Results.** Color-only status dots are separate from lifecycle: blue for Working, green for Done,
+  orange for Needs your input, red for Failed, and gray for Stopped/Idle. Hover for the status label;
+  screen readers announce it too.
   Unread result dots persist until the loaded outcome card is visible in an active chat, or you choose
   "Mark as reviewed" in the sidebar. Reviewing never answers a question or clears Needs your input.
 - **Pull requests.** Browser links in the sidebar, session header, dashboard, context menu and menu bar
-  show Draft, Open, Merged or Closed without merging, independently of results and unread dots.
-  Compact badges shorten the last label to Closed; hover for the full state, title and last lookup time.
-  Failed lookups retain a marked cached state, or show PR unavailable if no cached PR exists.
+  show only a colored state icon and PR number, independently of results and unread dots.
+  Hover for Draft, Open, Merged or Closed without merging, the title and last lookup time.
+  Failed lookups retain a warning-marked cached icon, or show a warning icon if no cached PR exists.
   Links accept HTTP(S), including GitHub Enterprise hosts, and never merge or close a PR.
 - **Notifications.** New completion versions (bundled app only), deduplicated across reconnects.
 

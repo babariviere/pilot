@@ -125,38 +125,19 @@ struct ChipLabel: View {
     }
 }
 
-/// Small status capsule for headers.
-struct StateBadge: View {
+/// Color-only agent status, with details available without adding row text.
+struct SessionStatusIcon: View {
     let status: SessionStatus
 
     var body: some View {
-        HStack(spacing: 5) {
-            if status == .working {
-                ProgressView().controlSize(.mini)
-            } else {
-                Image(systemName: status.icon).font(.system(size: 10))
-            }
-            Text(status.rawValue).font(.system(size: 11, weight: .medium))
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .background(Capsule().fill(status.color.opacity(0.1)))
-        .foregroundStyle(status.color)
+        Circle().fill(status.color).frame(width: 8, height: 8)
+            .help(status.rawValue)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Agent status: \(status.rawValue)")
     }
 }
 
 extension SessionStatus {
-    var icon: String {
-        switch self {
-        case .working: "arrow.trianglehead.2.clockwise"
-        case .done: "checkmark.circle.fill"
-        case .needsInput: "questionmark.circle.fill"
-        case .failed: "exclamationmark.circle.fill"
-        case .stopped: "stop.circle"
-        case .idle: "circle"
-        }
-    }
-
     var color: Color {
         switch self {
         case .working: Theme.info

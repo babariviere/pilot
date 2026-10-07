@@ -153,10 +153,7 @@ struct SessionRow: View {
                 Text(session.title)
                     .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))
                     .lineLimit(1)
-                Text(session.status.rawValue)
-                    .font(.system(size: 11))
-                    .foregroundStyle(session.status.color)
-                PullRequestBadge(session: session, compact: true)
+                PullRequestBadge(session: session)
             }
             Spacer(minLength: 4)
             if model.isUnread(session) { UnreadBadge() }
@@ -169,7 +166,8 @@ struct SessionRow: View {
         .help(session.cwd.abbreviatingHome)
         .contextMenu {
             if let pr = session.pullRequest, let url = pr.browserURL {
-                Link("Open PR \(pr.label)\(session.pullRequestIsStale ? " (last known)" : "") in Browser", destination: url)
+                Link("Open PR #\(pr.number) in Browser", destination: url)
+                    .help(session.pullRequestHelpText ?? "")
             }
             if model.isUnread(session) {
                 Button("Mark as reviewed") { model.review(session, explicit: true) }
@@ -185,21 +183,6 @@ struct SessionRow: View {
         case ..<86400: return "\(Int(seconds / 3600))h"
         case ..<604_800: return "\(Int(seconds / 86400))d"
         default: return "\(Int(seconds / 604_800))w"
-        }
-    }
-}
-
-struct SessionStatusIcon: View {
-    let status: SessionStatus
-
-    var body: some View {
-        switch status {
-        case .working:
-            ProgressView().controlSize(.mini)
-        case .failed, .needsInput, .done, .stopped:
-            Image(systemName: status.icon).foregroundStyle(status.color).font(.system(size: 11))
-        default:
-            Circle().fill(Color.secondary.opacity(0.35)).frame(width: 6, height: 6)
         }
     }
 }

@@ -64,7 +64,7 @@ struct SessionDetail: View {
         .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItemGroup {
-                StateBadge(status: session.status)
+                SessionStatusIcon(status: session.status)
                 if model.isUnread(session) { UnreadBadge() }
                 PullRequestBadge(session: session)
                 if let branch = session.branch {
