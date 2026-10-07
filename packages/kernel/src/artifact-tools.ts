@@ -2,18 +2,25 @@
 import type { JsonValue } from "@earendil-works/chord";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { type ArtifactStore, artifactLibraries, previewArtifact } from "@pilot/artifacts";
+import {
+	type ArtifactStore,
+	artifactLibraries,
+	loadArtifactImage,
+	MAX_IMAGE_SOURCE_BYTES,
+	previewArtifact,
+} from "@pilot/artifacts";
 import type { ArtifactReference, ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
-const kind = StringEnum(["html", "react"] as const);
+const kind = StringEnum(["html", "react", "image"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
 	kind,
 	source: Type.String({
-		maxLength: MAX_SOURCE_BYTES,
-		description: "Editable HTML or default-export JSX/TSX source, at most 512 KiB UTF-8.",
+		maxLength: MAX_IMAGE_SOURCE_BYTES,
+		description:
+			"HTML or JSX/TSX (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
 	}),
 	libraries: Type.Optional(
 		Type.Array(library, { description: "Offline libraries to include, especially for HTML script globals." }),
@@ -43,7 +50,8 @@ const diagnosticsProperties = {
 	contentHeight: Type.Number(),
 };
 
-const authoring = `Source must be self-contained and at most 512 KiB UTF-8. Runs offline in a sandbox: no CDN, remote scripts, fetch, network assets, Node APIs, native bridge or arbitrary npm imports. Tailwind is not available: use plain CSS inline or in <style> tags, not external stylesheets or assumed utility classes.
+const authoring = `HTML and React source must be self-contained and at most 512 KiB UTF-8. Runs offline in a sandbox: no CDN, remote scripts, fetch, network assets, Node APIs, native bridge or arbitrary npm imports. Tailwind is not available: use plain CSS inline or in <style> tags, not external stylesheets or assumed utility classes.
+Image: kind:"image", source is a local PNG, JPEG, GIF or WebP path (relative to the session working directory or absolute) or a base64 data:image/... URL. Maximum decoded image size is 16 MiB; libraries are not supported. The tool embeds the bytes durably, so the original file need not remain. No remote URLs. In codemode: await tools.artifact({action:"create",title:"Generated image",kind:"image",source:"/tmp/generated.png"}). Do not print image base64; get returns the saved data URL.
 Pilot supplies a light palette and system font. Use CSS variables --pilot-background, --pilot-foreground, --pilot-muted, --pilot-muted-foreground, --pilot-border, --pilot-primary and --pilot-radius for consistent styling; your styles may override them.
 HTML: use inline CSS or <style> tags and ordinary inline <script> tags. Select libraries to get globals echarts, mermaid, motion, d3, THREE (three). Do not import packages in HTML scripts.
 HTML example: {title:"Chart",kind:"html",libraries:["echarts"],source:'<div id="chart" style="height:320px"></div><script>echarts.init(document.getElementById("chart")).setOption({xAxis:{type:"category",data:["A","B"]},yAxis:{},series:[{type:"bar",data:[2,5]}]});</script>'}.
@@ -63,7 +71,7 @@ export interface ArtifactToolOptions {
 }
 
 function checkSource(write: ArtifactWrite): void {
-	if (Buffer.byteLength(write.source, "utf8") > MAX_SOURCE_BYTES)
+	if (write.kind !== "image" && Buffer.byteLength(write.source, "utf8") > MAX_SOURCE_BYTES)
 		throw new Error("Artifact source exceeds the 512 KiB UTF-8 limit");
 }
 
@@ -120,7 +128,7 @@ Actions:
 - list: list current session artifact summaries without source or compiled HTML.
 - preview: render draft title, kind, source and optional libraries to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. Requires Playwright Chromium; if missing, install with npm run artifacts:browser (npx playwright install chromium). In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.
 ${authoring}`,
-			promptSnippet: "Publish, inspect or preview offline HTML or React artifacts",
+			promptSnippet: "Publish, inspect or preview offline HTML, React or image artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
@@ -155,7 +163,7 @@ ${authoring}`,
 					...diagnosticsProperties,
 				}),
 			]),
-			async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
+			async execute(_callId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<JsonValue>> {
 				signal?.throwIfAborted();
 				const { action, id } = params;
 				if ((action === "get" || action === "update") && id === undefined)
@@ -182,6 +190,11 @@ ${authoring}`,
 							source,
 							...(libraries === undefined ? {} : { libraries }),
 						};
+						if (write.kind === "image") {
+							if (write.libraries?.length) throw new Error("Image artifacts do not use libraries");
+							write.source = await loadArtifactImage(write.source, ctx.cwd);
+							signal?.throwIfAborted();
+						}
 						checkSource(write);
 						if (action === "create") return published(await store.create(write));
 						if (action === "update") return published(await store.update(id!, write, params.expectedRevision));

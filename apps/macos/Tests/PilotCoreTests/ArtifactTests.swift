@@ -4,6 +4,26 @@ import Testing
 
 private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision":2}"#
 
+@Test func imageArtifactProtocolDecodesAndRoundTrips() throws {
+    let json = #"{"id":"a","sessionId":"s","title":"Image","kind":"image","revision":1,"createdAt":1,"updatedAt":2,"source":"data:image/png;base64,test","html":"<img>","libraries":[]}"#
+    let revision = try JSONDecoder().decode(ArtifactRevision.self, from: Data(json.utf8))
+    #expect(revision.kind == .image)
+    #expect(revision.libraries.isEmpty)
+    #expect(try JSONDecoder().decode(ArtifactRevision.self, from: JSONEncoder().encode(revision)) == revision)
+    let update = try JSONValue.decode(Data("""
+    {"type":"artifacts","sessionId":"s","artifacts":[{"id":"a","sessionId":"s","title":"Image","kind":"image","revision":1,"createdAt":1,"updatedAt":2}]}
+    """.utf8))
+    #expect(ArtifactListMessage.parse(update)?.artifacts.first?.kind == .image)
+}
+
+@Test func expandedArtifactViewerUsesMostOfTheScreenAndFitsSmallerDisplays() {
+    let large = ArtifactViewerLayout.size(available: CGSize(width: 1440, height: 900))
+    #expect(large == CGSize(width: 1296, height: 810))
+    let small = ArtifactViewerLayout.size(available: CGSize(width: 800, height: 600))
+    #expect(small == CGSize(width: 720, height: 540))
+    #expect(small.width < 800 && small.height < 600)
+}
+
 @Test func toolArtifactChangesRemainVisibleWithCachedSummaries() {
     let original = ToolItem(id: "call", name: "artifact", arguments: .object(["action": .string("create")]), status: .done, output: "")
     var cached = original

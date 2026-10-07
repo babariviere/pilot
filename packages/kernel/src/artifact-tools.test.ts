@@ -57,7 +57,7 @@ function fixture(overrides: Partial<ArtifactToolOptions> = {}) {
 }
 
 function execute(tool: ToolDefinition, args: unknown, signal?: AbortSignal) {
-	return tool.execute("call-1", args, signal, undefined, {} as ExtensionToolContext);
+	return tool.execute("call-1", args, signal, undefined, { cwd: process.cwd() } as ExtensionToolContext);
 }
 
 test("artifact tools declare structured output, sequential execution and authoring guidance", () => {
@@ -195,6 +195,38 @@ test("create forwards only document fields, without action or unrelated controls
 	const f = fixture();
 	await f.call("create", { ...write, id: "ignored", revision: 1, expectedRevision: 1, width: 800 });
 	assert.deepEqual(f.calls, [{ method: "create", args: [write] }]);
+});
+
+test("image actions forward embedded sources and do not expose image bytes in publication results", async () => {
+	const source =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
+	const imageWrite: ArtifactWrite = { title: "Image", kind: "image", source };
+	let previews = 0;
+	const f = fixture({
+		preview: async (write) => {
+			assert.deepEqual(write, imageWrite);
+			previews++;
+			return {
+				screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
+				consoleMessages: [],
+				contentHeight: 600,
+			};
+		},
+	});
+	for (const action of ["create", "update"]) {
+		const result = await f.call(action, { ...imageWrite, id: "artifact-1", expectedRevision: 3 });
+		assert.ok(!JSON.stringify(result).includes(source));
+	}
+	assert.deepEqual(f.calls, [
+		{ method: "create", args: [imageWrite] },
+		{ method: "update", args: ["artifact-1", imageWrite, 3] },
+	]);
+	await f.call("preview", imageWrite);
+	assert.equal(previews, 1);
+	assert.equal(f.notifications, 2);
+	await assert.rejects(f.call("create", { ...imageWrite, libraries: ["react"] }), /do not use libraries/);
+	await assert.rejects(f.call("create", { ...imageWrite, source: "https://example.com/image.png" }), /local path/);
+	assert.equal(f.notifications, 2);
 });
 
 test("preview forwards viewport and abort signal, returns image content and structured screenshot", async () => {

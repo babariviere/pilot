@@ -1,3 +1,4 @@
+import AppKit
 import PilotCore
 import SwiftUI
 
@@ -63,6 +64,11 @@ struct ArtifactViewer: View {
     let latest: Bool
     @Environment(\.dismiss) private var dismiss
 
+    private var expandedSize: CGSize {
+        ArtifactViewerLayout.size(available: NSApp.keyWindow?.screen?.visibleFrame.size
+            ?? NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HStack {
@@ -75,7 +81,7 @@ struct ArtifactViewer: View {
             Divider()
             ArtifactContent(reference: reference, latest: latest)
         }
-        .frame(minWidth: 640, idealWidth: 900, minHeight: 440, idealHeight: 680)
+        .frame(width: expandedSize.width, height: expandedSize.height)
     }
 }
 
@@ -92,13 +98,15 @@ private struct ArtifactContent: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Picker("View", selection: $state.source) {
-                    Text("Preview").tag(false)
-                    Text("Source").tag(true)
+                if state.revision?.kind != .image {
+                    Picker("View", selection: $state.source) {
+                        Text("Preview").tag(false)
+                        Text("Source").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 160)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 160)
             }
             .padding(8)
             if state.loading {
@@ -110,7 +118,7 @@ private struct ArtifactContent: View {
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let revision = state.revision {
-                if state.source {
+                if state.source, revision.kind != .image {
                     ScrollView {
                         CodeBlock(language: revision.kind == .react ? "jsx" : "html", text: revision.source)
                     }

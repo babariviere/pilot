@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -220,6 +220,19 @@ test("KernelSession registers tools with the session directory and project ident
 		artifact: { id: summary.id, sessionId: summary.sessionId, title: summary.title, revision: summary.revision },
 	});
 	assert.ok(!JSON.stringify(result).includes("<!doctype"));
+	await writeFile(join(f.root, "generated.png"), Buffer.from(png, "base64"));
+	const imageResult = await create.execute(
+		"publish-image",
+		{ action: "create", title: "Generated image", kind: "image", source: "generated.png" },
+		undefined,
+	);
+	const imageReference = imageResult.details as { artifact: { id: string } };
+	const savedImage = await store.get(imageReference.artifact.id);
+	assert.equal(savedImage.kind, "image");
+	assert.equal(savedImage.source, `data:image/png;base64,${png}`);
+	assert.ok(savedImage.html.includes(savedImage.source));
+	assert.ok(!JSON.stringify(imageResult).includes(png));
+	assert.equal(notifications, 2);
 	assert.equal(f.faux.state.callCount, 0);
 });
 

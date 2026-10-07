@@ -265,9 +265,11 @@ reports), producing a morning summary in the app and Slack.
   actor, preserve stream ordering, and publish prepared rows once per batch. Long tool groups render
   lazily; loading and startup have visible progress. Procedural home artwork renders off main as well.
 - Questions panel: answer `ask_human` gates inline.
-- Artifacts: durable HTML/JS or React/JSX documents owned by a session and its project. Agent tools
+- Artifacts: durable images, HTML/JS or React/JSX documents owned by a session and its project. Agent tools
   create, update, list, read and preview them. Each publication saves an immutable revision; chat
   previews are shown by default and pin that revision, while sidebar access opens the latest.
+  Plain PNG, JPEG, GIF and WebP files (or data URLs) are embedded with their revisions, up to 16 MiB.
+  Expanded viewers use 90% of the display's usable area.
   Offscreen chat rows release their renderer; previews can also be hidden manually. An older running
   daemon without artifact routes prompts for a restart once agents are idle. Native WebKit renders isolated,
   offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,

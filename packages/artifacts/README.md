@@ -1,6 +1,6 @@
 # Artifacts
 
-Session-owned, project-indexed HTML/JavaScript and React/JSX documents. This package owns preparation,
+Session-owned, project-indexed images, HTML/JavaScript and React/JSX documents. This package owns preparation,
 offline libraries, revision storage and optional agent-side browser previews. It does not run generated
 code in Node or grant artifacts native capabilities.
 
@@ -12,6 +12,25 @@ document and `expectedRevision`. `artifact({action: "list"})` returns compact su
 session. Publication results contain pinned references; the transcript also receives a passive
 `pilot.artifact` publication entry, including when a tool is invoked through codemode. A sidebar entry
 always opens the latest revision.
+
+### Images
+
+Publish a plain PNG, JPEG, GIF or WebP image directly, without authoring HTML:
+
+```js
+await tools.artifact({
+  action: "create",
+  title: "Generated image",
+  kind: "image",
+  source: "/tmp/generated.png",
+});
+```
+
+`source` may be an absolute file path, a path relative to the session working directory, or a base64
+`data:image/...` URL. Images are limited to 16 MiB decoded and do not use libraries. Remote URLs and
+SVG are not accepted for this kind. The tool embeds the image bytes, so saved revisions remain visible
+if the original file is removed. Create/update results contain only the pinned reference, not base64.
+Get returns the saved data URL. Images fit the inline preview and the larger, screen-sized viewer.
 
 ### HTML
 

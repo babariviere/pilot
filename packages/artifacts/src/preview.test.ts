@@ -5,8 +5,41 @@ import { createServer } from "node:http";
 import { test } from "node:test";
 import { chromium } from "playwright";
 import { previewArtifact } from "./preview.ts";
+import { prepareArtifact } from "./render.ts";
 
 const browserInstalled = existsSync(chromium.executablePath());
+
+test("plain images decode offline and fit both inline and expanded viewports", {
+	skip: !browserInstalled,
+}, async () => {
+	const source =
+		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
+	const prepared = await prepareArtifact({ title: "Image", kind: "image", source });
+	const browser = await chromium.launch({ headless: true });
+	try {
+		const page = await browser.newPage();
+		for (const viewport of [
+			{ width: 640, height: 240 },
+			{ width: 1296, height: 810 },
+		]) {
+			await page.setViewportSize(viewport);
+			await page.setContent(prepared.html);
+			const image = await page.locator("img").evaluate((element) => {
+				const image = element as HTMLImageElement;
+				const bounds = image.getBoundingClientRect();
+				return {
+					width: image.naturalWidth,
+					height: image.naturalHeight,
+					boxWidth: bounds.width,
+					boxHeight: bounds.height,
+				};
+			});
+			assert.deepEqual(image, { width: 1, height: 1, boxWidth: viewport.width, boxHeight: viewport.height });
+		}
+	} finally {
+		await browser.close();
+	}
+});
 
 test("preview validates dimensions and respects cancellation", async () => {
 	const source = { title: "test", kind: "html" as const, source: "hello" };
