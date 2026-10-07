@@ -134,6 +134,20 @@ enum Snapshot {
             size: CGSize(width: 760, height: 300),
             to: directory.appending(path: "usage-footers.png")
         )
+        for width in [760, 420] {
+            await render(
+                Composer(
+                    state: ComposerState(), working: true, queuedMessages: [],
+                    completionDirectory: session.cwd,
+                    onSend: { _, _ in }, onStop: {}, onEditQueuedMessage: { _, _ in },
+                    session: session
+                )
+                .padding(.top, 16)
+                .background(Theme.background),
+                size: CGSize(width: width, height: 200),
+                to: directory.appending(path: width == 760 ? "usage-composer.png" : "usage-composer-narrow.png")
+            )
+        }
         await render(
             VStack(spacing: 16) {
                 UsageFooter(usage: Fixtures.codexUsage)

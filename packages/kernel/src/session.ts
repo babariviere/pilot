@@ -7,11 +7,15 @@ import {
 	AgentDoc,
 	type AgentEventStream,
 	type Conversation,
+	ConversationBusy,
+	configure,
 	createRegistry,
 	type DocumentWatch,
 	type Extension,
 	Harness,
 	type InboxState,
+	InboxDoc,
+	LiveDoc,
 	type ModelRef,
 	ROOT_CONVERSATION_ID,
 	type Storage,
@@ -68,6 +72,8 @@ export class KernelSession {
 	#working = false;
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
+	#changingModel = false;
+	#admissions = 0;
 
 	private constructor(
 		readonly harness: Harness,
@@ -221,6 +227,61 @@ export class KernelSession {
 		return this.#working;
 	}
 
+	get thinkingLevel(): string {
+		return this.adapter.thinkingLevel;
+	}
+
+	/** Configure on the durable mutation line, with the same busy/inbox barrier as input admission. */
+	async changeModel(model: string): Promise<void> {
+		if (this.#closing || this.#changingModel || this.#admissions) throw new ConversationBusy(this.conversation.id);
+		if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
+		this.#changingModel = true;
+		const previous = this.adapter.session.model!;
+		const thinking = this.adapter.thinkingLevel;
+		const previousSubscription = this.adapter.usage.current.subscription;
+		let providerChanged = false;
+		const configureIdle = (change = false) =>
+			this.conversation.commit(async (tx) => {
+				const live = await tx.doc(LiveDoc, this.conversation.id);
+				const inbox = await tx.doc(InboxDoc, this.conversation.id);
+				if (live.run || live.compactions?.length || inbox.items.length)
+					throw new ConversationBusy(this.conversation.id);
+				// This is Conversation.configure's operation, in the same commit as the idle check.
+				if (change)
+					await configure(tx, this.conversation.id, {
+						model: this.adapter.model,
+						thinkingLevel: this.adapter.thinkingLevel,
+					});
+			}, context);
+		try {
+			await configureIdle();
+			const choice = await this.adapter.resolveModel(model.trim());
+			await configureIdle();
+			providerChanged = previous.provider !== choice.model.provider;
+			// model_select handlers may publish fresh destination usage during setModel. Clear first,
+			// not afterwards, so that snapshot is included in the modelChanged acknowledgement.
+			if (providerChanged) this.adapter.usage.clearSubscription();
+			await this.adapter.session.setModel(choice.model);
+			if (choice.thinkingLevel) this.adapter.session.setThinkingLevel(choice.thinkingLevel);
+			await configureIdle(true);
+			// Display-only failures must not turn a successfully persisted selection into a rejection.
+			try {
+				await this.adapter.refreshUsage(context);
+			} catch (error) {
+				console.warn("pilot: could not refresh context usage", error);
+			}
+		} catch (error) {
+			if (this.adapter.session.model !== previous || this.adapter.thinkingLevel !== thinking) {
+				await this.adapter.session.setModel(previous);
+				this.adapter.session.setThinkingLevel(thinking);
+			}
+			if (providerChanged) this.adapter.usage.setSubscription(previousSubscription);
+			throw error;
+		} finally {
+			this.#changingModel = false;
+		}
+	}
+
 	get usage(): SessionUsage {
 		return this.adapter.usage.current;
 	}
@@ -231,9 +292,15 @@ export class KernelSession {
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
 	async submit(requestId: string, content: string, mode: DeliveryMode): Promise<void> {
-		// Native input handlers (prompt templates, skill commands) expand the text first.
-		const prepared = await this.adapter.prepareInput(content);
-		await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context);
+		if (this.#changingModel) throw new ConversationBusy(this.conversation.id);
+		this.#admissions++;
+		try {
+			// Native input handlers (prompt templates, skill commands) expand the text first.
+			const prepared = await this.adapter.prepareInput(content);
+			await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context);
+		} finally {
+			this.#admissions--;
+		}
 	}
 
 	/** Edit in place only if the input is still queued when the commit runs. */

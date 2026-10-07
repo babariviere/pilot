@@ -36,8 +36,10 @@ cp /tmp/pilot-todos-screenshots/session.png docs/screenshots/tasks-chat.png
 
 ## Chat usage screenshots
 
+- `usage-composer.png`: the subtle model picker, context, 5h and weekly gauges below the chat box.
+- `usage-composer-narrow.png`: the controls row wrapping in a narrow chat column.
 - `usage-footers.png`: Claude/Codex usage windows, refresh errors, and missing-snapshot states.
-- `usage-footer-narrow.png`: the same footer stacked for a narrow chat column.
+- `usage-footer-narrow.png`: the compact usage indicators in a narrow column.
 
 These also use deterministic fixtures. Regenerate with the snapshot command above, then copy
-`usage-footers.png` and `usage-footer-narrow.png` from its output directory.
+the `usage-*.png` images from its output directory.

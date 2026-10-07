@@ -225,6 +225,13 @@ public struct SendRequest: Codable, Sendable {
     }
 }
 
+/// POST /api/sessions/:id/model. Only idle chats can change their pinned model.
+public struct ChangeModelRequest: Codable, Sendable {
+    public let model: String
+
+    public init(model: String) { self.model = model }
+}
+
 public struct ChangedFile: Codable, Identifiable, Equatable, Sendable {
     public var id: String { path }
     public let path: String

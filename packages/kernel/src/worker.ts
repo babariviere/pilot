@@ -1,5 +1,6 @@
 /** Kernel worker entry: one process per session, driven over Node IPC by pilotd. */
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
+import { ConversationBusy } from "@earendil-works/pi-durable";
 import { KernelSession } from "./session.ts";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -24,6 +25,7 @@ async function shutdown(code = 0): Promise<void> {
 	watchdog.unref();
 	try {
 		await initialization?.catch(() => undefined);
+		await commands;
 		await session?.close();
 	} catch (error) {
 		await send({ type: "error", message: `Shutdown failed: ${errorText(error)}` });
@@ -47,6 +49,16 @@ async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdo
 		case "editQueuedMessage":
 			await session.editQueuedMessage(command.submissionId, command.content);
 			await send({ type: "accepted", requestId: command.requestId });
+			break;
+		case "changeModel":
+			await session.changeModel(command.model);
+			await send({
+				type: "modelChanged",
+				requestId: command.requestId,
+				model: session.model,
+				thinking: session.thinkingLevel,
+				usage: session.usage,
+			});
 			break;
 		case "watch":
 			await session.watch(
@@ -100,6 +112,7 @@ process.on("message", (message: unknown) => {
 				type: "error",
 				requestId: "requestId" in command ? command.requestId : undefined,
 				message: errorText(error),
+				...(error instanceof ConversationBusy ? { code: "busy" as const } : {}),
 			}),
 		);
 });

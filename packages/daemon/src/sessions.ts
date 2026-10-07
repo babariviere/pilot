@@ -20,6 +20,7 @@ import type {
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
@@ -33,7 +34,14 @@ type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" }>;
 type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
-export class CommandRejected extends Error {}
+export class CommandRejected extends Error {
+	constructor(
+		message: string,
+		readonly code?: "busy",
+	) {
+		super(message);
+	}
+}
 
 /** Injectable daemon boundaries for deterministic startup tests. */
 export interface SessionWorker {
@@ -155,13 +163,16 @@ class Worker implements SessionWorker {
 				this.usage = packet.usage;
 			} else if (packet.type === "working") {
 				this.state = packet.working ? "working" : "idle";
+			} else if (packet.type === "modelChanged") {
+				this.usage = packet.usage;
+				this.settle(packet.requestId);
 			} else if (packet.type === "accepted" || packet.type === "aborted") {
 				// IPC acceptance can precede working=true. A fresh committed snapshot is the idle barrier,
 				// including idempotent retries which produce no new run/inbox events.
 				if (packet.type === "accepted") this.refreshActivity();
 				this.settle(packet.requestId);
 			} else if (packet.type === "error") {
-				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message));
+				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message, packet.code));
 				else if (!this.initialized) {
 					markFailed(new Error(packet.message));
 					this.state = "failed";
@@ -253,6 +264,9 @@ export class SessionManager {
 	private readonly updateGate = new UpdateGate();
 	/** Admissions waiting for acknowledgement must not race archiving. */
 	private readonly sending = new Map<string, number>();
+	/** Held synchronously through catalog lookup, worker reopen and durable model acknowledgement. */
+	private readonly changingModels = new Map<string, Promise<void>>();
+	private readonly modelCatalog: ModelCatalog;
 	/** Same-target retries share the durable result; opposite transitions execute in order. */
 	private readonly archiveTransitions = new Map<string, { archived: boolean; promise: Promise<SessionSummary> }>();
 	private closing = false;
@@ -265,6 +279,7 @@ export class SessionManager {
 		private readonly factories: SessionFactories = {},
 		pullRequests: PullRequestOptions = {},
 	) {
+		this.modelCatalog = new ModelCatalog(agentDir);
 		this.pullRequests = new PullRequestTracker(
 			() => this.metas.values(),
 			(session, result) => this.applyPullRequest(this.require(session.id), result),
@@ -403,6 +418,7 @@ export class SessionManager {
 						worker?.state === "starting" ||
 						worker?.state === "working" ||
 						worker?.busy ||
+						this.changingModels.has(id) ||
 						this.sending.has(id))
 				)
 					throw new Conflict("Stop the session before archiving it");
@@ -422,6 +438,73 @@ export class SessionManager {
 	get(id: string): SessionSummary | undefined {
 		const meta = this.metas.get(id);
 		return meta && this.summary(meta);
+	}
+
+	/** A parked idle conversation may reopen, but model changes never interrupt or queue behind work. */
+	async changeModel(
+		id: string,
+		model: string,
+		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
+	): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		let locked = false;
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		try {
+			const meta = this.require(id);
+			if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
+			if (this.closing) throw new Error("pilotd is shutting down");
+			if (meta.archivedAt !== undefined)
+				throw new Conflict("Restore the archived session before changing its model");
+			if (meta.failure) throw new Conflict("Session is not idle");
+			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
+				throw new Conflict("Session is changing configuration");
+			this.assertModelIdle(meta);
+			this.changingModels.set(id, settled);
+			locked = true;
+			const name = model.trim();
+			const list = await catalog.list(meta.cwd);
+			if (!list.models.some((entry) => entry.id === name))
+				throw new Error(`Model is not available in this session's scope: ${name}`);
+			const reopening = !this.workers.has(id);
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			if (this.closing) throw new Error("pilotd is shutting down");
+			// A fresh worker's activity snapshot may follow ready. The kernel's atomic guard checks
+			// its durable inbox before switching, so unknown fresh activity is not proof of busy work.
+			this.assertModelIdle(meta, reopening);
+			try {
+				await worker.request({ type: "changeModel", requestId: randomUUID(), model: name });
+			} catch (error) {
+				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
+				throw error;
+			}
+			// The modelChanged packet carries the native selection and effective thinking level.
+			meta.updatedAt = Date.now();
+			await this.save(meta);
+			this.emit(meta);
+			return this.summary(meta);
+		} finally {
+			if (locked) this.changingModels.delete(id);
+			release();
+			end();
+		}
+	}
+
+	private assertModelIdle(meta: SessionMeta, reopening = false): void {
+		const worker = this.workers.get(meta.id);
+		if (
+			meta.working ||
+			meta.initializing ||
+			meta.preparing ||
+			meta.pending?.length ||
+			this.starting.has(meta.id) ||
+			this.sending.has(meta.id) ||
+			(worker && (worker.state !== "idle" || (!reopening && (worker.busy ?? true))))
+		)
+			throw new Conflict("Session must be idle with no queued messages before changing its model");
 	}
 
 	/** Where the session's changes start: its workspace base, else the folder's HEAD. */
@@ -522,6 +605,7 @@ export class SessionManager {
 		const transition = this.archiveTransitions.get(id);
 		if (transition) await transition.promise;
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
+		if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
@@ -551,6 +635,7 @@ export class SessionManager {
 
 	async stop(id: string): Promise<void> {
 		const meta = this.require(id);
+		if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return;
 		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length) return;
@@ -577,6 +662,7 @@ export class SessionManager {
 			const transition = this.archiveTransitions.get(id);
 			if (transition) await transition.promise;
 			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before editing messages");
+			if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
 			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 			const worker = this.ensureWorker(id);
@@ -630,6 +716,7 @@ export class SessionManager {
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.preparations]);
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
@@ -817,7 +904,10 @@ export class SessionManager {
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}
-		if (packet.type === "ready" || packet.type === "working") {
+		if (packet.type === "modelChanged") {
+			meta.model = packet.model;
+			meta.thinking = packet.thinking;
+		} else if (packet.type === "ready" || packet.type === "working") {
 			const wasWorking = Boolean(meta.working);
 			const changed = applyActivity(meta, packet.working, packet.completion);
 			if (packet.type === "ready") {

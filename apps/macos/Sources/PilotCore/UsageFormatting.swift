@@ -2,6 +2,10 @@ import Foundation
 
 /// Shared, testable presentation rules. Missing measurements are never treated as zero.
 public enum UsageFormatting {
+    public static func gaugeFraction(_ percent: Double?) -> Double? {
+        guard let percent, percent.isFinite, percent >= 0 else { return nil }
+        return min(percent / 100, 1)
+    }
     public static func percent(_ value: Double?) -> String {
         guard let value, value.isFinite, value >= 0 else { return "Unknown" }
         return number(value.rounded()) + "%"
@@ -41,6 +45,13 @@ public enum UsageFormatting {
     }
 }
 
+extension ModelList {
+    public func displayName(for model: String?) -> String {
+        guard let model, !model.isEmpty else { return "Model" }
+        return models.first { $0.id == model }?.name ?? (model.split(separator: "/").last.map(String.init) ?? model)
+    }
+}
+
 extension ContextUsage {
     public var displayedPercent: Double? {
         if let percent, percent.isFinite, percent >= 0 { return percent }
@@ -50,7 +61,7 @@ extension ContextUsage {
     }
 
     /// Only the drawing is clamped. Text retains estimates above the limit.
-    public var gaugeFraction: Double? { displayedPercent.map { min($0 / 100, 1) } }
+    public var gaugeFraction: Double? { UsageFormatting.gaugeFraction(displayedPercent) }
     public var percentLabel: String { UsageFormatting.percent(displayedPercent) }
     public var tokenLabel: String {
         "\(UsageFormatting.tokens(tokens))/\(UsageFormatting.tokens(contextWindow > 0 ? contextWindow : nil))"
@@ -120,6 +131,7 @@ extension SessionUsage {
 }
 
 extension SubscriptionWindow {
+    public var gaugeFraction: Double? { UsageFormatting.gaugeFraction(usedPercent) }
     public var percentLabel: String { UsageFormatting.percent(usedPercent) }
     public var helpText: String {
         let reset: String
