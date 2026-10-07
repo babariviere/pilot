@@ -33,7 +33,7 @@ struct ChatThinkingPicker: View {
             if levels.isEmpty { Text("No thinking levels reported") }
         } label: {
             HStack(spacing: 5) {
-                Text("Thinking: \(levelLabel)")
+                Text(levelLabel)
                 Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
             }
             .font(.system(size: 11))
