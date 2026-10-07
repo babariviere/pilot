@@ -50,7 +50,7 @@ class FakeWorker implements SessionWorker {
 				type: "modelChanged",
 				requestId: command.requestId,
 				model: command.model,
-				thinking: "low",
+				thinking: command.thinking ?? "low",
 				usage: this.usage,
 			});
 		}
@@ -80,7 +80,7 @@ async function fixture(t: TestContext) {
 	await sessions.load();
 	const models = new ModelCatalog("/unused");
 	const list = t.mock.method(models, "list", async () => ({
-		models: [{ id: second, provider: "other", name: "Second" }],
+		models: [{ id: second, provider: "other", name: "Second", thinkingLevels: ["off", "low", "high"] }],
 	}));
 	t.after(async () => {
 		await sessions.shutdown();
@@ -96,6 +96,7 @@ test("idle parked session switches through the kernel, persists metadata, publis
 	f.sessions.onChange((session) => changes.push(session));
 	const changed = await f.sessions.changeModel(f.id, ` ${second} `, f.models);
 	assert.equal(changed.model, second);
+	assert.equal(changed.thinking, "low");
 	assert.equal(changed.state, "idle");
 	assert.equal(changed.usage?.subscription, undefined);
 	assert.equal(changed.usage?.context?.contextWindow, 200);
@@ -110,6 +111,7 @@ test("idle parked session switches through the kernel, persists metadata, publis
 	const reopened = new SessionManager(f.home, f.projects);
 	await reopened.load();
 	assert.equal(reopened.get(f.id)?.model, second);
+	assert.equal(reopened.get(f.id)?.thinking, "low");
 	assert.equal(reopened.get(f.id)?.usage, undefined);
 	await reopened.shutdown();
 });
@@ -126,6 +128,7 @@ test("busy, starting, queued, archived and in-flight admissions reject rather th
 	]) {
 		Object.assign(meta, patch);
 		await assert.rejects(f.sessions.changeModel(f.id, second, f.models), Conflict);
+		await assert.rejects(f.sessions.changeModel(f.id, second, f.models, "high"), Conflict);
 		for (const key of Object.keys(patch)) delete (meta as unknown as Record<string, unknown>)[key];
 	}
 	f.sessions["sending"].set(f.id, 1);
@@ -209,22 +212,38 @@ test("model HTTP route returns SessionSummary and validates payload, availabilit
 			body: JSON.stringify(body),
 			...extra,
 		});
-	const changed = await request({ model: second });
+	const changed = await request({ model: second, thinking: "high" });
 	assert.equal(changed.status, 200);
 	const summary = (await changed.json()) as SessionSummary;
 	assert.equal(summary.id, f.id);
 	assert.equal(summary.model, second);
+	assert.equal(summary.thinking, "high");
+	assert.equal((f.workers[0]!.commands[0] as Extract<Command, { type: "changeModel" }>).thinking, "high");
 	assert.equal(summary.usage?.subscription, undefined);
-	for (const body of [null, [], {}, { model: 42 }, { model: " " }, { model: "unavailable/model" }]) {
+	for (const body of [
+		null,
+		[],
+		{},
+		{ model: 42 },
+		{ model: " " },
+		{ model: "unavailable/model" },
+		{ model: second, thinking: null },
+		{ model: second, thinking: 42 },
+		{ model: second, thinking: "" },
+		{ model: second, thinking: "max" },
+		{ model: second, thinking: "unknown" },
+	]) {
 		const rejected = await request(body);
 		assert.equal(rejected.status, 400);
 		await rejected.arrayBuffer();
 	}
 	f.workers[0]!.busy = true;
 	assert.equal((await request({ model: second })).status, 409);
+	assert.equal((await request({ model: second, thinking: "low" })).status, 409);
 	f.workers[0]!.busy = false;
 	await f.sessions.archive(f.id);
 	assert.equal((await request({ model: second })).status, 409);
+	assert.equal((await request({ model: second, thinking: "low" })).status, 409);
 	await f.sessions.restore(f.id);
 	assert.equal(
 		(
@@ -238,4 +257,28 @@ test("model HTTP route returns SessionSummary and validates payload, availabilit
 	assert.equal((await request({ model: second }, { method: "PATCH" })).status, 404);
 	assert.deepEqual(f.sessions.prepareUpdate(), { ready: true });
 	assert.equal((await request({ model: second })).status, 503);
+});
+
+test("unsupported thinking choices never open a worker or mutate session metadata", async (t) => {
+	const f = await fixture(t);
+	for (const level of ["", "unknown", "minimal", "max"])
+		await assert.rejects(f.sessions.changeModel(f.id, second, f.models, level), /Thinking level is not supported/);
+	assert.equal(f.workers.length, 0);
+	assert.equal(f.sessions.get(f.id)?.model, first);
+	assert.equal(f.sessions.get(f.id)?.thinking, undefined);
+});
+
+test("worker startup publishes the effective thinking level instead of stale creation defaults", async (t) => {
+	const f = await fixture(t);
+	f.sessions["metas"].get(f.id)!.thinking = "high";
+	const worker = new FakeWorker(() => {});
+	f.sessions["workers"].set(f.id, worker);
+	f.sessions["onPacket"](f.sessions["metas"].get(f.id)!, worker, {
+		type: "ready",
+		model: first,
+		thinking: "off",
+		working: false,
+		usage: {},
+	});
+	assert.equal(f.sessions.get(f.id)?.thinking, "off");
 });

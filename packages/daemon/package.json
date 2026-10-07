@@ -11,6 +11,7 @@
 		"start": "node --import tsx src/main.ts"
 	},
 	"dependencies": {
+		"@earendil-works/pi-ai": "1.0.4",
 		"@earendil-works/pi-coding-agent": "1.0.4",
 		"@pilot/artifacts": "^0.1.0",
 		"@pilot/kernel": "0.1.0",

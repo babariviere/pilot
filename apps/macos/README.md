@@ -45,6 +45,9 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   Subscription values are the latest fetched snapshot, not live measurements.
 - **Models.** The model picker lists your pi scope (`enabledModels`, resolved by pi's model runtime for the
   project's directory) grouped by provider, plus the project's or pi's default (`GET /api/models`).
+  Chats have a separate Thinking selector offering only the selected model's supported levels.
+  Model and thinking changes require an idle chat with no queued messages; both persist across reopening.
+  Thinking is disabled when the model has only one level or no reported levels.
 - **Artifacts.** Structured artifact tool results show a pinned-revision card with an opt-in inline
   preview and expanded viewer. Durable publication entries also show artifacts published inside
   codemode without duplicating direct tool cards. The selected session's sidebar Artifacts section

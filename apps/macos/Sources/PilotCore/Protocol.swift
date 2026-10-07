@@ -21,6 +21,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let archivedAt: Double?
     public let state: String
     public let model: String?
+    /// Effective thinking level pinned for this chat. Omitted by older daemons.
+    public let thinking: String?
     public let usage: SessionUsage?
     public let error: String?
     public let outcome: SessionOutcome?
@@ -41,7 +43,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
-        archivedAt: Double? = nil, sessionPath: String? = nil
+        archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -54,6 +56,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.archivedAt = archivedAt
         self.state = state
         self.model = model
+        self.thinking = thinking
         self.usage = usage
         self.error = error
         self.outcome = outcome
@@ -185,13 +188,19 @@ public struct ModelOption: Codable, Identifiable, Hashable, Sendable {
     public let name: String
     public let reasoning: Bool?
     public let thinking: String?
+    /// Ordered supported levels. Missing capabilities must not invent selectable levels.
+    public let thinkingLevels: [String]?
 
-    public init(id: String, provider: String, name: String, reasoning: Bool? = nil, thinking: String? = nil) {
+    public init(
+        id: String, provider: String, name: String, reasoning: Bool? = nil, thinking: String? = nil,
+        thinkingLevels: [String]? = nil
+    ) {
         self.id = id
         self.provider = provider
         self.name = name
         self.reasoning = reasoning
         self.thinking = thinking
+        self.thinkingLevels = thinkingLevels
     }
 }
 
@@ -243,8 +252,12 @@ public struct SendRequest: Codable, Sendable {
 /// POST /api/sessions/:id/model. Only idle chats can change their pinned model.
 public struct ChangeModelRequest: Codable, Sendable {
     public let model: String
+    public let thinking: String?
 
-    public init(model: String) { self.model = model }
+    public init(model: String, thinking: String? = nil) {
+        self.model = model
+        self.thinking = thinking
+    }
 }
 
 public struct ChangedFile: Codable, Identifiable, Equatable, Sendable {

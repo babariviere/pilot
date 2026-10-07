@@ -93,6 +93,8 @@ export interface SessionSummary {
 	pullRequestError?: string;
 	/** Resolved "provider/modelId", once the kernel has started. */
 	model?: string;
+	/** Effective thinking level, once the kernel has started. */
+	thinking?: string;
 	/** Latest context estimate and optional pi-extensions subscription snapshot. */
 	usage?: SessionUsage;
 	error?: string;
@@ -193,6 +195,8 @@ export interface ModelOption {
 	provider: string;
 	name: string;
 	reasoning?: boolean;
+	/** Ordered thinking levels supported by this model (non-reasoning models offer only "off"). */
+	thinkingLevels?: string[];
 	/** Thinking level pinned by the scope pattern ("model:high"). */
 	thinking?: string;
 }
@@ -216,10 +220,12 @@ export interface SpawnRequest {
 	thinking?: string;
 }
 
-/** POST /api/sessions/:id/model. Returns SessionSummary; only idle, non-archived chats may change. */
+/** POST /api/sessions/:id/model. Sets model and optional thinking; only idle, non-archived chats may change. */
 export interface ChangeModelRequest {
 	/** Exact "provider/modelId" from the scoped model catalog. */
 	model: string;
+	/** Explicit supported level, overriding the model's scoped default for this chat. */
+	thinking?: string;
 }
 
 /** POST /api/sessions/:id/messages */

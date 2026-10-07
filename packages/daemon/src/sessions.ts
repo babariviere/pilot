@@ -495,11 +495,12 @@ export class SessionManager {
 		return meta && this.summary(meta);
 	}
 
-	/** A parked idle conversation may reopen, but model changes never interrupt or queue behind work. */
+	/** A parked idle conversation may reopen; configuration changes never interrupt or queue behind work. */
 	async changeModel(
 		id: string,
 		model: string,
 		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
+		thinking?: string,
 	): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		let locked = false;
@@ -512,7 +513,7 @@ export class SessionManager {
 			if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.archivedAt !== undefined)
-				throw new Conflict("Restore the archived session before changing its model");
+				throw new Conflict("Restore the archived session before changing its model or thinking level");
 			if (meta.failure) throw new Conflict("Session is not idle");
 			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
 				throw new Conflict("Session is changing configuration");
@@ -521,8 +522,10 @@ export class SessionManager {
 			locked = true;
 			const name = model.trim();
 			const list = await catalog.list(meta.cwd);
-			if (!list.models.some((entry) => entry.id === name))
-				throw new Error(`Model is not available in this session's scope: ${name}`);
+			const option = list.models.find((entry) => entry.id === name);
+			if (!option) throw new Error(`Model is not available in this session's scope: ${name}`);
+			if (thinking !== undefined && !option.thinkingLevels?.includes(thinking))
+				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
 			const reopening = !this.workers.has(id);
 			const worker = this.ensureWorker(id);
 			await worker.ready;
@@ -531,7 +534,12 @@ export class SessionManager {
 			// its durable inbox before switching, so unknown fresh activity is not proof of busy work.
 			this.assertModelIdle(meta, reopening);
 			try {
-				await worker.request({ type: "changeModel", requestId: randomUUID(), model: name });
+				await worker.request({
+					type: "changeModel",
+					requestId: randomUUID(),
+					model: name,
+					...(thinking !== undefined ? { thinking } : {}),
+				});
 			} catch (error) {
 				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
 				throw error;
@@ -559,7 +567,7 @@ export class SessionManager {
 			this.sending.has(meta.id) ||
 			(worker && (worker.state !== "idle" || (!reopening && (worker.busy ?? true))))
 		)
-			throw new Conflict("Session must be idle with no queued messages before changing its model");
+			throw new Conflict("Session must be idle with no queued messages before changing its model or thinking level");
 	}
 
 	/** Where the session's changes start: its workspace base, else the folder's HEAD. */
@@ -1046,6 +1054,7 @@ export class SessionManager {
 			if (packet.type === "ready") {
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
+				if (packet.thinking !== undefined) meta.thinking = packet.thinking;
 				void this.save(meta);
 			} else if (wasWorking !== packet.working || (changed && packet.completion)) {
 				meta.updatedAt = Date.now();
@@ -1077,6 +1086,7 @@ export class SessionManager {
 						? "failed"
 						: (worker?.state ?? "parked"),
 			...(meta.model ? { model: meta.model } : {}),
+			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(worker?.usage ? { usage: worker.usage } : {}),
 			...(meta.outcome ? { outcome: meta.outcome } : {}),
 			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),

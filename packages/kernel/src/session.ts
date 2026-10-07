@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	AgentDoc,
 	type AgentEventStream,
@@ -232,12 +233,12 @@ export class KernelSession {
 	}
 
 	/** Configure on the durable mutation line, with the same busy/inbox barrier as input admission. */
-	async changeModel(model: string): Promise<void> {
+	async changeModel(model: string, thinking?: string): Promise<void> {
 		if (this.#closing || this.#changingModel || this.#admissions) throw new ConversationBusy(this.conversation.id);
 		if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 		this.#changingModel = true;
 		const previous = this.adapter.session.model!;
-		const thinking = this.adapter.thinkingLevel;
+		const previousThinking = this.adapter.thinkingLevel;
 		const previousSubscription = this.adapter.usage.current.subscription;
 		let providerChanged = false;
 		const configureIdle = (change = false) =>
@@ -256,13 +257,20 @@ export class KernelSession {
 		try {
 			await configureIdle();
 			const choice = await this.adapter.resolveModel(model.trim());
+			if (
+				thinking !== undefined &&
+				!getSupportedThinkingLevels(choice.model).includes(thinking as ModelThinkingLevel)
+			)
+				throw new Error(`Thinking level is not supported by ${model.trim()}: ${thinking}`);
 			await configureIdle();
 			providerChanged = previous.provider !== choice.model.provider;
 			// model_select handlers may publish fresh destination usage during setModel. Clear first,
 			// not afterwards, so that snapshot is included in the modelChanged acknowledgement.
 			if (providerChanged) this.adapter.usage.clearSubscription();
-			await this.adapter.session.setModel(choice.model);
-			if (choice.thinkingLevel) this.adapter.session.setThinkingLevel(choice.thinkingLevel);
+			// A thinking-only edit must not reselect the model or reapply its scoped startup level.
+			if (thinking === undefined || model.trim() !== this.model) await this.adapter.session.setModel(choice.model);
+			const level = thinking ?? choice.thinkingLevel;
+			if (level !== undefined) this.adapter.session.setThinkingLevel(level as ModelThinkingLevel);
 			await configureIdle(true);
 			// Display-only failures must not turn a successfully persisted selection into a rejection.
 			try {
@@ -271,9 +279,9 @@ export class KernelSession {
 				console.warn("pilot: could not refresh context usage", error);
 			}
 		} catch (error) {
-			if (this.adapter.session.model !== previous || this.adapter.thinkingLevel !== thinking) {
-				await this.adapter.session.setModel(previous);
-				this.adapter.session.setThinkingLevel(thinking);
+			if (this.adapter.session.model !== previous) await this.adapter.session.setModel(previous);
+			if (this.adapter.thinkingLevel !== previousThinking) {
+				this.adapter.session.setThinkingLevel(previousThinking);
 			}
 			if (providerChanged) this.adapter.usage.setSubscription(previousSubscription);
 			throw error;

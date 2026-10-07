@@ -131,3 +131,30 @@ test("title generation follows project model scope, ignores its thinking suffix 
 	assert.equal(await catalog.generateTitle(cwd, "task"), undefined);
 	assert.equal(calls.length, 1);
 });
+
+test("model catalog offers only levels supported by each model, including mapped extended levels", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-thinking-models-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const mapped = {
+		...model("mapped", 0, 0),
+		thinkingLevelMap: { off: null, minimal: null, xhigh: "xhigh", max: "max" },
+	};
+	const plain = { ...model("plain", 0, 0), reasoning: false };
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				getAvailable: async () => [cheap, mapped, plain],
+			}) as unknown as ModelRuntime,
+	);
+	const list = await new ModelCatalog(root).list(root);
+	assert.deepEqual(
+		list.models.map(({ id, thinkingLevels }) => ({ id, thinkingLevels })),
+		[
+			{ id: "test/small", thinkingLevels: ["off", "minimal", "low", "medium", "high"] },
+			{ id: "test/mapped", thinkingLevels: ["low", "medium", "high", "xhigh", "max"] },
+			{ id: "test/plain", thinkingLevels: ["off"] },
+		],
+	);
+});

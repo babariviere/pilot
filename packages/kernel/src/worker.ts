@@ -51,7 +51,7 @@ async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdo
 			await send({ type: "accepted", requestId: command.requestId });
 			break;
 		case "changeModel":
-			await session.changeModel(command.model);
+			await session.changeModel(command.model, command.thinking);
 			await send({
 				type: "modelChanged",
 				requestId: command.requestId,
@@ -98,6 +98,7 @@ process.on("message", (message: unknown) => {
 			await send({
 				type: "ready",
 				model: session.model,
+				thinking: session.thinkingLevel,
 				working: session.working,
 				usage: session.usage,
 				...(session.completion ? { completion: session.completion } : {}),
