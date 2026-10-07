@@ -154,6 +154,7 @@ struct ChatView: View {
                         state: composer,
                         working: transcript.working || session.state == "starting",
                         queuedMessages: transcript.queuedMessagesInDeliveryOrder,
+                        completionDirectory: session.cwd,
                         onSend: send,
                         onStop: { model.stopSession(session.id) },
                         onEditQueuedMessage: { id, text in

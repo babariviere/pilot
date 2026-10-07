@@ -29,6 +29,7 @@ let package = Package(
         ),
         .testTarget(name: "PilotCoreTests", dependencies: ["PilotCore"], path: "Tests/PilotCoreTests"),
         .testTarget(name: "PilotUITests", dependencies: ["Pilot"], path: "Tests/PilotUITests"),
+        .testTarget(name: "PilotTests", dependencies: ["Pilot"], path: "Tests/PilotTests"),
     ],
     swiftLanguageModes: [.v5]
 )

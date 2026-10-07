@@ -15,6 +15,11 @@ usage endpoints separately. Without that extension or subscription credentials, 
 See [PLAN.md](PLAN.md) for the spec and milestones (GitHub, Slack and Linear triggers, human-in-the-loop
 specs, hosting).
 
+In the task and chat composers, press Tab while typing a path to complete files or folders. Relative
+paths use the selected project or session's working directory (home if no project is selected).
+Absolute paths and `~/` are supported. For multiple matches, use the native menu's arrow keys and
+Return to choose, or Escape to dismiss. Quote paths containing spaces or escape the spaces with `\`.
+
 ## Architecture
 
 ```text

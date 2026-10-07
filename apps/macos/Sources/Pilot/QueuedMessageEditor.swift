@@ -5,6 +5,7 @@ import SwiftUI
 struct QueuedMessageEditor: View {
     @ObservedObject var state: ComposerState
     let available: Bool
+    let completionDirectory: String
     let onSave: () -> Void
     let onNavigate: (QueueNavigationDirection) -> Bool
     @Environment(\.pilotFonts) private var fonts
@@ -17,7 +18,8 @@ struct QueuedMessageEditor: View {
                 isEditable: !state.savingQueueEdit,
                 focusToken: state.queueFocus,
                 onNavigateQueue: onNavigate,
-                onCancel: state.cancelQueueEdit
+                onCancel: state.cancelQueueEdit,
+                completionDirectory: completionDirectory
             ) { _ in onSave() }
             .frame(height: state.queueEditorHeight)
             .padding(8)

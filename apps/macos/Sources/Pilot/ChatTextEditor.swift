@@ -15,6 +15,7 @@ struct ChatTextEditor: NSViewRepresentable {
     var focusToken: UUID?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Void)?
+    var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -44,6 +45,7 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.string = text
+        textView.completionDirectory = completionDirectory
         textView.onSubmit = { [weak coordinator = context.coordinator] flags in coordinator?.parent.onSubmit(flags) }
         textView.onNavigateQueue = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onNavigateQueue?(direction) ?? false
@@ -71,6 +73,7 @@ struct ChatTextEditor: NSViewRepresentable {
             context.coordinator.lastFocusToken = focusToken
             DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
         }
+        textView.completionDirectory = completionDirectory
         var changed = false
         if textView.string != text {
             textView.string = text
@@ -114,6 +117,14 @@ final class SubmitTextView: NSTextView {
     var onSubmit: ((NSEvent.ModifierFlags) -> Void)?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Bool)?
+    var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+    private var keyFlags: NSEvent.ModifierFlags?
+    private var isReturnKey = false
+    private var handledReturn = false
+
+    private var inputFlags: NSEvent.ModifierFlags {
+        keyFlags ?? NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
+    }
 
     override func keyDown(with event: NSEvent) {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -123,15 +134,67 @@ final class SubmitTextView: NSTextView {
                onNavigateQueue?(event.keyCode == 126 ? .up : .down) == true { return }
             if event.keyCode == 53, onCancel?() == true { return }
         }
-        let isReturn = event.keyCode == 36 || event.keyCode == 76
-        if isReturn, !hasMarkedText() {
-            if flags.contains(.shift) {
-                insertNewlineIgnoringFieldEditor(nil)
-            } else {
-                onSubmit?(flags)
-            }
-            return
-        }
+        keyFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        isReturnKey = (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText()
+        handledReturn = false
+        defer { keyFlags = nil; isReturnKey = false }
+        // Let AppKit handle its completion menu before interpreting Return as a submission.
         super.keyDown(with: event)
+        // Some modified Returns (for example Command-Return) have no text command binding.
+        if isReturnKey, !handledReturn, !hasMarkedText() {
+            if inputFlags.contains(.shift) { super.insertNewlineIgnoringFieldEditor(nil) }
+            else { onSubmit?(inputFlags) }
+        }
+    }
+
+    override func insertNewline(_ sender: Any?) {
+        if !submitReturn() { super.insertNewline(sender) }
+    }
+
+    override func insertNewlineIgnoringFieldEditor(_ sender: Any?) {
+        if !submitReturn() { super.insertNewlineIgnoringFieldEditor(sender) }
+    }
+
+    override func insertLineBreak(_ sender: Any?) {
+        if !submitReturn() { super.insertLineBreak(sender) }
+    }
+
+    private func submitReturn() -> Bool {
+        guard isReturnKey, !hasMarkedText() else { return false }
+        handledReturn = true
+        guard !inputFlags.contains(.shift) else { return false }
+        onSubmit?(inputFlags)
+        return true
+    }
+
+    override func insertCompletion(_ word: String, forPartialWordRange charRange: NSRange, movement: Int, isFinal flag: Bool) {
+        if isReturnKey { handledReturn = true }
+        super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
+    }
+
+    override var rangeForUserCompletion: NSRange {
+        PathCompletion.range(in: string, selection: selectedRange()) ?? NSRange(location: NSNotFound, length: 0)
+    }
+
+    override func completions(forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String]? {
+        index.pointee = -1
+        return PathCompletion.candidates(in: string, range: charRange, directory: completionDirectory)
+    }
+
+    override func insertTab(_ sender: Any?) {
+        let flags = inputFlags
+        if !hasMarkedText(), flags.intersection([.shift, .control, .option, .command]).isEmpty,
+           let range = PathCompletion.range(in: string, selection: selectedRange()) {
+            let candidates = PathCompletion.candidates(in: string, range: range, directory: completionDirectory)
+            if candidates.count == 1 {
+                insertText(candidates[0], replacementRange: range)
+                return
+            }
+            if !candidates.isEmpty {
+                complete(sender)
+                return
+            }
+        }
+        super.insertTab(sender)
     }
 }
