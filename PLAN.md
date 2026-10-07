@@ -122,7 +122,9 @@ Decided: **every session gets its own private clone** (done for manual sessions)
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
-- Start private clones detached from the remote default branch. The agent chooses or creates a descriptive branch or bookmark without a `pilot/` prefix; PR sessions check out the PR head instead.
+- Start private clones detached from the remote default branch. New agent-chosen branches and bookmarks use
+  `<type>/<short-description>` with a conventional task prefix (`feat/`, `fix/`, `docs/`, etc.), never `pilot/`.
+  Existing branch and bookmark names are preserved; PR sessions check out and keep the PR head instead.
 - jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
 - Projects can opt out (`workspace: "direct"`) to run in the folder itself.
 - Archiving retains the workspace and transcript so old chats can be viewed and restored. Workspace

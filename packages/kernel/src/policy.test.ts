@@ -28,10 +28,47 @@ test("prompt describes the workspace and delivery", () => {
 	assert.match(prompt, /private clone of \/src\/app/);
 	assert.match(prompt, /initially detached with no task branch or bookmark/);
 	assert.match(prompt, /Choose or create a descriptive branch or bookmark/);
-	assert.match(prompt, /Do not use a `pilot\/` prefix/);
+	assert.match(prompt, /Do not use a `pilot\/` prefix for new names/);
 	assert.match(prompt, /jj git push --bookmark <name>/);
 	assert.match(prompt, /gh pr create/);
 	assert.match(pilotPrompt({}), /Never post on GitHub/);
+});
+
+test("new Git branches and jj bookmarks require conventional task prefixes", () => {
+	for (const jj of [false, true]) {
+		const prompt = pilotPrompt({ workspace: { source: "/src/app", base: "origin/main", jj } });
+		assert.match(prompt, /New names must use `<type>\/<short-description>`/);
+		assert.match(prompt, /conventional prefix matching the task/);
+		for (const type of [
+			"feat",
+			"fix",
+			"docs",
+			"refactor",
+			"test",
+			"build",
+			"ci",
+			"perf",
+			"style",
+			"chore",
+			"revert",
+		]) {
+			assert.ok(prompt.includes(`\`${type}/\``), `missing ${type}/ prefix for ${jj ? "jj" : "Git"}`);
+		}
+		assert.match(prompt, /`fix\/branch-prefix-policy`/);
+	}
+});
+
+test("existing Git and jj PR heads keep their names even without conventional prefixes", () => {
+	for (const jj of [false, true]) {
+		const prompt = pilotPrompt({
+			workspace: { source: "/src/app", base: "origin/main", branch: "legacy-pr-head", jj },
+		});
+		assert.match(prompt, /branch\/bookmark `legacy-pr-head`/);
+		assert.match(prompt, /Keep an existing branch or bookmark name, including a PR head/);
+		assert.match(prompt, /even if it does not follow this convention/);
+		assert.match(prompt, jj ? /If a new bookmark is needed/ : /If a new branch is needed/);
+		assert.doesNotMatch(prompt, /initially detached/);
+	}
 });
 
 test("Git delivery uses the agent-chosen branch, including on restored sessions", () => {
