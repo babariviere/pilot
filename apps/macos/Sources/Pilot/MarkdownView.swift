@@ -49,6 +49,8 @@ private struct BlockView: View {
             }
         case let .code(language, text):
             CodeBlock(language: language, text: text)
+        case let .diagram(kind, text):
+            InlineDiagramBlock(kind: kind, text: text).id(kind.rawValue + ":" + text)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(.tertiary).frame(width: 3)

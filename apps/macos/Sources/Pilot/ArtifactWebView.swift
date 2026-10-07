@@ -68,6 +68,8 @@ struct ArtifactWebView: NSViewRepresentable {
         let state: ArtifactRenderState
         var libraries: ArtifactLibraryHandler?
         var active = true
+        /// Inline diagrams wait for their asynchronous renderer after navigation finishes.
+        var onLoad: ((WKWebView) -> Void)?
         private var initialNavigation = true
 
         init(state: ArtifactRenderState) { self.state = state }
@@ -105,7 +107,9 @@ struct ArtifactWebView: NSViewRepresentable {
             decisionHandler(response.isForMainFrame && response.response.url?.absoluteString == "about:blank" ? .allow : .cancel)
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { state.loading = false }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if let onLoad { onLoad(webView) } else { state.loading = false }
+        }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
