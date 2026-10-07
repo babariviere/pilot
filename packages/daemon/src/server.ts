@@ -1,0 +1,162 @@
+/** HTTP API and WebSocket event streams. */
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { ClientMessage, ProjectRequest, SendRequest, ServerMessage, SpawnRequest } from "@pilot/protocol";
+import { type WebSocket, WebSocketServer } from "ws";
+import type { DaemonConfig } from "./config.ts";
+import type { ModelCatalog } from "./models.ts";
+import { isAllowedOrigin } from "./origin.ts";
+import { expandHome, type ProjectStore } from "./projects.ts";
+import { NotFound, type SessionManager } from "./sessions.ts";
+
+const MAX_BODY = 1024 * 1024;
+
+class HttpError extends Error {
+	constructor(
+		readonly status: number,
+		message: string,
+	) {
+		super(message);
+	}
+}
+
+function json(res: ServerResponse, status: number, body: unknown): void {
+	res.writeHead(status, { "content-type": "application/json" });
+	res.end(JSON.stringify(body));
+}
+
+async function readJson<T>(req: IncomingMessage): Promise<T> {
+	if (!req.headers["content-type"]?.startsWith("application/json"))
+		throw new HttpError(415, "Expected application/json");
+	let size = 0;
+	const chunks: Buffer[] = [];
+	for await (const chunk of req) {
+		size += (chunk as Buffer).length;
+		if (size > MAX_BODY) throw new HttpError(413, "Request body too large");
+		chunks.push(chunk as Buffer);
+	}
+	try {
+		return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+	} catch {
+		throw new HttpError(400, "Invalid JSON");
+	}
+}
+
+export function createDaemonServer(
+	_config: DaemonConfig,
+	sessions: SessionManager,
+	projects: ProjectStore,
+	models: ModelCatalog,
+): Server {
+	const route = async (req: IncomingMessage, res: ServerResponse) => {
+		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
+		const url = new URL(req.url ?? "/", "http://localhost");
+		const parts = url.pathname.split("/").filter(Boolean);
+		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "models" && parts.length === 2 && req.method === "GET") {
+			const projectId = url.searchParams.get("projectId");
+			const cwd = projectId ? projects.require(projectId).path : expandHome(url.searchParams.get("cwd") || "~");
+			return json(res, 200, await models.list(cwd));
+		}
+		if (parts[1] === "projects" && parts.length === 2) {
+			if (req.method === "GET") return json(res, 200, projects.list());
+			if (req.method === "POST") return json(res, 201, await projects.create(await readJson<ProjectRequest>(req)));
+		}
+		if (parts[1] === "projects" && parts.length === 3) {
+			const id = parts[2]!;
+			if (req.method === "GET") return json(res, 200, projects.require(id));
+			if (req.method === "PATCH")
+				return json(res, 200, await projects.update(id, await readJson<Partial<ProjectRequest>>(req)));
+			if (req.method === "DELETE") {
+				await projects.remove(id);
+				return json(res, 200, { ok: true });
+			}
+		}
+		if (parts[1] === "sessions" && parts.length === 2) {
+			if (req.method === "GET") return json(res, 200, sessions.list());
+			if (req.method === "POST") return json(res, 201, await sessions.spawn(await readJson<SpawnRequest>(req)));
+		}
+		if (parts[1] === "sessions" && parts.length === 3 && req.method === "GET") {
+			const session = sessions.get(parts[2]!);
+			if (!session) throw new HttpError(404, "Unknown session");
+			return json(res, 200, session);
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
+			const id = parts[2]!;
+			if (parts[3] === "messages") {
+				const body = await readJson<SendRequest>(req);
+				await sessions.send(id, body.message, body.mode, body.requestId);
+				return json(res, 202, { ok: true });
+			}
+			if (parts[3] === "stop") {
+				await sessions.stop(id);
+				return json(res, 202, { ok: true });
+			}
+		}
+		throw new HttpError(404, "Not found");
+	};
+
+	const server = createServer((req, res) => {
+		route(req, res).catch((error: unknown) => {
+			const status = error instanceof HttpError ? error.status : error instanceof NotFound ? 404 : 400;
+			const message = error instanceof Error ? error.message : String(error);
+			if (!res.headersSent) json(res, status, { error: message });
+			else res.end();
+		});
+	});
+
+	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+	server.on("upgrade", (req, socket, head) => {
+		const { pathname } = new URL(req.url ?? "/", "http://localhost");
+		if (pathname !== "/api/ws" || !isAllowedOrigin(req.headers.origin)) {
+			socket.destroy();
+			return;
+		}
+		wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+	});
+
+	const clients = new Set<WebSocket>();
+	const send = (ws: WebSocket, message: ServerMessage) => {
+		if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+	};
+	sessions.onChange((session) => {
+		for (const ws of clients) send(ws, { type: "session", session });
+	});
+	projects.onChange((list) => {
+		for (const ws of clients) send(ws, { type: "projects", projects: list });
+	});
+
+	wss.on("connection", (ws: WebSocket) => {
+		clients.add(ws);
+		const subscriptions = new Map<string, () => void>();
+		send(ws, { type: "projects", projects: projects.list() });
+		send(ws, { type: "sessions", sessions: sessions.list() });
+		ws.on("message", (raw) => {
+			let message: ClientMessage;
+			try {
+				message = JSON.parse(String(raw)) as ClientMessage;
+			} catch {
+				return send(ws, { type: "error", message: "Invalid JSON" });
+			}
+			const { sessionId } = message;
+			if (message.type === "subscribe" && !subscriptions.has(sessionId)) {
+				try {
+					subscriptions.set(
+						sessionId,
+						sessions.subscribe(sessionId, (events) => send(ws, { type: "events", sessionId, events })),
+					);
+				} catch (error) {
+					send(ws, { type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
+				}
+			} else if (message.type === "unsubscribe") {
+				subscriptions.get(sessionId)?.();
+				subscriptions.delete(sessionId);
+			}
+		});
+		ws.on("close", () => {
+			clients.delete(ws);
+			for (const unsubscribe of subscriptions.values()) unsubscribe();
+		});
+	});
+
+	return server;
+}

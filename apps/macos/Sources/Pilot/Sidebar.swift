@@ -1,0 +1,194 @@
+import AppKit
+import PilotCore
+import SwiftUI
+
+/// Sessions grouped by project, newest first.
+struct SessionSidebar: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var client: PilotClient
+
+    var body: some View {
+        let known = Set(client.projects.map(\.id))
+        let unassigned = client.sessions.filter { $0.projectId.map { !known.contains($0) } ?? true }
+        List(selection: $model.selectedSessionId) {
+            ForEach(client.projects) { project in
+                let sessions = client.sessions.filter { $0.projectId == project.id }
+                Section(isExpanded: expanded(project.id)) {
+                    ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
+                    if sessions.isEmpty {
+                        Text("No sessions").font(.caption).foregroundStyle(.tertiary)
+                    }
+                } header: {
+                    ProjectHeader(project: project, working: sessions.filter(\.isWorking).count) {
+                        model.newSession(in: project.id)
+                    }
+                }
+            }
+            if !unassigned.isEmpty {
+                Section(client.projects.isEmpty ? "Sessions" : "Other") {
+                    ForEach(unassigned) { SessionRow(session: $0).tag($0.id) }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
+        .background(Theme.sidebar)
+        .overlay {
+            if client.projects.isEmpty, client.sessions.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "folder.badge.plus").font(.title2).foregroundStyle(.secondary)
+                    Text("Add a project to get started").font(.callout).foregroundStyle(.secondary)
+                    Button("Add Project…") { model.addProject() }
+                }
+                .padding()
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 6) {
+                SidebarButton(title: "New session", icon: "square.and.pencil", selected: model.selectedSessionId == nil) {
+                    model.newSession(in: model.draftProjectId)
+                }
+                Button { model.addProject() } label: {
+                    Image(systemName: "folder.badge.plus").frame(width: 28, height: 28)
+                }
+                .buttonStyle(.borderless)
+                .help("Add Project… (⇧⌘O)")
+            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            ConnectionFooter(client: client)
+        }
+    }
+
+    private func expanded(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { !model.collapsedProjects.contains(id) },
+            set: { open in
+                if open { model.collapsedProjects.remove(id) } else { model.collapsedProjects.insert(id) }
+            }
+        )
+    }
+}
+
+private struct SidebarButton: View {
+    let title: String
+    let icon: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label(title, systemImage: icon)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.subtleFill : Color.clear))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ProjectHeader: View {
+    let project: Project
+    let working: Int
+    let onNew: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(project.name)
+            if working > 0 {
+                Text("\(working)")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                    .foregroundStyle(Color.accentColor)
+            }
+            Spacer()
+            Button(action: onNew) { Image(systemName: "plus") }
+                .buttonStyle(.borderless)
+                .help("New session in \(project.name)")
+        }
+        .contextMenu {
+            Button("New Session", action: onNew)
+            Button("Open in Finder") { NSWorkspace.shared.open(URL(filePath: project.path)) }
+            Divider()
+            Button("Remove Project", role: .destructive) {
+                Task { try? await AppModel.shared.client.deleteProject(project.id) }
+            }
+        }
+        .help(project.path.abbreviatingHome)
+    }
+}
+
+struct SessionRow: View {
+    let session: SessionSummary
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            SessionStatusIcon(state: session.state)
+                .frame(width: 12)
+            Text(session.title)
+                .font(.system(size: 13))
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Text(relative(session.updatedAt))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .monospacedDigit()
+        }
+        .padding(.vertical, 2)
+        .help(session.cwd.abbreviatingHome)
+    }
+
+    private func relative(_ milliseconds: Double) -> String {
+        let seconds = max(0, Date().timeIntervalSince1970 - milliseconds / 1000)
+        switch seconds {
+        case ..<60: return "now"
+        case ..<3600: return "\(Int(seconds / 60))m"
+        case ..<86400: return "\(Int(seconds / 3600))h"
+        case ..<604_800: return "\(Int(seconds / 86400))d"
+        default: return "\(Int(seconds / 604_800))w"
+        }
+    }
+}
+
+struct SessionStatusIcon: View {
+    let state: String
+
+    var body: some View {
+        switch state {
+        case "working", "starting":
+            ProgressView().controlSize(.mini)
+        case "failed":
+            Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).font(.system(size: 11))
+        default:
+            Circle().fill(Color.secondary.opacity(0.35)).frame(width: 6, height: 6)
+        }
+    }
+}
+
+private struct ConnectionFooter: View {
+    @ObservedObject var client: PilotClient
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(client.connected ? Color.green : Color.orange)
+                .frame(width: 6, height: 6)
+            Text(client.connected ? "pilotd connected" : "Connecting to pilotd…")
+            Spacer()
+            if client.workingCount > 0 {
+                Text("\(client.workingCount) working")
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+}

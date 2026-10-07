@@ -1,0 +1,108 @@
+import AppKit
+import SwiftUI
+
+/// Multi-line text input that distinguishes Return, Option-Return and Shift-Return, which
+/// SwiftUI's TextField cannot do reliably. Shift-Return inserts a line; the others submit.
+struct ChatTextEditor: NSViewRepresentable {
+    @Binding var text: String
+    @Binding var height: CGFloat
+    var font: NSFont
+    var minLines = 1
+    var maxLines = 10
+    var focusOnAppear = true
+    var onSubmit: (NSEvent.ModifierFlags) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSScrollView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+
+        let textView = SubmitTextView()
+        textView.delegate = context.coordinator
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.drawsBackground = false
+        textView.font = font
+        textView.textColor = .labelColor
+        textView.textContainerInset = .zero
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainer?.widthTracksTextView = true
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.string = text
+        textView.onSubmit = { [weak coordinator = context.coordinator] flags in coordinator?.parent.onSubmit(flags) }
+        scroll.documentView = textView
+
+        if focusOnAppear {
+            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+        }
+        context.coordinator.recalculate(textView)
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let textView = scroll.documentView as? SubmitTextView else { return }
+        var changed = false
+        if textView.string != text {
+            textView.string = text
+            changed = true
+        }
+        if textView.font != font {
+            textView.font = font
+            changed = true
+        }
+        if changed { context.coordinator.recalculate(textView) }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: ChatTextEditor
+
+        init(parent: ChatTextEditor) { self.parent = parent }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            parent.text = textView.string
+            recalculate(textView)
+        }
+
+        func recalculate(_ textView: NSTextView) {
+            guard let layout = textView.layoutManager, let container = textView.textContainer else { return }
+            layout.ensureLayout(for: container)
+            let line = layout.defaultLineHeight(for: parent.font)
+            let used = layout.usedRect(for: container).height
+            let height = min(max(used, line * CGFloat(parent.minLines)), line * CGFloat(parent.maxLines)).rounded(.up)
+            if abs(parent.height - height) > 0.5 {
+                let binding = parent.$height
+                DispatchQueue.main.async { binding.wrappedValue = height }
+            }
+        }
+    }
+}
+
+final class SubmitTextView: NSTextView {
+    var onSubmit: ((NSEvent.ModifierFlags) -> Void)?
+
+    override func keyDown(with event: NSEvent) {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        if isReturn, !hasMarkedText() {
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if flags.contains(.shift) {
+                insertNewlineIgnoringFieldEditor(nil)
+            } else {
+                onSubmit?(flags)
+            }
+            return
+        }
+        super.keyDown(with: event)
+    }
+}

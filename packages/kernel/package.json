@@ -1,0 +1,17 @@
+{
+	"name": "@pilot/kernel",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./worker": "./src/worker.ts"
+	},
+	"dependencies": {
+		"@earendil-works/chord": "1.0.4",
+		"@earendil-works/pi-ai": "1.0.4",
+		"@earendil-works/pi-coding-agent": "1.0.4",
+		"@earendil-works/pi-durable": "1.0.4",
+		"@pilot/protocol": "0.1.0"
+	}
+}

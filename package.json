@@ -1,0 +1,31 @@
+{
+	"name": "pilot",
+	"version": "0.1.0",
+	"private": true,
+	"description": "Background pi agents: durable sessions, a native macOS app, and triggers from GitHub, Slack and Linear.",
+	"type": "module",
+	"license": "MIT",
+	"author": "babariviere",
+	"workspaces": [
+		"packages/*"
+	],
+	"engines": {
+		"node": ">=24.0.0"
+	},
+	"scripts": {
+		"dev:daemon": "npm run dev -w @pilot/daemon",
+		"start": "npm run start -w @pilot/daemon",
+		"app:macos": "apps/macos/scripts/bundle.sh",
+		"typecheck": "tsgo -p tsconfig.json",
+		"test": "node --import tsx --test 'packages/*/src/**/*.test.ts'",
+		"lint": "biome lint .",
+		"fmt": "biome format --write .",
+		"fmt:check": "biome format ."
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.13",
+		"@types/node": "^24.0.0",
+		"@typescript/native-preview": "latest",
+		"tsx": "^4.23.15"
+	}
+}

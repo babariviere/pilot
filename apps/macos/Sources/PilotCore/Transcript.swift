@@ -1,0 +1,205 @@
+import Foundation
+
+/// One content block of a pi-ai message.
+public enum Block: Equatable, Sendable {
+    case text(String)
+    case thinking(String)
+    case toolCall(id: String, name: String, arguments: JSONValue)
+    case image
+    case other
+
+    init(json: JSONValue) {
+        switch json["type"]?.string {
+        case "text": self = .text(json["text"]?.string ?? "")
+        case "thinking": self = .thinking(json["thinking"]?.string ?? "")
+        case "toolCall":
+            self = .toolCall(
+                id: json["id"]?.string ?? "",
+                name: json["name"]?.string ?? "tool",
+                arguments: json["arguments"] ?? .object([:])
+            )
+        case "image": self = .image
+        default: self = .other
+        }
+    }
+}
+
+public struct ChatMessage: Equatable, Sendable {
+    public var role: String
+    public var blocks: [Block]
+    public var toolCallId: String?
+    public var isError: Bool
+    public var stopReason: String?
+    public var errorMessage: String?
+
+    public init(json: JSONValue) {
+        role = json["role"]?.string ?? "unknown"
+        if let text = json["content"]?.string {
+            blocks = [.text(text)]
+        } else {
+            blocks = (json["content"]?.array ?? []).map(Block.init(json:))
+        }
+        toolCallId = json["toolCallId"]?.string
+        isError = json["isError"]?.bool ?? false
+        stopReason = json["stopReason"]?.string
+        errorMessage = json["errorMessage"]?.string
+    }
+
+    public var text: String {
+        blocks.compactMap { block in
+            switch block {
+            case let .text(text): text
+            case .image: "[image]"
+            default: nil
+            }
+        }.joined()
+    }
+}
+
+/// A committed transcript entry (pi-durable `EntryRecord`).
+public struct Entry: Identifiable, Equatable, Sendable {
+    public let id: Int
+    public let kind: String
+    public let messages: [ChatMessage]
+
+    public init?(json: JSONValue) {
+        guard let id = json["id"]?.int else { return nil }
+        self.id = id
+        kind = json["kind"]?.string ?? ""
+        messages = (json["model"]?.array ?? []).map(ChatMessage.init(json:))
+    }
+}
+
+public struct LiveTool: Equatable, Sendable {
+    public var callId: String
+    public var name: String
+    public var output: String
+    public var status: String
+}
+
+/// Folds pi-durable agent events into a renderable transcript.
+public struct Transcript: Equatable, Sendable {
+    public var entries: [Entry] = []
+    /// In-flight assistant message, until its entry is committed.
+    public var streaming: ChatMessage?
+    public var tools: [String: LiveTool] = [:]
+    public var working = false
+    public var queued = 0
+    public var retry: String?
+    public var error: String?
+
+    public init() {}
+
+    /// Tool results by call ID; they render inside their call's card.
+    public var results: [String: ChatMessage] {
+        var results: [String: ChatMessage] = [:]
+        for entry in entries {
+            for message in entry.messages where message.role == "toolResult" {
+                if let id = message.toolCallId { results[id] = message }
+            }
+        }
+        return results
+    }
+
+    public mutating func apply(_ events: [JSONValue]) {
+        for event in events { apply(event) }
+    }
+
+    public mutating func apply(_ event: JSONValue) {
+        switch event["type"]?.string {
+        case "snapshot":
+            self = Transcript()
+            entries = (event["entries"]?.array ?? []).compactMap(Entry.init(json:)).sorted { $0.id < $1.id }
+            if let message = event["generation"]?["message"], !message.isNull { streaming = ChatMessage(json: message) }
+            for tool in event["tools"]?.array ?? [] {
+                guard let id = tool["callId"]?.string else { continue }
+                tools[id] = LiveTool(
+                    callId: id,
+                    name: tool["name"]?.string ?? "tool",
+                    output: tool["output"]?.string ?? "",
+                    status: tool["status"]?.string ?? "pending"
+                )
+            }
+            working = event["run"].map { !$0.isNull } ?? false
+            queued = event["inbox"]?.array?.count ?? 0
+            retry = event["generation"]?["retry"]?["error"]?.string
+        case "run_start":
+            working = true
+            error = nil
+        case "run_end":
+            working = false
+            streaming = nil
+            retry = nil
+        case "message_start":
+            if let message = event["message"], message["role"]?.string == "assistant" {
+                streaming = ChatMessage(json: message)
+            }
+        case "message_update":
+            guard var message = streaming else { return }
+            for change in event["changes"]?.array ?? [] { Self.apply(change, to: &message) }
+            streaming = message
+            retry = nil
+        case "message_end":
+            streaming = nil
+            if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
+        case "entry_appended":
+            if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
+        case "tool_execution_start":
+            guard let id = event["toolCallId"]?.string else { return }
+            tools[id] = LiveTool(callId: id, name: event["toolName"]?.string ?? "tool", output: "", status: "running")
+        case "tool_execution_update":
+            guard let id = event["toolCallId"]?.string, var tool = tools[id], let output = event["output"] else { return }
+            if let set = output["set"]?.string {
+                tool.output = set
+            } else {
+                let trim = min(output["trimStart"]?.int ?? 0, tool.output.count)
+                tool.output = String(tool.output.dropFirst(trim)) + (output["append"]?.string ?? "")
+            }
+            tools[id] = tool
+        case "tool_execution_end":
+            guard let id = event["toolCallId"]?.string else { return }
+            tools[id]?.status = "done"
+            if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
+        case "inbox_update":
+            queued = event["items"]?.array?.count ?? 0
+        case "auto_retry_start":
+            retry = event["errorMessage"]?.string
+        case "auto_retry_end":
+            retry = nil
+        case "task_failed":
+            error = event["message"]?.string
+        default:
+            break
+        }
+    }
+
+    private mutating func add(_ entry: Entry) {
+        guard !entries.contains(where: { $0.id == entry.id }) else { return }
+        entries.append(entry)
+        if let last = entries.dropLast().last, last.id > entry.id { entries.sort { $0.id < $1.id } }
+    }
+
+    private static func apply(_ change: JSONValue, to message: inout ChatMessage) {
+        if change["type"]?.string == "message", let full = change["message"] {
+            message = ChatMessage(json: full)
+            return
+        }
+        guard let index = change["contentIndex"]?.int, index >= 0 else { return }
+        while message.blocks.count <= index { message.blocks.append(.other) }
+        switch change["type"]?.string {
+        case "text_start", "thinking_start", "toolcall_start", "block":
+            if let block = change["block"] { message.blocks[index] = Block(json: block) }
+        case "text_delta":
+            if case let .text(text) = message.blocks[index] {
+                message.blocks[index] = .text(text + (change["delta"]?.string ?? ""))
+            }
+        case "thinking_delta":
+            if case let .thinking(text) = message.blocks[index] {
+                message.blocks[index] = .thinking(text + (change["delta"]?.string ?? ""))
+            }
+        default:
+            // toolcall_delta carries partial JSON arguments; the final "block" change replaces it.
+            break
+        }
+    }
+}

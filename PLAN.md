@@ -1,0 +1,251 @@
+# Pilot plan
+
+Status: draft. Owner: babariviere. This document is the product and technical spec for Pilot, and the
+milestone plan that gets it to background-agents.com.
+
+## 1. Vision
+
+Pilot runs pi agents in the background on durable sessions, and brings work to them from where it
+happens: GitHub, Slack and Linear, plus anything you start yourself. Agents fix what they can, ask when
+they cannot decide, and hand back reviewable results (pull requests, specs, replies). You supervise from a
+native macOS app, or from wherever the work came from.
+
+### Goals
+
+- Start, steer and stop regular pi agents from a native app, with your pi setup (pi-extensions) by default.
+- Fix CI failures and review comments on pull requests, when the fix makes sense.
+- Fix bug reports posted in Slack, when they can be reproduced and fixed.
+- Spec Linear tickets in a loop with a human: the agent asks questions, the human answers, the spec converges.
+- Give every session a real terminal (libghostty) in its working copy.
+- Survive restarts and crashes without losing or duplicating work.
+
+### Non-goals (for now)
+
+- Auto-merging anything. Pilot proposes; humans merge.
+- Replacing CI, code review or the issue tracker. Pilot works inside them.
+- Cross-platform desktop apps. macOS first; the daemon stays portable.
+
+## 2. Principles
+
+1. **Durable by default.** Every admission, answer and external effect is committed before it is shown or
+   acted on (pi-durable). Restarts resume work; retries are idempotent by request ID.
+2. **Bring the conversation to the human.** Questions and results go back to the source thread (PR,
+   Slack thread, Linear issue). The app is the cockpit, not the only door.
+3. **Decline is a valid outcome.** Every automated trigger starts with triage, and "this does not make
+   sense, here is why" is a first-class result.
+4. **Least privilege per trigger.** External text is untrusted input. Permissions come from the trigger's
+   policy, never from the prompt.
+5. **Local first, hostable later.** One daemon model for a laptop and a server. Hosting adds auth,
+   tenancy and webhooks, not a second architecture.
+
+## 3. Architecture
+
+```text
+ Pilot.app (SwiftUI, libghostty)        GitHub   Slack   Linear   schedule
+        │ HTTP + WS (loopback)              │       │       │        │
+        ▼                                   ▼       ▼       ▼        ▼
+ ┌──────────────────────────── pilotd (launchd agent) ──────────────────────────┐
+ │ API · session registry · trigger sources · policy · workspaces · notifier    │
+ └──────────────┬───────────────────────────────────────────────────────────────┘
+                │ fork + IPC, one worker per session
+                ▼
+        kernel worker: pi-durable Harness (SQLite) + native pi kernel (extensions, tools, auth)
+```
+
+- **pilotd** (`packages/daemon`): owns sessions, trigger sources and policies. Runs as a per-user launchd
+  agent, independent of the app.
+- **kernel** (`packages/kernel`): one process per session. pi-durable owns the transcript and model loop;
+  the native pi kernel provides tools, prompts, extension hooks and provider auth from `~/.pi/agent`.
+- **Pilot.app** (`apps/macos`): session list, native chat, per-session terminal, menu bar, notifications.
+  Installs and supervises the launch agent. Closing or quitting the app never stops agents.
+- **protocol** (`packages/protocol`, mirrored in `PilotCore`): HTTP commands and WS event streams.
+
+## 4. Core concepts
+
+| Concept | Definition |
+| --- | --- |
+| **Session** | One durable pi conversation with its working copy, origin, policy and state. |
+| **Origin** | What created the session: `manual`, `github.ci`, `github.review`, `slack.bug`, `linear.spec`, `schedule`. |
+| **Binding** | Link between a session and an external thread (PR, check suite, Slack thread, Linear issue). Unique per thread, so new events steer the same session instead of spawning duplicates. |
+| **Trigger source** | Adapter that turns external events into admissions: `spawn(origin, binding, brief)` or `send(session, message)`. Polling or webhooks. |
+| **Policy** | Per-origin permissions: repositories, branches it may push, sandbox floor, tools, budget, auto-reply rights. |
+| **Workspace** | Isolated working copy per session (jj workspace or private clone), created by pilotd, never by the agent. |
+| **Human gate** | A durable pause where the agent waits for a human answer or approval (`waiting` state). |
+| **Outcome** | Structured end of a run: `fixed` (with PR/commit), `declined` (with reason), `needs-human`, `failed`. |
+
+### Session states
+
+`parked → starting → working ⇄ waiting → idle`, plus `failed`. `waiting` is new: the run is parked on a
+human gate and costs nothing until answered.
+
+## 5. Shared machinery
+
+### 5.1 Human gate (`ask_human` tool)
+
+A durable pilot tool available to every session:
+
+- `ask_human({ questions: [{ id, text, options? }], blocking: boolean })`.
+- The tool commits the questions, publishes them to the binding's channel (app, PR comment, Slack thread,
+  Linear comment) and parks as a waiting task. No model tokens are spent while waiting.
+- Answers arrive from any channel through `POST /api/sessions/:id/answers` (or a trigger source) and
+  complete the task; the tool returns the answers to the model.
+- Replay-safe: question IDs and channel message IDs are stored, so a restart never double-posts.
+- Timeouts per policy: remind, then end with `needs-human`.
+
+### 5.2 Triage step
+
+Every automated origin starts with a cheap, read-only triage turn that must produce one of
+`proceed`, `decline(reason)`, `ask(questions)`. Only `proceed` unlocks write tools for that run.
+
+### 5.3 Outcome reporter
+
+A checkpointed task posts the outcome back to the binding (exactly one report per outcome ID) and records
+it in the session. Reuses the reporter pattern from pi-extensions subagents.
+
+### 5.4 Workspaces
+
+- One workspace per session under `$PILOT_HOME/workspaces/<session>`, from a configured repository
+  (jj workspace when the repository is jj, else a git worktree or clone).
+- Branch naming `pilot/<origin>/<short-id>`; PR sessions check out the PR head instead.
+- Released when the session is archived; never deleted while a PR is open.
+
+### 5.5 Policy and safety
+
+- External text (CI logs, review comments, Slack messages, Linear issues) is framed as untrusted data in
+  the brief, never as instructions with authority.
+- Sandbox floor per origin (pi-extensions `sandbox`): writes only inside the workspace; network allowlist.
+- Push rules: only to the session's own branch or the PR branch under review; never default branches;
+  never force-push others' commits; never merge.
+- Allowlists: repositories, Slack channels, Linear teams, GitHub authors whose events may trigger work.
+- Loop prevention: ignore events authored by Pilot's own identity; cap fix attempts per PR and per day.
+- Budgets: token and wall-clock limits per session and per origin per day; stop and report when exceeded.
+- Secrets via fnox (pi-extensions `secrets`); credentials never enter transcripts.
+- Audit log: every external write (push, comment, message) with session, policy and timestamp.
+
+### 5.6 Configuration
+
+`~/.config/pilot/config.toml` (hot-reloaded): repositories, sources, policies, budgets, identities.
+Credentials resolve through fnox references.
+
+## 6. Integrations
+
+### 6.1 Manual sessions (M1)
+
+Start from the app with a directory, optional model, and task. Chat, steer, follow up, stop, terminal.
+
+### 6.2 GitHub: CI failures and review comments (M3)
+
+**Triggers**
+
+- `check_suite` / `workflow_run` concluded `failure` on a PR in an allowlisted repository.
+- Review comments and reviews with `changes_requested` on a PR, from allowlisted authors, optionally only
+  when mentioning `@pilot` or labelled `pilot`.
+
+**Sources.** Local: poll with `gh api` (ETag-aware) every N minutes. Hosted: GitHub App webhooks.
+
+**Flow**
+
+1. Bind to the PR (`owner/repo#number`). Existing binding: steer the same session with the new event.
+2. Workspace on the PR head.
+3. Triage: CI failure caused by this PR? flaky? infra? Review comment actionable, correct, in scope?
+4. Fix, run the relevant checks locally, push one focused commit to the PR branch.
+5. Report: reply to each addressed comment (what changed, commit link); for declined comments, explain why;
+   CI fixes get one summary comment. Resolve threads only when policy allows.
+
+**Reuse.** pi-extensions `pr` (`/review-comments`, `/autofix`) logic and prompts.
+
+**Done when.** A failing PR gets a fix commit or an explanation within one poll interval plus run time; no
+duplicate comments across restarts; Pilot never reacts to its own commits or comments.
+
+### 6.3 Slack: bug reports (M5)
+
+**Triggers.** Messages in allowlisted channels that mention `@pilot`, or a `:pilot:` reaction on a message.
+
+**Source.** Socket Mode (works locally, no public URL); Events API when hosted.
+
+**Flow**
+
+1. Bind to the thread (`channel/thread_ts`). Replies in the thread steer the session.
+2. Triage: is this a bug? which repository? enough information to reproduce? Otherwise `ask_human` in
+   the thread.
+3. Reproduce (test or script), fix in a workspace branch, open a draft PR.
+4. Report in the thread: root cause, PR link, how it was verified. Or `declined` with what is missing.
+
+**Done when.** A reported bug yields a reproduction plus draft PR, a precise question, or a decline, in the
+same thread; a thread never spawns two sessions.
+
+### 6.4 Linear: spec loop (M4)
+
+**Triggers.** Issue assigned to the Pilot user, or labelled `pilot:spec`, in allowlisted teams.
+
+**Source.** Linear webhooks when hosted; polling the Linear API locally.
+
+**Flow**
+
+1. Bind to the issue. Read the issue, linked issues, relevant code (read-only workspace).
+2. Draft a spec as a Linear document (or a section in the description): problem, scope, non-goals,
+   approach, acceptance criteria, risks, open questions.
+3. `ask_human` with the open questions as a Linear comment (numbered, with options when possible).
+4. Human replies in comments; each reply resumes the session, which updates the spec and asks follow-ups.
+5. Converges when no blocking questions remain: mark the spec ready, move the issue to the configured
+   state, optionally propose sub-issues (created only after approval).
+6. Optional handoff: an "implement" label starts an implementation session bound to the same issue.
+
+**Done when.** A labelled issue gets a spec draft and questions; answers update the spec without losing
+earlier decisions; the loop survives days of waiting with zero idle cost.
+
+### 6.5 Scheduled and night runs (later)
+
+Cron-like schedules and night-mode style batches (reuse the pi-extensions `night-mode` ledger and
+reports), producing a morning summary in the app and Slack.
+
+## 7. App (macOS)
+
+- Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
+- Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop.
+- Questions panel: answer `ask_human` gates inline.
+- Terminal: libghostty per session (⌘J). M2 moves PTYs into pilotd and streams them to libghostty's
+  in-memory backend, so terminals survive app restarts and work against remote daemons.
+- Menu bar: counts per state, quick open, daemon control. Notifications for finished, failed and waiting.
+
+## 8. API additions
+
+| Endpoint / message | Purpose |
+| --- | --- |
+| `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
+| `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
+| `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
+| `POST /api/sessions/:id/archive` | Release workspace, hide from lists |
+| `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
+| `GET /api/audit` | External effects log |
+| WS `questions` | Push new questions to clients |
+
+## 9. Milestones
+
+| Milestone | Scope | Definition of done |
+| --- | --- | --- |
+| **M1 Spawn and chat** | Daemon, kernel, native app with chat, projects, launchd agent, notifications | Spawn, steer, stop from the app; sessions survive daemon restarts; app quit leaves agents running |
+| **M2 Terminal** | libghostty pane (done, app-owned PTY), then daemon-owned PTYs | Terminal per session in its workspace; with daemon PTYs, reattach after app restart |
+| **M3 Foundations + GitHub** | Origins, bindings, policies, workspaces, triage, outcome reporter, audit log, config file; GitHub source | §6.2 done-when, with a dry-run mode that comments nothing |
+| **M4 Linear spec loop** | `ask_human`, `waiting` state, questions panel; Linear source | §6.4 done-when |
+| **M5 Slack bugs** | Slack Socket Mode source | §6.3 done-when |
+| **M6 Hosted** | Authenticated remote daemon, GitHub App, webhooks, multi-user tenancy, server workspaces | background-agents.com runs the same flows for a team |
+
+## 10. Risks
+
+- **Prompt injection from external text.** Mitigated by triage gating, policy-only permissions, sandbox
+  floors and push rules. Needs adversarial tests per origin.
+- **Noise.** Agents that comment too much get muted. Default to fewer, denser comments; dry-run first.
+- **libghostty ABI churn.** Pinned release, vendored; audit each bump.
+- **pi SDK coupling.** The native adapter mirrors pi internals (ported from pi-extensions subagents).
+  Track pi releases; keep the adapter small and tested.
+- **Replay-unsafe tools.** A crash mid-tool yields an interrupted result; external effects go through the
+  outcome reporter, which is idempotent.
+
+## 11. Open questions
+
+1. Workspace source of truth: jj workspaces in your checkouts, or private clones per session?
+2. Identity: a dedicated GitHub/Slack/Linear bot user, or your own account with a `[pilot]` marker?
+3. Should declined review comments get a reply by default, or only a note in the app?
+4. Where do specs live: Linear documents, the issue description, or a repo file linked from the issue?
+5. Hosted tenancy: one daemon per user, or a shared scheduler with per-tenant workers?

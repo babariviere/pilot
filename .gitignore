@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.build/
+.swiftpm/
+apps/macos/build/
+apps/macos/Vendor/
+.pi/
+*.log
+.DS_Store
