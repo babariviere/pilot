@@ -51,7 +51,7 @@ Mermaid example: libraries:["mermaid"], source:'<pre class="mermaid">graph TD; A
 React: source is a JSX/TSX module with a default-export component. Allowed imports only: react, react-dom (including react-dom/client), mermaid, echarts, motion (including motion/react), and optional d3 or three. React and ReactDOM mounting are provided; do not mount the component yourself.
 React example: {title:"Counter",kind:"react",source:'import {useState} from "react"; export default function App(){const [n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>Count: {n}</button>}'}.
 Available pinned offline libraries: ${JSON.stringify(artifactLibraries)}.
-Use artifact_preview to inspect screenshots and diagnostics before publishing. Update an existing artifact instead of creating duplicates; get its current editable source first and pass expectedRevision to avoid overwriting a newer revision.`;
+Use artifact({action:"preview",...}) to inspect screenshots and diagnostics before publishing. Update an existing artifact instead of creating duplicates; get its current editable source first and pass expectedRevision to avoid overwriting a newer revision.`;
 
 export interface ArtifactToolOptions {
 	store: Pick<ArtifactStore, "create" | "update" | "get" | "list">;
@@ -108,119 +108,105 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		}
 		return dataResult({ artifact });
 	};
-	const common = {
-		executionMode: "sequential" as const,
-		annotations: { openWorldHint: false, destructiveHint: false },
-	};
 	return [
 		defineTool({
-			...common,
-			name: "artifact_create",
-			label: "Create artifact",
-			description: `Publish a new versioned HTML or React artifact in this Pilot session. Returns a compact artifact reference, not compiled HTML. ${authoring}`,
-			promptSnippet: "Publish an offline HTML or React artifact",
-			parameters: Type.Object(writeProperties),
-			outputSchema: referenceSchema,
-			async execute(_id, write, signal) {
-				signal?.throwIfAborted();
-				checkSource(write);
-				return published(await store.create(write));
-			},
-		}),
-		defineTool({
-			...common,
-			name: "artifact_update",
-			label: "Update artifact",
-			description: `Publish a new revision of an existing artifact. Supply the complete replacement title, kind, source and libraries, not a patch. expectedRevision rejects stale updates. Returns a compact artifact reference. ${authoring}`,
+			name: "artifact",
+			label: "Artifact",
+			description: `Publish, inspect and preview session-local offline artifacts.
+Actions:
+- create: publish a new artifact with title, kind, source and optional libraries. Returns a compact pinned reference, not compiled HTML.
+- update: publish a revision by id with the complete replacement title, kind, source and libraries, not a patch. Optional expectedRevision rejects stale updates. Returns a compact pinned reference.
+- get: read editable source and metadata by id, optionally at a historical revision. Omitting revision reads the latest. Never returns compiled HTML. Use before updating and pass its revision as expectedRevision.
+- list: list current session artifact summaries without source or compiled HTML.
+- preview: render draft title, kind, source and optional libraries to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. Requires Playwright Chromium; if missing, install with npm run artifacts:browser (npx playwright install chromium). In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.
+${authoring}`,
+			promptSnippet: "Publish, inspect or preview offline HTML or React artifacts",
+			executionMode: "sequential",
+			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
-				id: Type.String(),
-				...writeProperties,
+				action: StringEnum(["create", "update", "get", "list", "preview"] as const),
+				id: Type.Optional(Type.String({ description: "Artifact ID, required for get and update." })),
+				title: Type.Optional(writeProperties.title),
+				kind: Type.Optional(kind),
+				source: Type.Optional(writeProperties.source),
+				libraries: writeProperties.libraries,
 				expectedRevision: Type.Optional(revisionNumber),
-			}),
-			outputSchema: referenceSchema,
-			async execute(_callId, { id, expectedRevision, ...write }, signal) {
-				signal?.throwIfAborted();
-				checkSource(write);
-				return published(await store.update(id, write, expectedRevision));
-			},
-		}),
-		defineTool({
-			...common,
-			name: "artifact_get",
-			label: "Get artifact",
-			description:
-				"Get editable artifact source and metadata by ID, optionally at a historical revision. Omitting revision reads the latest. Never returns compiled HTML. Use this before updating and pass its revision as expectedRevision.",
-			annotations: { ...common.annotations, readOnlyHint: true },
-			parameters: Type.Object({ id: Type.String(), revision: Type.Optional(revisionNumber) }),
-			outputSchema: Type.Object({
-				artifact: Type.Object({ ...summaryProperties, source: Type.String(), libraries: Type.Array(library) }),
-			}),
-			async execute(_callId, { id, revision }, signal) {
-				signal?.throwIfAborted();
-				const value = await store.get(id, revision);
-				if (!value) throw new Error(`Artifact not found: ${id}`);
-				return dataResult({ artifact: { ...summary(value), source: value.source, libraries: value.libraries } });
-			},
-		}),
-		defineTool({
-			...common,
-			name: "artifact_list",
-			label: "List artifacts",
-			description:
-				"List current artifact summaries in this Pilot session, without source or compiled HTML. Use artifact_get for editable source or historical revisions.",
-			annotations: { ...common.annotations, readOnlyHint: true },
-			parameters: Type.Object({}),
-			outputSchema: Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
-			async execute(_callId, _params, signal) {
-				signal?.throwIfAborted();
-				return dataResult({ artifacts: (await store.list()).map(summary) });
-			},
-		}),
-		defineTool({
-			...common,
-			name: "artifact_preview",
-			label: "Preview artifact",
-			description: `Render draft source to a PNG screenshot plus console diagnostics and contentHeight, without saving a revision or publishing. Optional width/height set the viewport. Requires Playwright Chromium; if missing, install with npm run artifacts:browser (npx playwright install chromium). In codemode: const r = await tools.artifact_preview(write); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text. ${authoring}`,
-			annotations: { ...common.annotations, readOnlyHint: true },
-			parameters: Type.Object({
-				...writeProperties,
+				revision: Type.Optional(revisionNumber),
 				width: Type.Optional(
-					Type.Integer({ minimum: 240, maximum: 1600, description: "Viewport width in CSS pixels, default 800." }),
+					Type.Integer({ minimum: 240, maximum: 1600, description: "Preview width in CSS pixels, default 800." }),
 				),
 				height: Type.Optional(
-					Type.Integer({
-						minimum: 200,
-						maximum: 1600,
-						description: "Viewport height in CSS pixels, default 600.",
-					}),
+					Type.Integer({ minimum: 200, maximum: 1600, description: "Preview height in CSS pixels, default 600." }),
 				),
 			}),
-			outputSchema: Type.Object({
-				screenshot: Type.Object({
-					mimeType: Type.Literal("image/png"),
-					data: Type.String(),
-					width: Type.Number(),
-					height: Type.Number(),
+			outputSchema: Type.Union([
+				referenceSchema,
+				Type.Object({
+					artifact: Type.Object({ ...summaryProperties, source: Type.String(), libraries: Type.Array(library) }),
 				}),
-				...diagnosticsProperties,
-			}),
-			async execute(_callId, { width, height, ...write }, signal) {
+				Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
+				Type.Object({
+					screenshot: Type.Object({
+						mimeType: Type.Literal("image/png"),
+						data: Type.String(),
+						width: Type.Number(),
+						height: Type.Number(),
+					}),
+					...diagnosticsProperties,
+				}),
+			]),
+			async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
 				signal?.throwIfAborted();
-				checkSource(write);
-				const result = await (options.preview ?? previewArtifact)(write, { width, height, signal });
-				const diagnostics = { consoleMessages: result.consoleMessages, contentHeight: result.contentHeight };
-				return {
-					content: [
-						{ type: "image", mimeType: result.screenshot.mimeType, data: result.screenshot.data },
-						{ type: "text", text: JSON.stringify(diagnostics) },
-					],
-					details: diagnostics,
-					structuredContent: {
-						screenshot: { ...result.screenshot },
-						consoleMessages: result.consoleMessages.map((message) => ({ ...message })),
-						contentHeight: result.contentHeight,
-					},
-				};
+				const { action, id } = params;
+				if ((action === "get" || action === "update") && id === undefined)
+					throw new Error(`Artifact ${action} requires id`);
+				switch (action) {
+					case "get": {
+						const value = await store.get(id!, params.revision);
+						if (!value) throw new Error(`Artifact not found: ${id}`);
+						return dataResult({
+							artifact: { ...summary(value), source: value.source, libraries: value.libraries },
+						});
+					}
+					case "list":
+						return dataResult({ artifacts: (await store.list()).map(summary) });
+					case "create":
+					case "update":
+					case "preview": {
+						const { title, kind, source, libraries } = params;
+						if (title === undefined || kind === undefined || source === undefined)
+							throw new Error(`Artifact ${action} requires title, kind and source`);
+						const write: ArtifactWrite = {
+							title,
+							kind,
+							source,
+							...(libraries === undefined ? {} : { libraries }),
+						};
+						checkSource(write);
+						if (action === "create") return published(await store.create(write));
+						if (action === "update") return published(await store.update(id!, write, params.expectedRevision));
+						const result = await (options.preview ?? previewArtifact)(write, {
+							width: params.width,
+							height: params.height,
+							signal,
+						});
+						const diagnostics = { consoleMessages: result.consoleMessages, contentHeight: result.contentHeight };
+						return {
+							content: [
+								{ type: "image", mimeType: result.screenshot.mimeType, data: result.screenshot.data },
+								{ type: "text", text: JSON.stringify(diagnostics) },
+							],
+							details: diagnostics,
+							structuredContent: {
+								screenshot: { ...result.screenshot },
+								consoleMessages: result.consoleMessages.map((message) => ({ ...message })),
+								contentHeight: result.contentHeight,
+							},
+						};
+					}
+					default:
+						throw new Error(`Unknown artifact action: ${action}`);
+				}
 			},
 		}),
 	];

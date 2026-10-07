@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { JsonValue } from "@earendil-works/chord";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
@@ -46,10 +48,10 @@ function fixture(overrides: Partial<ArtifactToolOptions> = {}) {
 		get notifications() {
 			return notifications;
 		},
-		call(name: string, args: unknown, signal?: AbortSignal) {
-			const tool = tools.find((candidate) => candidate.name === name);
-			assert.ok(tool, name);
-			return execute(tool, args, signal);
+		call(action: string, args: object, signal?: AbortSignal) {
+			const tool = tools.find((candidate) => candidate.name === "artifact");
+			assert.ok(tool);
+			return execute(tool, { action, ...args }, signal);
 		},
 	};
 }
@@ -62,15 +64,16 @@ test("artifact tools declare structured output, sequential execution and authori
 	const f = fixture();
 	assert.deepEqual(
 		f.tools.map((tool) => tool.name),
-		["artifact_create", "artifact_update", "artifact_get", "artifact_list", "artifact_preview"],
+		["artifact"],
 	);
 	for (const tool of f.tools) {
 		assert.ok(tool.outputSchema, tool.name);
 		assert.equal(tool.executionMode, "sequential");
 		assert.notEqual(tool.exposure, "model-only");
 		assert.equal(tool.annotations?.openWorldHint, false);
+		assert.notEqual(tool.annotations?.readOnlyHint, true, "the combined tool can publish");
 	}
-	for (const name of ["artifact_create", "artifact_update", "artifact_preview"]) {
+	for (const name of ["artifact"]) {
 		const description = f.tools.find((tool) => tool.name === name)!.description;
 		for (const example of [
 			"512 KiB",
@@ -104,7 +107,7 @@ test("create awaits committed publication before notification and returns only a
 	});
 	const f = fixture();
 	f.store.create = async () => committed;
-	const pending = f.call("artifact_create", write);
+	const pending = f.call("create", write);
 	assert.equal(f.notifications, 0);
 	finish(revision);
 	const result = await pending;
@@ -119,34 +122,79 @@ test("create awaits committed publication before notification and returns only a
 
 test("update forwards the full write and expected revision, notifying only after success", async () => {
 	const f = fixture();
-	await f.call("artifact_update", { id: "artifact-1", expectedRevision: 2, ...write });
+	await f.call("update", { id: "artifact-1", expectedRevision: 2, ...write });
 	assert.deepEqual(f.calls, [{ method: "update", args: ["artifact-1", write, 2] }]);
 	assert.equal(f.notifications, 1);
 	f.store.update = async () => {
 		throw new Error("Revision conflict");
 	};
-	await assert.rejects(
-		f.call("artifact_update", { id: "artifact-1", expectedRevision: 2, ...write }),
-		/Revision conflict/,
-	);
+	await assert.rejects(f.call("update", { id: "artifact-1", expectedRevision: 2, ...write }), /Revision conflict/);
 	assert.equal(f.notifications, 1);
 });
 
 test("get returns editable metadata and historical revision, list returns summaries only", async () => {
 	const f = fixture();
-	const result = await f.call("artifact_get", { id: "artifact-1", revision: 2 });
+	const result = await f.call("get", { id: "artifact-1", revision: 2 });
 	const { html: _html, ...editable } = revision;
 	assert.deepEqual(result.structuredContent, { artifact: editable });
-	await f.call("artifact_get", { id: "artifact-1" });
+	await f.call("get", { id: "artifact-1" });
 	assert.deepEqual(f.calls.slice(0, 2), [
 		{ method: "get", args: ["artifact-1", 2] },
 		{ method: "get", args: ["artifact-1", undefined] },
 	]);
-	const listed = await f.call("artifact_list", {});
+	const listed = await f.call("list", {});
 	const { source: _source, libraries: _libraries, ...summary } = editable;
 	assert.deepEqual(listed.structuredContent, { artifacts: [summary] });
 	assert.ok(!JSON.stringify([result, listed]).includes("COMPILED_HTML"));
 	assert.equal(f.notifications, 0);
+});
+
+test("actions reject missing required fields and unknown actions before side effects", async () => {
+	const f = fixture({
+		preview: async () => assert.fail("invalid calls must not render"),
+	});
+	for (const action of ["get", "update"])
+		await assert.rejects(f.call(action, write), new RegExp(`Artifact ${action} requires id`));
+	for (const action of ["create", "update", "preview"]) {
+		for (const field of ["title", "kind", "source"] as const) {
+			const incomplete: Partial<ArtifactWrite> = { ...write };
+			delete incomplete[field];
+			await assert.rejects(
+				f.call(action, { id: "artifact-1", ...incomplete }),
+				new RegExp(`Artifact ${action} requires title, kind and source`),
+			);
+		}
+	}
+	await assert.rejects(f.call("unknown", {}), /Unknown artifact action/);
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.notifications, 0);
+});
+
+test("artifact schema requires a valid action and retains field constraints", () => {
+	const [tool] = fixture().tools;
+	assert.ok(tool);
+	const invalidArguments: Record<string, JsonValue>[] = [
+		{},
+		{ action: "unknown" },
+		{ action: "create", ...write, title: "" },
+		{ action: "create", ...write, kind: "text" },
+		{ action: "update", ...write, id: "artifact-1", expectedRevision: 0 },
+		{ action: "get", id: "artifact-1", revision: 0 },
+		{ action: "preview", ...write, width: 239 },
+		{ action: "preview", ...write, height: 1601 },
+	];
+	for (const args of invalidArguments) {
+		assert.throws(
+			() => validateToolArguments(tool, { type: "toolCall", id: "invalid", name: "artifact", arguments: args }),
+			/Validation failed/,
+		);
+	}
+});
+
+test("create forwards only document fields, without action or unrelated controls", async () => {
+	const f = fixture();
+	await f.call("create", { ...write, id: "ignored", revision: 1, expectedRevision: 1, width: 800 });
+	assert.deepEqual(f.calls, [{ method: "create", args: [write] }]);
 });
 
 test("preview forwards viewport and abort signal, returns image content and structured screenshot", async () => {
@@ -160,7 +208,7 @@ test("preview forwards viewport and abort signal, returns image content and stru
 			return { screenshot, ...diagnostics };
 		},
 	});
-	const result = await f.call("artifact_preview", { ...write, width: 640, height: 480 }, signal);
+	const result = await f.call("preview", { ...write, width: 640, height: 480 }, signal);
 	assert.deepEqual(result.content, [
 		{ type: "image", mimeType: "image/png", data: "cG5n" },
 		{ type: "text", text: JSON.stringify(diagnostics) },
@@ -177,12 +225,12 @@ test("write and preview reject source above the UTF-8 byte limit before side eff
 			assert.fail("oversized source must not render");
 		},
 	});
-	for (const name of ["artifact_create", "artifact_update", "artifact_preview"]) {
+	for (const name of ["create", "update", "preview"]) {
 		await assert.rejects(f.call(name, { id: "artifact-1", ...write, source: "😀".repeat(131_073) }), /512 KiB UTF-8/);
 	}
 	assert.deepEqual(f.calls, []);
 	assert.equal(f.notifications, 0);
-	await f.call("artifact_create", { ...write, source: "x".repeat(512 * 1024) });
+	await f.call("create", { ...write, source: "x".repeat(512 * 1024) });
 	assert.equal(f.notifications, 1, "exact byte limit is allowed");
 });
 
@@ -194,8 +242,8 @@ test("all artifact tools reject already-aborted calls without store or preview w
 	});
 	const controller = new AbortController();
 	controller.abort(new Error("Stopped"));
-	for (const tool of f.tools)
-		await assert.rejects(execute(tool, { id: "artifact-1", ...write }, controller.signal), /Stopped/);
+	for (const action of ["create", "update", "get", "list", "preview"])
+		await assert.rejects(f.call(action, { id: "artifact-1", ...write }, controller.signal), /Stopped/);
 	assert.deepEqual(f.calls, []);
 	assert.equal(f.notifications, 0);
 });
@@ -212,9 +260,9 @@ test("store and missing-browser errors propagate without change notifications", 
 	f.store.create = async () => {
 		throw new Error("Unsupported import");
 	};
-	await assert.rejects(f.call("artifact_get", { id: "missing" }), /Artifact not found/);
-	await assert.rejects(f.call("artifact_create", write), /Unsupported import/);
-	await assert.rejects(f.call("artifact_preview", write), /npx playwright install chromium/);
+	await assert.rejects(f.call("get", { id: "missing" }), /Artifact not found/);
+	await assert.rejects(f.call("create", write), /Unsupported import/);
+	await assert.rejects(f.call("preview", write), /npx playwright install chromium/);
 	assert.equal(f.notifications, 0);
 });
 
@@ -230,7 +278,7 @@ test("publication waits for asynchronous durable admission before returning and 
 			await admitted;
 		},
 	});
-	const pending = f.call("artifact_create", write);
+	const pending = f.call("create", write);
 	await Promise.resolve();
 	await Promise.resolve();
 	assert.deepEqual(received, { id: "artifact-1", sessionId: "session-1", title: "Chart", revision: 3 });
@@ -247,7 +295,7 @@ test("committed publication keeps its metadata fallback when display admission f
 			throw new Error("Display admission failed");
 		},
 	});
-	const result = await f.call("artifact_create", write);
+	const result = await f.call("create", write);
 	assert.deepEqual(result.details, result.structuredContent);
 	assert.equal(f.notifications, 1, "the committed store still needs a list refresh");
 	assert.equal(warnings.mock.callCount(), 1);

@@ -5,7 +5,7 @@ import Testing
 private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision":2}"#
 
 @Test func toolArtifactChangesRemainVisibleWithCachedSummaries() {
-    let original = ToolItem(id: "call", name: "artifact_create", arguments: .object([:]), status: .done, output: "")
+    let original = ToolItem(id: "call", name: "artifact", arguments: .object(["action": .string("create")]), status: .done, output: "")
     var cached = original
     cached.prepare(summary: original.summary)
     #expect(cached == original)
@@ -62,7 +62,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
         var transcript = Transcript()
         transcript.apply(try JSONValue.decode(Data("""
         {"type":"snapshot","entries":[
-          {"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"artifact_update","arguments":{}}]}]},
+          {"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"artifact","arguments":{"action":"update"}}]}]},
           {"id":2,"kind":"pi.tool-result","model":[\(json.prettyPrinted)]}
         ]}
         """.utf8)))
@@ -134,7 +134,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
 @Test func artifactPublicationRendersLiveAndSnapshotAndDeduplicatesToolCards() throws {
     let publication = "{\"id\":3,\"kind\":\"pilot.artifact\",\"data\":{\"artifact\":\(artifactJSON)},\"model\":[]}"
     let toolEntries = """
-    {"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"artifact_create","arguments":{}}]}]},
+    {"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"artifact","arguments":{"action":"create"}}]}]},
     {"id":2,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"c","details":{"artifact":\(artifactJSON)}}]}
     """
     var live = Transcript()
@@ -157,7 +157,29 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
 }
 
 @Test func artifactGetMetadataDoesNotPublishAnotherInlineCard() throws {
-    for name in ["artifact_get", "read", "artifact_preview"] {
+    for (name, arguments) in [
+        ("artifact", #"{"action":"get"}"#),
+        ("artifact", #"{"action":"list"}"#),
+        ("artifact", #"{"action":"preview"}"#),
+        ("artifact", "{}"),
+        ("artifact_get", "{}"),
+        ("read", "{}"),
+        ("artifact_preview", "{}"),
+    ] {
+        var transcript = Transcript()
+        transcript.apply(try JSONValue.decode(Data("""
+        {"type":"snapshot","entries":[
+          {"id":1,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"\(name)","arguments":\(arguments)}]}]},
+          {"id":2,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"c","details":{"artifact":\(artifactJSON)}}]}
+        ]}
+        """.utf8)))
+        guard case let .tools(_, items) = transcript.rows.first else { Issue.record("Missing tools"); continue }
+        #expect(items.first?.artifact == nil)
+    }
+}
+
+@Test func legacyArtifactPublicationToolsStillRenderPinnedCards() throws {
+    for name in ["artifact_create", "artifact_update"] {
         var transcript = Transcript()
         transcript.apply(try JSONValue.decode(Data("""
         {"type":"snapshot","entries":[
@@ -166,7 +188,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
         ]}
         """.utf8)))
         guard case let .tools(_, items) = transcript.rows.first else { Issue.record("Missing tools"); continue }
-        #expect(items.first?.artifact == nil)
+        #expect(items.first?.artifact?.revision == 2)
     }
 }
 

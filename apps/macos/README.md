@@ -118,7 +118,7 @@ back to mise shims and Homebrew. pilotd logs to `~/Library/Logs/Pilot/pilotd.log
 ### Optional artifact screenshot browser
 
 Native artifact previews use WebKit and need no browser installation. The agent's optional
-`artifact_preview` screenshot tool uses Playwright Chromium. Pilot never downloads that browser
+`artifact({action: "preview", ...})` screenshot tool uses Playwright Chromium. Pilot never downloads that browser
 automatically. If you want screenshots, explicitly run this in Terminal (it downloads Chromium
 into your user cache; adjust the app path if needed):
 

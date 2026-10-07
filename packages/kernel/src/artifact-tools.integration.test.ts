@@ -136,13 +136,13 @@ for (const mode of ["on", "only"] as const) {
 			"offline-script",
 			{
 				code: `
-const registered = ALL_TOOLS.filter(t => t.name.startsWith("artifact_")).map(t => t.name).sort();
-const created = await tools.artifact_create({title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
-const got = await tools.artifact_get({id:created.artifact.id});
-const listed = await tools.artifact_list({});
-const updated = await tools.artifact_update({id:created.artifact.id,title:"Demo",kind:"html",source:"<h1>Next</h1>",expectedRevision:1});
+const registered = ALL_TOOLS.filter(t => t.name === "artifact").map(t => t.name).sort();
+const created = await tools.artifact({action:"create",title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
+const got = await tools.artifact({action:"get",id:created.artifact.id});
+const listed = await tools.artifact({action:"list"});
+const updated = await tools.artifact({action:"update",id:created.artifact.id,title:"Demo",kind:"html",source:"<h1>Next</h1>",expectedRevision:1});
 text({registered,created,source:got.artifact.source,count:listed.artifacts.length,revision:updated.artifact.revision});
-const preview = await tools.artifact_preview({title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
+const preview = await tools.artifact({action:"preview",title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
 image({type:"image",...preview.screenshot});
 text({consoleMessages:preview.consoleMessages,contentHeight:preview.contentHeight});
 `,
@@ -154,6 +154,7 @@ text({consoleMessages:preview.consoleMessages,contentHeight:preview.contentHeigh
 			.filter((block) => block.type === "text")
 			.map((block) => block.text)
 			.join("\n");
+		assert.ok(text.includes('"registered":["artifact"]'), text);
 		assert.ok(text.includes('"source":"<h1>Demo</h1>"'), text);
 		assert.ok(text.includes('"revision":2'), text);
 		assert.ok(text.includes("Rendered offline"), text);
@@ -202,9 +203,13 @@ test("KernelSession registers tools with the session directory and project ident
 	);
 	f.cleanup.push(() => session.close());
 	assert.ok(adapter);
-	const create = adapter.session.agent.state.tools.find((tool) => tool.name === "artifact_create");
+	const create = adapter.session.agent.state.tools.find((tool) => tool.name === "artifact");
 	assert.ok(create);
-	const result = await create.execute("publish", { title: "Demo", kind: "html", source: "<h1>Demo</h1>" }, undefined);
+	const result = await create.execute(
+		"publish",
+		{ action: "create", title: "Demo", kind: "html", source: "<h1>Demo</h1>" },
+		undefined,
+	);
 	assert.equal(notifications, 1);
 	const store = new ArtifactStore(f.root, { sessionId: "session-integration", projectId: "project-integration" });
 	const [summary] = await store.list();
@@ -269,7 +274,7 @@ test("busy codemode publications and attention survive native tool refresh and r
 	const assertReplaySafety = async (kernel: KernelSession) => {
 		const tools = (await kernel.conversation.agent(context)).tools;
 		assert.equal(tools.find((tool) => tool.name === reportStatus.name)?.replay, "safe");
-		for (const name of ["codemode", "artifact_create", "artifact_update", "artifact_list", "artifact_preview"]) {
+		for (const name of ["codemode", "artifact"]) {
 			const tool = tools.find((candidate) => candidate.name === name);
 			assert.ok(tool, name);
 			assert.equal(tool.replay, "unsafe", name);
@@ -304,8 +309,8 @@ test("busy codemode publications and attention survive native tool refresh and r
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
 				code: `
-const created = await tools.artifact_create({title:"Graph",kind:"html",source:"<h1>Graph</h1>"});
-await tools.artifact_update({id:created.artifact.id,expectedRevision:1,title:"Graph updated",kind:"html",source:"<h1>Updated</h1>"});
+const created = await tools.artifact({action:"create",title:"Graph",kind:"html",source:"<h1>Graph</h1>"});
+await tools.artifact({action:"update",id:created.artifact.id,expectedRevision:1,title:"Graph updated",kind:"html",source:"<h1>Updated</h1>"});
 text("Published two revisions");
 `,
 			}),
@@ -317,11 +322,13 @@ text("Published two revisions");
 			// Change the declaration fingerprint, exercising the real onToolsChanged replacement,
 			// rather than a no-op refresh which would never reinstall the attention wrapper.
 			adapter.session.setActiveToolsByName(
-				adapter.session.getActiveToolNames().filter((name) => name !== "artifact_get"),
+				adapter.session.getActiveToolNames().filter((name) => name !== "artifact"),
 			);
 			adapter.refreshTools();
 			assert.notEqual(adapter.extension, before);
-			assert.ok(!(await session.conversation.agent(context)).tools.some((tool) => tool.name === "artifact_get"));
+			assert.ok(!(await session.conversation.agent(context)).tools.some((tool) => tool.name === "artifact"));
+			adapter.session.setActiveToolsByName([...adapter.session.getActiveToolNames(), "artifact"]);
+			adapter.refreshTools();
 			await assertReplaySafety(session);
 			return fauxAssistantMessage(
 				fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Choose which graph to keep" }),

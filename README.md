@@ -11,8 +11,8 @@ Agents can create **Artifacts**: interactive HTML/JavaScript or React/JSX previe
 graphs and animations. Revisions persist with their originating session and project. Chat cards open
 the revision published there; the session sidebar opens the latest. Previews run offline in an isolated
 WebKit view, with bundled React, Mermaid, ECharts and Motion (D3 and Three.js are opt-in).
-The `artifact_create`, `artifact_update`, `artifact_get`, `artifact_list` and `artifact_preview` tools
-document the available libraries and authoring examples. For agent-side screenshots and runtime
+The `artifact` tool (actions: `create`, `update`, `get`, `list`, `preview`)
+documents the available libraries and authoring examples. For agent-side screenshots and runtime
 diagnostics, install the optional preview browser once with `npm run artifacts:browser`.
 
 The chat footer shows the session's context-window estimate. With pi-extensions' `usage` extension
