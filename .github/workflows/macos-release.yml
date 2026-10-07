@@ -46,7 +46,8 @@ jobs:
           python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_*.py'
           node --test apps/macos/scripts/tests/*.test.mjs
       - run: apps/macos/scripts/test.sh
-      - run: swift build --package-path apps/macos -c release --product Pilot
+      # Build, sign and smoke-test the relocated app, not just the Swift executable.
+      - run: apps/macos/scripts/bundle.sh
 
   release-please:
     needs: verify

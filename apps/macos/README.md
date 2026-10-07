@@ -80,6 +80,7 @@ Requires macOS 14+ and Swift 6.2+. Command Line Tools are enough:
 
 ```sh
 scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from the repo root)
+scripts/check-app.sh build/Pilot.app  # relocated app: packaged resources and terminal initialization
 scripts/test.sh              # PilotCore tests
 .build/debug/Pilot --queue-edit-test  # native inline editing keys, focus, drafts, failed/stale saves
 swift run Pilot              # unbundled dev run (no notifications)
@@ -103,7 +104,10 @@ apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
 
 Command Line Tools quirks handled here: libghostty-spm's `.xcstrings` catalog needs Xcode's
 `xcstringstool`, so the vendoring script drops it; SwiftUI's `@State` macro plugin is missing, so views keep
-local state in small `ObservableObject`s; Swift Testing's macro plugin lives outside the default plugin
+local state in small `ObservableObject`s; Ghostty's resource lookup is patched to use the signed app's
+`Contents/Resources` (native SwiftPM's generated accessor only checks the app root and build directory);
+every bundle build smoke-tests terminal initialization from a temporary location without a daemon.
+Swift Testing's macro plugin lives outside the default plugin
 path, so `scripts/test.sh` passes it explicitly.
 
 Development bundles run `node --import tsx src/main.ts` from this checkout's `packages/daemon`. Release

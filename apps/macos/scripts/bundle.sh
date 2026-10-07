@@ -64,4 +64,5 @@ fi
 
 codesign --force --deep --sign - "$app"
 codesign --verify --deep --strict "$app"
+"$here/scripts/check-app.sh" "$app"
 echo "$app"
