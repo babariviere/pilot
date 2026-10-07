@@ -11,6 +11,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   task composer and a dashboard (working now, activity, recent sessions, projects).
 - **Projects.** Named folders stored by pilotd (`/api/projects`). The sidebar groups sessions by project;
   new sessions pick a project (or another folder) and inherit its default model. Manage them in Settings.
+  **Require PR** defaults to on, including for older projects. Disabling it permits direct pushes to the
+  default branch. Saved PR policy changes apply when a session worker next starts.
 - **Chat.** Native transcript fed by pilotd's agent event stream: block Markdown (headings, lists, code
   blocks with copy), collapsible thinking, grouped tool rows with summaries ("Ran command npm test"),
   live output and stop. Return steers the current run (or sends when idle), Option-Return queues a

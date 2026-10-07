@@ -131,8 +131,10 @@ export interface Project {
 	path: string;
 	/** Default model for new sessions, "provider/modelId". */
 	model?: string;
-	/** "clone" (default): each session works in a private clone on its own branch. "direct": in `path` itself. */
+	/** "clone" (default): each session works in a private clone. "direct": in `path` itself. */
 	workspace?: WorkspaceMode;
+	/** Require branch/PR delivery. Defaults to true; false permits direct default-branch pushes. */
+	requirePullRequest?: boolean;
 	createdAt: number;
 }
 
@@ -181,6 +183,7 @@ export interface ProjectRequest {
 	name?: string;
 	model?: string;
 	workspace?: WorkspaceMode;
+	requirePullRequest?: boolean;
 }
 
 /** One selectable model, from the user's pi scope. */

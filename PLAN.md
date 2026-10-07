@@ -122,11 +122,15 @@ Decided: **every session gets its own private clone** (done for manual sessions)
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
-- Start private clones detached from the remote default branch. New agent-chosen branches and bookmarks use
-  `<type>/<short-description>` with a conventional task prefix (`feat/`, `fix/`, `docs/`, etc.), never `pilot/`.
-  Existing branch and bookmark names are preserved; PR sessions check out and keep the PR head instead.
+- Start private clones detached from the remote default branch. When a PR is required, new agent-chosen
+  branches and bookmarks use `<type>/<short-description>` with a conventional task prefix
+  (`feat/`, `fix/`, `docs/`, etc.), never `pilot/`. Existing branch and bookmark names are preserved;
+  PR sessions check out and keep the PR head instead.
 - jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
 - Projects can opt out (`workspace: "direct"`) to run in the folder itself.
+- Projects independently configure **Require PR** (`requirePullRequest`, default true). Turning it off
+  permits direct pushes to the remote default branch without a PR. It does not change workspace isolation
+  or run an after-push command. The policy is read when a session worker starts (new sessions or kernel restart).
 - Archiving retains the workspace and transcript so old chats can be viewed and restored. Workspace
   cleanup is deferred; never delete while a PR is open.
 
@@ -139,7 +143,8 @@ Decided: **every session gets its own private clone** (done for manual sessions)
 - External text (CI logs, review comments, Slack messages, Linear issues) is framed as untrusted data in
   the brief, never as instructions with authority.
 - Sandbox floor per origin (pi-extensions `sandbox`): writes only inside the workspace; network allowlist.
-- Push rules: only to the session's own branch or the PR branch under review; never default branches;
+- Push rules: only to the session's own branch or the PR branch under review, except projects explicitly
+  disabling Require PR may push directly to the remote default branch;
   never force-push others' commits; never merge.
 - Allowlists: repositories, Slack channels, Linear teams, GitHub authors whose events may trigger work.
 - Loop prevention: ignore events authored by Pilot's own identity; cap fix attempts per PR and per day.

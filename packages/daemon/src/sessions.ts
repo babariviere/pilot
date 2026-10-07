@@ -968,7 +968,12 @@ export class SessionManager {
 				thinking: meta.thinking,
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
-				pilot: meta.workspace ? { workspace: meta.workspace } : {},
+				pilot: {
+					...(meta.workspace ? { workspace: meta.workspace } : {}),
+					...(meta.projectId
+						? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
+						: {}),
+				},
 			},
 			(packet) => this.onPacket(meta, worker, packet),
 			(exited, code, signal) => this.onExit(meta, exited, code, signal),
