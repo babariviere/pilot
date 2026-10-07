@@ -33,6 +33,7 @@ import {
 	getAgentDir,
 	ProjectTrustStore,
 	resolveCliModel,
+	resolveModelScopeWithDiagnostics,
 	SessionManager,
 	SettingsManager,
 	wrapRegisteredTool,
@@ -319,6 +320,19 @@ export class NativeAdapter {
 	}
 	get thinkingLevel() {
 		return this.session.thinkingLevel;
+	}
+	/** Resolve only an exact, authenticated choice in this workspace's native model scope. */
+	async resolveModel(name: string) {
+		this.assertOpen();
+		const patterns = this.session.settingsManager.getEnabledModels();
+		const available = patterns?.length
+			? (await resolveModelScopeWithDiagnostics(patterns, this.session.modelRuntime)).scopedModels
+			: (await this.session.modelRuntime.getAvailable()).map((model) => ({ model, thinkingLevel: undefined }));
+		const choice = available.find(({ model }) => `${model.provider}/${model.id}` === name);
+		const resolved = resolveCliModel({ cliModel: name, modelRuntime: this.session.modelRuntime });
+		if (!choice || !resolved.model || resolved.error || `${resolved.model.provider}/${resolved.model.id}` !== name)
+			throw new Error(`Model is not available in this session's scope: ${name}`);
+		return choice;
 	}
 	bindHarness(harness: Harness, conversationId: ConversationId): void {
 		this.assertOpen();

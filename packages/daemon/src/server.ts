@@ -4,6 +4,7 @@ import { getLibrary, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
 	ClientMessage,
+	ChangeModelRequest,
 	EditQueuedMessageRequest,
 	ProjectRequest,
 	SendRequest,
@@ -168,6 +169,12 @@ export function createDaemonServer(
 			const id = parts[2]!;
 			if (parts[3] === "archive") return json(res, 200, await sessions.archive(id));
 			if (parts[3] === "restore") return json(res, 200, await sessions.restore(id));
+			if (parts[3] === "model") {
+				const body = await readJson<ChangeModelRequest>(req);
+				if (!body || typeof body.model !== "string" || !body.model.trim())
+					throw new HttpError(400, "model is required");
+				return json(res, 200, await sessions.changeModel(id, body.model, models));
+			}
 			if (parts[3] === "messages") {
 				const body = await readJson<SendRequest>(req);
 				await sessions.send(id, body.message, body.mode, body.requestId);

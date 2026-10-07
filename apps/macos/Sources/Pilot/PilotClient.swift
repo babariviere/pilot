@@ -83,6 +83,13 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())
     }
 
+    @discardableResult
+    func changeModel(_ sessionId: String, model: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call("api/sessions/\(sessionId)/model", body: ChangeModelRequest(model: model))
+        update(session)
+        return session
+    }
+
     func editQueuedMessage(_ sessionId: String, submissionId: Int, message: String) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before editing queued messages.") }
         let _: Ack = try await call(

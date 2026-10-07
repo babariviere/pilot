@@ -16,6 +16,8 @@ final class ComposerState: ObservableObject {
 
     var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    func canSend(changingModel: Bool) -> Bool { !changingModel && !trimmed.isEmpty }
+
     func selectQueuedMessage(_ message: QueuedMessage) {
         guard !savingQueueEdit else { return }
         queueEditing.select(message)
@@ -53,6 +55,8 @@ struct Composer: View {
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
     let onEditQueuedMessage: (Int, String) async throws -> Void
+    var session: SessionSummary? = nil
+    @StateObject private var modelPicker = ChatModelPickerState()
     @Environment(\.pilotFonts) private var fonts
 
     var body: some View {
@@ -61,12 +65,27 @@ struct Composer: View {
                 QueuedMessagesView(state: state, messages: queuedMessages, completionDirectory: completionDirectory, onSave: saveQueueEdit)
             }
             editor
+            controls
+            if let error = state.error {
+                Text(error).font(.caption).foregroundStyle(Theme.destructive)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
         .frame(maxWidth: Theme.column)
         .padding(.horizontal, 24)
         .padding(.bottom, 16)
         .padding(.top, 6)
         .frame(maxWidth: .infinity)
+        .task(id: session?.cwd) {
+            if let session { await modelPicker.loadModels(cwd: session.cwd) }
+        }
+        .alert("Model picker", isPresented: Binding(
+            get: { modelPicker.error != nil }, set: { if !$0 { modelPicker.error = nil } }
+        )) {
+            Button("OK") { modelPicker.error = nil }
+        } message: {
+            Text(modelPicker.error ?? "")
+        }
     }
 
     private var editor: some View {
@@ -91,19 +110,7 @@ struct Composer: View {
             }
             HStack(spacing: 10) {
                 KeyHints(working: working)
-                if let error = state.error {
-                    Text(error).font(.caption).foregroundStyle(Theme.destructive).lineLimit(1)
-                }
                 Spacer()
-                if working {
-                    Button(action: onStop) { Image(systemName: "stop.fill") }
-                        .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive))
-                        .help("Stop the current run")
-                }
-                Button { send(.steer) } label: { Image(systemName: "arrow.up") }
-                    .buttonStyle(CircleIconButtonStyle())
-                    .disabled(state.trimmed.isEmpty)
-                    .help(working ? "Steer (↩)" : "Send (↩)")
             }
         }
         .padding(.horizontal, 14)
@@ -111,9 +118,40 @@ struct Composer: View {
         .card(radius: 14, shadow: true)
     }
 
+    private var controls: some View {
+        HStack(alignment: .top, spacing: 10) {
+            if let session {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 16) {
+                        ChatModelPicker(session: session, working: working || !queuedMessages.isEmpty, state: modelPicker)
+                        UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        ChatModelPicker(session: session, working: working || !queuedMessages.isEmpty, state: modelPicker)
+                        UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
+                    }
+                }
+                .padding(.top, 5)
+            }
+            Spacer(minLength: 8)
+            HStack(spacing: 8) {
+                if working {
+                    Button(action: onStop) { Image(systemName: "stop.fill") }
+                        .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive))
+                        .help("Stop the current run")
+                }
+                Button { send(.steer) } label: { Image(systemName: "arrow.up") }
+                    .buttonStyle(CircleIconButtonStyle())
+                    .disabled(!state.canSend(changingModel: modelPicker.changing))
+                    .help(working ? "Steer (↩)" : "Send (↩)")
+            }
+        }
+        .padding(.horizontal, 10)
+    }
+
     private func send(_ mode: DeliveryMode) {
         let message = state.trimmed
-        guard !message.isEmpty else { return }
+        guard state.canSend(changingModel: modelPicker.changing) else { return }
         onSend(message, mode)
     }
 

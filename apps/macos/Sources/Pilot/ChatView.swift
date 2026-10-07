@@ -149,7 +149,6 @@ struct ChatView: View {
                 if !transcript.todos.isEmpty {
                     TodosPanel(todos: transcript.todos, sessionId: session.id)
                 }
-                UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
                 if session.isArchived {
                     ArchivedComposer(session: session)
                 } else {
@@ -162,7 +161,8 @@ struct ChatView: View {
                         onStop: { model.stopSession(session.id) },
                         onEditQueuedMessage: { id, text in
                             try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
-                        }
+                        },
+                        session: session
                     )
                 }
             }

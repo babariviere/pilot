@@ -155,3 +155,25 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
         #expect(SessionUsage(subscription: subscription).fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == nil)
     }
 }
+
+@Test func subscriptionGaugesClampOnlyTheirDrawing() {
+    let zero = SubscriptionWindow(label: "5h", usedPercent: 0)
+    #expect(zero.gaugeFraction == 0)
+    #expect(zero.percentLabel == "0%")
+    #expect(SubscriptionWindow(label: "Week", usedPercent: 45).gaugeFraction == 0.45)
+    let overflow = SubscriptionWindow(label: "Week", usedPercent: 123)
+    #expect(overflow.gaugeFraction == 1)
+    #expect(overflow.percentLabel == "123%")
+    #expect(UsageFormatting.gaugeFraction(.nan) == nil)
+    #expect(UsageFormatting.gaugeFraction(-1) == nil)
+}
+
+@Test func chatModelNamesUseTheCatalogAndFallbackToTheId() throws {
+    let list = ModelList(models: [ModelOption(id: "anthropic/claude-sonnet-5", provider: "anthropic", name: "Claude Sonnet 5")])
+    #expect(list.displayName(for: "anthropic/claude-sonnet-5") == "Claude Sonnet 5")
+    #expect(list.displayName(for: "openai-codex/gpt-6.1-sol") == "gpt-6.1-sol")
+    #expect(list.displayName(for: nil) == "Model")
+    let request = ChangeModelRequest(model: "anthropic/claude-sonnet-5")
+    let decoded = try JSONDecoder().decode(ChangeModelRequest.self, from: JSONEncoder().encode(request))
+    #expect(decoded.model == request.model)
+}

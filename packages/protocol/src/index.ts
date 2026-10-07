@@ -211,6 +211,12 @@ export interface SpawnRequest {
 	thinking?: string;
 }
 
+/** POST /api/sessions/:id/model. Returns SessionSummary; only idle, non-archived chats may change. */
+export interface ChangeModelRequest {
+	/** Exact "provider/modelId" from the scoped model catalog. */
+	model: string;
+}
+
 /** POST /api/sessions/:id/messages */
 /** One file in a session's changes. */
 export interface ChangedFile {

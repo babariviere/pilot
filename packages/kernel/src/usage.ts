@@ -62,6 +62,13 @@ export class UsageTracker {
 		const { context: _previous, ...rest } = this.#usage;
 		this.publish({ ...rest, ...(context ? { context } : {}) });
 	}
+	clearSubscription(): void {
+		this.setSubscription(undefined);
+	}
+	setSubscription(subscription: SubscriptionUsage | undefined): void {
+		const { subscription: _previous, ...rest } = this.#usage;
+		this.publish({ ...rest, ...(subscription ? { subscription } : {}) });
+	}
 	receive(data: unknown): void {
 		const subscription = subscriptionUsage(data);
 		if (!subscription) return;
