@@ -1,5 +1,19 @@
 # UI screenshots
 
+## Agent status icons
+
+`status-icons.png` shows all six colored agent states in the sidebar: working, done,
+needs your input, failed, idle and stopped. Unread dots remain separate. The image
+uses deterministic fixture sessions, not live conversations.
+
+Regenerate on macOS:
+
+```sh
+swift build --package-path apps/macos
+apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-status-screenshots
+cp /tmp/pilot-status-screenshots/status-icons.png docs/screenshots/
+```
+
 ## PR status
 
 These screenshots use deterministic fixture data, not live session conversations.

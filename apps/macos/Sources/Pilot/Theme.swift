@@ -125,12 +125,16 @@ struct ChipLabel: View {
     }
 }
 
-/// Color-only agent status, with details available without adding row text.
+/// Colored agent status symbol, with details available without adding row text.
 struct SessionStatusIcon: View {
     let status: SessionStatus
 
     var body: some View {
-        Circle().fill(status.color).frame(width: 8, height: 8)
+        Image(systemName: status.symbolName)
+            .font(.system(size: 12, weight: .semibold))
+            .symbolRenderingMode(.monochrome)
+            .foregroundStyle(status.color)
+            .frame(width: 14, height: 14)
             .help(status.rawValue)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Agent status: \(status.rawValue)")
@@ -138,6 +142,17 @@ struct SessionStatusIcon: View {
 }
 
 extension SessionStatus {
+    var symbolName: String {
+        switch self {
+        case .working: "arrow.triangle.2.circlepath"
+        case .done: "checkmark.circle.fill"
+        case .needsInput: "hand.raised.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        case .stopped: "stop.circle.fill"
+        case .idle: "moon.zzz.fill"
+        }
+    }
+
     var color: Color {
         switch self {
         case .working: Theme.info

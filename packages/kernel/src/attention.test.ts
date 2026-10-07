@@ -72,6 +72,42 @@ test("explicit blocking signal is needs_input, a new run does not inherit it", a
 	}
 });
 
+test("a design proposal awaiting implementation approval remains needs_input", async () => {
+	const f = await fixture();
+	try {
+		f.faux.setResponses([
+			fauxAssistantMessage(
+				fauxToolCall(reportStatus.name, {
+					status: "needs_input",
+					reason: "Awaiting approval of the status icon design",
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage(
+				"I suggest a warning triangle, sleeping moon, checkmark and raised hand. Shall I implement it?",
+			),
+			fauxAssistantMessage(
+				fauxToolCall(reportStatus.name, { status: "done", reason: "Implemented and verified the approved icons" }),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("Implemented the icons. Tests pass."),
+		]);
+		await (
+			await f.conversation.submit({ type: "input", content: "Can we replace status dots with icons?" }, context)
+		).wait(context);
+		const proposal = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
+		assert.equal(proposal?.outcome, "needs_input");
+		assert.equal(proposal?.outcomeReason, "Awaiting approval of the status icon design");
+		await (await f.conversation.submit({ type: "input", content: "Yes, implement it" }, context)).wait(context);
+		const implemented = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
+		assert.equal(implemented?.outcome, "done");
+		assert.equal(implemented?.outcomeReason, "Implemented and verified the approved icons");
+		assert.ok(implemented!.outcomeAt > proposal!.outcomeAt);
+	} finally {
+		await f.harness.close(context);
+	}
+});
+
 test("failed generations are not completed successfully", async () => {
 	const f = await fixture();
 	try {

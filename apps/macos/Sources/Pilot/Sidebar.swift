@@ -179,7 +179,6 @@ struct SessionRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             SessionStatusIcon(status: session.status)
-                .frame(width: 12)
             VStack(alignment: .leading, spacing: 3) {
                 Text(session.title)
                     .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))

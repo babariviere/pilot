@@ -32,7 +32,7 @@ export const AttentionDoc = defineDoc<AttentionState>({
 export const reportStatus = defineTool({
 	name: "pilot_report_status",
 	description:
-		"Report the outcome before your final response. Use needs_input only when an answer, approval or missing information blocks further work. Optional offers are not blockers. This records a status, not a suspended tool; ask the question in your final response and wait for the user's next message.",
+		"Report the task outcome before your final response, not merely that your reply is finished. Use done only when the requested work is complete. Use needs_input when an answer, decision, approval or missing information blocks further work, including an ongoing design discussion awaiting a decision or permission to implement. Do not mark an unfinished task done just because you proposed a plan or answered one part of it. A fully answered standalone question can be done; optional offers after completed work are not blockers. This records a status, not a suspended tool; ask the actual question in your final response and wait for the user's next message.",
 	parameters: Type.Object({
 		status: Type.Union([Type.Literal("done"), Type.Literal("needs_input")]),
 		reason: Type.String({ minLength: 1, maxLength: 1000 }),

@@ -63,7 +63,7 @@ private struct WorkingNowCard: View {
                     Button { app.selectedSessionId = session.id } label: {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 8) {
-                                SessionStatusIcon(status: session.status).frame(width: 12)
+                                SessionStatusIcon(status: session.status)
                                 Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                                 Spacer()
                                 Text(elapsed(session.updatedAt)).font(.system(size: 11).monospacedDigit())
@@ -145,7 +145,7 @@ private struct RecentCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button { app.selectedSessionId = session.id } label: {
                         HStack(spacing: 8) {
-                            SessionStatusIcon(status: session.status).frame(width: 12)
+                            SessionStatusIcon(status: session.status)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(session.title).font(.system(size: 13)).lineLimit(1)
                                 Text(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
