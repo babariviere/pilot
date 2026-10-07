@@ -17,8 +17,8 @@
   <rect x="100" y="118" width="824" height="824" rx="185" fill="#000000" opacity="0.3" filter="url(#tileShadow)"/>
   <g clip-path="url(#tile)">
     <rect x="100" y="100" width="824" height="824" fill="url(#sky)"/>
-    <g transform="translate(770 845) scale(1)" fill="#FFFFFF" opacity="0.85"><circle cx="-85" cy="5" r="45"/><circle cx="-15" cy="-30" r="70"/><circle cx="70" cy="-5" r="55"/><circle cx="135" cy="20" r="30"/><rect x="-130" y="0" width="295" height="50" rx="25"/></g>
-    <g transform="translate(270 300) scale(0.5)" fill="#FFFFFF" opacity="0.5"><circle cx="-85" cy="5" r="45"/><circle cx="-15" cy="-30" r="70"/><circle cx="70" cy="-5" r="55"/><circle cx="135" cy="20" r="30"/><rect x="-130" y="0" width="295" height="50" rx="25"/></g>
+    <g transform="translate(770 845) scale(1)" fill="#FFFFFF" opacity="0.85"><circle cx="-105" cy="15" r="42"/><circle cx="-55" cy="-20" r="58"/><circle cx="15" cy="-45" r="72"/><circle cx="90" cy="-15" r="58"/><circle cx="140" cy="20" r="40"/><circle cx="95" cy="40" r="45"/><circle cx="35" cy="38" r="52"/><circle cx="-25" cy="40" r="50"/><circle cx="-80" cy="42" r="38"/></g>
+    <g transform="translate(270 300) scale(0.5)" fill="#FFFFFF" opacity="0.5"><circle cx="-105" cy="15" r="42"/><circle cx="-55" cy="-20" r="58"/><circle cx="15" cy="-45" r="72"/><circle cx="90" cy="-15" r="58"/><circle cx="140" cy="20" r="40"/><circle cx="95" cy="40" r="45"/><circle cx="35" cy="38" r="52"/><circle cx="-25" cy="40" r="50"/><circle cx="-80" cy="42" r="38"/></g>
     <g transform="translate(585 445) rotate(45) scale(0.72)" fill="url(#trail)">
       <path d="M -8 262 L 8 262 L 46 1150 L -46 1150 Z" filter="url(#puff)" opacity="0.55" transform="scale(1.8 1)"/>
       <path d="M -8 262 L 8 262 L 46 1150 L -46 1150 Z" opacity="0.9"/>
@@ -27,4 +27,5 @@
     <use href="#plane" transform="translate(585 445) rotate(45) scale(0.72)" fill="#FFFFFF"/>
   </g>
 </svg>
+
 
