@@ -81,8 +81,11 @@ human gate and costs nothing until answered.
 For manual sessions today, lifecycle (`parked`, `starting`, `working`, `idle`, `failed`) is separate from
 the latest settled-run outcome (`done`, `needs_input`, `failed`, `stopped`). The replay-safe
 `pilot_report_status` tool explicitly reports blocking questions, approvals or missing information
-before the final response. Optional offers are not blockers. An otherwise successful run defaults to
-`done`; errors and aborts override reported status. This is not the suspended `ask_human` gate yet:
+before the final response, including design discussions awaiting a decision or permission to implement.
+Agents report `done` only when the requested work is complete, not merely when a reply ends.
+Fully answered standalone questions can be done; optional offers after completed work are not blockers.
+An otherwise successful run defaults to `done`; errors and aborts override reported status.
+This is not the suspended `ask_human` gate yet:
 the run ends normally, costs nothing while idle, and an ordinary user message resumes work.
 Outcomes and their stable completion version survive worker and daemon restarts.
 
@@ -230,7 +233,8 @@ reports), producing a morning summary in the app and Slack.
 ## 7. App (macOS)
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
-- Manual sessions show color-only status dots, with Working, Done, Needs your input, Failed or Stopped
+- Manual sessions show colored status icons (working arrows, done checkmark, needs-input raised hand,
+  failed warning triangle, stopped stop symbol, idle sleeping moon), with the status
   in tooltips and accessibility labels, separately from worker lifecycle. Unread completion dots persist
   until reviewed, independently of the outcome:
   reading a question does not answer it. Native macOS notifications distinguish results, blocking

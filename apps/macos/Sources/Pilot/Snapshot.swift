@@ -51,6 +51,14 @@ enum Snapshot {
         let size = CGSize(width: 1360, height: 860)
 
         model.selectedSessionId = nil
+        model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions + [
+            SessionSummary(id: "status-idle", title: "Idle, ready for a task", cwd: Fixtures.projects[0].path, projectId: "p1",
+                           createdAt: Fixtures.now, updatedAt: Fixtures.now, state: "idle"),
+            SessionSummary(id: "status-stopped", title: "Stopped by you", cwd: Fixtures.projects[1].path, projectId: "p2",
+                           createdAt: Fixtures.now, updatedAt: Fixtures.now, state: "idle", outcome: .stopped),
+        ])
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "status-icons.png"))
+        model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
         await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "home.png"))
 
         await render(
