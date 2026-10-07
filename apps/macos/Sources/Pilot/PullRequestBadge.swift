@@ -44,8 +44,8 @@ extension PullRequestState {
     var icon: String {
         switch self {
         case .draft: "pencil.circle"
-        case .open: "arrow.triangle.pull"
-        case .merged: "arrow.triangle.merge"
+        case .open: "arrow.triangle.branch"
+        case .merged: "arrow.triangle.pull"
         case .closed: "xmark.circle"
         }
     }
