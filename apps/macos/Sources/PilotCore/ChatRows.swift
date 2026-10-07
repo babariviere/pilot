@@ -14,7 +14,24 @@ public struct ToolItem: Identifiable, Equatable, Sendable {
     public let status: ToolStatus
     public let output: String
 
-    public var summary: ToolSummary { ToolSummary(name: name, arguments: arguments) }
+    private var cachedSummary: ToolSummary?
+    public var summary: ToolSummary { cachedSummary ?? ToolSummary(name: name, arguments: arguments) }
+
+    init(id: String, name: String, arguments: JSONValue, status: ToolStatus, output: String) {
+        self.id = id
+        self.name = name
+        self.arguments = arguments
+        self.status = status
+        self.output = output
+    }
+
+    mutating func prepare(summary: ToolSummary) { cachedSummary = summary }
+
+    public static func == (lhs: ToolItem, rhs: ToolItem) -> Bool {
+        // A rendering cache must not change the identity or equality of a tool result.
+        lhs.id == rhs.id && lhs.name == rhs.name && lhs.arguments == rhs.arguments
+            && lhs.status == rhs.status && lhs.output == rhs.output
+    }
 }
 
 /// One visual row of the chat. Consecutive tool calls are grouped.
@@ -39,12 +56,23 @@ extension Transcript {
     public var rows: [ChatRow] {
         let results = results
         var rows: [ChatRow] = []
+        var toolGroupId: String?
+        var toolGroup: [ToolItem] = []
+
+        func flushTools() {
+            guard let id = toolGroupId else { return }
+            rows.append(.tools(id: id, items: toolGroup))
+            toolGroupId = nil
+            toolGroup = []
+        }
 
         func append(_ row: ChatRow) {
             // Merge adjacent tool groups, also across assistant messages.
-            if case let .tools(_, items) = row, case let .tools(id, previous)? = rows.last {
-                rows[rows.count - 1] = .tools(id: id, items: previous + items)
+            if case let .tools(id, items) = row {
+                if toolGroupId == nil { toolGroupId = id }
+                toolGroup.append(contentsOf: items)
             } else {
+                flushTools()
                 rows.append(row)
             }
         }
@@ -88,6 +116,7 @@ extension Transcript {
         }
         if let streaming { appendAssistant(streaming, id: "streaming", streaming: true) }
         if let error { append(.error(id: "transcript-error", text: error)) }
+        flushTools()
         return rows
     }
 
@@ -115,8 +144,8 @@ public struct ToolSummary: Equatable, Sendable {
     /// Line diffs for edits (applyPatch, edit, write), for stats and colored rendering.
     public let diffs: [FileDiff]
 
-    public var additions: Int { diffs.reduce(0) { $0 + $1.additions } }
-    public var deletions: Int { diffs.reduce(0) { $0 + $1.deletions } }
+    public let additions: Int
+    public let deletions: Int
 
     public init(name: String, arguments: JSONValue) {
         let string = { (key: String) in arguments[key]?.string }
@@ -193,6 +222,8 @@ public struct ToolSummary: Equatable, Sendable {
             body = nil
         }
         self.diffs = diffs
+        additions = diffs.reduce(0) { $0 + $1.additions }
+        deletions = diffs.reduce(0) { $0 + $1.deletions }
     }
 
     private static func firstLine(_ text: String) -> String {

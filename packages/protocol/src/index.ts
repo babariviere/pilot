@@ -94,6 +94,7 @@ export interface ModelList {
 }
 
 /** POST /api/sessions. Needs a projectId, a cwd, or both (cwd overrides the project's path). */
+/** Returns a durable `starting` session before workspace preparation and kernel startup finish. */
 export interface SpawnRequest {
 	projectId?: string;
 	cwd?: string;

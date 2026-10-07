@@ -4,34 +4,73 @@ import SwiftUI
 /// Live transcript for one session, fed by pilotd's agent event stream.
 @MainActor
 final class SessionFeed: ObservableObject {
-    @Published private(set) var transcript: Transcript
+    @Published private(set) var presentation: TranscriptPresentation
+    @Published private(set) var loading = true
     private let sessionId: String
     private let client: PilotClient?
     private var token: UUID?
+    private var processor = TranscriptProcessor()
+    private var pending: [[JSONValue]] = []
+    private var processing: Task<Void, Never>?
+    private var generation = UUID()
+    private var processorRevision = 0
 
     init(sessionId: String, client: PilotClient) {
         self.sessionId = sessionId
         self.client = client
-        transcript = Transcript()
+        presentation = TranscriptPresentation()
     }
 
     /// A static transcript, for snapshots and previews.
     init(sessionId: String, transcript: Transcript) {
         self.sessionId = sessionId
         client = nil
-        self.transcript = transcript
+        presentation = TranscriptPresentation(transcript: transcript)
+        loading = false
     }
 
     func start() {
         guard let client, token == nil else { return }
+        generation = UUID()
+        processor = TranscriptProcessor()
+        processorRevision = 0
+        loading = true
         token = client.subscribe(sessionId) { [weak self] events in
-            self?.transcript.apply(events)
+            self?.enqueue(events)
+        }
+    }
+
+    private func enqueue(_ events: [JSONValue]) {
+        pending.append(events)
+        guard processing == nil else { return }
+        let generation = generation
+        let processor = processor
+        processing = Task { [weak self] in
+            while let self, self.generation == generation, !self.pending.isEmpty {
+                let events = self.pending.flatMap { $0 }
+                self.pending.removeAll(keepingCapacity: true)
+                guard var presentation = try? await processor.apply(events) else { return }
+                guard !Task.isCancelled, self.generation == generation else { return }
+                if presentation.revision != self.processorRevision {
+                    self.processorRevision = presentation.revision
+                    presentation.revision = self.presentation.revision + 1
+                    self.presentation = presentation
+                }
+                if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
+                    self.loading = false
+                }
+            }
+            if let self, self.generation == generation { self.processing = nil }
         }
     }
 
     func stop() {
         if let token { client?.unsubscribe(sessionId, token: token) }
         token = nil
+        generation = UUID()
+        processing?.cancel()
+        processing = nil
+        pending.removeAll()
     }
 }
 
@@ -46,15 +85,19 @@ struct ChatView: View {
     }
 
     var body: some View {
-        let transcript = feed.transcript
+        let transcript = feed.presentation
         let rows = transcript.rows
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    if feed.loading, session.state != "failed" {
+                        ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
+                            .frame(maxWidth: .infinity)
+                    }
                     ForEach(rows) { row in
                         RowView(row: row)
                     }
-                    if transcript.working, transcript.streaming == nil || rows.last.map(isToolRow) == true {
+                    if transcript.working, !transcript.streaming || rows.last.map(isToolRow) == true {
                         WorkingIndicator(retry: transcript.retry)
                     }
                     if let error = session.error, transcript.error == nil {
@@ -68,7 +111,7 @@ struct ChatView: View {
                 .frame(maxWidth: Theme.column + 56)
                 .frame(maxWidth: .infinity)
             }
-            .onChange(of: transcript) { _, _ in
+            .onChange(of: transcript.revision) { _, _ in
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
@@ -78,7 +121,7 @@ struct ChatView: View {
                 if let usage = session.usage, usage.hasDisplayData { UsageFooter(usage: usage) }
                 Composer(
                     state: composer,
-                    working: transcript.working,
+                    working: transcript.working || session.state == "starting",
                     queued: transcript.queued,
                     onSend: send,
                     onStop: { Task { try? await AppModel.shared.client.stop(session.id) } }

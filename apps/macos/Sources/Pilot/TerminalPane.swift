@@ -51,11 +51,12 @@ final class TerminalStore: ObservableObject {
 
     /// Attaches to the session's shell unless attached or exited (restart is explicit).
     func ensure(_ session: SessionSummary) {
-        guard states[session.id] == nil, !exited.contains(session.id) else { return }
+        guard session.state != "starting", states[session.id] == nil, !exited.contains(session.id) else { return }
         start(session, restart: false)
     }
 
     func restart(_ session: SessionSummary) {
+        guard session.state != "starting" else { return }
         exited.remove(session.id)
         if states[session.id] != nil { remove(session.id) }
         start(session, restart: true)
@@ -141,6 +142,7 @@ struct TerminalPane: View {
                     Image(systemName: "arrow.clockwise").font(.caption)
                 }
                 .buttonStyle(.borderless)
+                .disabled(session.state == "starting")
                 .help("Restart shell")
                 Button {
                     AppModel.shared.inspectorVisible = false
@@ -168,6 +170,8 @@ struct TerminalPane: View {
                 }
                 if store.exited.contains(session.id) {
                     ExitedPlaceholder { store.restart(session) }
+                } else if session.state == "starting" {
+                    ProgressView("Preparing task…")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -176,6 +180,7 @@ struct TerminalPane: View {
         .background(Theme.background)
         .onAppear { store.ensure(session) }
         .onChange(of: session.id) { _, _ in store.ensure(session) }
+        .onChange(of: session.state) { _, _ in store.ensure(session) }
     }
 }
 
