@@ -38,7 +38,10 @@ class FakeWorker implements SessionWorker {
 	readonly commands: Command[] = [];
 	rejectBusy = false;
 	gate?: Promise<void>;
-	constructor(private readonly onPacket: (packet: KernelPacket) => void) {}
+	private readonly onPacket: (packet: KernelPacket) => void;
+	constructor(onPacket: (packet: KernelPacket) => void) {
+		this.onPacket = onPacket;
+	}
 	send(): void {}
 	async request(command: Command): Promise<void> {
 		this.commands.push(command);

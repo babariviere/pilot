@@ -6,10 +6,13 @@ export class UpdateGate {
 	private pending = 0;
 	private pausedUntil = 0;
 
-	constructor(
-		private readonly leaseMs = 30_000,
-		private readonly now: () => number = () => performance.now(),
-	) {}
+	private readonly leaseMs: number;
+	private readonly now: () => number;
+
+	constructor(leaseMs = 30_000, now: () => number = () => performance.now()) {
+		this.leaseMs = leaseMs;
+		this.now = now;
+	}
 
 	assertOpen(): void {
 		if (this.now() < this.pausedUntil)

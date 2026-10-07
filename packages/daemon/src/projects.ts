@@ -20,7 +20,11 @@ export class ProjectStore {
 	private readonly listeners = new Set<(projects: Project[]) => void>();
 	private saving: Promise<void> = Promise.resolve();
 
-	constructor(private readonly home: string) {}
+	private readonly home: string;
+
+	constructor(home: string) {
+		this.home = home;
+	}
 
 	private get file(): string {
 		return join(this.home, "projects.json");

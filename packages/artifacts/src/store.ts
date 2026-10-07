@@ -24,10 +24,10 @@ export class ArtifactStore {
 	private readonly directory: string;
 	private writes: Promise<unknown> = Promise.resolve();
 
-	constructor(
-		sessionDir: string,
-		private readonly identity: { sessionId: string; projectId?: string },
-	) {
+	private readonly identity: { sessionId: string; projectId?: string };
+
+	constructor(sessionDir: string, identity: { sessionId: string; projectId?: string }) {
+		this.identity = identity;
 		this.directory = join(sessionDir, "artifacts");
 	}
 

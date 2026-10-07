@@ -1,5 +1,5 @@
 /** Session registry and kernel worker supervision. */
-import { type ChildProcess, fork } from "node:child_process";
+import { type ChildProcess, execFile, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -26,7 +26,7 @@ import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } f
 import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
-import { createWorkspace, type Workspace } from "./workspaces.ts";
+import { createWorkspace, dissociateWorkspace, type Workspace, workspaceBorrowsObjects } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
 
@@ -35,11 +35,11 @@ type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
 export class CommandRejected extends Error {
-	constructor(
-		message: string,
-		readonly code?: "busy",
-	) {
+	readonly code?: "busy";
+
+	constructor(message: string, code?: "busy") {
 		super(message);
+		if (code) this.code = code;
 	}
 }
 
@@ -54,6 +54,13 @@ export interface SessionWorker {
 	send(command: KernelCommand): void;
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void>;
 	close(): Promise<void>;
+	/** Whether the kernel has live subprocesses (background jobs, subagents). Such workers are never parked. */
+	hasChildren?(): Promise<boolean>;
+}
+
+export interface SessionManagerOptions {
+	/** Close idle, unwatched kernels after this long. Their sessions reopen on demand. Defaults to 10 minutes. */
+	idleParkMs?: number;
 }
 
 export interface SessionFactories {
@@ -119,6 +126,63 @@ function titleFrom(message: string): string {
 	return line.length > 60 ? `${line.slice(0, 57)}...` : line || "Untitled session";
 }
 
+function forkWorker(): ChildProcess {
+	return fork(fileURLToPath(workerEntry), [], {
+		// Node strips the kernel's erasable TypeScript itself. A loader hook (tsx) roughly doubles import time.
+		execArgv: [],
+		serialization: "advanced",
+		stdio: ["ignore", "inherit", "inherit", "ipc"],
+	});
+}
+
+/**
+ * One pre-forked kernel process that has already loaded its modules and waits for its start command, so
+ * opening a session skips Node startup and module loading.
+ */
+class WorkerPool {
+	private spare?: ChildProcess;
+	private timer?: ReturnType<typeof setTimeout>;
+	private closed = false;
+
+	take(): ChildProcess {
+		const spare = this.spare;
+		this.spare = undefined;
+		// Do not compete with the session that is starting right now.
+		this.refill(5_000);
+		if (spare?.connected && spare.exitCode === null && spare.signalCode === null) {
+			spare.ref();
+			spare.channel?.ref();
+			return spare;
+		}
+		spare?.kill();
+		return forkWorker();
+	}
+
+	refill(delayMs: number): void {
+		if (this.closed || this.spare || this.timer) return;
+		this.timer = setTimeout(() => {
+			this.timer = undefined;
+			if (this.closed || this.spare) return;
+			const child = forkWorker();
+			// An unused spare must not keep the daemon (or a test) alive.
+			child.unref();
+			child.channel?.unref();
+			child.once("exit", () => {
+				if (this.spare === child) this.spare = undefined;
+			});
+			this.spare = child;
+		}, delayMs);
+		this.timer.unref();
+	}
+
+	close(): void {
+		this.closed = true;
+		clearTimeout(this.timer);
+		this.spare?.kill();
+		this.spare = undefined;
+	}
+}
+
 class Worker implements SessionWorker {
 	private exited = false;
 	private initialized = false;
@@ -141,16 +205,16 @@ class Worker implements SessionWorker {
 		);
 	}
 
+	private readonly onPacket: (packet: KernelPacket) => void;
+
 	constructor(
 		spec: Extract<KernelCommand, { type: "start" }>["spec"],
-		private readonly onPacket: (packet: KernelPacket) => void,
+		onPacket: (packet: KernelPacket) => void,
 		onExit: (worker: SessionWorker, code: number | null, signal?: NodeJS.Signals | null) => void,
+		pool?: WorkerPool,
 	) {
-		this.child = fork(fileURLToPath(workerEntry), [], {
-			execArgv: ["--import", import.meta.resolve("tsx")],
-			serialization: "advanced",
-			stdio: ["ignore", "inherit", "inherit", "ipc"],
-		});
+		this.onPacket = onPacket;
+		this.child = pool?.take() ?? forkWorker();
 		let markReady!: () => void;
 		let markFailed!: (error: Error) => void;
 		this.ready = new Promise<void>((resolve, reject) => {
@@ -224,6 +288,15 @@ class Worker implements SessionWorker {
 		if (this.child.connected) this.child.send(command);
 	}
 
+	hasChildren(): Promise<boolean> {
+		const pid = this.child.pid;
+		if (!pid || this.exited) return Promise.resolve(false);
+		return new Promise((resolve) => {
+			// pgrep exits 1 when nothing matches. Any other failure is treated as "has children": never park blindly.
+			execFile("pgrep", ["-P", String(pid)], (error) => resolve(!error || (error as { code?: unknown }).code !== 1));
+		});
+	}
+
 	/** Send a command and wait for its accepted/aborted/error acknowledgement. */
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void> {
 		if (!this.child.connected) return Promise.reject(new Error("Kernel is disconnected"));
@@ -270,6 +343,8 @@ export class SessionManager {
 	private readonly saving = new Map<string, Promise<void>>();
 	private readonly starting = new Map<string, Promise<Map<string, Error>>>();
 	private readonly preparations = new Set<Promise<Workspace>>();
+	/** Workspaces start by borrowing their project's objects. Copy them in the background, one at a time. */
+	private dissociation: Promise<void> = Promise.resolve();
 	private readonly titleTasks = new Set<Promise<void>>();
 	private readonly titleCatalog: ModelCatalog;
 	private readonly shutdownSignal = new AbortController();
@@ -285,14 +360,34 @@ export class SessionManager {
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
 	private readonly pullRequests: PullRequestTracker;
+	private readonly pool?: WorkerPool;
+	private readonly idleParkMs: number;
+	/** Last packet, subscription or command per live worker. */
+	private readonly lastUse = new Map<string, number>();
+	/** Workers being closed for inactivity. A new worker for the session waits for the storage lease. */
+	private readonly parking = new Map<string, Promise<void>>();
+	private readonly parked = new WeakSet<SessionWorker>();
+	private parkTimer?: ReturnType<typeof setTimeout>;
+
+	private readonly home: string;
+	private readonly projects: ProjectStore;
+	private readonly agentDir?: string;
+	private readonly factories: SessionFactories;
 
 	constructor(
-		private readonly home: string,
-		private readonly projects: ProjectStore,
-		private readonly agentDir?: string,
-		private readonly factories: SessionFactories = {},
+		home: string,
+		projects: ProjectStore,
+		agentDir?: string,
+		factories: SessionFactories = {},
 		pullRequests: PullRequestOptions = {},
+		options: SessionManagerOptions = {},
 	) {
+		this.idleParkMs = options.idleParkMs ?? 10 * 60_000;
+		if (!factories.worker) this.pool = new WorkerPool();
+		this.home = home;
+		this.projects = projects;
+		this.agentDir = agentDir;
+		this.factories = factories;
 		this.modelCatalog = new ModelCatalog(agentDir);
 		this.titleCatalog = new ModelCatalog(agentDir);
 		this.pullRequests = new PullRequestTracker(
@@ -338,6 +433,80 @@ export class SessionManager {
 				void this.start(meta.id, true);
 		this.pullRequests.start();
 		this.scheduleArchiveSweep();
+		// Resume dissociation interrupted by a restart.
+		for (const meta of this.metas.values()) if (!meta.preparing) this.dissociate(meta);
+		this.scheduleParkSweep();
+		this.pool?.refill(2_000);
+	}
+
+	private scheduleParkSweep(): void {
+		clearTimeout(this.parkTimer);
+		if (this.closing || !Number.isFinite(this.idleParkMs)) return;
+		this.parkTimer = setTimeout(
+			() => {
+				void this.parkIdleWorkers()
+					.catch((error: unknown) => console.warn(`pilotd: could not park idle sessions: ${error}`))
+					.finally(() => this.scheduleParkSweep());
+			},
+			Math.max(10, Math.min(60_000, this.idleParkMs)),
+		);
+		this.parkTimer.unref();
+	}
+
+	private parkable(meta: SessionMeta, worker: SessionWorker): boolean {
+		const id = meta.id;
+		return (
+			this.workers.get(id) === worker &&
+			worker.state === "idle" &&
+			!(worker.busy ?? true) &&
+			!this.watchers.get(id)?.size &&
+			!this.starting.has(id) &&
+			!this.sending.has(id) &&
+			!this.changingModels.has(id) &&
+			!this.archiveTransitions.has(id) &&
+			!meta.pending?.length &&
+			!meta.initializing &&
+			!meta.working &&
+			Date.now() - (this.lastUse.get(id) ?? 0) >= this.idleParkMs
+		);
+	}
+
+	/** Idle kernels hold hundreds of megabytes each. Close unwatched ones; durable state reopens on demand. */
+	private async parkIdleWorkers(): Promise<void> {
+		for (const [id, worker] of [...this.workers]) {
+			if (this.closing) return;
+			const meta = this.metas.get(id);
+			if (!meta || !this.parkable(meta, worker)) continue;
+			// Background jobs and subagents run as kernel subprocesses and would die with it.
+			if ((await worker.hasChildren?.()) ?? true) continue;
+			if (this.closing || !this.parkable(meta, worker)) continue;
+			this.workers.delete(id);
+			this.lastUse.delete(id);
+			this.parked.add(worker);
+			const closing: Promise<void> = worker.close().finally(() => {
+				if (this.parking.get(id) === closing) this.parking.delete(id);
+			});
+			this.parking.set(id, closing);
+			this.emit(meta);
+		}
+	}
+
+	/** Wait for an inactivity close, so the next worker can take the session's storage lease. */
+	private async unparked(id: string): Promise<void> {
+		for (let closing = this.parking.get(id); closing; closing = this.parking.get(id)) await closing;
+	}
+
+	private dissociate(meta: SessionMeta): void {
+		if (!meta.workspace || !workspaceBorrowsObjects(meta.cwd)) return;
+		this.dissociation = this.dissociation.then(async () => {
+			if (this.closing) return;
+			try {
+				if (!(await dissociateWorkspace(meta.cwd, undefined, this.shutdownSignal.signal)))
+					console.warn(`pilotd: workspace for ${meta.id} still borrows objects; retrying on next start`);
+			} catch (error) {
+				if (!this.closing) console.warn(`pilotd: could not make workspace for ${meta.id} self-contained: ${error}`);
+			}
+		});
 	}
 
 	/** Daemon-owned, independent of GitHub, clients and workers. Sweeps never overlap. */
@@ -526,6 +695,7 @@ export class SessionManager {
 			if (!option) throw new Error(`Model is not available in this session's scope: ${name}`);
 			if (thinking !== undefined && !option.thinkingLevels?.includes(thinking))
 				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
+			await this.unparked(id);
 			const reopening = !this.workers.has(id);
 			const worker = this.ensureWorker(id);
 			await worker.ready;
@@ -770,6 +940,7 @@ export class SessionManager {
 			if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
 			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
+			await this.unparked(id);
 			const worker = this.ensureWorker(id);
 			await worker.ready;
 			await worker.request({ type: "editQueuedMessage", requestId: randomUUID(), submissionId, content: message });
@@ -794,6 +965,7 @@ export class SessionManager {
 			// Prevent archiving between the check above, worker readiness, and the acknowledgement.
 			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 			admitted = true;
+			await this.unparked(id);
 			const worker = this.ensureWorker(id);
 			await worker.ready;
 			await worker.request({ type: "removeQueuedMessage", requestId: randomUUID(), submissionId });
@@ -825,6 +997,7 @@ export class SessionManager {
 			this.watchers.set(id, watchers);
 		}
 		watchers.set(watchId, listener);
+		this.lastUse.set(id, Date.now());
 		if (meta.failure || (meta.preparing && meta.cancelled)) listener([emptySnapshot]);
 		if (worker) worker.send({ type: "watch", watchId });
 		else if (!meta.failure)
@@ -840,6 +1013,8 @@ export class SessionManager {
 				.catch(() => undefined);
 		return () => {
 			watchers.delete(watchId);
+			// The inactivity clock starts when the last viewer leaves.
+			this.lastUse.set(id, Date.now());
 			this.workers.get(id)?.send({ type: "unwatch", watchId });
 		};
 	}
@@ -847,11 +1022,15 @@ export class SessionManager {
 	async shutdown(): Promise<void> {
 		this.closing = true;
 		clearTimeout(this.archiveTimer);
+		clearTimeout(this.parkTimer);
+		this.pool?.close();
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.titleTasks]);
 		await Promise.allSettled([...this.preparations]);
+		await this.dissociation;
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await Promise.allSettled([...this.parking.values()]);
 		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
@@ -897,7 +1076,9 @@ export class SessionManager {
 					delete meta.preparing;
 					await this.save(meta);
 					void this.pullRequests.refresh(meta);
+					this.dissociate(meta);
 				}
+				await this.unparked(id);
 				if (this.closing) return;
 				const worker = this.ensureWorker(id);
 				await worker.ready;
@@ -965,7 +1146,8 @@ export class SessionManager {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
-		const createWorker = this.factories.worker ?? ((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit));
+		const createWorker =
+			this.factories.worker ?? ((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit, this.pool));
 		const worker = createWorker(
 			{
 				sessionId: id,
@@ -987,6 +1169,7 @@ export class SessionManager {
 			(exited, code, signal) => this.onExit(meta, exited, code, signal),
 		);
 		this.workers.set(id, worker);
+		this.lastUse.set(id, Date.now());
 		// Reattach existing subscribers, for example after a kernel restart.
 		for (const watchId of this.watchers.get(id)?.keys() ?? []) worker.send({ type: "watch", watchId });
 		this.emit(meta);
@@ -1000,7 +1183,8 @@ export class SessionManager {
 		signal: NodeJS.Signals | null = null,
 	): void {
 		if (this.workers.get(meta.id) === exited) this.workers.delete(meta.id);
-		if (!this.closing) {
+		// An inactivity close is not a failure, even if a slow shutdown had to be forced.
+		if (!this.closing && !this.parked.has(exited)) {
 			if (exited.state === "failed") {
 				// Preserve performance recovery: transport failures do not permanently disable the session.
 				meta.inputError =
@@ -1028,6 +1212,7 @@ export class SessionManager {
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (this.workers.get(meta.id) === worker) this.lastUse.set(meta.id, Date.now());
 		if (packet.type === "artifacts.changed") {
 			const next = (this.artifactNotifications.get(meta.id) ?? Promise.resolve())
 				.then(async () => {

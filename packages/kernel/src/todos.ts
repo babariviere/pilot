@@ -52,10 +52,13 @@ export class TodosWatch {
 	#timer?: ReturnType<typeof setInterval>;
 	#refresh?: Promise<void>;
 
-	constructor(
-		readonly directory: string,
-		private readonly intervalMs = 1_000,
-	) {}
+	readonly directory: string;
+	private readonly intervalMs: number;
+
+	constructor(directory: string, intervalMs = 1_000) {
+		this.directory = directory;
+		this.intervalMs = intervalMs;
+	}
 
 	get current(): TodosUpdateEvent {
 		return {

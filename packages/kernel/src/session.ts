@@ -76,14 +76,28 @@ export class KernelSession {
 	#changingModel = false;
 	#admissions = 0;
 
+	readonly harness: Harness;
+	readonly conversation: Conversation;
+	private readonly adapter: NativeAdapter;
+	private readonly release: () => void;
+	private readonly status: AgentEventStream;
+	private readonly todos: TodosWatch;
+
 	private constructor(
-		readonly harness: Harness,
-		readonly conversation: Conversation,
-		private readonly adapter: NativeAdapter,
-		private readonly release: () => void,
-		private readonly status: AgentEventStream,
-		private readonly todos: TodosWatch,
-	) {}
+		harness: Harness,
+		conversation: Conversation,
+		adapter: NativeAdapter,
+		release: () => void,
+		status: AgentEventStream,
+		todos: TodosWatch,
+	) {
+		this.harness = harness;
+		this.conversation = conversation;
+		this.adapter = adapter;
+		this.release = release;
+		this.status = status;
+		this.todos = todos;
+	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
 		const owned = await openSessionStorage(spec.storageDir);

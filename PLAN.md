@@ -54,7 +54,9 @@ native macOS app, or from wherever the work came from.
 
 - **pilotd** (`packages/daemon`): owns sessions, trigger sources and policies. Runs as a per-user launchd
   agent, independent of the app.
-- **kernel** (`packages/kernel`): one process per session. pi-durable owns the transcript and model loop;
+- **kernel** (`packages/kernel`): one process per open session. Kernels idle and unwatched for 10 minutes
+  (`PILOT_IDLE_PARK_MS`), with no subprocesses such as background jobs, are closed and reopen on demand; one
+  pre-forked spare with its modules loaded keeps reopening fast. pi-durable owns the transcript and model loop;
   the native pi kernel provides tools, prompts, extension hooks and provider auth from `~/.pi/agent`.
 - **Pilot.app** (`apps/macos`): session list, native chat, per-session terminal, menu bar, notifications.
   Installs and supervises the launch agent. Closing or quitting the app never stops agents.
@@ -118,7 +120,10 @@ it in the session. Reuses the reporter pattern from pi-extensions subagents.
 Decided: **every session gets its own private clone** (done for manual sessions).
 
 - The clone lives in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
-  checkout (hardlinked objects), with `origin` pointed at the project's real remote and fetched. Only committed
+  checkout, with `origin` pointed at the project's real remote and fetched. The clone first borrows the
+  checkout's objects through Git alternates (no copying or hardlinking, which takes minutes for a jj checkout with
+  tens of thousands of loose objects), then pilotd repacks the reachable objects into the clone in the background
+  and drops the alternate. Only committed
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.

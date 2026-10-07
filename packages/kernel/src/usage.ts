@@ -54,7 +54,10 @@ export function subscriptionUsage(data: unknown): SubscriptionUsage | undefined 
 
 export class UsageTracker {
 	#usage: SessionUsage = {};
-	constructor(private readonly onChange?: (usage: SessionUsage) => void) {}
+	private readonly onChange?: (usage: SessionUsage) => void;
+	constructor(onChange?: (usage: SessionUsage) => void) {
+		this.onChange = onChange;
+	}
 	get current(): SessionUsage {
 		return structuredClone(this.#usage);
 	}

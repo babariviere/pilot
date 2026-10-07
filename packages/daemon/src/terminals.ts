@@ -95,7 +95,11 @@ class Terminal {
 export class TerminalManager {
 	private readonly terminals = new Map<string, Terminal>();
 
-	constructor(private readonly shell: () => ShellCommand = loginShell) {}
+	private readonly shell: () => ShellCommand;
+
+	constructor(shell: () => ShellCommand = loginShell) {
+		this.shell = shell;
+	}
 
 	/**
 	 * Attach to the session's shell, starting one if needed (or if `restart`). The listener first

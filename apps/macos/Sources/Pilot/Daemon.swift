@@ -194,7 +194,8 @@ final class DaemonController: ObservableObject {
         }
         let plist: [String: Any] = [
             "Label": Self.label,
-            "ProgramArguments": [node, "--import", "tsx", "src/main.ts"],
+            // Node strips pilotd's erasable TypeScript natively; a loader hook would slow every import.
+            "ProgramArguments": [node, "src/main.ts"],
             "WorkingDirectory": daemonDir.path,
             "EnvironmentVariables": variables,
             "RunAtLoad": true,

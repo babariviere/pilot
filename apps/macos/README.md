@@ -131,7 +131,8 @@ every bundle build smoke-tests terminal initialization from a temporary location
 Swift Testing's macro plugin lives outside the default plugin
 path, so `scripts/test.sh` passes it explicitly.
 
-Development bundles run `node --import tsx src/main.ts` from this checkout's `packages/daemon`. Release
+Development bundles run `node src/main.ts` (Node's native TypeScript stripping, no loader) from this checkout's
+`packages/daemon`. Release
 bundles include Node and pilotd in `Contents/Resources/runtime` and do not require this checkout. GUI apps get
 a minimal PATH, so the installer asks your login shell (nushell, fish, zsh or bash) for its PATH and falls
 back to mise shims and Homebrew. pilotd logs to `~/Library/Logs/Pilot/pilotd.log`.
