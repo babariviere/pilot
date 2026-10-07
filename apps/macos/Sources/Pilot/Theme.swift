@@ -128,9 +128,18 @@ struct ChipLabel: View {
 /// Colored agent status symbol, with details available without adding row text.
 struct SessionStatusIcon: View {
     let status: SessionStatus
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Image(systemName: status.symbolName)
+        Group {
+            if let symbolName = status.symbolName {
+                Image(systemName: symbolName)
+            } else {
+                TimelineView(.animation(minimumInterval: BrailleProgress.interval, paused: reduceMotion)) { context in
+                    Image(nsImage: BrailleProgress.images[reduceMotion ? 0 : BrailleProgress.frameIndex(at: context.date)])
+                }
+            }
+        }
             .font(.system(size: 12, weight: .semibold))
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(status.color)
@@ -147,9 +156,9 @@ struct SessionStatusIcon: View {
 }
 
 extension SessionStatus {
-    var symbolName: String {
+    var symbolName: String? {
         switch self {
-        case .working: "arrow.triangle.2.circlepath"
+        case .working: nil
         case .done: "checkmark"
         case .needsInput: "hand.raised.fill"
         case .failed: "exclamationmark.triangle.fill"
@@ -160,7 +169,7 @@ extension SessionStatus {
 
     var color: Color {
         switch self {
-        case .working: Theme.info
+        case .working: Theme.foreground
         case .done: Theme.success
         case .needsInput: Theme.warning
         case .failed: Theme.destructive

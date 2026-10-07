@@ -20,9 +20,7 @@ struct MenuBarContent: View {
                 Label {
                     Text("\(session.title)\(model.isUnread(session) ? " •" : "")")
                 } icon: {
-                    Image(systemName: session.status.symbolName)
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(session.status.color)
+                    SessionStatusIcon(status: session.status)
                 }
             }
             .help(session.status.rawValue)

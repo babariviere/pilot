@@ -4,9 +4,8 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
-@Test func sessionStatusesUseDistinctAvailableSymbols() {
+@Test func settledSessionStatusesUseDistinctAvailableSymbols() {
     let symbols: [(SessionStatus, String)] = [
-        (.working, "arrow.triangle.2.circlepath"),
         (.done, "checkmark"),
         (.needsInput, "hand.raised.fill"),
         (.failed, "exclamationmark.triangle.fill"),
@@ -18,10 +17,29 @@ import Testing
         #expect(status.symbolName == symbol)
         #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil)
     }
+    #expect(SessionStatus.working.symbolName == nil)
 }
 
-@Test func sessionStatusIconsKeepTheirExistingColors() {
-    #expect(SessionStatus.working.color == Theme.info)
+@Test func brailleProgressAdvancesAndLoops() {
+    #expect(BrailleProgress.frames.count == 10)
+    #expect(Set(BrailleProgress.frames).count == 10)
+    for index in 0..<20 {
+        let date = Date(timeIntervalSinceReferenceDate: Double(index) * BrailleProgress.interval + 0.01)
+        #expect(BrailleProgress.frameIndex(at: date) == index % 10)
+    }
+    #expect(BrailleProgress.frameIndex(at: Date(timeIntervalSinceReferenceDate: -0.01)) == 9)
+}
+
+@Test func brailleProgressUsesFixedSizeTemplateImages() {
+    #expect(BrailleProgress.images.count == BrailleProgress.frames.count)
+    for image in BrailleProgress.images {
+        #expect(image.isTemplate)
+        #expect(image.size == NSSize(width: 14, height: 14))
+    }
+}
+
+@Test func sessionStatusIconsUseNeutralWorkingAndColoredOutcomes() {
+    #expect(SessionStatus.working.color == Theme.foreground)
     #expect(SessionStatus.done.color == Theme.success)
     #expect(SessionStatus.needsInput.color == Theme.warning)
     #expect(SessionStatus.failed.color == Theme.destructive)

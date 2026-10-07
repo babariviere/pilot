@@ -233,8 +233,9 @@ reports), producing a morning summary in the app and Slack.
 ## 7. App (macOS)
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
-- Manual sessions show colored status icons (working arrows, done checkmark, needs-input raised hand,
-  failed warning triangle, stopped stop symbol, idle sleeping moon), with the status
+- Manual sessions show a text-colored animated braille spinner while working, and colored status icons
+  (done checkmark, needs-input raised hand, failed warning triangle, stopped stop symbol, idle sleeping moon),
+  with the status
   in tooltips and accessibility labels, separately from worker lifecycle. Unread completion dots persist
   until reviewed, independently of the outcome:
   reading a question does not answer it. Native macOS notifications distinguish results, blocking
