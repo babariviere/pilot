@@ -1,53 +1,50 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
-    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1F6FE0"/>
-      <stop offset="1" stop-color="#7EC3F7"/>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2F6FC6"/>
+      <stop offset="1" stop-color="#7DB9E8"/>
     </linearGradient>
-    <linearGradient id="trail" gradientUnits="userSpaceOnUse" x1="0" y1="262" x2="0" y2="980">
-      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
+    <linearGradient id="contrail" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="0" y2="1100">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.9"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
     </linearGradient>
+    <filter id="trailSoft" x="-50%" y="-10%" width="200%" height="120%"><feGaussianBlur stdDeviation="6"/></filter>
     <clipPath id="tile"><rect x="100" y="100" width="824" height="824" rx="185"/></clipPath>
-    <path id="plane" d="M 0 -300 C 17 -300 26 -286 26 -262 L 26 -72 L 276 44 Q 290 51 290 66 L 290 72 Q 290 84 277 81 L 26 30 L 26 168 L 108 222 Q 116 228 116 238 L 116 244 Q 116 254 105 252 L 12 236 Q 0 262 -12 236 L -105 252 Q -116 254 -116 244 L -116 238 Q -116 228 -108 222 L -26 168 L -26 30 L -277 81 Q -290 84 -290 72 L -290 66 Q -290 51 -276 44 L -26 -72 L -26 -262 C -26 -286 -17 -300 0 -300 Z"/>
-    <filter id="tileShadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="14"/></filter>
-    <filter id="planeShadow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="12"/></filter>
-    <filter id="puff" x="-100%" y="-10%" width="300%" height="120%"><feGaussianBlur stdDeviation="12"/></filter>
-    <linearGradient id="cloudBase" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#E4EEFA"/>
-      <stop offset="1" stop-color="#B9CEE8"/>
+    
+    <linearGradient id="wing" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#D7DFEA"/>
     </linearGradient>
-    <filter id="cloudShadow" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="14"/></filter>
-    <clipPath id="cloudA"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></clipPath>
-    <clipPath id="cloudB"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></clipPath>
-    <clipPath id="cloudC"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></clipPath>
+    <linearGradient id="fuselage" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#D3DBE6"/>
+      <stop offset="0.4" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#BFC9D7"/>
+    </linearGradient>
+    <filter id="planeShadow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="9"/></filter>
+    <g id="airlinerArt">
+      <path d="M 24 -52 L 282 66 Q 290 70 290 78 L 290 86 Q 290 94 282 93 L 104 54 L 24 54 Z M -24 -52 L -24 54 L -104 54 L -282 93 Q -290 94 -290 86 L -290 78 Q -290 70 -282 66 Z" fill="url(#wing)" stroke="#8E9BB0" stroke-width="2.5" stroke-linejoin="round"/>
+      <g fill="none" stroke="#A9B4C4" stroke-width="1.8" stroke-linecap="round">
+        <path d="M 30 40 L 104 40 L 240 70 M -30 40 L -104 40 L -240 70"/>
+        <path d="M 170 56 L 168 69 M 240 70 L 238 84 M -170 56 L -168 69 M -240 70 L -238 84"/>
+      </g>
+      <path d="M 280 64 L 290 70 L 290 94 L 282 93 Z M -280 64 L -290 70 L -290 94 L -282 93 Z" fill="#2D5BA8"/>
+      <path d="M 10 200 L 112 248 Q 118 251 118 257 L 118 264 Q 118 270 112 270 L 10 266 Z M -10 200 L -10 266 L -112 270 Q -118 270 -118 264 L -118 257 Q -118 251 -112 248 Z" fill="url(#wing)" stroke="#8E9BB0" stroke-width="2.5" stroke-linejoin="round"/>
+      <path d="M 0 -300 C 17 -300 27 -280 27 -244 L 27 140 C 27 200 14 260 6 292 Q 0 304 -6 292 C -14 260 -27 200 -27 140 L -27 -244 C -27 -280 -17 -300 0 -300 Z" fill="url(#fuselage)" stroke="#8E9BB0" stroke-width="2.5"/>
+      <path d="M -11 -268 Q 0 -276 11 -268 L 13 -256 Q 0 -262 -13 -256 Z" fill="#2B3550"/>
+      <path d="M 0 196 L 0 296" stroke="#2D5BA8" stroke-width="7" stroke-linecap="round"/>
+      <path d="M 0 -236 L 0 120" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round" opacity="0.8"/>
+    </g>
+    <path id="plane" d="M 24 -52 L 282 66 Q 290 70 290 78 L 290 86 Q 290 94 282 93 L 104 54 L 24 54 Z M -24 -52 L -24 54 L -104 54 L -282 93 Q -290 94 -290 86 L -290 78 Q -290 70 -282 66 Z M 10 200 L 112 248 Q 118 251 118 257 L 118 264 Q 118 270 112 270 L 10 266 Z M -10 200 L -10 266 L -112 270 Q -118 270 -118 264 L -118 257 Q -118 251 -112 248 Z M 0 -300 C 17 -300 27 -280 27 -244 L 27 140 C 27 200 14 260 6 292 Q 0 304 -6 292 C -14 260 -27 200 -27 140 L -27 -244 C -27 -280 -17 -300 0 -300 Z"/>
+    <filter id="tileShadow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="14"/></filter>
   </defs>
-  <rect x="100" y="118" width="824" height="824" rx="185" fill="#000000" opacity="0.3" filter="url(#tileShadow)"/>
+  <rect x="100" y="118" width="824" height="824" rx="185" fill="#000000" opacity="0.28" filter="url(#tileShadow)"/>
   <g clip-path="url(#tile)">
     <rect x="100" y="100" width="824" height="824" fill="url(#sky)"/>
-    <g transform="translate(270 300) scale(0.5)" opacity="0.75">
-      <g fill="#0B3B8C" opacity="0.22" filter="url(#cloudShadow)" transform="translate(6 22)"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></g>
-      <g fill="url(#cloudBase)"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></g>
-      <g clip-path="url(#cloudA)" fill="#FFFFFF"><circle cx="-115" cy="-1" r="37.0"/><circle cx="-65" cy="-36" r="51.0"/><circle cx="5" cy="-61" r="63.4"/><circle cx="80" cy="-31" r="51.0"/><circle cx="130" cy="4" r="35.2"/><circle cx="85" cy="24" r="39.6"/><circle cx="25" cy="22" r="45.8"/><circle cx="-35" cy="24" r="44.0"/><circle cx="-90" cy="26" r="33.4"/></g>
+    <g transform="translate(533 491) rotate(45) scale(0.74)" fill="url(#contrail)">
+      <g filter="url(#trailSoft)" opacity="0.6"><path d="M -101 0 L -91 0 L -82 1100 L -110 1100 Z"/><path d="M 91 0 L 101 0 L 110 1100 L 82 1100 Z"/></g>
+      <path d="M -101 0 L -91 0 L -82 1100 L -110 1100 Z"/><path d="M 91 0 L 101 0 L 110 1100 L 82 1100 Z"/>
     </g>
-    <g transform="translate(790 850) scale(0.9)" opacity="1">
-      <g fill="#0B3B8C" opacity="0.22" filter="url(#cloudShadow)" transform="translate(6 22)"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></g>
-      <g fill="url(#cloudBase)"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></g>
-      <g clip-path="url(#cloudB)" fill="#FFFFFF"><circle cx="-115" cy="-1" r="37.0"/><circle cx="-65" cy="-36" r="51.0"/><circle cx="5" cy="-61" r="63.4"/><circle cx="80" cy="-31" r="51.0"/><circle cx="130" cy="4" r="35.2"/><circle cx="85" cy="24" r="39.6"/><circle cx="25" cy="22" r="45.8"/><circle cx="-35" cy="24" r="44.0"/><circle cx="-90" cy="26" r="33.4"/></g>
-    </g>
-    <g transform="translate(585 445) rotate(45) scale(0.72)" fill="url(#trail)">
-      <path d="M -8 262 L 8 262 L 46 1150 L -46 1150 Z" filter="url(#puff)" opacity="0.55" transform="scale(1.8 1)"/>
-      <path d="M -8 262 L 8 262 L 46 1150 L -46 1150 Z" opacity="0.9"/>
-    </g>
-    <use href="#plane" transform="translate(597 465) rotate(45) scale(0.72)" fill="#000000" opacity="0.45" filter="url(#planeShadow)"/>
-    <use href="#plane" transform="translate(585 445) rotate(45) scale(0.72)" fill="#FFFFFF"/>
-    <g transform="translate(415 620) scale(0.8)" opacity="1">
-      <g fill="#0B3B8C" opacity="0.22" filter="url(#cloudShadow)" transform="translate(6 22)"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></g>
-      <g fill="url(#cloudBase)"><circle cx="-105" cy="15" r="42.0"/><circle cx="-55" cy="-20" r="58.0"/><circle cx="15" cy="-45" r="72.0"/><circle cx="90" cy="-15" r="58.0"/><circle cx="140" cy="20" r="40.0"/><circle cx="95" cy="40" r="45.0"/><circle cx="35" cy="38" r="52.0"/><circle cx="-25" cy="40" r="50.0"/><circle cx="-80" cy="42" r="38.0"/></g>
-      <g clip-path="url(#cloudC)" fill="#FFFFFF"><circle cx="-115" cy="-1" r="37.0"/><circle cx="-65" cy="-36" r="51.0"/><circle cx="5" cy="-61" r="63.4"/><circle cx="80" cy="-31" r="51.0"/><circle cx="130" cy="4" r="35.2"/><circle cx="85" cy="24" r="39.6"/><circle cx="25" cy="22" r="45.8"/><circle cx="-35" cy="24" r="44.0"/><circle cx="-90" cy="26" r="33.4"/></g>
-    </g>
+    <use href="#plane" transform="translate(551 527) rotate(45) scale(0.74)" fill="#0E2550" opacity="0.35" filter="url(#planeShadow)"/>
+    <use href="#airlinerArt" transform="translate(533 491) rotate(45) scale(0.74)"/>
   </g>
 </svg>
-
-
-

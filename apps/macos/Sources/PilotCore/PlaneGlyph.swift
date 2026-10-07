@@ -4,7 +4,7 @@ import CoreGraphics
 /// Keep `svgPath` identical to the icon's `#plane` path (a test checks it).
 public enum PlaneGlyph {
     public static let svgPath =
-        "M 0 -300 C 17 -300 26 -286 26 -262 L 26 -72 L 276 44 Q 290 51 290 66 L 290 72 Q 290 84 277 81 L 26 30 L 26 168 L 108 222 Q 116 228 116 238 L 116 244 Q 116 254 105 252 L 12 236 Q 0 262 -12 236 L -105 252 Q -116 254 -116 244 L -116 238 Q -116 228 -108 222 L -26 168 L -26 30 L -277 81 Q -290 84 -290 72 L -290 66 Q -290 51 -276 44 L -26 -72 L -26 -262 C -26 -286 -17 -300 0 -300 Z"
+        "M 24 -52 L 282 66 Q 290 70 290 78 L 290 86 Q 290 94 282 93 L 104 54 L 24 54 Z M -24 -52 L -24 54 L -104 54 L -282 93 Q -290 94 -290 86 L -290 78 Q -290 70 -282 66 Z M 10 200 L 112 248 Q 118 251 118 257 L 118 264 Q 118 270 112 270 L 10 266 Z M -10 200 L -10 266 L -112 270 Q -118 270 -118 264 L -118 257 Q -118 251 -112 248 Z M 0 -300 C 17 -300 27 -280 27 -244 L 27 140 C 27 200 14 260 6 292 Q 0 304 -6 292 C -14 260 -27 200 -27 140 L -27 -244 C -27 -280 -17 -300 0 -300 Z"
 
     /// The contrail behind the tail, in the same units. It widens and fades away from the plane.
     public static func trail(length: CGFloat) -> CGPath {
