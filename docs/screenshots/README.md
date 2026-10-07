@@ -3,7 +3,9 @@
 ## Agent status icons
 
 `status-icons.png` shows all six colored agent states in the sidebar: working, done,
-needs your input, failed, idle and stopped. Unread dots remain separate. The image
+needs your input, failed, idle and stopped. Working uses a normal-text-color braille spinner
+(a single animation frame in the screenshot). Reduce Motion keeps it static.
+Unread dots remain separate. The image
 uses deterministic fixture sessions, not live conversations.
 
 Regenerate on macOS:
