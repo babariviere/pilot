@@ -1,7 +1,7 @@
 import Foundation
 
 public enum ArtifactKind: String, Codable, Hashable, Sendable {
-    case html, react
+    case html, react, image
 }
 
 public enum ArtifactLibrary: String, Codable, CaseIterable, Hashable, Sendable {

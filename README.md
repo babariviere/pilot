@@ -7,9 +7,10 @@ and gives you a native macOS app to spawn, steer and stop them, with a libghostt
 Sessions load your pi configuration from `~/.pi/agent` (settings, packages, extensions, skills, MCP),
 so packages such as [pi-extensions](https://github.com/babariviere/pi-extensions) work by default.
 
-Agents can create **Artifacts**: interactive HTML/JavaScript or React/JSX previews, including diagrams,
-graphs and animations. Revisions persist with their originating session and project. Chat cards open
-the revision published there; the session sidebar opens the latest. Previews run offline in an isolated
+Agents can create **Artifacts**: plain images or interactive HTML/JavaScript and React/JSX previews,
+including diagrams, graphs and animations. Revisions persist with their originating session and project.
+Chat cards open the revision published there; the session sidebar opens the latest. Expanded previews
+fill most of the screen. Previews run offline in an isolated
 WebKit view, with bundled React, Mermaid, ECharts and Motion (D3 and Three.js are opt-in).
 The `artifact` tool (actions: `create`, `update`, `get`, `list`, `preview`)
 documents the available libraries and authoring examples. For agent-side screenshots and runtime

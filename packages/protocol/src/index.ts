@@ -138,7 +138,7 @@ export type WorkspaceMode = "clone" | "direct";
 
 /** Offline libraries available inside the artifact sandbox. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
-export type ArtifactKind = "html" | "react";
+export type ArtifactKind = "html" | "react" | "image";
 
 export interface ArtifactSummary {
 	id: string;
@@ -151,7 +151,7 @@ export interface ArtifactSummary {
 	updatedAt: number;
 }
 
-/** Source is editable; html is the prepared, sandboxed preview. */
+/** Source is editable code or an embedded image data URL; html is the prepared, sandboxed preview. */
 export interface ArtifactRevision extends ArtifactSummary {
 	source: string;
 	html: string;

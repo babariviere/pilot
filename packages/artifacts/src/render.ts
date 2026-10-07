@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "esbuild";
 import type { ArtifactLibrary, ArtifactWrite } from "@pilot/protocol";
+import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
 
 const require = createRequire(import.meta.url);
 const resolveDir = dirname(fileURLToPath(import.meta.url));
@@ -32,12 +33,20 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 	if (!write || typeof write !== "object") throw new Error("Expected an artifact document");
 	if (typeof write.title !== "string" || !write.title.trim() || write.title.length > 160)
 		throw new Error("Artifact title must contain 1-160 characters");
-	if (write.kind !== "html" && write.kind !== "react") throw new Error("Artifact kind must be html or react");
-	if (typeof write.source !== "string" || !write.source.trim() || Buffer.byteLength(write.source) > MAX_SOURCE_BYTES)
-		throw new Error("Artifact source must contain 1-512 KiB of HTML or JSX/TSX");
+	if (write.kind !== "html" && write.kind !== "react" && write.kind !== "image")
+		throw new Error("Artifact kind must be html, react or image");
+	const maxBytes = write.kind === "image" ? MAX_IMAGE_SOURCE_BYTES : MAX_SOURCE_BYTES;
+	if (typeof write.source !== "string" || !write.source.trim() || Buffer.byteLength(write.source) > maxBytes)
+		throw new Error(
+			write.kind === "image"
+				? "Artifact image exceeds 16 MiB or is empty"
+				: "Artifact source must contain 1-512 KiB of HTML or JSX/TSX",
+		);
+	if (write.kind === "image") validateImageSource(write.source);
 	if (write.libraries !== undefined && (!Array.isArray(write.libraries) || !write.libraries.every(isArtifactLibrary)))
 		throw new Error("Unknown artifact library. Use the bundled library names only");
 	const libraries = [...new Set(write.libraries ?? [])];
+	if (write.kind === "image" && libraries.length) throw new Error("Image artifacts do not use libraries");
 	if (libraries.includes("react-dom")) {
 		const reactIndex = libraries.indexOf("react");
 		if (reactIndex !== -1) libraries.splice(reactIndex, 1);
@@ -181,7 +190,9 @@ export async function prepareArtifact(input: ArtifactWrite): Promise<{ html: str
 	const body =
 		write.kind === "react"
 			? `<div id="artifact-root"></div>${compiledScript(await compileReact(write.source))}`
-			: write.source;
+			: write.kind === "image"
+				? `<style>body{padding:0}img{display:block;width:100%;height:100vh;object-fit:contain}</style><img alt="Artifact image" src="${write.source}">`
+				: write.source;
 	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${ARTIFACT_RUNTIME_GUARD}</script><style>${styles}</style>${libraries}</head><body>${body}</body></html>`;
 	if (Buffer.byteLength(html) > 25 * 1024 * 1024) throw new Error("Prepared artifact exceeds 25 MiB");
 	return { html, libraries: write.libraries };
