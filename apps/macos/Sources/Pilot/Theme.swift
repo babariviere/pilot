@@ -1,4 +1,5 @@
 import AppKit
+import PilotCore
 import SwiftUI
 
 /// Light design tokens, after Berth's palette: white surfaces, a neutral-50 sidebar, 8% black
@@ -24,6 +25,18 @@ enum Theme {
     static let success = Color(hex: 0x10B981)
     static let warning = Color(hex: 0xF59E0B)
     static let destructive = Color(hex: 0xEF4444)
+
+    /// Syntax colors with contrast against the light code surface.
+    static func syntaxColor(_ kind: CodeSyntax.Kind?) -> Color {
+        switch kind {
+        case .keyword: Color(hex: 0x7C3AED)
+        case .string: Color(hex: 0x166534)
+        case .number, .literal: Color(hex: 0x9A3412)
+        case .comment: mutedForeground
+        case .function: Color(hex: 0x1D4ED8)
+        case nil: foreground
+        }
+    }
 
     // Older names, kept so views read naturally.
     static var cardBackground: Color { card }

@@ -70,6 +70,19 @@ struct CodeBlock: View {
     @Environment(\.pilotFonts) private var fonts
     let language: String?
     let text: String
+    private let highlightedText: AttributedString
+
+    init(language: String?, text: String) {
+        self.language = language
+        self.text = text
+        var highlighted = AttributedString()
+        for token in CodeSyntax.tokens(text, language: language) {
+            var part = AttributedString(token.text)
+            part.foregroundColor = Theme.syntaxColor(token.kind)
+            highlighted.append(part)
+        }
+        highlightedText = highlighted
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -82,8 +95,9 @@ struct CodeBlock: View {
             .padding(.vertical, 5)
             .background(Theme.subtleFill)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(text)
+                Text(highlightedText)
                     .font(fonts.mono)
+                    .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
                     .padding(10)
             }
