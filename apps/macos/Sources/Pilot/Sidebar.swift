@@ -73,7 +73,8 @@ struct SessionSidebar: View {
     private func matches(_ session: SessionSummary) -> Bool {
         let query = model.sidebarQuery.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty else { return true }
-        return [session.title, session.branch ?? "", session.cwd, session.model ?? ""]
+        return [session.title, session.branch ?? "", session.cwd, session.model ?? "",
+                session.pullRequest?.label ?? "", session.pullRequest?.title ?? ""]
             .contains { $0.lowercased().contains(query) }
     }
 
@@ -155,6 +156,7 @@ struct SessionRow: View {
                 Text(session.status.rawValue)
                     .font(.system(size: 11))
                     .foregroundStyle(session.status.color)
+                PullRequestBadge(session: session, compact: true)
             }
             Spacer(minLength: 4)
             if model.isUnread(session) { UnreadBadge() }
@@ -166,6 +168,9 @@ struct SessionRow: View {
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
         .contextMenu {
+            if let pr = session.pullRequest, let url = pr.browserURL {
+                Link("Open PR \(pr.label)\(session.pullRequestIsStale ? " (last known)" : "") in Browser", destination: url)
+            }
             if model.isUnread(session) {
                 Button("Mark as reviewed") { model.review(session, explicit: true) }
             }

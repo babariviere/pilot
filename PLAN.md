@@ -230,6 +230,11 @@ reports), producing a morning summary in the app and Slack.
   lifecycle. Unread completion badges persist until reviewed, independently of the outcome:
   reading a question does not answer it. Native macOS notifications distinguish results, blocking
   requests and failures, and deduplicate completion versions across reconnects.
+- Private-branch sessions show a linked GitHub PR badge independently of run outcome: Draft, Open,
+  Merged, or Closed without merging. The daemon discovers PRs by the exact workspace branch and
+  repository, checks GitHub at startup, after settled work and about once a minute while idle,
+  and persists the last successful status. Failed lookups retain the cache but label it as last
+  known, never as a fresh merge result. Direct/shared-folder sessions are not auto-linked.
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
   user messages above the composer until consumed, restoring them on reconnect. Display steering before
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
@@ -266,6 +271,7 @@ reports), producing a morning summary in the app and Slack.
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
 | `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
+| `SessionSummary.pullRequest`, `.pullRequestError` | Branch-linked GitHub PR status and cached-lookup errors (done for private manual sessions) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
 | `POST /api/sessions/:id/archive` | Release workspace, hide from lists |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |

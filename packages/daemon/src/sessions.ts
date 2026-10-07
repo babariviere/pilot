@@ -8,6 +8,7 @@ import { type KernelCommand, type KernelPacket, type WorkspaceContext, workerEnt
 import type {
 	AgentEvent,
 	DeliveryMode,
+	SessionPullRequest,
 	SessionState,
 	SessionSummary,
 	SessionUsage,
@@ -18,6 +19,7 @@ import { NotFound } from "./errors.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
+import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
 import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
 import { branchSlug, createWorkspace, type Workspace } from "./workspaces.ts";
 
@@ -71,6 +73,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** A recoverable input/admission error, not a failed worker initialization. */
 	inputError?: string;
 	failure?: string;
+	pullRequest?: SessionPullRequest;
+	pullRequestError?: string;
 }
 
 type EventListener = (events: AgentEvent[]) => void;
@@ -241,13 +245,21 @@ export class SessionManager {
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
 	private closing = false;
+	private readonly pullRequests: PullRequestTracker;
 
 	constructor(
 		private readonly home: string,
 		private readonly projects: ProjectStore,
 		private readonly agentDir?: string,
 		private readonly factories: SessionFactories = {},
-	) {}
+		pullRequests: PullRequestOptions = {},
+	) {
+		this.pullRequests = new PullRequestTracker(
+			() => this.metas.values(),
+			(session, result) => this.applyPullRequest(this.require(session.id), result),
+			pullRequests,
+		);
+	}
 
 	private get sessionsDir(): string {
 		return join(this.home, "sessions");
@@ -278,6 +290,7 @@ export class SessionManager {
 		for (const meta of this.metas.values())
 			if (!meta.failure && (meta.initializing || meta.pending?.length || meta.working))
 				void this.start(meta.id, true);
+		this.pullRequests.start();
 	}
 
 	onChange(listener: (session: SessionSummary) => void): () => void {
@@ -483,9 +496,11 @@ export class SessionManager {
 
 	async shutdown(): Promise<void> {
 		this.closing = true;
+		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.preparations]);
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await drainPullRequests;
 		await Promise.all([...this.saving.values()]);
 	}
 
@@ -526,6 +541,7 @@ export class SessionManager {
 					};
 					delete meta.preparing;
 					await this.save(meta);
+					void this.pullRequests.refresh(meta);
 				}
 				if (this.closing) return;
 				const worker = this.ensureWorker(id);
@@ -656,12 +672,14 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "ready" || packet.type === "working") {
+			const wasWorking = meta.working;
 			const changed = applyActivity(meta, packet.working, packet.completion);
 			if (packet.type === "ready") meta.model = packet.model;
 			if (changed || packet.type === "ready") {
 				meta.updatedAt = Date.now();
 				void this.save(meta);
 			}
+			if (!packet.working && (wasWorking || (changed && packet.completion))) void this.pullRequests.refresh(meta);
 		} else if (packet.type === "error" && !packet.requestId && worker.state === "failed" && !this.closing) {
 			this.fail(meta, packet.message);
 		}
@@ -689,10 +707,43 @@ export class SessionManager {
 			...(meta.outcome ? { outcome: meta.outcome } : {}),
 			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
 			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),
+			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
+			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.failure || meta.inputError || worker?.error
 				? { error: meta.failure || meta.inputError || worker?.error }
 				: {}),
 		};
+	}
+
+	private async applyPullRequest(meta: SessionMeta, result: PullRequestResult): Promise<void> {
+		const previous = meta.pullRequest;
+		const previousError = meta.pullRequestError;
+		const next = result.pullRequest;
+		const changed =
+			previousError !== result.error ||
+			(next !== undefined &&
+				(previous?.number !== next.number ||
+					previous.url !== next.url ||
+					previous.title !== next.title ||
+					previous.state !== next.state));
+		if (next) meta.pullRequest = next;
+		if (result.error) meta.pullRequestError = result.error;
+		else delete meta.pullRequestError;
+		// PR freshness is not agent activity. Keep ordering and completion versions unchanged.
+		if (next || changed) {
+			try {
+				await this.save(meta);
+			} catch (error) {
+				// Publish only persisted PR updates, and let the next check retry the same error.
+				// Other activity/outcome fields may have changed during I/O. Never roll those back.
+				if (previous) meta.pullRequest = previous;
+				else delete meta.pullRequest;
+				if (previousError !== undefined) meta.pullRequestError = previousError;
+				else delete meta.pullRequestError;
+				throw error;
+			}
+		}
+		if (next || changed) this.emit(meta);
 	}
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {

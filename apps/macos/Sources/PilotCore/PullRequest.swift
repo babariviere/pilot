@@ -1,0 +1,70 @@
+import Foundation
+
+public enum PullRequestState: String, Codable, CaseIterable, Hashable, Sendable {
+    case draft
+    case open
+    case merged
+    case closed
+
+    public var label: String {
+        switch self {
+        case .draft: "Draft"
+        case .open: "Open"
+        case .merged: "Merged"
+        case .closed: "Closed without merging"
+        }
+    }
+
+    public var compactLabel: String { self == .closed ? "Closed" : label }
+}
+
+/// Mirrors packages/protocol. Read-only GitHub metadata, independent of agent outcome.
+public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
+    public let number: Int
+    public let url: String
+    public let title: String
+    public let state: PullRequestState
+    /// Last successful lookup, epoch milliseconds.
+    public let checkedAt: Double
+
+    public init(number: Int, url: String, title: String, state: PullRequestState, checkedAt: Double) {
+        self.number = number
+        self.url = url
+        self.title = title
+        self.state = state
+        self.checkedAt = checkedAt
+    }
+
+    public var label: String { "\(state.label) #\(number)" }
+    public var compactLabel: String { "\(state.compactLabel) #\(number)" }
+
+    /// Allow GitHub Enterprise hosts too, but never launch arbitrary URL schemes.
+    public var browserURL: URL? {
+        guard let parts = URLComponents(string: url),
+              let scheme = parts.scheme?.lowercased(), ["http", "https"].contains(scheme),
+              let host = parts.host, !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              parts.user == nil, parts.password == nil
+        else { return nil }
+        return parts.url
+    }
+
+    public var checkedDate: Date? {
+        checkedAt.isFinite ? Date(timeIntervalSince1970: checkedAt / 1000) : nil
+    }
+}
+
+extension SessionSummary {
+    public var pullRequestIsStale: Bool { pullRequestError != nil }
+
+    public var pullRequestHelpText: String? {
+        guard let pr = pullRequest else {
+            return pullRequestError.map { "Pull request lookup failed. No cached status available.\n\($0)" }
+        }
+        var lines = ["\(pullRequestIsStale ? "Last known: " : "")\(pr.label): \(pr.title)"]
+        let checked = pr.checkedDate?.formatted(date: .abbreviated, time: .standard) ?? "Unknown"
+        lines.append("Last checked: \(checked)")
+        if let error = pullRequestError { lines.append("Lookup failed. Cached status may be out of date.\n\(error)") }
+        lines.append(pr.browserURL == nil ? "Invalid pull request link. Cannot open in browser." : "Open pull request in browser. No merge action.")
+        return lines.joined(separator: "\n")
+    }
+}

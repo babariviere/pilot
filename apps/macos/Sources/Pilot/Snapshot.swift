@@ -145,6 +145,21 @@ enum Snapshot {
                 to: directory.appending(path: session.outcome == .needsInput ? "needs-input-unread.png" : "done-unread.png")
             )
         }
+        // A separate fixture set preserves the original attention/usage/diff screenshots.
+        model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.pullRequestSessions)
+        model.inspectorVisible = false
+        model.selectedSessionId = nil
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "pr-dashboard.png"))
+        for session in Fixtures.pullRequestSessions where ["pr-open", "pr-merged", "pr-stale"].contains(session.id) {
+            model.selectedSessionId = session.id
+            await render(
+                Frame(title: session.title, subtitle: "pilot · \(session.model ?? "default model")", status: session.status, session: session) {
+                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: session.isWorking ? Fixtures.transcript : Fixtures.settledTranscript(needsInput: false)))
+                },
+                size: size,
+                to: directory.appending(path: "\(session.id).png")
+            )
+        }
         print("snapshots written to \(directory.path)")
         exit(0)
     }
@@ -270,6 +285,7 @@ enum Snapshot {
         let title: String
         let subtitle: String?
         var status: SessionStatus = .working
+        var session: SessionSummary? = nil
         @ViewBuilder let content: Content
 
         var body: some View {
@@ -297,6 +313,10 @@ enum Snapshot {
                         Spacer()
                         if subtitle != nil {
                             StateBadge(status: status)
+                            if let session {
+                                if AppModel.shared.isUnread(session) { UnreadBadge() }
+                                PullRequestBadge(session: session)
+                            }
                             Image(systemName: "folder").foregroundStyle(Theme.mutedForeground)
                             Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
                         }
@@ -354,6 +374,35 @@ enum Fixtures {
         SessionSummary(id: "s5", title: "Explain the Harness task graph", cwd: "\(home)/scratch",
                        createdAt: now - 6 * 86_400_000, updatedAt: now - 400_000_000, state: "parked",
                        outcome: .needsInput, outcomeAt: now - 400_000_000, outcomeReason: "Which part of the task graph should I document first?"),
+    ]
+
+    static let pullRequestSessions: [SessionSummary] = [
+        SessionSummary(id: "pr-open", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",
+                       branch: "pilot/fix-flaky-reopen-test-55cb84", createdAt: now - 3_600_000, updatedAt: now - 133_000,
+                       state: "working", model: "openai-codex/gpt-6.1-sol", usage: codexUsage,
+                       pullRequest: SessionPullRequest(number: 7, url: "https://github.com/babariviere/pilot/pull/7",
+                                                      title: "Fix flaky reopen test", state: .open, checkedAt: 1_781_524_800_000)),
+        SessionSummary(id: "pr-merged", title: "Add projects API to pilotd", cwd: projects[0].path, projectId: "p1",
+                       createdAt: now - 86_400_000, updatedAt: now - 3_000_000, state: "idle", model: "openai-codex/gpt-6.1-sol",
+                       outcome: .done, outcomeAt: 1_781_524_800_000, outcomeReason: "Projects API implemented and tests passed.",
+                       pullRequest: SessionPullRequest(number: 4, url: "https://github.com/babariviere/pilot/pull/4",
+                                                      title: "Add projects API", state: .merged, checkedAt: 1_781_524_800_000)),
+        SessionSummary(id: "pr-draft", title: "Document durable storage", cwd: projects[0].path, projectId: "p1",
+                       createdAt: now - 2 * 86_400_000, updatedAt: now - 600_000, state: "idle",
+                       outcome: .needsInput, outcomeAt: 1_781_524_800_001, outcomeReason: "Which storage flow should I document first?",
+                       pullRequest: SessionPullRequest(number: 8, url: "https://github.com/babariviere/pilot/pull/8",
+                                                      title: "Document durable storage", state: .draft, checkedAt: 1_781_524_800_000)),
+        SessionSummary(id: "pr-closed", title: "Explore alternate scheduler", cwd: projects[0].path, projectId: "p1",
+                       createdAt: now - 4 * 86_400_000, updatedAt: now - 90_000_000, state: "parked",
+                       outcome: .stopped, outcomeAt: 1_781_524_800_002,
+                       pullRequest: SessionPullRequest(number: 5, url: "https://github.com/babariviere/pilot/pull/5",
+                                                      title: "Explore alternate scheduler", state: .closed, checkedAt: 1_781_524_800_000)),
+        SessionSummary(id: "pr-stale", title: "Add projects API, offline lookup", cwd: projects[0].path, projectId: "p1",
+                       createdAt: now - 5 * 86_400_000, updatedAt: now - 120_000, state: "idle", model: "openai-codex/gpt-6.1-sol",
+                       outcome: .done, outcomeAt: 1_781_524_800_003, outcomeReason: "Projects API implemented and tests passed.",
+                       pullRequest: SessionPullRequest(number: 9, url: "https://github.com/babariviere/pilot/pull/9",
+                                                      title: "Add projects API", state: .open, checkedAt: 1_781_521_200_000),
+                       pullRequestError: "GitHub lookup failed: network offline"),
     ]
 
     static func settledTranscript(needsInput: Bool) -> Transcript {
