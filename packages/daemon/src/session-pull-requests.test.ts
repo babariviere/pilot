@@ -248,7 +248,7 @@ test("draft/open/merged/closed PR changes persist and broadcast independently of
 			assert.equal((await saved(home, meta.id)).pullRequest?.state, expected);
 			assert.deepEqual(lifecycle(manager, meta), initial);
 		}
-		assert.equal(changes.length, 4);
+		assert.equal(changes.length, 5, "merge also broadcasts the committed archive timestamp");
 	});
 });
 
@@ -283,12 +283,191 @@ test("failed and empty lookups retain last known badge and stale timestamp, dedu
 			assert.equal(manager.get(meta.id)?.pullRequest?.state, "merged");
 			assert.equal(manager.get(meta.id)?.pullRequestError, undefined);
 			assert.ok(manager.get(meta.id)!.pullRequest!.checkedAt > cached.checkedAt);
-			assert.equal(changes.length, 3);
+			assert.equal(changes.length, 4, "successful merge recovery also archives the chat");
 			assert.deepEqual(lifecycle(manager, meta), initial);
 			assert.equal((await saved(home, meta.id)).pullRequestError, undefined);
 		},
 		cached,
 	);
+});
+
+test("fresh merge archives durably, retains files, and restoration survives checks and restart", async () => {
+	let number = 10;
+	const runner: Runner = async (_file, args) =>
+		args.includes("--state=open")
+			? "[]"
+			: JSON.stringify([{ ...candidate("MERGED"), number, url: `https://github.com/octo/repo/pull/${number}` }]);
+	await fixture({ runner }, async (manager, meta, home, changes) => {
+		await writeFile(join(meta.cwd, "work.txt"), "retained workspace");
+		await mkdir(join(home, "sessions", meta.id, "durable"));
+		await writeFile(join(home, "sessions", meta.id, "durable", "history"), "retained transcript");
+		await manager["pullRequests"]["polling"];
+		const archivedAt = manager.get(meta.id)!.archivedAt;
+		assert.ok(archivedAt);
+		assert.equal(changes.at(-1)?.archivedAt, archivedAt);
+		assert.equal((await saved(home, meta.id)).archivedAt, archivedAt);
+		assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, cached.url);
+		assert.ok(!manager.list().some((summary) => summary.id === meta.id));
+		assert.equal(manager.list({ archived: "true" })[0]?.id, meta.id);
+		assert.equal(await readFile(join(meta.cwd, "work.txt"), "utf8"), "retained workspace");
+		assert.equal(
+			await readFile(join(home, "sessions", meta.id, "durable", "history"), "utf8"),
+			"retained transcript",
+		);
+		await manager["pullRequests"].refresh(meta);
+		assert.equal(manager.get(meta.id)?.archivedAt, archivedAt, "repeated checks retain the archive timestamp");
+		await manager.restore(meta.id);
+		await manager["pullRequests"].refresh(meta);
+		assert.equal(manager.get(meta.id)?.archivedAt, undefined);
+		await manager.shutdown();
+		const reopened = new SessionManager(home, new ProjectStore(home), undefined, {}, { runner });
+		try {
+			await reopened.load();
+			await reopened["pullRequests"]["polling"];
+			assert.equal(reopened.get(meta.id)?.archivedAt, undefined, "restoration survives a daemon restart");
+			number = 11;
+			await reopened["pullRequests"].refresh(reopened["metas"].get(meta.id)!);
+			assert.ok(reopened.get(meta.id)?.archivedAt, "a different merged PR can archive the chat again");
+		} finally {
+			await reopened.shutdown();
+		}
+	});
+});
+
+test("draft, open, closed and failed lookups of a cached merge never auto-archive", async () => {
+	for (const state of ["draft", "open", "closed", "stale"] as const) {
+		await fixture(
+			{
+				runner: async (_file, args) => {
+					if (state === "stale") throw new Error("offline");
+					if (state === "closed" && args.includes("--state=open")) return "[]";
+					return JSON.stringify([candidate(state === "closed" ? "CLOSED" : "OPEN", state === "draft")]);
+				},
+			},
+			async (manager, meta, home) => {
+				await manager["pullRequests"]["polling"];
+				assert.equal(manager.get(meta.id)?.archivedAt, undefined, state);
+				assert.equal((await saved(home, meta.id)).archivedAt, undefined, state);
+			},
+			{ ...cached, state: "merged" },
+		);
+	}
+});
+
+test("merge archiving defers all busy states and retries after the chat becomes inactive", async () => {
+	let merged = false;
+	const runner: Runner = async (_file, args) =>
+		merged && args.includes("--state=open") ? "[]" : JSON.stringify([candidate(merged ? "MERGED" : "OPEN")]);
+	await fixture({ runner }, async (manager, meta) => {
+		await manager["pullRequests"]["polling"];
+		const worker: Worker & { busy: boolean } = {
+			ready: Promise.resolve(),
+			state: "idle",
+			busy: false,
+			send: () => {},
+			request: async () => {},
+			close: async () => {},
+		};
+		manager["workers"].set(meta.id, worker);
+		merged = true;
+		const busyStates: [() => void, () => void][] = [
+			[() => (meta.working = true), () => (meta.working = false)],
+			[() => (meta.initializing = true), () => delete meta.initializing],
+			[() => (meta.preparing = { source: meta.cwd, branch }), () => delete meta.preparing],
+			[
+				() => (meta.pending = [{ type: "input", requestId: "queued", content: "Hi", mode: "followUp" }]),
+				() => delete meta.pending,
+			],
+			[() => (worker.state = "starting"), () => (worker.state = "idle")],
+			[() => (worker.state = "working"), () => (worker.state = "idle")],
+			[() => (worker.busy = true), () => (worker.busy = false)],
+			[() => manager["sending"].set(meta.id, 1), () => manager["sending"].delete(meta.id)],
+		];
+		for (const [start, stop] of busyStates) {
+			start();
+			await manager["pullRequests"].refresh(meta);
+			assert.equal(meta.pullRequest?.state, "merged");
+			assert.equal(meta.archivedAt, undefined);
+			assert.equal(meta.autoArchivedPullRequest, undefined);
+			stop();
+		}
+		await manager["pullRequests"].refresh(meta);
+		assert.ok(meta.archivedAt);
+	});
+});
+
+test("failed automatic archive writes leave the merge retryable and publish no archive", async () => {
+	let merged = false;
+	const runner: Runner = async (_file, args) =>
+		merged && args.includes("--state=open") ? "[]" : JSON.stringify([candidate(merged ? "MERGED" : "OPEN")]);
+	await fixture({ runner }, async (manager, meta, home, changes) => {
+		await manager["pullRequests"]["polling"];
+		const save = manager["save"].bind(manager);
+		manager["save"] = async (current, archive) => {
+			if (archive) throw new Error("disk full");
+			await save(current);
+		};
+		try {
+			merged = true;
+			await manager["pullRequests"].refresh(meta);
+			assert.equal(meta.pullRequest?.state, "merged");
+			assert.equal(meta.archivedAt, undefined);
+			assert.equal(meta.autoArchivedPullRequest, undefined);
+			assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, undefined);
+			assert.ok(changes.every((summary) => summary.archivedAt === undefined));
+			manager["save"] = save;
+			await manager["pullRequests"].refresh(meta);
+			assert.ok(meta.archivedAt);
+			assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, cached.url);
+		} finally {
+			manager["save"] = save;
+		}
+	});
+});
+
+test("queued lifecycle saves preserve the committed automatic archive marker", async () => {
+	let merged = false;
+	const runner: Runner = async (_file, args) =>
+		merged && args.includes("--state=open") ? "[]" : JSON.stringify([candidate(merged ? "MERGED" : "OPEN")]);
+	await fixture({ runner }, async (manager, meta, home) => {
+		await manager["pullRequests"]["polling"];
+		const save = manager["save"].bind(manager);
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let stage!: () => void;
+		const staged = new Promise<void>((resolve) => {
+			stage = resolve;
+		});
+		manager["save"] = (current, archive) => {
+			if (archive) manager["saving"].set(meta.id, gate);
+			const writing = save(current, archive);
+			if (archive) stage();
+			return writing;
+		};
+		merged = true;
+		const refresh = manager["pullRequests"].refresh(meta);
+		try {
+			await staged;
+			assert.equal(meta.archivedAt, undefined, "archive state stays uncommitted during I/O");
+			assert.equal(meta.autoArchivedPullRequest, undefined);
+			manager["save"] = save;
+			meta.model = "updated/model";
+			const queuedSave = save(meta);
+			release();
+			await refresh;
+			await queuedSave;
+			const persisted = await saved(home, meta.id);
+			assert.equal(persisted.model, "updated/model");
+			assert.equal(persisted.archivedAt, meta.archivedAt);
+			assert.equal(persisted.autoArchivedPullRequest, cached.url);
+		} finally {
+			release();
+			manager["save"] = save;
+			await refresh;
+		}
+	});
 });
 
 test("successful empty lookup without a cache clears discovery errors and cannot invent a badge", async () => {
