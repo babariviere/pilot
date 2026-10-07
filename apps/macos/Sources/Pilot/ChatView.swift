@@ -85,6 +85,8 @@ struct ChatView: View {
     @EnvironmentObject private var model: AppModel
     @StateObject private var feed: SessionFeed
     @StateObject private var composer: ComposerState
+    @StateObject private var scroll = TranscriptScrollState()
+    private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
         self.session = session
@@ -131,11 +133,13 @@ struct ChatView: View {
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 24)
-                .padding(.bottom, 8)
+                .padding(.bottom, bottomPadding)
                 .frame(maxWidth: Theme.column + 56)
                 .frame(maxWidth: .infinity)
+                .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
             .onChange(of: transcript.revision) { _, _ in
+                guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
             .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
