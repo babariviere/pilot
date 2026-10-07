@@ -1,5 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
   <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1F6FE0"/>
+      <stop offset="1" stop-color="#7EC3F7"/>
+    </linearGradient>
     <linearGradient id="trail" gradientUnits="userSpaceOnUse" x1="0" y1="262" x2="0" y2="980">
       <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.95"/>
       <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
@@ -12,7 +16,9 @@
   </defs>
   <rect x="100" y="118" width="824" height="824" rx="185" fill="#000000" opacity="0.3" filter="url(#tileShadow)"/>
   <g clip-path="url(#tile)">
-    <rect x="100" y="100" width="824" height="824" fill="#14213D"/>
+    <rect x="100" y="100" width="824" height="824" fill="url(#sky)"/>
+    <g transform="translate(770 845) scale(1)" fill="#FFFFFF" opacity="0.85"><circle cx="-85" cy="5" r="45"/><circle cx="-15" cy="-30" r="70"/><circle cx="70" cy="-5" r="55"/><circle cx="135" cy="20" r="30"/><rect x="-130" y="0" width="295" height="50" rx="25"/></g>
+    <g transform="translate(270 300) scale(0.5)" fill="#FFFFFF" opacity="0.5"><circle cx="-85" cy="5" r="45"/><circle cx="-15" cy="-30" r="70"/><circle cx="70" cy="-5" r="55"/><circle cx="135" cy="20" r="30"/><rect x="-130" y="0" width="295" height="50" rx="25"/></g>
     <g transform="translate(585 445) rotate(45) scale(0.72)" fill="url(#trail)">
       <path d="M -8 262 L 8 262 L 46 1150 L -46 1150 Z" filter="url(#puff)" opacity="0.55" transform="scale(1.8 1)"/>
       <path d="M -8 262 L 8 262 L 46 1150 L -46 1150 Z" opacity="0.9"/>
@@ -21,3 +27,4 @@
     <use href="#plane" transform="translate(585 445) rotate(45) scale(0.72)" fill="#FFFFFF"/>
   </g>
 </svg>
+
