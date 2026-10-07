@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 final class ArtifactViewState: ObservableObject {
-    @Published var preview = false
+    @Published var preview = true
     @Published var visible = false
     @Published var viewer = false
     @Published var source = false
@@ -26,7 +26,7 @@ final class ArtifactViewState: ObservableObject {
 }
 
 /// The reference, not the session's current summary, pins this card to its saved revision.
-/// Previews are opt-in and removed when a lazy transcript row leaves the screen.
+/// Previews are shown by default and removed when a lazy transcript row leaves the screen.
 struct ArtifactCard: View {
     let reference: ArtifactReference
     @StateObject private var state = ArtifactViewState()
@@ -97,6 +97,7 @@ private struct ArtifactContent: View {
                     Text("Source").tag(true)
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .frame(width: 160)
             }
             .padding(8)
