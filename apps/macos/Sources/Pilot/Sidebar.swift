@@ -82,6 +82,12 @@ struct SessionSidebar: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ConnectionFooter(client: client)
+                // The list can draw beneath its safe-area inset while scrolling.
+                // Keep session metadata from showing through the status text.
+                .background(Theme.sidebar)
+                .overlay(alignment: .top) {
+                    Rectangle().fill(Theme.border).frame(height: 1)
+                }
         }
     }
 

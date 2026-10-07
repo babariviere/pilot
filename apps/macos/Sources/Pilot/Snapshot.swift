@@ -65,6 +65,15 @@ enum Snapshot {
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
         await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "home.png"))
 
+        // A short sidebar forces session rows beneath the fixed connection footer.
+        for width in [230, 280] {
+            await render(
+                SessionSidebar(model: model, client: model.client),
+                size: CGSize(width: width, height: 360),
+                to: directory.appending(path: "sidebar-footer-\(width).png")
+            )
+        }
+
         await render(
             VStack(spacing: 16) {
                 Text("What should Pilot work on?")
