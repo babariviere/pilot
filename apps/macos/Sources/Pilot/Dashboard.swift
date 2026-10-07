@@ -62,7 +62,7 @@ private struct WorkingNowCard: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button { app.selectedSessionId = session.id } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            HStack(spacing: 8) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 SessionStatusIcon(status: session.status)
                                 Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                                 Spacer()
@@ -144,7 +144,7 @@ private struct RecentCard: View {
             ForEach(sessions) { session in
                 VStack(alignment: .leading, spacing: 4) {
                     Button { app.selectedSessionId = session.id } label: {
-                        HStack(spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
                             SessionStatusIcon(status: session.status)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(session.title).font(.system(size: 13)).lineLimit(1)
