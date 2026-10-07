@@ -55,7 +55,7 @@ private struct MenuBarLabel: View {
     @ObservedObject var client: PilotClient
 
     var body: some View {
-        Image(systemName: client.workingCount > 0 ? "airplane.circle.fill" : "airplane")
+        Image(nsImage: PlaneImage.menuBar(working: client.workingCount > 0))
     }
 }
 
@@ -69,6 +69,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_: Notification) {
         // Light theme only, for now.
         NSApp.appearance = NSAppearance(named: .aqua)
+        if Bundle.main.bundleIdentifier == nil, let icon = PlaneImage.developmentIcon {
+            NSApp.applicationIconImage = icon
+        }
         Task { @MainActor in
             if Snapshot.runIfRequested() { return }
             AppModel.shared.start()
