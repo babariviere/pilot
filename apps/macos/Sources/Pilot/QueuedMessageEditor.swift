@@ -1,77 +1,45 @@
 import PilotCore
 import SwiftUI
 
-@MainActor
-final class QueuedMessageEditorState: ObservableObject {
-    @Published var draft: String
-    @Published var saving = false
-    @Published var error: String?
-
-    init(text: String) { draft = text }
-
-    var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
-}
-
-/// A separate draft leaves both the durable queue and the main composer untouched until Save.
+/// Edits the selected queue row in place, keeping the main composer draft separate.
 struct QueuedMessageEditor: View {
-    let message: QueuedMessage
-    let onSave: (Int, String) async throws -> Void
-    @StateObject private var state: QueuedMessageEditorState
-    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var state: ComposerState
+    let available: Bool
+    let onSave: () -> Void
+    let onNavigate: (QueueNavigationDirection) -> Bool
     @Environment(\.pilotFonts) private var fonts
 
-    init(message: QueuedMessage, onSave: @escaping (Int, String) async throws -> Void) {
-        self.message = message
-        self.onSave = onSave
-        _state = StateObject(wrappedValue: QueuedMessageEditorState(text: message.text))
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Edit queued message").font(.headline)
-            Text(message.mode == .followUp ? "Follow-up" : "Steering").font(.caption).foregroundStyle(Theme.mutedForeground)
-            TextEditor(text: $state.draft)
-                .font(fonts.body)
-                .padding(6)
-                .frame(height: 160)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
-                .disabled(state.saving)
-            Text("Changes can only be saved while this message is still queued.")
-                .font(.caption)
-                .foregroundStyle(Theme.mutedForeground)
-            if let error = state.error {
-                Text(error).font(.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 8) {
+            ChatTextEditor(
+                text: $state.queueEditing.draft, height: $state.queueEditorHeight, font: fonts.nsBody,
+                minLines: 2, maxLines: 6,
+                isEditable: !state.savingQueueEdit,
+                focusToken: state.queueFocus,
+                onNavigateQueue: onNavigate,
+                onCancel: state.cancelQueueEdit
+            ) { _ in onSave() }
+            .frame(height: state.queueEditorHeight)
+            .padding(8)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.border))
+            if let error = state.queueEditError {
+                Text(error).font(.caption).foregroundStyle(Theme.destructive).textSelection(.enabled)
+            } else if !available {
+                Text("Message is no longer queued. Your edit has not been sent.")
+                    .font(.caption).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
             HStack {
+                Text("↩ save · esc cancel · ⇧↩ new line")
+                    .font(.caption).foregroundStyle(Theme.mutedForeground)
                 Spacer()
-                if state.saving { ProgressView().controlSize(.small) }
-                Button("Cancel") { dismiss() }
+                if state.savingQueueEdit { ProgressView().controlSize(.small) }
+                Button("Cancel", action: state.cancelQueueEdit)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(state.saving)
-                Button("Save", action: save)
+                    .disabled(state.savingQueueEdit)
+                Button("Save", action: onSave)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(state.saving || state.trimmed.isEmpty)
+                    .disabled(state.savingQueueEdit || !available || state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-        }
-        .padding(20)
-        .frame(width: 480)
-        .interactiveDismissDisabled(state.saving)
-    }
-
-    private func save() {
-        let text = state.trimmed
-        guard !text.isEmpty, !state.saving else { return }
-        state.saving = true
-        state.error = nil
-        Task {
-            do {
-                try await onSave(message.id, text)
-                dismiss()
-            } catch {
-                // Keep the draft available to copy/retry, including when the agent consumed the original.
-                state.error = error.localizedDescription
-            }
-            state.saving = false
         }
     }
 }

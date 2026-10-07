@@ -16,8 +16,9 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   live output and stop. Return steers the current run (or sends when idle), Option-Return queues a
   follow-up, Shift-Return adds a line. All queued messages appear above the composer, with their delivery
   mode and full text; steering appears before follow-ups, with FIFO order within each mode. Long queues
-  scroll and survive reconnects. Each queued message has an Edit action
-  with Save and Cancel. Saving preserves its position and delivery mode; consumed messages cannot be edited.
+  scroll and survive reconnects. Edit queued messages inline with Edit or Option-Up/Option-Down.
+  Return saves, Escape cancels, and Shift-Return adds a line. Arrow navigation retains unsaved drafts;
+  saving preserves queue position and delivery mode. Consumed messages cannot be edited.
 - **Usage footer.** Above the composer, the optional session usage snapshot shows a context-window
   estimate (percent and tokens/window) and Claude (orange) or Codex (blue) subscription windows.
   Hover for reset times, snapshot fetch time, and provider errors. Missing measurements stay unknown;
@@ -52,9 +53,11 @@ Requires macOS 14+ and Swift 6.2+. Command Line Tools are enough:
 ```sh
 scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from the repo root)
 scripts/test.sh              # PilotCore tests
+.build/debug/Pilot --queue-edit-test  # native inline editing keys, focus, drafts, failed/stale saves
 swift run Pilot              # unbundled dev run (no notifications)
 .build/debug/Pilot --snapshot /tmp/pilot-snap   # render home, session and settings with fixtures to PNGs
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
+                             # also session-queued.png, session-long-queue.png and queued-message-editor.png
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 ```

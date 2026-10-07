@@ -9,6 +9,10 @@ import SwiftUI
 enum Snapshot {
     static func runIfRequested() -> Bool {
         let arguments = CommandLine.arguments
+        if arguments.contains("--queue-edit-test") {
+            Task { await QueueEditingTest.run() }
+            return true
+        }
         if arguments.contains("--terminal-exit-test") {
             Task { await terminalExitTest(directory: URL(filePath: arguments.last ?? "/tmp")) }
             return true
@@ -65,10 +69,15 @@ enum Snapshot {
             to: directory.appending(path: "session-long-queue.png")
         )
         model.inspectorVisible = true
+        let editingComposer = ComposerState()
+        editingComposer.selectQueuedMessage(Fixtures.queuedTranscript.queuedMessages[0])
         await render(
-            QueuedMessageEditor(message: Fixtures.queuedTranscript.queuedMessages[0], onSave: { _, _ in })
-                .background(Theme.background),
-            size: CGSize(width: 500, height: 360),
+            Frame(title: session.title, subtitle: "pilot") {
+                ChatView(session: session,
+                         feed: SessionFeed(sessionId: session.id, transcript: Fixtures.queuedTranscript),
+                         composer: editingComposer)
+            },
+            size: size,
             to: directory.appending(path: "queued-message-editor.png")
         )
         model.inspectorTab = .changes

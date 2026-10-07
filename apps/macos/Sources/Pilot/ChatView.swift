@@ -77,11 +77,12 @@ final class SessionFeed: ObservableObject {
 struct ChatView: View {
     let session: SessionSummary
     @StateObject private var feed: SessionFeed
-    @StateObject private var composer = ComposerState()
+    @StateObject private var composer: ComposerState
 
-    init(session: SessionSummary, feed: SessionFeed? = nil) {
+    init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
         self.session = session
         _feed = StateObject(wrappedValue: feed ?? SessionFeed(sessionId: session.id, client: AppModel.shared.client))
+        _composer = StateObject(wrappedValue: composer ?? ComposerState())
     }
 
     var body: some View {
