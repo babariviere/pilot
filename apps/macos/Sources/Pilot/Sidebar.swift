@@ -168,10 +168,12 @@ struct SessionRow: View {
             }
             Spacer(minLength: 4)
             if model.isUnread(session) { UnreadBadge() }
-            Text(relative(session.updatedAt))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .monospacedDigit()
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                Text(SessionTimeFormatting.relative(session.updatedAt, now: context.date))
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .monospacedDigit()
+            }
         }
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
@@ -187,17 +189,6 @@ struct SessionRow: View {
             if model.isUnread(session) {
                 Button("Mark as reviewed") { model.review(session, explicit: true) }
             }
-        }
-    }
-
-    private func relative(_ milliseconds: Double) -> String {
-        let seconds = max(0, Date().timeIntervalSince1970 - milliseconds / 1000)
-        switch seconds {
-        case ..<60: return "now"
-        case ..<3600: return "\(Int(seconds / 60))m"
-        case ..<86400: return "\(Int(seconds / 3600))h"
-        case ..<604_800: return "\(Int(seconds / 86400))d"
-        default: return "\(Int(seconds / 604_800))w"
         }
     }
 }
