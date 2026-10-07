@@ -1,12 +1,23 @@
 import PilotCore
 import SwiftUI
 
+private final class UsageFooterState: ObservableObject {
+    @Published var showingDetails = false
+}
+
 /// Session estimates and the latest subscription snapshot, independent of transcript token totals.
 struct UsageFooter: View {
     let usage: SessionUsage
+    var model: String? = nil
+    @StateObject private var state = UsageFooterState()
+
+    private var fallbackProvider: SubscriptionProvider? { usage.fallbackSubscriptionProvider(model: model) }
+    private var subscriptionHelp: String {
+        usage.subscription?.helpText ?? fallbackProvider?.unavailableHelpText ?? ""
+    }
 
     var body: some View {
-        if usage.hasDisplayData {
+        if usage.hasDisplayData || fallbackProvider != nil {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 14) {
                     context
@@ -58,27 +69,56 @@ struct UsageFooter: View {
     }
 
     @ViewBuilder private var subscription: some View {
-        if let subscription = usage.subscription, subscription.hasDisplayData {
-            HStack(spacing: 8) {
-                HStack(spacing: 4) {
-                    Circle().fill(providerColor(subscription.provider)).frame(width: 5, height: 5)
-                    Text(subscription.providerLabel).foregroundStyle(providerColor(subscription.provider))
+        if usage.subscription?.hasDisplayData == true || fallbackProvider != nil {
+            Button { state.showingDetails.toggle() } label: {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) {
+                        subscriptionLabel
+                        subscriptionWindows
+                    }
+                    VStack(alignment: .leading, spacing: 6) {
+                        subscriptionLabel
+                        VStack(alignment: .leading, spacing: 4) { subscriptionWindows }
+                    }
                 }
-                ForEach(Array(subscription.windows.enumerated()), id: \.offset) { _, window in
-                    Text("\(window.label) \(window.percentLabel)")
-                        .help(window.helpText)
-                }
-                if let availability = subscription.availabilityLabel {
-                    Text(availability)
-                        .foregroundStyle(subscription.error == nil ? Theme.mutedForeground : Theme.warning)
-                }
-                Image(systemName: subscription.error == nil ? "info.circle" : "exclamationmark.triangle")
-                    .foregroundStyle(subscription.error == nil ? Theme.faintForeground : Theme.warning)
             }
-            .fixedSize()
-            .help(subscription.helpText)
+            .buttonStyle(.plain)
+            .help(subscriptionHelp)
+            .popover(isPresented: $state.showingDetails) {
+                Text(subscriptionHelp)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .padding(16)
+                    .frame(width: 340, alignment: .leading)
+            }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(subscription.helpText)
+            .accessibilityLabel(subscriptionHelp)
+            .accessibilityHint("Show usage windows and reset times")
+        }
+    }
+
+    private var subscriptionLabel: some View {
+        let provider = usage.subscription?.provider ?? fallbackProvider
+        return HStack(spacing: 4) {
+            Circle().fill(providerColor(provider)).frame(width: 5, height: 5)
+            Text("\(usage.subscription?.providerLabel ?? provider?.displayName ?? "Subscription") usage")
+                .foregroundStyle(providerColor(provider))
+            Image(systemName: usage.subscription?.error == nil ? "info.circle" : "exclamationmark.triangle")
+                .foregroundStyle(usage.subscription?.error == nil ? Theme.faintForeground : Theme.warning)
+        }
+        .fixedSize()
+    }
+
+    @ViewBuilder private var subscriptionWindows: some View {
+        ForEach(Array((usage.subscription?.windows ?? []).enumerated()), id: \.offset) { _, window in
+            Text("\(window.label) \(window.percentLabel)")
+                .fixedSize()
+                .help(window.helpText)
+        }
+        if let availability = usage.subscription?.availabilityLabel ?? (fallbackProvider == nil ? nil : "Unavailable") {
+            Text(availability)
+                .fixedSize()
+                .foregroundStyle(usage.subscription?.error == nil ? Theme.mutedForeground : Theme.warning)
         }
     }
 

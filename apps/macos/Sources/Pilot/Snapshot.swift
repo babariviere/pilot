@@ -126,10 +126,12 @@ enum Snapshot {
                                                     windows: [], error: "Could not refresh subscription limits")
                 ))
                 UsageFooter(usage: SessionUsage(subscription: SubscriptionUsage(fetchedAt: Fixtures.now, provider: .openai, windows: [])))
+                UsageFooter(usage: SessionUsage(), model: "openai-codex/gpt-6.1-sol")
+                UsageFooter(usage: SessionUsage(), model: "anthropic/claude-sonnet-5")
             }
             .padding(.vertical, 16)
             .background(Theme.background),
-            size: CGSize(width: 760, height: 220),
+            size: CGSize(width: 760, height: 300),
             to: directory.appending(path: "usage-footers.png")
         )
         await render(
@@ -140,6 +142,7 @@ enum Snapshot {
                     context: ContextUsage(tokens: 0, contextWindow: 200_000),
                     subscription: SubscriptionUsage(fetchedAt: Fixtures.now, windows: [])
                 ))
+                UsageFooter(usage: SessionUsage(), model: "openai-codex/gpt-6.1-sol")
             }
             .padding(.vertical, 16)
             .background(Theme.background),

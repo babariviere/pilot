@@ -33,3 +33,11 @@ swift build --package-path apps/macos
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-todos-screenshots
 cp /tmp/pilot-todos-screenshots/session.png docs/screenshots/tasks-chat.png
 ```
+
+## Chat usage screenshots
+
+- `usage-footers.png`: Claude/Codex usage windows, refresh errors, and missing-snapshot states.
+- `usage-footer-narrow.png`: the same footer stacked for a narrow chat column.
+
+These also use deterministic fixtures. Regenerate with the snapshot command above, then copy
+`usage-footers.png` and `usage-footer-narrow.png` from its output directory.

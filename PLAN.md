@@ -250,6 +250,8 @@ reports), producing a morning summary in the app and Slack.
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
+  Click subscription usage for snapshot details and reset times. Concrete Claude/Codex models show
+  an explicit unavailable state when no snapshot arrives, never a fabricated zero measurement.
 - Chat TODO panel: read-only live view of pi-extensions' file-backed TODO store (`.pi/todos`, or
   `PI_TODO_PATH`), with this session's claimed open tasks first, titles/statuses visible above the
   composer, and expansion for the full list. Poll only while subscribed, including during codemode
