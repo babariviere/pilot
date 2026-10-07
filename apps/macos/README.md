@@ -33,7 +33,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   and replays its scrollback. Exiting the shell leaves a "Shell exited" placeholder with Restart.
 - **Settings (⌘,).** Chat and code fonts and sizes, terminal font family and size (live, on top of your
   `~/.config/ghostty/config`, which can be turned off), and projects.
-- **Menu bar.** Daemon status, recent sessions, open, restart/stop pilotd, open the log.
+- **Menu bar.** Daemon status, recent sessions, open, restart/stop pilotd, open the log. The icon is the app
+  icon's plane, with its contrail while agents are working.
 - **Notifications.** When a session finishes or fails (bundled app only).
 
 ## Layout
@@ -44,6 +45,7 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 | `Sources/PilotCore` | Also: Markdown block parser, chat rows and tool summaries |
 | `Sources/Pilot` | SwiftUI app, pilotd client, launchd management, terminals |
 | `Tests/PilotCoreTests` | Swift Testing tests for the reducer |
+| `Resources/AppIcon.svg` | App icon source; `scripts/icon.sh` regenerates the committed `AppIcon.icns` |
 | `Vendor/libghostty-spm` | Fetched by `scripts/vendor-ghostty.sh` (gitignored) |
 
 ## Build
@@ -58,6 +60,7 @@ swift run Pilot              # unbundled dev run (no notifications)
 .build/debug/Pilot --snapshot /tmp/pilot-snap   # render home, session and settings with fixtures to PNGs
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
+                             # and menubar-idle.png / menubar-working.png: the menu bar plane glyph
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 ```

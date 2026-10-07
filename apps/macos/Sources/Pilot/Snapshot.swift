@@ -123,6 +123,18 @@ enum Snapshot {
             size: CGSize(width: 360, height: 220),
             to: directory.appending(path: "usage-footer-narrow.png")
         )
+        for (name, working) in [("menubar-idle", false), ("menubar-working", true)] {
+            let image = PlaneImage.menuBar(working: working)
+            let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 72, pixelsHigh: 72, bitsPerSample: 8,
+                                       samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                       bytesPerRow: 0, bitsPerPixel: 0)!
+            rep.size = image.size
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            image.draw(in: NSRect(origin: .zero, size: image.size))
+            NSGraphicsContext.restoreGraphicsState()
+            try? rep.representation(using: .png, properties: [:])?.write(to: directory.appending(path: "\(name).png"))
+        }
         print("snapshots written to \(directory.path)")
         exit(0)
     }
