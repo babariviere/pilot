@@ -49,15 +49,15 @@ export function pilotPrompt(context: PilotContext): string {
 	if (workspace) {
 		lines.push(
 			`- Your working directory is a private clone of ${workspace.source}, started from \`${workspace.base}\`${workspace.branch ? `, with branch/bookmark \`${workspace.branch}\`` : ", initially detached with no task branch or bookmark"}. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
-			"- Choose or create a descriptive branch or bookmark for this task before making changes. Do not use a `pilot/` prefix. Never push the default branch.",
+			"- Choose or create a descriptive branch or bookmark for this task before making changes. New names must use `<type>/<short-description>`, with a conventional prefix matching the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/`, or `revert/` (for example, `fix/branch-prefix-policy`). Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention. Do not use a `pilot/` prefix for new names. Never push the default branch.",
 		);
 		if (workspace.jj) {
 			lines.push(
-				"- The clone is a colocated jj repository. Use jj for version-control changes. Choose a descriptive bookmark with `jj bookmark create <name> -r @`; after committing, move it with `jj bookmark set <name> -r @-`, and push with `jj git push --bookmark <name>`.",
+				"- The clone is a colocated jj repository. Use jj for version-control changes. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`; after committing, move the chosen bookmark with `jj bookmark set <name> -r @-`, and push with `jj git push --bookmark <name>`.",
 			);
 		} else {
 			lines.push(
-				"- Create your chosen branch with `git switch -c <name>`. Commit on it and push it with `git push -u origin <name>`.",
+				"- If a new branch is needed, create it with `git switch -c <name>`. Commit on the chosen branch and push it with `git push -u origin <name>`.",
 			);
 		}
 		lines.push(
