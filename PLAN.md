@@ -246,7 +246,8 @@ reports), producing a morning summary in the app and Slack.
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
   to navigate, Enter to save, and Escape to cancel. Preserve drafts while navigating and reject edits
   after consumption without resubmitting. Remove individual queued messages before delivery without
-  stopping the active run; reject removal once a message has been consumed.
+  stopping the active run; Command-Delete removes the selected row only from its focused inline
+  editor. Reject removal once a message has been consumed.
 - Archive inactive chats without deleting their history or workspace. Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
   Fresh GitHub merge checks automatically archive linked chats once inactive. Failed lookups and

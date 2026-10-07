@@ -327,6 +327,7 @@ private struct QueuedMessagesView: View {
                             available: messages.contains(where: { $0.id == message.id }),
                             completionDirectory: completionDirectory,
                             onSave: onSave,
+                            onRemove: { onRemove(message.id) },
                             onNavigate: { state.navigateQueue($0, messages: messages) }
                         )
                     } else {

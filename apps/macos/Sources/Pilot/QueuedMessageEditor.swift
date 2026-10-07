@@ -7,6 +7,7 @@ struct QueuedMessageEditor: View {
     let available: Bool
     let completionDirectory: String
     let onSave: () -> Void
+    let onRemove: () -> Void
     let onNavigate: (QueueNavigationDirection) -> Bool
     @Environment(\.pilotFonts) private var fonts
 
@@ -19,6 +20,10 @@ struct QueuedMessageEditor: View {
                 focusToken: state.queueFocus,
                 onNavigateQueue: onNavigate,
                 onCancel: state.cancelQueueEdit,
+                onRemoveQueuedMessage: {
+                    guard available, !state.mutatingQueue else { return }
+                    onRemove()
+                },
                 completionDirectory: completionDirectory
             ) { _ in onSave() }
             .frame(height: state.queueEditorHeight)
@@ -31,7 +36,7 @@ struct QueuedMessageEditor: View {
                     .font(.caption).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
             HStack {
-                Text("↩ save · esc cancel · ⇧↩ new line")
+                Text("↩ save · esc cancel · ⇧↩ new line · ⌘⌫ remove")
                     .font(.caption).foregroundStyle(Theme.mutedForeground)
                 Spacer()
                 if state.savingQueueEdit { ProgressView().controlSize(.small) }

@@ -34,7 +34,7 @@ enum QueueEditingTest {
         func press(_ code: UInt16, _ flags: NSEvent.ModifierFlags = []) {
             let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
                                         timestamp: 0, windowNumber: window.windowNumber, context: nil,
-                                        characters: code == 36 ? "\r" : "", charactersIgnoringModifiers: "",
+                                        characters: code == 36 ? "\r" : code == 51 ? "\u{7f}" : "", charactersIgnoringModifiers: "",
                                         isARepeat: false, keyCode: code)!
             window.sendEvent(event)
         }
@@ -73,11 +73,13 @@ enum QueueEditingTest {
         press(36)
         check(state.savingQueueEdit, "Enter begins save")
         press(36)
+        press(51, .command)
         press(126, .option)
         press(53)
         check(state.queueEditing.selected?.id == 10, "selection is frozen during save")
         await settle()
         check(model.saves.count == 1 && model.saves[0].0 == 10 && model.saves[0].1 == "Edited first", "Enter saves selected message once")
+        check(model.removals.isEmpty, "Command-Delete cannot remove during save")
         check(state.queueEditing.selected == nil && editor() === composerEditor, "successful save restores composer focus")
         press(125, .option)
         await settle()
@@ -101,12 +103,44 @@ enum QueueEditingTest {
         check(editor().string == "Retain failed draft", "consumption retains active editor")
         press(36)
         check(model.saves.count == 2 && state.queueEditError?.contains("no longer queued") == true, "consumed message cannot be saved")
+        press(51, .command)
+        await settle()
+        check(model.removals.isEmpty && editor().string == "Retain failed draft", "consumed message cannot be removed or its draft deleted")
         press(53)
         await settle()
+        press(126, .option)
+        await settle()
+        let removalId = state.queueEditing.selected!.id
+        type("Keep failed removal draft")
+        let queueEditor = editor()
+        window.makeFirstResponder(composerEditor)
+        press(51, .command)
+        await settle()
+        check(model.removals.isEmpty && state.queueEditing.selected?.id == removalId, "Command-Delete in composer does not remove selected queue row")
+        type("Keep my composer draft")
+        window.makeFirstResponder(queueEditor)
+        model.rejectRemove = true
+        press(51, .command)
+        await settle()
+        check(state.queueRemovalError != nil && state.queueEditing.draft == "Keep failed removal draft", "failed shortcut removal keeps edit")
+        model.rejectRemove = false
+        press(51, .command)
+        press(51, .command)
+        press(125, .option)
+        await settle()
+        check(model.removals == [removalId] && !model.messages.contains(where: { $0.id == removalId }), "Command-Delete removes selected follow-up only once")
+        check(state.queueEditing.selected == nil && editor() === composerEditor, "shortcut removal restores composer focus")
+        check(state.draft == "Keep my composer draft" && model.saves.count == 2, "shortcut removal does not save or modify composer draft")
+        press(125, .option)
+        await settle()
+        let steeringId = state.queueEditing.selected!.id
+        press(51, .command)
+        await settle()
+        check(model.removals == [removalId, steeringId] && editor() === composerEditor, "Alt-Down and Command-Delete remove steering too")
         press(36)
         press(36, .option)
         check(model.sends == [.steer, .followUp] && state.draft == "Keep my composer draft", "main composer and send shortcuts are unchanged")
-        print("queue-edit-test passed: inline focus, arrows, drafts, Enter, Escape, Shift-Enter, failed/stale saves")
+        print("queue-edit-test passed: inline focus, arrows, drafts, Enter, Escape, Shift-Enter, Command-Delete, failed/stale saves and removals")
         window.orderOut(nil)
         exit(0)
     }
@@ -118,6 +152,8 @@ enum QueueEditingTest {
         var saves: [(Int, String)] = []
         var sends: [DeliveryMode] = []
         var rejectSave = false
+        var removals: [Int] = []
+        var rejectRemove = false
 
         init() {
             var transcript = Transcript()
@@ -138,7 +174,12 @@ enum QueueEditingTest {
                          if model.rejectSave { throw NSError(domain: "Save rejected", code: 1) }
                          model.saves.append((id, text))
                      },
-                     onRemoveQueuedMessage: { id in model.messages.removeAll { $0.id == id } })
+                     onRemoveQueuedMessage: { id in
+                         try await Task.sleep(for: .milliseconds(100))
+                         if model.rejectRemove { throw ClientError("Removal rejected") }
+                         model.removals.append(id)
+                         model.messages.removeAll { $0.id == id }
+                     })
         }
     }
 }
