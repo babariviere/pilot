@@ -1,9 +1,9 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
-import type { AgentEvent } from "@earendil-works/pi-durable";
+import type { UserMessage } from "@earendil-works/pi-ai";
+import type { AgentEvent as DurableAgentEvent } from "@earendil-works/pi-durable";
 
 export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 export type {
-	AgentEvent,
 	EntryRecord,
 	MessageChange,
 	SnapshotEvent,
@@ -15,6 +15,21 @@ export type SessionState = "parked" | "starting" | "idle" | "working" | "failed"
 
 /** How a message joins a busy session: steer the current run, or queue a follow-up run. */
 export type DeliveryMode = "steer" | "followUp";
+
+/** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
+export interface QueuedMessage {
+	id: number;
+	mode: DeliveryMode;
+	content: UserMessage["content"];
+}
+
+/** Queue contents are sent after the initial snapshot and whenever the durable inbox changes. */
+export interface QueueUpdateEvent {
+	type: "queue_update";
+	items: QueuedMessage[];
+}
+
+export type AgentEvent = DurableAgentEvent | QueueUpdateEvent;
 
 export interface SessionSummary {
 	id: string;
@@ -130,6 +145,11 @@ export interface SendRequest {
 	mode?: DeliveryMode;
 	/** Idempotency key. Retrying with the same ID never submits twice. */
 	requestId?: string;
+}
+
+/** PATCH /api/sessions/:id/queue/:submissionId. Keeps the message's queue position and delivery mode. */
+export interface EditQueuedMessageRequest {
+	message: string;
 }
 
 /** Client to daemon, over /api/ws. */

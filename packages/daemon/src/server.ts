@@ -1,6 +1,13 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { ClientMessage, ProjectRequest, SendRequest, ServerMessage, SpawnRequest } from "@pilot/protocol";
+import type {
+	ClientMessage,
+	EditQueuedMessageRequest,
+	ProjectRequest,
+	SendRequest,
+	ServerMessage,
+	SpawnRequest,
+} from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { collectChanges } from "./changes.ts";
 import type { DaemonConfig } from "./config.ts";
@@ -98,6 +105,11 @@ export function createDaemonServer(
 				await sessions.stop(id);
 				return json(res, 202, { ok: true });
 			}
+		}
+		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "PATCH") {
+			const body = await readJson<EditQueuedMessageRequest>(req);
+			await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message);
+			return json(res, 200, { ok: true });
 		}
 		throw new HttpError(404, "Not found");
 	};

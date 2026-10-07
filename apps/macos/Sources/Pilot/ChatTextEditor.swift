@@ -1,4 +1,5 @@
 import AppKit
+import PilotCore
 import SwiftUI
 
 /// Multi-line text input that distinguishes Return, Option-Return and Shift-Return, which
@@ -10,6 +11,10 @@ struct ChatTextEditor: NSViewRepresentable {
     var minLines = 1
     var maxLines = 10
     var focusOnAppear = true
+    var isEditable = true
+    var focusToken: UUID?
+    var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
+    var onCancel: (() -> Void)?
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -27,6 +32,7 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.allowsUndo = true
         textView.drawsBackground = false
         textView.font = font
+        textView.isEditable = isEditable
         textView.textColor = .labelColor
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
@@ -39,11 +45,20 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.string = text
         textView.onSubmit = { [weak coordinator = context.coordinator] flags in coordinator?.parent.onSubmit(flags) }
+        textView.onNavigateQueue = { [weak coordinator = context.coordinator] direction in
+            coordinator?.parent.onNavigateQueue?(direction) ?? false
+        }
+        textView.onCancel = { [weak coordinator = context.coordinator] in
+            guard let onCancel = coordinator?.parent.onCancel else { return false }
+            onCancel()
+            return true
+        }
         scroll.documentView = textView
 
         if focusOnAppear {
             DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
         }
+        context.coordinator.lastFocusToken = focusToken
         context.coordinator.recalculate(textView)
         return scroll
     }
@@ -51,6 +66,11 @@ struct ChatTextEditor: NSViewRepresentable {
     func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = scroll.documentView as? SubmitTextView else { return }
+        textView.isEditable = isEditable
+        if focusToken != context.coordinator.lastFocusToken {
+            context.coordinator.lastFocusToken = focusToken
+            DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
+        }
         var changed = false
         if textView.string != text {
             textView.string = text
@@ -66,6 +86,7 @@ struct ChatTextEditor: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatTextEditor
+        var lastFocusToken: UUID?
 
         init(parent: ChatTextEditor) { self.parent = parent }
 
@@ -91,11 +112,19 @@ struct ChatTextEditor: NSViewRepresentable {
 
 final class SubmitTextView: NSTextView {
     var onSubmit: ((NSEvent.ModifierFlags) -> Void)?
+    var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
+    var onCancel: (() -> Bool)?
 
     override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if !hasMarkedText() {
+            if flags.contains(.option), flags.intersection([.shift, .command, .control]).isEmpty,
+               event.keyCode == 126 || event.keyCode == 125,
+               onNavigateQueue?(event.keyCode == 126 ? .up : .down) == true { return }
+            if event.keyCode == 53, onCancel?() == true { return }
+        }
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         if isReturn, !hasMarkedText() {
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
             if flags.contains(.shift) {
                 insertNewlineIgnoringFieldEditor(nil)
             } else {

@@ -77,11 +77,12 @@ final class SessionFeed: ObservableObject {
 struct ChatView: View {
     let session: SessionSummary
     @StateObject private var feed: SessionFeed
-    @StateObject private var composer = ComposerState()
+    @StateObject private var composer: ComposerState
 
-    init(session: SessionSummary, feed: SessionFeed? = nil) {
+    init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
         self.session = session
         _feed = StateObject(wrappedValue: feed ?? SessionFeed(sessionId: session.id, client: AppModel.shared.client))
+        _composer = StateObject(wrappedValue: composer ?? ComposerState())
     }
 
     var body: some View {
@@ -122,9 +123,12 @@ struct ChatView: View {
                 Composer(
                     state: composer,
                     working: transcript.working || session.state == "starting",
-                    queued: transcript.queued,
+                    queuedMessages: transcript.queuedMessagesInDeliveryOrder,
                     onSend: send,
-                    onStop: { Task { try? await AppModel.shared.client.stop(session.id) } }
+                    onStop: { Task { try? await AppModel.shared.client.stop(session.id) } },
+                    onEditQueuedMessage: { id, text in
+                        try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
+                    }
                 )
             }
         }

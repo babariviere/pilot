@@ -21,6 +21,7 @@ export interface KernelSpec {
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
 	| { type: "input"; requestId: string; content: string; mode: DeliveryMode }
+	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string }
 	| { type: "abort"; requestId: string }
 	| { type: "watch"; watchId: string }
 	| { type: "unwatch"; watchId: string }

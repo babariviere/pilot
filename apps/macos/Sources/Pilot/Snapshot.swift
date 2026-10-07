@@ -9,6 +9,10 @@ import SwiftUI
 enum Snapshot {
     static func runIfRequested() -> Bool {
         let arguments = CommandLine.arguments
+        if arguments.contains("--queue-edit-test") {
+            Task { await QueueEditingTest.run() }
+            return true
+        }
         if arguments.contains("--terminal-exit-test") {
             Task { await terminalExitTest(directory: URL(filePath: arguments.last ?? "/tmp")) }
             return true
@@ -50,7 +54,32 @@ enum Snapshot {
             to: directory.appending(path: "session.png")
         )
         model.client.fixtureChanges = Fixtures.changes
+        await render(
+            Frame(title: session.title, subtitle: "pilot") {
+                ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.queuedTranscript))
+            },
+            size: size,
+            to: directory.appending(path: "session-queued.png")
+        )
+        await render(
+            Frame(title: session.title, subtitle: "pilot") {
+                ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.longQueuedTranscript))
+            },
+            size: CGSize(width: 1000, height: 700),
+            to: directory.appending(path: "session-long-queue.png")
+        )
         model.inspectorVisible = true
+        let editingComposer = ComposerState()
+        editingComposer.selectQueuedMessage(Fixtures.queuedTranscript.queuedMessages[0])
+        await render(
+            Frame(title: session.title, subtitle: "pilot") {
+                ChatView(session: session,
+                         feed: SessionFeed(sessionId: session.id, transcript: Fixtures.queuedTranscript),
+                         composer: editingComposer)
+            },
+            size: size,
+            to: directory.appending(path: "queued-message-editor.png")
+        )
         model.inspectorTab = .changes
         await render(
             Frame(title: session.title, subtitle: "pilot · \(session.branch ?? "")") {
@@ -337,6 +366,28 @@ enum Fixtures {
             "+});",
         ].joined(separator: "\n")
     )
+
+    static var queuedTranscript: Transcript {
+        var transcript = transcript
+        let event = #"{"type":"queue_update","items":[{"id":20,"mode":"followUp","content":"Also check that queued messages reappear after reconnecting.\nInclude the results in your summary."},{"id":21,"mode":"steer","content":"Keep the change focused on the queue UI."}]}"#
+        transcript.apply(try! JSONValue.decode(Data(event.utf8)))
+        return transcript
+    }
+
+    static var longQueuedTranscript: Transcript {
+        var transcript = queuedTranscript
+        transcript.apply(.object([
+            "type": .string("queue_update"),
+            "items": .array((1 ... 8).map { index in
+                .object([
+                    "id": .number(Double(index + 20)),
+                    "mode": .string("followUp"),
+                    "content": .string("Queued follow-up \(index)\nRun the tests and report any failures. Keep all pending messages accessible without hiding the chatbox."),
+                ])
+            }),
+        ]))
+        return transcript
+    }
 
     static var transcript: Transcript {
         var transcript = Transcript()
