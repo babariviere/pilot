@@ -135,6 +135,11 @@ struct SessionStatusIcon: View {
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(status.color)
             .frame(width: 14, height: 14)
+            // SF Symbols have different intrinsic baselines. Center every symbol on
+            // the cap height of the 13-point session title, not on a subtitle row.
+            .alignmentGuide(.firstTextBaseline) { dimensions in
+                dimensions[VerticalAlignment.center] + NSFont.systemFont(ofSize: 13).capHeight / 2
+            }
             .help(status.rawValue)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Agent status: \(status.rawValue)")
@@ -145,7 +150,7 @@ extension SessionStatus {
     var symbolName: String {
         switch self {
         case .working: "arrow.triangle.2.circlepath"
-        case .done: "checkmark.circle.fill"
+        case .done: "checkmark"
         case .needsInput: "hand.raised.fill"
         case .failed: "exclamationmark.triangle.fill"
         case .stopped: "stop.circle.fill"
