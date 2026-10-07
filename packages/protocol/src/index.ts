@@ -75,6 +75,8 @@ export interface SessionSummary {
 	id: string;
 	title: string;
 	cwd: string;
+	/** Session storage directory containing metadata and durable history, not the working directory. */
+	sessionPath?: string;
 	projectId?: string;
 	/** The session's own branch, when it runs in a private clone. */
 	branch?: string;

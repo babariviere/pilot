@@ -99,6 +99,11 @@ struct SessionDetail: View {
                 .help("Open \(session.cwd.abbreviatingHome) in Finder")
                 InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
                 InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+                Button { model.debugSession(session) } label: {
+                    Label("Debug session", systemImage: "ladybug")
+                }
+                .labelStyle(.iconOnly)
+                .help("Debug this session in the pilot project")
             }
         }
     }

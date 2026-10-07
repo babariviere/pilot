@@ -358,6 +358,41 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
+for (const workspace of ["clone", "direct"] as const) {
+	test(`${workspace} summaries project the session storage directory across restart`, async (t) => {
+		const f = await fixture(t);
+		const sessions = await f.manager({
+			workspace: async (_source, path) => ({ path, base: "HEAD", jj: false }),
+		});
+		const changes: SessionSummary[] = [];
+		sessions.onChange((session) => changes.push(session));
+		const created = await sessions.spawn({
+			...(workspace === "clone" ? { projectId: f.project.id } : { cwd: f.source }),
+			title: "Storage path",
+			message: "hello",
+		});
+		const sessionPath = join(f.home, "sessions", created.id);
+		assert.equal(created.sessionPath, sessionPath);
+		assert.notEqual(created.sessionPath, created.cwd);
+		assert.equal(created.cwd, workspace === "clone" ? join(sessionPath, "workspace") : f.source);
+		assert.ok((await stat(join(sessionPath, "meta.json"))).isFile());
+		await until(() => sessions.get(created.id)?.state === "working");
+		assert.equal(f.workers[0]!.spec.storageDir, join(sessionPath, "durable"));
+		assert.equal(sessions.get(created.id)?.sessionPath, sessionPath);
+		assert.equal(sessions.list()[0]?.sessionPath, sessionPath);
+		assert.ok(changes.length > 0);
+		assert.ok(changes.every((session) => session.sessionPath === sessionPath));
+		await sessions.stop(created.id);
+		await sessions.shutdown();
+		// Existing metadata has no wire-only path; derive it again when reopening a parked session.
+		assert.equal(Object.hasOwn(await f.stored(created.id), "sessionPath"), false);
+		const reopened = await f.manager();
+		assert.equal(reopened.get(created.id)?.state, "parked");
+		assert.equal(reopened.get(created.id)?.sessionPath, sessionPath);
+		assert.equal(reopened.list()[0]?.sessionPath, sessionPath);
+	});
+}
+
 test("POST returns durable starting session before clone or worker, guarding changes and terminals", async (t) => {
 	const f = await fixture(t);
 	const clone = deferred();
@@ -402,6 +437,8 @@ test("POST returns durable starting session before clone or worker, guarding cha
 	const created = (await response.json()) as SessionSummary;
 	assert.equal(created.state, "starting");
 	assert.equal(created.cwd, join(f.home, "sessions", created.id, "workspace"));
+	assert.equal(created.sessionPath, join(f.home, "sessions", created.id));
+	assert.notEqual(created.sessionPath, created.cwd);
 	assert.notEqual(created.cwd, f.source);
 	const meta = await f.stored(created.id);
 	assert.equal(meta.initializing, true);

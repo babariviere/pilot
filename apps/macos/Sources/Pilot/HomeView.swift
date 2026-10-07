@@ -13,6 +13,16 @@ final class NewSessionForm: ObservableObject {
     @Published var tab: ComposerTab = .newTask
     @Published var editorHeight: CGFloat = 60
     @Published var models = ModelList(models: [])
+
+    func consumeDraft(from app: AppModel) {
+        guard let message = app.draftMessage else { return }
+        self.message = message
+        folder = ""
+        model = ""
+        error = nil
+        tab = .newTask
+        app.draftMessage = nil
+    }
 }
 
 enum ComposerTab: Hashable {
@@ -88,6 +98,8 @@ struct TaskComposer: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0xF5F5F5)))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
+        .onAppear { form.consumeDraft(from: app) }
+        .onChange(of: app.draftMessage) { _, _ in form.consumeDraft(from: app) }
     }
 
     private var newTask: some View {

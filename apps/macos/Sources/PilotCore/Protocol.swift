@@ -10,6 +10,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let id: String
     public let title: String
     public let cwd: String
+    /// Session storage directory containing metadata and durable history, not the working directory.
+    public let sessionPath: String?
     public let projectId: String?
     /// The session's own branch, when it runs in a private clone.
     public let branch: String?
@@ -39,11 +41,12 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
-        archivedAt: Double? = nil
+        archivedAt: Double? = nil, sessionPath: String? = nil
     ) {
         self.id = id
         self.title = title
         self.cwd = cwd
+        self.sessionPath = sessionPath
         self.projectId = projectId
         self.branch = branch
         self.createdAt = createdAt
