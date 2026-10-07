@@ -257,6 +257,11 @@ public struct EditQueuedMessageRequest: Codable, Sendable {
     public init(message: String) { self.message = message }
 }
 
+/// DELETE /api/sessions/:id/queue/:submissionId. Only withdraws a still-queued input.
+public struct RemoveQueuedMessageResponse: Codable, Sendable {
+    public let ok: Bool
+}
+
 /// GET /api/sessions/:id/changes
 public struct SessionChanges: Codable, Equatable, Sendable {
     public let base: String

@@ -89,6 +89,7 @@ test("prepare uses the origin-protected route and paused admissions return HTTP 
 			["sessions", "POST"],
 			["sessions/missing/messages", "POST"],
 			["sessions/missing/queue/42", "PATCH"],
+			["sessions/missing/queue/42", "DELETE"],
 		]) {
 			const response = await fetch(`${base}/${path}`, {
 				method,
@@ -103,4 +104,47 @@ test("prepare uses the origin-protected route and paused admissions return HTTP 
 	} finally {
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 	}
+});
+
+test("queued message DELETE forwards only the ID, reports stale removal, and rejects invalid IDs and origins", async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const terminals = new TerminalManager();
+	let stale = false;
+	const remove = t.mock.method(sessions, "removeQueuedMessage", async () => {
+		if (stale) throw new Error("Message is no longer queued. It has not been removed.");
+	});
+	const send = t.mock.method(sessions, "send", async () => assert.fail("removal must never submit input"));
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/session-1/queue`;
+	const response = await fetch(`${base}/42`, { method: "DELETE" });
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), { ok: true });
+	assert.deepEqual(remove.mock.calls[0]?.arguments, ["session-1", 42]);
+	stale = true;
+	const rejected = await fetch(`${base}/42`, { method: "DELETE" });
+	assert.equal(rejected.status, 400);
+	assert.deepEqual(await rejected.json(), { error: "Message is no longer queued. It has not been removed." });
+	for (const id of ["0", "-1", "1.5", "NaN", "Infinity", "9007199254740992", "1e2", "0x2a", "42oops"]) {
+		const invalid = await fetch(`${base}/${id}`, { method: "DELETE" });
+		assert.equal(invalid.status, 400);
+		assert.deepEqual(await invalid.json(), { error: "Invalid queued message ID" });
+	}
+	const browser = await fetch(`${base}/42`, { method: "DELETE", headers: { origin: "https://example.com" } });
+	assert.equal(browser.status, 403);
+	await browser.arrayBuffer();
+	assert.equal(remove.mock.callCount(), 2);
+	assert.equal(send.mock.callCount(), 0);
 });

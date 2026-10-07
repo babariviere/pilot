@@ -60,6 +60,10 @@ async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdo
 				usage: session.usage,
 			});
 			break;
+		case "removeQueuedMessage":
+			await session.removeQueuedMessage(command.submissionId);
+			await send({ type: "accepted", requestId: command.requestId });
+			break;
 		case "watch":
 			await session.watch(
 				command.watchId,

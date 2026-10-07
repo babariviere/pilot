@@ -245,7 +245,8 @@ reports), producing a morning summary in the app and Slack.
   user messages above the composer until consumed, restoring them on reconnect. Display steering before
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
   to navigate, Enter to save, and Escape to cancel. Preserve drafts while navigating and reject edits
-  after consumption without resubmitting.
+  after consumption without resubmitting. Remove individual queued messages before delivery without
+  stopping the active run; reject removal once a message has been consumed.
 - Archive inactive chats without deleting their history or workspace. Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
   Fresh GitHub merge checks automatically archive linked chats once inactive. Failed lookups and
@@ -303,6 +304,7 @@ reports), producing a morning summary in the app and Slack.
 | --- | --- |
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
 | `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
+| `PATCH /api/sessions/:id/queue/:submissionId`, `DELETE /api/sessions/:id/queue/:submissionId` | Edit or remove a still-queued user message without resubmitting or interrupting the active run (done) |
 | `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |
 | `GET /api/sessions/:id/artifacts/:artifactId?revision=N` | Read a pinned revision (latest when omitted) |
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |

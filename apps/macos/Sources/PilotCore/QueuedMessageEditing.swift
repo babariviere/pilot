@@ -23,6 +23,12 @@ public struct QueuedMessageEditing: Equatable, Sendable {
 
     public mutating func select(_ message: QueuedMessage) { selected = message }
 
+    /// A confirmed removal discards only that message's draft.
+    public mutating func remove(_ id: Int) {
+        drafts.removeValue(forKey: id)
+        if selected?.id == id { selected = nil }
+    }
+
     /// From the composer, Up starts at the closest row and Down starts at the first row.
     @discardableResult
     public mutating func navigate(_ direction: QueueNavigationDirection, messages: [QueuedMessage]) -> Bool {

@@ -9,26 +9,36 @@ final class ComposerState: ObservableObject {
     @Published var editorHeight: CGFloat = 18
     @Published var queueEditing = QueuedMessageEditing()
     @Published var savingQueueEdit = false
+    @Published var removingQueuedMessage: Int?
+    @Published private(set) var removedQueuedMessages: Set<Int> = []
+    @Published var queueRemovalError: String?
     @Published var queueEditError: String?
     @Published var queueEditorHeight: CGFloat = 18
     @Published var queueFocus = UUID()
     @Published var composerFocus = UUID()
 
     var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var mutatingQueue: Bool { savingQueueEdit || removingQueuedMessage != nil }
+
+    /// HTTP can acknowledge removal before the queue stream catches up (or while it reconnects).
+    /// Submission IDs are never reused within a session.
+    func remainingQueuedMessages(_ messages: [QueuedMessage]) -> [QueuedMessage] {
+        messages.filter { !removedQueuedMessages.contains($0.id) }
+    }
 
     func canSend(changingModel: Bool) -> Bool { !changingModel && !trimmed.isEmpty }
 
     func selectQueuedMessage(_ message: QueuedMessage) {
-        guard !savingQueueEdit else { return }
+        guard !mutatingQueue, !removedQueuedMessages.contains(message.id) else { return }
         queueEditing.select(message)
         queueEditError = nil
         queueFocus = UUID()
     }
 
     func navigateQueue(_ direction: QueueNavigationDirection, messages: [QueuedMessage]) -> Bool {
-        guard !savingQueueEdit else { return true }
+        guard !mutatingQueue else { return true }
         let previous = queueEditing.selected?.id
-        let handled = queueEditing.navigate(direction, messages: messages)
+        let handled = queueEditing.navigate(direction, messages: remainingQueuedMessages(messages))
         if handled {
             if previous != queueEditing.selected?.id { queueEditError = nil }
             queueFocus = UUID()
@@ -37,10 +47,29 @@ final class ComposerState: ObservableObject {
     }
 
     func cancelQueueEdit() {
-        guard !savingQueueEdit else { return }
+        guard !mutatingQueue else { return }
         queueEditing.finish()
         queueEditError = nil
         composerFocus = UUID()
+    }
+
+    func removeQueuedMessage(_ id: Int, perform: (Int) async throws -> Void) async {
+        guard !mutatingQueue else { return }
+        removingQueuedMessage = id
+        queueRemovalError = nil
+        defer { removingQueuedMessage = nil }
+        do {
+            try await perform(id)
+            removedQueuedMessages.insert(id)
+            let wasSelected = queueEditing.selected?.id == id
+            queueEditing.remove(id)
+            if wasSelected {
+                queueEditError = nil
+                composerFocus = UUID()
+            }
+        } catch {
+            queueRemovalError = error.localizedDescription
+        }
     }
 }
 
@@ -55,14 +84,20 @@ struct Composer: View {
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
     let onEditQueuedMessage: (Int, String) async throws -> Void
+    let onRemoveQueuedMessage: (Int) async throws -> Void
     var session: SessionSummary? = nil
     @StateObject private var modelPicker = ChatModelPickerState()
     @Environment(\.pilotFonts) private var fonts
 
+    private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
+
     var body: some View {
         VStack(spacing: 8) {
-            if !queuedMessages.isEmpty || state.queueEditing.selected != nil {
-                QueuedMessagesView(state: state, messages: queuedMessages, completionDirectory: completionDirectory, onSave: saveQueueEdit)
+            if !remainingQueuedMessages.isEmpty || state.queueEditing.selected != nil || state.queueRemovalError != nil {
+                QueuedMessagesView(state: state, messages: remainingQueuedMessages, completionDirectory: completionDirectory,
+                                   onSave: saveQueueEdit, onRemove: { id in
+                                       Task { await state.removeQueuedMessage(id, perform: onRemoveQueuedMessage) }
+                                   })
             }
             editor
             controls
@@ -100,7 +135,7 @@ struct Composer: View {
                 ChatTextEditor(
                     text: $state.draft, height: $state.editorHeight, font: fonts.nsBody,
                     focusToken: state.composerFocus,
-                    onNavigateQueue: { state.navigateQueue($0, messages: queuedMessages) },
+                    onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
                     onCancel: cancelQueueEditAction,
                     completionDirectory: completionDirectory
                 ) { flags in
@@ -161,10 +196,10 @@ struct Composer: View {
     }
 
     private func saveQueueEdit() {
-        guard let selected = state.queueEditing.selected, !state.savingQueueEdit else { return }
+        guard let selected = state.queueEditing.selected, !state.mutatingQueue else { return }
         let text = state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        guard queuedMessages.contains(where: { $0.id == selected.id }) else {
+        guard remainingQueuedMessages.contains(where: { $0.id == selected.id }) else {
             state.queueEditError = "Message is no longer queued. Your edit has not been sent."
             return
         }
@@ -189,6 +224,7 @@ private struct QueuedMessagesView: View {
     let messages: [QueuedMessage]
     let completionDirectory: String
     let onSave: () -> Void
+    let onRemove: (Int) -> Void
 
     private var displayedMessages: [QueuedMessage] {
         if let selected = state.queueEditing.selected, !messages.contains(where: { $0.id == selected.id }) {
@@ -206,6 +242,16 @@ private struct QueuedMessagesView: View {
             }
             .font(.caption)
             .foregroundStyle(Theme.mutedForeground)
+            if let error = state.queueRemovalError {
+                HStack {
+                    Text(error).font(.caption).foregroundStyle(Theme.destructive).textSelection(.enabled)
+                    Spacer()
+                    Button { state.queueRemovalError = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.plain)
+                        .help("Dismiss removal error")
+                        .accessibilityLabel("Dismiss removal error")
+                }
+            }
             ScrollViewReader { proxy in
                 if state.queueEditing.selected != nil {
                     // One editor subtree: ViewThatFits must not create two competing NSTextViews.
@@ -261,9 +307,19 @@ private struct QueuedMessagesView: View {
                             }
                             .buttonStyle(.plain)
                             .foregroundStyle(Theme.mutedForeground)
-                            .disabled(state.savingQueueEdit)
+                            .disabled(state.mutatingQueue)
                             .help("Edit this queued message")
                         }
+                        if state.removingQueuedMessage == message.id {
+                            ProgressView().controlSize(.small)
+                        }
+                        Button { onRemove(message.id) } label: {
+                            Label("Remove", systemImage: "trash").font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.destructive)
+                        .disabled(state.mutatingQueue || !messages.contains(where: { $0.id == message.id }))
+                        .help("Remove this queued message")
                     }
                     if state.queueEditing.selected?.id == message.id {
                         QueuedMessageEditor(

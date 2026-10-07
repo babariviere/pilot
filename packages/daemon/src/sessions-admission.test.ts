@@ -24,13 +24,14 @@ test("spawn is counted synchronously before metadata exists, and failures releas
 		await assert.rejects(spawn, /Not a directory/);
 		await assert.rejects(sessions.send("missing", "hello"), /Unknown session/);
 		await assert.rejects(sessions.editQueuedMessage("missing", 42, "edited"), /Unknown session/);
+		await assert.rejects(sessions.removeQueuedMessage("missing", 42), /Unknown session/);
 		assert.deepEqual(sessions.prepareUpdate(), { ready: true });
 	} finally {
 		await rm(home, { recursive: true, force: true });
 	}
 });
 
-test("a lease rejects spawn, send, queued edits and subscription reopening before side effects", async () => {
+test("a lease rejects spawn, send, queued mutations and subscription reopening before side effects", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-quiescence-"));
 	try {
 		const id = randomUUID();
@@ -52,6 +53,7 @@ test("a lease rejects spawn, send, queued edits and subscription reopening befor
 		await assert.rejects(sessions.spawn({ cwd: home, message: "hello" }), ServiceUnavailable);
 		await assert.rejects(sessions.send(id, "hello"), ServiceUnavailable);
 		await assert.rejects(sessions.editQueuedMessage(id, 42, "edited"), ServiceUnavailable);
+		await assert.rejects(sessions.removeQueuedMessage(id, 42), ServiceUnavailable);
 		assert.throws(() => sessions.subscribe(id, () => undefined), ServiceUnavailable);
 		assert.equal(sessions.get(id)?.state, "parked");
 		assert.equal(sessions.list().length, 1);

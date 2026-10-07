@@ -18,7 +18,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   mode and full text; steering appears before follow-ups, with FIFO order within each mode. Long queues
   scroll and survive reconnects. Edit queued messages inline with Edit or Option-Up/Option-Down.
   Return saves, Escape cancels, and Shift-Return adds a line. Arrow navigation retains unsaved drafts;
-  saving preserves queue position and delivery mode. Consumed messages cannot be edited.
+  saving preserves queue position and delivery mode. Use Remove on any queued row to withdraw it
+  without stopping the active run. Consumed messages cannot be edited or removed.
 - **Archives.** Archive an idle chat from its toolbar or sidebar context menu. Stop starting/working
   sessions first. The sidebar's **Archived chats** control browses all archives; each project's
   archive icon opens its archives, and the browser's project selector changes scope. Archived chats

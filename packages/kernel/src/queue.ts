@@ -17,6 +17,25 @@ export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEven
 	};
 }
 
+/** Withdraw one pending input atomically with consumption, without aborting the active run. */
+export async function removeQueuedMessage(
+	session: Pick<Session, "commit">,
+	conversationId: ConversationId,
+	submissionId: number,
+	context: Context,
+): Promise<void> {
+	if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
+	await session.commit(async (tx) => {
+		const inbox = await tx.doc(InboxDoc, conversationId);
+		const index = inbox.items.findIndex((item) => item.id === submissionId);
+		const item = inbox.items[index];
+		if (!item || item.mode === "write") throw new Error("Message is no longer queued. It has not been removed.");
+		// Match pi-durable's queued withdrawal semantics, including waiter publication.
+		tx.settleSubmission(item.id, { status: "unanswered", reason: "aborted" });
+		inbox.items.splice(index, 1);
+	}, context);
+}
+
 /** Exact committed inbox frames, independent of the agent stream's content-free queue IDs. */
 export async function watchQueue(observer: DocumentObserver, conversationId: ConversationId, context: Context) {
 	const watch = await observer.watchDoc(InboxDoc, conversationId, context);

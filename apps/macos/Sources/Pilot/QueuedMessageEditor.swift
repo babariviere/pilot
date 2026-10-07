@@ -15,7 +15,7 @@ struct QueuedMessageEditor: View {
             ChatTextEditor(
                 text: $state.queueEditing.draft, height: $state.queueEditorHeight, font: fonts.nsBody,
                 minLines: 2, maxLines: 6,
-                isEditable: !state.savingQueueEdit,
+                isEditable: !state.mutatingQueue,
                 focusToken: state.queueFocus,
                 onNavigateQueue: onNavigate,
                 onCancel: state.cancelQueueEdit,
@@ -37,10 +37,10 @@ struct QueuedMessageEditor: View {
                 if state.savingQueueEdit { ProgressView().controlSize(.small) }
                 Button("Cancel", action: state.cancelQueueEdit)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(state.savingQueueEdit)
+                    .disabled(state.mutatingQueue)
                 Button("Save", action: onSave)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(state.savingQueueEdit || !available || state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(state.mutatingQueue || !available || state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
     }

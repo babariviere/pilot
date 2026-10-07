@@ -162,6 +162,9 @@ struct ChatView: View {
                         onEditQueuedMessage: { id, text in
                             try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
                         },
+                        onRemoveQueuedMessage: { id in
+                            try await AppModel.shared.client.removeQueuedMessage(session.id, submissionId: id)
+                        },
                         session: session
                     )
                 }

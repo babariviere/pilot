@@ -64,3 +64,18 @@ private func queued(_ id: Int, _ mode: DeliveryMode, _ text: String) -> QueuedMe
     editing.finish()
     #expect(editing.draft.isEmpty)
 }
+
+@Test func removingAnUnselectedMessageDiscardsItsSavedDraftOnly() {
+    let first = queued(1, .steer, "First")
+    let second = queued(2, .followUp, "Second")
+    var editing = QueuedMessageEditing()
+    editing.select(first)
+    editing.draft = "Changed first"
+    editing.select(second)
+    editing.draft = "Changed second"
+    editing.remove(first.id)
+    #expect(editing.selected?.id == second.id)
+    #expect(editing.draft == "Changed second")
+    editing.select(first)
+    #expect(editing.draft == "First")
+}

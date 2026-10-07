@@ -190,6 +190,12 @@ export function createDaemonServer(
 			await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message);
 			return json(res, 200, { ok: true });
 		}
+		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "DELETE") {
+			if (!/^[1-9]\d*$/.test(parts[4]!) || !Number.isSafeInteger(Number(parts[4])))
+				throw new HttpError(400, "Invalid queued message ID");
+			await sessions.removeQueuedMessage(parts[2]!, Number(parts[4]));
+			return json(res, 200, { ok: true });
+		}
 		throw new HttpError(404, "Not found");
 	};
 

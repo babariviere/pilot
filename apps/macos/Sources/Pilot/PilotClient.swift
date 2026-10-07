@@ -99,6 +99,13 @@ final class PilotClient: ObservableObject {
         )
     }
 
+    func removeQueuedMessage(_ sessionId: String, submissionId: Int) async throws {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before removing queued messages.") }
+        let _: RemoveQueuedMessageResponse = try await call(
+            "api/sessions/\(sessionId)/queue/\(submissionId)", method: "DELETE", body: [String: String]()
+        )
+    }
+
     @discardableResult
     func archive(_ sessionId: String) async throws -> SessionSummary {
         guard session(sessionId)?.isWorking != true else { throw ClientError("Stop this session before archiving it.") }

@@ -230,6 +230,60 @@ test("restore does not start an agent, and permits the next input admission", as
 	}
 });
 
+test("queued removal respects archive transitions and holds archive/admission until acknowledged", async (t) => {
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const worker = new FakeWorker();
+	const ack = deferred();
+	const requested = deferred();
+	t.mock.method(worker, "request", async (command: Command) => {
+		worker.commands.push(command);
+		requested.resolve();
+		await ack.promise;
+	});
+	try {
+		const before = sessions.get(id)!;
+		for (const invalid of [0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])
+			await assert.rejects(sessions.removeQueuedMessage(id, invalid), /Invalid queued message ID/);
+		assert.deepEqual(sessions.get(id), before);
+		assert.equal(sessions["workers"].size, 0);
+		const archive = sessions.archive(id);
+		const rejected = sessions.removeQueuedMessage(id, 42);
+		await archive;
+		await assert.rejects(rejected, Conflict);
+		assert.equal(sessions["workers"].size, 0);
+		const restoring = sessions.restore(id);
+		sessions["workers"].set(id, worker);
+		const removal = sessions.removeQueuedMessage(id, 42);
+		await restoring;
+		assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+		await assert.rejects(sessions.archive(id), Conflict);
+		worker.gate.resolve();
+		await requested.promise;
+		assert.equal(worker.commands.length, 1);
+		assert.equal(worker.commands[0]?.type, "removeQueuedMessage");
+		assert.equal(worker.commands[0]?.submissionId, 42);
+		assert.equal(sessions.get(id)?.updatedAt, before.updatedAt, "metadata waits for the durable acknowledgement");
+		await assert.rejects(sessions.archive(id), Conflict);
+		ack.resolve();
+		await removal;
+		assert.ok(sessions.get(id)!.updatedAt > before.updatedAt);
+		assert.equal(sessions.get(id)?.outcome, before.outcome);
+		assert.equal(sessions.get(id)?.outcomeAt, before.outcomeAt);
+		const unchanged = sessions.get(id);
+		t.mock.method(worker, "request", async () => {
+			throw new Error("Message is no longer queued");
+		});
+		await assert.rejects(sessions.removeQueuedMessage(id, 42), /no longer queued/);
+		assert.deepEqual(sessions.get(id), unchanged);
+		assert.ok((await sessions.archive(id)).archivedAt, "failed removals release the archive guard");
+	} finally {
+		ack.resolve();
+		worker.gate.resolve();
+		await cleanup();
+	}
+});
+
 test("failed archive transitions roll back and concurrent retries wait for persistence", async () => {
 	const { sessions, ids, manager, cleanup } = await fixture();
 	const id = ids[0]!;
