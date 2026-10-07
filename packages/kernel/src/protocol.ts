@@ -5,6 +5,8 @@ import type { PilotContext } from "./policy.ts";
 export interface KernelSpec {
 	/** Pilot session ID, reused as the native session ID. */
 	sessionId: string;
+	/** Project identity attached to published artifacts. */
+	projectId?: string;
 	/** Private directory holding this session's durable storage. */
 	storageDir: string;
 	cwd: string;
@@ -30,6 +32,7 @@ export type KernelCommand =
 export type KernelPacket =
 	| { type: "ready"; model: string; working: boolean; usage: SessionUsage; completion?: SessionCompletion }
 	| { type: "usage"; usage: SessionUsage }
+	| { type: "artifacts.changed" }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
 	| { type: "working"; working: boolean; completion?: SessionCompletion }

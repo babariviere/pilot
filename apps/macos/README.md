@@ -32,6 +32,17 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   Subscription values are the latest fetched snapshot, not live measurements.
 - **Models.** The model picker lists your pi scope (`enabledModels`, resolved by pi's model runtime for the
   project's directory) grouped by provider, plus the project's or pi's default (`GET /api/models`).
+- **Artifacts.** Structured artifact tool results show a pinned-revision card with an opt-in inline
+  preview and expanded viewer. Durable publication entries also show artifacts published inside
+  codemode without duplicating direct tool cards. The selected session's sidebar Artifacts section
+  opens the latest revision; each project has a Browse artifacts entry across its sessions.
+  Both views offer Source and loading/error states. Offscreen inline previews are disposed.
+  Each renderer uses an isolated, nonpersistent WebKit store, a restrictive CSP and a fail-closed
+  request blocker. Only declared, allowlisted `pilot-artifact://library/<name>` script resources can
+  load through read-only native HTTP requests. There is no JavaScript/native bridge, external
+  navigation, popup, file picker, media capture, shell access or event sending. All-frame, page-world
+  document-start guards lock WebRTC and WebTransport constructors to undefined, blocking UDP APIs
+  outside WebKit's request blocker. Data/blob images and media, and data fonts remain supported.
 - **Terminal.** ⌘J toggles a libghostty terminal on the right, via
   [libghostty-spm](https://github.com/Lakr233/libghostty-spm)'s in-memory backend. The shell is a PTY owned
   by pilotd in the session's working directory, so it keeps running when Pilot quits; reopening reattaches
@@ -79,6 +90,15 @@ swift run Pilot              # unbundled dev run (no notifications)
                              # also pr-open.png, pr-merged.png, pr-stale.png and pr-dashboard.png
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
+# Run from the repository root, after building:
+apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
+                             # no daemon: real ECharts/animations and data/blob SVGs, sandbox probes,
+                             # immutable RTC/WebTransport guards in main/about:blank realms, PNGs
+                             # optional PILOT_ARTIFACT_TEST_LIBRARY=/absolute/path/to/echarts.min.js
+                             # optional PILOT_ARTIFACT_TEST_REACT=/absolute/path/to/prepared-react.html
+                             # React fixture: "Native React 7", button increments to "Native React 8";
+                             # Motion #native-react-counter reaches opacity 1 after 300ms, or optionally
+                             # sets window.nativeMotionDone=false then true on animation completion
 ```
 
 Command Line Tools quirks handled here: libghostty-spm's `.xcstrings` catalog needs Xcode's
@@ -90,6 +110,21 @@ Development bundles run `node --import tsx src/main.ts` from this checkout's `pa
 bundles include Node and pilotd in `Contents/Resources/runtime` and do not require this checkout. GUI apps get
 a minimal PATH, so the installer asks your login shell (nushell, fish, zsh or bash) for its PATH and falls
 back to mise shims and Homebrew. pilotd logs to `~/Library/Logs/Pilot/pilotd.log`.
+
+### Optional artifact screenshot browser
+
+Native artifact previews use WebKit and need no browser installation. The agent's optional
+`artifact_preview` screenshot tool uses Playwright Chromium. Pilot never downloads that browser
+automatically. If you want screenshots, explicitly run this in Terminal (it downloads Chromium
+into your user cache; adjust the app path if needed):
+
+```sh
+runtime="/Applications/Pilot.app/Contents/Resources/runtime"
+"$runtime/node/bin/node" "$runtime/node_modules/playwright/cli.js" install chromium
+```
+
+Release runtimes include Node and Playwright but not npm, so use this bundled CLI rather than
+`npm` or `npx`. Artifact rendering remains isolated and screenshot browser installation is opt-in.
 
 ## Automatic builds and private updates
 

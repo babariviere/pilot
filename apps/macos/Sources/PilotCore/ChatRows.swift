@@ -13,16 +13,18 @@ public struct ToolItem: Identifiable, Equatable, Sendable {
     public let arguments: JSONValue
     public let status: ToolStatus
     public let output: String
+    public var artifact: ArtifactReference? = nil
 
     private var cachedSummary: ToolSummary?
     public var summary: ToolSummary { cachedSummary ?? ToolSummary(name: name, arguments: arguments) }
 
-    init(id: String, name: String, arguments: JSONValue, status: ToolStatus, output: String) {
+    init(id: String, name: String, arguments: JSONValue, status: ToolStatus, output: String, artifact: ArtifactReference? = nil) {
         self.id = id
         self.name = name
         self.arguments = arguments
         self.status = status
         self.output = output
+        self.artifact = artifact
     }
 
     mutating func prepare(summary: ToolSummary) { cachedSummary = summary }
@@ -30,7 +32,7 @@ public struct ToolItem: Identifiable, Equatable, Sendable {
     public static func == (lhs: ToolItem, rhs: ToolItem) -> Bool {
         // A rendering cache must not change the identity or equality of a tool result.
         lhs.id == rhs.id && lhs.name == rhs.name && lhs.arguments == rhs.arguments
-            && lhs.status == rhs.status && lhs.output == rhs.output
+            && lhs.status == rhs.status && lhs.output == rhs.output && lhs.artifact == rhs.artifact
     }
 }
 
@@ -40,13 +42,14 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
     case text(id: String, text: String)
     case thinking(id: String, text: String, streaming: Bool)
     case tools(id: String, items: [ToolItem])
+    case artifact(id: String, reference: ArtifactReference)
     case error(id: String, text: String)
     case notice(id: String, text: String)
 
     public var id: String {
         switch self {
         case let .user(id, _), let .text(id, _), let .thinking(id, _, _), let .tools(id, _), let .error(id, _),
-             let .notice(id, _):
+             let .notice(id, _), let .artifact(id, _):
             id
         }
     }
@@ -55,6 +58,7 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
 extension Transcript {
     public var rows: [ChatRow] {
         let results = results
+        let published = Set(entries.compactMap(\.artifact).map { "\($0.sessionId)/\($0.id)/\($0.revision)" })
         var rows: [ChatRow] = []
         var toolGroupId: String?
         var toolGroup: [ToolItem] = []
@@ -87,7 +91,10 @@ extension Transcript {
                 case let .thinking(text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                     append(.thinking(id: blockId, text: text, streaming: streaming && isLast))
                 case let .toolCall(callId, name, arguments):
-                    append(.tools(id: blockId, items: [tool(callId, name: name, arguments: arguments, results: results)]))
+                    var item = tool(callId, name: name, arguments: arguments, results: results)
+                    if let artifact = item.artifact,
+                       published.contains("\(artifact.sessionId)/\(artifact.id)/\(artifact.revision)") { item.artifact = nil }
+                    append(.tools(id: blockId, items: [item]))
                 default:
                     break
                 }
@@ -101,6 +108,8 @@ extension Transcript {
 
         for entry in entries {
             switch entry.kind {
+            case "pilot.artifact":
+                if let artifact = entry.artifact { append(.artifact(id: "\(entry.id)-artifact", reference: artifact)) }
             case "pi.compaction": append(.notice(id: "\(entry.id)", text: "Context compacted"))
             case "pi.reset": append(.notice(id: "\(entry.id)", text: "Context reset"))
             default:
@@ -122,7 +131,9 @@ extension Transcript {
 
     private func tool(_ callId: String, name: String, arguments: JSONValue, results: [String: ChatMessage]) -> ToolItem {
         if let result = results[callId] {
-            return ToolItem(id: callId, name: name, arguments: arguments, status: result.isError ? .error : .done, output: result.text)
+            let publicationTool = name == "artifact_create" || name == "artifact_update"
+            return ToolItem(id: callId, name: name, arguments: arguments, status: result.isError ? .error : .done,
+                            output: result.text, artifact: publicationTool ? result.artifact : nil)
         }
         let live = tools[callId]
         let status: ToolStatus = switch live?.status {

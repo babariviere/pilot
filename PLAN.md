@@ -254,6 +254,13 @@ reports), producing a morning summary in the app and Slack.
   actor, preserve stream ordering, and publish prepared rows once per batch. Long tool groups render
   lazily; loading and startup have visible progress. Procedural home artwork renders off main as well.
 - Questions panel: answer `ask_human` gates inline.
+- Artifacts: durable HTML/JS or React/JSX documents owned by a session and its project. Agent tools
+  create, update, list, read and preview them. Each publication saves an immutable revision; chat
+  previews pin that revision, while sidebar access opens the latest. Native WebKit renders isolated,
+  offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,
+  ECharts and Motion are bundled; D3 and Three.js are opt-in bundled libraries. JSX compilation accepts
+  only those libraries, not arbitrary package installs. Optional agent screenshots and console
+  diagnostics use an isolated Playwright browser (`npm run artifacts:browser` installs Chromium).
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release
@@ -278,6 +285,9 @@ reports), producing a morning summary in the app and Slack.
 | --- | --- |
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
 | `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
+| `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |
+| `GET /api/sessions/:id/artifacts/:artifactId?revision=N` | Read a pinned revision (latest when omitted) |
+| `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `SessionSummary.pullRequest`, `.pullRequestError` | Branch-linked GitHub PR status and cached-lookup errors (done for private manual sessions) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |

@@ -14,6 +14,11 @@ enum Snapshot {
             Task { await QueueEditingTest.run() }
             return true
         }
+        if let index = arguments.firstIndex(of: "--artifact-render-test") {
+            let directory = arguments.count > index + 1 ? arguments[index + 1] : "/tmp/pilot-artifact-test"
+            Task { await ArtifactRenderTest.run(directory: URL(filePath: directory)) }
+            return true
+        }
         if arguments.contains("--terminal-exit-test") {
             Task { await terminalExitTest(directory: URL(filePath: arguments.last ?? "/tmp")) }
             return true

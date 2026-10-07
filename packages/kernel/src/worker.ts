@@ -73,6 +73,7 @@ process.on("message", (message: unknown) => {
 				onWorking: (working, completion) =>
 					void send({ type: "working", working, ...(completion ? { completion } : {}) }),
 				onUsageChanged: (usage) => void send({ type: "usage", usage }),
+				onArtifactsChanged: () => void send({ type: "artifacts.changed" }),
 			});
 			await send({
 				type: "ready",

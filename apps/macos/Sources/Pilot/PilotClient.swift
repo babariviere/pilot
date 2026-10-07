@@ -7,6 +7,8 @@ import PilotCore
 final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var projects: [Project] = []
+    @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
+    private var artifactVersions: [String: Int] = [:]
     @Published private(set) var connected = false
 
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
@@ -18,6 +20,7 @@ final class PilotClient: ObservableObject {
     var workingCount: Int { activeSessions.filter(\.isWorking).count }
 
     private var baseURL: URL?
+    init(baseURL: URL? = nil) { self.baseURL = baseURL }
     private var task: URLSessionWebSocketTask?
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
@@ -152,6 +155,57 @@ final class PilotClient: ObservableObject {
         }
         return try await Task.detached(priority: .userInitiated) {
             try JSONDecoder().decode(SessionChanges.self, from: data)
+        }.value
+    }
+
+    func sessionArtifacts(_ sessionId: String) async throws -> [ArtifactSummary] {
+        let version = artifactVersions[sessionId, default: 0]
+        let list: [ArtifactSummary] = try await get(artifactURL(["sessions", sessionId, "artifacts"]))
+        guard list.allSatisfy({ $0.sessionId == sessionId }) else { throw ClientError("Invalid artifact list") }
+        // A WS update received while GET was pending is newer than that response.
+        if artifactVersions[sessionId, default: 0] == version { artifacts[sessionId] = list }
+        return artifacts[sessionId] ?? list
+    }
+
+    func projectArtifacts(_ projectId: String) async throws -> [ArtifactSummary] {
+        try await get(artifactURL(["projects", projectId, "artifacts"]))
+    }
+
+    func artifact(_ reference: ArtifactReference, latest: Bool = false) async throws -> ArtifactRevision {
+        var components = URLComponents(url: try artifactURL(["sessions", reference.sessionId, "artifacts", reference.id]),
+                                       resolvingAgainstBaseURL: false)!
+        if !latest { components.queryItems = [URLQueryItem(name: "revision", value: String(reference.revision))] }
+        let result: ArtifactRevision = try await get(components.url!)
+        guard result.id == reference.id, result.sessionId == reference.sessionId,
+              latest || result.revision == reference.revision else { throw ClientError("Invalid artifact revision") }
+        return result
+    }
+
+    /// Called only by the allowlisted scheme handler, never with a web-supplied path.
+    func artifactLibraryURL(_ library: ArtifactLibrary) throws -> URL {
+        try artifactURL(["artifact-libraries", library.rawValue])
+    }
+
+    private func artifactURL(_ components: [String]) throws -> URL {
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        var url = baseURL.appendingPathComponent("api")
+        for component in components {
+            guard !component.isEmpty, component != ".", component != "..",
+                  component.rangeOfCharacter(from: CharacterSet(charactersIn: "/\\?#%")) == nil
+            else { throw ClientError("Invalid artifact identifier") }
+            url.appendPathComponent(component)
+        }
+        return url
+    }
+
+    private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
+        let (data, response) = try await URLSession.shared.data(from: url)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(Response.self, from: data)
         }.value
     }
 
@@ -315,6 +369,9 @@ final class PilotClient: ObservableObject {
             update(session)
         case let .events(id, events):
             for listener in listeners[id]?.values ?? [:].values { listener(events) }
+        case let .artifacts(update):
+            artifactVersions[update.sessionId, default: 0] += 1
+            artifacts[update.sessionId] = update.artifacts
         case let .terminalData(id, data):
             terminals[id]?.onData(data)
         case let .terminalExit(id, code):

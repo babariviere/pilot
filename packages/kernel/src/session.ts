@@ -1,5 +1,5 @@
 /** One durable pi session: a Harness root conversation driven by the native Pi kernel. */
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -17,12 +17,14 @@ import {
 	type Storage,
 	watchEvents,
 } from "@earendil-works/pi-durable";
+import { ArtifactStore } from "@pilot/artifacts";
 import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
+import { createArtifactTools } from "./artifact-tools.ts";
 import { reconcileCompletion, withAttention } from "./attention.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
-import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
 import type { KernelSpec } from "./protocol.ts";
+import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
@@ -53,6 +55,8 @@ async function pinnedAgent(
 export interface KernelSessionHooks {
 	onWorking(working: boolean, completion?: SessionCompletion): void;
 	onUsageChanged?(usage: SessionUsage): void;
+	/** Called after an artifact revision has been committed to the session store. */
+	onArtifactsChanged?(): void;
 }
 
 export class KernelSession {
@@ -73,8 +77,13 @@ export class KernelSession {
 		const owned = await openSessionStorage(spec.storageDir);
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
+		let artifactConversation: Conversation | undefined;
 		try {
 			const pinned = await pinnedAgent(owned.storage);
+			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
+				sessionId: spec.sessionId,
+				projectId: spec.projectId,
+			});
 			adapter = await NativeAdapter.open({
 				cwd: spec.cwd,
 				agentDir: spec.agentDir,
@@ -82,6 +91,26 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
+				sessionOptions: {
+					customTools: createArtifactTools({
+						store: artifacts,
+						onArtifactsChanged: hooks.onArtifactsChanged,
+						onArtifactPublished: async (artifact) => {
+							if (!artifactConversation)
+								throw new Error("Artifact publication requires a bound Harness conversation");
+							// Passive write admission is legal while tools are running. The Harness places it
+							// at its post-tools boundary; direct tx.appendEntry would race a busy conversation.
+							await artifactConversation.submit(
+								{
+									type: "write",
+									requestId: `artifact:${artifact.id}:${artifact.revision}`,
+									entry: { kind: "pilot.artifact", data: { artifact: { ...artifact } }, model: [] },
+								},
+								context,
+							);
+						},
+					}),
+				},
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
@@ -105,6 +134,7 @@ export class KernelSession {
 				},
 			});
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
+			artifactConversation = conversation;
 			// Bind before resume(), so recovered tool calls cannot race binding.
 			adapter.bindHarness(harness, conversation.id);
 			const status = await watchEvents(harness, conversation.id, context);

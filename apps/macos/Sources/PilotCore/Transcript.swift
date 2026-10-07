@@ -31,6 +31,7 @@ public struct ChatMessage: Equatable, Sendable {
     public var isError: Bool
     public var stopReason: String?
     public var errorMessage: String?
+    public var artifact: ArtifactReference?
 
     public init(json: JSONValue) {
         role = json["role"]?.string ?? "unknown"
@@ -43,6 +44,7 @@ public struct ChatMessage: Equatable, Sendable {
         isError = json["isError"]?.bool ?? false
         stopReason = json["stopReason"]?.string
         errorMessage = json["errorMessage"]?.string
+        artifact = role == "toolResult" && !isError ? ArtifactReference.fromToolResult(json) : nil
     }
 
     public var text: String {
@@ -61,12 +63,14 @@ public struct Entry: Identifiable, Equatable, Sendable {
     public let id: Int
     public let kind: String
     public let messages: [ChatMessage]
+    public let artifact: ArtifactReference?
 
     public init?(json: JSONValue) {
         guard let id = json["id"]?.int else { return nil }
         self.id = id
         kind = json["kind"]?.string ?? ""
         messages = (json["model"]?.array ?? []).map(ChatMessage.init(json:))
+        artifact = kind == "pilot.artifact" ? ArtifactReference.fromToolResult(.object(["details": json["data"] ?? .null])) : nil
     }
 }
 

@@ -121,6 +121,43 @@ export interface Project {
 
 export type WorkspaceMode = "clone" | "direct";
 
+/** Offline libraries available inside the artifact sandbox. */
+export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
+export type ArtifactKind = "html" | "react";
+
+export interface ArtifactSummary {
+	id: string;
+	sessionId: string;
+	projectId?: string;
+	title: string;
+	kind: ArtifactKind;
+	revision: number;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/** Source is editable; html is the prepared, sandboxed preview. */
+export interface ArtifactRevision extends ArtifactSummary {
+	source: string;
+	html: string;
+	libraries: ArtifactLibrary[];
+}
+
+export interface ArtifactWrite {
+	title: string;
+	kind: ArtifactKind;
+	source: string;
+	libraries?: ArtifactLibrary[];
+}
+
+/** Saved in a tool result, pinning the chat preview to its original revision. */
+export interface ArtifactReference {
+	id: string;
+	sessionId: string;
+	title: string;
+	revision: number;
+}
+
 /** POST /api/projects, PATCH /api/projects/:id (partial). An empty model clears it. */
 export interface ProjectRequest {
 	path: string;
@@ -213,6 +250,7 @@ export type ServerMessage =
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| { type: "session"; session: SessionSummary }
 	| { type: "projects"; projects: Project[] }
+	| { type: "artifacts"; sessionId: string; artifacts: ArtifactSummary[] }
 	/** Starts with a snapshot event on every (re)subscription, then incremental batches. */
 	| { type: "events"; sessionId: string; events: AgentEvent[] }
 	| { type: "terminal.data"; sessionId: string; data: string }

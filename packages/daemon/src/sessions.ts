@@ -4,9 +4,12 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import { type KernelCommand, type KernelPacket, type WorkspaceContext, workerEntry } from "@pilot/kernel";
 import type {
 	AgentEvent,
+	ArtifactRevision,
+	ArtifactSummary,
 	DeliveryMode,
 	SessionPullRequest,
 	SessionListQuery,
@@ -240,6 +243,8 @@ export class SessionManager {
 	/** sessionId -> watchId -> listener */
 	private readonly watchers = new Map<string, Map<string, EventListener>>();
 	private readonly changeListeners = new Set<(session: SessionSummary) => void>();
+	private readonly artifactListeners = new Set<(sessionId: string, artifacts: ArtifactSummary[]) => void>();
+	private readonly artifactNotifications = new Map<string, Promise<void>>();
 	/** Serialized, immutable metadata snapshots per session. */
 	private readonly saving = new Map<string, Promise<void>>();
 	private readonly starting = new Map<string, Promise<Map<string, Error>>>();
@@ -306,6 +311,44 @@ export class SessionManager {
 	onChange(listener: (session: SessionSummary) => void): () => void {
 		this.changeListeners.add(listener);
 		return () => this.changeListeners.delete(listener);
+	}
+
+	onArtifactsChanged(listener: (sessionId: string, artifacts: ArtifactSummary[]) => void): () => void {
+		this.artifactListeners.add(listener);
+		return () => this.artifactListeners.delete(listener);
+	}
+
+	/** Read committed artifacts without creating or waking a kernel worker. */
+	async artifacts(id: string): Promise<ArtifactSummary[]> {
+		return this.artifactStore(id).list();
+	}
+
+	async artifact(id: string, artifactId: string, revision?: number): Promise<ArtifactRevision> {
+		const store = this.artifactStore(id);
+		if (revision !== undefined && (!Number.isSafeInteger(revision) || revision <= 0))
+			throw new Error("revision must be a positive integer");
+		try {
+			return await store.get(artifactId, revision);
+		} catch (error) {
+			if (error instanceof ArtifactNotFound) throw new NotFound(error.message);
+			throw error;
+		}
+	}
+
+	async projectArtifacts(projectId: string): Promise<ArtifactSummary[]> {
+		this.projects.require(projectId);
+		const lists = await Promise.all(
+			[...this.metas.values()].filter((meta) => meta.projectId === projectId).map((meta) => this.artifacts(meta.id)),
+		);
+		return lists.flat().sort((a, b) => b.updatedAt - a.updatedAt);
+	}
+
+	private artifactStore(id: string): ArtifactStore {
+		const meta = this.require(id);
+		return new ArtifactStore(this.dir(id), {
+			sessionId: id,
+			...(meta.projectId ? { projectId: meta.projectId } : {}),
+		});
 	}
 
 	list(query: SessionListQuery = {}): SessionSummary[] {
@@ -587,6 +630,7 @@ export class SessionManager {
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.preparations]);
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
+		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
@@ -702,6 +746,7 @@ export class SessionManager {
 		const worker = createWorker(
 			{
 				sessionId: id,
+				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
 				cwd: meta.cwd,
 				model: meta.model,
@@ -755,6 +800,19 @@ export class SessionManager {
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (packet.type === "artifacts.changed") {
+			const next = (this.artifactNotifications.get(meta.id) ?? Promise.resolve())
+				.then(async () => {
+					const artifacts = await this.artifacts(meta.id);
+					for (const listener of this.artifactListeners) listener(meta.id, artifacts);
+				})
+				.catch((error: unknown) => console.warn(`pilotd: could not read artifacts for ${meta.id}: ${error}`))
+				.finally(() => {
+					if (this.artifactNotifications.get(meta.id) === next) this.artifactNotifications.delete(meta.id);
+				});
+			this.artifactNotifications.set(meta.id, next);
+			return;
+		}
 		if (packet.type === "events") {
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
