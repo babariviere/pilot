@@ -115,10 +115,7 @@ struct ChatView: View {
                     }
                     if !session.isWorking, session.outcome != nil {
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                SessionStatusIcon(status: session.status)
-                                if model.isUnread(session) { UnreadBadge() }
-                            }
+                            SessionStatusIcon(status: session.status)
                             if let reason = session.outcomeReason {
                                 Text(reason).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
                             }
@@ -294,13 +291,12 @@ private struct WorkingIndicator: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            SessionStatusIcon(status: .working)
-            if let retry {
-                Text("Retrying: \(retry)")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            ProgressView().controlSize(.mini)
+            Text(retry.map { "Retrying: \($0)" } ?? "Working…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+        .accessibilityElement(children: .combine)
     }
 }
