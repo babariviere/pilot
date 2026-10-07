@@ -260,9 +260,12 @@ reports), producing a morning summary in the app and Slack.
   editor. Reject removal once a message has been consumed.
 - Archive inactive chats without deleting their history or workspace. Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
-  Fresh GitHub merge checks automatically archive linked chats once inactive. Failed lookups and
-  closed, unmerged PRs never trigger archiving. Restoring an auto-archived chat keeps it active for
-  that PR, including after daemon restarts.
+  The daemon checks once a minute to automatically archive chats after one week without activity,
+  skipping running chats and pending admissions. Restoration grants another week, including across
+  daemon restarts, without changing chat ordering. Fresh GitHub merge checks automatically archive
+  inactive linked chats no earlier than 24 hours after GitHub's merge timestamp. Failed lookups and
+  closed, unmerged PRs never trigger merge-based archiving. Restoring a merge-archived chat keeps it
+  active for that PR, including after daemon restarts (the one-week inactivity rule still applies).
 - Task and chat composers complete local file and folder paths on Tab, relative to the selected project
   or session working directory; absolute paths and `~/` work too. A compact floating path picker shows
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.

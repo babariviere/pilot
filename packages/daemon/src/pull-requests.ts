@@ -21,6 +21,8 @@ export interface PullRequestResult {
 	/** Current agent-chosen branch/bookmark, also cached for session summaries. */
 	branch?: string;
 	pullRequest?: SessionPullRequest;
+	/** GitHub's merge time, epoch milliseconds. Used only for delayed archiving. */
+	mergedAt?: number;
 	error?: string;
 }
 
@@ -84,6 +86,7 @@ interface Candidate {
 	headRefName: string;
 	isCrossRepository: boolean;
 	createdAt: string;
+	mergedAt: string | null;
 }
 
 function select(output: string, branch: string, repo: Repository): Candidate | undefined {
@@ -104,7 +107,8 @@ function select(output: string, branch: string, repo: Repository): Candidate | u
 			typeof pr.headRefName !== "string" ||
 			typeof pr.isCrossRepository !== "boolean" ||
 			typeof pr.createdAt !== "string" ||
-			!Number.isFinite(Date.parse(pr.createdAt))
+			!Number.isFinite(Date.parse(pr.createdAt)) ||
+			(pr.state === "MERGED" && (typeof pr.mergedAt !== "string" || !Number.isFinite(Date.parse(pr.mergedAt))))
 		)
 			throw new Error("Invalid GitHub pull request response");
 		// Same-named fork branches are not this private clone's branch. Deleted head branches
@@ -129,7 +133,7 @@ function select(output: string, branch: string, repo: Repository): Candidate | u
 	)[0];
 }
 
-const fields = "number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt";
+const fields = "number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt,mergedAt";
 
 export async function discoverPullRequest(
 	session: PullRequestSession,
@@ -181,6 +185,7 @@ export async function discoverPullRequest(
 			};
 		return {
 			branch,
+			...(pr.state === "MERGED" ? { mergedAt: Date.parse(pr.mergedAt!) } : {}),
 			pullRequest: {
 				number: pr.number,
 				url: pr.url,

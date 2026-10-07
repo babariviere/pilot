@@ -22,6 +22,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
 		headRefName: branch,
 		isCrossRepository: false,
 		createdAt: "2026-01-01T00:00:00Z",
+		mergedAt: "2026-01-02T00:00:00Z",
 		...overrides,
 	};
 }
@@ -85,6 +86,7 @@ test("discovers all four authoritative states, terminal state takes precedence o
 		assert.equal(result.pullRequest?.number, 1);
 		assert.equal(result.pullRequest?.title, "A pull request");
 		assert.ok(result.pullRequest!.checkedAt >= before);
+		assert.equal(result.mergedAt, state === "MERGED" ? Date.parse("2026-01-02T00:00:00Z") : undefined);
 	}
 });
 
@@ -111,7 +113,7 @@ test("uses recorded upstream, agent-chosen branch and repo flags with timeouts",
 			"--repo=github.com/octo/repo",
 			"--state=open",
 			"--limit=100",
-			"--json=number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt",
+			"--json=number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt,mergedAt",
 		],
 	});
 });
@@ -246,6 +248,9 @@ test("lookup errors and malformed results are stale signals, not mutations", asy
 		async () => "invalid JSON",
 		async () => "{}",
 		async () => JSON.stringify([candidate({ state: "UNKNOWN" })]),
+		async () => JSON.stringify([candidate({ state: "MERGED", mergedAt: null })]),
+		async () => JSON.stringify([candidate({ state: "MERGED", mergedAt: undefined })]),
+		async () => JSON.stringify([candidate({ state: "MERGED", mergedAt: "invalid" })]),
 		async () => JSON.stringify([candidate({ url: "https://github.com/foreign/repo/pull/1" })]),
 	];
 	for (const runner of runners) {
