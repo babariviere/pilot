@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// Selection is not review. Only a visible outcome card in the active key window
+/// Selection is not review. Only a visible transcript end in the active key window
 /// can acknowledge a result. In particular, minimized/closed/background windows cannot.
 struct ChatReviewVisibility: NSViewRepresentable {
     let onVisible: () -> Void

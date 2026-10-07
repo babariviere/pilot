@@ -113,20 +113,13 @@ struct ChatView: View {
                     if let error = session.error, transcript.error == nil {
                         ErrorRow(text: error)
                     }
-                    if !session.isWorking, session.outcome != nil {
-                        VStack(alignment: .leading, spacing: 8) {
-                            SessionStatusIcon(status: session.status)
-                            if let reason = session.outcomeReason {
-                                Text(reason).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                            }
-                        }
+                    Color.clear.frame(height: 1).id("bottom")
                         .background(ChatReviewVisibility {
-                            guard feed.hasSnapshot, !transcript.working, !transcript.streaming,
+                            guard !session.isWorking, session.outcome != nil,
+                                  feed.hasSnapshot, !transcript.working, !transcript.streaming,
                                   model.selectedSessionId == session.id else { return }
                             model.review(session, chatVisible: true)
                         })
-                    }
-                    Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 24)
