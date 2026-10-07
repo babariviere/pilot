@@ -256,7 +256,9 @@ reports), producing a morning summary in the app and Slack.
 - Questions panel: answer `ask_human` gates inline.
 - Artifacts: durable HTML/JS or React/JSX documents owned by a session and its project. Agent tools
   create, update, list, read and preview them. Each publication saves an immutable revision; chat
-  previews pin that revision, while sidebar access opens the latest. Native WebKit renders isolated,
+  previews are shown by default and pin that revision, while sidebar access opens the latest.
+  Offscreen chat rows release their renderer; previews can also be hidden manually. An older running
+  daemon without artifact routes prompts for a restart once agents are idle. Native WebKit renders isolated,
   offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,
   ECharts and Motion are bundled; D3 and Three.js are opt-in bundled libraries. JSX compilation accepts
   only those libraries, not arbitrary package installs. Optional agent screenshots and console

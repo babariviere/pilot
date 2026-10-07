@@ -20,7 +20,11 @@ final class PilotClient: ObservableObject {
     var workingCount: Int { activeSessions.filter(\.isWorking).count }
 
     private var baseURL: URL?
-    init(baseURL: URL? = nil) { self.baseURL = baseURL }
+    private let artifactSession: URLSession
+    init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
+        self.baseURL = baseURL
+        self.artifactSession = artifactSession
+    }
     private var task: URLSessionWebSocketTask?
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
@@ -199,10 +203,16 @@ final class PilotClient: ObservableObject {
     }
 
     private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
-        let (data, response) = try await URLSession.shared.data(from: url)
+        let (data, response) = try await artifactSession.data(from: url)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
-            throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
+            let error = (try? JSONDecoder().decode(APIError.self, from: data))?.error
+            // Older running daemons can serve chats but have no artifact routes. Do not
+            // restart them automatically: that would interrupt active agents.
+            if status == 404, error == "Not found" {
+                throw ClientError("This pilotd does not support artifacts. Once agents are idle, restart pilotd from the Pilot menu to load the current runtime.")
+            }
+            throw ClientError(error ?? "HTTP \(status)")
         }
         return try await Task.detached(priority: .userInitiated) {
             try JSONDecoder().decode(Response.self, from: data)
