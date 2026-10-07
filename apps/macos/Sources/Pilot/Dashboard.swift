@@ -7,10 +7,10 @@ struct Dashboard: View {
 
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], spacing: 14) {
-            WorkingNowCard(sessions: client.sessions.filter(\.isWorking))
-            ActivityCard(sessions: client.sessions)
-            RecentCard(sessions: Array(client.sessions.filter { !$0.isWorking }.prefix(6)))
-            ProjectsCard(projects: client.projects, sessions: client.sessions)
+            WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
+            ActivityCard(sessions: client.activeSessions)
+            RecentCard(sessions: Array(client.activeSessions.filter { !$0.isWorking }.prefix(6)))
+            ProjectsCard(projects: client.projects, sessions: client.activeSessions)
         }
     }
 }

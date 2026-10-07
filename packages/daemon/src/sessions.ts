@@ -9,13 +9,14 @@ import type {
 	AgentEvent,
 	DeliveryMode,
 	SessionPullRequest,
+	SessionListQuery,
 	SessionState,
 	SessionSummary,
 	SessionUsage,
 	SpawnRequest,
 	UpdatePreparation,
 } from "@pilot/protocol";
-import { NotFound } from "./errors.ts";
+import { Conflict, NotFound } from "./errors.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
@@ -62,6 +63,7 @@ interface SessionMeta extends OutcomeMeta {
 	workspace?: WorkspaceContext;
 	createdAt: number;
 	updatedAt: number;
+	archivedAt?: number;
 	model?: string;
 	thinking?: string;
 	/** Cleared only after initialization and durable input admission. */
@@ -244,6 +246,10 @@ export class SessionManager {
 	private readonly preparations = new Set<Promise<Workspace>>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
+	/** Admissions waiting for acknowledgement must not race archiving. */
+	private readonly sending = new Map<string, number>();
+	/** Same-target retries share the durable result; opposite transitions execute in order. */
+	private readonly archiveTransitions = new Map<string, { archived: boolean; promise: Promise<SessionSummary> }>();
 	private closing = false;
 	private readonly pullRequests: PullRequestTracker;
 
@@ -288,7 +294,11 @@ export class SessionManager {
 		}
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
-			if (!meta.failure && (meta.initializing || meta.pending?.length || meta.working))
+			if (
+				meta.archivedAt === undefined &&
+				!meta.failure &&
+				(meta.initializing || meta.pending?.length || meta.working)
+			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
 	}
@@ -298,8 +308,72 @@ export class SessionManager {
 		return () => this.changeListeners.delete(listener);
 	}
 
-	list(): SessionSummary[] {
-		return [...this.metas.values()].map((meta) => this.summary(meta)).sort((a, b) => b.updatedAt - a.updatedAt);
+	list(query: SessionListQuery = {}): SessionSummary[] {
+		return [...this.metas.values()]
+			.filter((meta) => {
+				const archived = meta.archivedAt !== undefined;
+				return (
+					(query.archived === "all" || archived === (query.archived === "true")) &&
+					(query.projectId === undefined || meta.projectId === query.projectId)
+				);
+			})
+			.map((meta) => this.summary(meta))
+			.sort((a, b) => b.updatedAt - a.updatedAt);
+	}
+
+	/** Non-destructive: keep the transcript, branch and workspace available for viewing and restoration. */
+	async archive(id: string): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			return await this.setArchived(id, true);
+		} finally {
+			end();
+		}
+	}
+
+	async restore(id: string): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			return await this.setArchived(id, false);
+		} finally {
+			end();
+		}
+	}
+
+	private setArchived(id: string, archived: boolean): Promise<SessionSummary> {
+		if (this.closing) throw new Error("pilotd is shutting down");
+		this.require(id);
+		const previous = this.archiveTransitions.get(id);
+		if (previous?.archived === archived) return previous.promise;
+		const promise = (previous?.promise ?? Promise.resolve())
+			.catch(() => undefined)
+			.then(async () => {
+				const meta = this.require(id);
+				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
+				const worker = this.workers.get(id);
+				if (
+					archived &&
+					(meta.working ||
+						meta.initializing ||
+						meta.preparing ||
+						meta.pending?.length ||
+						worker?.state === "starting" ||
+						worker?.state === "working" ||
+						worker?.busy ||
+						this.sending.has(id))
+				)
+					throw new Conflict("Stop the session before archiving it");
+				// Stage only this write. Concurrent lifecycle saves and summaries keep the committed state.
+				await this.save(meta, { timestamp: archived ? Date.now() : undefined });
+				this.emit(meta);
+				return this.summary(meta);
+			});
+		this.archiveTransitions.set(id, { archived, promise });
+		const clear = () => {
+			if (this.archiveTransitions.get(id)?.promise === promise) this.archiveTransitions.delete(id);
+		};
+		void promise.then(clear, clear);
+		return promise;
 	}
 
 	get(id: string): SessionSummary | undefined {
@@ -402,23 +476,33 @@ export class SessionManager {
 	private async sendAdmitted(id: string, message: string, mode: DeliveryMode, requestId: string): Promise<void> {
 		const meta = this.require(id);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
-		if (this.closing) throw new Error("pilotd is shutting down");
-		if (meta.failure) throw new Error(meta.failure);
-		delete meta.cancelled;
-		// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.
-		if (!meta.pending?.some((command) => command.requestId === requestId)) {
-			meta.pending ??= [];
-			meta.pending.push({ type: "input", requestId, content: message, mode });
-		}
-		meta.updatedAt = Date.now();
-		await this.save(meta);
-		this.emit(meta);
-		const starting = meta.initializing;
-		const admission = this.start(id, true);
-		if (!starting) {
-			const rejected = await admission;
-			if (rejected.has(requestId)) throw rejected.get(requestId);
+		const transition = this.archiveTransitions.get(id);
+		if (transition) await transition.promise;
+		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
+		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+		try {
+			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
+			delete meta.cancelled;
+			// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.
+			if (!meta.pending?.some((command) => command.requestId === requestId)) {
+				meta.pending ??= [];
+				meta.pending.push({ type: "input", requestId, content: message, mode });
+			}
+			meta.updatedAt = Date.now();
+			await this.save(meta);
+			this.emit(meta);
+			const starting = meta.initializing;
+			const admission = this.start(id, true);
+			if (!starting) {
+				const rejected = await admission;
+				if (rejected.has(requestId)) throw rejected.get(requestId);
+				if (meta.failure) throw new Error(meta.failure);
+			}
+		} finally {
+			const count = (this.sending.get(id) ?? 1) - 1;
+			if (count) this.sending.set(id, count);
+			else this.sending.delete(id);
 		}
 	}
 
@@ -447,6 +531,9 @@ export class SessionManager {
 		const end = this.updateGate.begin();
 		try {
 			const meta = this.require(id);
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before editing messages");
 			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 			const worker = this.ensureWorker(id);
@@ -501,6 +588,7 @@ export class SessionManager {
 		await Promise.allSettled([...this.preparations]);
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await drainPullRequests;
+		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
 	}
 
@@ -695,6 +783,7 @@ export class SessionManager {
 			...(meta.workspace ? { branch: meta.workspace.branch } : {}),
 			createdAt: meta.createdAt,
 			updatedAt: meta.updatedAt,
+			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
 			state: meta.failure
 				? "failed"
 				: meta.initializing
@@ -761,15 +850,25 @@ export class SessionManager {
 		return join(this.sessionsDir, id);
 	}
 
-	private save(meta: SessionMeta): Promise<void> {
+	private save(meta: SessionMeta, archive?: { timestamp?: number }): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
 		const snapshot = `${JSON.stringify(meta, null, "\t")}\n`;
 		const write = async () => {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
-			await writeFile(temp, snapshot, { mode: 0o600 });
+			const persisted = JSON.parse(snapshot) as SessionMeta;
+			// Archive state commits only after rename, unlike captured lifecycle transitions.
+			const archivedAt = archive ? archive.timestamp : meta.archivedAt;
+			if (archivedAt === undefined) delete persisted.archivedAt;
+			else persisted.archivedAt = archivedAt;
+			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600 });
 			await rename(temp, file);
+			// Commit in memory before the next queued save can read the metadata.
+			if (archive) {
+				if (archive.timestamp === undefined) delete meta.archivedAt;
+				else meta.archivedAt = archive.timestamp;
+			}
 		};
 		const next = (this.saving.get(meta.id) ?? Promise.resolve())
 			.catch(() => undefined)

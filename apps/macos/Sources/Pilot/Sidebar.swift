@@ -9,7 +9,7 @@ struct SessionSidebar: View {
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
-        let visible = client.sessions.filter(matches)
+        let visible = client.activeSessions.filter(matches)
         let searching = !model.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty
         let unassigned = visible.filter { $0.projectId.map { !known.contains($0) } ?? true }
         List(selection: $model.selectedSessionId) {
@@ -22,7 +22,9 @@ struct SessionSidebar: View {
                         Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
                     }
                 } header: {
-                    ProjectHeader(project: project, working: sessions.filter(\.isWorking).count) {
+                    ProjectHeader(project: project, working: sessions.filter(\.isWorking).count, onArchive: {
+                        model.showArchive(in: project.id)
+                    }) {
                         model.newSession(in: project.id)
                     }
                 }
@@ -50,7 +52,7 @@ struct SessionSidebar: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 6) {
             HStack(spacing: 6) {
-                SidebarButton(title: "New session", icon: "square.and.pencil", selected: model.selectedSessionId == nil) {
+                SidebarButton(title: "New session", icon: "square.and.pencil", selected: model.selectedSessionId == nil && !model.showingArchive) {
                     model.newSession(in: model.draftProjectId)
                 }
                 Button { model.addProject() } label: {
@@ -58,6 +60,10 @@ struct SessionSidebar: View {
                 }
                 .buttonStyle(.borderless)
                 .help("Add Project… (⇧⌘O)")
+            }
+            SidebarButton(title: "Archived chats (\(client.archivedSessions.count))", icon: "archivebox",
+                          selected: model.showingArchive && model.selectedSessionId == nil) {
+                model.showArchive()
             }
             SearchField(text: $model.sidebarQuery)
             }
@@ -110,6 +116,7 @@ private struct SidebarButton: View {
 private struct ProjectHeader: View {
     let project: Project
     let working: Int
+    let onArchive: () -> Void
     let onNew: () -> Void
 
     var body: some View {
@@ -125,12 +132,16 @@ private struct ProjectHeader: View {
                     .foregroundStyle(Color.accentColor)
             }
             Spacer()
+            Button(action: onArchive) { Image(systemName: "archivebox") }
+                .buttonStyle(.borderless)
+                .help("Browse archived chats in \(project.name)")
             Button(action: onNew) { Image(systemName: "plus") }
                 .buttonStyle(.borderless)
                 .help("New session in \(project.name)")
         }
         .contextMenu {
             Button("New Session", action: onNew)
+            Button("Browse Archived Chats", action: onArchive)
             Button("Open in Finder") { NSWorkspace.shared.open(URL(filePath: project.path)) }
             Divider()
             Button("Remove Project", role: .destructive) {
@@ -165,6 +176,10 @@ struct SessionRow: View {
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
         .contextMenu {
+            SessionArchiveAction(session: session)
+            if session.isWorking {
+                Button("Stop Session") { model.stopSession(session.id) }
+            }
             if let pr = session.pullRequest, let url = pr.browserURL {
                 Link("Open PR #\(pr.number) in Browser", destination: url)
                     .help(session.pullRequestHelpText ?? "")

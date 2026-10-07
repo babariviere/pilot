@@ -122,7 +122,8 @@ Decided: **every session gets its own private clone** (done for manual sessions)
 - Branch `pilot/<title-slug>-<short-id>` from the remote default branch; PR sessions check out the PR head instead.
 - jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
 - Projects can opt out (`workspace: "direct"`) to run in the folder itself.
-- Released when the session is archived; never deleted while a PR is open.
+- Archiving retains the workspace and transcript so old chats can be viewed and restored. Workspace
+  cleanup is deferred; never delete while a PR is open.
 
 ### 5.5 Policy and safety
 
@@ -242,6 +243,8 @@ reports), producing a morning summary in the app and Slack.
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
   to navigate, Enter to save, and Escape to cancel. Preserve drafts while navigating and reject edits
   after consumption without resubmitting.
+- Archive inactive chats without deleting their history or workspace. Browse archived chats globally
+  or per project, search them, and restore them to continue the conversation. Stop running chats first.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
 - Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI
@@ -275,7 +278,9 @@ reports), producing a morning summary in the app and Slack.
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `SessionSummary.pullRequest`, `.pullRequestError` | Branch-linked GitHub PR status and cached-lookup errors (done for private manual sessions) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
-| `POST /api/sessions/:id/archive` | Release workspace, hide from lists |
+| `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history and workspace (done) |
+| `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |
+| `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
 | `GET /api/audit` | External effects log |
 | WS `questions` | Push new questions to clients |
