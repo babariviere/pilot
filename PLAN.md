@@ -266,6 +266,10 @@ reports), producing a morning summary in the app and Slack.
   inactive linked chats no earlier than 24 hours after GitHub's merge timestamp. Failed lookups and
   closed, unmerged PRs never trigger merge-based archiving. Restoring a merge-archived chat keeps it
   active for that PR, including after daemon restarts (the one-week inactivity rule still applies).
+- Debug a session from the top-right bug button, including failed and archived chats. Open the new-task
+  composer in the project named `pilot`, prefilled with the source session ID, daemon-provided data path
+  and working directory. The user adds an issue/reason before submitting; opening the draft never starts
+  an agent or changes the source session. Missing or ambiguous `pilot` projects surface an actionable error.
 - Task and chat composers complete local file and folder paths on Tab, relative to the selected project
   or session working directory; absolute paths and `~/` work too. A compact floating path picker shows
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
@@ -329,6 +333,7 @@ reports), producing a morning summary in the app and Slack.
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history and workspace (done) |
 | `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |
 | `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |
+| `SessionSummary.sessionPath` | Daemon-provided session data directory for debug drafts, independent of the workspace path (done) |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
 | `GET /api/audit` | External effects log |
 | WS `questions` | Push new questions to clients |

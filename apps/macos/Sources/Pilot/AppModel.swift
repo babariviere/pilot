@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published var sidebarQuery = ""
     /// Project preselected in the new-session screen.
     @Published var draftProjectId: String?
+    /// One-shot prefill consumed by the new-session composer, never submitted automatically.
+    @Published var draftMessage: String?
     @Published var collapsedProjects: Set<String> = []
     @Published var showingArchive = false
     /// nil browses every project's archived chats.
@@ -61,10 +63,38 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func newSession(in projectId: String?) {
+    func newSession(in projectId: String?, message: String? = nil) {
         showingArchive = false
         draftProjectId = projectId
+        draftMessage = message
         selectedSessionId = nil
+    }
+
+    func debugSession(_ session: SessionSummary) {
+        let projects = client.projects.filter { $0.name.caseInsensitiveCompare("pilot") == .orderedSame }
+        guard projects.count == 1, let project = projects.first else {
+            sessionActionError = projects.isEmpty
+                ? "Add a project named pilot before debugging a session."
+                : "More than one project is named pilot. Rename the others before debugging a session."
+            return
+        }
+        guard let path = session.sessionPath, !path.isEmpty else {
+            sessionActionError = "The daemon has not provided this session's data path. Update or restart pilotd and try again."
+            return
+        }
+        newSession(in: project.id, message: """
+        Investigate and fix a Pilot issue in the referenced session.
+
+        Session: \(session.title)
+        Session ID: \(session.id)
+        Session data path: \(path)
+        Session working directory: \(session.cwd)
+
+        Read the session history, tool calls, and logs to diagnose the issue, then fix the underlying problem in Pilot. Treat the original session's data and workspace as read-only.
+
+        Issue / reason:
+
+        """)
     }
 
     func isUnread(_ session: SessionSummary) -> Bool { attention.isUnread(session) }

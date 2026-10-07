@@ -1058,6 +1058,7 @@ export class SessionManager {
 			id: meta.id,
 			title: meta.title,
 			cwd: meta.cwd,
+			sessionPath: this.dir(meta.id),
 			...(meta.projectId ? { projectId: meta.projectId } : {}),
 			...(meta.workspace?.branch ? { branch: meta.workspace.branch } : {}),
 			createdAt: meta.createdAt,
