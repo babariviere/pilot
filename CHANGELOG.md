@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.0.0](https://github.com/babariviere/pilot/compare/v0.5.0...v1.0.0) (2026-10-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **artifacts:** artifact tools are now invoked as artifact({action: ...}).
+
+### Features
+
+* **artifacts:** support images and larger expanded previews ([dde61df](https://github.com/babariviere/pilot/commit/dde61df1b87dd62618a3cf53c76f6ee635ebd47f))
+* **chat:** add queued message removal shortcut ([56f0c00](https://github.com/babariviere/pilot/commit/56f0c0051abb846285dea85475dbea04650ecd92))
+* **daemon:** archive inactive chats and delay merge archives ([20f6c0b](https://github.com/babariviere/pilot/commit/20f6c0b9658cb8534f0628069989aec2f7053c2b))
+* **macos:** add session debugging drafts in pilot project ([1cd0e4f](https://github.com/babariviere/pilot/commit/1cd0e4fa8279bd5760eb31d16d12ed344666ace2))
+* **macos:** show git changes and branch in sidebar ([d8a0ddd](https://github.com/babariviere/pilot/commit/d8a0ddddce07cd1ef5671c02428313b0acd4f3a9))
+* **macos:** show sidebar line totals with a branch separator ([e7e430f](https://github.com/babariviere/pilot/commit/e7e430ff839bfa29d69e99a00d3cbc25dea6f376))
+* **macos:** use a text-colored braille spinner while working ([ee4b623](https://github.com/babariviere/pilot/commit/ee4b6233fa07780a38f9e4b420d91ff3d40f10be))
+* **sessions:** let agents name branches and generate cheap titles ([7c9d076](https://github.com/babariviere/pilot/commit/7c9d076709ab4526221f4f7b9439509916b859a7))
+* **status:** show colored icons and clarify completion reporting ([40824bc](https://github.com/babariviere/pilot/commit/40824bcb3e86ea0258bd741dc95bf82755224c9d))
+
+
+### Bug Fixes
+
+* **chat:** allow removing queued messages ([e58d86a](https://github.com/babariviere/pilot/commit/e58d86a481493dbba961c89b9930957d18b5d431))
+* **macos:** align status icons and use a plain completion check ([92aec39](https://github.com/babariviere/pilot/commit/92aec396c5754ac73fd666d50282ca66468b008d))
+* **macos:** animate chat activity and remove trailing unread badge ([659f430](https://github.com/babariviere/pilot/commit/659f43088c8c8621a6b93666ef0a755023581ebf))
+* **macos:** distinguish open and merged pull request icons ([0030ca3](https://github.com/babariviere/pilot/commit/0030ca3458bfbbfa9b80ea41ace0dedd831ea5ca))
+* **macos:** move artifact browser into project header ([ae541fb](https://github.com/babariviere/pilot/commit/ae541fbc1c257115bb412676f821e169794895fe))
+* **macos:** render real braille glyphs for the working spinner ([0f7cc11](https://github.com/babariviere/pilot/commit/0f7cc115da0599b9cb85be8f8f031cc0c05287ba))
+* **macos:** replace working spinner with a text highlight wave ([58eb685](https://github.com/babariviere/pilot/commit/58eb6859fc4030bbf683280a0aa6ca58e4705c53))
+
+
+### Code Refactoring
+
+* **artifacts:** consolidate tools behind an action API ([fa5f462](https://github.com/babariviere/pilot/commit/fa5f462c8b00bad07e7295be48570ee11d26f56c))
+
 ## [0.5.0](https://github.com/babariviere/pilot/compare/v0.4.0...v0.5.0) (2026-10-07)
 
 
