@@ -16,19 +16,25 @@ struct SessionSidebar: View {
             ForEach(client.projects) { project in
                 let sessions = visible.filter { $0.projectId == project.id }
                 if !searching || !sessions.isEmpty {
-                Section(isExpanded: searching ? .constant(true) : expanded(project.id)) {
-                    ProjectArtifactsEntry(project: project, client: client)
-                    ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
-                    if sessions.isEmpty {
-                        Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
+                    let isExpanded = searching ? Binding.constant(true) : expanded(project.id)
+                    // Native expandable sidebar sections insert a disclosure control on hover,
+                    // shrinking the header and moving its action buttons underneath the pointer.
+                    Section {
+                        if isExpanded.wrappedValue {
+                            ProjectArtifactsEntry(project: project, client: client)
+                            ForEach(sessions) { SessionRow(session: $0).tag($0.id) }
+                            if sessions.isEmpty {
+                                Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
+                            }
+                        }
+                    } header: {
+                        ProjectHeader(project: project, working: sessions.filter(\.isWorking).count,
+                                      isExpanded: isExpanded, onArchive: {
+                            model.showArchive(in: project.id)
+                        }) {
+                            model.newSession(in: project.id)
+                        }
                     }
-                } header: {
-                    ProjectHeader(project: project, working: sessions.filter(\.isWorking).count, onArchive: {
-                        model.showArchive(in: project.id)
-                    }) {
-                        model.newSession(in: project.id)
-                    }
-                }
                 }
             }
             if !unassigned.isEmpty {
@@ -120,6 +126,7 @@ private struct SidebarButton: View {
 private struct ProjectHeader: View {
     let project: Project
     let working: Int
+    @Binding var isExpanded: Bool
     let onArchive: () -> Void
     let onNew: () -> Void
 
@@ -142,6 +149,14 @@ private struct ProjectHeader: View {
             Button(action: onNew) { Image(systemName: "plus") }
                 .buttonStyle(.borderless)
                 .help("New session in \(project.name)")
+            Button { isExpanded.toggle() } label: {
+                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 16, height: 16)
+            }
+            .buttonStyle(.borderless)
+            .help("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
+            .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
         }
         .contextMenu {
             Button("New Session", action: onNew)
