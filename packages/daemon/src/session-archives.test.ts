@@ -161,6 +161,115 @@ test("archives and restores durably, retaining history, workspace and project as
 	}
 });
 
+test("age sweep archives at one week since activity, retains files and grants a durable week on restore", async (t) => {
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const { home, sessions, ids, manager, cleanup } = await fixture();
+	const week = 7 * 86_400_000;
+	const [old, recent, direct] = ids as [string, string, string];
+	const metas = sessions["metas"];
+	metas.get(old)!.updatedAt = now - week;
+	metas.get(recent)!.updatedAt = now - week + 1;
+	metas.get(direct)!.updatedAt = now - week - 1;
+	delete metas.get(direct)!.workspace;
+	const before = sessions.get(old)!;
+	try {
+		await sessions["archiveInactiveSessions"]();
+		assert.equal(sessions.get(old)?.archivedAt, now, "exact one-week boundary is eligible");
+		assert.equal(sessions.get(recent)?.archivedAt, undefined);
+		assert.equal(sessions.get(direct)?.archivedAt, now, "direct chats do not require GitHub");
+		assert.deepEqual(sessions.get(old), { ...before, archivedAt: now });
+		assert.equal(await readFile(join(home, "sessions", old, "durable", "history"), "utf8"), "retained transcript");
+		assert.equal(await readFile(join(before.cwd, "work.txt"), "utf8"), "retained changes");
+		await sessions.restore(old);
+		await sessions["archiveInactiveSessions"]();
+		assert.deepEqual(sessions.get(old), before);
+		const reopened = await manager();
+		await reopened["archiveInactiveSessions"]();
+		assert.equal(reopened.get(old)?.archivedAt, undefined, "restoration grace survives restarts");
+		t.mock.method(Date, "now", () => now + week);
+		await reopened["archiveInactiveSessions"]();
+		assert.equal(reopened.get(old)?.archivedAt, now + week);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("age sweep skips busy chats, retries settled chats and rechecks new activity before archiving", async (t) => {
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const meta = sessions["metas"].get(id)!;
+	const worker = new FakeWorker();
+	sessions["workers"].set(id, worker);
+	const busyStates: [() => void, () => void][] = [
+		[() => (meta.working = true), () => (meta.working = false)],
+		[() => (meta.initializing = true), () => delete meta.initializing],
+		[() => (meta.preparing = { source: meta.cwd }), () => delete meta.preparing],
+		[
+			() => (meta.pending = [{ type: "input", requestId: "queued", content: "Hi", mode: "followUp" }]),
+			() => delete meta.pending,
+		],
+		[() => (worker.state = "starting"), () => (worker.state = "idle")],
+		[() => (worker.state = "working"), () => (worker.state = "idle")],
+		[() => (worker.busy = true), () => (worker.busy = false)],
+		[() => sessions["sending"].set(id, 1), () => sessions["sending"].delete(id)],
+		[() => sessions["changingModels"].set(id, Promise.resolve()), () => sessions["changingModels"].delete(id)],
+	];
+	try {
+		for (const [start, stop] of busyStates) {
+			start();
+			await sessions["archiveInactiveSessions"]();
+			assert.equal(meta.archivedAt, undefined);
+			stop();
+		}
+		const sweep = sessions["archiveInactiveSessions"]();
+		meta.updatedAt = now;
+		await sweep;
+		assert.equal(meta.archivedAt, undefined, "activity arriving after selection cancels automatic archiving");
+		meta.updatedAt = now - 7 * 86_400_000;
+		await sessions["archiveInactiveSessions"]();
+		assert.equal(meta.archivedAt, now);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("daemon sweeps every minute without clients, retries failed writes and stops on shutdown", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const save = sessions["save"].bind(sessions);
+	let fail = true;
+	sessions["save"] = async (meta, archive) => {
+		if (archive && fail) throw new Error("disk full");
+		await save(meta, archive);
+	};
+	try {
+		assert.equal(sessions.get(id)?.archivedAt, undefined);
+		t.mock.timers.tick(60_000);
+		await sessions["archiveSweep"];
+		assert.equal(sessions.get(id)?.archivedAt, undefined);
+		fail = false;
+		t.mock.timers.tick(60_000);
+		await sessions["archiveSweep"];
+		assert.ok(sessions.get(id)?.archivedAt);
+		assert.equal(sessions["workers"].size, 0);
+		await sessions.restore(id);
+		await sessions.shutdown();
+		const sweep = t.mock.method(
+			sessions as unknown as { archiveInactiveSessions(): Promise<void> },
+			"archiveInactiveSessions",
+		);
+		t.mock.timers.tick(60_000);
+		assert.equal(sweep.mock.calls.length, 0);
+	} finally {
+		sessions["save"] = save;
+		await cleanup();
+	}
+});
+
 test("running, starting and in-flight input sessions cannot be archived", async () => {
 	const { sessions, ids, cleanup } = await fixture();
 	const id = ids[0]!;
@@ -406,6 +515,7 @@ for (const archived of [true, false]) {
 			const result = structuredClone(snapshot);
 			if (timestamp === undefined) delete result.archivedAt;
 			else result.archivedAt = timestamp;
+			if (meta.restoredAt !== undefined) result.restoredAt = meta.restoredAt;
 			return result;
 		};
 		try {

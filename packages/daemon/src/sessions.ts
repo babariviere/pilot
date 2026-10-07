@@ -78,6 +78,8 @@ interface SessionMeta extends OutcomeMeta {
 	createdAt: number;
 	updatedAt: number;
 	archivedAt?: number;
+	/** Restoring gives an inactive chat a new week without changing its activity ordering. */
+	restoredAt?: number;
 	/** Remember successful merge archives so restoring a chat survives polling and restarts. */
 	autoArchivedPullRequest?: string;
 	model?: string;
@@ -108,6 +110,9 @@ const emptySnapshot: AgentEvent = {
 };
 
 const ID_PATTERN = /^[0-9a-f-]{36}$/;
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const WEEK_MS = 7 * DAY_MS;
+const ARCHIVE_INTERVAL_MS = 60_000;
 
 function titleFrom(message: string): string {
 	const line = message.trim().split("\n")[0] ?? "";
@@ -277,6 +282,8 @@ export class SessionManager {
 	/** Same-target retries share the durable result; opposite transitions execute in order. */
 	private readonly archiveTransitions = new Map<string, { archived: boolean; promise: Promise<SessionSummary> }>();
 	private closing = false;
+	private archiveTimer?: ReturnType<typeof setTimeout>;
+	private archiveSweep?: Promise<void>;
 	private readonly pullRequests: PullRequestTracker;
 
 	constructor(
@@ -330,6 +337,31 @@ export class SessionManager {
 			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
+		this.scheduleArchiveSweep();
+	}
+
+	/** Daemon-owned, independent of GitHub, clients and workers. Sweeps never overlap. */
+	private scheduleArchiveSweep(): void {
+		clearTimeout(this.archiveTimer);
+		if (this.closing) return;
+		this.archiveTimer = setTimeout(() => {
+			this.archiveSweep = this.archiveInactiveSessions().finally(() => this.scheduleArchiveSweep());
+		}, ARCHIVE_INTERVAL_MS);
+		this.archiveTimer.unref();
+	}
+
+	private async archiveInactiveSessions(): Promise<void> {
+		const staleBefore = Date.now() - WEEK_MS;
+		for (const meta of this.metas.values()) {
+			if (this.closing) break;
+			if (meta.archivedAt !== undefined || Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore) continue;
+			try {
+				await this.setArchived(meta.id, true, undefined, staleBefore);
+			} catch (error) {
+				if (!(error instanceof Conflict))
+					console.warn(`pilotd: could not archive inactive session ${meta.id}: ${error}`);
+			}
+		}
 	}
 
 	onChange(listener: (session: SessionSummary) => void): () => void {
@@ -407,7 +439,12 @@ export class SessionManager {
 		}
 	}
 
-	private setArchived(id: string, archived: boolean, autoArchivedPullRequest?: string): Promise<SessionSummary> {
+	private setArchived(
+		id: string,
+		archived: boolean,
+		autoArchivedPullRequest?: string,
+		staleBefore?: number,
+	): Promise<SessionSummary> {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		this.require(id);
 		const previous = this.archiveTransitions.get(id);
@@ -416,6 +453,9 @@ export class SessionManager {
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				// Activity or restoration may have arrived after the sweep selected this chat.
+				if (staleBefore !== undefined && Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore)
+					return this.summary(meta);
 				if (autoArchivedPullRequest && meta.autoArchivedPullRequest === autoArchivedPullRequest)
 					return this.summary(meta);
 				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
@@ -434,7 +474,11 @@ export class SessionManager {
 				)
 					throw new Conflict("Stop the session before archiving it");
 				// Stage only this write. Concurrent lifecycle saves and summaries keep the committed state.
-				await this.save(meta, { timestamp: archived ? Date.now() : undefined, autoArchivedPullRequest });
+				await this.save(meta, {
+					timestamp: archived ? Date.now() : undefined,
+					...(!archived ? { restoredAt: Date.now() } : {}),
+					autoArchivedPullRequest,
+				});
 				this.emit(meta);
 				return this.summary(meta);
 			});
@@ -794,6 +838,7 @@ export class SessionManager {
 
 	async shutdown(): Promise<void> {
 		this.closing = true;
+		clearTimeout(this.archiveTimer);
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.titleTasks]);
@@ -802,6 +847,7 @@ export class SessionManager {
 		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
+		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
 	}
@@ -1080,6 +1126,8 @@ export class SessionManager {
 		// Only a fresh merge result can archive a chat. Busy chats retry on the next lookup.
 		if (
 			next?.state === "merged" &&
+			result.mergedAt !== undefined &&
+			Date.now() >= result.mergedAt + DAY_MS &&
 			!result.error &&
 			!this.closing &&
 			meta.archivedAt === undefined &&
@@ -1108,7 +1156,10 @@ export class SessionManager {
 		return join(this.sessionsDir, id);
 	}
 
-	private save(meta: SessionMeta, archive?: { timestamp?: number; autoArchivedPullRequest?: string }): Promise<void> {
+	private save(
+		meta: SessionMeta,
+		archive?: { timestamp?: number; restoredAt?: number; autoArchivedPullRequest?: string },
+	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
 		const snapshot = `${JSON.stringify(meta, null, "\t")}\n`;
@@ -1120,6 +1171,8 @@ export class SessionManager {
 			const archivedAt = archive ? archive.timestamp : meta.archivedAt;
 			if (archivedAt === undefined) delete persisted.archivedAt;
 			else persisted.archivedAt = archivedAt;
+			const restoredAt = archive?.restoredAt ?? meta.restoredAt;
+			if (restoredAt !== undefined) persisted.restoredAt = restoredAt;
 			// Like archivedAt, the merge marker must not be lost to queued lifecycle snapshots.
 			const autoArchivedPullRequest = archive?.autoArchivedPullRequest ?? meta.autoArchivedPullRequest;
 			if (autoArchivedPullRequest !== undefined) persisted.autoArchivedPullRequest = autoArchivedPullRequest;
@@ -1129,6 +1182,7 @@ export class SessionManager {
 			if (archive) {
 				if (archive.timestamp === undefined) delete meta.archivedAt;
 				else meta.archivedAt = archive.timestamp;
+				if (archive.restoredAt !== undefined) meta.restoredAt = archive.restoredAt;
 				if (archive.autoArchivedPullRequest !== undefined)
 					meta.autoArchivedPullRequest = archive.autoArchivedPullRequest;
 			}

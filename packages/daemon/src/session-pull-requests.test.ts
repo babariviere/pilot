@@ -31,6 +31,7 @@ function candidate(state = "OPEN", isDraft = false) {
 		headRefName: branch,
 		isCrossRepository: false,
 		createdAt: "2026-01-01T00:00:00Z",
+		mergedAt: "2026-01-02T00:00:00Z",
 	};
 }
 
@@ -340,6 +341,47 @@ test("failed and empty lookups retain last known badge and stale timestamp, dedu
 		},
 		cached,
 	);
+});
+
+test("merge archives only after 24 hours from GitHub's merge time, including across daemon restarts", async (t) => {
+	const day = 86_400_000;
+	const mergedAt = Date.now();
+	let now = mergedAt;
+	let offline = false;
+	t.mock.method(Date, "now", () => now);
+	const runner: Runner = async (file, args) => {
+		if (file === "git" && args[0] === "branch") return "";
+		if (offline) throw new Error("offline");
+		return args.includes("--state=open")
+			? "[]"
+			: JSON.stringify([{ ...candidate("MERGED"), mergedAt: new Date(mergedAt).toISOString() }]);
+	};
+	await fixture({ runner }, async (manager, meta, home) => {
+		await manager["pullRequests"]["polling"];
+		assert.equal(meta.pullRequest?.state, "merged");
+		assert.equal(meta.archivedAt, undefined, "freshly merged chats remain active");
+		now = mergedAt + day - 1;
+		await manager["pullRequests"].refresh(meta);
+		assert.equal(meta.archivedAt, undefined, "not eligible one millisecond before the boundary");
+		await manager.shutdown();
+		const reopened = new SessionManager(home, new ProjectStore(home), undefined, {}, { runner });
+		try {
+			await reopened.load();
+			await reopened["pullRequests"]["polling"];
+			const live = reopened["metas"].get(meta.id)!;
+			assert.equal(live.archivedAt, undefined);
+			now = mergedAt + day;
+			offline = true;
+			await reopened["pullRequests"].refresh(live);
+			assert.equal(live.archivedAt, undefined, "cached merges cannot archive during failed lookups");
+			offline = false;
+			await reopened["pullRequests"].refresh(live);
+			assert.equal(live.archivedAt, now, "restart does not reset the delay");
+			assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, cached.url);
+		} finally {
+			await reopened.shutdown();
+		}
+	});
 });
 
 test("fresh merge archives durably, retains files, and restoration survives checks and restart", async () => {
