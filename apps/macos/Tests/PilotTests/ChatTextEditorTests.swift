@@ -7,33 +7,84 @@ private final class EditObserver: NSObject, NSTextViewDelegate {
     func textDidChange(_ notification: Notification) { changes += 1 }
 }
 
-private final class CompletionCommand: NSObject, NSTextViewDelegate {
-    func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
-        guard commandSelector == #selector(NSTextView.insertNewline(_:)) else { return false }
-        textView.insertCompletion("README.md", forPartialWordRange: NSRange(location: 5, length: 1),
-                                  movement: NSTextMovement.return.rawValue, isFinal: true)
-        return true
-    }
+private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+    try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
+                                 timestamp: 0, windowNumber: 0, context: nil,
+                                 characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code))
 }
 
 @Test @MainActor func returnHandledByCompletionDoesNotAlsoSubmit() throws {
     _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for file in ["README.md", "Report.txt"] { try Data().write(to: directory.appendingPathComponent(file)) }
     let editor = SubmitTextView()
-    let completion = CompletionCommand()
-    editor.delegate = completion
+    editor.completionDirectory = directory.path
     editor.string = "Read R"
     editor.setSelectedRange(NSRange(location: 6, length: 0))
     var submissions = 0
     editor.onSubmit = { _ in submissions += 1 }
-    let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
-                                            timestamp: 0, windowNumber: 0, context: nil,
-                                            characters: "\r", charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36))
+    editor.insertTab(nil)
+    #expect(editor.pathPicker?.model.candidates == ["README.md", "Report.txt"])
+    let event = try pickerKey(36, "\r")
     editor.keyDown(with: event)
     #expect(editor.string == "Read README.md")
     #expect(submissions == 0)
-    editor.delegate = nil
+    #expect(editor.pathPicker == nil)
     editor.keyDown(with: event)
     #expect(submissions == 1)
+}
+
+@Test @MainActor func pathPickerNavigationCancellationAndMouseSelection() throws {
+    _ = NSApplication.shared
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    for file in ["README.md", "Report.txt"] { try Data().write(to: directory.appendingPathComponent(file)) }
+    let editor = SubmitTextView()
+    editor.completionDirectory = directory.path
+    editor.string = "R"
+    editor.setSelectedRange(NSRange(location: 1, length: 0))
+    editor.insertTab(nil)
+    editor.keyDown(with: try pickerKey(125, "\u{f701}"))
+    #expect(editor.pathPicker?.model.selected == 1)
+    editor.keyDown(with: try pickerKey(126, "\u{f700}"))
+    #expect(editor.pathPicker?.model.selected == 0)
+    editor.keyDown(with: try pickerKey(48, "\t", flags: .shift))
+    #expect(editor.pathPicker?.model.selected == 1)
+    editor.keyDown(with: try pickerKey(53, "\u{1b}"))
+    #expect(editor.pathPicker == nil)
+    #expect(editor.string == "R")
+    editor.insertTab(nil)
+    editor.pathPicker?.model.choose?(1)
+    #expect(editor.string == "Report.txt")
+    editor.string = "R"
+    editor.setSelectedRange(NSRange(location: 1, length: 0))
+    editor.insertTab(nil)
+    editor.keyDown(with: try pickerKey(48, "\t"))
+    #expect(editor.string == "README.md")
+    editor.string = "R"
+    editor.setSelectedRange(NSRange(location: 1, length: 0))
+    editor.insertTab(nil)
+    editor.completionDirectory = "/"
+    #expect(editor.pathPicker == nil)
+    editor.completionDirectory = directory.path
+    editor.insertTab(nil)
+    editor.string = "changed outside the editor"
+    editor.pathPicker?.model.choose?(0)
+    #expect(editor.string == "changed outside the editor")
+    #expect(editor.pathPicker == nil)
+}
+
+@Test @MainActor func pathPickerStaysWithinSmallAndSecondaryScreens() {
+    for screen in [CGRect(x: 0, y: 0, width: 380, height: 300), CGRect(x: -1440, y: 0, width: 1440, height: 900)] {
+        for caret in [CGRect(x: screen.minX, y: screen.minY, width: 0, height: 18),
+                      CGRect(x: screen.maxX, y: screen.maxY, width: 0, height: 18)] {
+            let frame = PathCompletionPicker.frame(caret: caret, screen: screen, count: 100)
+            #expect(screen.insetBy(dx: 12, dy: 12).contains(frame))
+        }
+    }
 }
 
 @Test @MainActor func tabCompletesPathsAndNotifiesTheBinding() throws {

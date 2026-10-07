@@ -76,6 +76,7 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.completionDirectory = completionDirectory
         var changed = false
         if textView.string != text {
+            textView.dismissPathPicker()
             textView.string = text
             changed = true
         }
@@ -117,84 +118,96 @@ final class SubmitTextView: NSTextView {
     var onSubmit: ((NSEvent.ModifierFlags) -> Void)?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Bool)?
-    var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+    var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path {
+        didSet { if oldValue != completionDirectory { dismissPathPicker() } }
+    }
+    private(set) var pathPicker: PathCompletionPicker?
     private var keyFlags: NSEvent.ModifierFlags?
-    private var isReturnKey = false
-    private var handledReturn = false
 
     private var inputFlags: NSEvent.ModifierFlags {
         keyFlags ?? NSApp.currentEvent?.modifierFlags.intersection(.deviceIndependentFlagsMask) ?? []
     }
 
     override func keyDown(with event: NSEvent) {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        keyFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        defer { keyFlags = nil }
+        let navigation = inputFlags.intersection([.command, .control, .option]).isEmpty
+        if let picker = pathPicker, !hasMarkedText() {
+            switch event.keyCode {
+            case 125 where navigation: picker.model.move(1); return
+            case 126 where navigation: picker.model.move(-1); return
+            case 48 where navigation && inputFlags.contains(.shift): picker.model.move(-1); return
+            case 48 where navigation: picker.model.choose?(picker.model.selected); return
+            case 36, 76: picker.model.choose?(picker.model.selected); return
+            case 53: dismissPathPicker(); return
+            default: dismissPathPicker()
+            }
+        }
+        // Picker navigation and Escape take precedence over queue editing shortcuts.
         if !hasMarkedText() {
-            if flags.contains(.option), flags.intersection([.shift, .command, .control]).isEmpty,
+            if inputFlags.contains(.option), inputFlags.intersection([.shift, .command, .control]).isEmpty,
                event.keyCode == 126 || event.keyCode == 125,
                onNavigateQueue?(event.keyCode == 126 ? .up : .down) == true { return }
             if event.keyCode == 53, onCancel?() == true { return }
         }
-        keyFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        isReturnKey = (event.keyCode == 36 || event.keyCode == 76) && !hasMarkedText()
-        handledReturn = false
-        defer { keyFlags = nil; isReturnKey = false }
-        // Let AppKit handle its completion menu before interpreting Return as a submission.
-        super.keyDown(with: event)
-        // Some modified Returns (for example Command-Return) have no text command binding.
-        if isReturnKey, !handledReturn, !hasMarkedText() {
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
+        if isReturn, !hasMarkedText() {
             if inputFlags.contains(.shift) { super.insertNewlineIgnoringFieldEditor(nil) }
             else { onSubmit?(inputFlags) }
+            return
         }
-    }
-
-    override func insertNewline(_ sender: Any?) {
-        if !submitReturn() { super.insertNewline(sender) }
-    }
-
-    override func insertNewlineIgnoringFieldEditor(_ sender: Any?) {
-        if !submitReturn() { super.insertNewlineIgnoringFieldEditor(sender) }
-    }
-
-    override func insertLineBreak(_ sender: Any?) {
-        if !submitReturn() { super.insertLineBreak(sender) }
-    }
-
-    private func submitReturn() -> Bool {
-        guard isReturnKey, !hasMarkedText() else { return false }
-        handledReturn = true
-        guard !inputFlags.contains(.shift) else { return false }
-        onSubmit?(inputFlags)
-        return true
-    }
-
-    override func insertCompletion(_ word: String, forPartialWordRange charRange: NSRange, movement: Int, isFinal flag: Bool) {
-        if isReturnKey { handledReturn = true }
-        super.insertCompletion(word, forPartialWordRange: charRange, movement: movement, isFinal: flag)
-    }
-
-    override var rangeForUserCompletion: NSRange {
-        PathCompletion.range(in: string, selection: selectedRange()) ?? NSRange(location: NSNotFound, length: 0)
-    }
-
-    override func completions(forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>) -> [String]? {
-        index.pointee = -1
-        return PathCompletion.candidates(in: string, range: charRange, directory: completionDirectory)
+        super.keyDown(with: event)
     }
 
     override func insertTab(_ sender: Any?) {
         let flags = inputFlags
-        if !hasMarkedText(), flags.intersection([.shift, .control, .option, .command]).isEmpty,
-           let range = PathCompletion.range(in: string, selection: selectedRange()) {
-            let candidates = PathCompletion.candidates(in: string, range: range, directory: completionDirectory)
-            if candidates.count == 1 {
-                insertText(candidates[0], replacementRange: range)
-                return
-            }
-            if !candidates.isEmpty {
-                complete(sender)
-                return
-            }
-        }
+        if flags.intersection([.shift, .control, .option, .command]).isEmpty, completePath() { return }
         super.insertTab(sender)
+    }
+
+    override func complete(_ sender: Any?) { _ = completePath() }
+
+    private func completePath() -> Bool {
+        guard !hasMarkedText(), let range = PathCompletion.range(in: string, selection: selectedRange()) else { return false }
+        let candidates = PathCompletion.candidates(in: string, range: range, directory: completionDirectory)
+        guard !candidates.isEmpty else { return false }
+        if candidates.count == 1 { insertText(candidates[0], replacementRange: range) }
+        else { showPathPicker(candidates: candidates, range: range) }
+        return true
+    }
+
+    override func didChangeText() {
+        dismissPathPicker()
+        super.didChangeText()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        dismissPathPicker()
+        return super.resignFirstResponder()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        dismissPathPicker()
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    func dismissPathPicker() {
+        pathPicker?.close()
+        pathPicker = nil
+    }
+
+    private func showPathPicker(candidates: [String], range: NSRange) {
+        dismissPathPicker()
+        let original = string
+        let selection = selectedRange()
+        let parent = (candidates[0] as NSString).deletingLastPathComponent
+        let picker = PathCompletionPicker(candidates: candidates, folder: parent.isEmpty ? completionDirectory : parent) { [weak self] index in
+            guard let self else { return }
+            self.dismissPathPicker()
+            guard self.string == original, self.selectedRange() == selection else { return }
+            self.insertText(candidates[index], replacementRange: range)
+        } onDismiss: { [weak self] in self?.dismissPathPicker() }
+        pathPicker = picker
+        picker.show(for: self)
     }
 }
