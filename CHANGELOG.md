@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/babariviere/pilot/compare/v0.4.0...v0.5.0) (2026-10-07)
+
+
+### Features
+
+* **chat:** add compact composer usage and model picker ([6edb47d](https://github.com/babariviere/pilot/commit/6edb47dc771095d55a80c480932748974aa750f3))
+* **chat:** make Codex and Claude usage visible and inspectable ([9ed9635](https://github.com/babariviere/pilot/commit/9ed9635c12318d05cd69d97b060cf2d52d4f18f7))
+
 ## [0.4.0](https://github.com/babariviere/pilot/compare/v0.3.0...v0.4.0) (2026-10-07)
 
 
