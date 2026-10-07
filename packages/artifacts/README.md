@@ -6,18 +6,20 @@ code in Node or grant artifacts native capabilities.
 
 ## Authoring
 
-Use `artifact_create` with `title`, `kind`, `source` and optional `libraries`. For changes, use
-`artifact_get`, then `artifact_update` with the complete replacement document and `expectedRevision`.
-`artifact_list` returns compact summaries for the current session. Tool results contain pinned references;
-the transcript also receives a passive `pilot.artifact` publication entry, including when a tool is invoked
-through codemode. A sidebar entry always opens the latest revision.
+Use `artifact({action: "create", ...})` with `title`, `kind`, `source` and optional `libraries`. For changes, use
+`artifact({action: "get", id})`, then `artifact({action: "update", id, ...})` with the complete replacement
+document and `expectedRevision`. `artifact({action: "list"})` returns compact summaries for the current
+session. Publication results contain pinned references; the transcript also receives a passive
+`pilot.artifact` publication entry, including when a tool is invoked through codemode. A sidebar entry
+always opens the latest revision.
 
 ### HTML
 
 Request libraries by name. The runtime injects their scripts before the document, without a CDN:
 
 ```js
-await tools.artifact_create({
+await tools.artifact({
+  action: "create",
   title: "Build times",
   kind: "html",
   libraries: ["echarts"],
@@ -55,7 +57,8 @@ Custom artifact styles can override these variables.
 Provide one JSX/TSX module exporting a default component. Mounting and JSX compilation are provided:
 
 ```js
-await tools.artifact_create({
+await tools.artifact({
+  action: "create",
   title: "Animated counter",
   kind: "react",
   source: `import {useState} from "react";
@@ -76,8 +79,9 @@ and prepared HTML, not temporary workspace files.
 
 ## Verification
 
-`artifact_preview` renders a draft without saving it, returning PNG image content, console messages and
-content height. When using codemode, display the structured `screenshot` with `image`, not `text`.
+`artifact({action: "preview", ...})` renders a draft without saving it, returning PNG image content,
+console messages and content height. When using codemode, display the structured `screenshot` with
+`image`, not `text`.
 
 Install Chromium once with `npm run artifacts:browser`. Installation is never triggered by a model tool.
 For an installed release app without npm, run its bundled Node explicitly:

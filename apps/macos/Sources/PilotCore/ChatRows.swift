@@ -131,7 +131,9 @@ extension Transcript {
 
     private func tool(_ callId: String, name: String, arguments: JSONValue, results: [String: ChatMessage]) -> ToolItem {
         if let result = results[callId] {
+            let action = arguments["action"]?.string
             let publicationTool = name == "artifact_create" || name == "artifact_update"
+                || (name == "artifact" && (action == "create" || action == "update"))
             return ToolItem(id: callId, name: name, arguments: arguments, status: result.isError ? .error : .done,
                             output: result.text, artifact: publicationTool ? result.artifact : nil)
         }
