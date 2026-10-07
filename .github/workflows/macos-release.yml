@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+    # Release Please only changes these files. Skip its PR runs (and GitHub's
+    # bot-workflow approval prompt); merging still verifies and releases on main.
+    paths-ignore:
+      - CHANGELOG.md
+      - package.json
+      - package-lock.json
+      - .release-please-manifest.json
   workflow_dispatch:
     inputs:
       release_tag:

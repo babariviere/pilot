@@ -301,7 +301,8 @@ reports), producing a morning summary in the app and Slack.
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release
-  PRs and changelogs on `main`; merging one builds a stable `vX.Y.Z` arm64 macOS release. Drafts stay
+  PRs and changelogs on `main`; metadata-only PRs skip workflows and need no workflow approval.
+  Merging one verifies and builds a stable `vX.Y.Z` arm64 macOS release. Drafts stay
   unpublished until the DMG installer, signed update ZIP and appcast are complete, with retries
   against the tagged source and semantic and Sparkle build-order safeguards. App versions follow
   root `package.json`; build numbers remain

@@ -37,11 +37,14 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    Release Please needs Contents, Issues and Pull requests write permissions, scoped in its job.
    Optionally configure **Actions secret `RELEASE_PLEASE_TOKEN`** with a GitHub App token or a
    fine-grained personal access token limited to this repository with those permissions. This is
-   required if CI checks must automatically run on bot-created release PRs: the default `GITHUB_TOKEN`
-   can create PRs, but GitHub suppresses workflows triggered by its changes. Do not give this token
+   only needed if CI must run automatically on bot-created PRs that change more than release metadata:
+   the default `GITHUB_TOKEN` creates PR workflow runs that require approval. Do not give this token
    access to other repositories. The macOS publishing job still uses only `GITHUB_TOKEN`.
-4. Merge the workflow changes, then merge the Release Please PR when ready to release. PRs run
-   verification only, without release secrets or publishing permissions. The release job fails with
+4. Merge the workflow changes, then merge the Release Please PR when ready to release. PRs changing
+   only `CHANGELOG.md`, `package.json`, `package-lock.json` and `.release-please-manifest.json` skip
+   workflows, so release PRs need no workflow approval. Merging triggers full verification and
+   publishing on `main`. Other PRs run verification only, without release secrets or publishing
+   permissions. The release job fails with
    a configuration message if signing keys are missing. Ordinary main commits publish dev prereleases,
    not stable releases.
 
