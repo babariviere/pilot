@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/babariviere/pilot/compare/v1.0.0...v1.0.1) (2026-10-07)
+
+
+### Bug Fixes
+
+* **macos:** resolve private appcast downloads before Sparkle checks ([c243b0c](https://github.com/babariviere/pilot/commit/c243b0cd0546430581f2f370d8b0859a41e3d53b))
+
 ## [1.0.0](https://github.com/babariviere/pilot/compare/v0.5.0...v1.0.0) (2026-10-07)
 
 
