@@ -13,7 +13,7 @@ private final class RepositoryHTTPStub: URLProtocol {
         let response = HTTPURLResponse(url: url, statusCode: success ? 200 : 404, httpVersion: nil,
                                        headerFields: ["Content-Type": "application/json"])!
         let body = success
-            ? #"{"base":"origin/main","branch":"pilot/task","fileCount":3}"#
+            ? #"{"base":"origin/main","branch":"pilot/task","fileCount":3,"additions":13,"deletions":2}"#
             : #"{"error":"Not a git repository"}"#
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
@@ -37,7 +37,7 @@ private func repositorySession(_ state: String = "idle") -> SessionSummary {
     let client = repositoryClient()
     let model = SessionRepositoryModel()
     await model.load(repositorySession(), client: client)
-    #expect(model.summary == SessionChangeSummary(base: "origin/main", branch: "pilot/task", fileCount: 3))
+    #expect(model.summary == SessionChangeSummary(base: "origin/main", branch: "pilot/task", fileCount: 3, additions: 13, deletions: 2))
     #expect(model.error == nil)
 }
 

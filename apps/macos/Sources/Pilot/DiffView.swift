@@ -85,12 +85,14 @@ struct DiffView: View {
 struct DiffStat: View {
     let additions: Int
     let deletions: Int
+    var showZero = false
+    var fontSize: CGFloat = 11
 
     var body: some View {
         HStack(spacing: 4) {
-            if additions > 0 { Text("+\(additions)").foregroundStyle(Theme.success) }
-            if deletions > 0 { Text("−\(deletions)").foregroundStyle(Theme.destructive) }
+            if showZero || additions > 0 { Text("+\(additions)").foregroundStyle(Theme.success) }
+            if showZero || deletions > 0 { Text("−\(deletions)").foregroundStyle(Theme.destructive) }
         }
-        .font(.system(size: 11, weight: .medium).monospacedDigit())
+        .font(.system(size: fontSize, weight: .medium).monospacedDigit())
     }
 }

@@ -267,15 +267,27 @@ public struct SessionChangeSummary: Codable, Equatable, Sendable {
     public let base: String
     public let branch: String?
     public let fileCount: Int
+    /// Omitted by older daemons. Unknown totals must not be displayed as zero.
+    public let additions: Int?
+    public let deletions: Int?
 
-    public init(base: String, branch: String? = nil, fileCount: Int) {
+    public init(base: String, branch: String? = nil, fileCount: Int, additions: Int? = nil, deletions: Int? = nil) {
         self.base = base
         self.branch = branch
         self.fileCount = fileCount
+        self.additions = additions
+        self.deletions = deletions
     }
 
     public var fileCountLabel: String { "\(fileCount) file\(fileCount == 1 ? "" : "s")" }
-    public var helpText: String { "\(fileCountLabel) changed since \(base), including committed, uncommitted and untracked files." }
+    public var lineStatLabel: String? {
+        guard let additions, let deletions else { return nil }
+        return "\(additions) lines added, \(deletions) lines deleted"
+    }
+    public var helpText: String {
+        "\(fileCountLabel) changed since \(base), including committed, uncommitted and untracked files."
+            + (lineStatLabel.map { "\n\($0). Binary files have no line totals." } ?? "")
+    }
 }
 
 /// GET /api/sessions/:id/changes

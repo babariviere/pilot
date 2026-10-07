@@ -41,10 +41,20 @@ struct SessionRepositoryMetadata: View {
                     .monospacedDigit()
                     .fixedSize()
                     .help(summary.helpText)
-                    .accessibilityLabel(summary.helpText)
+                    .accessibilityLabel("\(summary.fileCountLabel) changed since \(summary.base)")
+                if let additions = summary.additions, let deletions = summary.deletions {
+                    DiffStat(additions: additions, deletions: deletions, showZero: true, fontSize: 10)
+                        .fixedSize()
+                        .help(summary.helpText)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(summary.lineStatLabel ?? "")
+                }
             }
             if let branch = model.branch(for: session), !branch.isEmpty {
-                Label(branch, systemImage: "arrow.triangle.branch")
+                if session.pullRequest != nil || session.pullRequestError != nil || model.summary != nil {
+                    Text("·").accessibilityHidden(true)
+                }
+                Text(branch)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .layoutPriority(-1)

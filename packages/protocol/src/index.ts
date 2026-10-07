@@ -242,6 +242,8 @@ export interface SessionChangeSummary {
 	base: string;
 	branch?: string;
 	fileCount: number;
+	additions: number;
+	deletions: number;
 }
 
 export interface SendRequest {

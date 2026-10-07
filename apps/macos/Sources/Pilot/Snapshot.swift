@@ -41,7 +41,8 @@ enum Snapshot {
         let model = AppModel.shared
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sessions.map {
-            ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: $0.id == "s1" ? 2 : 0))
+            ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: $0.id == "s1" ? 2 : 0,
+                                        additions: $0.id == "s1" ? 13 : 0, deletions: $0.id == "s1" ? 1 : 0))
         })
         model.client.fixtureModels = ModelList(
             models: [
@@ -201,7 +202,9 @@ enum Snapshot {
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.pullRequestSessions)
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.pullRequestSessions.map {
             ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch ?? "pilot/\($0.id)",
-                                        fileCount: $0.id == "pr-merged" ? 0 : 2))
+                                        fileCount: $0.id == "pr-merged" ? 0 : 2,
+                                        additions: $0.id == "pr-merged" ? 0 : 13,
+                                        deletions: $0.id == "pr-merged" ? 0 : 1))
         })
         model.inspectorVisible = false
         model.selectedSessionId = nil

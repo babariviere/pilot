@@ -41,14 +41,53 @@ async function changeBase(cwd: string, base: string) {
 	};
 }
 
-/** Count changed paths without generating patches or line statistics. Renames count once. */
+/** Read NUL-delimited numstat records without interpreting tabs or newlines in filenames. */
+function numstat(output: string): Map<string, { additions: number; deletions: number }> {
+	const records = output.split("\0");
+	const files = new Map<string, { additions: number; deletions: number }>();
+	for (let i = 0; i < records.length; i++) {
+		const record = records[i]!;
+		if (!record) continue;
+		const firstTab = record.indexOf("\t");
+		const secondTab = record.indexOf("\t", firstTab + 1);
+		if (firstTab < 0 || secondTab < 0) continue;
+		let path = record.slice(secondTab + 1);
+		// A rename has an empty path field followed by separate old and new path records.
+		if (!path) {
+			i += 2;
+			path = records[i]!;
+		}
+		if (!path) continue;
+		files.set(path, {
+			additions: Number(record.slice(0, firstTab)) || 0,
+			deletions: Number(record.slice(firstTab + 1, secondTab)) || 0,
+		});
+	}
+	return files;
+}
+
+/** Count changed paths and lines without generating patches. Renames count once. */
 export async function collectChangeSummary(cwd: string, base = "HEAD"): Promise<SessionChangeSummary> {
 	const { mergeBase, ...metadata } = await changeBase(cwd, base);
 	const tracked = await git(cwd, ["diff", "--name-only", "-z", "-M", mergeBase, "--"]);
 	const untracked = await git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
 	// NUL records preserve tabs, newlines and quoted/non-ASCII filenames. A rename emits only its destination.
 	const paths = new Set([...tracked.split("\0"), ...untracked.split("\0")].filter(Boolean));
-	return { ...metadata, fileCount: paths.size };
+	const stats = numstat(await git(cwd, ["diff", "--numstat", "-z", "-M", mergeBase, "--"]));
+	for (const path of untracked.split("\0").filter(Boolean)) {
+		const untrackedStats = numstat(
+			await git(cwd, ["diff", "--numstat", "-z", "--no-index", "--", "/dev/null", path], true),
+		);
+		// Like collectChanges, a recreated untracked path replaces its staged deletion rather than counting twice.
+		stats.set(path, [...untrackedStats.values()][0] ?? { additions: 0, deletions: 0 });
+	}
+	let additions = 0;
+	let deletions = 0;
+	for (const stat of stats.values()) {
+		additions += stat.additions;
+		deletions += stat.deletions;
+	}
+	return { ...metadata, fileCount: paths.size, additions, deletions };
 }
 
 /**

@@ -52,6 +52,8 @@ test("reports committed, uncommitted and untracked changes since the base", asyn
 			base: changes.base,
 			branch: changes.branch,
 			fileCount: changes.files.length,
+			additions: changes.files.reduce((total, file) => total + file.additions, 0),
+			deletions: changes.files.reduce((total, file) => total + file.deletions, 0),
 		});
 	} finally {
 		rmSync(root, { recursive: true, force: true });
@@ -68,7 +70,13 @@ test("summary counts NUL-delimited tracked and untracked paths, renames once, an
 		git(root, "add", ".");
 		git(root, "commit", "--quiet", "-m", "base");
 		const base = git(root, "rev-parse", "HEAD").trim();
-		assert.deepEqual(await collectChangeSummary(root, base), { base, branch: "main", fileCount: 0 });
+		assert.deepEqual(await collectChangeSummary(root, base), {
+			base,
+			branch: "main",
+			fileCount: 0,
+			additions: 0,
+			deletions: 0,
+		});
 
 		renameSync(join(root, 'old"é.txt'), join(root, "renamed\n\tfile.txt"));
 		git(root, "add", "-A");
@@ -81,7 +89,90 @@ test("summary counts NUL-delimited tracked and untracked paths, renames once, an
 		// A staged deletion recreated as untracked is still only one changed path.
 		git(root, "rm", "--quiet", "--", "recreated.txt");
 		writeFileSync(join(root, "recreated.txt"), "replacement\n");
-		assert.deepEqual(await collectChangeSummary(root, base), { base, branch: "main", fileCount: 6 });
+		assert.deepEqual(await collectChangeSummary(root, base), {
+			base,
+			branch: "main",
+			fileCount: 6,
+			additions: 4,
+			deletions: 3,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("summary reads every numstat record, including renames with numeric tabs and newlines in paths", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-numstat-"));
+	try {
+		git(root, "init", "--quiet", "-b", "main");
+		const oldPath = "17\t23\told\nname.txt";
+		const newPath = "7\t9\tnew\nname.txt";
+		const modifiedPath = "42\t53\nmodified.txt";
+		writeFileSync(join(root, oldPath), "one\ntwo\nthree\nfour\nfive\nsix\n");
+		writeFileSync(join(root, modifiedPath), "old\nlines\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "base");
+		const base = git(root, "rev-parse", "HEAD").trim();
+		renameSync(join(root, oldPath), join(root, newPath));
+		writeFileSync(join(root, newPath), "one\ntwo\nthree\nfour\nfive\nchanged\nextra\n");
+		git(root, "add", "-A");
+		writeFileSync(join(root, modifiedPath), "replacement\n");
+		writeFileSync(join(root, "99\t100\nuntracked.txt"), "first\nlast");
+		assert.ok(git(root, "diff", "--numstat", "-z", "-M", base).includes(`2\t1\t\0${oldPath}\0${newPath}\0`));
+		// The rename contributes 2/1, the modified file 1/2, and the untracked file 2/0.
+		assert.deepEqual(await collectChangeSummary(root, base), {
+			base,
+			branch: "main",
+			fileCount: 3,
+			additions: 5,
+			deletions: 3,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("summary counts binary files without line statistics and empty untracked files without additions", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-binary-"));
+	try {
+		git(root, "init", "--quiet", "-b", "main");
+		writeFileSync(join(root, "tracked.bin"), Buffer.from([0, 1, 2]));
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "base");
+		const base = git(root, "rev-parse", "HEAD").trim();
+		writeFileSync(join(root, "tracked.bin"), Buffer.from([0, 3, 4]));
+		writeFileSync(join(root, "untracked.bin"), Buffer.from([0, 5, 6]));
+		writeFileSync(join(root, "empty.txt"), "");
+		assert.deepEqual(await collectChangeSummary(root, base), {
+			base,
+			branch: "main",
+			fileCount: 3,
+			additions: 0,
+			deletions: 0,
+		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("summary replaces staged deletion statistics when the path is recreated as untracked", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-recreated-"));
+	try {
+		git(root, "init", "--quiet", "-b", "main");
+		writeFileSync(join(root, "recreated.txt"), "old\nlines\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "base");
+		git(root, "rm", "--quiet", "--", "recreated.txt");
+		writeFileSync(join(root, "recreated.txt"), "new\nlast");
+		const changes = await collectChanges(root);
+		assert.deepEqual(changes.files, [{ path: "recreated.txt", status: "untracked", additions: 2, deletions: 0 }]);
+		assert.deepEqual(await collectChangeSummary(root), {
+			base: changes.base,
+			branch: changes.branch,
+			fileCount: 1,
+			additions: 2,
+			deletions: 0,
+		});
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -108,11 +199,18 @@ test("summary shares merge-base semantics with changes and omits a detached bran
 			base: `main (${base.slice(0, 8)})`,
 			branch: changes.branch,
 			fileCount: changes.files.length,
+			additions: 1,
+			deletions: 1,
 		});
 		assert.equal(changes.files.length, 1);
 		git(root, "checkout", "--quiet", "--detach");
 		const detached = await collectChanges(root);
-		assert.deepEqual(await collectChangeSummary(root), { base: detached.base, fileCount: 0 });
+		assert.deepEqual(await collectChangeSummary(root), {
+			base: detached.base,
+			fileCount: 0,
+			additions: 0,
+			deletions: 0,
+		});
 		await assert.rejects(collectChangeSummary(root, "missing-base"));
 	} finally {
 		rmSync(root, { recursive: true, force: true });
