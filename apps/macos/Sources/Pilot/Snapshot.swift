@@ -82,6 +82,18 @@ enum Snapshot {
         model.selectedSessionId = session.id
         let feed = SessionFeed(sessionId: session.id, transcript: Fixtures.transcript)
         await render(
+            Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")", session: session) {
+                ChatView(session: session, feed: feed)
+            },
+            size: size,
+            to: directory.appending(path: "session-debug-button.png")
+        )
+        model.debugSession(session)
+        model.draftMessage? += "The tool call stopped returning output. Investigate why and fix the issue."
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
+                     to: directory.appending(path: "session-debug-draft.png"), scrollEditorToEnd: true)
+        model.selectedSessionId = session.id
+        await render(
             Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")") {
                 ChatView(session: session, feed: feed)
             },
@@ -310,7 +322,8 @@ enum Snapshot {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
-    private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false) async {
+    private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false,
+                                       scrollEditorToEnd: Bool = false) async {
         let root = view
             .environmentObject(AppModel.shared)
             .environment(\.pilotFonts, AppSettings.shared.fonts)
@@ -329,19 +342,29 @@ enum Snapshot {
             try? await Task.sleep(for: .milliseconds(100))
         }
         var previewEditor: SubmitTextView?
-        if completionPreview {
+        if completionPreview || scrollEditorToEnd {
             func findEditor(_ view: NSView) -> SubmitTextView? {
                 if let editor = view as? SubmitTextView { return editor }
                 return view.subviews.lazy.compactMap { findEditor($0) }.first
             }
             guard let editor = findEditor(hosting) else { return }
-            previewEditor = editor
-            window.makeKeyAndOrderFront(nil)
-            window.makeFirstResponder(editor)
-            editor.insertText("Please review apps/macos/Sources/Pilot/Cha", replacementRange: NSRange(location: 0, length: 0))
-            try? await Task.sleep(for: .milliseconds(300))
-            editor.completionDirectory = AppModel.shared.daemon.repoURL.path
-            editor.insertTab(nil)
+            if completionPreview {
+                previewEditor = editor
+                window.makeKeyAndOrderFront(nil)
+                window.makeFirstResponder(editor)
+                editor.insertText("Please review apps/macos/Sources/Pilot/Cha", replacementRange: NSRange(location: 0, length: 0))
+                try? await Task.sleep(for: .milliseconds(300))
+                editor.completionDirectory = AppModel.shared.daemon.repoURL.path
+                editor.insertTab(nil)
+            } else {
+                let end = NSRange(location: editor.string.utf16.count, length: 0)
+                editor.setSelectedRange(end)
+                editor.scrollRangeToVisible(end)
+                if let scroll = editor.enclosingScrollView {
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: scroll.contentView.bounds.minY))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+            }
             try? await Task.sleep(for: .milliseconds(300))
         }
         // 1x output keeps review images small.
@@ -411,6 +434,14 @@ enum Snapshot {
                             }
                             Image(systemName: "folder").foregroundStyle(Theme.mutedForeground)
                             Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
+                            if let session {
+                                Button { AppModel.shared.debugSession(session) } label: {
+                                    Label("Debug session", systemImage: "ladybug")
+                                }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                                .help("Debug this session in the pilot project")
+                            }
                         }
                     }
                     .padding(.horizontal, 16)
@@ -453,7 +484,7 @@ enum Fixtures {
         SessionSummary(id: "s1", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",
                        branch: "pilot/fix-flaky-reopen-test-55cb84",
                        createdAt: now - 3_600_000, updatedAt: now - 133_000, state: "working", model: "openai-codex/gpt-6.1-sol",
-                       usage: codexUsage),
+                       usage: codexUsage, sessionPath: "\(home)/.local/share/pilot/sessions/s1"),
         SessionSummary(id: "s2", title: "Add projects API to pilotd", cwd: projects[0].path, projectId: "p1",
                        createdAt: now - 86_400_000, updatedAt: now - 3_000_000, state: "idle", model: "openai-codex/gpt-6.1-sol",
                        outcome: .done, outcomeAt: now - 3_000_000, outcomeReason: "Projects API implemented and tests passed."),

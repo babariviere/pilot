@@ -1,5 +1,22 @@
 # UI screenshots
 
+## Session debugging
+
+- `session-debug-button.png`: the bug button at the top right of a session.
+- `session-debug-draft.png`: the new task in `pilot`, prefilled with the source session path
+  and an example issue description, before submitting.
+
+Both use fixture data, not live conversations. As with the other chat snapshots, the window
+toolbar is represented by the snapshot renderer's stand-in header.
+
+Regenerate on macOS:
+
+```sh
+swift build --package-path apps/macos
+apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-debug-screenshots
+cp /tmp/pilot-debug-screenshots/session-debug-{button,draft}.png docs/screenshots/
+```
+
 ## Agent status icons
 
 `status-icons.png` shows all six colored agent states in the sidebar: working, done,
