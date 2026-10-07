@@ -49,6 +49,7 @@ struct Composer: View {
     @ObservedObject var state: ComposerState
     let working: Bool
     let queuedMessages: [QueuedMessage]
+    let completionDirectory: String
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
     let onEditQueuedMessage: (Int, String) async throws -> Void
@@ -57,7 +58,7 @@ struct Composer: View {
     var body: some View {
         VStack(spacing: 8) {
             if !queuedMessages.isEmpty || state.queueEditing.selected != nil {
-                QueuedMessagesView(state: state, messages: queuedMessages, onSave: saveQueueEdit)
+                QueuedMessagesView(state: state, messages: queuedMessages, completionDirectory: completionDirectory, onSave: saveQueueEdit)
             }
             editor
         }
@@ -81,7 +82,8 @@ struct Composer: View {
                     text: $state.draft, height: $state.editorHeight, font: fonts.nsBody,
                     focusToken: state.composerFocus,
                     onNavigateQueue: { state.navigateQueue($0, messages: queuedMessages) },
-                    onCancel: cancelQueueEditAction
+                    onCancel: cancelQueueEditAction,
+                    completionDirectory: completionDirectory
                 ) { flags in
                     send(flags.contains(.option) ? .followUp : .steer)
                 }
@@ -147,6 +149,7 @@ private struct QueuedMessagesView: View {
     @Environment(\.pilotFonts) private var fonts
     @ObservedObject var state: ComposerState
     let messages: [QueuedMessage]
+    let completionDirectory: String
     let onSave: () -> Void
 
     private var displayedMessages: [QueuedMessage] {
@@ -228,6 +231,7 @@ private struct QueuedMessagesView: View {
                         QueuedMessageEditor(
                             state: state,
                             available: messages.contains(where: { $0.id == message.id }),
+                            completionDirectory: completionDirectory,
                             onSave: onSave,
                             onNavigate: { state.navigateQueue($0, messages: messages) }
                         )

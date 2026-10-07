@@ -99,7 +99,8 @@ struct TaskComposer: View {
                         .foregroundStyle(Theme.faintForeground)
                         .allowsHitTesting(false)
                 }
-                ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14) { _ in
+                ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
+                               completionDirectory: project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
                     start()
                 }
                 .frame(height: form.editorHeight)

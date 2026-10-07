@@ -131,6 +131,7 @@ enum QueueEditingTest {
 
         var body: some View {
             Composer(state: model.composer, working: true, queuedMessages: model.messages,
+                     completionDirectory: FileManager.default.temporaryDirectory.path,
                      onSend: { _, mode in model.sends.append(mode) }, onStop: {},
                      onEditQueuedMessage: { id, text in
                          try await Task.sleep(for: .milliseconds(100))
