@@ -28,7 +28,28 @@ export interface SessionSummary {
 	state: SessionState;
 	/** Resolved "provider/modelId", once the kernel has started. */
 	model?: string;
+	/** Latest context estimate and optional pi-extensions subscription snapshot. */
+	usage?: SessionUsage;
 	error?: string;
+}
+
+export interface ContextUsage {
+	tokens?: number;
+	contextWindow: number;
+	percent?: number;
+}
+
+export interface SubscriptionUsage {
+	/** Epoch ms of the provider snapshot, not the time it was forwarded. */
+	fetchedAt: number;
+	provider?: "anthropic" | "openai";
+	windows: Array<{ label: string; usedPercent: number; resetsAt?: string }>;
+	error?: string;
+}
+
+export interface SessionUsage {
+	context?: ContextUsage;
+	subscription?: SubscriptionUsage;
 }
 
 /** A named working directory. Sessions and triggers belong to projects. */

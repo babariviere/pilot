@@ -212,6 +212,8 @@ reports), producing a morning summary in the app and Slack.
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop.
+- Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
+  supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
 - Questions panel: answer `ask_human` gates inline.
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
