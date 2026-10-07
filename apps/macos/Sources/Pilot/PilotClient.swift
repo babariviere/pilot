@@ -18,6 +18,17 @@ final class PilotClient: ObservableObject {
     private var task: URLSessionWebSocketTask?
     private var retry = 0
     private var listeners: [String: [UUID: ([JSONValue]) -> Void]] = [:]
+    private var terminals: [String: TerminalAttachment] = [:]
+
+    /// One app-side terminal attached to a daemon-owned shell.
+    struct TerminalAttachment {
+        var cols: Int
+        var rows: Int
+        let onData: (String) -> Void
+        let onExit: (Int) -> Void
+        /// Called before the daemon replays scrollback on (re)attach, so the surface can reset.
+        let onReplay: () -> Void
+    }
 
     func connect(to baseURL: URL) {
         self.baseURL = baseURL
@@ -121,7 +132,7 @@ final class PilotClient: ObservableObject {
         let token = UUID()
         let first = listeners[sessionId]?.isEmpty ?? true
         listeners[sessionId, default: [:]][token] = listener
-        if first { post(["type": "subscribe", "sessionId": sessionId]) }
+        if first { post(["type": .string("subscribe"), "sessionId": .string(sessionId)]) }
         return token
     }
 
@@ -129,12 +140,48 @@ final class PilotClient: ObservableObject {
         listeners[sessionId]?[token] = nil
         if listeners[sessionId]?.isEmpty ?? false {
             listeners[sessionId] = nil
-            post(["type": "unsubscribe", "sessionId": sessionId])
+            post(["type": .string("unsubscribe"), "sessionId": .string(sessionId)])
         }
     }
 
-    private func post(_ message: [String: String]) {
-        guard connected, let task, let data = try? JSONEncoder().encode(message) else { return }
+    // MARK: Terminals (daemon-owned PTYs)
+
+    func attachTerminal(_ sessionId: String, cols: Int, rows: Int, restart: Bool = false, _ attachment: TerminalAttachment) {
+        terminals[sessionId] = attachment
+        sendAttach(sessionId, restart: restart)
+    }
+
+    func detachTerminal(_ sessionId: String) {
+        guard terminals.removeValue(forKey: sessionId) != nil else { return }
+        post(["type": .string("terminal.detach"), "sessionId": .string(sessionId)])
+    }
+
+    func terminalInput(_ sessionId: String, _ data: Data) {
+        post(["type": .string("terminal.input"), "sessionId": .string(sessionId), "data": .string(String(decoding: data, as: UTF8.self))])
+    }
+
+    func terminalResize(_ sessionId: String, cols: Int, rows: Int) {
+        guard cols > 0, rows > 0 else { return }
+        terminals[sessionId]?.cols = cols
+        terminals[sessionId]?.rows = rows
+        post([
+            "type": .string("terminal.resize"), "sessionId": .string(sessionId),
+            "cols": .number(Double(cols)), "rows": .number(Double(rows)),
+        ])
+    }
+
+    private func sendAttach(_ sessionId: String, restart: Bool) {
+        guard let attachment = terminals[sessionId], connected else { return }
+        attachment.onReplay()
+        post([
+            "type": .string("terminal.attach"), "sessionId": .string(sessionId),
+            "cols": .number(Double(attachment.cols)), "rows": .number(Double(attachment.rows)),
+            "restart": .bool(restart),
+        ])
+    }
+
+    private func post(_ message: [String: JSONValue]) {
+        guard connected, let task, let data = try? JSONEncoder().encode(JSONValue.object(message)) else { return }
         task.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
     }
 
@@ -161,7 +208,8 @@ final class PilotClient: ObservableObject {
                         self.connected = true
                         self.retry = 0
                         // The daemon sends a fresh snapshot per subscription, so reconnects resync.
-                        for id in self.listeners.keys { self.post(["type": "subscribe", "sessionId": id]) }
+                        for id in self.listeners.keys { self.post(["type": .string("subscribe"), "sessionId": .string(id)]) }
+                        for id in self.terminals.keys { self.sendAttach(id, restart: false) }
                     }
                     switch message {
                     case let .string(text): self.handle(Data(text.utf8))
@@ -209,6 +257,12 @@ final class PilotClient: ObservableObject {
         case "events":
             guard let id = message["sessionId"]?.string, let events = message["events"]?.array else { return }
             for listener in listeners[id]?.values ?? [:].values { listener(events) }
+        case "terminal.data":
+            guard let id = message["sessionId"]?.string, let data = message["data"]?.string else { return }
+            terminals[id]?.onData(data)
+        case "terminal.exit":
+            guard let id = message["sessionId"]?.string else { return }
+            terminals[id]?.onExit(message["code"]?.int ?? 0)
         default:
             break
         }

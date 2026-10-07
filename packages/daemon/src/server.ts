@@ -7,6 +7,7 @@ import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
+import type { TerminalManager } from "./terminals.ts";
 
 const MAX_BODY = 1024 * 1024;
 
@@ -46,6 +47,7 @@ export function createDaemonServer(
 	sessions: SessionManager,
 	projects: ProjectStore,
 	models: ModelCatalog,
+	terminals: TerminalManager,
 ): Server {
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
@@ -104,7 +106,8 @@ export function createDaemonServer(
 		});
 	});
 
-	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+	// Large enough for terminal pastes.
+	const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
 	server.on("upgrade", (req, socket, head) => {
 		const { pathname } = new URL(req.url ?? "/", "http://localhost");
 		if (pathname !== "/api/ws" || !isAllowedOrigin(req.headers.origin)) {
@@ -128,6 +131,7 @@ export function createDaemonServer(
 	wss.on("connection", (ws: WebSocket) => {
 		clients.add(ws);
 		const subscriptions = new Map<string, () => void>();
+		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
 		send(ws, { type: "sessions", sessions: sessions.list() });
 		ws.on("message", (raw) => {
@@ -138,7 +142,13 @@ export function createDaemonServer(
 				return send(ws, { type: "error", message: "Invalid JSON" });
 			}
 			const { sessionId } = message;
-			if (message.type === "subscribe" && !subscriptions.has(sessionId)) {
+			if (message.type.startsWith("terminal.")) {
+				try {
+					handleTerminal(message, attachedTerminals, ws);
+				} catch (error) {
+					send(ws, { type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
+				}
+			} else if (message.type === "subscribe" && !subscriptions.has(sessionId)) {
 				try {
 					subscriptions.set(
 						sessionId,
@@ -155,8 +165,50 @@ export function createDaemonServer(
 		ws.on("close", () => {
 			clients.delete(ws);
 			for (const unsubscribe of subscriptions.values()) unsubscribe();
+			for (const detach of attachedTerminals.values()) detach();
 		});
 	});
+
+	function handleTerminal(message: ClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {
+		const { sessionId } = message;
+		switch (message.type) {
+			case "terminal.attach": {
+				const session = sessions.get(sessionId);
+				if (!session) throw new NotFound(`Unknown session: ${sessionId}`);
+				attached.get(sessionId)?.();
+				attached.set(
+					sessionId,
+					terminals.attach(
+						sessionId,
+						session.cwd,
+						message.cols,
+						message.rows,
+						{
+							data: (data) => send(ws, { type: "terminal.data", sessionId, data }),
+							exit: (code) => send(ws, { type: "terminal.exit", sessionId, code }),
+						},
+						message.restart === true,
+					),
+				);
+				break;
+			}
+			case "terminal.detach":
+				attached.get(sessionId)?.();
+				attached.delete(sessionId);
+				break;
+			case "terminal.input":
+				if (typeof message.data === "string") terminals.write(sessionId, message.data);
+				break;
+			case "terminal.resize":
+				terminals.resize(sessionId, message.cols, message.rows);
+				break;
+			case "terminal.close":
+				attached.get(sessionId)?.();
+				attached.delete(sessionId);
+				terminals.close(sessionId);
+				break;
+		}
+	}
 
 	return server;
 }

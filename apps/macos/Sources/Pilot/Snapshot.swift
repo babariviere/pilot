@@ -49,31 +49,17 @@ enum Snapshot {
         exit(0)
     }
 
-    /// Opens a real window with a session and its terminal, types `exit` into the shell, and checks that
-    /// the pane turns into a placeholder (and restarts) without breaking the layout.
+    /// Against a running pilotd (PILOT_PORT) and an existing session (PILOT_TEST_SESSION): opens a real window
+    /// with the session's terminal, types into the daemon-owned shell, reattaches (as after an app restart) and
+    /// checks the scrollback replay, then exits the shell and restarts it.
     private static func terminalExitTest(directory: URL) async {
         NSApp.appearance = NSAppearance(named: .aqua)
         for window in NSApp.windows { window.orderOut(nil) }
         let model = AppModel.shared
-        model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
+        let sessionId = ProcessInfo.processInfo.environment["PILOT_TEST_SESSION"] ?? ""
+        model.client.connect(to: model.daemon.baseURL)
         model.daemon.markRunningForSnapshot()
         model.terminals.bind(to: model.settings)
-        let session = SessionSummary(
-            id: "t1", title: "Terminal exit", cwd: FileManager.default.temporaryDirectory.path, createdAt: 0, updatedAt: 0,
-            state: "idle"
-        )
-        model.selectedSessionId = session.id
-        model.terminalVisible = true
-        let size = CGSize(width: 1200, height: 700)
-        let root = SessionDetail(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.transcript))
-            .environmentObject(model)
-            .environment(\.pilotFonts, model.settings.fonts)
-            .frame(width: size.width, height: size.height)
-        let hosting = NSHostingView(rootView: root)
-        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: 40, y: 40))
-        window.orderFrontRegardless()
 
         func wait(_ seconds: Double, until done: () -> Bool) async -> Bool {
             let deadline = Date().addingTimeInterval(seconds)
@@ -83,22 +69,64 @@ enum Snapshot {
             }
             return done()
         }
+        func fail(_ step: String) -> Never {
+            print("terminal-test failed at \(step)")
+            exit(1)
+        }
+        guard await wait(5, until: { model.client.connected && model.client.session(sessionId) != nil }),
+              let session = model.client.session(sessionId)
+        else { fail("connect") }
+
+        model.selectedSessionId = session.id
+        model.terminalVisible = true
+        let size = CGSize(width: 1200, height: 700)
+        let root = SessionDetail(session: session, feed: SessionFeed(sessionId: session.id, transcript: Transcript()))
+            .environmentObject(model)
+            .environment(\.pilotFonts, model.settings.fonts)
+            .frame(width: size.width, height: size.height)
+        let hosting = NSHostingView(rootView: root)
+        let window = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = hosting
+        window.setFrameOrigin(NSPoint(x: 40, y: 40))
+        window.orderFrontRegardless()
+
         let store = model.terminals
-        let started = await wait(5) { store.states[session.id] != nil }
-        try? await Task.sleep(for: .seconds(1.5))
-        if let state = store.states[session.id] {
-            for character in "exit" {
+        func screen() -> String { store.memories[session.id]?.readViewportText() ?? "" }
+        func type(_ text: String) {
+            guard let state = store.states[session.id] else { return }
+            for character in text {
                 if let press = TerminalKeyPress(typing: character) { state.sendKey(press) }
             }
             state.sendKey(.enter)
         }
-        let exited = await wait(5) { store.exited.contains(session.id) && store.states[session.id] == nil }
+
+        guard await wait(5, until: { store.states[session.id] != nil }) else { fail("attach") }
+        guard await wait(10, until: { !screen().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { fail("prompt") }
+        type("echo pilot-roundtrip")
+        // The command's own output line, not just the echoed input.
+        func printed() -> Bool { screen().split(separator: "\n").contains { $0.trimmingCharacters(in: .whitespaces) == "pilot-roundtrip" } }
+        guard await wait(10, until: printed) else { fail("roundtrip") }
+
+        // Drop the surface and attach again, as a relaunched app would: the daemon replays scrollback.
+        store.remove(session.id)
+        store.ensure(session)
+        guard await wait(5, until: printed) else { fail("replay") }
+        try? await Task.sleep(for: .seconds(1))
+
+        type("exit")
+        if !(await wait(4, until: { store.exited.contains(session.id) })) { type("exit") }
+        guard await wait(5, until: { store.exited.contains(session.id) && store.states[session.id] == nil }) else {
+            print("screen: \(screen().split(separator: "\n").filter { !$0.isEmpty }.suffix(4))")
+            fail("exit")
+        }
         try? await Task.sleep(for: .milliseconds(400))
         snapshot(hosting, to: directory.appending(path: "terminal-exited.png"))
+
         store.restart(session)
-        let restarted = await wait(5) { store.states[session.id] != nil && !store.exited.contains(session.id) }
-        print("terminal-exit-test started=\(started) exited=\(exited) restarted=\(restarted)")
-        exit(started && exited && restarted ? 0 : 1)
+        guard await wait(10, until: { !screen().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { fail("restart") }
+        guard !printed() else { fail("restart-fresh") }
+        print("terminal-test passed: roundtrip, replay, exit, restart")
+        exit(0)
     }
 
     private static func snapshot(_ view: NSView, to url: URL) {

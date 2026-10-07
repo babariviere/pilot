@@ -204,9 +204,8 @@ reports), producing a morning summary in the app and Slack.
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop.
 - Questions panel: answer `ask_human` gates inline.
-- Terminal: libghostty per session (⌘J). M2 moves PTYs into pilotd and streams them to libghostty's
-  in-memory backend, so terminals survive app restarts and work against remote daemons.
-- Menu bar: counts per state, quick open, daemon control. Notifications for finished, failed and waiting.
+- Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
+  restarts and works against remote daemons.
 
 ## 8. API additions
 
@@ -225,7 +224,7 @@ reports), producing a morning summary in the app and Slack.
 | Milestone | Scope | Definition of done |
 | --- | --- | --- |
 | **M1 Spawn and chat** | Daemon, kernel, native app with chat, projects, launchd agent, notifications | Spawn, steer, stop from the app; sessions survive daemon restarts; app quit leaves agents running |
-| **M2 Terminal** | libghostty pane (done, app-owned PTY), then daemon-owned PTYs | Terminal per session in its workspace; with daemon PTYs, reattach after app restart |
+| **M2 Terminal** | libghostty pane backed by daemon-owned PTYs (done) | Terminal per session in its workspace; reattach with scrollback after app restart |
 | **M3 Foundations + GitHub** | Origins, bindings, policies, workspaces, triage, outcome reporter, audit log, config file; GitHub source | §6.2 done-when, with a dry-run mode that comments nothing |
 | **M4 Linear spec loop** | `ask_human`, `waiting` state, questions panel; Linear source | §6.4 done-when |
 | **M5 Slack bugs** | Slack Socket Mode source | §6.3 done-when |

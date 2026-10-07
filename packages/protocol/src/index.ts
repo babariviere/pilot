@@ -85,7 +85,20 @@ export interface SendRequest {
 }
 
 /** Client to daemon, over /api/ws. */
-export type ClientMessage = { type: "subscribe"; sessionId: string } | { type: "unsubscribe"; sessionId: string };
+export type ClientMessage =
+	| { type: "subscribe"; sessionId: string }
+	| { type: "unsubscribe"; sessionId: string }
+	/**
+	 * Attach to the session's daemon-owned shell, starting it if needed (or replacing it with `restart`).
+	 * The daemon replies with the retained scrollback, then live output.
+	 */
+	| { type: "terminal.attach"; sessionId: string; cols: number; rows: number; restart?: boolean }
+	/** Stop receiving output. The shell keeps running. */
+	| { type: "terminal.detach"; sessionId: string }
+	| { type: "terminal.input"; sessionId: string; data: string }
+	| { type: "terminal.resize"; sessionId: string; cols: number; rows: number }
+	/** Kill the shell. */
+	| { type: "terminal.close"; sessionId: string };
 
 /** Daemon to client, over /api/ws. */
 export type ServerMessage =
@@ -94,6 +107,8 @@ export type ServerMessage =
 	| { type: "projects"; projects: Project[] }
 	/** Starts with a snapshot event on every (re)subscription, then incremental batches. */
 	| { type: "events"; sessionId: string; events: AgentEvent[] }
+	| { type: "terminal.data"; sessionId: string; data: string }
+	| { type: "terminal.exit"; sessionId: string; code: number }
 	| { type: "error"; sessionId?: string; message: string };
 
 export const DEFAULT_PORT = 4319;
