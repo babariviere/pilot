@@ -75,6 +75,8 @@ interface SessionMeta extends OutcomeMeta {
 	createdAt: number;
 	updatedAt: number;
 	archivedAt?: number;
+	/** Remember successful merge archives so restoring a chat survives polling and restarts. */
+	autoArchivedPullRequest?: string;
 	model?: string;
 	thinking?: string;
 	/** Cleared only after initialization and durable input admission. */
@@ -398,7 +400,7 @@ export class SessionManager {
 		}
 	}
 
-	private setArchived(id: string, archived: boolean): Promise<SessionSummary> {
+	private setArchived(id: string, archived: boolean, autoArchivedPullRequest?: string): Promise<SessionSummary> {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		this.require(id);
 		const previous = this.archiveTransitions.get(id);
@@ -407,6 +409,8 @@ export class SessionManager {
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				if (autoArchivedPullRequest && meta.autoArchivedPullRequest === autoArchivedPullRequest)
+					return this.summary(meta);
 				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
 				const worker = this.workers.get(id);
 				if (
@@ -423,7 +427,7 @@ export class SessionManager {
 				)
 					throw new Conflict("Stop the session before archiving it");
 				// Stage only this write. Concurrent lifecycle saves and summaries keep the committed state.
-				await this.save(meta, { timestamp: archived ? Date.now() : undefined });
+				await this.save(meta, { timestamp: archived ? Date.now() : undefined, autoArchivedPullRequest });
 				this.emit(meta);
 				return this.summary(meta);
 			});
@@ -984,6 +988,20 @@ export class SessionManager {
 			}
 		}
 		if (next || changed) this.emit(meta);
+		// Only a fresh merge result can archive a chat. Busy chats retry on the next lookup.
+		if (
+			next?.state === "merged" &&
+			!result.error &&
+			!this.closing &&
+			meta.archivedAt === undefined &&
+			meta.autoArchivedPullRequest !== next.url
+		) {
+			try {
+				await this.setArchived(meta.id, true, next.url);
+			} catch (error) {
+				if (!(error instanceof Conflict)) throw error;
+			}
+		}
 	}
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
@@ -1001,7 +1019,7 @@ export class SessionManager {
 		return join(this.sessionsDir, id);
 	}
 
-	private save(meta: SessionMeta, archive?: { timestamp?: number }): Promise<void> {
+	private save(meta: SessionMeta, archive?: { timestamp?: number; autoArchivedPullRequest?: string }): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
 		const snapshot = `${JSON.stringify(meta, null, "\t")}\n`;
@@ -1013,12 +1031,17 @@ export class SessionManager {
 			const archivedAt = archive ? archive.timestamp : meta.archivedAt;
 			if (archivedAt === undefined) delete persisted.archivedAt;
 			else persisted.archivedAt = archivedAt;
+			// Like archivedAt, the merge marker must not be lost to queued lifecycle snapshots.
+			const autoArchivedPullRequest = archive?.autoArchivedPullRequest ?? meta.autoArchivedPullRequest;
+			if (autoArchivedPullRequest !== undefined) persisted.autoArchivedPullRequest = autoArchivedPullRequest;
 			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600 });
 			await rename(temp, file);
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {
 				if (archive.timestamp === undefined) delete meta.archivedAt;
 				else meta.archivedAt = archive.timestamp;
+				if (archive.autoArchivedPullRequest !== undefined)
+					meta.autoArchivedPullRequest = archive.autoArchivedPullRequest;
 			}
 		};
 		const next = (this.saving.get(meta.id) ?? Promise.resolve())
