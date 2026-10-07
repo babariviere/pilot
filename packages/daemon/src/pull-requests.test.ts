@@ -4,7 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { discoverPullRequest, githubRepository, type PullRequestSession, PullRequestTracker } from "./pull-requests.ts";
 import type { Runner } from "./workspaces.ts";
 
-const branch = "pilot/test-123";
+const branch = "fix-pr-tracking";
 const session = (): PullRequestSession => ({
 	id: "session",
 	cwd: "/private/clone",
@@ -29,6 +29,7 @@ function candidate(overrides: Record<string, unknown> = {}) {
 const listing =
 	(rows: ReturnType<typeof candidate>[]): Runner =>
 	async (file, args) => {
+		if (file === "git" && args[0] === "branch") return "";
 		assert.equal(file, "gh");
 		return JSON.stringify(args.includes("--state=open") ? rows.filter((row) => row.state === "OPEN") : rows);
 	};
@@ -87,11 +88,12 @@ test("discovers all four authoritative states, terminal state takes precedence o
 	}
 });
 
-test("uses recorded upstream, exact branch and repo flags with timeouts, never resolving local HEAD", async () => {
+test("uses recorded upstream, agent-chosen branch and repo flags with timeouts", async () => {
 	const calls: { file: string; args: string[]; cwd: string; timeout?: number }[] = [];
 	const target = session();
-	target.workspace!.branch = "pilot/a;$(whoami)";
+	target.workspace!.branch = "fix/a;$(whoami)";
 	const result = await discoverPullRequest(target, async (file, args, cwd, timeout) => {
+		if (file === "git" && args[0] === "branch") return "";
 		calls.push({ file, args, cwd, timeout });
 		assert.equal(file, "gh", "recorded upstream avoids a potentially changed origin");
 		return JSON.stringify([candidate({ headRefName: target.workspace!.branch })]);
@@ -105,7 +107,7 @@ test("uses recorded upstream, exact branch and repo flags with timeouts, never r
 		args: [
 			"pr",
 			"list",
-			"--head=pilot/a;$(whoami)",
+			"--head=fix/a;$(whoami)",
 			"--repo=github.com/octo/repo",
 			"--state=open",
 			"--limit=100",
@@ -119,6 +121,7 @@ test("only legacy private workspaces read origin, direct sessions never run git 
 	const target = session();
 	delete target.workspace!.upstream;
 	const runner: Runner = async (file, args, cwd, timeout) => {
+		if (file === "git" && args[0] === "branch") return "";
 		calls++;
 		assert.equal(cwd, target.cwd);
 		assert.equal(timeout, 10_000);
@@ -134,6 +137,47 @@ test("only legacy private workspaces read origin, direct sessions never run git 
 	delete target.workspace;
 	assert.deepEqual(await discoverPullRequest(target, runner), {});
 	assert.equal(calls, 2);
+});
+
+test("detached private sessions wait for the agent's branch before asking GitHub", async () => {
+	const target = session();
+	delete target.workspace!.branch;
+	let chosen = "";
+	let lookups = 0;
+	const runner: Runner = async (file, args) => {
+		if (file === "git") {
+			assert.deepEqual(args, ["branch", "--show-current"]);
+			return chosen;
+		}
+		lookups++;
+		assert.ok(args.includes("--head=fix-reopen-race"));
+		return JSON.stringify([candidate({ headRefName: chosen })]);
+	};
+	assert.deepEqual(await discoverPullRequest(target, runner), {});
+	assert.equal(lookups, 0);
+	chosen = "fix-reopen-race";
+	const result = await discoverPullRequest(target, runner);
+	assert.equal(result.branch, chosen);
+	assert.equal(result.pullRequest?.state, "open");
+	assert.equal(lookups, 1);
+	assert.equal(target.workspace!.branch, undefined, "discovery does not mutate session metadata");
+});
+
+test("a newly checked-out branch supersedes the cached branch and does not retain its PR", async () => {
+	const target = session();
+	target.pullRequest = {
+		number: 1,
+		url: "https://github.com/octo/repo/pull/1",
+		title: "Old branch",
+		state: "open",
+		checkedAt: 1,
+	};
+	const result = await discoverPullRequest(target, async (file, args) => {
+		if (file === "git") return "fix-new-task";
+		assert.ok(args.includes("--head=fix-new-task"));
+		return "[]";
+	});
+	assert.deepEqual(result, { branch: "fix-new-task" });
 });
 
 test("prefers newest matching open/draft over history and excludes wrong branch or same-named forks", async () => {
@@ -159,6 +203,7 @@ test("historical fallback selects newest closed/merged, without needing a surviv
 		candidate({ number: 8, state: "CLOSED", createdAt: "2026-02-01T00:00:00Z" }),
 	]);
 	const result = await discoverPullRequest(session(), async (file, args, cwd, timeout) => {
+		if (file === "git" && args[0] === "branch") return "";
 		calls.push(args);
 		return runner(file, args, cwd, timeout);
 	});
@@ -171,6 +216,7 @@ test("historical fallback selects newest closed/merged, without needing a surviv
 
 test("an active PR wins even when the historical query could be truncated", async () => {
 	const result = await discoverPullRequest(session(), async (_file, args) => {
+		if (_file === "git" && args[0] === "branch") return "";
 		assert.ok(args.includes("--state=open"), "must not query truncated history if active PR exists");
 		return JSON.stringify([candidate()]);
 	});
@@ -212,7 +258,7 @@ test("lookup errors and malformed results are stale signals, not mutations", asy
 	assert.match(result.error!, /keeping last known status/);
 	assert.deepEqual(target, previous);
 	delete target.pullRequest;
-	assert.deepEqual(await discoverPullRequest(target, listing([])), {});
+	assert.deepEqual(await discoverPullRequest(target, listing([])), { branch });
 });
 
 test("invalid branches and upstream identities cannot become command options", async () => {
@@ -230,9 +276,13 @@ test("invalid branches and upstream identities cannot become command options", a
 		);
 	assert.match(
 		(
-			await discoverPullRequest({ ...session(), workspace: { branch, upstream: "--repo=evil" } }, async () => {
-				throw new Error("must not execute");
-			})
+			await discoverPullRequest(
+				{ ...session(), workspace: { branch, upstream: "--repo=evil" } },
+				async (file, args) => {
+					if (file === "git" && args[0] === "branch") return "";
+					throw new Error("must not execute");
+				},
+			)
 		).error!,
 		/not a GitHub repository URL/,
 	);
@@ -251,6 +301,7 @@ test("tracker deduplicates overlapping per-session requests and executes session
 		},
 		{
 			runner: async (_file, _args, cwd) => {
+				if (_file === "git" && _args[0] === "branch") return "";
 				active++;
 				maxActive = Math.max(maxActive, active);
 				called.push(cwd);
@@ -286,7 +337,8 @@ test("polls immediately then at bounded delay without overlapping sweeps, and st
 		async () => {},
 		{
 			intervalMs: 10,
-			runner: async () => {
+			runner: async (file, args) => {
+				if (file === "git" && args[0] === "branch") return "";
 				calls++;
 				if (calls === 1) await first.promise;
 				return JSON.stringify([candidate()]);
@@ -325,7 +377,8 @@ test("shutdown drains the in-flight lookup and cache update but skips queued ses
 			await cache.promise;
 		},
 		{
-			runner: async () => {
+			runner: async (file, args) => {
+				if (file === "git" && args[0] === "branch") return "";
 				calls++;
 				await lookup.promise;
 				return JSON.stringify([candidate()]);

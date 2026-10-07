@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { branchSlug, createWorkspace } from "./workspaces.ts";
+import { createWorkspace, workspaceBranch } from "./workspaces.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -29,13 +29,17 @@ const git = (cwd: string, ...args: string[]) =>
 		},
 	}).trim();
 
-test("slugs titles for branch names", () => {
-	assert.equal(branchSlug("Fix the flaky reopen test!"), "fix-the-flaky-reopen-test");
-	assert.equal(branchSlug("!!!"), "task");
-	assert.ok(branchSlug("x".repeat(80)).length <= 40);
-});
+const jj = (cwd: string, ...args: string[]) => execFileSync("jj", args, { cwd, encoding: "utf8" }).trim();
+const hasJj = (() => {
+	try {
+		execFileSync("jj", ["--version"], { stdio: "ignore" });
+		return true;
+	} catch {
+		return false;
+	}
+})();
 
-test("clones a project into a private workspace on its own branch from the remote default", async () => {
+test("clones a project into a private workspace detached from the remote default, leaving the branch choice to the agent", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
 	try {
 		const remote = join(root, "remote.git");
@@ -51,12 +55,15 @@ test("clones a project into a private workspace on its own branch from the remot
 		git(source, "switch", "--quiet", "-c", "local-topic");
 
 		const destination = join(root, "workspace");
-		const workspace = await createWorkspace(source, destination, "pilot/fix-it-abc123");
-		assert.equal(workspace.branch, "pilot/fix-it-abc123");
+		const workspace = await createWorkspace(source, destination);
+		assert.equal(workspace.branch, undefined);
 		assert.equal(workspace.base, "origin/main");
 		assert.equal(workspace.upstream, remote);
 		assert.equal(workspace.jj, false);
-		assert.equal(git(destination, "branch", "--show-current"), "pilot/fix-it-abc123");
+		assert.equal(git(destination, "branch", "--show-current"), "");
+		assert.equal(await workspaceBranch(destination), undefined);
+		git(destination, "switch", "--quiet", "-c", "fix-readme");
+		assert.equal(await workspaceBranch(destination), "fix-readme");
 		assert.equal(git(destination, "remote", "get-url", "origin"), remote);
 		assert.equal(readFileSync(join(destination, "README.md"), "utf8"), "hello\n");
 		assert.ok(existsSync(join(source, "README.md")));
@@ -68,7 +75,61 @@ test("clones a project into a private workspace on its own branch from the remot
 test("refuses folders that are not git repositories", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));
 	try {
-		await assert.rejects(createWorkspace(root, join(root, "w"), "pilot/x"), /not a git repository/);
+		await assert.rejects(createWorkspace(root, join(root, "w")), /not a git repository/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("local-only clones pin their base before the agent creates and commits on a branch", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-local-"));
+	try {
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "-b", "main", source);
+		writeFileSync(join(source, "README.md"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "init");
+		const base = git(source, "rev-parse", "HEAD");
+		const workspace = await createWorkspace(source, join(root, "workspace"));
+		assert.equal(workspace.base, base);
+		assert.equal(await workspaceBranch(workspace.path), undefined);
+		git(workspace.path, "switch", "--quiet", "-c", "improve-readme");
+		writeFileSync(join(workspace.path, "README.md"), "updated\n");
+		git(workspace.path, "commit", "--quiet", "-am", "update");
+		assert.notEqual(git(workspace.path, "rev-parse", "HEAD"), workspace.base);
+		assert.equal(git(source, "branch", "--show-current"), "main");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("jj clones inherit no task bookmark and detect the agent's chosen bookmark after commits", {
+	skip: !hasJj,
+}, async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-ws-jj-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "README.md"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "init");
+		git(source, "push", "--quiet", "origin", "HEAD:main");
+		jj(source, "git", "init", "--colocate");
+		const workspace = await createWorkspace(source, join(root, "workspace"));
+		assert.equal(workspace.jj, true);
+		assert.equal(await workspaceBranch(workspace.path), undefined);
+		assert.equal(jj(workspace.path, "bookmark", "list"), "");
+		jj(workspace.path, "bookmark", "create", "fix-readme", "-r", "@");
+		assert.equal(await workspaceBranch(workspace.path), "fix-readme");
+		writeFileSync(join(workspace.path, "README.md"), "updated\n");
+		jj(workspace.path, "commit", "-m", "update");
+		jj(workspace.path, "bookmark", "set", "fix-readme", "-r", "@-");
+		assert.equal(await workspaceBranch(workspace.path), "fix-readme");
+		jj(workspace.path, "bookmark", "create", "other-fix", "-r", "@-");
+		assert.equal(await workspaceBranch(workspace.path), undefined, "ambiguous bookmarks must not be guessed");
+		assert.equal(await workspaceBranch(workspace.path, "fix-readme"), "fix-readme");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -104,7 +165,7 @@ for (const ignoreLocation of ["repository", "local", "global"]) {
 			writeFileSync(join(source, "untracked.txt"), "untracked\n");
 			writeFileSync(join(source, "README.md"), "dirty\n");
 
-			await createWorkspace(source, destination, "pilot/local-config");
+			await createWorkspace(source, destination);
 			for (const path of configs) {
 				assert.equal(readFileSync(join(destination, path), "utf8"), readFileSync(join(source, path), "utf8"));
 				assert.equal(git(destination, "check-ignore", "--", path), path);
@@ -140,7 +201,7 @@ test("does not copy tracked, unignored or symlinked local configs", async () => 
 		mkdirSync(join(source, "mise"));
 		writeFileSync(join(source, "mise/config.local.toml"), "unignored\n");
 
-		await createWorkspace(source, destination, "pilot/local-config");
+		await createWorkspace(source, destination);
 		assert.equal(readFileSync(join(destination, "mise.local.toml"), "utf8"), "committed\n");
 		assert.equal(existsSync(join(destination, ".mise.local.toml")), false);
 		assert.equal(existsSync(join(destination, "mise/config.local.toml")), false);
@@ -176,7 +237,7 @@ test("does not overwrite remote files or copy through checked-out symlinks", asy
 			writeFileSync(join(source, path), "local config\n");
 		}
 
-		await createWorkspace(source, destination, "pilot/local-config");
+		await createWorkspace(source, destination);
 		assert.equal(readFileSync(join(destination, "mise.local.toml"), "utf8"), "remote config\n");
 		assert.equal(readFileSync(join(destination, "mise"), "utf8"), "remote file\n");
 		assert.equal(readlinkSync(join(destination, ".mise.local.toml")), dangling);
@@ -189,14 +250,13 @@ test("does not overwrite remote files or copy through checked-out symlinks", asy
 	}
 });
 
-test("cancelled fetch never proceeds to branch creation", async () => {
+test("cancelled fetch never proceeds to checkout", async () => {
 	const signal = new AbortController();
 	const commands: string[] = [];
 	await assert.rejects(
 		createWorkspace(
 			"source",
 			"destination",
-			"pilot/task",
 			async (_file, args, _cwd, _timeout, received) => {
 				assert.equal(received, signal.signal);
 				commands.push(args[0]!);
@@ -252,7 +312,7 @@ esac
 	const oldPath = process.env.PATH;
 	process.env.PATH = `${bin}:${oldPath}`;
 	const signal = new AbortController();
-	const preparing = createWorkspace(root, join(root, "workspace"), "pilot/task", undefined, signal.signal);
+	const preparing = createWorkspace(root, join(root, "workspace"), undefined, signal.signal);
 	let completed = false;
 	let preparationError: unknown;
 	preparing.then(

@@ -4,7 +4,7 @@ import { type Extension, hook, section, ToolTask } from "@earendil-works/pi-dura
 export interface WorkspaceContext {
 	/** The user's checkout this clone came from. */
 	source: string;
-	branch: string;
+	branch?: string;
 	base: string;
 	upstream?: string;
 	jj: boolean;
@@ -48,14 +48,17 @@ export function pilotPrompt(context: PilotContext): string {
 	const workspace = context.workspace;
 	if (workspace) {
 		lines.push(
-			`- Your working directory is a private clone of ${workspace.source}, on branch \`${workspace.branch}\` started from \`${workspace.base}\`. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
+			`- Your working directory is a private clone of ${workspace.source}, started from \`${workspace.base}\`${workspace.branch ? `, with branch/bookmark \`${workspace.branch}\`` : ", initially detached with no task branch or bookmark"}. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
+			"- Choose or create a descriptive branch or bookmark for this task before making changes. Do not use a `pilot/` prefix. Never push the default branch.",
 		);
 		if (workspace.jj) {
 			lines.push(
-				`- The clone is a colocated jj repository. Commit with jj, move the bookmark with \`jj bookmark set ${workspace.branch} -r @-\`, and push with \`jj git push --bookmark ${workspace.branch}\`.`,
+				"- The clone is a colocated jj repository. Use jj for version-control changes. Choose a descriptive bookmark with `jj bookmark create <name> -r @`; after committing, move it with `jj bookmark set <name> -r @-`, and push with `jj git push --bookmark <name>`.",
 			);
 		} else {
-			lines.push(`- Commit on \`${workspace.branch}\` and push it with \`git push -u origin ${workspace.branch}\`.`);
+			lines.push(
+				"- Create your chosen branch with `git switch -c <name>`. Commit on it and push it with `git push -u origin <name>`.",
+			);
 		}
 		lines.push(
 			"- When the work is ready, open a pull request with `gh pr create`. It is opened as the user. Never merge.",

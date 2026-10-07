@@ -118,9 +118,9 @@ for (const phase of ["clone", "ready", "ack"] as const) {
 			worker: f.workerFactory(phase !== "ready", async () => {
 				if (phase === "ack") await gate.promise;
 			}),
-			workspace: async (_source, path, branch, _runner, signal) => {
+			workspace: async (_source, path, _runner, signal) => {
 				if (phase === "clone") await waitFor(gate.promise, signal);
-				return { path, branch, base: "HEAD", jj: false };
+				return { path, base: "HEAD", jj: false };
 			},
 		});
 		const created = await sessions.spawn({ projectId: f.project.id, message: "admitted" });
@@ -151,9 +151,9 @@ for (const phase of ["clone", "factory", "ready"] as const) {
 	test(`terminal ${phase} failure does not hold the update lease forever`, async (t) => {
 		const f = await fixture(t);
 		const sessions = await f.manager({
-			workspace: async (_source, path, branch) => {
+			workspace: async (_source, path) => {
 				if (phase === "clone") throw new Error("terminal clone failure");
-				return { path, branch, base: "HEAD", jj: false };
+				return { path, base: "HEAD", jj: false };
 			},
 			worker:
 				phase === "factory"
@@ -220,6 +220,95 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 	}
 }
 
+test("generated title updates and persists without delaying startup", async (t) => {
+	const f = await fixture(t);
+	const gate = deferred();
+	const task = "Please fix the branch naming and describe the result";
+	const sessions = await f.manager({
+		title: async (cwd, message, signal) => {
+			assert.equal(cwd, f.source);
+			assert.equal(message, task);
+			assert.equal(signal.aborted, false);
+			await gate.promise;
+			return "Fix branch naming";
+		},
+	});
+	const titles: string[] = [];
+	sessions.onChange((summary) => titles.push(summary.title));
+	const created = await sessions.spawn({ cwd: f.source, message: task });
+	assert.equal(created.title, task);
+	await until(() => sessions.get(created.id)?.state === "working");
+	assert.equal(sessions.get(created.id)?.title, task);
+	gate.resolve();
+	await until(() => sessions.get(created.id)?.title === "Fix branch naming");
+	await until(async () => (await f.stored(created.id)).title === "Fix branch naming");
+	assert.ok(titles.includes("Fix branch naming"));
+	assert.equal((await f.stored(created.id)).titlePending, undefined);
+});
+
+test("explicit titles bypass generation and provider failures keep the fallback", async (t) => {
+	const f = await fixture(t);
+	let calls = 0;
+	const sessions = await f.manager({
+		title: async () => {
+			calls++;
+			throw new Error("unavailable");
+		},
+	});
+	const explicit = await sessions.spawn({ cwd: f.source, message: "task", title: " My title " });
+	assert.equal(explicit.title, "My title");
+	assert.equal(calls, 0);
+	const fallback = await sessions.spawn({ cwd: f.source, message: "Fallback task\nDetails" });
+	await until(async () => (await f.stored(fallback.id)).titlePending === undefined);
+	assert.equal(calls, 1);
+	assert.equal(sessions.get(fallback.id)?.title, "Fallback task");
+	assert.equal(sessions.get(explicit.id)?.title, "My title");
+});
+
+test("pending titles resume on load without waking an idle kernel", async (t) => {
+	const f = await fixture(t);
+	const id = randomUUID();
+	await mkdir(join(f.home, "sessions", id), { recursive: true });
+	await writeFile(
+		join(f.home, "sessions", id, "meta.json"),
+		JSON.stringify({
+			id,
+			cwd: f.source,
+			title: "Fallback",
+			createdAt: 1,
+			updatedAt: 1,
+			titlePending: { cwd: f.source, message: "Task details" },
+		}),
+	);
+	const sessions = await f.manager({
+		title: async (cwd, message) => {
+			assert.equal(cwd, f.source);
+			assert.equal(message, "Task details");
+			return "Recovered title";
+		},
+	});
+	await until(async () => (await f.stored(id)).titlePending === undefined);
+	assert.equal(sessions.get(id)?.title, "Recovered title");
+	assert.equal(f.workers.length, 0);
+});
+
+test("shutdown aborts title generation and leaves a durable retry", async (t) => {
+	const f = await fixture(t);
+	let started = false;
+	const sessions = await f.manager({
+		title: async (_cwd, _message, signal) => {
+			started = true;
+			await waitFor(new Promise<void>(() => {}), signal);
+			return "Should not be written";
+		},
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "Fallback" });
+	await until(() => started);
+	await sessions.shutdown();
+	assert.equal(sessions.get(created.id)?.title, "Fallback");
+	assert.ok((await f.stored(created.id)).titlePending);
+});
+
 async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-startup-"));
 	const home = join(root, "home");
@@ -239,7 +328,11 @@ async function fixture(t: TestContext) {
 			return worker;
 		};
 	const manager = async (factories: SessionFactories = {}) => {
-		const sessions = new SessionManager(home, projects, undefined, { worker: workerFactory(), ...factories });
+		const sessions = new SessionManager(home, projects, undefined, {
+			title: async () => undefined,
+			worker: workerFactory(),
+			...factories,
+		});
 		managers.push(sessions);
 		await sessions.load();
 		return sessions;
@@ -247,9 +340,11 @@ async function fixture(t: TestContext) {
 	const stored = async (
 		id: string,
 	): Promise<{
+		title: string;
+		titlePending?: { cwd: string; message: string };
 		cwd: string;
 		initializing?: boolean;
-		preparing?: { source: string; branch: string };
+		preparing?: { source: string };
 		pending: Command[];
 		cancelled?: boolean;
 		inputError?: string;
@@ -268,9 +363,9 @@ test("POST returns durable starting session before clone or worker, guarding cha
 	const clone = deferred();
 	t.after(() => clone.resolve());
 	const sessions = await f.manager({
-		workspace: async (_source, path, branch, _runner, signal) => {
+		workspace: async (_source, path, _runner, signal) => {
 			await waitFor(clone.promise, signal);
-			return { path, branch, base: "origin/main", jj: false };
+			return { path, base: "origin/main", jj: false };
 		},
 	});
 	let terminalsStarted = 0;
@@ -368,10 +463,10 @@ test("restart retries an unfinished clone, removes only its partial destination 
 	const clone = deferred();
 	const entered = deferred();
 	const sessions = await f.manager({
-		workspace: async (_source, path, branch, _runner, signal) => {
+		workspace: async (_source, path, _runner, signal) => {
 			entered.resolve();
 			await waitFor(clone.promise, signal);
-			return { path, branch, base: "HEAD", jj: false };
+			return { path, base: "HEAD", jj: false };
 		},
 	});
 	const created = await sessions.spawn({ projectId: f.project.id, message: "recover clone" });
@@ -385,13 +480,12 @@ test("restart retries an unfinished clone, removes only its partial destination 
 	clone.resolve();
 	let clones = 0;
 	const reopened = await f.manager({
-		workspace: async (source, path, branch) => {
+		workspace: async (source, path) => {
 			clones++;
 			assert.equal(source, f.source);
 			assert.equal(path, created.cwd);
-			assert.equal(branch, before.preparing!.branch);
 			assert.equal(await stat(path).catch(() => undefined), undefined);
-			return { path, branch, base: "HEAD", jj: false };
+			return { path, base: "HEAD", jj: false };
 		},
 	});
 	await until(() => reopened.get(created.id)?.state === "working");
@@ -405,7 +499,7 @@ test("restart after clone but before ready reuses the workspace and recovers idl
 	const f = await fixture(t);
 	const sessions = await f.manager({
 		worker: f.workerFactory(false),
-		workspace: async (_source, path, branch) => ({ path, branch, base: "HEAD", jj: true }),
+		workspace: async (_source, path) => ({ path, base: "HEAD", jj: true }),
 	});
 	const created = await sessions.spawn({ projectId: f.project.id, message: "recover kernel" });
 	await until(() => f.workers.length === 1);
@@ -461,9 +555,9 @@ test("startup sends are durable, ordered and deduplicated; unsubscribed watchers
 	const f = await fixture(t);
 	const clone = deferred();
 	const sessions = await f.manager({
-		workspace: async (_source, path, branch, _runner, signal) => {
+		workspace: async (_source, path, _runner, signal) => {
 			await waitFor(clone.promise, signal);
-			return { path, branch, base: "HEAD", jj: false };
+			return { path, base: "HEAD", jj: false };
 		},
 	});
 	const created = await sessions.spawn({ projectId: f.project.id, message: "first" });
@@ -494,9 +588,9 @@ for (const phase of ["clone", "ready", "ack"] as const) {
 			worker: f.workerFactory(phase !== "ready", async () => {
 				if (phase === "ack") await gate.promise;
 			}),
-			workspace: async (_source, path, branch, _runner, signal) => {
+			workspace: async (_source, path, _runner, signal) => {
 				if (phase === "clone") await waitFor(gate.promise, signal);
-				return { path, branch, base: "HEAD", jj: false };
+				return { path, base: "HEAD", jj: false };
 			},
 		});
 		const created = await sessions.spawn({ projectId: f.project.id, message: "cancel me" });
@@ -530,9 +624,9 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 	test(`${failure} startup errors remain visible failed sessions across restart`, async (t) => {
 		const f = await fixture(t);
 		const sessions = await f.manager({
-			workspace: async (_source, path, branch) => {
+			workspace: async (_source, path) => {
 				if (failure === "clone") throw new Error("clone unavailable");
-				return { path, branch, base: "HEAD", jj: false };
+				return { path, base: "HEAD", jj: false };
 			},
 			worker:
 				failure === "factory"
@@ -578,10 +672,10 @@ test("shutdown during clone does not start a worker when preparation later compl
 	const entered = deferred();
 	const clone = deferred();
 	const sessions = await f.manager({
-		workspace: async (_source, path, branch, _runner, signal) => {
+		workspace: async (_source, path, _runner, signal) => {
 			entered.resolve();
 			await waitFor(clone.promise, signal);
-			return { path, branch, base: "HEAD", jj: false };
+			return { path, base: "HEAD", jj: false };
 		},
 	});
 	const created = await sessions.spawn({ projectId: f.project.id, message: "resume later" });
@@ -597,9 +691,9 @@ test("shutdown during clone does not start a worker when preparation later compl
 test("stopped preparation stays cancelled across restart and immediately clears subscriber loading", async (t) => {
 	const f = await fixture(t);
 	const gate = deferred();
-	const workspace: SessionFactories["workspace"] = async (_source, path, branch, _runner, signal) => {
+	const workspace: SessionFactories["workspace"] = async (_source, path, _runner, signal) => {
 		await waitFor(gate.promise, signal);
-		return { path, branch, base: "HEAD", jj: false };
+		return { path, base: "HEAD", jj: false };
 	};
 	const sessions = await f.manager({ workspace });
 	const created = await sessions.spawn({ projectId: f.project.id, message: "must not run" });
@@ -655,7 +749,7 @@ test("malformed preparing metadata never removes or runs in the source directory
 	await sessions.shutdown();
 	const file = join(f.home, "sessions", created.id, "meta.json");
 	const meta = await f.stored(created.id);
-	meta.preparing = { source: f.source, branch: "pilot/test" };
+	meta.preparing = { source: f.source };
 	await writeFile(file, JSON.stringify(meta));
 	await writeFile(join(f.source, "keep"), "source untouched");
 	const reopened = await f.manager({

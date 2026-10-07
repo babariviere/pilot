@@ -14,7 +14,7 @@ import type { Runner } from "./workspaces.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
 type Worker = Parameters<SessionManager["onPacket"]>[1];
-const branch = "pilot/pr-test";
+const branch = "fix-pr-tracking";
 const cached: SessionPullRequest = {
 	number: 10,
 	url: "https://github.com/octo/repo/pull/10",
@@ -53,6 +53,7 @@ async function fixture(
 	options: PullRequestOptions,
 	run: (manager: SessionManager, meta: Meta, home: string, changes: SessionSummary[]) => Promise<void>,
 	initialPullRequest?: SessionPullRequest,
+	currentBranch: () => string = () => "",
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-prs-"));
 	const id = randomUUID();
@@ -77,7 +78,17 @@ async function fixture(
 	await mkdir(join(home, "sessions", direct.id), { recursive: true });
 	await writeFile(join(home, "sessions", id, "meta.json"), JSON.stringify(meta));
 	await writeFile(join(home, "sessions", direct.id, "meta.json"), JSON.stringify(direct));
-	const manager = new SessionManager(home, new ProjectStore(home), undefined, {}, options);
+	const manager = new SessionManager(
+		home,
+		new ProjectStore(home),
+		undefined,
+		{},
+		{
+			...options,
+			runner: async (file, args, ...rest) =>
+				file === "git" && args[0] === "branch" ? currentBranch() : options.runner!(file, args, ...rest),
+		},
+	);
 	const changes: SessionSummary[] = [];
 	manager.onChange((summary) => changes.push(summary));
 	try {
@@ -163,10 +174,11 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 		projects,
 		undefined,
 		{
-			workspace: async (_source, path, head) => {
+			title: async () => undefined,
+			workspace: async (_source, path) => {
 				cloning = true;
 				await clone;
-				return { path, branch: head, base: "origin/main", upstream: "git@github.com:octo/repo.git", jj: false };
+				return { path, base: "origin/main", upstream: "git@github.com:octo/repo.git", jj: false };
 			},
 			worker: (_spec, onPacket, onExit) => {
 				workerCreated = true;
@@ -193,6 +205,7 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 		},
 		{
 			runner: async (file, args) => {
+				if (file === "git" && args[0] === "branch") return branch;
 				assert.equal(file, "gh", "new clone must use the daemon-recorded upstream, not read origin");
 				lookups++;
 				await lookup;
@@ -217,6 +230,9 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 		const active = lifecycle(manager, manager["metas"].get(created.id)!);
 		releaseLookup();
 		await until(() => manager.get(created.id)?.pullRequest?.state === "open");
+		await manager["pullRequests"].refresh(manager["metas"].get(created.id)!);
+		assert.equal(manager.get(created.id)?.branch, branch);
+		assert.equal((await saved(home, created.id)).workspace?.branch, branch);
 		assert.deepEqual(lifecycle(manager, manager["metas"].get(created.id)!), active);
 	} finally {
 		releaseClone();
@@ -225,6 +241,41 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 		await manager.shutdown();
 		await rm(home, { recursive: true, force: true });
 	}
+});
+
+test("agent branch changes persist for the UI, clear the prior PR, and survive deleted refs", async () => {
+	let chosen = branch;
+	let hasPr = true;
+	await fixture(
+		{
+			runner: async (_file, args) => {
+				const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
+				return JSON.stringify(hasPr ? [{ ...candidate(), headRefName: head }] : []);
+			},
+		},
+		async (manager, meta, home, changes) => {
+			await manager["pullRequests"]["polling"];
+			const initial = lifecycle(manager, meta);
+			chosen = "fix-branch-discovery";
+			hasPr = false;
+			await manager["pullRequests"].refresh(meta);
+			assert.equal(manager.get(meta.id)?.branch, chosen);
+			assert.equal(changes.at(-1)?.branch, chosen);
+			assert.equal(manager.get(meta.id)?.pullRequest, undefined);
+			assert.equal(manager.get(meta.id)?.pullRequestError, undefined);
+			assert.equal((await saved(home, meta.id)).workspace?.branch, chosen);
+			hasPr = true;
+			await manager["pullRequests"].refresh(meta);
+			assert.equal(manager.get(meta.id)?.pullRequest?.state, "open");
+			chosen = "";
+			await manager["pullRequests"].refresh(meta);
+			assert.equal(manager.get(meta.id)?.branch, "fix-branch-discovery");
+			assert.equal(manager.get(meta.id)?.pullRequest?.number, 10);
+			assert.deepEqual(lifecycle(manager, meta), initial);
+		},
+		cached,
+		() => chosen,
+	);
 });
 
 test("draft/open/merged/closed PR changes persist and broadcast independently of agent completion", async () => {
@@ -320,7 +371,16 @@ test("fresh merge archives durably, retains files, and restoration survives chec
 		await manager["pullRequests"].refresh(meta);
 		assert.equal(manager.get(meta.id)?.archivedAt, undefined);
 		await manager.shutdown();
-		const reopened = new SessionManager(home, new ProjectStore(home), undefined, {}, { runner });
+		const reopened = new SessionManager(
+			home,
+			new ProjectStore(home),
+			undefined,
+			{},
+			{
+				runner: async (file, args, ...rest) =>
+					file === "git" && args[0] === "branch" ? "" : runner(file, args, ...rest),
+			},
+		);
 		try {
 			await reopened.load();
 			await reopened["pullRequests"]["polling"];
@@ -373,7 +433,7 @@ test("merge archiving defers all busy states and retries after the chat becomes 
 		const busyStates: [() => void, () => void][] = [
 			[() => (meta.working = true), () => (meta.working = false)],
 			[() => (meta.initializing = true), () => delete meta.initializing],
-			[() => (meta.preparing = { source: meta.cwd, branch }), () => delete meta.preparing],
+			[() => (meta.preparing = { source: meta.cwd }), () => delete meta.preparing],
 			[
 				() => (meta.pending = [{ type: "input", requestId: "queued", content: "Hi", mode: "followUp" }]),
 				() => delete meta.pending,
@@ -580,6 +640,7 @@ test("restart exposes persisted badge/error immediately and immediately rechecks
 				{},
 				{
 					runner: async (_file, args) => {
+						if (_file === "git" && args[0] === "branch") return "";
 						calls++;
 						await gate;
 						return args.includes("--state=open") ? "[]" : JSON.stringify([candidate("MERGED", true)]);

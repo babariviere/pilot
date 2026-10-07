@@ -26,7 +26,7 @@ import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
 import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
-import { branchSlug, createWorkspace, type Workspace } from "./workspaces.ts";
+import { createWorkspace, type Workspace } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
 
@@ -57,6 +57,7 @@ export interface SessionWorker {
 }
 
 export interface SessionFactories {
+	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
 	workspace?: typeof createWorkspace;
 	worker?: (
 		spec: WorkerSpec,
@@ -68,6 +69,8 @@ export interface SessionFactories {
 interface SessionMeta extends OutcomeMeta {
 	id: string;
 	title: string;
+	/** Best-effort title generation resumes after a daemon restart. */
+	titlePending?: { cwd: string; message: string };
 	cwd: string;
 	projectId?: string;
 	/** Private clone the session works in (its cwd), and where it came from. */
@@ -81,7 +84,7 @@ interface SessionMeta extends OutcomeMeta {
 	thinking?: string;
 	/** Cleared only after initialization and durable input admission. */
 	initializing?: boolean;
-	preparing?: { source: string; branch: string };
+	preparing?: { source: string };
 	pending?: PendingCommand[];
 	/** A stopped, unopened workspace has no conversation history to load yet. */
 	cancelled?: boolean;
@@ -262,6 +265,8 @@ export class SessionManager {
 	private readonly saving = new Map<string, Promise<void>>();
 	private readonly starting = new Map<string, Promise<Map<string, Error>>>();
 	private readonly preparations = new Set<Promise<Workspace>>();
+	private readonly titleTasks = new Set<Promise<void>>();
+	private readonly titleCatalog: ModelCatalog;
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
 	/** Admissions waiting for acknowledgement must not race archiving. */
@@ -282,6 +287,7 @@ export class SessionManager {
 		pullRequests: PullRequestOptions = {},
 	) {
 		this.modelCatalog = new ModelCatalog(agentDir);
+		this.titleCatalog = new ModelCatalog(agentDir);
 		this.pullRequests = new PullRequestTracker(
 			() => this.metas.values(),
 			(session, result) => this.applyPullRequest(this.require(session.id), result),
@@ -315,6 +321,7 @@ export class SessionManager {
 			}
 		}
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
+		for (const meta of this.metas.values()) if (meta.titlePending) this.generateTitle(meta);
 		for (const meta of this.metas.values())
 			if (
 				meta.archivedAt === undefined &&
@@ -562,16 +569,18 @@ export class SessionManager {
 		const now = Date.now();
 		const id = randomUUID();
 		const title = request.title?.trim() || titleFrom(request.message);
+		const titlePending = request.title?.trim() ? undefined : { cwd, message: request.message };
 		await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		// Persist the clone recipe and destination, never a runnable source-project cwd.
 		let preparing: SessionMeta["preparing"];
 		if (project && !request.cwd?.trim() && project.workspace !== "direct") {
-			preparing = { source: project.path, branch: `pilot/${branchSlug(title)}-${id.slice(0, 6)}` };
+			preparing = { source: project.path };
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
 			id,
 			title,
+			...(titlePending ? { titlePending } : {}),
 			cwd,
 			...(project ? { projectId: project.id } : {}),
 			...(preparing ? { preparing } : {}),
@@ -586,7 +595,47 @@ export class SessionManager {
 		const summary = this.summary(meta);
 		this.emit(meta);
 		void this.start(id, true);
+		if (meta.titlePending) this.generateTitle(meta);
 		return summary;
+	}
+
+	private generateTitle(meta: SessionMeta): void {
+		const pending = meta.titlePending;
+		if (!pending || this.closing) return;
+		const signal = AbortSignal.any([this.shutdownSignal.signal, AbortSignal.timeout(15_000)]);
+		const task = (async () => {
+			let changed = false;
+			let abort!: () => void;
+			const cancelled = new Promise<never>((_resolve, reject) => {
+				abort = () => reject(signal.reason);
+				signal.addEventListener("abort", abort, { once: true });
+			});
+			try {
+				signal.throwIfAborted();
+				const title = await Promise.race([
+					(this.factories.title ?? this.titleCatalog.generateTitle.bind(this.titleCatalog))(
+						pending.cwd,
+						pending.message,
+						signal,
+					),
+					cancelled,
+				]);
+				if (!signal.aborted && title?.trim() && title.trim() !== meta.title) {
+					meta.title = title.trim();
+					changed = true;
+				}
+			} catch {
+				// Authentication, unavailable models and provider failures leave the readable fallback.
+			} finally {
+				signal.removeEventListener("abort", abort);
+			}
+			if (this.closing) return;
+			delete meta.titlePending;
+			await this.save(meta);
+			if (changed) this.emit(meta);
+		})();
+		this.titleTasks.add(task);
+		void task.finally(() => this.titleTasks.delete(task)).catch(() => undefined);
 	}
 
 	async send(
@@ -718,6 +767,7 @@ export class SessionManager {
 		this.closing = true;
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
+		await Promise.allSettled([...this.titleTasks]);
 		await Promise.allSettled([...this.preparations]);
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled(this.changingModels.values());
@@ -748,7 +798,6 @@ export class SessionManager {
 					const preparation = (this.factories.workspace ?? createWorkspace)(
 						plan.source,
 						meta.cwd,
-						plan.branch,
 						undefined,
 						this.shutdownSignal.signal,
 					);
@@ -757,7 +806,7 @@ export class SessionManager {
 					if (this.closing) return;
 					meta.workspace = {
 						source: plan.source,
-						branch: created.branch,
+						...(created.branch ? { branch: created.branch } : {}),
 						base: created.base,
 						jj: created.jj,
 						...(created.upstream ? { upstream: created.upstream } : {}),
@@ -935,7 +984,7 @@ export class SessionManager {
 			title: meta.title,
 			cwd: meta.cwd,
 			...(meta.projectId ? { projectId: meta.projectId } : {}),
-			...(meta.workspace ? { branch: meta.workspace.branch } : {}),
+			...(meta.workspace?.branch ? { branch: meta.workspace.branch } : {}),
 			createdAt: meta.createdAt,
 			updatedAt: meta.updatedAt,
 			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
@@ -960,16 +1009,23 @@ export class SessionManager {
 	}
 
 	private async applyPullRequest(meta: SessionMeta, result: PullRequestResult): Promise<void> {
+		const previousBranch = meta.workspace?.branch;
+		const branchChanged = result.branch !== undefined && previousBranch !== result.branch;
 		const previous = meta.pullRequest;
 		const previousError = meta.pullRequestError;
 		const next = result.pullRequest;
 		const changed =
+			branchChanged ||
 			previousError !== result.error ||
 			(next !== undefined &&
 				(previous?.number !== next.number ||
 					previous.url !== next.url ||
 					previous.title !== next.title ||
 					previous.state !== next.state));
+		if (branchChanged && meta.workspace) {
+			meta.workspace.branch = result.branch;
+			delete meta.pullRequest;
+		}
 		if (next) meta.pullRequest = next;
 		if (result.error) meta.pullRequestError = result.error;
 		else delete meta.pullRequestError;
@@ -980,6 +1036,10 @@ export class SessionManager {
 			} catch (error) {
 				// Publish only persisted PR updates, and let the next check retry the same error.
 				// Other activity/outcome fields may have changed during I/O. Never roll those back.
+				if (branchChanged && meta.workspace) {
+					if (previousBranch !== undefined) meta.workspace.branch = previousBranch;
+					else delete meta.workspace.branch;
+				}
 				if (previous) meta.pullRequest = previous;
 				else delete meta.pullRequest;
 				if (previousError !== undefined) meta.pullRequestError = previousError;

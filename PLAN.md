@@ -119,7 +119,7 @@ Decided: **every session gets its own private clone** (done for manual sessions)
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
-- Branch `pilot/<title-slug>-<short-id>` from the remote default branch; PR sessions check out the PR head instead.
+- Start private clones detached from the remote default branch. The agent chooses or creates a descriptive branch or bookmark without a `pilot/` prefix; PR sessions check out the PR head instead.
 - jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
 - Projects can opt out (`workspace: "direct"`) to run in the folder itself.
 - Archiving retains the workspace and transcript so old chats can be viewed and restored. Workspace
@@ -152,6 +152,9 @@ Credentials resolve through fnox references.
 ### 6.1 Manual sessions (M1)
 
 Start from the app with a directory, optional model, and task. Chat, steer, follow up, stop, terminal.
+Chat titles are generated asynchronously by the cheapest model in the project's pi model scope
+(uncached input plus output price), with thinking off and no tools. Explicit titles are preserved;
+failed title requests keep the first-line fallback and never block the main agent.
 
 Task creation durably records its initial input and returns a `starting` session before workspace
 preparation and kernel startup complete. Interrupted preparation resumes after a daemon restart;
