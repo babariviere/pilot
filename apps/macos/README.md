@@ -23,6 +23,10 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   saving preserves queue position and delivery mode. Use Remove on any queued row to withdraw it
   without stopping the active run, or press Command-Delete (⌘⌫) while its inline editor is focused.
   Consumed messages cannot be edited or removed.
+- **Inline diagrams.** Completed `svg` and `mermaid` Markdown fences render directly in chat, with
+  source/copy controls and source fallback for errors. Unclosed streaming fences stay as code.
+  Previews fit the chat width and release their renderer offscreen. SVG scripts and external resources
+  are disabled; Mermaid uses the bundled library with strict security. Sources are capped at 512 KiB.
 - **Archives.** Archive an idle chat from its toolbar or sidebar context menu. Stop starting/working
   sessions first. The sidebar's **Archived chats** control browses all archives; each project's
   archive icon opens its archives, and the browser's project selector changes scope. Archived chats
@@ -101,6 +105,8 @@ apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
                              # no daemon: real ECharts/animations and data/blob SVGs, sandbox probes,
                              # immutable RTC/WebTransport guards in main/about:blank realms, PNGs
                              # optional PILOT_ARTIFACT_TEST_LIBRARY=/absolute/path/to/echarts.min.js
+                             # also inline SVG/Mermaid, invalid/hostile source, responsive heights, PNGs
+                             # optional PILOT_ARTIFACT_TEST_MERMAID=/absolute/path/to/bundled-mermaid.js
                              # optional PILOT_ARTIFACT_TEST_REACT=/absolute/path/to/prepared-react.html
                              # React fixture: "Native React 7", button increments to "Native React 8";
                              # Motion #native-react-counter reaches opacity 1 after 300ms, or optionally

@@ -13,7 +13,10 @@ enum ArtifactRenderTest {
             let libraryPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_LIBRARY"]
                 ?? "node_modules/echarts/dist/echarts.min.js"
             let library = try Data(contentsOf: URL(filePath: libraryPath))
-            let server = try ArtifactTestServer(library: library)
+            let mermaidPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_MERMAID"]
+                ?? "node_modules/mermaid/dist/mermaid.min.js"
+            let mermaid = try Data(contentsOf: URL(filePath: mermaidPath))
+            let server = try ArtifactTestServer(library: library, mermaid: mermaid)
             defer { server.stop() }
             try await wait("HTTP server") { server.port != nil }
             let base = URL(string: "http://127.0.0.1:\(server.port!)")!
@@ -116,6 +119,7 @@ enum ArtifactRenderTest {
                 try png.write(to: directory.appending(path: csp ? "artifact-chart.png" : "artifact-blocker-only.png"))
                 print("artifact-render-test passed: CSP=\(csp), ECharts, animations, library GET, data/blob SVGs, blocker, navigation, immutable RTC/WebTransport guards (main/about:blank), no bridge/popups/dialogs")
             }
+            try await renderInlineDiagrams(directory: directory, client: client, server: server, base: base.absoluteString)
             if let reactPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_REACT"] {
                 try await renderReact(htmlURL: URL(filePath: reactPath), directory: directory, client: client, server: server)
             }
@@ -123,6 +127,93 @@ enum ArtifactRenderTest {
         } catch {
             print("artifact-render-test failed: \(error)")
             exit(1)
+        }
+    }
+
+    private static func renderInlineDiagrams(directory: URL, client: PilotClient, server: ArtifactTestServer, base: String) async throws {
+        let fixtures: [(String, MarkdownDiagramKind, String, Bool)] = [
+            ("svg", .svg, """
+            <svg viewBox="0 0 640 320"><rect width="640" height="320" fill="#edf3ff"/>
+            <text x="32" y="64" font-size="28">Inline SVG ✓</text></svg>
+            """, true),
+            ("svg-hostile", .svg, """
+            <svg xmlns="http://www.w3.org/2000/svg" width="640" height="320" onload="window.svgEventRan=true">
+            <script>window.svgScriptRan=true;fetch('\(base)/escaped')</script>
+            <image href="\(base)/escaped-image" width="100" height="100"/>
+            <rect width="640" height="320" fill="#edf3ff"/>
+            <text x="32" y="64" font-size="28">Scripts and external images blocked</text></svg>
+            """, true),
+            ("svg-invalid", .svg, "<svg><not-closed></svg>", false),
+            ("svg-non-svg", .svg, "<html><script>window.breakout=true</script></html>", false),
+            ("svg-doctype", .svg, "<!DOCTYPE svg><svg xmlns=\"http://www.w3.org/2000/svg\"/>", false),
+            ("mermaid", .mermaid, "flowchart LR\n A[Read source] --> B[Render inline] --> C[Done ✓]", true),
+            ("mermaid-sequence", .mermaid, "sequenceDiagram\n User->>Pilot: Show diagram\n Pilot-->>User: Inline preview", true),
+            ("mermaid-invalid", .mermaid, "this is not a diagram", false),
+            ("mermaid-config", .mermaid, """
+            %%{init: {'securityLevel': 'loose', 'htmlLabels': true, 'maxEdges': 999999, 'flowchart': {'htmlLabels': true}}}%%
+            graph LR
+              A[Protected configuration] --> B[Safe]
+              click B "\(base)/escaped-link"
+            """, true),
+            ("mermaid-hostile", .mermaid, """
+            %%{init: {'securityLevel': 'loose', 'htmlLabels': true, 'maxEdges': 999999, 'flowchart': {'htmlLabels': true}}}%%
+            graph LR
+              A["</script><script>window.breakout=true</script>"] --> B[Safe]
+              click B "\(base)/escaped-link"
+            """, true),
+        ]
+        for (name, kind, source, valid) in fixtures {
+            let state = ArtifactRenderState()
+            let layout = InlineDiagramLayout()
+            let coordinator = InlineDiagramWebView.Coordinator(state: state, layout: layout)
+            let before = server.paths.count
+            let view = InlineDiagramWebView.makeView(kind: kind, source: source, coordinator: coordinator, client: client)
+            view.frame = CGRect(x: 0, y: 0, width: 760, height: 480)
+            let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            window.orderFront(nil)
+            defer {
+                InlineDiagramWebView.dismantleNSView(view, coordinator: coordinator)
+                window.close()
+            }
+            try await wait("inline \(name)") { !state.loading || state.error != nil }
+            guard (state.error == nil) == valid else {
+                throw ClientError("Inline \(name): unexpected result \(state.error ?? "success")")
+            }
+            let escaped = try await view.evaluateJavaScript("!!(window.breakout || window.svgScriptRan || window.svgEventRan)") as? Bool
+            guard escaped == false else { throw ClientError("Inline source executed: \(name)") }
+            if valid {
+                let imageLoaded = try await view.evaluateJavaScript("document.getElementById('diagram').naturalWidth > 0 && document.querySelectorAll('script').length === \(kind == .svg ? 1 : 2)") as? Bool
+                guard imageLoaded == true, (60...480).contains(layout.height) else { throw ClientError("Inline image/height missing: \(name)") }
+                if name == "mermaid-config" {
+                    let strict = try await view.evaluateJavaScript("""
+                    (() => { const c = mermaid.mermaidAPI.getConfig();
+                      return c.securityLevel === 'strict' && c.htmlLabels === false &&
+                        c.flowchart.htmlLabels === false && c.maxEdges === 500;
+                    })()
+                    """) as? Bool
+                    guard strict == true else { throw ClientError("Mermaid directives changed security") }
+                }
+                if name == "svg" {
+                    let fullHeight = layout.height
+                    view.setFrameSize(CGSize(width: 320, height: 480))
+                    coordinator.resize(view, width: 320)
+                    try await wait("inline resize") { layout.height < fullHeight }
+                    view.setFrameSize(CGSize(width: 760, height: 480))
+                    coordinator.resize(view, width: 760)
+                    try await wait("inline resize restoration") { layout.height >= fullHeight }
+                }
+                let image = try await view.takeSnapshot(configuration: nil)
+                guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+                      let png = bitmap.representation(using: .png, properties: [:]) else { throw ClientError("Inline snapshot unavailable") }
+                try png.write(to: directory.appending(path: "inline-\(name).png"))
+            }
+            try await Task.sleep(for: .milliseconds(100))
+            let requests = Array(server.paths.dropFirst(before))
+            let allowed = kind == .mermaid ? ["/api/artifact-libraries/mermaid"] : []
+            guard requests == allowed else { throw ClientError("Inline network escaped: \(name), \(requests)") }
+            print("artifact-render-test passed: inline \(name), \(valid ? "image and layout" : "source fallback"), no source scripts/network")
         }
     }
 
@@ -202,13 +293,13 @@ enum ArtifactRenderTest {
 @MainActor
 private final class ArtifactTestServer {
     private let listener: NWListener
-    private let library: Data
+    private let libraries: [String: Data]
     private var connections: [NWConnection] = []
     private(set) var port: UInt16?
     private(set) var paths: [String] = []
 
-    init(library: Data) throws {
-        self.library = library
+    init(library: Data, mermaid: Data) throws {
+        self.libraries = ["/api/artifact-libraries/echarts": library, "/api/artifact-libraries/mermaid": mermaid]
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)
@@ -240,8 +331,8 @@ private final class ArtifactTestServer {
                 let parts = request.components(separatedBy: "\r\n")[0].split(separator: " ")
                 let path = parts.count > 1 ? String(parts[1]) : "invalid"
                 self.paths.append(path)
-                let allowed = parts.first == "GET" && path == "/api/artifact-libraries/echarts"
-                let body = allowed ? self.library : Data("denied".utf8)
+                let allowed = parts.first == "GET" && self.libraries[path] != nil
+                let body = allowed ? self.libraries[path]! : Data("denied".utf8)
                 let headers = "HTTP/1.1 \(allowed ? "200 OK" : "403 Forbidden")\r\nContent-Type: application/javascript\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
                 connection.send(content: Data(headers.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
             }

@@ -1,12 +1,17 @@
 import Foundation
 
-/// Block-level Markdown, enough for agent answers: headings, paragraphs, lists, fenced code,
+public enum MarkdownDiagramKind: String, Equatable, Sendable {
+    case svg, mermaid
+}
+
+/// Block-level Markdown, enough for agent answers: headings, paragraphs, lists, fenced code and diagrams,
 /// quotes, rules and tables. Inline syntax is left to `AttributedString(markdown:)`.
 public enum MarkdownBlock: Equatable, Sendable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case list(ordered: Bool, start: Int, items: [String])
     case code(language: String?, text: String)
+    case diagram(kind: MarkdownDiagramKind, text: String)
     case quote(String)
     case table([String])
     case rule
@@ -19,7 +24,7 @@ public enum Markdown {
         var list: (ordered: Bool, start: Int, items: [String])?
         var quote: [String] = []
         var table: [String] = []
-        var code: (language: String?, lines: [String])?
+        var code: (language: String?, fenceLength: Int, lines: [String])?
 
         func flush() {
             if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))) }
@@ -33,10 +38,17 @@ public enum Markdown {
         }
 
         for rawLine in source.components(separatedBy: "\n") {
-            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
             if var current = code {
-                if line.hasPrefix("```") {
-                    blocks.append(.code(language: current.language, text: current.lines.joined(separator: "\n")))
+                let ticks = line.prefix { $0 == "`" }.count
+                if ticks >= current.fenceLength, line.dropFirst(ticks).isEmpty {
+                    let text = current.lines.joined(separator: "\n")
+                    let token = current.language?.split(whereSeparator: { $0.isWhitespace }).first?.lowercased()
+                    if let token, let kind = MarkdownDiagramKind(rawValue: token) {
+                        blocks.append(.diagram(kind: kind, text: text))
+                    } else {
+                        blocks.append(.code(language: current.language, text: text))
+                    }
                     code = nil
                 } else {
                     current.lines.append(rawLine)
@@ -44,10 +56,11 @@ public enum Markdown {
                 }
                 continue
             }
-            if line.hasPrefix("```") {
+            let ticks = line.prefix { $0 == "`" }.count
+            if ticks >= 3, !line.dropFirst(ticks).contains("`") {
                 flush()
-                let language = line.dropFirst(3).trimmingCharacters(in: .whitespaces)
-                code = (language.isEmpty ? nil : language, [])
+                let language = line.dropFirst(ticks).trimmingCharacters(in: .whitespacesAndNewlines)
+                code = (language.isEmpty ? nil : language, ticks, [])
                 continue
             }
             if line.isEmpty {
