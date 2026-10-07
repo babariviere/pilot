@@ -11,6 +11,7 @@ import type {
 import { type WebSocket, WebSocketServer } from "ws";
 import { collectChanges } from "./changes.ts";
 import type { DaemonConfig } from "./config.ts";
+import { ServiceUnavailable } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
@@ -62,6 +63,8 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
+			return json(res, 200, sessions.prepareUpdate());
 		if (parts[1] === "models" && parts.length === 2 && req.method === "GET") {
 			const projectId = url.searchParams.get("projectId");
 			const cwd = projectId ? projects.require(projectId).path : expandHome(url.searchParams.get("cwd") || "~");
@@ -116,7 +119,14 @@ export function createDaemonServer(
 
 	const server = createServer((req, res) => {
 		route(req, res).catch((error: unknown) => {
-			const status = error instanceof HttpError ? error.status : error instanceof NotFound ? 404 : 400;
+			const status =
+				error instanceof HttpError
+					? error.status
+					: error instanceof ServiceUnavailable
+						? 503
+						: error instanceof NotFound
+							? 404
+							: 400;
 			const message = error instanceof Error ? error.message : String(error);
 			if (!res.headersSent) json(res, status, { error: message });
 			else res.end();

@@ -31,6 +31,11 @@ export interface QueueUpdateEvent {
 
 export type AgentEvent = DurableAgentEvent | QueueUpdateEvent;
 
+/** POST /api/update/prepare, no body. Ready holds new worker admissions for a 30-second lease. */
+export interface UpdatePreparation {
+	ready: boolean;
+}
+
 export interface SessionSummary {
 	id: string;
 	title: string;

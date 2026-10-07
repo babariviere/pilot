@@ -6,6 +6,7 @@ struct PilotApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model = AppModel.shared
     @StateObject private var settings = AppSettings.shared
+    @StateObject private var updater = AppUpdater.shared
 
     var body: some Scene {
         Window("Pilot", id: MainWindow.id) {
@@ -16,6 +17,10 @@ struct PilotApp: App {
         }
         .defaultSize(width: 1280, height: 820)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { Task { await updater.check() } }
+                    .disabled(!updater.canCheck)
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Session") { model.newSession(in: model.draftProjectId) }
                     .keyboardShortcut("n", modifiers: .command)
@@ -67,6 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             if Snapshot.runIfRequested() { return }
             AppModel.shared.start()
+            AppUpdater.shared.start()
         }
+    }
+
+    func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
+        AppUpdater.shared.shouldDelayTermination() ? .terminateCancel : .terminateNow
     }
 }

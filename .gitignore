@@ -7,3 +7,4 @@ apps/macos/Vendor/
 .pi/
 *.log
 .DS_Store
+__pycache__/

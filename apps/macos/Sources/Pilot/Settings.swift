@@ -116,6 +116,8 @@ struct SettingsView: View {
                 .tabItem { Label("Terminal", systemImage: "terminal") }
             ProjectSettings()
                 .tabItem { Label("Projects", systemImage: "folder") }
+            UpdateSettings()
+                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
         }
         .frame(width: 560, height: 420)
     }

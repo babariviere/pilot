@@ -24,5 +24,13 @@
 	<string>NSApplication</string>
 	<key>PilotRepoPath</key>
 	<string>@PILOT_REPO@</string>
+	<key>SUEnableAutomaticChecks</key>
+	<false/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
+	<key>SUShowReleaseNotes</key>
+	<false/>
 </dict>
 </plist>

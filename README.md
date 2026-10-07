@@ -46,6 +46,14 @@ open apps/macos/build/Pilot.app
 Daemon only, in the foreground: `npm run dev:daemon`. Checks: `npm run typecheck`, `npm test`,
 `apps/macos/scripts/test.sh`.
 
+## Private releases and updates
+
+GitHub Actions can build self-contained Apple Silicon releases on `main`. Pilot authenticates private
+downloads using local `gh` authentication (with a Keychain token fallback) and installs Sparkle-signed
+updates when agents are idle.
+No Apple developer membership is required (personal builds are ad-hoc signed, not notarized).
+See [the one-time setup](apps/macos/UPDATES.md) for signing keys, GitHub access and initial installation.
+
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PILOT_HOME` | `~/.local/share/pilot` | Session metadata and durable storage |

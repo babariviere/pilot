@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises"
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mock, test, type TestContext } from "node:test";
+import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket } from "@pilot/kernel";
 import type { AgentEvent, SessionState, SessionSummary, SessionUsage } from "@pilot/protocol";
@@ -59,6 +59,10 @@ class FakeWorker implements SessionWorker {
 	readonly sent: KernelCommand[] = [];
 	readonly requests: Command[] = [];
 
+	get busy(): boolean {
+		return this.state === "starting" || this.state === "working";
+	}
+
 	constructor(
 		readonly spec: Spec,
 		private readonly onPacket: (packet: KernelPacket) => void,
@@ -103,6 +107,108 @@ class FakeWorker implements SessionWorker {
 		this.onExit(this, 1);
 	}
 }
+
+for (const phase of ["clone", "ready", "ack"] as const) {
+	test(`update refuses background ${phase} after spawn returns, then allows settled idle`, async (t) => {
+		const f = await fixture(t);
+		const gate = deferred();
+		const sessions = await f.manager({
+			worker: f.workerFactory(phase !== "ready", async () => {
+				if (phase === "ack") await gate.promise;
+			}),
+			workspace: async (_source, path, branch, _runner, signal) => {
+				if (phase === "clone") await waitFor(gate.promise, signal);
+				return { path, branch, base: "HEAD", jj: false };
+			},
+		});
+		const created = await sessions.spawn({ projectId: f.project.id, message: "admitted" });
+		if (phase !== "clone") await until(() => f.workers.length === 1);
+		if (phase === "ack") await until(() => f.workers[0]!.requests.length === 1);
+		assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+		// Refused preparations must not pause additional already-admitted startup input.
+		await sessions.send(created.id, "queued", "followUp", "queued-id");
+		gate.resolve();
+		if (phase === "ready") f.workers[0]!.open();
+		await until(() => sessions.get(created.id)?.state === "working");
+		assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+		const stopping = sessions.stop(created.id);
+		assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+		await stopping;
+		assert.deepEqual((await f.stored(created.id)).pending, []);
+		assert.equal(sessions.get(created.id)?.state, "idle");
+		assert.deepEqual(sessions.prepareUpdate(), { ready: true });
+		// Watching a live idle worker is permitted, without reopening or admitting input.
+		const off = sessions.subscribe(created.id, () => {});
+		off();
+		await assert.rejects(sessions.send(created.id, "blocked"), /preparing for an update/);
+		assert.equal(f.workers.length, 1);
+	});
+}
+
+for (const phase of ["clone", "factory", "ready"] as const) {
+	test(`terminal ${phase} failure does not hold the update lease forever`, async (t) => {
+		const f = await fixture(t);
+		const sessions = await f.manager({
+			workspace: async (_source, path, branch) => {
+				if (phase === "clone") throw new Error("terminal clone failure");
+				return { path, branch, base: "HEAD", jj: false };
+			},
+			worker:
+				phase === "factory"
+					? () => {
+							throw new Error("terminal factory failure");
+						}
+					: f.workerFactory(false),
+		});
+		const created = await sessions.spawn({ projectId: f.project.id, message: "unrunnable" });
+		if (phase === "ready") {
+			await until(() => f.workers.length === 1);
+			// Model the real Worker's initialization error packet, which marks it failed.
+			f.workers[0]!.state = "failed";
+			f.workers[0]!.gate.reject(new Error("terminal ready failure"));
+		}
+		await until(() => sessions.get(created.id)?.state === "failed");
+		await until(() => sessions.prepareUpdate().ready);
+		assert.equal((await f.stored(created.id)).pending.length, 1);
+		const before = f.workers.length;
+		sessions.subscribe(created.id, () => {});
+		assert.equal(f.workers.length, before);
+	});
+}
+
+test("uncertain durable admission stays busy after an idle drain has settled", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({
+		worker: f.workerFactory(true, async () => {
+			throw new Error("lost acknowledgement");
+		}),
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "uncertain" });
+	await until(() => sessions.get(created.id)?.state === "failed");
+	assert.equal(f.workers[0]!.busy, false);
+	assert.equal((await f.stored(created.id)).pending.length, 1);
+	assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+	await f.workers[0]!.close();
+	assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+});
+
+test("a new subscription drain is busy even during a reentrant idle worker factory notification", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "initial" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	await f.workers[0]!.close();
+	const attempts: boolean[] = [];
+	sessions.onChange(() => attempts.push(sessions.prepareUpdate().ready));
+	const off = sessions.subscribe(created.id, () => {});
+	assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+	await until(() => sessions.get(created.id)?.state === "idle");
+	await until(() => sessions.prepareUpdate().ready);
+	assert.ok(attempts.length > 0);
+	assert.ok(attempts.every((ready) => !ready));
+	off();
+});
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 3_000;
