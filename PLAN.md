@@ -108,7 +108,9 @@ Decided: **every session gets its own private clone** (done for manual sessions)
 
 - The clone lives in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
   checkout (hardlinked objects), with `origin` pointed at the project's real remote and fetched. Only committed
-  history is copied; the user's checkout is never touched.
+  history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
+  `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
+  and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
 - Branch `pilot/<title-slug>-<short-id>` from the remote default branch; PR sessions check out the PR head instead.
 - jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
 - Projects can opt out (`workspace: "direct"`) to run in the folder itself.
