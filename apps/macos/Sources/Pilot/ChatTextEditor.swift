@@ -15,6 +15,7 @@ struct ChatTextEditor: NSViewRepresentable {
     var focusToken: UUID?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Void)?
+    var onRemoveQueuedMessage: (() -> Void)?
     var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
@@ -34,6 +35,7 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.font = font
         textView.isEditable = isEditable
+        textView.onRemoveQueuedMessage = onRemoveQueuedMessage
         textView.textColor = .labelColor
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
@@ -69,6 +71,7 @@ struct ChatTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scroll.documentView as? SubmitTextView else { return }
         textView.isEditable = isEditable
+        textView.onRemoveQueuedMessage = onRemoveQueuedMessage
         if focusToken != context.coordinator.lastFocusToken {
             context.coordinator.lastFocusToken = focusToken
             DispatchQueue.main.async { textView.window?.makeFirstResponder(textView) }
@@ -118,6 +121,7 @@ final class SubmitTextView: NSTextView {
     var onSubmit: ((NSEvent.ModifierFlags) -> Void)?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Bool)?
+    var onRemoveQueuedMessage: (() -> Void)?
     var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path {
         didSet { if oldValue != completionDirectory { dismissPathPicker() } }
     }
@@ -145,6 +149,13 @@ final class SubmitTextView: NSTextView {
         }
         // Picker navigation and Escape take precedence over queue editing shortcuts.
         if !hasMarkedText() {
+            if event.keyCode == 51, inputFlags.intersection([.command, .control, .option, .shift]) == .command,
+               let onRemoveQueuedMessage {
+                // Only queue editors install this handler. Keep normal Command-Delete elsewhere,
+                // and consume repeats/busy edits without modifying the queued draft.
+                if isEditable, !event.isARepeat { onRemoveQueuedMessage() }
+                return
+            }
             if inputFlags.contains(.option), inputFlags.intersection([.shift, .command, .control]).isEmpty,
                event.keyCode == 126 || event.keyCode == 125,
                onNavigateQueue?(event.keyCode == 126 ? .up : .down) == true { return }

@@ -19,7 +19,8 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   scroll and survive reconnects. Edit queued messages inline with Edit or Option-Up/Option-Down.
   Return saves, Escape cancels, and Shift-Return adds a line. Arrow navigation retains unsaved drafts;
   saving preserves queue position and delivery mode. Use Remove on any queued row to withdraw it
-  without stopping the active run. Consumed messages cannot be edited or removed.
+  without stopping the active run, or press Command-Delete (⌘⌫) while its inline editor is focused.
+  Consumed messages cannot be edited or removed.
 - **Archives.** Archive an idle chat from its toolbar or sidebar context menu. Stop starting/working
   sessions first. The sidebar's **Archived chats** control browses all archives; each project's
   archive icon opens its archives, and the browser's project selector changes scope. Archived chats
@@ -83,7 +84,7 @@ Requires macOS 14+ and Swift 6.2+. Command Line Tools are enough:
 scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from the repo root)
 scripts/check-app.sh build/Pilot.app  # relocated app: packaged resources and terminal initialization
 scripts/test.sh              # PilotCore tests
-.build/debug/Pilot --queue-edit-test  # native inline editing keys, focus, drafts, failed/stale saves
+.build/debug/Pilot --queue-edit-test  # native queue editing/removal keys, focus, drafts, failed/stale requests
 swift run Pilot              # unbundled dev run (no notifications)
 .build/debug/Pilot --snapshot /tmp/pilot-snap   # home, session, changes, settings, needs-input-unread, done-unread PNGs
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
