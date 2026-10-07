@@ -38,6 +38,11 @@ import Testing
     }
 }
 
+@Test func brailleProgressRendersDistinctGlyphsInsteadOfMissingCharacterBoxes() throws {
+    let frames = try BrailleProgress.images.map { try #require($0.tiffRepresentation) }
+    #expect(Set(frames).count == BrailleProgress.frames.count)
+}
+
 @Test func sessionStatusIconsUseNeutralWorkingAndColoredOutcomes() {
     #expect(SessionStatus.working.color == Theme.foreground)
     #expect(SessionStatus.done.color == Theme.success)
