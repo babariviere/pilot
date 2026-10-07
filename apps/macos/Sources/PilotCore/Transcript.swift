@@ -77,6 +77,23 @@ public struct LiveTool: Equatable, Sendable {
     public var status: String
 }
 
+/// Mirrors packages/protocol's QueuedMessage, not the agent stream's content-free inbox IDs.
+public struct QueuedMessage: Identifiable, Equatable, Sendable {
+    public let id: Int
+    public let mode: DeliveryMode
+    public let text: String
+
+    public init?(json: JSONValue) {
+        guard let id = json["id"]?.int,
+              let rawMode = json["mode"]?.string,
+              let mode = DeliveryMode(rawValue: rawMode)
+        else { return nil }
+        self.id = id
+        self.mode = mode
+        text = ChatMessage(json: .object(["role": .string("user"), "content": json["content"] ?? .string("")])).text
+    }
+}
+
 /// Folds pi-durable agent events into a renderable transcript.
 public struct Transcript: Equatable, Sendable {
     public var entries: [Entry] = []
@@ -84,7 +101,8 @@ public struct Transcript: Equatable, Sendable {
     public var streaming: ChatMessage?
     public var tools: [String: LiveTool] = [:]
     public var working = false
-    public var queued = 0
+    public var queuedMessages: [QueuedMessage] = []
+    public var queued: Int { queuedMessages.count }
     public var retry: String?
     public var error: String?
 
@@ -108,7 +126,11 @@ public struct Transcript: Equatable, Sendable {
     public mutating func apply(_ event: JSONValue) {
         switch event["type"]?.string {
         case "snapshot":
+            // Queue contents have their own exact-frame watch. An agent stream overflow snapshot
+            // must not erase them; reconnects deliver a fresh queue_update after the snapshot.
+            let queue = queuedMessages
             self = Transcript()
+            queuedMessages = queue
             entries = (event["entries"]?.array ?? []).compactMap(Entry.init(json:)).sorted { $0.id < $1.id }
             if let message = event["generation"]?["message"], !message.isNull { streaming = ChatMessage(json: message) }
             for tool in event["tools"]?.array ?? [] {
@@ -121,7 +143,6 @@ public struct Transcript: Equatable, Sendable {
                 )
             }
             working = event["run"].map { !$0.isNull } ?? false
-            queued = event["inbox"]?.array?.count ?? 0
             retry = event["generation"]?["retry"]?["error"]?.string
         case "run_start":
             working = true
@@ -160,8 +181,8 @@ public struct Transcript: Equatable, Sendable {
             guard let id = event["toolCallId"]?.string else { return }
             tools[id]?.status = "done"
             if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
-        case "inbox_update":
-            queued = event["items"]?.array?.count ?? 0
+        case "queue_update":
+            queuedMessages = (event["items"]?.array ?? []).compactMap(QueuedMessage.init(json:))
         case "auto_retry_start":
             retry = event["errorMessage"]?.string
         case "auto_retry_end":

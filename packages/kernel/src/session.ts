@@ -8,8 +8,10 @@ import {
 	type AgentEventStream,
 	type Conversation,
 	createRegistry,
+	type DocumentWatch,
 	type Extension,
 	Harness,
+	type InboxState,
 	type ModelRef,
 	ROOT_CONVERSATION_ID,
 	type Storage,
@@ -18,6 +20,7 @@ import {
 import type { AgentEvent, DeliveryMode, SessionUsage } from "@pilot/protocol";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
+import { queueUpdate, watchQueue } from "./queue.ts";
 import type { KernelSpec } from "./protocol.ts";
 import { openSessionStorage } from "./storage.ts";
 
@@ -52,7 +55,7 @@ export interface KernelSessionHooks {
 }
 
 export class KernelSession {
-	readonly #watches = new Map<string, AgentEventStream>();
+	readonly #watches = new Map<string, { events: AgentEventStream; queue: DocumentWatch<InboxState> }>();
 	#working = false;
 	#closing?: Promise<void>;
 
@@ -172,15 +175,23 @@ export class KernelSession {
 	async watch(watchId: string, listener: (events: AgentEvent[]) => void): Promise<void> {
 		if (this.#watches.has(watchId)) return;
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
-		this.#watches.set(watchId, stream);
-		listener([stream.snapshot]);
+		let queue: DocumentWatch<InboxState>;
+		try {
+			queue = await watchQueue(this.harness, this.conversation.id, context);
+		} catch (error) {
+			await stream.stop();
+			throw error;
+		}
+		this.#watches.set(watchId, { events: stream, queue });
+		listener([stream.snapshot, queueUpdate(queue.value)]);
 		stream.start(async (events) => listener([...events]));
+		queue.start(async (inbox) => listener([queueUpdate(inbox)]));
 	}
 
 	async unwatch(watchId: string): Promise<void> {
 		const stream = this.#watches.get(watchId);
 		this.#watches.delete(watchId);
-		await stream?.stop();
+		if (stream) await Promise.all([stream.events.stop(), stream.queue.stop()]);
 	}
 
 	/** Pause: pending work stays durable and resumes on the next open. */

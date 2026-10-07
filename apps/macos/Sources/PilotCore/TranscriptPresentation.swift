@@ -5,7 +5,8 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public var rows: [ChatRow] = []
     public var working = false
     public var streaming = false
-    public var queued = 0
+    public var queuedMessages: [QueuedMessage] = []
+    public var queued: Int { queuedMessages.count }
     public var retry: String?
     public var error: String?
     public var revision = 0
@@ -16,7 +17,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         rows = transcript.rows
         working = transcript.working
         streaming = transcript.streaming != nil
-        queued = transcript.queued
+        queuedMessages = transcript.queuedMessages
         retry = transcript.retry
         error = transcript.error
     }

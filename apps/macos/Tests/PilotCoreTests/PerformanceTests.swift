@@ -40,16 +40,37 @@ private func event(_ text: String) -> JSONValue { try! JSONValue.decode(Data(tex
     #expect(first.rows == [.text(id: "streaming-0", text: "Hello")])
     let second = try await processor.apply([
         event(#"{"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":" world"}]}"#),
-        event(#"{"type":"inbox_update","items":[{}]}"#),
+        event(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Run tests"}]}"#),
     ])
     #expect(second.rows == [.text(id: "streaming-0", text: "Hello world")])
     #expect(second.queued == 1)
     #expect(second.revision > first.revision)
-    let replaced = try await processor.apply([event(#"{"type":"snapshot","entries":[],"tools":[],"inbox":[]}"#)])
+    let replaced = try await processor.apply([
+        event(#"{"type":"snapshot","entries":[],"tools":[],"inbox":[]}"#),
+        event(#"{"type":"queue_update","items":[]}"#),
+    ])
     #expect(replaced.rows.isEmpty && !replaced.working && !replaced.streaming)
     #expect(replaced.queued == 0 && replaced.revision > second.revision)
     let ignored = try await processor.apply([event(#"{"type":"usage_update"}"#)])
     #expect(ignored == replaced)
+}
+
+@Test func backgroundPresentationPublishesQueueEditsEvenWhenCountIsUnchanged() async throws {
+    let processor = TranscriptProcessor()
+    let original = event(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Original"},{"id":11,"mode":"steer","content":"Steering"}]}"#)
+    let first = try await processor.apply([original])
+    #expect(first.queuedMessages.map(\.id) == [10, 11])
+    #expect(first.queuedMessages.map(\.text) == ["Original", "Steering"])
+    let edit = event(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Edited"},{"id":11,"mode":"steer","content":"Steering"}]}"#)
+    let edited = try await processor.apply([edit])
+    #expect(edited.queued == first.queued)
+    #expect(edited.queuedMessages.map(\.text) == ["Edited", "Steering"])
+    #expect(edited.revision > first.revision)
+    #expect(try await processor.apply([edit]) == edited)
+    let snapshot = try await processor.apply([event(#"{"type":"snapshot","entries":[],"tools":[],"inbox":[]}"#)])
+    #expect(snapshot.queuedMessages == edited.queuedMessages)
+    let cleared = try await processor.apply([event(#"{"type":"queue_update","items":[]}"#)])
+    #expect(cleared.queuedMessages.isEmpty && cleared.revision > edited.revision)
 }
 
 @Test func cachedToolSummariesFollowArgumentAndOutputChanges() async throws {

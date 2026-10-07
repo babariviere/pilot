@@ -122,7 +122,7 @@ struct ChatView: View {
                 Composer(
                     state: composer,
                     working: transcript.working || session.state == "starting",
-                    queued: transcript.queued,
+                    queuedMessages: transcript.queuedMessages,
                     onSend: send,
                     onStop: { Task { try? await AppModel.shared.client.stop(session.id) } }
                 )

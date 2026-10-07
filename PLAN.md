@@ -218,7 +218,8 @@ reports), producing a morning summary in the app and Slack.
 ## 7. App (macOS)
 
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
-- Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop.
+- Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
+  user messages above the composer until consumed, restoring them on reconnect.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
 - Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI

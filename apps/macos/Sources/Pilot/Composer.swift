@@ -17,12 +17,26 @@ final class ComposerState: ObservableObject {
 struct Composer: View {
     @ObservedObject var state: ComposerState
     let working: Bool
-    let queued: Int
+    let queuedMessages: [QueuedMessage]
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
     @Environment(\.pilotFonts) private var fonts
 
     var body: some View {
+        VStack(spacing: 8) {
+            if !queuedMessages.isEmpty {
+                QueuedMessagesView(messages: queuedMessages)
+            }
+            editor
+        }
+        .frame(maxWidth: Theme.column)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 16)
+        .padding(.top, 6)
+        .frame(maxWidth: .infinity)
+    }
+
+    private var editor: some View {
         VStack(alignment: .leading, spacing: 10) {
             ZStack(alignment: .topLeading) {
                 if state.draft.isEmpty {
@@ -38,9 +52,6 @@ struct Composer: View {
             }
             HStack(spacing: 10) {
                 KeyHints(working: working)
-                if queued > 0 {
-                    Label("\(queued) queued", systemImage: "tray.full").font(.caption).foregroundStyle(Theme.mutedForeground)
-                }
                 if let error = state.error {
                     Text(error).font(.caption).foregroundStyle(Theme.destructive).lineLimit(1)
                 }
@@ -59,17 +70,52 @@ struct Composer: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
         .card(radius: 14, shadow: true)
-        .frame(maxWidth: Theme.column)
-        .padding(.horizontal, 24)
-        .padding(.bottom, 16)
-        .padding(.top, 6)
-        .frame(maxWidth: .infinity)
     }
 
     private func send(_ mode: DeliveryMode) {
         let message = state.trimmed
         guard !message.isEmpty else { return }
         onSend(message, mode)
+    }
+}
+
+private struct QueuedMessagesView: View {
+    @Environment(\.pilotFonts) private var fonts
+    let messages: [QueuedMessage]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("\(messages.count) queued", systemImage: "tray.full")
+                .font(.caption)
+                .foregroundStyle(Theme.mutedForeground)
+            ViewThatFits(in: .vertical) {
+                rows
+                ScrollView { rows }
+                    .frame(height: 180)
+            }
+            .frame(maxHeight: 180)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card(radius: 12)
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(messages) { message in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(message.mode == .followUp ? "Follow-up" : "Steering")
+                        .font(.caption)
+                        .foregroundStyle(Theme.mutedForeground)
+                    Text(message.text)
+                        .font(fonts.body)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
     }
 }
 
