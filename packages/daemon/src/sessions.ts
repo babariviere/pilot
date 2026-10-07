@@ -1,13 +1,14 @@
 /** Session registry and kernel worker supervision. */
 import { type ChildProcess, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { type KernelCommand, type KernelPacket, workerEntry } from "@pilot/kernel";
+import { type KernelCommand, type KernelPacket, type WorkspaceContext, workerEntry } from "@pilot/kernel";
 import type { AgentEvent, DeliveryMode, SessionState, SessionSummary, SpawnRequest } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
+import { branchSlug, createWorkspace } from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
 
@@ -16,6 +17,8 @@ interface SessionMeta {
 	title: string;
 	cwd: string;
 	projectId?: string;
+	/** Private clone the session works in (its cwd), and where it came from. */
+	workspace?: WorkspaceContext;
 	createdAt: number;
 	updatedAt: number;
 	model?: string;
@@ -160,20 +163,44 @@ export class SessionManager {
 		const project = request.projectId ? this.projects.require(request.projectId) : undefined;
 		const directory = request.cwd?.trim() || project?.path;
 		if (!directory) throw new Error("projectId or cwd is required");
-		const cwd = await requireDirectory(directory);
+		let cwd = await requireDirectory(directory);
 		const model = request.model?.trim() || project?.model;
 		const now = Date.now();
+		const id = randomUUID();
+		const title = request.title?.trim() || titleFrom(request.message);
+		await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
+		// Project sessions get a private clone unless the project opts out or a cwd override is given.
+		let workspace: WorkspaceContext | undefined;
+		if (project && !request.cwd?.trim() && project.workspace !== "direct") {
+			const branch = `pilot/${branchSlug(title)}-${id.slice(0, 6)}`;
+			try {
+				const created = await createWorkspace(project.path, join(this.dir(id), "workspace"), branch);
+				workspace = {
+					source: project.path,
+					branch: created.branch,
+					base: created.base,
+					jj: created.jj,
+					...(created.upstream ? { upstream: created.upstream } : {}),
+				};
+				cwd = created.path;
+			} catch (error) {
+				await rm(this.dir(id), { recursive: true, force: true });
+				throw new Error(
+					`Could not create a workspace for ${project.name}: ${error instanceof Error ? error.message : error}`,
+				);
+			}
+		}
 		const meta: SessionMeta = {
-			id: randomUUID(),
-			title: request.title?.trim() || titleFrom(request.message),
+			id,
+			title,
 			cwd,
 			...(project ? { projectId: project.id } : {}),
+			...(workspace ? { workspace } : {}),
 			createdAt: now,
 			updatedAt: now,
 			...(model ? { model } : {}),
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
-		await mkdir(this.dir(meta.id), { recursive: true, mode: 0o700 });
 		await this.save(meta);
 		await this.send(meta.id, request.message, "followUp");
 		return this.summary(meta);
@@ -252,6 +279,8 @@ export class SessionManager {
 				model: meta.model,
 				thinking: meta.thinking,
 				agentDir: this.agentDir,
+				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
+				pilot: meta.workspace ? { workspace: meta.workspace } : {},
 			},
 			(packet) => this.onPacket(meta, worker, packet),
 			(exited, code) => {
@@ -291,6 +320,7 @@ export class SessionManager {
 			title: meta.title,
 			cwd: meta.cwd,
 			...(meta.projectId ? { projectId: meta.projectId } : {}),
+			...(meta.workspace ? { branch: meta.workspace.branch } : {}),
 			createdAt: meta.createdAt,
 			updatedAt: meta.updatedAt,
 			state: !worker || (exited && worker.state !== "failed") ? "parked" : worker.state,

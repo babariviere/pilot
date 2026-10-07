@@ -1,5 +1,6 @@
 /** IPC between pilotd and one kernel worker process. */
 import type { AgentEvent, DeliveryMode } from "@pilot/protocol";
+import type { PilotContext } from "./policy.ts";
 
 export interface KernelSpec {
 	/** Pilot session ID, reused as the native session ID. */
@@ -11,6 +12,10 @@ export interface KernelSpec {
 	model?: string;
 	thinking?: string;
 	agentDir?: string;
+	/** Directory whose pi project trust applies (the project's own checkout, not its clone). */
+	trustDirectory?: string;
+	/** Workspace and policy context for Pilot's prompt section. */
+	pilot?: PilotContext;
 }
 
 export type KernelCommand =

@@ -21,6 +21,8 @@ export interface SessionSummary {
 	title: string;
 	cwd: string;
 	projectId?: string;
+	/** The session's own branch, when it runs in a private clone. */
+	branch?: string;
 	createdAt: number;
 	updatedAt: number;
 	state: SessionState;
@@ -37,14 +39,19 @@ export interface Project {
 	path: string;
 	/** Default model for new sessions, "provider/modelId". */
 	model?: string;
+	/** "clone" (default): each session works in a private clone on its own branch. "direct": in `path` itself. */
+	workspace?: WorkspaceMode;
 	createdAt: number;
 }
+
+export type WorkspaceMode = "clone" | "direct";
 
 /** POST /api/projects, PATCH /api/projects/:id (partial). An empty model clears it. */
 export interface ProjectRequest {
 	path: string;
 	name?: string;
 	model?: string;
+	workspace?: WorkspaceMode;
 }
 
 /** One selectable model, from the user's pi scope. */

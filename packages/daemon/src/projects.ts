@@ -65,6 +65,7 @@ export class ProjectStore {
 			path,
 			createdAt: Date.now(),
 			...(request.model?.trim() ? { model: request.model.trim() } : {}),
+			...(request.workspace === "direct" ? { workspace: "direct" } : {}),
 		};
 		this.projects.push(project);
 		await this.persist();
@@ -82,6 +83,10 @@ export class ProjectStore {
 		if (request.model !== undefined) {
 			if (request.model?.trim()) next.model = request.model.trim();
 			else delete next.model;
+		}
+		if (request.workspace !== undefined) {
+			if (request.workspace === "direct") next.workspace = "direct";
+			else delete next.workspace;
 		}
 		this.projects = this.projects.map((existing) => (existing.id === id ? next : existing));
 		await this.persist();

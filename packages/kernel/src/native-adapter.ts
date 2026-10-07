@@ -63,6 +63,8 @@ export interface NativeAdapterOptions {
 	agentDir?: string;
 	/** Defaults to pi's saved trust decision for cwd, then `defaultProjectTrust`. */
 	projectTrusted?: boolean;
+	/** Resolve project trust for this directory instead of cwd (a clone inherits its source's trust). */
+	trustDirectory?: string;
 	/** Stable native session identity, so extension state keyed by session survives restarts. */
 	sessionId?: string;
 	/**
@@ -218,7 +220,8 @@ export class NativeAdapter {
 		const cwd = options.cwd;
 		const agentDir = options.agentDir ?? getAgentDir();
 		const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-		const projectTrusted = options.projectTrusted ?? resolveProjectTrust(cwd, agentDir, settingsManager);
+		const projectTrusted =
+			options.projectTrusted ?? resolveProjectTrust(options.trustDirectory ?? cwd, agentDir, settingsManager);
 		// The Harness compacts and retries; the native session must not do either on its own.
 		settingsManager.applyOverrides({
 			cacheWarming: "off",

@@ -104,13 +104,22 @@ it in the session. Reuses the reporter pattern from pi-extensions subagents.
 
 ### 5.4 Workspaces
 
-- One workspace per session under `$PILOT_HOME/workspaces/<session>`, from a configured repository
-  (jj workspace when the repository is jj, else a git worktree or clone).
-- Branch naming `pilot/<origin>/<short-id>`; PR sessions check out the PR head instead.
+Decided: **every session gets its own private clone** (done for manual sessions).
+
+- The clone lives in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
+  checkout (hardlinked objects), with `origin` pointed at the project's real remote and fetched. Only committed
+  history is copied; the user's checkout is never touched.
+- Branch `pilot/<title-slug>-<short-id>` from the remote default branch; PR sessions check out the PR head instead.
+- jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
+- Projects can opt out (`workspace: "direct"`) to run in the folder itself.
 - Released when the session is archived; never deleted while a PR is open.
 
 ### 5.5 Policy and safety
 
+- **GitHub identity (decided):** Pilot never posts on GitHub: no comments, reviews, replies, merges or closes.
+  It acts as the user only to push branches and open pull requests (`gh pr create`, the user's credentials).
+  Enforced by a kernel tool hook (also inside codemode scripts) and stated in the session prompt; results,
+  questions and declined items go to the app (and later Slack).
 - External text (CI logs, review comments, Slack messages, Linear issues) is framed as untrusted data in
   the brief, never as instructions with authority.
 - Sandbox floor per origin (pi-extensions `sandbox`): writes only inside the workspace; network allowlist.
@@ -149,13 +158,13 @@ Start from the app with a directory, optional model, and task. Chat, steer, foll
 2. Workspace on the PR head.
 3. Triage: CI failure caused by this PR? flaky? infra? Review comment actionable, correct, in scope?
 4. Fix, run the relevant checks locally, push one focused commit to the PR branch.
-5. Report: reply to each addressed comment (what changed, commit link); for declined comments, explain why;
-   CI fixes get one summary comment. Resolve threads only when policy allows.
+5. Report in the app, never on GitHub: what changed per comment (with commit links), what was declined and
+   why, and CI fixes. The pushed commits are the only GitHub-visible output.
 
 **Reuse.** pi-extensions `pr` (`/review-comments`, `/autofix`) logic and prompts.
 
-**Done when.** A failing PR gets a fix commit or an explanation within one poll interval plus run time; no
-duplicate comments across restarts; Pilot never reacts to its own commits or comments.
+**Done when.** A failing PR gets a fix commit or an explanation in the app within one poll interval plus run
+time; no duplicate sessions or pushes across restarts; Pilot never reacts to its own commits.
 
 ### 6.3 Slack: bug reports (M5)
 
@@ -225,7 +234,7 @@ reports), producing a morning summary in the app and Slack.
 | --- | --- | --- |
 | **M1 Spawn and chat** | Daemon, kernel, native app with chat, projects, launchd agent, notifications | Spawn, steer, stop from the app; sessions survive daemon restarts; app quit leaves agents running |
 | **M2 Terminal** | libghostty pane backed by daemon-owned PTYs (done) | Terminal per session in its workspace; reattach with scrollback after app restart |
-| **M3 Foundations + GitHub** | Origins, bindings, policies, workspaces, triage, outcome reporter, audit log, config file; GitHub source | §6.2 done-when, with a dry-run mode that comments nothing |
+| **M3 Foundations + GitHub** | Workspaces and GitHub posting policy (done); origins, bindings, triage, outcome reporter, audit log, config file; GitHub source | §6.2 done-when, with a dry-run mode that pushes nothing |
 | **M4 Linear spec loop** | `ask_human`, `waiting` state, questions panel; Linear source | §6.4 done-when |
 | **M5 Slack bugs** | Slack Socket Mode source | §6.3 done-when |
 | **M6 Hosted** | Authenticated remote daemon, GitHub App, webhooks, multi-user tenancy, server workspaces | background-agents.com runs the same flows for a team |
@@ -234,7 +243,7 @@ reports), producing a morning summary in the app and Slack.
 
 - **Prompt injection from external text.** Mitigated by triage gating, policy-only permissions, sandbox
   floors and push rules. Needs adversarial tests per origin.
-- **Noise.** Agents that comment too much get muted. Default to fewer, denser comments; dry-run first.
+- **Noise.** Pilot never comments on GitHub; in Slack and Linear, default to fewer, denser messages; dry-run first.
 - **libghostty ABI churn.** Pinned release, vendored; audit each bump.
 - **pi SDK coupling.** The native adapter mirrors pi internals (ported from pi-extensions subagents).
   Track pi releases; keep the adapter small and tested.
@@ -243,8 +252,8 @@ reports), producing a morning summary in the app and Slack.
 
 ## 11. Open questions
 
-1. Workspace source of truth: jj workspaces in your checkouts, or private clones per session?
-2. Identity: a dedicated GitHub/Slack/Linear bot user, or your own account with a `[pilot]` marker?
-3. Should declined review comments get a reply by default, or only a note in the app?
+1. ~~Workspace source of truth~~ Decided: a private clone per session (§5.4).
+2. ~~Identity~~ Decided for GitHub: never posts; opens PRs as the user (§5.5). Slack and Linear identity open.
+3. ~~Replies to declined review comments~~ Decided: only a note in the app.
 4. Where do specs live: Linear documents, the issue description, or a repo file linked from the issue?
 5. Hosted tenancy: one daemon per user, or a shared scheduler with per-tenant workers?

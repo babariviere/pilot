@@ -6,6 +6,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let title: String
     public let cwd: String
     public let projectId: String?
+    /// The session's own branch, when it runs in a private clone.
+    public let branch: String?
     public let createdAt: Double
     public let updatedAt: Double
     public let state: String
@@ -15,13 +17,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var isWorking: Bool { state == "working" || state == "starting" }
 
     public init(
-        id: String, title: String, cwd: String, projectId: String? = nil, createdAt: Double, updatedAt: Double,
-        state: String, model: String? = nil, error: String? = nil
+        id: String, title: String, cwd: String, projectId: String? = nil, branch: String? = nil, createdAt: Double,
+        updatedAt: Double, state: String, model: String? = nil, error: String? = nil
     ) {
         self.id = id
         self.title = title
         self.cwd = cwd
         self.projectId = projectId
+        self.branch = branch
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.state = state
@@ -35,13 +38,18 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let name: String
     public let path: String
     public let model: String?
+    /// "clone" (default, nil) or "direct".
+    public let workspace: String?
     public let createdAt: Double
 
-    public init(id: String, name: String, path: String, model: String? = nil, createdAt: Double) {
+    public var usesPrivateClones: Bool { workspace != "direct" }
+
+    public init(id: String, name: String, path: String, model: String? = nil, workspace: String? = nil, createdAt: Double) {
         self.id = id
         self.name = name
         self.path = path
         self.model = model
+        self.workspace = workspace
         self.createdAt = createdAt
     }
 }
@@ -51,11 +59,13 @@ public struct ProjectRequest: Codable, Sendable {
     public var path: String?
     public var name: String?
     public var model: String?
+    public var workspace: String?
 
-    public init(path: String? = nil, name: String? = nil, model: String? = nil) {
+    public init(path: String? = nil, name: String? = nil, model: String? = nil, workspace: String? = nil) {
         self.path = path
         self.name = name
         self.model = model
+        self.workspace = workspace
     }
 }
 

@@ -17,6 +17,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { AgentEvent, DeliveryMode } from "@pilot/protocol";
 import { NativeAdapter } from "./native-adapter.ts";
+import { withPilotPolicy } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
 import { openSessionStorage } from "./storage.ts";
 
@@ -71,13 +72,15 @@ export class KernelSession {
 			adapter = await NativeAdapter.open({
 				cwd: spec.cwd,
 				agentDir: spec.agentDir,
+				trustDirectory: spec.trustDirectory,
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
+			const prepare = (extension: Extension) => replayUnsafe(withPilotPolicy(extension, spec.pilot ?? {}));
 			const registry = createRegistry();
-			registry.install(replayUnsafe(adapter.extension));
+			registry.install(prepare(adapter.extension));
 			harness = await Harness.open(
 				owned.storage,
 				{ models: adapter.models, registry, settings: { toolExecution: "sequential" } },
@@ -93,7 +96,7 @@ export class KernelSession {
 					tools: null,
 				},
 			});
-			adapter.onToolsChanged = (extension) => registry.install(replayUnsafe(extension));
+			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			// Bind before resume(), so recovered tool calls cannot race binding.
 			adapter.bindHarness(harness, conversation.id);
 			const status = await watchEvents(harness, conversation.id, context);

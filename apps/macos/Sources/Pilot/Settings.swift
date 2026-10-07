@@ -219,6 +219,7 @@ final class ProjectEditor: ObservableObject {
     @Published var selection: String?
     @Published var name = ""
     @Published var model = ""
+    @Published var privateClones = true
     @Published var error: String?
 }
 
@@ -255,6 +256,10 @@ private struct ProjectSettings: View {
                         TextField("Name", text: $editor.name)
                         LabeledContent("Folder") { Text(project.path.abbreviatingHome).textSelection(.enabled) }
                         TextField("Default model", text: $editor.model, prompt: Text("pi default"))
+                        Toggle("Run each session in a private clone", isOn: $editor.privateClones)
+                        Text("Sessions get their own clone and pilot/… branch, so they never touch your checkout. Turn off to run in the folder itself.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         if let error = editor.error { Text(error).foregroundStyle(.red) }
                         HStack {
                             Spacer()
@@ -278,12 +283,16 @@ private struct ProjectSettings: View {
     private func load(_ project: Project) {
         editor.name = project.name
         editor.model = project.model ?? ""
+        editor.privateClones = project.usesPrivateClones
         editor.error = nil
     }
 
     private func save(_ project: Project) async {
         do {
-            _ = try await client.updateProject(project.id, ProjectRequest(name: editor.name, model: editor.model))
+            _ = try await client.updateProject(
+                project.id,
+                ProjectRequest(name: editor.name, model: editor.model, workspace: editor.privateClones ? "clone" : "direct")
+            )
             editor.error = nil
         } catch {
             editor.error = error.localizedDescription

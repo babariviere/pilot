@@ -81,7 +81,7 @@ struct SessionDetail: View {
 
     private var subtitle: String {
         let place = client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
-        return [place, session.model].compactMap { $0 }.joined(separator: " · ")
+        return [place, session.branch, session.model].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
