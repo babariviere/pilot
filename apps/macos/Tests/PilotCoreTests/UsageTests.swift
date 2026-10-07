@@ -129,3 +129,29 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
     #expect(SubscriptionUsage(fetchedAt: 0, windows: [], error: "Unavailable").hasDisplayData)
     #expect(SubscriptionUsage(fetchedAt: 0, windows: [SubscriptionWindow(label: "5h", usedPercent: 12)]).hasDisplayData)
 }
+
+@Test func missingSubscriptionShowsAnHonestProviderFallback() {
+    let missing = SessionUsage()
+    #expect(missing.fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == .openai)
+    #expect(missing.fallbackSubscriptionProvider(model: "anthropic/claude-sonnet-5") == .anthropic)
+    #expect(SubscriptionProvider.openai.displayName == "Codex")
+    #expect(SubscriptionProvider.anthropic.displayName == "Claude")
+    #expect(SubscriptionProvider.openai.unavailableHelpText.contains("No usage snapshot is available."))
+    #expect(!SubscriptionProvider.openai.unavailableHelpText.contains("0%"))
+    let contextOnly = SessionUsage(context: ContextUsage(tokens: 0, contextWindow: 200_000))
+    #expect(contextOnly.fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == .openai)
+    for model in [nil, "", "openai/gpt-6", "router/auto", "custom/claude", "claude-sonnet-5"] {
+        #expect(missing.fallbackSubscriptionProvider(model: model) == nil)
+    }
+}
+
+@Test func realOrClearedSnapshotsNeverUseAModelFallback() {
+    for subscription in [
+        SubscriptionUsage(fetchedAt: 1, windows: []),
+        SubscriptionUsage(fetchedAt: 1, provider: .anthropic, windows: []),
+        SubscriptionUsage(fetchedAt: 1, windows: [], error: "Sign in required"),
+        SubscriptionUsage(fetchedAt: 1, provider: .openai, windows: [SubscriptionWindow(label: "5h", usedPercent: 0)]),
+    ] {
+        #expect(SessionUsage(subscription: subscription).fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == nil)
+    }
+}

@@ -62,16 +62,25 @@ extension ContextUsage {
     }
 }
 
+extension SubscriptionProvider {
+    public var displayName: String {
+        switch self {
+        case .anthropic: "Claude"
+        case .openai: "Codex"
+        }
+    }
+
+    public var unavailableHelpText: String {
+        "\(displayName) subscription usage\nNo usage snapshot is available.\nUsage reporting requires the pi usage extension and a signed-in OAuth subscription account."
+    }
+}
+
 extension SubscriptionUsage {
     /// A providerless empty snapshot clears old limits after switching to an unsupported model.
     public var hasDisplayData: Bool { provider != nil || !windows.isEmpty || error != nil }
 
     public var providerLabel: String {
-        switch provider {
-        case .anthropic: "Claude"
-        case .openai: "Codex"
-        case nil: "Subscription"
-        }
+        provider?.displayName ?? "Subscription"
     }
 
     public var availabilityLabel: String? {
@@ -97,6 +106,17 @@ extension SubscriptionUsage {
 
 extension SessionUsage {
     public var hasDisplayData: Bool { context != nil || subscription?.hasDisplayData == true }
+
+    /// Missing snapshots are unknown, not zero. An explicit empty snapshot still clears the footer.
+    /// Only infer from concrete subscription providers, never from a virtual router or an API model name.
+    public func fallbackSubscriptionProvider(model: String?) -> SubscriptionProvider? {
+        guard subscription == nil, let model else { return nil }
+        switch model.split(separator: "/", maxSplits: 1, omittingEmptySubsequences: false).first {
+        case "anthropic": return .anthropic
+        case "openai-codex": return .openai
+        default: return nil
+        }
+    }
 }
 
 extension SubscriptionWindow {

@@ -149,7 +149,7 @@ struct ChatView: View {
                 if !transcript.todos.isEmpty {
                     TodosPanel(todos: transcript.todos, sessionId: session.id)
                 }
-                if let usage = session.usage, usage.hasDisplayData { UsageFooter(usage: usage) }
+                UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
                 if session.isArchived {
                     ArchivedComposer(session: session)
                 } else {
