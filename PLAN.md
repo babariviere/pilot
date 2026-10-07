@@ -246,7 +246,8 @@ reports), producing a morning summary in the app and Slack.
 - Archive inactive chats without deleting their history or workspace. Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
 - Task and chat composers complete local file and folder paths on Tab, relative to the selected project
-  or session working directory; absolute paths and `~/` work too.
+  or session working directory; absolute paths and `~/` work too. A floating path picker shows file
+  and folder icons, the current folder, and keyboard hints for multiple matches.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
 - Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI

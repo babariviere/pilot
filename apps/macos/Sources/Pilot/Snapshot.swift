@@ -3,7 +3,8 @@ import GhosttyTerminal
 import PilotCore
 import SwiftUI
 
-/// `Pilot --snapshot <dir>` renders the main screens offscreen with fixture data, as PNGs, and quits.
+/// `Pilot --snapshot <dir>` renders fixture screens as PNGs and quits. Most render offscreen;
+/// the completion preview briefly opens a window to capture its floating picker.
 /// Used to review the UI without screen-recording permission or a live daemon.
 @MainActor
 enum Snapshot {
@@ -42,6 +43,19 @@ enum Snapshot {
 
         model.selectedSessionId = nil
         await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "home.png"))
+
+        await render(
+            VStack(spacing: 16) {
+                Text("What should Pilot work on?")
+                    .font(.system(size: 24, weight: .semibold)).foregroundStyle(Theme.foreground)
+                TaskComposer().frame(width: 640)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .padding(.top, 40).background(Theme.background),
+            size: CGSize(width: 840, height: 500),
+            to: directory.appending(path: "path-completion.png"),
+            completionPreview: true
+        )
 
         let session = Fixtures.sessions[0]
         model.selectedSessionId = session.id
@@ -251,23 +265,39 @@ enum Snapshot {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
-    private static func render<V: View>(_ view: V, size: CGSize, to url: URL) async {
+    private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false) async {
         let root = view
             .environmentObject(AppModel.shared)
             .environment(\.pilotFonts, AppSettings.shared.fonts)
             .frame(width: size.width, height: size.height)
         let hosting = NSHostingView(rootView: root)
         hosting.frame = CGRect(origin: .zero, size: size)
-        let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless], backing: .buffered, defer: false)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: completionPreview ? [.titled] : [.borderless], backing: .buffered, defer: false)
         window.appearance = NSAppearance(named: .aqua)
         window.contentView = hosting
-        window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+        window.setFrameOrigin(completionPreview ? NSPoint(x: 100, y: 100) : NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless()
         // Let lists, lazy stacks, images and async loads settle. Sleeping (not spinning the run loop)
         // lets other main-actor work, such as a pane's load, run meanwhile.
         for _ in 0 ..< 8 {
             hosting.layoutSubtreeIfNeeded()
             try? await Task.sleep(for: .milliseconds(100))
+        }
+        var previewEditor: SubmitTextView?
+        if completionPreview {
+            func findEditor(_ view: NSView) -> SubmitTextView? {
+                if let editor = view as? SubmitTextView { return editor }
+                return view.subviews.lazy.compactMap { findEditor($0) }.first
+            }
+            guard let editor = findEditor(hosting) else { return }
+            previewEditor = editor
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(editor)
+            editor.insertText("Please review apps/macos/Sources/Pilot/Cha", replacementRange: NSRange(location: 0, length: 0))
+            try? await Task.sleep(for: .milliseconds(300))
+            editor.completionDirectory = AppModel.shared.daemon.repoURL.path
+            editor.insertTab(nil)
+            try? await Task.sleep(for: .milliseconds(300))
         }
         // 1x output keeps review images small.
         guard let rep = NSBitmapImageRep(
@@ -276,7 +306,24 @@ enum Snapshot {
         ) else { return }
         rep.size = size
         hosting.cacheDisplay(in: hosting.bounds, to: rep)
+        if completionPreview {
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+            for panel in window.childWindows ?? [] {
+                guard panel.isVisible, let content = panel.contentView,
+                      let bitmap = content.bitmapImageRepForCachingDisplay(in: content.bounds) else { continue }
+                content.cacheDisplay(in: content.bounds, to: bitmap)
+                let image = NSImage(size: content.bounds.size)
+                image.addRepresentation(bitmap)
+                let frame = panel.convertToScreen(content.frame)
+                image.draw(in: CGRect(x: frame.minX - window.frame.minX, y: frame.minY - window.frame.minY,
+                                      width: frame.width, height: frame.height),
+                           from: .zero, operation: .sourceOver, fraction: 1)
+            }
+            NSGraphicsContext.restoreGraphicsState()
+        }
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
+        previewEditor?.dismissPathPicker()
         window.orderOut(nil)
     }
 

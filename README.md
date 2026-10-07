@@ -17,8 +17,8 @@ specs, hosting).
 
 In the task and chat composers, press Tab while typing a path to complete files or folders. Relative
 paths use the selected project or session's working directory (home if no project is selected).
-Absolute paths and `~/` are supported. For multiple matches, use the native menu's arrow keys and
-Return to choose, or Escape to dismiss. Quote paths containing spaces or escape the spaces with `\`.
+Absolute paths and `~/` are supported. For multiple matches, use the path picker's arrow keys and
+Tab or Return to choose, or Escape to dismiss. Quote paths containing spaces or escape the spaces with `\`.
 
 ## Architecture
 
