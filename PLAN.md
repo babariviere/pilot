@@ -311,6 +311,11 @@ reports), producing a morning summary in the app and Slack.
   after consumption without resubmitting. Remove individual queued messages before delivery without
   stopping the active run; Command-Delete removes the selected row only from its focused inline
   editor. Reject removal once a message has been consumed.
+- Keep unsent text, image attachments and queued-message edits per chat when navigating between
+  chats, Home and archives or reopening the window. Keep the new-task form and its base-branch
+  selection too. Drafts stay in memory for the app launch, not across app restarts; navigation
+  never sends or clears them. Sending clears the submitted draft, and an explicit debug prefill
+  replaces the new-task draft without being erased by an older pending spawn.
 - Inline diagrams: completed `svg` and `mermaid` Markdown fences render in chat; unclosed streaming
   fences remain code. Borderless previews fit the chat width and expand on click, with source/copy
   controls in the expanded viewer and context menu, and source fallback on errors. Offscreen rows

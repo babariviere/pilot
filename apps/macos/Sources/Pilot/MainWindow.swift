@@ -63,7 +63,7 @@ struct SessionDetail: View {
 
     var body: some View {
         HSplitView {
-            ChatView(session: session, feed: feed)
+            ChatView(session: session, feed: feed, composer: model.composer(for: session.id))
                 .frame(minWidth: 420, maxWidth: .infinity)
             if model.inspectorVisible {
                 Inspector(session: session)
