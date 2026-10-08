@@ -32,11 +32,6 @@ export interface PullRequestOptions {
 	runner?: Runner;
 	/** Delay between completed sweeps, not an overlapping interval. Defaults to one minute. */
 	intervalMs?: number;
-	/**
-	 * Minimum age of a merged or closed result before a sweep checks it again. Defaults to 30 minutes.
-	 * Agent activity still refreshes immediately, so a new branch in the same chat is not delayed.
-	 */
-	settledIntervalMs?: number;
 }
 
 interface Repository {
@@ -269,20 +264,18 @@ export class PullRequestTracker {
 		await this.tail;
 	}
 
-	/** Archived chats and long-settled pull requests do not need a GitHub query every minute. */
-	private due(session: PullRequestSession, now: number): boolean {
+	/** Terminal PRs never poll again. Explicit agent-activity refreshes may discover a new PR. */
+	private due(session: PullRequestSession): boolean {
 		if (session.archivedAt !== undefined) return false;
 		const pr = session.pullRequest;
-		if (pr?.state !== "merged" && pr?.state !== "closed") return true;
-		return now - pr.checkedAt >= (this.options.settledIntervalMs ?? 30 * 60_000);
+		return pr?.state !== "merged" && pr?.state !== "closed";
 	}
 
 	private poll(): void {
 		this.polling = (async () => {
-			const now = Date.now();
 			for (const session of [...this.sessions()]) {
 				if (this.stopped) break;
-				if (this.due(session, now)) await this.refresh(session);
+				if (this.due(session)) await this.refresh(session);
 			}
 		})().finally(() => {
 			if (!this.stopped) {
