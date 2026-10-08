@@ -4,6 +4,33 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
+@Test @MainActor func compactPullRequestBadgesOmitOnlyTheStateIcon() throws {
+    for state in [PullRequestState.open, .draft, .merged, .closed] {
+        for error in [nil, "Lookup failed"] as [String?] {
+            let session = SessionSummary(
+                id: "badge", title: "Chat", cwd: "/repository", createdAt: 1, updatedAt: 1, state: "idle",
+                pullRequest: SessionPullRequest(number: 79, url: "https://github.com/example/repo/pull/79",
+                                               title: "Change", state: state, checkedAt: 1),
+                pullRequestError: error)
+            let regular = try #require(ImageRenderer(content: PullRequestBadge(session: session)).cgImage)
+            let compact = try #require(ImageRenderer(content: PullRequestBadge(
+                session: session, showsStateIcon: false)).cgImage)
+            #expect(compact.width < regular.width)
+            #expect(compact.height == regular.height)
+        }
+    }
+}
+
+@Test @MainActor func inspectorToolbarButtonsHaveRoomToBreathe() throws {
+    let session = SessionSummary(id: "actions", title: "Chat", cwd: "/repository",
+                                 createdAt: 1, updatedAt: 1, state: "idle")
+    let renderer = ImageRenderer(content: SessionInspectorActions(session: session)
+        .environmentObject(AppModel.shared))
+    let image = try #require(renderer.cgImage)
+    #expect(image.width == 3 * 36 + 2 * 8)
+    #expect(image.height == 36)
+}
+
 @Test @MainActor func toolbarBranchAndPullRequestStayCompactAtNarrowWidths() throws {
     let session = SessionSummary(
         id: "toolbar", title: "Chat", cwd: "/repository",

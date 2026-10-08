@@ -4,6 +4,7 @@ import SwiftUI
 /// Browser links only, one per PR the session opened. PR state never replaces outcome or unread indicators.
 struct PullRequestBadge: View {
     let session: SessionSummary
+    var showsStateIcon = true
 
     var body: some View {
         Group {
@@ -31,7 +32,7 @@ struct PullRequestBadge: View {
 
     private func badge(_ pr: SessionPullRequest) -> some View {
         HStack(spacing: 4) {
-            pr.state.icon
+            if showsStateIcon { pr.state.icon }
             Text("#\(pr.number)")
             if session.pullRequestIsStale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
