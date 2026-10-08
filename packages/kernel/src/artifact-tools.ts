@@ -14,14 +14,14 @@ import type { ArtifactReference, ArtifactRevision, ArtifactSummary, ArtifactWrit
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
-const kind = StringEnum(["html", "react", "image"] as const);
+const kind = StringEnum(["html", "react", "image", "swiftui"] as const);
 const writeProperties = {
 	title: Type.String({ minLength: 1, maxLength: 160, description: "Short human-readable artifact title." }),
 	kind,
 	source: Type.String({
 		maxLength: MAX_IMAGE_SOURCE_BYTES,
 		description:
-			"HTML or JSX/TSX (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
+			"HTML, JSX/TSX or standalone SwiftUI (512 KiB UTF-8 max), or for image: a local file path or base64 image data URL (16 MiB decoded max).",
 	}),
 	libraries: Type.Optional(
 		Type.Array(library, { description: "Offline libraries to include, especially for HTML script globals." }),
@@ -52,6 +52,7 @@ const diagnosticsProperties = {
 };
 
 const authoring = `HTML and React source must be self-contained and at most 512 KiB UTF-8. Runs offline in a sandbox: no CDN, remote scripts, fetch, network assets, Node APIs, native bridge or arbitrary npm imports. Tailwind is not available: use plain CSS inline or in <style> tags, not external stylesheets or assumed utility classes.
+SwiftUI: kind:"swiftui", source is self-contained Swift defining struct ArtifactView: View with a zero-argument initializer. SwiftUI, AppKit and Foundation imports are provided. No project imports, package dependencies, @main or #Preview. Avoid @State (Command Line Tools lack its macro plugin); use @StateObject if needed. Maximum source is 512 KiB UTF-8; libraries are not supported. Requires macOS 14+ and installed Swift Command Line Tools (xcode-select --install), with no browser installation. Compiles and renders in a disposable sandbox with no network or workspace/credential access. Static screenshot only, not an interactive app or validation of actual project views. Offscreen ImageRenderer does not capture embedded AppKit/WebKit views; use SwiftUI layout primitives and inspect screenshots for unsupported controls. create/update save editable Swift source and an embedded 800x600 PNG. Compiler diagnostics are reported on failure. Cold SDK compilation can take minutes; do not set short codemode deadlines. SwiftUI example: {title:"Native card",kind:"swiftui",source:'struct ArtifactView: View { var body: some View { VStack(alignment: .leading) { Text("Preview").font(.title); Text("Native SwiftUI layout") }.padding(24) } }'}.
 Image: kind:"image", source is a local PNG, JPEG, GIF or WebP path (relative to the session working directory or absolute) or a base64 data:image/... URL. Maximum decoded image size is 16 MiB; libraries are not supported. The tool embeds the bytes durably, so the original file need not remain. No remote URLs. In codemode: await tools.artifact({action:"create",title:"Generated image",kind:"image",source:"/tmp/generated.png"}). Do not print image base64; get returns the saved data URL.
 Pilot supplies a light palette and system font. Use CSS variables --pilot-background, --pilot-foreground, --pilot-muted, --pilot-muted-foreground, --pilot-border, --pilot-primary and --pilot-radius for consistent styling; your styles may override them.
 HTML: use inline CSS or <style> tags and ordinary inline <script> tags. Select libraries to get globals echarts, mermaid, motion, d3, THREE (three). Do not import packages in HTML scripts.
@@ -67,7 +68,7 @@ export interface ArtifactToolOptions {
 	/** Persist a display-only transcript reference, including publications nested inside codemode. */
 	onArtifactPublished?: (artifact: ArtifactReference) => Promise<void>;
 	onArtifactsChanged?: () => void;
-	/** Override the renderer for tests, or disable preview. By default, require installed Chromium. */
+	/** Override the renderer for tests, or disable preview. By default, require an installed renderer. */
 	preview?: typeof previewArtifact | false;
 }
 
@@ -102,7 +103,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			: (options.preview ?? (isArtifactPreviewAvailable() ? previewArtifact : undefined));
 	const actions = ["create", "update", "get", "list", ...(preview ? ["preview" as const] : [])] as const;
 	const previewDescription = preview
-		? '- preview: optionally render a draft to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. Preview is not required before publishing. If it fails, publish without preview; do not request a browser installation. In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.\n'
+		? '- preview: optionally render a draft to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. HTML/React/image need installed Chromium; SwiftUI needs the installed macOS Swift toolchain, independently of Chromium. Preview is not required before publishing. If it fails, publish without preview; do not request a browser installation. SwiftUI publication also renders the source, so fix native compiler/render errors before publishing. In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.\n'
 		: "";
 	const published = async (value: ArtifactRevision) => {
 		const artifact = {
@@ -136,7 +137,7 @@ Actions:
 - get: read editable source and metadata by id, optionally at a historical revision. Omitting revision reads the latest. Never returns compiled HTML. Use before updating and pass its revision as expectedRevision.
 - list: list current session artifact summaries without source or compiled HTML.
 ${previewDescription}${authoring}`,
-			promptSnippet: "Publish and inspect offline HTML, React or image artifacts",
+			promptSnippet: "Publish and inspect offline HTML, React, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
@@ -222,8 +223,11 @@ ${previewDescription}${authoring}`,
 							signal?.throwIfAborted();
 						}
 						checkSource(write);
-						if (action === "create") return published(await store.create(write));
-						if (action === "update") return published(await store.update(id!, write, params.expectedRevision));
+						if (write.kind === "swiftui" && write.libraries?.length)
+							throw new Error("SwiftUI artifacts do not use libraries");
+						if (action === "create") return published(await store.create(write, signal));
+						if (action === "update")
+							return published(await store.update(id!, write, params.expectedRevision, signal));
 						const result = await preview!(write, {
 							width: typeof params.width === "number" ? params.width : undefined,
 							height: typeof params.height === "number" ? params.height : undefined,

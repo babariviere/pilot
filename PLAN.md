@@ -352,7 +352,7 @@ reports), producing a morning summary in the app and Slack.
   actor, preserve stream ordering, and publish prepared rows once per batch. Long tool groups render
   lazily; loading and startup have visible progress. Procedural home artwork renders off main as well.
 - Questions panel: answer `ask_human` gates inline.
-- Artifacts: durable images, HTML/JS or React/JSX documents owned by a session and its project. Agent tools
+- Artifacts: durable images, HTML/JS, React/JSX or standalone SwiftUI documents owned by a session and its project. Agent tools
   create, update, list, read and preview them. Each publication saves an immutable revision; chat
   previews are shown by default and pin that revision, while sidebar access opens the latest.
   The right-hand inspector's Artifacts tab lists every artifact in the current chat, updates live,
@@ -367,9 +367,15 @@ reports), producing a morning summary in the app and Slack.
   ECharts and Motion are bundled; D3 and Three.js are opt-in bundled libraries. JSX compilation accepts
   only those libraries, not arbitrary package installs. Optional agent screenshots and console
   diagnostics use an isolated Playwright browser (`npm run artifacts:browser` installs Chromium).
-  The preview action is exposed only when Chromium is installed at session startup, and is never
+  The preview action is exposed only when Chromium or the native Swift toolchain is installed at session startup, and is never
   required before publishing. Pilot-only system guidance encourages useful explanatory diagrams,
   preferring simple Mermaid, only while the artifact tool is available (including through codemode).
+  SwiftUI artifacts define `ArtifactView` and compile/render in disposable macOS `sandbox-exec`
+  processes using the installed Swift Command Line Tools. Source remains editable; publication embeds
+  an 800x600 PNG for offline viewing without recompilation. Draft previews support custom dimensions
+  and bounded compiler/runtime diagnostics, cancellation and a five-minute deadline. No network,
+  workspace or credential access is granted. These are static, standalone previews, not project-aware
+  or interactive views; agents use artifacts to show UI changes and label prototype limitations.
 - Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release

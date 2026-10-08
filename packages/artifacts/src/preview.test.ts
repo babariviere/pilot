@@ -4,10 +4,16 @@ import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
 import { test } from "node:test";
 import { chromium } from "playwright";
-import { previewArtifact } from "./preview.ts";
+import { isArtifactPreviewAvailable, previewArtifact } from "./preview.ts";
 import { prepareArtifact } from "./render.ts";
+import { isSwiftUIPreviewAvailable } from "./swiftui.ts";
 
 const browserInstalled = existsSync(chromium.executablePath());
+
+test("native preview remains available without Chromium", { skip: !isSwiftUIPreviewAvailable() }, (t) => {
+	t.mock.method(chromium, "executablePath", () => "/nonexistent/pilot-artifact-chromium");
+	assert.equal(isArtifactPreviewAvailable(), true);
+});
 
 test("plain images decode offline and fit both inline and expanded viewports", {
 	skip: !browserInstalled,

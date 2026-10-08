@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "esbuild";
 import type { ArtifactLibrary, ArtifactWrite } from "@pilot/protocol";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
+import { previewSwiftUI } from "./swiftui.ts";
 
 const require = createRequire(import.meta.url);
 const resolveDir = dirname(fileURLToPath(import.meta.url));
@@ -33,20 +34,21 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 	if (!write || typeof write !== "object") throw new Error("Expected an artifact document");
 	if (typeof write.title !== "string" || !write.title.trim() || write.title.length > 160)
 		throw new Error("Artifact title must contain 1-160 characters");
-	if (write.kind !== "html" && write.kind !== "react" && write.kind !== "image")
-		throw new Error("Artifact kind must be html, react or image");
+	if (write.kind !== "html" && write.kind !== "react" && write.kind !== "image" && write.kind !== "swiftui")
+		throw new Error("Artifact kind must be html, react, image or swiftui");
 	const maxBytes = write.kind === "image" ? MAX_IMAGE_SOURCE_BYTES : MAX_SOURCE_BYTES;
 	if (typeof write.source !== "string" || !write.source.trim() || Buffer.byteLength(write.source) > maxBytes)
 		throw new Error(
 			write.kind === "image"
 				? "Artifact image exceeds 16 MiB or is empty"
-				: "Artifact source must contain 1-512 KiB of HTML or JSX/TSX",
+				: "Artifact source must contain 1-512 KiB of HTML, JSX/TSX or SwiftUI",
 		);
 	if (write.kind === "image") validateImageSource(write.source);
 	if (write.libraries !== undefined && (!Array.isArray(write.libraries) || !write.libraries.every(isArtifactLibrary)))
 		throw new Error("Unknown artifact library. Use the bundled library names only");
 	const libraries = [...new Set(write.libraries ?? [])];
 	if (write.kind === "image" && libraries.length) throw new Error("Image artifacts do not use libraries");
+	if (write.kind === "swiftui" && libraries.length) throw new Error("SwiftUI artifacts do not use libraries");
 	if (libraries.includes("react-dom")) {
 		const reactIndex = libraries.indexOf("react");
 		if (reactIndex !== -1) libraries.splice(reactIndex, 1);
@@ -180,8 +182,21 @@ function compiledScript(code: string): string {
  * before any generated code. Hosts additionally install this at document start in every frame. */
 export const ARTIFACT_RUNTIME_GUARD = `for (const name of ['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection','WebTransport']) { try { Object.defineProperty(globalThis,name,{value:undefined,writable:false,configurable:false}); } catch (_) {} }`;
 
-export async function prepareArtifact(input: ArtifactWrite): Promise<{ html: string; libraries: ArtifactLibrary[] }> {
+export async function prepareArtifact(
+	input: ArtifactWrite,
+	options: { signal?: AbortSignal } = {},
+): Promise<{ html: string; libraries: ArtifactLibrary[] }> {
 	const write = validateArtifact(input);
+	options.signal?.throwIfAborted();
+	if (write.kind === "swiftui") {
+		const preview = await previewSwiftUI(write.source, options);
+		// Reuse the offline image document. Retain SwiftUI source/kind in the stored revision;
+		// opening it later never executes Swift or requires the original toolchain.
+		return prepareArtifact(
+			{ title: write.title, kind: "image", source: `data:image/png;base64,${preview.screenshot.data}` },
+			options,
+		);
+	}
 	// The policy is the first node, before any untrusted source. Nested full HTML documents are parsed
 	// as body content, which is intentional: generated source cannot precede the policy in the head.
 	const libraries = write.libraries

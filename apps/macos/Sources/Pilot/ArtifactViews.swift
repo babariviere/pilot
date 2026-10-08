@@ -118,7 +118,7 @@ private struct ArtifactContent: View {
             } else if let revision = state.revision {
                 if state.source, revision.kind != .image {
                     ScrollView {
-                        CodeBlock(language: revision.kind == .react ? "jsx" : "html", text: revision.source)
+                        CodeBlock(language: revision.kind.sourceLanguage, text: revision.source)
                     }
                 } else {
                     ArtifactPreview(revision: revision).id("\(revision.id)-\(revision.revision)")

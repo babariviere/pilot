@@ -124,7 +124,7 @@ test("create awaits committed publication before notification and returns only a
 test("update forwards the full write and expected revision, notifying only after success", async () => {
 	const f = fixture();
 	await f.call("update", { id: "artifact-1", expectedRevision: 2, ...write });
-	assert.deepEqual(f.calls, [{ method: "update", args: ["artifact-1", write, 2] }]);
+	assert.deepEqual(f.calls, [{ method: "update", args: ["artifact-1", write, 2, undefined] }]);
 	assert.equal(f.notifications, 1);
 	f.store.update = async () => {
 		throw new Error("Revision conflict");
@@ -195,7 +195,7 @@ test("artifact schema requires a valid action and retains field constraints", ()
 test("create forwards only document fields, without action or unrelated controls", async () => {
 	const f = fixture();
 	await f.call("create", { ...write, id: "ignored", revision: 1, expectedRevision: 1, width: 800 });
-	assert.deepEqual(f.calls, [{ method: "create", args: [write] }]);
+	assert.deepEqual(f.calls, [{ method: "create", args: [write, undefined] }]);
 });
 
 test("unavailable preview is neither advertised nor callable, while publishing still works", async () => {
@@ -223,7 +223,7 @@ test("unavailable preview is neither advertised nor callable, while publishing s
 	assert.equal(f.notifications, 2);
 });
 
-test("default preview advertisement follows the installed browser probe", () => {
+test("default preview advertisement follows the installed renderer probe", () => {
 	const [tool] = fixture().tools;
 	assert.equal(tool!.description.includes("- preview:"), isArtifactPreviewAvailable());
 });
@@ -265,8 +265,8 @@ test("image actions forward embedded sources and do not expose image bytes in pu
 		assert.ok(!JSON.stringify(result).includes(source));
 	}
 	assert.deepEqual(f.calls, [
-		{ method: "create", args: [imageWrite] },
-		{ method: "update", args: ["artifact-1", imageWrite, 3] },
+		{ method: "create", args: [imageWrite, undefined] },
+		{ method: "update", args: ["artifact-1", imageWrite, 3, undefined] },
 	]);
 	await f.call("preview", imageWrite);
 	assert.equal(previews, 1);
@@ -274,6 +274,52 @@ test("image actions forward embedded sources and do not expose image bytes in pu
 	await assert.rejects(f.call("create", { ...imageWrite, libraries: ["react"] }), /do not use libraries/);
 	await assert.rejects(f.call("create", { ...imageWrite, source: "https://example.com/image.png" }), /local path/);
 	assert.equal(f.notifications, 2);
+});
+
+test("SwiftUI actions accept native source, forward cancellation and reject browser libraries", async () => {
+	const native: ArtifactWrite = {
+		title: "Native card",
+		kind: "swiftui",
+		source: 'struct ArtifactView: View { var body: some View { Text("Preview") } }',
+	};
+	const signal = new AbortController().signal;
+	const f = fixture({
+		preview: async (received, options) => {
+			assert.deepEqual(received, native);
+			assert.equal(options?.signal, signal);
+			return {
+				screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
+				consoleMessages: [],
+				contentHeight: 600,
+			};
+		},
+	});
+	const [tool] = f.tools;
+	assert.ok(tool);
+	const parameters = { action: "create", ...native };
+	assert.deepEqual(
+		validateToolArguments(tool, { type: "toolCall", id: "native", name: "artifact", arguments: parameters }),
+		parameters,
+	);
+	for (const action of ["create", "update", "preview"]) {
+		await f.call(action, { ...native, id: "artifact-1", expectedRevision: 3 }, signal);
+		await assert.rejects(
+			f.call(action, { ...native, id: "artifact-1", libraries: ["react"] }),
+			/SwiftUI artifacts do not use libraries/,
+		);
+	}
+	assert.deepEqual(f.calls, [
+		{ method: "create", args: [native, signal] },
+		{ method: "update", args: ["artifact-1", native, 3, signal] },
+	]);
+	for (const guidance of [
+		"ArtifactView",
+		"Command Line Tools",
+		"Static screenshot",
+		"@StateObject",
+		"no browser installation",
+	])
+		assert.ok(tool.description.includes(guidance));
 });
 
 test("preview forwards viewport and abort signal, returns image content and structured screenshot", async () => {

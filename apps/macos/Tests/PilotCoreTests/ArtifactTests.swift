@@ -4,6 +4,22 @@ import Testing
 
 private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision":2}"#
 
+@Test func swiftUIArtifactProtocolRetainsEditableSourceAndNativeLanguage() throws {
+    let json = #"{"id":"a","sessionId":"s","title":"Native card","kind":"swiftui","revision":1,"createdAt":1,"updatedAt":2,"source":"struct ArtifactView: View {}","html":"<img src='data:image/png;base64,test'>","libraries":[]}"#
+    let revision = try JSONDecoder().decode(ArtifactRevision.self, from: Data(json.utf8))
+    #expect(revision.kind == .swiftui)
+    #expect(revision.kind.sourceLanguage == "swift")
+    #expect(revision.source == "struct ArtifactView: View {}")
+    #expect(revision.libraries.isEmpty)
+    #expect(try JSONDecoder().decode(ArtifactRevision.self, from: JSONEncoder().encode(revision)) == revision)
+    let update = try JSONValue.decode(Data("""
+    {"type":"artifacts","sessionId":"s","artifacts":[{"id":"a","sessionId":"s","title":"Native card","kind":"swiftui","revision":1,"createdAt":1,"updatedAt":2}]}
+    """.utf8))
+    #expect(ArtifactListMessage.parse(update)?.artifacts.first?.kind == .swiftui)
+    #expect(ArtifactKind.react.sourceLanguage == "jsx")
+    #expect(ArtifactKind.html.sourceLanguage == "html")
+}
+
 @Test func imageArtifactProtocolDecodesAndRoundTrips() throws {
     let json = #"{"id":"a","sessionId":"s","title":"Image","kind":"image","revision":1,"createdAt":1,"updatedAt":2,"source":"data:image/png;base64,test","html":"<img>","libraries":[]}"#
     let revision = try JSONDecoder().decode(ArtifactRevision.self, from: Data(json.utf8))
