@@ -53,10 +53,18 @@ import {
 	ToolTask,
 } from "@earendil-works/pi-durable";
 import type { SessionUsage } from "@pilot/protocol";
+import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
+import { askSettings, createAskSession } from "./ask-runtime.ts";
+import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
+import type { AskContext } from "./policy.ts";
 import { contextUsage, UsageTracker } from "./usage.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 export interface NativeAdapterOptions {
+	/** Host-enforced read-only source or pinned object tree. Overrides all resource/tool configuration. */
+	ask?: AskContext;
+	/** Host-owned session-local artifact store and installed sandboxed renderers. */
+	askArtifacts?: ArtifactToolOptions;
 	/** Working directory for tools, context files and project configuration. */
 	cwd: string;
 	/** "provider/modelId", optionally with ":thinking". Defaults to pi's configured default. */
@@ -172,13 +180,15 @@ export class NativeAdapter {
 	#startMessages: Message[] = [];
 	#toolFingerprint = "";
 	#inputKey = "";
+	readonly #ask: boolean;
 
 	readonly session: AgentSession;
 	readonly usage: UsageTracker;
 
-	private constructor(session: AgentSession, usage: UsageTracker) {
+	private constructor(session: AgentSession, usage: UsageTracker, ask = false) {
 		this.session = session;
 		this.usage = usage;
+		this.#ask = ask;
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
 		this.models = new Proxy(session.modelRuntime, {
@@ -229,9 +239,11 @@ export class NativeAdapter {
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
 		const cwd = options.cwd;
 		const agentDir = options.agentDir ?? getAgentDir();
-		const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
-		const projectTrusted =
-			options.projectTrusted ?? resolveProjectTrust(options.trustDirectory ?? cwd, agentDir, settingsManager);
+		const originalSettings = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
+		const settingsManager = options.ask ? askSettings(originalSettings) : originalSettings;
+		const projectTrusted = options.ask
+			? false
+			: (options.projectTrusted ?? resolveProjectTrust(options.trustDirectory ?? cwd, agentDir, settingsManager));
 		// The Harness compacts and retries; the native session must not do either on its own.
 		settingsManager.applyOverrides({
 			cacheWarming: "off",
@@ -242,6 +254,13 @@ export class NativeAdapter {
 		const usage = new UsageTracker(options.onUsageChanged);
 		let stopUsage: (() => void) | undefined;
 		const capture: ExtensionFactory = (pi) => {
+			if (options.ask) {
+				// Covers nested codemode execution too, not just model declarations.
+				pi.on("tool_call", (event) => {
+					if (!ASK_TOOL_NAMES.includes(event.toolName) && event.toolName !== "pilot_report_status")
+						return { block: true, reason: `Ask mode denies tool: ${event.toolName}` };
+				});
+			}
 			stopUsage = pi.events.on("usage:snapshot", (data) => usage.receive(data));
 			pi.on("session_shutdown", () => {
 				stopUsage?.();
@@ -252,32 +271,66 @@ export class NativeAdapter {
 				renderPrompt = () => event.systemPrompt;
 			});
 		};
-		const loader = new DefaultResourceLoader({
-			...options.loaderOptions,
-			cwd,
-			agentDir,
-			settingsManager,
-			extensionFactories: [
-				{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
-				{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
-				{ name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
-				...(options.loaderOptions?.extensionFactories ?? []),
-				capture,
-			],
-		});
+		const loader = new DefaultResourceLoader(
+			options.ask
+				? {
+						cwd,
+						agentDir,
+						settingsManager,
+						noExtensions: true,
+						noSkills: true,
+						noPromptTemplates: true,
+						noThemes: true,
+						noContextFiles: true,
+						// Do not spread loaderOptions: explicit CLI paths and inline factories bypass noExtensions.
+						systemPrompt:
+							"You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use the provided read, find, grep and ls tools, safe codemode batches, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
+						appendSystemPrompt: [],
+						extensionFactories: [createCodemodeExtension({ models: false, mode: "on" }), capture],
+					}
+				: {
+						...options.loaderOptions,
+						cwd,
+						agentDir,
+						settingsManager,
+						extensionFactories: [
+							{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
+							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
+							{ name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
+							...(options.loaderOptions?.extensionFactories ?? []),
+							capture,
+						],
+					},
+		);
 		await loader.reload({ resolveProjectTrust: async () => projectTrusted });
 		const failures = loader.getExtensions().errors;
 		if (failures.length)
 			throw new Error(`Native extension loading failed: ${failures.map((e) => e.error).join("; ")}`);
-		const { session } = await createAgentSession({
+		const sessionConfig = {
 			...options.sessionOptions,
+			...(options.ask
+				? {
+						tools: ASK_TOOL_NAMES,
+						customTools: [
+							...(await createAskTools(options.ask)),
+							...(options.askArtifacts ? createArtifactTools({ ...options.askArtifacts, ask: true }) : []),
+						],
+					}
+				: {}),
 			cwd,
 			agentDir,
 			settingsManager,
 			resourceLoader: loader,
 			sessionManager: nativeSessionManager(cwd, options),
-		});
-		const adapter = new NativeAdapter(session, usage);
+		};
+		const session = options.ask
+			? await createAskSession({
+					...sessionConfig,
+					tools: ASK_TOOL_NAMES,
+					customTools: sessionConfig.customTools ?? [],
+				})
+			: (await createAgentSession(sessionConfig)).session;
+		const adapter = new NativeAdapter(session, usage, !!options.ask);
 		adapter.#renderPrompt = () => renderPrompt?.() ?? session.systemPrompt;
 		const noGeneration = async (): Promise<never> => {
 			throw new Error("Only durable Harness may run the worker model loop");
@@ -393,7 +446,9 @@ export class NativeAdapter {
 			manager.appendMessage(mirrored);
 		}
 		this.session.agent.state.messages = manager.buildSessionContext().messages;
-		const restored = getCurrentTools(view.messages).map((tool) => tool.name);
+		const restored = getCurrentTools(view.messages)
+			.map((tool) => tool.name)
+			.filter((name) => !this.#ask || ASK_TOOL_NAMES.includes(name));
 		if (restored.some((name) => !this.session.getActiveToolNames().includes(name))) {
 			this.session.setActiveToolsByName([...this.session.getActiveToolNames(), ...restored]);
 			this.refreshTools();
@@ -496,7 +551,7 @@ export class NativeAdapter {
 			for (const name of changes?.hiddenDeclarations ?? []) hidden.add(name);
 		}
 		const tools: ToolRegistration[] = this.session.agent.state.tools
-			.filter((tool) => !hidden.has(tool.name))
+			.filter((tool) => !hidden.has(tool.name) && (!this.#ask || ASK_TOOL_NAMES.includes(tool.name)))
 			.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
@@ -571,6 +626,8 @@ export class NativeAdapter {
 				}),
 				hook(ToolTask, {
 					beforeTool: async (call, _api, context) => {
+						if (this.#ask && !ASK_TOOL_NAMES.includes(call.name) && call.name !== "pilot_report_status")
+							return { block: `Ask mode denies tool: ${call.name}` };
 						await this.sync(context);
 						const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
 						const copy = structuredClone(call);

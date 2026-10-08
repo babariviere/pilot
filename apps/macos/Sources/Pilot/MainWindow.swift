@@ -65,7 +65,7 @@ struct SessionDetail: View {
         HSplitView {
             ChatView(session: session, feed: feed, composer: model.composer(for: session.id))
                 .frame(minWidth: 420, maxWidth: .infinity)
-            if model.inspectorVisible {
+            if model.inspectorVisible && model.inspectorTab.isAvailable(for: session) {
                 Inspector(session: session)
                     .frame(minWidth: 340, idealWidth: 520, maxWidth: .infinity)
             }
@@ -75,14 +75,14 @@ struct SessionDetail: View {
         .toolbar {
             ToolbarItemGroup {
                 if model.isUnread(session) { UnreadBadge() }
-                PullRequestBadge(session: session)
+                if !session.isAsk { PullRequestBadge(session: session) }
                 if session.isArchived {
                     Button { model.showArchive(in: model.archiveProjectId) } label: {
                         Label("Archived chats", systemImage: "archivebox")
                     }
                 }
                 SessionArchiveAction(session: session)
-                if let branch = session.branch {
+                if !session.isAsk, let branch = session.branch {
                     Label(branch, systemImage: "arrow.triangle.branch")
                         .labelStyle(.titleAndIcon)
                         .font(.system(size: 11, design: .monospaced))
@@ -96,8 +96,10 @@ struct SessionDetail: View {
                     Label("Open in Finder", systemImage: "folder")
                 }
                 .help("Open \(session.cwd.abbreviatingHome) in Finder")
-                InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
-                InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+                if !session.isAsk {
+                    InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
+                    InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+                }
                 InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
                 Button { model.debugSession(session) } label: {
                     Label("Debug session", systemImage: "ladybug")
@@ -142,8 +144,10 @@ struct Inspector: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 2) {
-                tab("Changes", .changes)
-                tab("Terminal", .terminal)
+                if !session.isAsk {
+                    tab("Changes", .changes)
+                    tab("Terminal", .terminal)
+                }
                 tab("Artifacts", .artifacts)
                 Spacer()
                 Button { model.inspectorVisible = false } label: {
@@ -158,12 +162,14 @@ struct Inspector: View {
             .background(Theme.sidebar)
             Rectangle().fill(Theme.border).frame(height: 1)
             ZStack {
-                ChangesPane(session: session, isVisible: model.inspectorTab == .changes)
-                    .opacity(model.inspectorTab == .changes ? 1 : 0)
-                    .allowsHitTesting(model.inspectorTab == .changes)
-                    .accessibilityHidden(model.inspectorTab != .changes)
+                if !session.isAsk {
+                    ChangesPane(session: session, isVisible: model.inspectorTab == .changes)
+                        .opacity(model.inspectorTab == .changes ? 1 : 0)
+                        .allowsHitTesting(model.inspectorTab == .changes)
+                        .accessibilityHidden(model.inspectorTab != .changes)
+                }
                 // Mounted once opened, so browsing other tabs never starts a shell.
-                if model.inspectorTab == .terminal || model.terminals.order.contains(session.id) {
+                if !session.isAsk && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
                     TerminalPane(store: model.terminals, session: session)
                         .opacity(model.inspectorTab == .terminal ? 1 : 0)
                         .allowsHitTesting(model.inspectorTab == .terminal)

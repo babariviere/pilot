@@ -168,9 +168,17 @@ final class PilotClient: ObservableObject {
     var fixtureModels: ModelList?
     var fixtureBranches: RemoteBranchList?
 
-    func remoteBranches(_ projectId: String) async throws -> RemoteBranchList {
+    func remoteBranches(_ projectId: String, mode: ChatMode = .build, workspace: WorkspaceMode? = nil) async throws -> RemoteBranchList {
         if let fixtureBranches { return fixtureBranches }
-        return try await get(artifactURL(["projects", projectId, "branches"]))
+        var url = try artifactURL(["projects", projectId, "branches"])
+        if mode == .ask || workspace == .clone {
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+            components.queryItems = mode == .ask
+                ? [URLQueryItem(name: "mode", value: "ask")]
+                : [URLQueryItem(name: "workspace", value: "clone")]
+            url = components.url!
+        }
+        return try await get(url)
     }
 
     var fixtureChanges: SessionChanges?

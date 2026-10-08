@@ -101,6 +101,122 @@ test("artifact tools declare structured output, sequential execution and authori
 	}
 });
 
+test("Ask artifact tools publish all session-local kinds and forward sandboxed previews", async () => {
+	const previews: ArtifactWrite[] = [];
+	const published: unknown[] = [];
+	const f = fixture({
+		ask: true,
+		onArtifactPublished: async (reference) => {
+			published.push(reference);
+		},
+		preview: async (document) => {
+			previews.push(document);
+			return {
+				screenshot: { mimeType: "image/png", data: "cG5n", width: 800, height: 600 },
+				consoleMessages: [],
+				contentHeight: 600,
+			};
+		},
+	});
+	const tool = f.tools[0]!;
+	assert.match(tool.description, /Publish and inspect session-local/);
+	assert.match(tool.description, /only inline base64/);
+	assert.doesNotMatch(tool.description, /source is a local|\/tmp\/generated\.png/);
+	assert.notEqual(tool.annotations?.readOnlyHint, true);
+	assert.equal(tool.annotations?.destructiveHint, false);
+	const schema = tool.parameters as { properties: { action: { enum: string[] } } };
+	assert.deepEqual(schema.properties.action.enum, ["create", "update", "get", "list", "preview"]);
+	for (const kind of ["html", "react", "swiftui", "image"] as const) {
+		const document = {
+			title: kind,
+			kind,
+			source:
+				kind === "image"
+					? "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAEElEQVR4AQEFAPr/AP8AAP8FAAH/+lyI0QAAAABJRU5ErkJggg=="
+					: "self-contained source",
+		};
+		for (const action of ["create", "update", "preview"]) {
+			const args = { action, id: revision.id, ...document };
+			assert.ok(validateToolArguments(tool, { type: "toolCall", id: "allowed", name: "artifact", arguments: args }));
+			const result = await execute(tool, args);
+			assert.ok(result.structuredContent);
+			if (action !== "preview")
+				assert.deepEqual(result.structuredContent, {
+					artifact: {
+						id: revision.id,
+						sessionId: revision.sessionId,
+						title: revision.title,
+						revision: revision.revision,
+					},
+				});
+		}
+	}
+	assert.equal(previews.length, 4);
+	assert.equal(published.length, 8);
+	assert.equal(f.notifications, 8);
+	const got = await f.call("get", { id: revision.id, revision: 2 });
+	assert.ok(JSON.stringify(got).includes("Editable"));
+	assert.ok(!JSON.stringify(got).includes("COMPILED_HTML"));
+	const listed = await f.call("list", {});
+	assert.ok(JSON.stringify(listed).includes(revision.id));
+	assert.equal(f.calls.length, 10);
+});
+
+test("Ask denies every image file path before store or renderer callbacks, including forged calls", async () => {
+	const f = fixture({ ask: true, preview: async () => assert.fail("Rejected image input must not render") });
+	for (const source of [
+		"/etc/passwd",
+		"../secret.png",
+		"picture.png",
+		"file:///etc/passwd",
+		"https://example.test/image.png",
+		"/tmp/generated.png",
+	]) {
+		for (const action of ["create", "update", "preview"])
+			await assert.rejects(
+				f.call(action, { id: revision.id, title: "Escaped", kind: "image", source }),
+				/require inline data URLs/,
+			);
+	}
+	assert.deepEqual(f.calls, []);
+	assert.equal(f.notifications, 0);
+});
+
+test("Ask inspects stored SwiftUI source without entering rendering or publication paths", async () => {
+	const stored: ArtifactRevision = {
+		...revision,
+		kind: "swiftui",
+		source: 'struct ArtifactView: View { var body: some View { Text("Stored") } }',
+		libraries: [],
+	};
+	const f = fixture({ ask: true, preview: async () => assert.fail("SwiftUI inspection must not render") });
+	f.store.get = async () => stored;
+	f.store.list = async () => [stored];
+	f.store.create = async () => assert.fail("SwiftUI inspection must not publish");
+	f.store.update = async () => assert.fail("SwiftUI inspection must not publish");
+	assert.deepEqual((await f.call("get", { id: stored.id })).structuredContent, {
+		artifact: {
+			id: stored.id,
+			sessionId: stored.sessionId,
+			projectId: stored.projectId,
+			title: stored.title,
+			kind: "swiftui",
+			revision: stored.revision,
+			createdAt: stored.createdAt,
+			updatedAt: stored.updatedAt,
+			source: stored.source,
+			libraries: [],
+		},
+	});
+	assert.ok(JSON.stringify((await f.call("list", {})).structuredContent).includes('"kind":"swiftui"'));
+	assert.ok(!JSON.stringify(await f.call("get", { id: stored.id })).includes("COMPILED_HTML"));
+	const output = f.tools[0]!.outputSchema as {
+		anyOf: Array<{ properties: { artifact?: { properties: { kind: { enum: string[] } } } } }>;
+	};
+	assert.ok(output.anyOf.some((entry) => entry.properties.artifact?.properties.kind?.enum.includes("swiftui")));
+	assert.equal(f.notifications, 0);
+});
+
 test("create awaits committed publication before notification and returns only a pinned reference", async () => {
 	let finish!: (value: ArtifactRevision) => void;
 	const committed = new Promise<ArtifactRevision>((resolve) => {

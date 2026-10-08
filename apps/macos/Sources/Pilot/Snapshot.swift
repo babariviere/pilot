@@ -105,7 +105,7 @@ enum Snapshot {
 
         let savedDraftProject = model.draftProjectId
         model.draftProjectId = Fixtures.projects[0].id
-        let branchScope = "\(Fixtures.projects[0].id):\(Fixtures.projects[0].path)"
+        let branchScope = BranchSelectorState.scope(project: Fixtures.projects[0], mode: .build, workspace: nil)!
         let branchState = BranchSelectorState()
         await branchState.load(scope: branchScope) { model.client.fixtureBranches! }
         for branch in [nil, "feat/billing"] as [String?] {
@@ -123,6 +123,44 @@ enum Snapshot {
             )
         }
         model.draftProjectId = savedDraftProject
+        // Ask and Build use the same project/branch row, with a mode switch in the header.
+        model.draftProjectId = Fixtures.projects[0].id
+        for mode in [ChatMode.build, .ask] {
+            let form = NewSessionForm()
+            form.consumeDraft(from: model)
+            form.mode = mode
+            form.message = mode == .ask ? "Explain how durable sessions are resumed." : "Improve durable session resume handling."
+            let state = BranchSelectorState()
+            let scope = BranchSelectorState.scope(project: Fixtures.projects[0], mode: mode, workspace: nil)!
+            await state.load(scope: scope, mode: mode) { model.client.fixtureBranches! }
+            if mode == .ask { state.select("feat/billing", for: scope) }
+            await render(TaskComposer(branches: state, form: form).frame(width: 680)
+                .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.background),
+                size: CGSize(width: 840, height: 360),
+                to: directory.appending(path: "new-chat-\(mode.rawValue).png"))
+        }
+        let askFixture = SessionSummary(id: "ask-source", title: "Explore durable session resume", cwd: Fixtures.projects[0].path,
+                                        projectId: Fixtures.projects[0].id, createdAt: Fixtures.now, updatedAt: Fixtures.now,
+                                        state: "idle", model: Fixtures.sessions[0].model, mode: .ask,
+                                        sourceBranch: "feat/billing", sourceCommit: "abcdef0123456789")
+        var askTranscript = Transcript()
+        askTranscript.apply(try! JSONValue.decode(Data(#"""
+        {"type":"snapshot","entries":[
+          {"id":1,"kind":"pi.user","model":[{"role":"user","content":"Explain how durable sessions are resumed, and suggest an implementation plan."}]},
+          {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"read-source","name":"read","arguments":{"path":"packages/daemon/src/sessions.ts"}}]}]},
+          {"id":3,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"read-source","toolName":"read","content":[{"type":"text","text":"Session registry retains durable history and resumes workers on demand."}],"isError":false}]},
+          {"id":4,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"text","text":"The daemon retains the conversation and resumes the worker on demand. A parked session does not lose its history.\n\n### Suggested plan\n1. Check the last settled run before starting a worker.\n2. Recover interrupted operations without replaying unsafe writes.\n3. Add regression tests for reconnect and resume.\n\nThis Ask chat is read-only. Start a separate Build chat when you are ready to implement the plan."}]}]}
+        ],"tools":[],"inbox":[]}
+        """#.utf8)))
+        let askFeed = SessionFeed(sessionId: askFixture.id, transcript: askTranscript)
+        await render(Frame(title: askFixture.title, subtitle: "pilot", session: askFixture) {
+            ChatView(session: askFixture, feed: askFeed)
+        }, size: size, to: directory.appending(path: "ask-chat.png"))
+        model.draftProjectId = savedDraftProject
+        if CommandLine.arguments.contains("--ask-build-only") {
+            NSApp.terminate(nil)
+            return
+        }
         if CommandLine.arguments.contains("--branches-only") {
             NSApp.terminate(nil)
             return
@@ -523,10 +561,12 @@ enum Snapshot {
                             SessionStatusIcon(status: status)
                             if let session {
                                 if AppModel.shared.isUnread(session) { UnreadBadge() }
-                                PullRequestBadge(session: session)
+                                if !session.isAsk { PullRequestBadge(session: session) }
                             }
                             Image(systemName: "folder").foregroundStyle(Theme.mutedForeground)
-                            Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
+                            if session?.isAsk != true {
+                                Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
+                            }
                             if let session {
                                 Button { AppModel.shared.debugSession(session) } label: {
                                     Label("Debug session", systemImage: "ladybug")

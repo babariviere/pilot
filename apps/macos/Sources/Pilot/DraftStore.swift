@@ -26,6 +26,13 @@ struct StoredTaskDraft: Codable {
     var branchScope: String? = nil
     var baseBranch: String? = nil
     var runningTab: Bool = false
+    /// Optional so draft files from before Ask/Build still decode as Build.
+    var mode: ChatMode? = nil
+    var workspace: WorkspaceMode? = nil
+    /// Required handoff source, retained even after origin validation succeeds.
+    var pendingBaseBranch: String? = nil
+    var pendingCwd: String? = nil
+    var pendingWorkspace: WorkspaceMode? = nil
 }
 
 struct StoredImage: Codable {

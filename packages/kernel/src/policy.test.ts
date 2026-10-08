@@ -17,6 +17,16 @@ test("Pilot diagram guidance is conditional on artifact availability", () => {
 		assert.doesNotMatch(prompt, /artifact|diagram|Mermaid|preview/);
 });
 
+test("Ask permits proactive session-local diagrams and sandboxed previews without repository mutation", () => {
+	const prompt = pilotPrompt({ ask: { source: "/source" } }, true);
+	assert.match(prompt, /proactively publish/);
+	assert.match(prompt, /Prefer simple Mermaid/);
+	assert.match(prompt, /Creating, updating and previewing host-owned session-local artifacts is allowed/);
+	assert.match(prompt, /installed sandboxed renderers/);
+	assert.match(prompt, /artifacts do not modify the repository/);
+	assert.match(prompt, /Do not write repository files/);
+});
+
 test("blocks GitHub posting in commands and codemode scripts", () => {
 	assert.ok(githubPosting({ command: 'gh pr comment 12 --body "done"' }));
 	assert.ok(githubPosting({ command: "gh pr review 12 --approve" }));
@@ -129,4 +139,23 @@ test("explicit project delivery policy also applies without a private workspace"
 	assert.match(pilotPrompt({ requirePullRequest: true }), /gh pr create/);
 	assert.match(pilotPrompt({ requirePullRequest: true }), /Never push the default branch/);
 	assert.doesNotMatch(pilotPrompt({}), /gh pr create/);
+});
+
+test("Ask overrides Build delivery policy and requires an explicit new Build handoff", () => {
+	for (const requirePullRequest of [true, false]) {
+		const prompt = pilotPrompt({
+			ask: { source: "/original", branch: "topic", gitDir: "/private/objects.git", commit: "a".repeat(40) },
+			workspace: { source: "/clone-source", base: "origin/main", jj: false },
+			requirePullRequest,
+		});
+		assert.match(prompt, /Ask mode, read-only/);
+		assert.match(prompt, /Source: "\/original"/);
+		assert.match(prompt, /pinned commit/);
+		assert.match(prompt, /explicit new Build session handoff/);
+		assert.doesNotMatch(
+			prompt,
+			/Choose or create|git switch|gh pr create|git push|private clone|does not require a pull request/,
+		);
+	}
+	assert.match(pilotPrompt({ ask: { source: "/source" } }), /current checkout, including its uncommitted changes/);
 });

@@ -129,7 +129,15 @@ export function createDaemonServer(
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "artifacts" && req.method === "GET")
 			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "branches" && req.method === "GET")
-			return json(res, 200, await projects.branches(parts[2]!));
+			return json(
+				res,
+				200,
+				await projects.branches(
+					parts[2]!,
+					url.searchParams.get("mode") === "ask" ||
+						(url.searchParams.get("mode") === "build" && url.searchParams.get("workspace") === "clone"),
+				),
+			);
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
 				const archived = url.searchParams.get("archived") ?? "false";
@@ -328,6 +336,7 @@ export function createDaemonServer(
 
 	function handleTerminal(message: ClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {
 		const { sessionId } = message;
+		if (message.type === "terminal.attach" || message.type === "terminal.input") sessions.assertWritable(sessionId);
 		switch (message.type) {
 			case "terminal.attach": {
 				const session = sessions.get(sessionId);

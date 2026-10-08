@@ -5,6 +5,16 @@ public struct UpdatePreparation: Codable, Sendable {
     public let ready: Bool
 }
 
+public enum ChatMode: String, Codable, Hashable, Sendable {
+    case build
+    case ask
+}
+
+public enum WorkspaceMode: String, Codable, Hashable, Sendable {
+    case clone
+    case direct
+}
+
 /// Mirrors packages/protocol. Keep both sides in sync.
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
@@ -13,6 +23,10 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Session storage directory containing metadata and durable history, not the working directory.
     public let sessionPath: String?
     public let projectId: String?
+    public let mode: ChatMode?
+    public let workspace: WorkspaceMode?
+    public let sourceBranch: String?
+    public let sourceCommit: String?
     /// The session's own branch, when it runs in a private clone.
     public let branch: String?
     public let createdAt: Double
@@ -34,6 +48,21 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let pullRequestError: String?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
+    public var effectiveMode: ChatMode { mode ?? .build }
+    public var isAsk: Bool { effectiveMode == .ask }
+    public var workspaceLabel: String {
+        if isAsk { return "Read-only · no private clone" }
+        switch workspace {
+        case .clone: return "Private clone"
+        case .direct: return "Current checkout"
+        case nil: return branch == nil ? "Build workspace" : "Private clone"
+        }
+    }
+    public var sourceLabel: String {
+        if isAsk { return sourceBranch.map { "origin/\($0)" } ?? "Current checkout" }
+        return branch ?? sourceBranch.map { "origin/\($0)" }
+            ?? (workspace == .clone ? "Default base" : workspace == .direct ? "Current checkout" : "Source unavailable")
+    }
     public var isArchived: Bool { archivedAt != nil }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
     public var canArchive: Bool { !isArchived && !isWorking }
@@ -43,12 +72,17 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
-        archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil
+        archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil,
+        mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil
     ) {
         self.id = id
         self.title = title
         self.cwd = cwd
         self.sessionPath = sessionPath
+        self.mode = mode
+        self.workspace = workspace
+        self.sourceBranch = sourceBranch
+        self.sourceCommit = sourceCommit
         self.projectId = projectId
         self.branch = branch
         self.createdAt = createdAt
@@ -234,12 +268,14 @@ public struct SpawnRequest: Codable, Sendable {
     public var title: String?
     public var model: String?
     public var thinking: String?
-    /// Plain origin branch name, only for a project's private clone.
+    public var mode: ChatMode?
+    public var workspace: WorkspaceMode?
+    /// Exact origin branch. Ask omission reads current checkout; Build omission uses default base.
     public var baseBranch: String?
 
     public init(
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
-        thinking: String? = nil, baseBranch: String? = nil
+        thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil
     ) {
         self.projectId = projectId
         self.cwd = cwd
@@ -248,6 +284,8 @@ public struct SpawnRequest: Codable, Sendable {
         self.model = model
         self.thinking = thinking
         self.baseBranch = baseBranch
+        self.mode = mode
+        self.workspace = workspace
     }
 }
 

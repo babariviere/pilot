@@ -24,8 +24,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
-import { createArtifactTools } from "./artifact-tools.ts";
 import { watchActivity } from "./activity.ts";
+import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion, withAttention } from "./attention.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
@@ -67,6 +67,7 @@ export interface KernelSessionHooks {
 }
 
 export class KernelSession {
+	readonly #ask: boolean;
 	readonly #watches = new Map<string, () => Promise<void>>();
 	#working = false;
 	#completion?: SessionCompletion;
@@ -88,6 +89,7 @@ export class KernelSession {
 		release: () => void,
 		status: AgentEventStream,
 		todos: TodosWatch,
+		ask: boolean,
 	) {
 		this.harness = harness;
 		this.conversation = conversation;
@@ -95,6 +97,7 @@ export class KernelSession {
 		this.release = release;
 		this.status = status;
 		this.todos = todos;
+		this.#ask = ask;
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
@@ -108,33 +111,33 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
 			});
+			const artifactOptions: ArtifactToolOptions = {
+				store: artifacts,
+				onArtifactsChanged: hooks.onArtifactsChanged,
+				onArtifactPublished: async (artifact) => {
+					if (!artifactConversation) throw new Error("Artifact publication requires a bound Harness conversation");
+					// Passive write admission places publications at the post-tools boundary.
+					await artifactConversation.submit(
+						{
+							type: "write",
+							requestId: `artifact:${artifact.id}:${artifact.revision}`,
+							entry: { kind: "pilot.artifact", data: { artifact: { ...artifact } }, model: [] },
+						},
+						context,
+					);
+				},
+			};
 			adapter = await NativeAdapter.open({
 				cwd: spec.cwd,
+				ask: spec.pilot?.ask,
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
-				sessionOptions: {
-					customTools: createArtifactTools({
-						store: artifacts,
-						onArtifactsChanged: hooks.onArtifactsChanged,
-						onArtifactPublished: async (artifact) => {
-							if (!artifactConversation)
-								throw new Error("Artifact publication requires a bound Harness conversation");
-							// Passive write admission is legal while tools are running. The Harness places it
-							// at its post-tools boundary; direct tx.appendEntry would race a busy conversation.
-							await artifactConversation.submit(
-								{
-									type: "write",
-									requestId: `artifact:${artifact.id}:${artifact.revision}`,
-									entry: { kind: "pilot.artifact", data: { artifact: { ...artifact } }, model: [] },
-								},
-								context,
-							);
-						},
-					}),
-				},
+				...(spec.pilot?.ask
+					? { askArtifacts: artifactOptions }
+					: { sessionOptions: { customTools: createArtifactTools(artifactOptions) } }),
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
@@ -179,6 +182,7 @@ export class KernelSession {
 				owned.release,
 				status,
 				new TodosWatch(todosDirectory(spec.cwd)),
+				!!spec.pilot?.ask,
 			);
 			session.#working = status.snapshot.run !== undefined;
 			if (!session.#working) {
@@ -372,7 +376,9 @@ export class KernelSession {
 			throw error;
 		}
 		listener([stream.snapshot, queueUpdate(queue.value)]);
-		const stopTodos = includeTodos ? this.todos.subscribe((event) => listener([event])) : () => {};
+		// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
+		if (includeTodos && this.#ask) listener([{ type: "todos_update", items: [] }]);
+		const stopTodos = includeTodos && !this.#ask ? this.todos.subscribe((event) => listener([event])) : () => {};
 		this.#watches.set(watchId, async () => {
 			stopTodos();
 			await Promise.all([stream.stop(), queue.stop()]);

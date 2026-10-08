@@ -51,9 +51,13 @@ const diagnosticsProperties = {
 	contentHeight: Type.Number(),
 };
 
-const authoring = `HTML and React source must be self-contained and at most 512 KiB UTF-8. Runs offline in a sandbox: no CDN, remote scripts, fetch, network assets, Node APIs, native bridge or arbitrary npm imports. Tailwind is not available: use plain CSS inline or in <style> tags, not external stylesheets or assumed utility classes.
+const fileImageAuthoring = `Image: kind:"image", source is a local PNG, JPEG, GIF or WebP path (relative to the session working directory or absolute) or a base64 data:image/... URL. Maximum decoded image size is 16 MiB; libraries are not supported. The tool embeds the bytes durably, so the original file need not remain. No remote URLs. In codemode: await tools.artifact({action:"create",title:"Generated image",kind:"image",source:"/tmp/generated.png"}). Do not print image base64; get returns the saved data URL.`;
+const inlineImageAuthoring = `Image: kind:"image" accepts only inline base64 data:image/... URLs containing PNG, JPEG, GIF or WebP bytes in Ask. Local file paths and remote URLs are not allowed. Maximum decoded image size is 16 MiB; libraries are not supported. In codemode, pass an existing inline data URL: await tools.artifact({action:"create",title:"Image",kind:"image",source:dataUrl}). Do not print image base64; get returns the saved data URL.`;
+const authoring = (
+	ask = false,
+) => `HTML and React source must be self-contained and at most 512 KiB UTF-8. Runs offline in a sandbox: no CDN, remote scripts, fetch, network assets, Node APIs, native bridge or arbitrary npm imports. Tailwind is not available: use plain CSS inline or in <style> tags, not external stylesheets or assumed utility classes.
 SwiftUI: kind:"swiftui", source is self-contained Swift defining struct ArtifactView: View with a zero-argument initializer. SwiftUI, AppKit and Foundation imports are provided. No project imports, package dependencies, @main or #Preview. Avoid @State (Command Line Tools lack its macro plugin); use @StateObject if needed. Maximum source is 512 KiB UTF-8; libraries are not supported. Requires macOS 14+ and installed Swift Command Line Tools (xcode-select --install), with no browser installation. Compiles and renders in a disposable sandbox with no network or workspace/credential access. Static screenshot only, not an interactive app or validation of actual project views. Offscreen ImageRenderer does not capture embedded AppKit/WebKit views; use SwiftUI layout primitives and inspect screenshots for unsupported controls. create/update save editable Swift source and an embedded 800x600 PNG. Compiler diagnostics are reported on failure. Cold SDK compilation can take minutes; do not set short codemode deadlines. SwiftUI example: {title:"Native card",kind:"swiftui",source:'struct ArtifactView: View { var body: some View { VStack(alignment: .leading) { Text("Preview").font(.title); Text("Native SwiftUI layout") }.padding(24) } }'}.
-Image: kind:"image", source is a local PNG, JPEG, GIF or WebP path (relative to the session working directory or absolute) or a base64 data:image/... URL. Maximum decoded image size is 16 MiB; libraries are not supported. The tool embeds the bytes durably, so the original file need not remain. No remote URLs. In codemode: await tools.artifact({action:"create",title:"Generated image",kind:"image",source:"/tmp/generated.png"}). Do not print image base64; get returns the saved data URL.
+${ask ? inlineImageAuthoring : fileImageAuthoring}
 Pilot supplies a light palette and system font. Use CSS variables --pilot-background, --pilot-foreground, --pilot-muted, --pilot-muted-foreground, --pilot-border, --pilot-primary and --pilot-radius for consistent styling; your styles may override them.
 HTML: use inline CSS or <style> tags and ordinary inline <script> tags. Select libraries to get globals echarts, mermaid, motion, d3, THREE (three). Do not import packages in HTML scripts.
 HTML example: {title:"Chart",kind:"html",libraries:["echarts"],source:'<div id="chart" style="height:320px"></div><script>echarts.init(document.getElementById("chart")).setOption({xAxis:{type:"category",data:["A","B"]},yAxis:{},series:[{type:"bar",data:[2,5]}]});</script>'}.
@@ -70,6 +74,8 @@ export interface ArtifactToolOptions {
 	onArtifactsChanged?: () => void;
 	/** Override the renderer for tests, or disable preview. By default, require an installed renderer. */
 	preview?: typeof previewArtifact | false;
+	/** Ask permits session-local artifacts and sandboxed previews, but never arbitrary image-path reads. */
+	ask?: boolean;
 }
 
 function checkSource(write: ArtifactWrite): void {
@@ -136,7 +142,7 @@ Actions:
 - update: publish a revision by id with the complete replacement title, kind, source and libraries, not a patch. Optional expectedRevision rejects stale updates. Returns a compact pinned reference.
 - get: read editable source and metadata by id, optionally at a historical revision. Omitting revision reads the latest. Never returns compiled HTML. Use before updating and pass its revision as expectedRevision.
 - list: list current session artifact summaries without source or compiled HTML.
-${previewDescription}${authoring}`,
+${previewDescription}${authoring(options.ask)}`,
 			promptSnippet: "Publish and inspect offline HTML, React, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
@@ -145,7 +151,15 @@ ${previewDescription}${authoring}`,
 				id: Type.Optional(Type.String({ description: "Artifact ID, required for get and update." })),
 				title: Type.Optional(writeProperties.title),
 				kind: Type.Optional(kind),
-				source: Type.Optional(writeProperties.source),
+				source: Type.Optional(
+					options.ask
+						? Type.String({
+								maxLength: MAX_IMAGE_SOURCE_BYTES,
+								description:
+									"HTML, JSX/TSX or standalone SwiftUI (512 KiB UTF-8 max), or inline base64 image data URL (16 MiB decoded max). Image file paths are not allowed in Ask.",
+							})
+						: writeProperties.source,
+				),
 				libraries: writeProperties.libraries,
 				expectedRevision: Type.Optional(revisionNumber),
 				revision: Type.Optional(revisionNumber),
@@ -218,6 +232,9 @@ ${previewDescription}${authoring}`,
 							...(libraries === undefined ? {} : { libraries }),
 						};
 						if (write.kind === "image") {
+							// Check before any filesystem image loader, including forged direct/nested calls.
+							if (options.ask && !write.source.startsWith("data:image/"))
+								throw new Error("Ask image artifacts require inline data URLs, not file paths");
 							if (write.libraries?.length) throw new Error("Image artifacts do not use libraries");
 							write.source = await loadArtifactImage(write.source, ctx.cwd);
 							signal?.throwIfAborted();

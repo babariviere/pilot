@@ -16,7 +16,7 @@ native macOS app, or from wherever the work came from.
 - Fix CI failures and review comments on pull requests, when the fix makes sense.
 - Fix bug reports posted in Slack, when they can be reproduced and fixed.
 - Spec Linear tickets in a loop with a human: the agent asks questions, the human answers, the spec converges.
-- Give every session a real terminal (libghostty) in its working copy.
+- Give every Build session a real terminal (libghostty) in its working copy.
 - Survive restarts and crashes without losing or duplicating work.
 
 ### Non-goals (for now)
@@ -66,12 +66,12 @@ native macOS app, or from wherever the work came from.
 
 | Concept | Definition |
 | --- | --- |
-| **Session** | One durable pi conversation with its working copy, origin, policy and state. |
+| **Session** | One durable pi conversation with its code source, mode, origin, policy and state. |
 | **Origin** | What created the session: `manual`, `github.ci`, `github.review`, `slack.bug`, `linear.spec`, `schedule`. |
 | **Binding** | Link between a session and an external thread (PR, check suite, Slack thread, Linear issue). Unique per thread, so new events steer the same session instead of spawning duplicates. |
 | **Trigger source** | Adapter that turns external events into admissions: `spawn(origin, binding, brief)` or `send(session, message)`. Polling or webhooks. |
 | **Policy** | Per-origin permissions: repositories, branches it may push, sandbox floor, tools, budget, auto-reply rights. |
-| **Workspace** | Isolated working copy per session (jj workspace or private clone), created by pilotd, never by the agent. |
+| **Workspace** | Daemon-owned Build working copy (private clone or project checkout). Ask uses a read-only checkout or pinned snapshot instead. |
 | **Human gate** | A durable pause where the agent waits for a human answer or approval (`waiting` state). |
 | **Outcome** | Structured end of a run: `fixed` (with PR/commit), `declined` (with reason), `needs-human`, `failed`. |
 
@@ -117,7 +117,25 @@ it in the session. Reuses the reporter pattern from pi-extensions subagents.
 
 ### 5.4 Workspaces
 
-Decided: **every session gets its own private clone** (done for manual sessions).
+Decided: **Build sessions use the project's workspace policy; Ask sessions are read-only**.
+
+- New chats default to **Build**. A per-chat workspace override does not change the project default.
+  **Ask** uses the current checkout without cloning, including local changes, or an explicitly
+  selected origin branch. The existing branch chip beside the project picker selects the source.
+- Branch-specific Ask sessions fetch the selected origin head into a session-owned bare object store,
+  fetch only the selected head's snapshot, pin its commit before starting the worker, and read/search
+  that tree without creating a checkout.
+  They never switch or modify the user's checkout, and reopening keeps the pinned revision. Branch
+  snapshots exclude local changes. A refresh of the branch menu lists current origin heads; missing
+  branches fail preparation rather than silently falling back to another source.
+- Ask workers load only host-owned read/search tools and session-local artifact tools. User and project
+  extensions, MCP, shell tools, jobs, and repository-write tools are not loaded, not merely hidden or
+  blocked. Repository read-only access is a capability boundary, not a prompt convention. Ask sessions
+  cannot open a terminal or publish repository changes. They can create, update and preview their own
+  artifacts using the isolated offline renderers, without arbitrary image-file reads. Codemode can only
+  call this restricted tool set; artifacts and completion reporting are session-local capabilities.
+  Mode is immutable for a chat; implementation starts a separate Build draft with the conversation
+  as context, preserving the Ask chat and its selected source.
 
 - The clone lives in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
   checkout, with `origin` pointed at the project's real remote and fetched. The clone first borrows the
@@ -127,7 +145,7 @@ Decided: **every session gets its own private clone** (done for manual sessions)
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
-- The new-task composer offers a Base branch selector for private-clone projects, listing only real
+- The new-task composer offers a Base branch selector for private-clone Build projects, listing only real
   branches advertised by `origin` (no local branches or HEAD pseudoref). The remote default remains
   the default; an explicit selection is persisted through startup/recovery and must still exist remotely.
   Starting from an existing branch does not change that branch or the user's checkout.
@@ -137,7 +155,8 @@ Decided: **every session gets its own private clone** (done for manual sessions)
   (`feat/`, `fix/`, `docs/`, etc.), never `pilot/`. Existing branch and bookmark names are preserved;
   PR sessions check out and keep the PR head instead.
 - jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
-- Projects can opt out (`workspace: "direct"`) to run in the folder itself.
+- Projects can opt out (`workspace: "direct"`) to run Build sessions in the folder itself. Ask source
+  selection is independent of this project setting. Folder-only Ask sessions use the current folder.
 - Projects independently configure **Require PR** (`requirePullRequest`, default true). Turning it off
   permits direct pushes to the remote default branch without a PR. It does not change workspace isolation
   or run an after-push command. The policy is read when a session worker starts (new sessions or kernel restart).
@@ -276,6 +295,10 @@ reports), producing a morning summary in the app and Slack.
 
 ## 7. App (macOS)
 
+- New-chat composer: Build/Ask mode switch, defaulting to Build, with the existing project, branch and
+  model chips. Ask adds Current checkout to the branch menu and labels read-only/no-clone access;
+  committed branch sources show their pinned revision in the chat. Build exposes a per-chat workspace
+  choice. Ask chats hide terminal/change actions and offer an explicit Start a Build chat handoff.
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
 - Projects can be grouped into user-created, collapsible sidebar folders. Create, rename and delete
   folders, and move projects via their context menu. Ungrouped projects remain visible; deleting a
@@ -388,7 +411,7 @@ reports), producing a morning summary in the app and Slack.
   and bounded compiler/runtime diagnostics, cancellation and a five-minute deadline. No network,
   workspace or credential access is granted. These are static, standalone previews, not project-aware
   or interactive views; agents use artifacts to show UI changes and label prototype limitations.
-- Terminal: libghostty per session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
+- Terminal: libghostty per Build session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release
   PRs and changelogs on `main`; metadata-only PRs skip workflows and need no workflow approval.
@@ -419,6 +442,8 @@ reports), producing a morning summary in the app and Slack.
 | --- | --- |
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
 | `GET /api/projects/:id/branches`, `SpawnRequest.baseBranch` | List origin's live branches and choose the base of a new private-clone session (done) |
+| `SpawnRequest.mode`, `.workspace`; `SessionSummary.mode`, `.workspace`, `.sourceBranch`, `.sourceCommit` | Immutable Ask/Build mode, per-chat Build workspace policy and source identity |
+| `GET /api/projects/:id/branches?mode=ask` or `?mode=build&workspace=clone` | List origin heads even for projects whose default Build policy is direct |
 | `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
 | `PATCH /api/sessions/:id/queue/:submissionId`, `DELETE /api/sessions/:id/queue/:submissionId` | Edit or remove a still-queued user message without resubmitting or interrupting the active run (done) |
 | `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |
@@ -460,7 +485,7 @@ reports), producing a morning summary in the app and Slack.
 
 ## 11. Open questions
 
-1. ~~Workspace source of truth~~ Decided: a private clone per session (§5.4).
+1. ~~Workspace source of truth~~ Decided: daemon-owned Build workspaces and read-only Ask sources (§5.4).
 2. ~~Identity~~ Decided for GitHub: never posts; opens PRs as the user (§5.5). Slack and Linear identity open.
 3. ~~Replies to declined review comments~~ Decided: only a note in the app.
 4. Where do specs live: Linear documents, the issue description, or a repo file linked from the issue?

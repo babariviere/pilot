@@ -22,7 +22,11 @@ export interface PersistedSessionView {
 	completion?: SessionCompletion;
 }
 
-export async function readSessionSnapshot(directory: string, cwd: string): Promise<PersistedSessionView> {
+export async function readSessionSnapshot(
+	directory: string,
+	cwd: string,
+	includeTodos = true,
+): Promise<PersistedSessionView> {
 	const storage = await openSessionReader(directory);
 	const context = BACKGROUND_CONTEXT;
 	let events: AgentEvent[];
@@ -87,9 +91,14 @@ export async function readSessionSnapshot(directory: string, cwd: string): Promi
 			await session.close(context);
 		}
 	}
-	// Read display-only extension files, never load or execute extension code.
-	const todos = new TodosWatch(todosDirectory(cwd));
-	await todos.refresh();
-	events.push(todos.current);
+	// Ask must not display live checkout extension TODOs, especially for pinned branch snapshots.
+	if (includeTodos) {
+		// Read display-only extension files, never load or execute extension code.
+		const todos = new TodosWatch(todosDirectory(cwd));
+		await todos.refresh();
+		events.push(todos.current);
+	} else {
+		events.push({ type: "todos_update", items: [] });
+	}
 	return { events, ...(completion ? { completion } : {}) };
 }

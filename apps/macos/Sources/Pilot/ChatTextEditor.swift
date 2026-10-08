@@ -17,7 +17,7 @@ struct ChatTextEditor: NSViewRepresentable {
     var onCancel: (() -> Void)?
     var onRemoveQueuedMessage: (() -> Void)?
     var onPasteImages: ((NSPasteboard) -> Bool)?
-    var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+    var completionDirectory: String? = FileManager.default.homeDirectoryForCurrentUser.path
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -228,7 +228,7 @@ final class SubmitTextView: NSTextView {
         }
         return super.readSelection(from: pasteboard, type: type)
     }
-    var completionDirectory = FileManager.default.homeDirectoryForCurrentUser.path {
+    var completionDirectory: String? = FileManager.default.homeDirectoryForCurrentUser.path {
         didSet { if oldValue != completionDirectory { dismissPathPicker() } }
     }
     private(set) var pathPicker: PathCompletionPicker?
@@ -285,7 +285,7 @@ final class SubmitTextView: NSTextView {
     override func complete(_ sender: Any?) { _ = completePath() }
 
     private func completePath() -> Bool {
-        guard !hasMarkedText(), let range = PathCompletion.range(in: string, selection: selectedRange()) else { return false }
+        guard let completionDirectory, !hasMarkedText(), let range = PathCompletion.range(in: string, selection: selectedRange()) else { return false }
         let candidates = PathCompletion.candidates(in: string, range: range, directory: completionDirectory)
         guard !candidates.isEmpty else { return false }
         if candidates.count == 1 { insertText(candidates[0], replacementRange: range) }

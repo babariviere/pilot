@@ -3,17 +3,23 @@ import { Worker } from "node:worker_threads";
 import { type PersistedSessionView, snapshotWorkerEntry } from "@pilot/kernel";
 
 export type SizedSessionView = PersistedSessionView & { bytes: number };
-type Job = { directory: string; cwd: string; resolve(view: SizedSessionView): void; reject(error: Error): void };
+type Job = {
+	directory: string;
+	cwd: string;
+	includeTodos: boolean;
+	resolve(view: SizedSessionView): void;
+	reject(error: Error): void;
+};
 
 export class ColdViewReader {
 	private readonly waiting: Job[] = [];
 	private readonly active = new Set<Worker>();
 	private closed = false;
 
-	read(directory: string, cwd: string): Promise<SizedSessionView> {
+	read(directory: string, cwd: string, includeTodos = true): Promise<SizedSessionView> {
 		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
 		return new Promise((resolve, reject) => {
-			this.waiting.push({ directory, cwd, resolve, reject });
+			this.waiting.push({ directory, cwd, includeTodos, resolve, reject });
 			this.drain();
 		});
 	}
@@ -24,7 +30,7 @@ export class ColdViewReader {
 			let worker: Worker;
 			try {
 				worker = new Worker(snapshotWorkerEntry, {
-					workerData: { directory: job.directory, cwd: job.cwd },
+					workerData: { directory: job.directory, cwd: job.cwd, includeTodos: job.includeTodos },
 					execArgv: [],
 				});
 			} catch (error) {

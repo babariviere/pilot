@@ -546,6 +546,7 @@ test("restart retries an unfinished clone, removes only its partial destination 
 		message: "recover clone",
 		baseBranch: "release/stable",
 	});
+	assert.equal(created.sourceBranch, "release/stable");
 	await entered.promise;
 	await mkdir(created.cwd);
 	await writeFile(join(created.cwd, "partial"), "unfinished");
@@ -568,6 +569,7 @@ test("restart retries an unfinished clone, removes only its partial destination 
 	});
 	await until(() => reopened.get(created.id)?.state === "working");
 	assert.equal(clones, 1);
+	assert.equal(reopened.get(created.id)?.sourceBranch, "release/stable");
 	assert.deepEqual(reopened.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable" });
 	assert.equal(await readFile(join(f.source, "keep"), "utf8"), "source");
 	assert.deepEqual(f.workers[0]!.requests, before.pending);
@@ -579,6 +581,7 @@ test("restart retries an unfinished clone, removes only its partial destination 
 		},
 	});
 	assert.deepEqual(readyRestart.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable" });
+	assert.equal(readyRestart.get(created.id)?.sourceBranch, "release/stable");
 });
 
 test("baseBranch validates before admission and is only accepted for private-clone project sessions", async (t) => {

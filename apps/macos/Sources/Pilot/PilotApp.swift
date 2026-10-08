@@ -30,10 +30,10 @@ struct PilotApp: App {
             CommandGroup(after: .toolbar) {
                 Button("Toggle Changes") { model.toggleInspector(.changes) }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
-                    .disabled(model.selectedSessionId == nil)
+                    .disabled(model.selectedSessionId == nil || model.selectedSession?.isAsk == true)
                 Button("Toggle Terminal") { model.toggleInspector(.terminal) }
                     .keyboardShortcut("j", modifiers: .command)
-                    .disabled(model.selectedSessionId == nil)
+                    .disabled(model.selectedSessionId == nil || model.selectedSession?.isAsk == true)
                 Button("Toggle Artifacts") { model.toggleInspector(.artifacts) }
                     .disabled(model.selectedSessionId == nil)
             }

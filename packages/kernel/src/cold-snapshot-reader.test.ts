@@ -22,6 +22,7 @@ import {
 import { AttentionDoc } from "./attention.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
+import { TodosWatch } from "./todos.ts";
 
 test("cold snapshot matches durable active view under a writer lease, without running pending tools", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-reader-"));
@@ -176,5 +177,27 @@ test("cold snapshot of an unopened session creates no storage and reads TODO fil
 		assert.deepEqual(await readdir(dir), [".pi"]);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("Ask cold snapshots return empty TODOs without reading live checkout extension files", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-ask-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	await mkdir(join(dir, ".pi", "todos"), { recursive: true });
+	await writeFile(join(dir, ".pi", "todos", "aabbccdd.md"), '{"title":"Live checkout only","status":"open"}');
+	t.mock.method(TodosWatch.prototype, "refresh", () => assert.fail("Ask cold readers must not read checkout TODOs"));
+	const durable = join(dir, "durable");
+	const unopened = await readSessionSnapshot(durable, dir, false);
+	assert.deepEqual(unopened.events[2], { type: "todos_update", items: [] });
+	assert.deepEqual(await readdir(dir), [".pi"]);
+	const owned = await openSessionStorage(durable);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		const persisted = await readSessionSnapshot(durable, dir, false);
+		assert.deepEqual(persisted.events[2], { type: "todos_update", items: [] });
+	} finally {
+		await harness.close(context);
+		owned.release();
 	}
 });

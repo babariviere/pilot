@@ -102,7 +102,8 @@ async function fixture(t: TestContext, extra: Record<string, unknown> = {}, snap
 
 test("cold viewing after daemon restart never starts a worker, then receives a fresh live replacement on send", async (t) => {
 	let reads = 0;
-	const f = await fixture(t, {}, async () => {
+	const f = await fixture(t, {}, async (_directory, _cwd, includeTodos) => {
+		assert.equal(includeTodos, true, "legacy Build cold views retain TODO reads");
 		reads++;
 		return { events: [cold] };
 	});

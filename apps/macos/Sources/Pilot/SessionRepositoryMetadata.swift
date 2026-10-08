@@ -12,7 +12,7 @@ final class SessionRepositoryModel: ObservableObject {
     }
 
     func load(_ session: SessionSummary, client: PilotClient) async {
-        guard session.state != "starting" else { return }
+        guard !session.isAsk, session.state != "starting" else { return }
         do {
             let summary = try await client.changeSummary(session.id)
             try Task.checkCancellation()
@@ -34,16 +34,23 @@ struct SessionRepositoryMetadata: View {
     @StateObject private var model = SessionRepositoryModel()
 
     var body: some View {
-        SessionRepositoryMetadataContent(session: session, summary: model.summary,
-                                         branch: model.branch(for: session), error: model.error)
-        .task(id: session.state) {
-            guard session.state != "starting" else { return }
-            // SwiftUI cancels this task when the row disappears. State changes refresh immediately;
-            // periodic reads also pick up external edits in idle sessions.
-            while !Task.isCancelled {
-                await model.load(session, client: app.client)
-                do { try await Task.sleep(for: .seconds(10)) }
-                catch { return }
+        if session.isAsk {
+            Label("Ask · \(session.sourceLabel)", systemImage: "questionmark.bubble")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                .help("Read-only · no private clone" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))
+        } else {
+            SessionRepositoryMetadataContent(session: session, summary: model.summary,
+                                             branch: model.branch(for: session), error: model.error)
+            .task(id: session.state) {
+                guard session.state != "starting" else { return }
+                // SwiftUI cancels this task when the row disappears. State changes refresh immediately;
+                // periodic reads also pick up external edits in idle sessions.
+                while !Task.isCancelled {
+                    await model.load(session, client: app.client)
+                    do { try await Task.sleep(for: .seconds(10)) }
+                    catch { return }
+                }
             }
         }
     }
