@@ -21,7 +21,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { AttentionDoc } from "./attention.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { readSessionSnapshot, readSubagentSnapshot } from "./snapshot.ts";
+import { readSessionSnapshot, readSubagentTranscript } from "./snapshot.ts";
+import { subagentStorageSignature } from "./subagent-watch.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
 import { TodosWatch } from "./todos.ts";
 
@@ -203,28 +204,63 @@ test("Ask cold snapshots return empty TODOs without reading live checkout extens
 	}
 });
 
-test("subagent snapshots read one child conversation from runs.sqlite while its writer is open", async (t) => {
+test("subagent transcripts read fully, then incrementally, and fall back to full reads after compaction", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-subagent-"));
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	const child = join(dir, "review.durable");
-	assert.deepEqual(await readSubagentSnapshot(child, "1"), [], "no storage before the child starts");
+	assert.deepEqual(await readSubagentTranscript(child, "1"), { full: true, events: [] }, "no storage before start");
+	const missing = subagentStorageSignature(child);
 	await mkdir(child);
 	const storage = await openNodeSqliteStorage(join(child, "runs.sqlite"));
 	const harness = await Harness.open(storage, { models: createModels(), registry: createRegistry() }, context);
 	try {
 		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
-		await root.commit(async (tx) => {
-			await tx.appendEntry(root.id, { kind: "note", data: { text: "child transcript" } });
-		}, context);
-		const events = await readSubagentSnapshot(child, String(root.id));
-		assert.equal(events.length, 1);
-		const [snapshot] = events;
+		const append = (text: string, head?: number) =>
+			root.commit(async (tx) => {
+				const entry = await tx.appendEntry(root.id, {
+					kind: head === undefined ? "note" : "pi.compaction",
+					data: { text },
+					...(head === undefined ? {} : { head: head as never }),
+				});
+				return Number(entry.id);
+			}, context);
+		const first = await append("first");
+		const full = await readSubagentTranscript(child, String(root.id));
+		assert.equal(full.full, true);
+		assert.equal(full.cursor, first);
+		const [snapshot] = full.events;
 		assert.ok(snapshot?.type === "snapshot");
 		assert.deepEqual(
 			snapshot.entries.map((entry) => entry.data),
-			[{ text: "child transcript" }],
+			[{ text: "first" }],
 		);
-		await assert.rejects(readSubagentSnapshot(child, "not-a-number"), /Invalid subagent conversation/);
+		const before = subagentStorageSignature(child);
+		assert.notEqual(before, missing);
+		assert.deepEqual(await readSubagentTranscript(child, String(root.id), first), {
+			full: false,
+			events: [],
+			cursor: first,
+		});
+		const second = await append("second");
+		const third = await append("third");
+		assert.notEqual(subagentStorageSignature(child), before, "every commit changes the signature");
+		const delta = await readSubagentTranscript(child, String(root.id), first);
+		assert.equal(delta.full, false);
+		assert.equal(delta.cursor, third);
+		assert.deepEqual(
+			delta.events.map((event) =>
+				event.type === "entry_appended" ? [Number(event.entry.id), event.entry.data] : event,
+			),
+			[
+				[second, { text: "second" }],
+				[third, { text: "third" }],
+			],
+		);
+		await append("summary", third);
+		const compacted = await readSubagentTranscript(child, String(root.id), third);
+		assert.equal(compacted.full, true, "a moved head marker needs a full replacement");
+		await assert.rejects(readSubagentTranscript(child, "not-a-number"), /Invalid subagent conversation/);
+		await assert.rejects(readSubagentTranscript(child, String(root.id), -1), /Invalid cursor/);
 	} finally {
 		await harness.close(context);
 	}

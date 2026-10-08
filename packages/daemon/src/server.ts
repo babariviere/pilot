@@ -83,6 +83,9 @@ function isClientMessage(value: unknown): value is ClientMessage {
 		case "terminal.detach":
 		case "terminal.close":
 			return true;
+		case "subagent.subscribe":
+		case "subagent.unsubscribe":
+			return typeof message.name === "string" && message.name.length > 0 && message.name.length <= 128;
 		case "terminal.input":
 			return typeof message.data === "string";
 		case "terminal.attach":
@@ -235,8 +238,22 @@ export function createDaemonServer(
 			} catch {
 				throw new HttpError(400, "Invalid subagent name");
 			}
-			if (parts[5] === "transcript" && req.method === "GET")
-				return json(res, 200, await sessions.subagentTranscript(id, name));
+			if (parts[5] === "transcript" && req.method === "GET") {
+				const after = url.searchParams.get("after");
+				if (after !== null && (!/^\d+$/.test(after) || !Number.isSafeInteger(Number(after))))
+					throw new HttpError(400, "after must be a non-negative integer");
+				const ifNoneMatch = req.headers["if-none-match"]?.replace(/^W\//, "").replace(/^"|"$/g, "");
+				const read = await sessions.subagentTranscript(id, name, {
+					...(after === null ? {} : { after: Number(after) }),
+					...(ifNoneMatch ? { ifNoneMatch } : {}),
+				});
+				if (read.signature) res.setHeader("etag", JSON.stringify(read.signature));
+				if (read.unchanged) {
+					res.writeHead(304);
+					return res.end();
+				}
+				return json(res, 200, read.transcript);
+			}
 			if (parts[5] === "messages" && req.method === "POST") {
 				const body = await readJson<SubagentMessageRequest>(req);
 				if (!body || typeof body.message !== "string" || !body.message.trim())
@@ -340,6 +357,7 @@ export function createDaemonServer(
 	wss.on("connection", (ws: WebSocket) => {
 		clients.set(ws, boundedSender(ws));
 		const subscriptions = new Map<string, () => void>();
+		const subagentSubscriptions = new Map<string, () => void>();
 		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
@@ -387,12 +405,36 @@ export function createDaemonServer(
 			} else if (message.type === "unsubscribe") {
 				subscriptions.get(sessionId)?.();
 				subscriptions.delete(sessionId);
+			} else if (message.type === "subagent.subscribe" || message.type === "subagent.unsubscribe") {
+				const { name } = message;
+				const key = `${sessionId}\0${name}`;
+				subagentSubscriptions.get(key)?.();
+				subagentSubscriptions.delete(key);
+				if (message.type === "subagent.unsubscribe") return;
+				try {
+					subagentSubscriptions.set(
+						key,
+						sessions.watchSubagent(sessionId, name, {
+							events: (events) => send(ws, { type: "subagent.events", sessionId, name, events }),
+							error: (error) => send(ws, { type: "error", sessionId, name, message: error }),
+						}),
+					);
+				} catch (error) {
+					send(ws, {
+						type: "error",
+						sessionId,
+						name,
+						message: error instanceof Error ? error.message : String(error),
+					});
+				}
 			}
 		});
 		ws.on("close", () => {
 			clients.delete(ws);
 			for (const unsubscribe of subscriptions.values()) unsubscribe();
 			subscriptions.clear();
+			for (const unsubscribe of subagentSubscriptions.values()) unsubscribe();
+			subagentSubscriptions.clear();
 			for (const detach of attachedTerminals.values()) detach();
 		});
 	});

@@ -1,61 +1,103 @@
 import PilotCore
 import SwiftUI
 
-/// One subagent's read-only transcript, refreshed while it works and when its answer changes.
+/// One subagent's live, read-only transcript, streamed from pilotd. Shared by every view of that
+/// subagent, so the popover and the Agents tab never open two streams.
 @MainActor
 final class SubagentFeed: ObservableObject {
     @Published private(set) var presentation = TranscriptPresentation()
     @Published private(set) var loading = true
     @Published private(set) var error: String?
-    let sessionId: String
-    let name: String
+    let key: SubagentKey
     private let client: PilotClient
-    private var polling: Task<Void, Never>?
-    private var observed: SessionSubagent?
-    static let interval: Duration = .milliseconds(1500)
+    private var token: UUID?
+    private var processor = TranscriptProcessor()
+    private var pending: [[JSONValue]] = []
+    private var processing: Task<Void, Never>?
+    private var generation = UUID()
+    private var users = 0
+    private var linger: Task<Void, Never>?
+    /// Called once nothing has used the feed for `lingerDelay`, so the owner can drop it.
+    var onIdle: (() -> Void)?
+    var lingerDelay: Duration = .seconds(5)
 
-    init(sessionId: String, name: String, client: PilotClient) {
-        self.sessionId = sessionId
-        self.name = name
+    init(key: SubagentKey, client: PilotClient) {
+        self.key = key
         self.client = client
     }
 
-    /// Polls only while the subagent works; otherwise reads once per state or answer change.
-    func observe(_ subagent: SessionSubagent?) {
-        let changed = subagent?.state != observed?.state || subagent?.lastAnswerId != observed?.lastAnswerId
-            || subagent?.error != observed?.error
-        observed = subagent
-        guard polling == nil || changed else { return }
-        polling?.cancel()
-        polling = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self else { return }
-                await self.refresh()
-                guard self.observed?.isWorking == true else { break }
-                try? await Task.sleep(for: Self.interval)
+    var isActive: Bool { users > 0 || linger != nil }
+
+    /// Views retain the feed while visible. The stream outlives a brief gap, such as popover to tab.
+    func retain() {
+        users += 1
+        linger?.cancel()
+        linger = nil
+        guard token == nil else { return }
+        generation = UUID()
+        loading = true
+        token = client.subscribeSubagent(key, PilotClient.SubagentListener(
+            events: { [weak self] events in self?.enqueue(events) },
+            error: { [weak self] message in
+                self?.error = message
+                self?.loading = false
+            }
+        ))
+    }
+
+    func release() {
+        users = max(0, users - 1)
+        guard users == 0, linger == nil else { return }
+        linger = Task { [weak self] in
+            try? await Task.sleep(for: self?.lingerDelay ?? .zero)
+            guard !Task.isCancelled, let self, self.users == 0 else { return }
+            self.linger = nil
+            self.stop()
+            self.onIdle?()
+        }
+    }
+
+    private func stop() {
+        if let token { client.unsubscribeSubagent(key, token: token) }
+        token = nil
+        generation = UUID()
+        processing?.cancel()
+        processing = nil
+        pending.removeAll()
+        processor = TranscriptProcessor()
+    }
+
+    private func enqueue(_ events: [JSONValue]) {
+        // An empty batch means the subagent has no storage yet: replace with an empty transcript.
+        if events.isEmpty || events.contains(where: { $0["type"]?.string == "snapshot" }) {
+            processing?.cancel()
+            processing = nil
+            pending.removeAll()
+            processor = TranscriptProcessor()
+            generation = UUID()
+            if events.isEmpty {
+                presentation = TranscriptPresentation()
+                loading = false
+                error = nil
+                return
             }
         }
-    }
-
-    func stop() {
-        polling?.cancel()
-        polling = nil
-        observed = nil
-    }
-
-    private func refresh() async {
-        do {
-            let events = try await client.subagentTranscript(sessionId, name: name)
-            let presentation = await Task.detached(priority: .userInitiated) {
-                TranscriptPresentation(transcript: Transcript(events: events))
-            }.value
-            guard !Task.isCancelled else { return }
-            if presentation.rows != self.presentation.rows { self.presentation = presentation }
-            error = nil
-        } catch {
-            if !Task.isCancelled { self.error = error.localizedDescription }
+        pending.append(events)
+        guard processing == nil else { return }
+        let generation = generation
+        let processor = processor
+        processing = Task { [weak self] in
+            while let self, self.generation == generation, !self.pending.isEmpty {
+                let batch = self.pending.flatMap { $0 }
+                self.pending.removeAll(keepingCapacity: true)
+                guard let presentation = try? await processor.apply(batch) else { break }
+                guard !Task.isCancelled, self.generation == generation else { return }
+                self.presentation = presentation
+                self.loading = false
+                self.error = nil
+            }
+            if let self, self.generation == generation { self.processing = nil }
         }
-        loading = false
     }
 
     /// The latest tool calls and text, for compact previews.
@@ -67,6 +109,25 @@ final class SubagentFeed: ObservableObject {
             }
         }.suffix(3))
     }
+}
+
+/// Live subagent feeds by session and name, dropped shortly after their last view disappears.
+@MainActor
+final class SubagentFeeds {
+    private var feeds: [SubagentKey: SubagentFeed] = [:]
+
+    func feed(_ key: SubagentKey, client: PilotClient) -> SubagentFeed {
+        if let feed = feeds[key] { return feed }
+        let feed = SubagentFeed(key: key, client: client)
+        feed.onIdle = { [weak self, weak feed] in
+            guard let self, let feed, self.feeds[key] === feed, !feed.isActive else { return }
+            self.feeds[key] = nil
+        }
+        feeds[key] = feed
+        return feed
+    }
+
+    var count: Int { feeds.count }
 }
 
 // MARK: - Status
@@ -200,13 +261,13 @@ struct SubagentPopover: View {
     let subagent: SessionSubagent
     let dismiss: () -> Void
     @EnvironmentObject private var model: AppModel
-    @StateObject private var feed: SubagentFeed
+    @ObservedObject private var feed: SubagentFeed
 
     init(session: SessionSummary, subagent: SessionSubagent, dismiss: @escaping () -> Void) {
         self.session = session
         self.subagent = subagent
         self.dismiss = dismiss
-        _feed = StateObject(wrappedValue: SubagentFeed(sessionId: session.id, name: subagent.name, client: AppModel.shared.client))
+        feed = AppModel.shared.subagentFeed(session.id, subagent.name)
     }
 
     var body: some View {
@@ -263,9 +324,8 @@ struct SubagentPopover: View {
         }
         .padding(14)
         .frame(width: 380)
-        .onAppear { feed.observe(subagent) }
-        .onChange(of: subagent) { _, value in feed.observe(value) }
-        .onDisappear { feed.stop() }
+        .onAppear { feed.retain() }
+        .onDisappear { feed.release() }
     }
 
     /// Recent rows, without repeating the failure already shown above.
@@ -388,13 +448,13 @@ private struct SubagentDetail: View {
     let session: SessionSummary
     let subagent: SessionSubagent
     @EnvironmentObject private var model: AppModel
-    @StateObject private var feed: SubagentFeed
+    @ObservedObject private var feed: SubagentFeed
     @StateObject private var draft = SubagentDraft()
 
     init(session: SessionSummary, subagent: SessionSubagent) {
         self.session = session
         self.subagent = subagent
-        _feed = StateObject(wrappedValue: SubagentFeed(sessionId: session.id, name: subagent.name, client: AppModel.shared.client))
+        feed = AppModel.shared.subagentFeed(session.id, subagent.name)
     }
 
     var body: some View {
@@ -433,14 +493,13 @@ private struct SubagentDetail: View {
             composer
         }
         .onAppear {
-            feed.observe(subagent)
+            feed.retain()
             model.markSubagentRead(subagent, in: session.id)
         }
         .onChange(of: subagent) { _, value in
-            feed.observe(value)
             model.markSubagentRead(value, in: session.id)
         }
-        .onDisappear { feed.stop() }
+        .onDisappear { feed.release() }
     }
 
     private var transcript: some View {

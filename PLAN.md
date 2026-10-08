@@ -461,6 +461,11 @@ reports), producing a morning summary in the app and Slack.
   inspector's Agents tab lists them with the selected subagent's full read-only transcript (read from its
   private `runs.sqlite`, never waking a parked kernel), plus Steer, Queue and Stop. Answers delivered
   to the parent render as compact answer cards. Unread answers are tracked locally per answer ID.
+  Transcripts stream over `subagent.subscribe`: pilotd runs one long-lived reader thread per watched
+  subagent (at most 8), shared by all viewers. It polls only the size and mtime of `runs.sqlite` and its
+  WAL every 250 ms (about 1 ms of CPU per second when idle) and, on a change, reads just the new entries
+  in a short read transaction, so it never pins the child's WAL. A moved head marker (compaction)
+  sends a fresh snapshot. `GET …/transcript` supports `?after=<entryId>` and an ETag for one-off reads.
   Extension messages that start a turn (`sendMessage` with `triggerTurn`, `sendUserMessage`) become
   durable Harness input, so subagent answers wake the parent; identical notifications are admitted once.
 - Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI

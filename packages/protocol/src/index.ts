@@ -173,11 +173,19 @@ export interface SessionSubagent {
 	retired?: boolean;
 }
 
-/** GET /api/sessions/:id/subagents/:name/transcript: a read-only snapshot of the subagent's conversation. */
+/**
+ * GET /api/sessions/:id/subagents/:name/transcript[?after=<entryId>]: a read-only read of the subagent's
+ * conversation. Responses carry an ETag; `If-None-Match` returns 304 when storage has not changed.
+ * Clients that display a transcript should prefer the `subagent.subscribe` WebSocket stream.
+ */
 export interface SubagentTranscript {
 	name: string;
-	/** A single durable snapshot event, or an empty list before the subagent has started. */
+	/** True: `events` replaces the transcript (one snapshot, or none before the subagent started). */
+	full: boolean;
+	/** A snapshot event when full, otherwise `entry_appended` events after `after`. */
 	events: AgentEvent[];
+	/** Newest entry ID included; pass as `after` for the next read. */
+	cursor?: number;
 }
 
 /** POST /api/sessions/:id/subagents/:name/messages. Steers current work by default. */
@@ -371,7 +379,10 @@ export type ClientMessage =
 	| { type: "terminal.input"; sessionId: string; data: string }
 	| { type: "terminal.resize"; sessionId: string; cols: number; rows: number }
 	/** Kill the shell. */
-	| { type: "terminal.close"; sessionId: string };
+	| { type: "terminal.close"; sessionId: string }
+	/** Stream one subagent's transcript: a snapshot first (also after reconnects), then appended entries. */
+	| { type: "subagent.subscribe"; sessionId: string; name: string }
+	| { type: "subagent.unsubscribe"; sessionId: string; name: string };
 
 /** Daemon to client, over /api/ws. */
 export type ServerMessage =
@@ -384,6 +395,8 @@ export type ServerMessage =
 	| { type: "events"; sessionId: string; events: AgentEvent[] }
 	| { type: "terminal.data"; sessionId: string; data: string }
 	| { type: "terminal.exit"; sessionId: string; code: number }
-	| { type: "error"; sessionId?: string; message: string };
+	/** Replaces the transcript when it contains a snapshot (or is empty); otherwise appends entries. */
+	| { type: "subagent.events"; sessionId: string; name: string; events: AgentEvent[] }
+	| { type: "error"; sessionId?: string; name?: string; message: string };
 
 export const DEFAULT_PORT = 4319;

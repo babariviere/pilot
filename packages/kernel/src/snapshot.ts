@@ -82,17 +82,68 @@ async function conversationView(
 }
 
 /**
- * Read-only snapshot of a pi-extensions subagent conversation from its private `runs.sqlite`.
- * Empty before the child has created its storage.
+ * One read of a pi-extensions subagent conversation from its private `runs.sqlite`.
+ * `full` reads replace the transcript with one snapshot event; incremental reads only append entries.
  */
-export async function readSubagentSnapshot(directory: string, conversationId: string): Promise<AgentEvent[]> {
+export interface SubagentTranscriptRead {
+	full: boolean;
+	/** A snapshot event when full (none before the child has storage), otherwise `entry_appended` events. */
+	events: AgentEvent[];
+	/** Newest entry ID included so far. Pass it back as `after` for the next incremental read. */
+	cursor?: number;
+}
+
+/**
+ * Read-only, never a writer: each call opens and closes its own short read transaction, so a long-lived
+ * watcher cannot pin the child's WAL. With `after`, returns only newer entries, unless compaction
+ * moved the head marker, which needs a full replacement.
+ */
+export async function readSubagentTranscript(
+	directory: string,
+	conversationId: string,
+	after?: number,
+): Promise<SubagentTranscriptRead> {
 	const id = Number(conversationId);
 	if (!Number.isSafeInteger(id) || id < 0) throw new Error(`Invalid subagent conversation: ${conversationId}`);
+	if (after !== undefined && (!Number.isSafeInteger(after) || after < 0)) throw new Error(`Invalid cursor: ${after}`);
 	const storage = await openSessionReader(directory, "runs.sqlite");
-	if (!storage) return [];
+	if (!storage) return { full: true, events: [] };
+	if (after !== undefined) {
+		let full = false;
+		const entries: EntryRecord[] = [];
+		try {
+			const head = await storage.findLatestHeadMarker(id as ConversationId, undefined, context);
+			full = head !== undefined && Number(head.id) > after;
+			let cursor: Cursor | undefined;
+			while (!full) {
+				const page = await storage.scanEntries(
+					{ conversationId: id as ConversationId, minEntryId: (after + 1) as EntryRecord["id"] },
+					256,
+					cursor,
+					context,
+				);
+				entries.push(...page.items);
+				cursor = page.next;
+				if (cursor === undefined) break;
+			}
+		} finally {
+			await storage.close(context);
+		}
+		entries.sort((a, b) => Number(a.id) - Number(b.id));
+		if (!full && !entries.some((entry) => entry.head !== undefined))
+			return {
+				full: false,
+				events: entries.map((entry) => ({ type: "entry_appended", entry })),
+				cursor: entries.length ? Number(entries.at(-1)!.id) : after,
+			};
+		return readSubagentTranscript(directory, conversationId);
+	}
 	const view = await conversationView(storage, id as ConversationId);
 	// Only the transcript: the child's inbox belongs to its supervisor, not to Pilot's queue editor.
-	return view.events.filter((event) => event.type === "snapshot");
+	const events = view.events.filter((event) => event.type === "snapshot");
+	const snapshot = events[0];
+	const ids = snapshot?.type === "snapshot" ? snapshot.entries.map((entry) => Number(entry.id)) : [];
+	return { full: true, events, ...(ids.length ? { cursor: Math.max(...ids) } : {}) };
 }
 
 export async function readSessionSnapshot(

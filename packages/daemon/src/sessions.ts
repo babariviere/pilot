@@ -12,6 +12,8 @@ import {
 	type KernelPacket,
 	type KernelSubagent,
 	type PersistedSessionView,
+	type SubagentTranscriptRead,
+	subagentStorageSignature,
 	type WorkspaceContext,
 	workerEntry,
 } from "@pilot/kernel";
@@ -32,6 +34,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
+import { type SubagentWatchListener, SubagentWatches, type SubagentWatchStarter } from "./subagent-watches.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -112,7 +115,9 @@ export interface SessionFactories {
 	/** Read-only persisted view, independent of the worker/SDK factory. */
 	snapshot?: (directory: string, cwd: string, includeTodos?: boolean) => Promise<PersistedSessionView>;
 	/** Read-only subagent transcript events from a child's private storage directory. */
-	subagentSnapshot?: (directory: string, conversationId: string) => Promise<AgentEvent[]>;
+	subagentRead?: (directory: string, conversationId: string, after?: number) => Promise<SubagentTranscriptRead>;
+	/** Starts a live transcript watcher. Defaults to a long-lived reader thread. */
+	subagentWatch?: SubagentWatchStarter;
 	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
 	workspace?: typeof createWorkspace;
 	askSnapshot?: typeof prepareAskSnapshot;
@@ -560,6 +565,9 @@ export class SessionManager {
 	/** Viewers sharing a read, including flights evicted from the bounded snapshot cache. */
 	private readonly coldConsumers = new Map<Promise<PersistedSessionView>, number>();
 	private readonly coldReader = new ColdViewReader();
+	private subagentWatchStore?: SubagentWatches;
+	/** Live subagent subscriptions waiting for, or following, their child's storage. */
+	private readonly subagentAttachers = new Map<string, Set<() => void>>();
 	private readonly workerGenerations = new Map<string, number>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
 
@@ -1474,19 +1482,101 @@ export class SessionManager {
 	}
 
 	/** Read-only transcript of one subagent, without waking the kernel. */
-	async subagentTranscript(id: string, name: string): Promise<SubagentTranscript> {
-		const meta = this.require(id);
-		const subagent = meta.subagents?.find((candidate) => candidate.name === name);
-		if (!subagent) throw new NotFound(`No subagent named ${name}`);
-		if (subagent.conversationId === undefined) return { name, events: [] };
-		// Storage comes from extension code; only read inside this session's private subagent runs.
+	private get subagentWatches(): SubagentWatches {
+		this.subagentWatchStore ??= new SubagentWatches(this.factories.subagentWatch);
+		return this.subagentWatchStore;
+	}
+
+	/** Storage comes from extension code; only read inside this session's private subagent runs. */
+	private subagentStorage(id: string, subagent: KernelSubagent): string {
 		const root = resolve(this.dir(id), "durable", "subagent-runs");
 		const directory = resolve(subagent.storage);
 		if (!directory.startsWith(root + sep)) throw new Error("Subagent storage is outside the session");
-		const events = this.factories.subagentSnapshot
-			? await this.factories.subagentSnapshot(directory, subagent.conversationId)
-			: (await this.coldReader.readSubagent(directory, subagent.conversationId)).events;
-		return { name, events };
+		return directory;
+	}
+
+	/**
+	 * Read-only transcript of one subagent, without waking the kernel. `after` returns only newer entries.
+	 * When `ifNoneMatch` equals the current storage signature, returns `unchanged` without reading.
+	 */
+	async subagentTranscript(
+		id: string,
+		name: string,
+		options: { after?: number; ifNoneMatch?: string } = {},
+	): Promise<{ transcript?: SubagentTranscript; signature?: string; unchanged?: boolean }> {
+		const meta = this.require(id);
+		const subagent = meta.subagents?.find((candidate) => candidate.name === name);
+		if (!subagent) throw new NotFound(`No subagent named ${name}`);
+		if (subagent.conversationId === undefined) return { transcript: { name, full: true, events: [] } };
+		const directory = this.subagentStorage(id, subagent);
+		// Includes the conversation and cursor, so a cached response is only reused for the same question.
+		const signature = `${subagent.conversationId}/${options.after ?? "full"}/${subagentStorageSignature(directory)}`;
+		if (options.ifNoneMatch === signature) return { signature, unchanged: true };
+		const read = this.factories.subagentRead
+			? await this.factories.subagentRead(directory, subagent.conversationId, options.after)
+			: await this.coldReader.readSubagent(directory, subagent.conversationId, options.after);
+		return {
+			signature,
+			transcript: {
+				name,
+				full: read.full,
+				events: read.events,
+				...(read.cursor === undefined ? {} : { cursor: read.cursor }),
+			},
+		};
+	}
+
+	/**
+	 * Live transcript of one subagent: a snapshot first, then appended entries. Waits for the child's
+	 * storage when it has not started, and follows a restarted conversation. Never wakes the kernel.
+	 */
+	watchSubagent(id: string, name: string, listener: SubagentWatchListener): () => void {
+		const meta = this.require(id);
+		if (this.closing) throw new Error("pilotd is shutting down");
+		if (!meta.subagents?.some((candidate) => candidate.name === name))
+			throw new NotFound(`No subagent named ${name}`);
+		let closed = false;
+		let current: string | undefined;
+		let stop: (() => void) | undefined;
+		let waiting = false;
+		const attach = () => {
+			if (closed) return;
+			const subagent = meta.subagents?.find((candidate) => candidate.name === name);
+			if (!subagent || subagent.conversationId === undefined) {
+				if (!waiting) listener.events([]);
+				waiting = true;
+				return;
+			}
+			let directory: string;
+			try {
+				directory = this.subagentStorage(id, subagent);
+			} catch (error) {
+				listener.error(error instanceof Error ? error.message : String(error));
+				return;
+			}
+			const key = `${directory}\0${subagent.conversationId}`;
+			if (key === current) return;
+			stop?.();
+			stop = undefined;
+			current = key;
+			waiting = false;
+			try {
+				stop = this.subagentWatches.watch(directory, subagent.conversationId, listener);
+			} catch (error) {
+				current = undefined;
+				listener.error(error instanceof Error ? error.message : String(error));
+			}
+		};
+		let attachers = this.subagentAttachers.get(id);
+		if (!attachers) this.subagentAttachers.set(id, (attachers = new Set()));
+		attachers.add(attach);
+		attach();
+		return () => {
+			closed = true;
+			stop?.();
+			attachers.delete(attach);
+			if (!attachers.size && this.subagentAttachers.get(id) === attachers) this.subagentAttachers.delete(id);
+		};
 	}
 
 	/** Steer, queue for, or stop a subagent on the user's behalf. Reopens a parked kernel. */
@@ -1719,6 +1809,7 @@ export class SessionManager {
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
+		this.subagentWatchStore?.close();
 		await Promise.allSettled([...this.coldReads]);
 		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
@@ -2044,6 +2135,7 @@ export class SessionManager {
 			else delete meta.subagents;
 			void this.save(meta);
 			this.emit(meta, worker);
+			for (const attach of [...(this.subagentAttachers.get(meta.id) ?? [])]) attach();
 			return;
 		}
 		if (packet.type === "modelChanged") {
