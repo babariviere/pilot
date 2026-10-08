@@ -152,7 +152,7 @@ export interface RemoteBranchList {
 
 /** Offline libraries available inside the artifact sandbox. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
-export type ArtifactKind = "html" | "react" | "image";
+export type ArtifactKind = "html" | "react" | "image" | "swiftui";
 
 export interface ArtifactSummary {
 	id: string;

@@ -75,16 +75,21 @@ export class ArtifactStore {
 		}
 	}
 
-	create(write: ArtifactWrite): Promise<ArtifactRevision> {
-		return this.serialize(async () => this.publish(randomUUID(), write));
+	create(write: ArtifactWrite, signal?: AbortSignal): Promise<ArtifactRevision> {
+		return this.serialize(async () => this.publish(randomUUID(), write, undefined, signal));
 	}
 
-	update(id: string, write: ArtifactWrite, expectedRevision?: number): Promise<ArtifactRevision> {
+	update(
+		id: string,
+		write: ArtifactWrite,
+		expectedRevision?: number,
+		signal?: AbortSignal,
+	): Promise<ArtifactRevision> {
 		return this.serialize(async () => {
 			const previous = await this.get(id);
 			if (expectedRevision !== undefined && previous.revision !== expectedRevision)
 				throw new Error(`Artifact revision conflict: expected ${expectedRevision}, latest is ${previous.revision}`);
-			return this.publish(id, write, previous);
+			return this.publish(id, write, previous, signal);
 		});
 	}
 
@@ -94,9 +99,15 @@ export class ArtifactStore {
 		return next;
 	}
 
-	private async publish(id: string, input: ArtifactWrite, previous?: ArtifactRevision): Promise<ArtifactRevision> {
+	private async publish(
+		id: string,
+		input: ArtifactWrite,
+		previous?: ArtifactRevision,
+		signal?: AbortSignal,
+	): Promise<ArtifactRevision> {
 		const write = validateArtifact(input);
-		const prepared = await prepareArtifact(write);
+		const prepared = await prepareArtifact(write, { signal });
+		signal?.throwIfAborted();
 		const now = Date.now();
 		const artifact: ArtifactRevision = {
 			id,

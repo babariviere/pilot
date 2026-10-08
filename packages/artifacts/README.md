@@ -1,8 +1,8 @@
 # Artifacts
 
-Session-owned, project-indexed images, HTML/JavaScript and React/JSX documents. This package owns preparation,
-offline libraries, revision storage and optional agent-side browser previews. It does not run generated
-code in Node or grant artifacts native capabilities.
+Session-owned, project-indexed images, HTML/JavaScript, React/JSX and standalone SwiftUI documents.
+This package owns preparation, offline libraries, revision storage and agent-side previews. Generated
+JavaScript never runs in Node; SwiftUI runs only in disposable native sandbox processes.
 
 ## Authoring
 
@@ -96,23 +96,70 @@ files, package installs, CDN imports, Tailwind, or arbitrary npm modules. Use in
 element for custom CSS. For HTML images, use embedded data URLs. Artifact revisions save the source
 and prepared HTML, not temporary workspace files.
 
+### SwiftUI
+
+Provide self-contained Swift declarations with a zero-argument `ArtifactView`:
+
+```js
+await tools.artifact({
+  action: "create",
+  title: "Native card",
+  kind: "swiftui",
+  source: `struct ArtifactView: View {
+    var body: some View {
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Preview").font(.title)
+        Text("Native SwiftUI layout with fixture data")
+      }.padding(24)
+    }
+  }`,
+});
+```
+
+Requires macOS 14+ with Swift Command Line Tools installed (`xcode-select --install`) and
+`/usr/bin/sandbox-exec` available. SwiftUI, AppKit and Foundation imports are provided. No project
+modules, package dependencies, `@main` or `#Preview`. Avoid `@State`, whose macro plugin is absent
+from Command Line Tools; use `@StateObject` holders if needed. Source is limited to 512 KiB UTF-8;
+offline JavaScript libraries are not supported.
+
+Create/update compile and render an 800x600 static PNG, saving the original Swift source and an
+offline image document. Existing viewers can display it without a Swift toolchain or recompilation;
+Source shows the editable Swift code. Draft preview supports custom viewport dimensions using the
+same width/height options as browser previews. Content height is the fixed viewport height, not a
+scroll measurement. No Chromium installation is needed for SwiftUI.
+
+Previews are standalone layout prototypes, not project-aware builds or interactive apps. Use fixture
+data and label that distinction when showing UI changes. Compiler failures include bounded diagnostics;
+successful draft previews include compiler warnings and runtime output in `consoleMessages`.
+The offscreen SwiftUI `ImageRenderer` does not capture embedded AppKit/WebKit views; use native SwiftUI
+layout primitives for prototypes and inspect the screenshot for unsupported controls.
+
+Native integration checks are opt-in because they require a macOS toolchain and cold SDK builds:
+
+```sh
+PILOT_SWIFTUI_TESTS=1 node --import tsx --test packages/artifacts/src/swiftui.test.ts
+```
+
 ## Verification
 
 Pilot-only system guidance encourages agents to publish explanatory diagrams when useful, preferring
 simple Mermaid diagrams with a short explanation. It is included only when the artifact tool is
-available, including through codemode. Normal Pi sessions and `AGENTS.md` are unchanged.
+available, including through codemode. Normal Pi sessions are unchanged; this project's `AGENTS.md`
+also asks agents to show user-visible UI changes with artifacts.
 
 `artifact({action: "preview", ...})` renders a draft without saving it, returning PNG image content,
 console messages and content height. When using codemode, display the structured `screenshot` with
 `image`, not `text`.
 
 Preview is optional, never a prerequisite for publication. The tool advertises and accepts the preview
-action only if Chromium is installed when the session opens. Without it, agents can still create,
-update and view artifacts, and should not ask for a browser installation to publish diagrams. After
-installing Chromium, reopen the session to enable agent-side previews.
+action only if Chromium or the macOS Swift toolchain is installed when the session opens. Browser
+previews require Chromium; native SwiftUI previews use the Swift toolchain independently. Without
+Chromium, agents can still create, update and view browser artifacts, and should not ask for a browser
+installation to publish diagrams. After installing a renderer, reopen the session to enable its previews.
 
-To enable previews, install Chromium once with `npm run artifacts:browser`. Installation is never
-triggered by a model tool. For an installed release app without npm, run its bundled Node explicitly:
+To enable HTML, React and image draft previews, install Chromium once with `npm run artifacts:browser`.
+SwiftUI uses the native renderer instead. Installation is never triggered by a model tool.
+For an installed release app without npm, run its bundled Node explicitly:
 
 ```sh
 runtime="/Applications/Pilot.app/Contents/Resources/runtime"
@@ -125,6 +172,15 @@ Runtime messages are bounded, viewport dimensions are limited, and previews time
 are sampled shortly after loading; a screenshot is not proof of every interactive state.
 
 ## Storage and security
+
+SwiftUI compilation (including compiler plugins) and rendering both use deny-by-default macOS sandbox
+profiles. They may read the system SDK, libraries and fonts, and their own private temporary directory;
+only that directory is writable. Network access and workspace/user-file reads are denied. Runtime
+subprocesses are denied, environment variables are stripped, output is bounded, and the whole operation
+has a five-minute deadline (cold SDK compilation can take minutes), with rendering limited to 15 seconds.
+Cancellation terminates compiler/helper descendants and removes temporary files. Native artifact code
+never loads into the running Pilot app. The sandbox is required; there is no unsandboxed fallback.
+Saved revisions contain PNG pixels, not native executables.
 
 Files live at `$PILOT_HOME/sessions/<sessionId>/artifacts/<artifactId>/`. Numbered JSON revisions are
 immutable after publication; an atomic `latest.json` points to the latest committed one. The session's

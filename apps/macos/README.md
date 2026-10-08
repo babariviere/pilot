@@ -55,6 +55,10 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   button or View > Toggle Artifacts to show it. Each project retains a Browse artifacts button in
   the navigation sidebar across its sessions.
   Both views offer Source and loading/error states. Offscreen inline previews are disposed.
+  Standalone `swiftui` artifacts show a saved native screenshot and syntax-highlighted Swift source.
+  They are static previews, not interactive or project-aware builds. Rendering requires macOS 14+
+  and Swift Command Line Tools on the daemon host; opening a saved revision needs neither compilation
+  nor Chromium. Compilation and rendering run in disposable native sandboxes, never in the app process.
   Each renderer uses an isolated, nonpersistent WebKit store, a restrictive CSP and a fail-closed
   request blocker. Only declared, allowlisted `pilot-artifact://library/<name>` script resources can
   load through read-only native HTTP requests. There is no JavaScript/native bridge, external
@@ -142,7 +146,9 @@ back to mise shims and Homebrew. pilotd logs to `~/Library/Logs/Pilot/pilotd.log
 ### Optional artifact screenshot browser
 
 Native artifact previews use WebKit and need no browser installation. The agent's optional
-`artifact({action: "preview", ...})` screenshot tool uses Playwright Chromium. Pilot never downloads that browser
+`artifact({action: "preview", ...})` screenshot tool uses Playwright Chromium for HTML, React and images.
+SwiftUI screenshots use the installed Swift Command Line Tools instead, with no browser installation.
+Pilot never downloads that browser
 automatically. If you want screenshots, explicitly run this in Terminal (it downloads Chromium
 into your user cache; adjust the app path if needed):
 

@@ -2,7 +2,8 @@
 import { existsSync } from "node:fs";
 import { type Browser, chromium } from "playwright";
 import type { ArtifactWrite } from "@pilot/protocol";
-import { ARTIFACT_RUNTIME_GUARD, getLibrary, isArtifactLibrary, prepareArtifact } from "./render.ts";
+import { ARTIFACT_RUNTIME_GUARD, getLibrary, isArtifactLibrary, prepareArtifact, validateArtifact } from "./render.ts";
+import { isSwiftUIPreviewAvailable, previewSwiftUI } from "./swiftui.ts";
 
 export interface ArtifactPreview {
 	screenshot: { mimeType: "image/png"; data: string; width: number; height: number };
@@ -10,9 +11,9 @@ export interface ArtifactPreview {
 	contentHeight: number;
 }
 
-/** Probe only the installed browser, without launching it or triggering a download. */
+/** Probe installed renderers without launching them or triggering a download. */
 export function isArtifactPreviewAvailable(): boolean {
-	return existsSync(chromium.executablePath());
+	return existsSync(chromium.executablePath()) || isSwiftUIPreviewAvailable();
 }
 
 export async function previewArtifact(
@@ -31,6 +32,7 @@ export async function previewArtifact(
 	)
 		throw new Error("Preview width must be 240-1600 and height 200-1600 CSS pixels");
 	options.signal?.throwIfAborted();
+	if (write.kind === "swiftui") return previewSwiftUI(validateArtifact(write).source, options);
 	const prepared = await prepareArtifact(write);
 	const libraries = new Map(
 		await Promise.all(prepared.libraries.map(async (name) => [name, await getLibrary(name)] as const)),

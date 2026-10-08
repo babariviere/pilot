@@ -20,6 +20,12 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - Native tools are replay-unsafe: a crash during a tool yields an interrupted result.
 - Keep the daemon bound to loopback until authentication exists.
 - Swift: no `@State` (its macro plugin is missing from Command Line Tools); use `@StateObject` holders.
+- For user-visible UI changes, use the `artifact` tool to show the result. Prefer `kind: "swiftui"`
+  for native layout previews: supply a self-contained `struct ArtifactView: View` with mock data,
+  inspect it with `action: "preview"` when available, then publish with `action: "create"` (or update an existing
+  artifact). SwiftUI artifacts are static screenshots, not project-aware builds; call out that
+  limitation when showing a prototype. If the tool or renderer is unavailable, explain why and
+  provide another visual check rather than claiming a preview was verified.
 
 ## Formatting and tests
 

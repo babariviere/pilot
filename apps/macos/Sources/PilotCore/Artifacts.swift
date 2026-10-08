@@ -1,7 +1,15 @@
 import Foundation
 
 public enum ArtifactKind: String, Codable, Hashable, Sendable {
-    case html, react, image
+    case html, react, image, swiftui
+
+    public var sourceLanguage: String {
+        switch self {
+        case .html, .image: return "html"
+        case .react: return "jsx"
+        case .swiftui: return "swift"
+        }
+    }
 }
 
 public enum ArtifactLibrary: String, Codable, CaseIterable, Hashable, Sendable {
