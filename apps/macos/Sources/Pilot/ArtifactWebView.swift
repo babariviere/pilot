@@ -7,6 +7,22 @@ import WebKit
 final class ArtifactRenderState: ObservableObject {
     @Published var loading = true
     @Published var error: String?
+    @Published var contentSize: CGSize?
+    weak var webView: WKWebView?
+
+    /// Capture the current viewport, including interactive state, without a JS/native bridge.
+    func snapshotPNG() async throws -> Data {
+        guard !loading, error == nil, let webView else { throw ClientError("Preview is not ready") }
+        let configuration = WKSnapshotConfiguration()
+        configuration.rect = webView.bounds
+        let image = try await webView.takeSnapshot(configuration: configuration)
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw ClientError("Cannot encode artifact screenshot")
+        }
+        return data
+    }
 }
 
 /// No message handlers, native bridge, persistent cookies, file URLs, or popup views.
@@ -20,7 +36,8 @@ struct ArtifactWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: AppModel.shared.client)
         let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries)
-        context.coordinator.install(in: view, document: ArtifactSandboxPolicy.document(revision.html))
+        context.coordinator.measurementKind = revision.kind
+        context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision))
         return view
     }
 
@@ -41,6 +58,7 @@ struct ArtifactWebView: NSViewRepresentable {
         view.uiDelegate = coordinator
         view.allowsBackForwardNavigationGestures = false
         view.allowsLinkPreview = false
+        coordinator.state.webView = view
         coordinator.libraries = libraries
         libraries.onError = { [weak coordinator] message in
             guard let coordinator, coordinator.active else { return }
@@ -54,6 +72,8 @@ struct ArtifactWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ view: WKWebView, coordinator: Coordinator) {
         coordinator.active = false
+        coordinator.measurementTask?.cancel()
+        if coordinator.state.webView === view { coordinator.state.webView = nil }
         coordinator.libraries?.dispose()
         view.stopLoading()
         view.navigationDelegate = nil
@@ -70,6 +90,9 @@ struct ArtifactWebView: NSViewRepresentable {
         var active = true
         /// Inline diagrams wait for their asynchronous renderer after navigation finishes.
         var onLoad: ((WKWebView) -> Void)?
+        var measurementKind: ArtifactKind?
+        var measurementTask: Task<Void, Never>?
+        private var measurement = ArtifactContentMeasurement()
         private var initialNavigation = true
 
         init(state: ArtifactRenderState) { self.state = state }
@@ -109,6 +132,60 @@ struct ArtifactWebView: NSViewRepresentable {
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             if let onLoad { onLoad(webView) } else { state.loading = false }
+            startMeasuring(webView)
+        }
+
+        /// Inspect DOM geometry in an isolated JS world. No message handler or native
+        /// capability is exposed to the artifact, and offscreen renderers stop polling.
+        func startMeasuring(_ view: WKWebView) {
+            guard let measurementKind else { return }
+            measurementTask?.cancel()
+            measurementTask = Task { [weak self, weak view] in
+                while !Task.isCancelled {
+                    guard let self, self.active, let view else { return }
+                    do {
+                        let intrinsic = measurementKind == .image || measurementKind == .swiftui
+                        let result = try await view.callAsyncJavaScript("""
+                        if (image) {
+                          const img = document.images[0];
+                          if (!img || !img.naturalWidth || !img.naturalHeight) return null;
+                          const scale = swiftui ? Math.min(1, 800 / img.naturalWidth, 600 / img.naturalHeight) : 1;
+                          return [img.naturalWidth * scale, img.naturalHeight * scale];
+                        }
+                        const body = document.body, root = document.documentElement;
+                        if (!body || !root) return null;
+                        let width = Math.max(body.scrollWidth, root.scrollWidth);
+                        let height = Math.max(body.scrollHeight, root.scrollHeight);
+                        const css = getComputedStyle(body);
+                        const paddingX = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight);
+                        const paddingBottom = parseFloat(css.paddingBottom);
+                        let preferredWidth = width, preferredHeight = height;
+                        // Mermaid and inline SVGs often shrink to max-width:100%. Preserve their
+                        // natural drawing size as a width request, with a height fitted to this viewport.
+                        for (const svg of Array.from(document.querySelectorAll('svg')).slice(0, 128)) {
+                          const bounds = svg.getBoundingClientRect();
+                          const box = svg.viewBox.baseVal;
+                          if (bounds.width <= 0 || bounds.height <= 0 || box.width <= bounds.width || box.height <= 0) continue;
+                          preferredWidth = Math.max(preferredWidth, box.width + paddingX);
+                          preferredHeight = Math.max(preferredHeight, bounds.top + scrollY +
+                            box.height * Math.min(1, Math.max(0, innerWidth - paddingX) / box.width) + paddingBottom);
+                        }
+                        return [preferredWidth, preferredHeight];
+                        """, arguments: ["image": intrinsic, "swiftui": measurementKind == .swiftui],
+                            in: nil, contentWorld: .defaultClient) as? [Double]
+                        guard self.active, !Task.isCancelled else { return }
+                        if let result, result.count == 2,
+                           let size = self.measurement.record(content: CGSize(width: result[0], height: result[1]),
+                                                              viewport: view.bounds.size, intrinsicImage: intrinsic),
+                           self.state.contentSize != size {
+                            self.state.contentSize = size
+                        }
+                    } catch {
+                        // Measurement is best-effort and must not replace a working preview with an error.
+                    }
+                    do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                }
+            }
         }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }

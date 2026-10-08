@@ -97,6 +97,7 @@ test("SwiftUI publishes editable source and durable screenshots, and failed upda
 		assert.equal(first.source, source);
 		assert.deepEqual(first.libraries, []);
 		assert.match(first.html, /data:image\/png;base64,/);
+		assert.match(first.html, /width:auto;height:auto;max-width:min\(100vw,800px\);max-height:min\(100vh,600px\)/);
 		assert.doesNotMatch(first.html, /struct ArtifactView/);
 		const reopened = new ArtifactStore(directory, { sessionId: "native" });
 		assert.deepEqual(await reopened.get(first.id), first);

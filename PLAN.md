@@ -485,11 +485,23 @@ reports), producing a morning summary in the app and Slack.
   The right-hand inspector's Artifacts tab lists every artifact in the current chat, updates live,
   and opens the latest revision on click. Project-wide browsing remains in the navigation sidebar.
   Plain PNG, JPEG, GIF and WebP files (or data URLs) are embedded with their revisions, up to 16 MiB.
-  Chat previews are borderless embedded content, with artifact rows growing up to 1200 points wide
-  while prose keeps its readable column. Preview height follows a 4:3 viewport, bounded to 360 to 720 points.
+  Chat previews are borderless embedded content. They begin with a viewport up to 1200 points wide
+  and 360 to 720 points tall, then grow to fit measured content, up to the chat's full available width
+  and 1600 points tall. Image previews use intrinsic aspect ratio; HTML/React measurements update
+  after rendering, responsive reflow and asynchronous content changes. Viewport-relative CSS cannot
+  cause unbounded resize feedback. Prose keeps its readable column. Expanded viewers start at 90% of
+  the usable screen and can grow for content to a 16-point screen margin, without going offscreen.
   Clicking opens images and diagrams at a larger size,
-  or an interactive sandbox for apps. Source and revision controls live in the expanded viewer (diagram
-  source is also available from its context menu). Expanded viewers use 90% of the display's usable area.
+  or an interactive sandbox for apps. Expanded artifact viewers always show the preview, with no
+  Preview/Source switch. Their Share menu copies file content, materializes a pinned source/image file
+  locally to copy its full path or reveal it in Finder, saves the original source/image with Save As,
+  and copies or exports a PNG of the visible preview (including interactive state). Local files live
+  in the app's artifact export cache, not the daemon's private store.
+  The single viewer header has a close icon on the left, artifact type beside the revision label,
+  and Share on the top right, without a repeated compact revision badge.
+  Images and SwiftUI screenshots fit the viewport without enlargement beyond their natural size,
+  including previously saved revisions.
+  Markdown diagram source remains available from its context menu; its expanded viewer uses 90% of the display's usable area.
   Offscreen chat rows release their renderer; previews can also be hidden manually. An older running
   daemon without artifact routes prompts for a restart once agents are idle. Native WebKit renders isolated,
   offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,

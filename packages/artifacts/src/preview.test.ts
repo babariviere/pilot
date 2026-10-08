@@ -15,32 +15,42 @@ test("native preview remains available without Chromium", { skip: !isSwiftUIPrev
 	assert.equal(isArtifactPreviewAvailable(), true);
 });
 
-test("plain images decode offline and fit both inline and expanded viewports", {
+test("plain images retain natural size and shrink proportionally in inline and expanded viewports", {
 	skip: !browserInstalled,
 }, async () => {
-	const source =
-		"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
-	const prepared = await prepareArtifact({ title: "Image", kind: "image", source });
 	const browser = await chromium.launch({ headless: true });
 	try {
 		const page = await browser.newPage();
-		for (const viewport of [
-			{ width: 640, height: 240 },
-			{ width: 1296, height: 810 },
+		for (const size of [
+			{ width: 1, height: 1 },
+			{ width: 320, height: 200 },
+			{ width: 1600, height: 400 },
+			{ width: 400, height: 1600 },
 		]) {
-			await page.setViewportSize(viewport);
+			const source = await page.evaluate(({ width, height }) => {
+				const canvas = document.createElement("canvas");
+				canvas.width = width;
+				canvas.height = height;
+				return canvas.toDataURL("image/png");
+			}, size);
+			const prepared = await prepareArtifact({ title: "Image", kind: "image", source });
 			await page.setContent(prepared.html);
-			const image = await page.locator("img").evaluate((element) => {
-				const image = element as HTMLImageElement;
-				const bounds = image.getBoundingClientRect();
-				return {
-					width: image.naturalWidth,
-					height: image.naturalHeight,
-					boxWidth: bounds.width,
-					boxHeight: bounds.height,
-				};
-			});
-			assert.deepEqual(image, { width: 1, height: 1, boxWidth: viewport.width, boxHeight: viewport.height });
+			await page.locator("img").evaluate((element) => (element as HTMLImageElement).decode());
+			for (const viewport of [
+				{ width: 640, height: 240 },
+				{ width: 1296, height: 810 },
+			]) {
+				await page.setViewportSize(viewport);
+				const image = await page.locator("img").evaluate((element) => {
+					const bounds = element.getBoundingClientRect();
+					return { width: bounds.width, height: bounds.height, x: bounds.x, y: bounds.y };
+				});
+				const scale = Math.min(1, viewport.width / size.width, viewport.height / size.height);
+				assert.ok(Math.abs(image.width - size.width * scale) < 0.1);
+				assert.ok(Math.abs(image.height - size.height * scale) < 0.1);
+				assert.ok(Math.abs(image.x - (viewport.width - image.width) / 2) < 0.1);
+				assert.ok(Math.abs(image.y - (viewport.height - image.height) / 2) < 0.1);
+			}
 		}
 	} finally {
 		await browser.close();

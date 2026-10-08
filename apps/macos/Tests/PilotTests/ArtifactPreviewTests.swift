@@ -69,7 +69,6 @@ private let previewReference = ArtifactReference(id: "artifact", sessionId: "ses
 @Test @MainActor func artifactCardsStartWithPreviewInsteadOfSource() {
     let state = ArtifactViewState()
     #expect(state.preview)
-    #expect(!state.source)
     #expect(!state.visible) // The renderer still waits for the row to appear.
     state.preview.toggle()
     #expect(!state.preview)
