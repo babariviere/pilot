@@ -22,7 +22,7 @@ export interface KernelSpec {
 
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
-	| { type: "input"; requestId: string; content: string; mode: DeliveryMode }
+	| { type: "input"; requestId: string; content: string; mode: DeliveryMode; onlyIfIdle?: boolean }
 	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
@@ -44,6 +44,7 @@ export type KernelPacket =
 	| { type: "usage"; usage: SessionUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
 	| { type: "artifacts.changed" }
+	| { type: "pullRequest.created"; url: string }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
 	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: SessionUsage }

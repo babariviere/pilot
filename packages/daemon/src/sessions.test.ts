@@ -153,6 +153,30 @@ test("acknowledged commands cancel their deadline and idle-child inspection does
 	assert.deepEqual(child.killed, []);
 	assert.equal(worker.busy, false);
 });
+
+test("automatic idle-guard rejection does not leave a visible worker error", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t);
+	ready();
+	const input = worker.request({
+		type: "input",
+		requestId: "automatic",
+		content: "Check the PR",
+		mode: "followUp",
+		onlyIfIdle: true,
+	});
+	const rejected = assert.rejects(input, CommandRejected);
+	child.emit("message", { type: "error", requestId: "automatic", message: "Conversation is busy", code: "busy" });
+	await rejected;
+	assert.equal(worker.error, undefined);
+	assert.equal(worker.state, "idle");
+	assert.equal(worker.busy, false);
+	// Ordinary rejected user commands still expose their error.
+	const user = worker.request({ type: "input", requestId: "user", content: "User work", mode: "followUp" });
+	const userRejected = assert.rejects(user, CommandRejected);
+	child.emit("message", { type: "error", requestId: "user", message: "User input failed", code: "busy" });
+	await userRejected;
+	assert.equal(worker.error, "User input failed");
+});
 function deferred() {
 	let resolve!: () => void;
 	let reject!: (error: Error) => void;

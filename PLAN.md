@@ -254,7 +254,23 @@ the isolated working copy is ready.
   supported. macOS build/test helpers default to two Swift jobs (`PILOT_SWIFT_JOBS` overrides this;
   explicit test `--jobs` also overrides it), so concurrent agents leave capacity for the UI.
 
-### 6.2 GitHub: CI failures and review comments (M3)
+### 6.2 GitHub: PR follow-ups, CI failures and review comments (M3)
+
+**Private-session automatic follow-ups.** The daemon's existing branch-linked PR poller checks failed CI,
+unresolved non-outdated review threads, and confirmed merge conflicts on open (including draft) PRs
+actually created by the agent in that session. PR ownership is recorded from successful agent creation
+tools and retained durably, not inferred from a matching branch alone. Only an idle session with no
+queued messages receives one combined follow-up; user input and fresh state win over in-flight lookups.
+The kernel rechecks idle/inbox state before admission, including after reopening a parked session.
+
+Each session has one persisted budget of three automatic follow-ups total, shared across PRs and all
+problem types. At three, polling continues for display but automatic work stops. A user message resets
+the budget to zero; automatic messages, new commits and PR changes do not. Each follow-up waits for the
+previous run to finish and a five-minute cooldown before fetching fresh health status. Pending CI,
+unknown mergeability, resolved/outdated comments, and failed GitHub lookups do not trigger work. The
+agent investigates flaky/infra failures instead of blindly rerunning CI, triages feedback, verifies
+in-scope fixes, and reports blocked or declined work in Pilot. No GitHub comments, replies, reviews,
+merges, or closing actions are permitted.
 
 **Triggers**
 

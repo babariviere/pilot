@@ -47,6 +47,14 @@ enabled, it also shows Claude or Codex subscription windows. Hover for reset tim
 Subscription data uses the extension's existing OAuth polling; Pilot does not read credentials or poll
 usage endpoints separately. Without that extension or subscription credentials, only context is shown.
 
+For PRs an agent opens from its private Build workspace, Pilot uses local `gh` authentication to check
+failed CI, unresolved current review threads and merge conflicts. It sends one combined follow-up only
+when the agent is idle with no queued messages. Automatic follow-ups share a persistent limit of three
+per session, with a five-minute cooldown after each run finishes. Sending a user message resets that
+limit. Agents investigate flaky CI rather than blindly retrying it and report blocked or declined work
+in Pilot, never in GitHub comments or reviews. Ask and direct-workspace chats are not monitored for
+automatic PR work.
+
 See [PLAN.md](PLAN.md) for the spec and milestones (GitHub, Slack and Linear triggers, human-in-the-loop
 specs, hosting).
 

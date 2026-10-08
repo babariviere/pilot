@@ -27,8 +27,10 @@ import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion } from "./attention.ts";
+import { submitIdleInput } from "./idle-input.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
+import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
 import type { KernelSpec } from "./protocol.ts";
 import { editQueuedMessage, queueUpdate, removeQueuedMessage, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
@@ -64,6 +66,8 @@ export interface KernelSessionHooks {
 	onUsageChanged?(usage: SessionUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
 	onArtifactsChanged?(): void;
+	/** Created by an agent tool, committed before notification; replayed on open. */
+	onPullRequestCreated?(url: string): void;
 }
 
 export class KernelSession {
@@ -106,6 +110,19 @@ export class KernelSession {
 		let harness: Harness | undefined;
 		let artifactConversation: Conversation | undefined;
 		try {
+			const provenance =
+				spec.pilot?.workspace && !spec.pilot.ask
+					? pullRequestProvenance(async (url) => {
+							if (!artifactConversation) throw new Error("PR provenance requires a bound conversation");
+							const added = await artifactConversation.commit(async (tx) => {
+								const state = await tx.doc(PullRequestsDoc, artifactConversation!.id);
+								if (state.urls.includes(url)) return false;
+								state.urls.push(url);
+								return true;
+							}, context);
+							if (added) hooks.onPullRequestCreated?.(url);
+						})
+					: undefined;
 			const pinned = await pinnedAgent(owned.storage);
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
@@ -135,14 +152,15 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
+				hostExtensions: provenance ? [provenance.native] : [],
 				...(spec.pilot?.ask
 					? { askArtifacts: artifactOptions }
 					: { sessionOptions: { customTools: createArtifactTools(artifactOptions) } }),
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
-			const prepare = (extension: Extension) =>
-				replayUnsafe(
+			const prepare = (extension: Extension) => {
+				const prepared = replayUnsafe(
 					withPilotPolicy(
 						extension,
 						spec.pilot ?? {},
@@ -151,6 +169,8 @@ export class KernelSession {
 							adapter!.session.getActiveToolNames().includes("artifact"),
 					),
 				);
+				return provenance ? provenance.prepare(prepared) : prepared;
+			};
 			const registry = createRegistry();
 			registry.install(prepare(adapter.extension));
 			harness = await Harness.open(
@@ -170,6 +190,10 @@ export class KernelSession {
 			});
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			artifactConversation = conversation;
+			if (provenance) {
+				const stored = await harness.snapshot(PullRequestsDoc, conversation.id, context);
+				for (const url of stored?.urls ?? []) hooks.onPullRequestCreated?.(url);
+			}
 			// Bind before resume(), so recovered tool calls cannot race binding.
 			adapter.bindHarness(harness, conversation.id);
 			const status = await watchEvents(harness, conversation.id, context);
@@ -323,12 +347,17 @@ export class KernelSession {
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
-	async submit(requestId: string, content: string, mode: DeliveryMode): Promise<void> {
-		if (this.#changingModel) throw new ConversationBusy(this.conversation.id);
+	async submit(requestId: string, content: string, mode: DeliveryMode, onlyIfIdle = false): Promise<void> {
+		if (this.#closing || this.#changingModel || (onlyIfIdle && this.#admissions))
+			throw new ConversationBusy(this.conversation.id);
 		this.#admissions++;
 		try {
 			// Native input handlers (prompt templates, skill commands) expand the text first.
 			const prepared = await this.adapter.prepareInput(content);
+			if (onlyIfIdle) {
+				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context);
+				return;
+			}
 			await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context);
 		} finally {
 			this.#admissions--;
