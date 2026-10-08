@@ -1,6 +1,14 @@
 /** IPC between pilotd and one kernel worker process. */
-import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCompletion, SessionSubagent, SessionUsage } from "@pilot/protocol";
 import type { PilotContext } from "./policy.ts";
+
+/** A subagent as reported by the kernel, including where its read-only transcript lives. */
+export interface KernelSubagent extends SessionSubagent {
+	/** Private durable directory holding the child's `runs.sqlite`. Never sent to clients. */
+	storage: string;
+	/** Child conversation inside `runs.sqlite`, once started. */
+	conversationId?: string;
+}
 
 export interface KernelSpec {
 	/** Pilot session ID, reused as the native session ID. */
@@ -28,6 +36,14 @@ export type KernelCommand =
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
 	| { type: "abort"; requestId: string }
 	| { type: "inspectChildren"; requestId: string }
+	| {
+			type: "subagent";
+			requestId: string;
+			action: "send" | "stop";
+			name: string;
+			message?: string;
+			mode?: DeliveryMode;
+	  }
 	| { type: "watch"; watchId: string; includeTodos?: boolean; activityOnly?: boolean }
 	| { type: "unwatch"; watchId: string }
 	| { type: "shutdown" };
@@ -43,6 +59,8 @@ export type KernelPacket =
 	  }
 	| { type: "usage"; usage: SessionUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
+	/** Full replacement, after every change reported by the subagents extension. */
+	| { type: "subagents"; subagents: KernelSubagent[] }
 	| { type: "artifacts.changed" }
 	| { type: "pullRequest.created"; url: string }
 	| { type: "accepted"; requestId: string }

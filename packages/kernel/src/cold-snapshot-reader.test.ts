@@ -20,7 +20,8 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { AttentionDoc } from "./attention.ts";
-import { readSessionSnapshot } from "./snapshot.ts";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { readSessionSnapshot, readSubagentSnapshot } from "./snapshot.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
 import { TodosWatch } from "./todos.ts";
 
@@ -199,5 +200,32 @@ test("Ask cold snapshots return empty TODOs without reading live checkout extens
 	} finally {
 		await harness.close(context);
 		owned.release();
+	}
+});
+
+test("subagent snapshots read one child conversation from runs.sqlite while its writer is open", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-subagent-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const child = join(dir, "review.durable");
+	assert.deepEqual(await readSubagentSnapshot(child, "1"), [], "no storage before the child starts");
+	await mkdir(child);
+	const storage = await openNodeSqliteStorage(join(child, "runs.sqlite"));
+	const harness = await Harness.open(storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, { kind: "note", data: { text: "child transcript" } });
+		}, context);
+		const events = await readSubagentSnapshot(child, String(root.id));
+		assert.equal(events.length, 1);
+		const [snapshot] = events;
+		assert.ok(snapshot?.type === "snapshot");
+		assert.deepEqual(
+			snapshot.entries.map((entry) => entry.data),
+			[{ text: "child transcript" }],
+		);
+		await assert.rejects(readSubagentSnapshot(child, "not-a-number"), /Invalid subagent conversation/);
+	} finally {
+		await harness.close(context);
 	}
 });

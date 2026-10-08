@@ -12,6 +12,8 @@ type Job = {
 	includeTodos: boolean;
 	promise?: Promise<PersistedSessionView>;
 	unlisten?(): void;
+	/** Read a pi-extensions subagent conversation from `runs.sqlite` instead of the session. */
+	subagentConversation?: string;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -57,6 +59,24 @@ export class ColdViewReader {
 		return true;
 	}
 
+	/** Read-only transcript of a subagent conversation; `events` holds one snapshot, or none before it started. */
+	readSubagent(directory: string, conversationId: string): Promise<SizedSessionView> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
+		return new Promise((resolve, reject) => {
+			this.waiting.push({
+				directory,
+				cwd: directory,
+				includeTodos: false,
+				subagentConversation: conversationId,
+				resolve,
+				reject,
+			});
+			this.drain();
+		});
+	}
+
 	private drain(): void {
 		while (!this.closed && this.active.size < 2 && this.waiting.length) {
 			const job = this.waiting.shift()!;
@@ -64,7 +84,12 @@ export class ColdViewReader {
 			let worker: Worker;
 			try {
 				worker = new Worker(snapshotWorkerEntry, {
-					workerData: { directory: job.directory, cwd: job.cwd, includeTodos: job.includeTodos },
+					workerData: {
+						directory: job.directory,
+						cwd: job.cwd,
+						includeTodos: job.includeTodos,
+						...(job.subagentConversation === undefined ? {} : { subagentConversation: job.subagentConversation }),
+					},
 					execArgv: [],
 				});
 			} catch (error) {

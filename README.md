@@ -117,7 +117,8 @@ See [the one-time setup](apps/macos/UPDATES.md) for signing keys, GitHub access 
 
 - Native tools are replay-unsafe. A crash mid-tool yields an interrupted result instead of a rerun.
 - Extensions that start their own model loop or replace the SDK session are unsupported, the same as
-  pi-extensions subagents. Extension messages that would start a native turn (for example subagent answer
-  notifications) are not bridged into the Harness yet. The `subagent` tool loads, with its storage anchored
-  in the session directory, but this path is untested; read answers with `status`.
+  pi-extensions subagents. Extension messages that start a turn (`sendMessage` with `triggerTurn`, or
+  `sendUserMessage`) become durable Harness input, so subagent answers wake the parent chat as follow-ups.
+  Custom messages without `triggerTurn` stay native-only and are not added to the durable transcript.
+  Subagent display and controls need a pi-extensions version with the `subagents:*` host events.
 - Project-local `.pi` resources load only for directories pi already trusts (or `defaultProjectTrust: always`).

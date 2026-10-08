@@ -6,6 +6,7 @@ enum InspectorTab: Hashable {
     case changes
     case terminal
     case artifacts
+    case agents
 
     func isAvailable(for session: SessionSummary) -> Bool { !session.isAsk || self == .artifacts }
 }
@@ -48,6 +49,17 @@ final class AppModel: ObservableObject {
     @Published var archiveProjectId: String?
     @Published var sessionActionError: String?
     @Published var pendingSessionActions: Set<String> = []
+    /// Subagent shown in the Agents tab, per session.
+    @Published var selectedSubagents: [String: String] = [:]
+    /// Subagent answers the user has opened. Persisted, so restarts do not resurface old answers.
+    @Published private(set) var subagentReads: SubagentReadState {
+        didSet {
+            if let data = try? JSONEncoder().encode(subagentReads) {
+                projectFolderDefaults.set(data, forKey: Self.subagentReadsKey)
+            }
+        }
+    }
+    private static let subagentReadsKey = "subagentReads"
 
     /// Captured from SwiftUI so non-view code (notifications, menu) can reopen the window.
     var openWindowAction: (() -> Void)?
@@ -65,6 +77,8 @@ final class AppModel: ObservableObject {
         self.projectFolderDefaults = projectFolderDefaults
         self.draftStore = draftStore
         projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
+        subagentReads = projectFolderDefaults.data(forKey: Self.subagentReadsKey)
+            .flatMap { try? JSONDecoder().decode(SubagentReadState.self, from: $0) } ?? SubagentReadState()
         loadDrafts()
         newSessionForm.onDraftChanged = { [weak self] in self?.saveDrafts() }
         newSessionForm.branches.onSelectionChanged = { [weak self] in self?.saveDrafts() }
@@ -325,6 +339,39 @@ final class AppModel: ObservableObject {
         Task {
             defer { pendingSessionActions.remove(sessionId) }
             do { try await client.stop(sessionId) }
+            catch { sessionActionError = error.localizedDescription }
+        }
+    }
+
+    // MARK: Subagents
+
+    func isUnread(_ subagent: SessionSubagent, in sessionId: String) -> Bool {
+        subagentReads.isUnread(subagent, in: sessionId)
+    }
+
+    func unreadSubagents(in session: SessionSummary) -> Int {
+        subagentReads.unreadCount(session.subagents ?? [], in: session.id)
+    }
+
+    func markSubagentRead(_ subagent: SessionSubagent, in sessionId: String) {
+        var reads = subagentReads
+        if reads.markRead(subagent, in: sessionId) { subagentReads = reads }
+    }
+
+    /// Opens the Agents tab on one subagent's transcript.
+    func openSubagent(_ name: String, in sessionId: String) {
+        selectedSubagents[sessionId] = name
+        inspectorTab = .agents
+        inspectorVisible = true
+    }
+
+    func stopSubagent(_ name: String, in sessionId: String) {
+        let key = "\(sessionId)/subagent/\(name)"
+        guard !pendingSessionActions.contains(key) else { return }
+        pendingSessionActions.insert(key)
+        Task {
+            defer { pendingSessionActions.remove(key) }
+            do { try await client.stopSubagent(sessionId, name: name) }
             catch { sessionActionError = error.localizedDescription }
         }
     }

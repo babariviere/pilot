@@ -11,6 +11,7 @@ import type {
 	ServerMessage,
 	SessionSummary,
 	SpawnRequest,
+	SubagentMessageRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { boundedSender } from "./backpressure.ts";
@@ -223,6 +224,40 @@ export function createDaemonServer(
 			}
 			if (parts[3] === "stop") {
 				await sessions.stop(id);
+				return json(res, 202, { ok: true });
+			}
+		}
+		if (parts[1] === "sessions" && parts.length === 6 && parts[3] === "subagents") {
+			const id = parts[2]!;
+			let name: string;
+			try {
+				name = decodeURIComponent(parts[4]!);
+			} catch {
+				throw new HttpError(400, "Invalid subagent name");
+			}
+			if (parts[5] === "transcript" && req.method === "GET")
+				return json(res, 200, await sessions.subagentTranscript(id, name));
+			if (parts[5] === "messages" && req.method === "POST") {
+				const body = await readJson<SubagentMessageRequest>(req);
+				if (!body || typeof body.message !== "string" || !body.message.trim())
+					throw new HttpError(400, "message is required");
+				if (body.mode !== undefined && body.mode !== "steer" && body.mode !== "followUp")
+					throw new HttpError(400, "mode must be steer or followUp");
+				if (
+					body.requestId !== undefined &&
+					(typeof body.requestId !== "string" || !/^[\w-]{1,128}$/.test(body.requestId))
+				)
+					throw new HttpError(400, "requestId must be 1-128 letters, digits, dashes or underscores");
+				await sessions.subagentCommand(id, name, {
+					action: "send",
+					message: body.message,
+					...(body.mode ? { mode: body.mode } : {}),
+					...(body.requestId ? { requestId: body.requestId } : {}),
+				});
+				return json(res, 202, { ok: true });
+			}
+			if (parts[5] === "stop" && req.method === "POST") {
+				await sessions.subagentCommand(id, name, { action: "stop" });
 				return json(res, 202, { ok: true });
 			}
 		}

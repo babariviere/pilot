@@ -87,6 +87,49 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())
     }
 
+    // MARK: Subagents
+
+    /// Static transcripts for snapshots and previews, keyed by subagent name.
+    var fixtureSubagentTranscripts: [String: [JSONValue]]?
+
+    /// Read-only snapshot of a subagent's own conversation. Never wakes a parked session.
+    func subagentTranscript(_ sessionId: String, name: String) async throws -> [JSONValue] {
+        if let fixtureSubagentTranscripts { return fixtureSubagentTranscripts[name] ?? [] }
+        let response: SubagentTranscriptResponse = try await get(
+            subagentURL(sessionId, name: name, action: "transcript"),
+            feature: "subagent transcripts"
+        )
+        guard response.name == name else { throw ClientError("Invalid subagent transcript") }
+        return response.events
+    }
+
+    /// Steers current work by default; `followUp` queues after it.
+    func sendToSubagent(_ sessionId: String, name: String, message: String, mode: DeliveryMode = .steer) async throws {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before messaging subagents.") }
+        let _: Ack = try await call(
+            url: subagentURL(sessionId, name: name, action: "messages"),
+            body: SubagentMessageRequest(message: message, mode: mode)
+        )
+    }
+
+    func stopSubagent(_ sessionId: String, name: String) async throws {
+        let _: Ack = try await call(url: subagentURL(sessionId, name: name, action: "stop"), body: [String: String]())
+    }
+
+    /// Names are arbitrary text, so encode them as one opaque path segment.
+    private func subagentURL(_ sessionId: String, name: String, action: String) throws -> URL {
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        var unreserved = CharacterSet.alphanumerics
+        unreserved.insert(charactersIn: "-._~")
+        guard !name.isEmpty, let encoded = name.addingPercentEncoding(withAllowedCharacters: unreserved),
+              var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false)
+        else { throw ClientError("Invalid subagent name") }
+        let base = components.percentEncodedPath.hasSuffix("/") ? components.percentEncodedPath : components.percentEncodedPath + "/"
+        components.percentEncodedPath = base + "api/sessions/\(sessionId)/subagents/\(encoded)/\(action)"
+        guard let url = components.url else { throw ClientError("Invalid subagent name") }
+        return url
+    }
+
     @discardableResult
     func changeModel(_ sessionId: String, model: String, thinking: String? = nil) async throws -> SessionSummary {
         let session: SessionSummary = try await call(
@@ -261,7 +304,7 @@ final class PilotClient: ObservableObject {
         return url
     }
 
-    private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
+    private func get<Response: Decodable & Sendable>(_ url: URL, feature: String = "artifacts") async throws -> Response {
         let (data, response) = try await artifactSession.data(from: url)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
@@ -269,7 +312,7 @@ final class PilotClient: ObservableObject {
             // Older running daemons can serve chats but have no artifact routes. Do not
             // restart them automatically: that would interrupt active agents.
             if status == 404, error == "Not found" {
-                throw ClientError("This pilotd does not support artifacts. Once agents are idle, restart pilotd from the Pilot menu to load the current runtime.")
+                throw ClientError("This pilotd does not support \(feature). Once agents are idle, restart pilotd from the Pilot menu to load the current runtime.")
             }
             throw ClientError(error ?? "HTTP \(status)")
         }
@@ -287,7 +330,15 @@ final class PilotClient: ObservableObject {
         body: Body
     ) async throws -> Response {
         guard let baseURL else { throw ClientError("pilotd is not connected") }
-        var request = URLRequest(url: baseURL.appending(path: path))
+        return try await call(url: baseURL.appending(path: path), method: method, body: body)
+    }
+
+    private func call<Body: Encodable, Response: Decodable>(
+        url: URL,
+        method: String = "POST",
+        body: Body
+    ) async throws -> Response {
+        var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(body)

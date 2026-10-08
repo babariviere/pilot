@@ -26,8 +26,8 @@ export class StorageBusy extends Error {}
  * checkpoints WAL, migrates a schema, or acquires the worker's writer lease. SQLite may create its
  * WAL read-coordination sidecars, which must remain enabled to see a concurrent writer's commits.
  */
-export async function openSessionReader(directory: string): Promise<Storage | undefined> {
-	const file = join(resolve(directory), "harness.sqlite");
+export async function openSessionReader(directory: string, name = "harness.sqlite"): Promise<Storage | undefined> {
+	const file = join(resolve(directory), name);
 	try {
 		if (!lstatSync(file).isFile()) throw new Error(`Durable storage is not a regular file: ${file}`);
 	} catch (error) {

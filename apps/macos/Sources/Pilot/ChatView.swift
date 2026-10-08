@@ -192,6 +192,9 @@ struct ChatView: View {
                 if !session.isAsk && !transcript.todos.isEmpty {
                     TodosPanel(todos: transcript.todos, sessionId: session.id)
                 }
+                if !session.isAsk {
+                    SubagentsStrip(session: session)
+                }
                 if session.isArchived {
                     ArchivedComposer(session: session)
                 } else {
@@ -272,7 +275,7 @@ private final class TranscriptPreparedAction: ObservableObject {
     lazy var callback: () -> Void = { [weak self] in self?.action?() }
 }
 
-private struct RowView: View, Equatable {
+struct RowView: View, Equatable {
     let row: ChatRow
     var toolExpansions: TranscriptToolExpansions? = nil
 
@@ -296,7 +299,11 @@ private struct RowView: View, Equatable {
     @ViewBuilder private var content: some View {
         switch row {
         case let .user(_, text):
-            UserMessage(text: text)
+            if let notification = SubagentNotification(message: text) {
+                SubagentAnswerRow(notification: notification)
+            } else {
+                UserMessage(text: text)
+            }
         case let .text(_, text):
             MarkdownView(text: text)
         case let .thinking(_, text, streaming):

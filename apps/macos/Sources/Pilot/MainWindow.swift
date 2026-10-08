@@ -147,12 +147,21 @@ struct SessionToolbarMetadata: View {
 
 struct SessionInspectorActions: View {
     let session: SessionSummary
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
         HStack(spacing: 2) {
             if !session.isAsk {
                 InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
                 InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+                if !(session.subagents ?? []).isEmpty {
+                    InspectorToggle(tab: .agents, icon: "person.2", help: "Subagents")
+                        .overlay(alignment: .topTrailing) {
+                            if model.unreadSubagents(in: session) > 0 {
+                                Circle().fill(Theme.success).frame(width: 6, height: 6).offset(x: -3, y: 3)
+                            }
+                        }
+                }
             }
             InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
         }
@@ -215,6 +224,7 @@ struct Inspector: View {
                 if !session.isAsk {
                     tab("Changes", .changes)
                     tab("Terminal", .terminal)
+                    tab("Agents", .agents, badge: model.unreadSubagents(in: session))
                 }
                 tab("Artifacts", .artifacts)
                 Spacer()
@@ -247,20 +257,36 @@ struct Inspector: View {
                     SessionArtifactsPane(sessionId: session.id, client: model.client)
                         .id(session.id)
                 }
+                if !session.isAsk && model.inspectorTab == .agents {
+                    SubagentsPane(session: session)
+                        .id(session.id)
+                }
             }
         }
         .background(Theme.background)
     }
 
-    private func tab(_ title: String, _ value: InspectorTab) -> some View {
+    private func tab(_ title: String, _ value: InspectorTab, badge: Int = 0) -> some View {
         Button { model.inspectorTab = value } label: {
-            Text(title)
-                .font(.system(size: 12, weight: model.inspectorTab == value ? .semibold : .regular))
-                .foregroundStyle(model.inspectorTab == value ? Theme.foreground : Theme.mutedForeground)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 6).fill(model.inspectorTab == value ? Theme.card : .clear))
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(model.inspectorTab == value ? Theme.border : .clear))
+            HStack(spacing: 5) {
+                Text(title)
+                    .font(.system(size: 12, weight: model.inspectorTab == value ? .semibold : .regular))
+                    .foregroundStyle(model.inspectorTab == value ? Theme.foreground : Theme.mutedForeground)
+                if badge > 0 {
+                    Text("\(badge)")
+                        .font(.system(size: 9, weight: .bold))
+                        .monospacedDigit()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Theme.success))
+                        .accessibilityLabel("\(badge) new answers")
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 6).fill(model.inspectorTab == value ? Theme.card : .clear))
+            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(model.inspectorTab == value ? Theme.border : .clear))
         }
         .buttonStyle(.plain)
     }

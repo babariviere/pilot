@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { KernelCommand, KernelPacket } from "@pilot/kernel";
+import type { KernelCommand, KernelPacket, KernelSubagent } from "@pilot/kernel";
 import type { AgentEvent, SessionCompletion, SessionState, SessionSummary, SessionUsage } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import type { ModelCatalog } from "./models.ts";
@@ -303,6 +303,7 @@ class FakeWorker implements SessionWorker {
 	error?: string;
 	readonly sent: KernelCommand[] = [];
 	readonly requests: Command[] = [];
+	readonly subagentRequests: Extract<KernelCommand, { type: "subagent" }>[] = [];
 	children = false;
 	closed = false;
 	closeGate?: Promise<void>;
@@ -340,12 +341,20 @@ class FakeWorker implements SessionWorker {
 		this.onPacket({ type: "usage", usage });
 	}
 
+	reportSubagents(subagents: KernelSubagent[]): void {
+		this.onPacket({ type: "subagents", subagents });
+	}
+
 	send(command: KernelCommand): void {
 		this.sent.push(command);
 		if (command.type === "watch") this.onPacket({ type: "events", watchId: command.watchId, events: [snapshot] });
 	}
 
-	async request(command: Command): Promise<void> {
+	async request(command: Command | Extract<KernelCommand, { type: "subagent" }>): Promise<void> {
+		if (command.type === "subagent") {
+			this.subagentRequests.push(command);
+			return;
+		}
 		this.requests.push(command);
 		await this.admit(command);
 		this.state = command.type === "input" ? "working" : "idle";
@@ -1143,6 +1152,86 @@ test("worker usage updates reach summaries and are dropped when the worker exits
 	await f.workers[0]!.close();
 	assert.equal(sessions.get(created.id)?.usage, undefined);
 	assert.equal(changes.at(-1)?.usage, undefined);
+});
+
+test("subagent reports reach summaries without private paths, survive parking, and route reads and commands", async (t) => {
+	const f = await fixture(t);
+	const reads: Array<[string, string]> = [];
+	const sessions = await f.manager({
+		subagentSnapshot: async (directory, conversationId) => {
+			reads.push([directory, conversationId]);
+			return [snapshot];
+		},
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	const runs = join(created.sessionPath!, "durable", "subagent-runs", "parent");
+	const review: KernelSubagent = {
+		name: "review",
+		state: "working",
+		task: "Review",
+		createdAt: 1,
+		cwd: f.source,
+		model: "test/model",
+		storage: join(runs, "1", "review.durable"),
+		conversationId: "8",
+	};
+	const pending: KernelSubagent = { ...review, name: "pending", storage: join(runs, "2", "pending.durable") };
+	delete pending.conversationId;
+	const outside: KernelSubagent = { ...review, name: "outside", storage: join(f.root, "elsewhere") };
+	const retired: KernelSubagent = { ...review, name: "retired", retired: true };
+	const changes: SessionSummary[] = [];
+	sessions.onChange((session) => changes.push(session));
+	f.workers[0]!.reportSubagents([review, pending, outside, retired]);
+	const visible = sessions.get(created.id)?.subagents;
+	assert.deepEqual(visible?.[0], {
+		name: "review",
+		state: "working",
+		task: "Review",
+		createdAt: 1,
+		cwd: f.source,
+		model: "test/model",
+	});
+	assert.equal(JSON.stringify(changes.at(-1)).includes("subagent-runs"), false, "storage paths stay private");
+	const count = changes.length;
+	f.workers[0]!.reportSubagents([review, pending, outside, retired]);
+	assert.equal(changes.length, count, "unchanged reports are not republished");
+
+	assert.deepEqual(await sessions.subagentTranscript(created.id, "review"), { name: "review", events: [snapshot] });
+	assert.deepEqual(reads, [[review.storage, "8"]]);
+	assert.deepEqual(await sessions.subagentTranscript(created.id, "pending"), { name: "pending", events: [] });
+	await assert.rejects(sessions.subagentTranscript(created.id, "outside"), /outside the session/);
+	await assert.rejects(sessions.subagentTranscript(created.id, "missing"), /No subagent named missing/);
+
+	await sessions.subagentCommand(created.id, "review", { action: "send", message: "focus", requestId: "r1" });
+	await sessions.subagentCommand(created.id, "review", { action: "send", message: "then", mode: "followUp" });
+	await sessions.subagentCommand(created.id, "review", { action: "stop" });
+	await assert.rejects(sessions.subagentCommand(created.id, "missing", { action: "stop" }), /No subagent named/);
+	await assert.rejects(sessions.subagentCommand(created.id, "retired", { action: "stop" }), /retired/);
+	await assert.rejects(sessions.subagentCommand(created.id, "review", { action: "send", message: " " }), /required/);
+	const requests = f.workers[0]!.subagentRequests;
+	assert.deepEqual(requests[0], {
+		type: "subagent",
+		action: "send",
+		requestId: "r1",
+		name: "review",
+		message: "focus",
+		mode: "steer",
+	});
+	assert.equal(requests[1]!.mode, "followUp");
+	assert.equal(requests[2]!.action, "stop");
+	assert.equal(requests.length, 3);
+
+	// Parked sessions keep the last report, so the app can still list and read subagents.
+	await f.workers[0]!.close();
+	assert.equal(sessions.get(created.id)?.state, "parked");
+	assert.equal(sessions.get(created.id)?.subagents?.length, 4);
+	await until(
+		async () =>
+			((await f.stored(created.id)) as { subagents?: KernelSubagent[] }).subagents?.[0]?.storage === review.storage,
+	);
+	assert.deepEqual(await sessions.subagentTranscript(created.id, "review"), { name: "review", events: [snapshot] });
+	assert.equal(f.workers.length, 1, "reading a transcript never reopens the kernel");
 });
 
 test("runtime worker exit publishes parked rather than the exited worker's stale working state", async (t) => {
