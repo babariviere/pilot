@@ -34,6 +34,8 @@ struct PilotApp: App {
                 Button("Toggle Terminal") { model.toggleInspector(.terminal) }
                     .keyboardShortcut("j", modifiers: .command)
                     .disabled(model.selectedSessionId == nil)
+                Button("Toggle Artifacts") { model.toggleInspector(.artifacts) }
+                    .disabled(model.selectedSessionId == nil)
             }
         }
 

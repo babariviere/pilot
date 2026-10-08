@@ -47,8 +47,8 @@ private func arrowInFolderSidebar(_ outline: NSOutlineView, up: Bool) throws {
 
 @MainActor
 private func settleFolderSidebar(_ hosting: NSView) {
-    // Selection inserts the artifacts section, so let SwiftUI reconcile the native
-    // outline before delivering another event (as the app's event loop would).
+    // Let SwiftUI reconcile the native outline before delivering another event,
+    // as the app's event loop would.
     hosting.layoutSubtreeIfNeeded()
     RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     hosting.layoutSubtreeIfNeeded()

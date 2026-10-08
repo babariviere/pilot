@@ -50,8 +50,10 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   Thinking is disabled when the model has only one level or no reported levels.
 - **Artifacts.** Structured artifact tool results show a pinned-revision card with an opt-in inline
   preview and expanded viewer. Durable publication entries also show artifacts published inside
-  codemode without duplicating direct tool cards. The selected session's sidebar Artifacts section
-  opens the latest revision; each project has a Browse artifacts entry across its sessions.
+  codemode without duplicating direct tool cards. The right-hand inspector's Artifacts tab lists all
+  artifacts in the selected chat, updates live, and opens the latest revision. Use the cube toolbar
+  button or View > Toggle Artifacts to show it. Each project retains a Browse artifacts button in
+  the navigation sidebar across its sessions.
   Both views offer Source and loading/error states. Offscreen inline previews are disposed.
   Each renderer uses an isolated, nonpersistent WebKit store, a restrictive CSP and a fail-closed
   request blocker. Only declared, allowlisted `pilot-artifact://library/<name>` script resources can

@@ -321,6 +321,8 @@ reports), producing a morning summary in the app and Slack.
 - Artifacts: durable images, HTML/JS or React/JSX documents owned by a session and its project. Agent tools
   create, update, list, read and preview them. Each publication saves an immutable revision; chat
   previews are shown by default and pin that revision, while sidebar access opens the latest.
+  The right-hand inspector's Artifacts tab lists every artifact in the current chat, updates live,
+  and opens the latest revision on click. Project-wide browsing remains in the navigation sidebar.
   Plain PNG, JPEG, GIF and WebP files (or data URLs) are embedded with their revisions, up to 16 MiB.
   Expanded viewers use 90% of the display's usable area.
   Offscreen chat rows release their renderer; previews can also be hidden manually. An older running

@@ -19,6 +19,10 @@ private final class ArtifactHTTPStub: URLProtocol {
         case "missing.invalid":
             status = 404
             body = #"{"error":"Unknown artifact or revision"}"#
+        case "empty.invalid":
+            body = "[]"
+        case "invalid-list.invalid":
+            body = #"[{"id":"wrong","sessionId":"other","title":"Other chat","kind":"html","revision":1,"createdAt":1,"updatedAt":2}]"#
         default:
             // Incorrect routes must fail rather than silently accepting a bad client URL.
             if url.path == "/api/sessions/session/artifacts/artifact" {
@@ -28,6 +32,17 @@ private final class ArtifactHTTPStub: URLProtocol {
                  "revision":\(revision),"createdAt":1,"updatedAt":2,"source":"<h1>Saved</h1>",
                  "html":"<h1>Saved</h1>","libraries":[]}
                 """
+            } else if url.path == "/api/sessions/session/artifacts" {
+                body = """
+                [{"id":"artifact","sessionId":"session","title":"Preview","kind":"html",
+                  "revision":2,"createdAt":1,"updatedAt":4},
+                 {"id":"react","sessionId":"session","title":"Dashboard","kind":"react",
+                  "revision":1,"createdAt":2,"updatedAt":3},
+                 {"id":"image","sessionId":"session","title":"Image","kind":"image",
+                  "revision":1,"createdAt":1,"updatedAt":2}]
+                """
+            } else if url.path == "/api/sessions/other/artifacts" {
+                body = #"[{"id":"other","sessionId":"other","title":"Other chat","kind":"html","revision":1,"createdAt":1,"updatedAt":2}]"#
             } else {
                 status = 404
                 body = #"{"error":"Not found"}"#
@@ -94,4 +109,55 @@ private let previewReference = ArtifactReference(id: "artifact", sessionId: "ses
     } catch {
         #expect(error.localizedDescription == "Unknown artifact or revision")
     }
+}
+
+@Test @MainActor func artifactsPaneLoadsEveryKindWithoutMixingChats() async throws {
+    let client = artifactClient("current.invalid")
+    let state = SessionArtifactsState()
+    await state.load(sessionId: "session", client: client)
+    #expect(!state.loading)
+    #expect(state.error == nil)
+    let artifacts = try #require(client.artifacts["session"])
+    #expect(artifacts.map(\.id) == ["artifact", "react", "image"])
+    #expect(artifacts.map(\.kind) == [.html, .react, .image])
+    #expect(artifacts.allSatisfy { $0.sessionId == "session" })
+
+    await state.load(sessionId: "other", client: client)
+    #expect(client.artifacts["other"]?.map(\.id) == ["other"])
+    #expect(client.artifacts["session"] == artifacts)
+    state.selected = artifacts[0].reference
+    #expect(state.selected?.revision == 2)
+    #expect(state.selected?.sessionId == "session")
+}
+
+@Test @MainActor func artifactsPaneSupportsEmptyListsAndRefreshes() async {
+    let client = artifactClient("current.invalid")
+    let state = SessionArtifactsState()
+    await state.load(sessionId: "session", client: client)
+    #expect(client.artifacts["session"]?.first?.revision == 2)
+    await state.load(sessionId: "session", client: client)
+    #expect(client.artifacts["session"]?.first?.revision == 2)
+    #expect(client.artifacts["session"]?.count == 3)
+    #expect(!state.loading)
+
+    let emptyClient = artifactClient("empty.invalid")
+    await state.load(sessionId: "session", client: emptyClient)
+    #expect(emptyClient.artifacts["session"] == [])
+    #expect(state.error == nil)
+    #expect(!state.loading)
+}
+
+@Test @MainActor func artifactsPaneShowsErrorsAndRecoversOnRetry() async {
+    let state = SessionArtifactsState()
+    await state.load(sessionId: "session", client: artifactClient("legacy.invalid"))
+    #expect(state.error?.contains("restart pilotd") == true)
+    #expect(!state.loading)
+    await state.load(sessionId: "session", client: artifactClient("current.invalid"))
+    #expect(state.error == nil)
+    #expect(!state.loading)
+
+    let invalidClient = artifactClient("invalid-list.invalid")
+    await state.load(sessionId: "session", client: invalidClient)
+    #expect(state.error == "Invalid artifact list")
+    #expect(invalidClient.artifacts["session"] == nil)
 }
