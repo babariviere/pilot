@@ -9,7 +9,17 @@ import { TerminalManager } from "./terminals.ts";
 const config = loadConfig();
 const projects = new ProjectStore(config.home);
 await projects.load();
-const sessions = new SessionManager(config.home, projects, config.agentDir, {}, {}, { idleParkMs: config.idleParkMs });
+const sessions = new SessionManager(
+	config.home,
+	projects,
+	config.agentDir,
+	{},
+	{},
+	{
+		idleParkMs: config.idleParkMs,
+		workspaceRetentionMs: config.workspaceRetentionMs,
+	},
+);
 await sessions.load();
 const terminals = new TerminalManager();
 const server = createDaemonServer(config, sessions, projects, new ModelCatalog(config.agentDir), terminals);
@@ -23,8 +33,7 @@ async function stop(): Promise<void> {
 	stopping = true;
 	console.log("pilotd: pausing sessions");
 	server.close();
-	terminals.shutdown();
-	await sessions.shutdown();
+	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
 	process.exit(0);
 }
 process.on("SIGINT", () => void stop());

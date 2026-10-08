@@ -107,6 +107,7 @@ export function createDaemonServer(
 	models: ModelCatalog,
 	terminals: TerminalManager,
 ): Server {
+	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const repositoryChanges = new RepositoryChanges();
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
@@ -206,6 +207,7 @@ export function createDaemonServer(
 			const id = parts[2]!;
 			if (parts[3] === "archive") return json(res, 200, await sessions.archive(id));
 			if (parts[3] === "restore") return json(res, 200, await sessions.restore(id));
+			if (parts[3] === "reclaim-workspace") return json(res, 200, await sessions.reclaimWorkspace(id));
 			if (parts[3] === "model") {
 				const body = await readJson<ChangeModelRequest>(req);
 				if (!body || typeof body.model !== "string" || !body.model.trim())

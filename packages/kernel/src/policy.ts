@@ -2,10 +2,12 @@
 import { type Extension, hook, section, ToolTask } from "@earendil-works/pi-durable";
 
 export interface WorkspaceContext {
-	/** The user's checkout this clone came from. */
+	/** The user's checkout this isolated workspace came from. */
 	source: string;
 	branch?: string;
 	base: string;
+	baseBranch?: string;
+	shared?: { repository: string; name: string };
 	upstream?: string;
 	jj: boolean;
 }
@@ -73,14 +75,26 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 		);
 	}
 	if (!context.ask && workspace) {
-		lines.push(
-			`- Your working directory is a private clone of ${workspace.source}, started from \`${workspace.base}\`${workspace.branch ? `, with branch/bookmark \`${workspace.branch}\`` : ", initially detached with no task branch or bookmark"}. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
-		);
-		if (requirePullRequest && workspace.jj) {
+		if (workspace.shared) {
+			lines.push(
+				`- Your working directory is the shared jj workspace \`${workspace.shared.name}\` in ${workspace.shared.repository}, created from ${workspace.source}. Its working-copy change starts on base \`${workspace.base}\`${workspace.baseBranch ? ` (branch \`${workspace.baseBranch}\`)` : ""}${workspace.branch ? `, with task bookmark \`${workspace.branch}\`` : ", with no task bookmark yet"}. The user's own checkout and its uncommitted changes are unaffected by your workspace edits. This is not a private clone or detached checkout.`,
+				"- Use jj for version-control changes. Your working copy is isolated, but repository bookmarks and history are shared with sibling sessions. Do not rewrite other sessions' changes or task bookmarks. Never use repository-wide `jj undo` or `jj op restore`, broad rebases, or `jj git push --all` (or other broad pushes). Restrict any rebase to this task's own changes.",
+			);
+			if (requirePullRequest) {
+				lines.push(
+					"- Use task-specific bookmarks, keeping an existing task bookmark when present. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`; after committing, move only the chosen task bookmark with `jj bookmark set <name> -r @-`. Push only the chosen task bookmark with `jj git push --bookmark <name>`; never include sibling bookmarks.",
+				);
+			}
+		} else {
+			lines.push(
+				`- Your working directory is a private clone of ${workspace.source}, started from \`${workspace.base}\`${workspace.branch ? `, with branch/bookmark \`${workspace.branch}\`` : ", initially detached with no task branch or bookmark"}. Uncommitted changes in the user's own checkout are not here, and nothing you do here touches it.`,
+			);
+		}
+		if (!workspace.shared && requirePullRequest && workspace.jj) {
 			lines.push(
 				"- The clone is a colocated jj repository. Use jj for version-control changes. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`; after committing, move the chosen bookmark with `jj bookmark set <name> -r @-`, and push with `jj git push --bookmark <name>`.",
 			);
-		} else if (requirePullRequest) {
+		} else if (!workspace.shared && requirePullRequest) {
 			lines.push(
 				"- If a new branch is needed, create it with `git switch -c <name>`. Commit on the chosen branch and push it with `git push -u origin <name>`.",
 			);
@@ -99,7 +113,9 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 			);
 			if (workspace?.jj) {
 				lines.push(
-					"- The clone is a colocated jj repository. Use jj for version-control changes. Track the remote default-branch bookmark with `jj bookmark track <default-branch>@origin`. After committing, move that bookmark to the completed commit and push it with `jj git push --bookmark <default-branch>`.",
+					workspace.shared
+						? "- For this shared jj repository's configured direct delivery, track the remote default-branch bookmark with `jj bookmark track <default-branch>@origin`. After reconciling upstream and committing, move only that default-branch bookmark to your own completed, verified change and push it explicitly with `jj git push --bookmark <default-branch>`. This delivery permission does not allow changing other sessions' task bookmarks or force-pushing."
+						: "- The clone is a colocated jj repository. Use jj for version-control changes. Track the remote default-branch bookmark with `jj bookmark track <default-branch>@origin`. After committing, move that bookmark to the completed commit and push it with `jj git push --bookmark <default-branch>`.",
 				);
 			} else if (workspace) {
 				lines.push(

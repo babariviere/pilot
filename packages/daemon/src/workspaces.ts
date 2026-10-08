@@ -5,6 +5,7 @@ import { appendFile, copyFile, lstat, mkdir, rm, writeFile } from "node:fs/promi
 import { dirname, join, resolve } from "node:path";
 import type { RemoteBranchList } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
+import type { SharedWorkspace } from "./shared-workspaces.ts";
 
 export interface Workspace {
 	path: string;
@@ -12,6 +13,10 @@ export interface Workspace {
 	branch?: string;
 	/** What the branch started from, such as `origin/main`. */
 	base: string;
+	/** Origin branch selection, kept separately when the diff base is an exact hash. */
+	baseBranch?: string;
+	/** Child workspace in a daemon-owned shared jj repository. */
+	shared?: SharedWorkspace;
 	/** The real remote, so pushes and pull requests go upstream rather than to the local checkout. */
 	upstream?: string;
 	/** Colocated jj repository (the source project uses jj). */
@@ -135,7 +140,12 @@ export async function listRemoteBranches(cwd: string, runner: Runner = run): Pro
 }
 
 // Deliberately bounded: ignored dependency trees, build output and unrelated secrets are not workspace inputs.
-const localConfigs = ["mise.local.toml", ".mise.local.toml", "mise/config.local.toml", ".mise/config.local.toml"];
+export const localConfigs = [
+	"mise.local.toml",
+	".mise.local.toml",
+	"mise/config.local.toml",
+	".mise/config.local.toml",
+];
 
 async function statIfExists(path: string) {
 	return lstat(path).catch((error: NodeJS.ErrnoException) => {
@@ -144,7 +154,7 @@ async function statIfExists(path: string) {
 	});
 }
 
-async function copyLocalConfigs(source: string, destination: string, runner: Runner): Promise<void> {
+export async function copyLocalConfigs(source: string, destination: string, runner: Runner): Promise<void> {
 	const ignored = await runner(
 		"git",
 		["ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", ...localConfigs],

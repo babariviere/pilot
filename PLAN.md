@@ -75,7 +75,7 @@ native macOS app, or from wherever the work came from.
 | **Binding** | Link between a session and an external thread (PR, check suite, Slack thread, Linear issue). Unique per thread, so new events steer the same session instead of spawning duplicates. |
 | **Trigger source** | Adapter that turns external events into admissions: `spawn(origin, binding, brief)` or `send(session, message)`. Polling or webhooks. |
 | **Policy** | Per-origin permissions: repositories, branches it may push, sandbox floor, tools, budget, auto-reply rights. |
-| **Workspace** | Daemon-owned Build working copy (private clone or project checkout). Ask uses a read-only checkout or pinned snapshot instead. |
+| **Workspace** | Daemon-owned Build working copy (shared jj workspace, legacy/Git private clone, or project checkout). Ask uses a read-only checkout or pinned snapshot instead. |
 | **Human gate** | A durable pause where the agent waits for a human answer or approval (`waiting` state). |
 | **Outcome** | Structured end of a run: `fixed` (with PR/commit), `declined` (with reason), `failed`, `stopped`. |
 
@@ -142,7 +142,11 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   Mode is immutable for a chat; implementation starts a separate Build draft with the conversation
   as context, preserving the Ask chat and its selected source.
 
-- The clone lives in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
+- New isolated Build sessions for jj projects use session working copies backed by a shared repository
+  in `$PILOT_HOME/repositories`. The working-copy change starts on the selected base. Workspace edits
+  leave the user's own checkout untouched, but bookmarks and repository history are shared with sibling
+  sessions. Existing clones are not migrated; Git-only projects, direct Build checkouts, and Ask remain unchanged.
+- Legacy and Git-only private clones live in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
   checkout, with `origin` pointed at the project's real remote and fetched. The clone first borrows the
   checkout's objects through Git alternates (no copying or hardlinking, which takes minutes for a jj checkout with
   tens of thousands of loose objects), then pilotd repacks the reachable objects into the clone in the background
@@ -150,26 +154,44 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
-- The new-task composer offers a Base branch selector for private-clone Build projects, listing only real
+- The new-task composer offers a Base branch selector for isolated Build projects, listing only real
   branches advertised by `origin` (no local branches or HEAD pseudoref). The remote default remains
   the default; an explicit selection is persisted through startup/recovery and must still exist remotely.
   Starting from an existing branch does not change that branch or the user's checkout.
-- Start private clones detached from the selected remote branch, or the remote default when none is
-  selected. When a PR is required, new agent-chosen
+- Start Git private clones detached from the selected remote branch, or the remote default when none is
+  selected. Shared jj workspaces start a working-copy change on that base, not a detached clone. When a PR is required, new agent-chosen
   branches and bookmarks use `<type>/<short-description>` with a conventional task prefix
   (`feat/`, `fix/`, `docs/`, etc.), never `pilot/`. Existing branch and bookmark names are preserved;
   PR sessions check out and keep the PR head instead.
-- jj projects get a colocated jj repository in the clone. The clone inherits the project's pi trust.
+- Shared jj workspaces and legacy clones inherit the project's pi trust.
 - Projects can opt out (`workspace: "direct"`) to run Build sessions in the folder itself. Ask source
   selection is independent of this project setting. Folder-only Ask sessions use the current folder.
 - Projects independently configure **Require PR** (`requirePullRequest`, default true). Turning it off
-  permits direct pushes to the remote default branch without a PR. It does not change workspace isolation
+  permits direct pushes to the remote default branch without a PR, including shared jj workspaces.
+  Shared jj sessions identify the remote default branch, reconcile upstream, then move only its bookmark
+  to their own completed, verified change and push it explicitly with `--bookmark`, without force-pushing.
+  PR delivery uses task-specific bookmarks. It does not change workspace isolation
   or run an after-push command. The policy is read when a session worker starts (new sessions or kernel restart).
-- Archiving retains the workspace and transcript so old chats can be viewed and restored. Workspace
-  cleanup is deferred; never delete while a PR is open.
+- Archiving retains history with recoverable jj snapshots, not a guarantee that the working directory
+  remains on disk. Archived shared jj workspaces are eligible for cleanup after 30 days, configurable
+  with `PILOT_WORKSPACE_RETENTION_DAYS`; `0` disables cleanup. Legacy clones and direct/Ask sources are
+  not reclaimed by this policy. Never delete while a PR is open.
+- Safe cleanup pins the exact commit and change IDs plus the base before removing a workspace. Preserve
+  the known ignored mise configs (`mise.local.toml`, `.mise.local.toml`, `mise/config.local.toml`,
+  `.mise/config.local.toml`) and bounded `.pi/todos` files for restoration, with content-addressed
+  backups for repeated cleanup. Block deletion on unknown files that would be lost, live work,
+  subprocesses, viewers or terminals, sparse checkouts and submodules. Ignored regenerable dependency
+  and build directories are discarded. jj 0.46+ and Git 2.42+ are required for shared colocation.
+  Resume restores the pinned jj snapshot, not a moving bookmark or the current remote head. Cleanup
+  failures are protocol metadata and appear in the existing workspace badge tooltip, without another screen.
 
 ### 5.5 Policy and safety
 
+- Shared jj agents own their working copy, not the repository: do not rewrite sibling sessions' changes
+  or task bookmarks, use repository-wide `jj undo`/`jj op restore`, or run broad rebases or `--all` pushes.
+  PR delivery uses task-specific bookmarks and pushes only the chosen bookmark with `--bookmark`.
+  Configured no-PR delivery may move and explicitly push the default bookmark for the session's own
+  completed change after reconciling upstream; this does not permit rewriting other sessions' work.
 - **GitHub identity (decided):** Pilot never posts on GitHub: no comments, reviews, replies, merges or closes.
   It acts as the user only to push branches and open pull requests (`gh pr create`, the user's credentials).
   Enforced by a kernel tool hook (also inside codemode scripts) and stated in the session prompt; results,
@@ -361,7 +383,8 @@ reports), producing a morning summary in the app and Slack.
   controls in the expanded viewer and context menu, and source fallback on errors. Offscreen rows
   release their renderer. Nonce-CSP WebKit sandboxes display SVG only as inactive
   data images, with strict bundled Mermaid rendering, no external resources, and a 512 KiB source limit.
-- Archive inactive chats without deleting their history or workspace. Browse archived chats globally
+- Archive inactive chats without deleting their history. Shared jj working directories may be reclaimed
+  after the retention period, with recoverable snapshots restored on resume (§5.4). Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
   The daemon checks once a minute to automatically archive chats after one week without activity,
   skipping running chats and pending admissions. Restoration grants another week, including across
@@ -467,10 +490,12 @@ reports), producing a morning summary in the app and Slack.
 | `SessionSummary.pullRequest`, `.pullRequestError` | Branch-linked GitHub PR status and cached-lookup errors (done for private manual sessions) |
 | `GET /api/sessions/:id/changes/summary` | Lightweight base, branch, changed-file count and added/deleted line totals for sidebar rows, without generating patches (done) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
-| `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history and workspace (done) |
+| `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history with recoverable jj snapshots (done) |
+| `POST /api/sessions/:id/reclaim-workspace` | Manually reclaim an eligible archived shared jj workspace using the same snapshot/config preservation and unknown-file safety checks |
 | `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |
 | `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |
 | `SessionSummary.lastUserMessageAt` | Stable latest user-submission time for completion-aware session ordering and elapsed indicators (done) |
+| `SessionSummary.workspaceStorage`, `.workspaceReclaimedAt`, `.workspaceCleanupError` | Shared jj storage marker (absent for legacy/direct), reclamation timestamp, and safe-cleanup failure metadata; Swift labels shared/reclaimed workspaces |
 | `SessionSummary.sessionPath` | Daemon-provided session data directory for debug drafts, independent of the workspace path (done) |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
 | `GET /api/audit` | External effects log |

@@ -1,5 +1,6 @@
 /** Session registry and kernel worker supervision. */
 import { type ChildProcess, fork } from "node:child_process";
+import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -35,6 +36,7 @@ import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } f
 import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
+import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
 import {
 	createWorkspace,
 	dissociateWorkspace,
@@ -90,6 +92,8 @@ export interface SessionManagerOptions {
 	idleParkMs?: number;
 	startupTimeoutMs?: number;
 	commandTimeoutMs?: number;
+	/** Reclaim shared workspaces this long after archival. Defaults to 30 days; Infinity disables. */
+	workspaceRetentionMs?: number;
 }
 
 export interface SessionFactories {
@@ -116,6 +120,10 @@ interface SessionMeta extends OutcomeMeta {
 	projectId?: string;
 	/** Private clone the session works in (its cwd), and where it came from. */
 	workspace?: WorkspaceContext;
+	/** Persisted before removal. Never discard this record until restoration has succeeded. */
+	workspaceRecovery?: WorkspaceRecovery & { phase: "removing" | "reclaimed" | "restoring" };
+	workspaceReclaimedAt?: number;
+	workspaceCleanupError?: string;
 	createdAt: number;
 	updatedAt: number;
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
@@ -469,7 +477,10 @@ export class SessionManager {
 	private readonly changingModels = new Map<string, Promise<void>>();
 	private readonly modelCatalog: ModelCatalog;
 	/** Same-target retries share the durable result; opposite transitions execute in order. */
-	private readonly archiveTransitions = new Map<string, { archived: boolean; promise: Promise<SessionSummary> }>();
+	private readonly archiveTransitions = new Map<
+		string,
+		{ archived: boolean | "reclaim"; promise: Promise<SessionSummary> }
+	>();
 	private closing = false;
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
@@ -477,6 +488,11 @@ export class SessionManager {
 	private readonly pool?: WorkerPool;
 	private readonly idleParkMs: number;
 	private readonly workerOptions: WorkerOptions;
+	private readonly workspaceRetentionMs: number;
+	private readonly sharedWorkspaces: SharedWorkspaceStore;
+	private hasWorkspaceProcess: (id: string) => boolean = () => false;
+	/** Queued opposite archive transitions must not release a workspace's capability lock. */
+	private readonly workspaceMaintenance = new Map<string, number>();
 	/** Last non-telemetry packet, subscription or command per live worker. */
 	private readonly lastUse = new Map<string, number>();
 	/** Workers being closed for inactivity. A new worker for the session waits for the storage lease. */
@@ -511,6 +527,8 @@ export class SessionManager {
 	) {
 		this.idleParkMs = options.idleParkMs ?? 10 * 60_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
+		this.workspaceRetentionMs = options.workspaceRetentionMs ?? 30 * DAY_MS;
+		this.sharedWorkspaces = new SharedWorkspaceStore(home);
 		if (!factories.worker) this.pool = new WorkerPool();
 		this.home = home;
 		this.projects = projects;
@@ -644,7 +662,10 @@ export class SessionManager {
 		clearTimeout(this.archiveTimer);
 		if (this.closing) return;
 		this.archiveTimer = setTimeout(() => {
-			this.archiveSweep = this.archiveInactiveSessions().finally(() => this.scheduleArchiveSweep());
+			this.archiveSweep = this.archiveInactiveSessions()
+				.then(() => this.reclaimArchivedWorkspaces())
+				.catch((error: unknown) => console.warn(`pilotd: archive maintenance failed: ${error}`))
+				.finally(() => this.scheduleArchiveSweep());
 		}, ARCHIVE_INTERVAL_MS);
 		this.archiveTimer.unref();
 	}
@@ -660,6 +681,192 @@ export class SessionManager {
 				if (!(error instanceof Conflict))
 					console.warn(`pilotd: could not archive inactive session ${meta.id}: ${error}`);
 			}
+		}
+	}
+
+	/** The daemon's PTYs outlive viewers. Any live shell, even detached, prevents reclamation. */
+	setWorkspaceProcessGuard(guard: (id: string) => boolean): void {
+		this.hasWorkspaceProcess = guard;
+	}
+
+	private async reclaimArchivedWorkspaces(): Promise<void> {
+		if (!Number.isFinite(this.workspaceRetentionMs)) return;
+		const staleBefore = Date.now() - this.workspaceRetentionMs;
+		for (const meta of this.metas.values()) {
+			if (this.closing) break;
+			if (
+				!meta.workspace?.shared ||
+				meta.archivedAt === undefined ||
+				meta.archivedAt > staleBefore ||
+				meta.pullRequest?.state === "open" ||
+				meta.pullRequest?.state === "draft" ||
+				meta.workspaceRecovery?.phase === "reclaimed"
+			)
+				continue;
+			try {
+				await this.reclaimWorkspace(meta.id, staleBefore);
+			} catch (error) {
+				// Busy sessions and update leases are retried by the next sweep.
+				if (!(error instanceof Conflict))
+					console.warn(`pilotd: could not reclaim workspace for ${meta.id}: ${error}`);
+			}
+		}
+	}
+
+	/** Keep conversation storage and a pinned jj snapshot; remove only the private working directory. */
+	async reclaimWorkspace(id: string, staleBefore?: number): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			this.require(id);
+			const previous = this.archiveTransitions.get(id);
+			if (previous?.archived === "reclaim") return await previous.promise;
+			const releaseWorkspace = this.holdWorkspace(id);
+			const promise = (previous?.promise ?? Promise.resolve())
+				.catch(() => undefined)
+				.then(async () => {
+					const meta = this.require(id);
+					if (this.closing) throw new Conflict("pilotd is shutting down");
+					if (staleBefore !== undefined && (meta.archivedAt === undefined || meta.archivedAt > staleBefore))
+						return this.summary(meta);
+					if (meta.archivedAt === undefined)
+						throw new Conflict("Archive the session before reclaiming its workspace");
+					if (!meta.workspace?.shared) throw new Conflict("Only shared jj workspaces can be reclaimed");
+					if (meta.pullRequest?.state === "open" || meta.pullRequest?.state === "draft")
+						throw new Conflict("Workspaces with an open pull request cannot be reclaimed");
+					if (meta.workspaceRecovery?.phase === "reclaimed") return this.summary(meta);
+					this.assertWorkspaceQuiescent(meta);
+					try {
+						const worker = this.workers.get(id);
+						if (worker && ((await worker.hasChildren?.()) ?? true))
+							throw new Conflict("Session has live subprocesses; stop them before reclaiming its workspace");
+						this.assertWorkspaceQuiescent(meta);
+						await this.unparked(id);
+						if (worker) {
+							this.workers.delete(id);
+							this.lastUse.delete(id);
+							this.parked.add(worker);
+							await worker.close();
+						}
+						this.assertWorkspaceQuiescent(meta);
+						this.assertOwnedWorkspace(meta);
+						if (!meta.workspaceRecovery) {
+							const snapshot = await this.sharedWorkspaces.snapshot(
+								meta.cwd,
+								meta.workspace.shared,
+								join(this.dir(id), "workspace-recovery"),
+							);
+							meta.workspaceRecovery = { ...snapshot, phase: "removing" };
+							// The restore recipe must be durable before any files disappear.
+							await this.save(meta);
+						}
+						this.assertWorkspaceQuiescent(meta);
+						await this.sharedWorkspaces.remove(meta.cwd, meta.workspace.shared, meta.workspaceRecovery);
+						meta.workspaceRecovery.phase = "reclaimed";
+						meta.workspaceReclaimedAt ??= Date.now();
+						delete meta.workspaceCleanupError;
+						this.coldSnapshots.delete(id);
+						await this.save(meta);
+						this.emit(meta);
+						return this.summary(meta);
+					} catch (error) {
+						meta.workspaceCleanupError = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+						await this.save(meta);
+						this.emit(meta);
+						throw error;
+					}
+				});
+			const held = promise.finally(releaseWorkspace);
+			this.archiveTransitions.set(id, { archived: "reclaim", promise: held });
+			const clear = () => {
+				if (this.archiveTransitions.get(id)?.promise === held) this.archiveTransitions.delete(id);
+			};
+			void held.then(clear, clear);
+			return await held;
+		} finally {
+			end();
+		}
+	}
+
+	private holdWorkspace(id: string): () => void {
+		this.workspaceMaintenance.set(id, (this.workspaceMaintenance.get(id) ?? 0) + 1);
+		return () => {
+			const count = (this.workspaceMaintenance.get(id) ?? 1) - 1;
+			if (count) this.workspaceMaintenance.set(id, count);
+			else this.workspaceMaintenance.delete(id);
+		};
+	}
+
+	private assertWorkspaceQuiescent(meta: SessionMeta): void {
+		const worker = this.workers.get(meta.id);
+		if (
+			this.closing ||
+			meta.working ||
+			meta.initializing ||
+			meta.preparing ||
+			meta.pending?.length ||
+			meta.pullRequest?.state === "open" ||
+			meta.pullRequest?.state === "draft" ||
+			this.starting.has(meta.id) ||
+			this.sending.has(meta.id) ||
+			this.changingModels.has(meta.id) ||
+			this.watchers.get(meta.id)?.size ||
+			this.hasWorkspaceProcess(meta.id) ||
+			(worker && (worker.state === "working" || worker.state === "starting" || (worker.busy ?? true)))
+		)
+			throw new Conflict(
+				"Session is in use; close viewers, terminals and live work before reclaiming its workspace",
+			);
+	}
+
+	private assertOwnedWorkspace(meta: SessionMeta): void {
+		if (meta.cwd !== join(this.dir(meta.id), "workspace")) throw new Error("Invalid session workspace destination");
+	}
+
+	private async restoreWorkspace(meta: SessionMeta): Promise<void> {
+		const releaseWorkspace = this.holdWorkspace(meta.id);
+		try {
+			await this.restoreWorkspaceHeld(meta);
+		} finally {
+			releaseWorkspace();
+		}
+	}
+
+	private async restoreWorkspaceHeld(meta: SessionMeta): Promise<void> {
+		const recovery = meta.workspaceRecovery;
+		if (!recovery) return;
+		if (!["removing", "reclaimed", "restoring"].includes(recovery.phase))
+			throw new Error("Invalid workspace recovery state");
+		this.assertOwnedWorkspace(meta);
+		if (!meta.workspace?.shared) throw new Error("Missing shared repository for workspace restoration");
+		await this.unparked(meta.id);
+		if (
+			this.hasWorkspaceProcess(meta.id) ||
+			this.workers.has(meta.id) ||
+			meta.working ||
+			meta.initializing ||
+			meta.preparing ||
+			meta.pending?.length
+		)
+			throw new Conflict("Close live work and terminals before restoring the workspace");
+		if (recovery.phase === "removing") await this.sharedWorkspaces.remove(meta.cwd, meta.workspace.shared, recovery);
+		meta.workspaceRecovery = { ...recovery, phase: "restoring" };
+		await this.save(meta);
+		await this.sharedWorkspaces.restore(
+			meta.cwd,
+			meta.workspace.shared,
+			recovery,
+			join(this.dir(meta.id), "workspace-recovery"),
+		);
+		delete meta.workspaceRecovery;
+		delete meta.workspaceReclaimedAt;
+		delete meta.workspaceCleanupError;
+		this.coldSnapshots.delete(meta.id);
+		try {
+			await this.save(meta);
+		} catch (error) {
+			// Retry restoration idempotently if committing its final state failed.
+			meta.workspaceRecovery = { ...recovery, phase: "restoring" };
+			throw error;
 		}
 	}
 
@@ -719,7 +926,7 @@ export class SessionManager {
 			.sort((a, b) => b.updatedAt - a.updatedAt);
 	}
 
-	/** Non-destructive: keep the transcript, branch and workspace available for viewing and restoration. */
+	/** Keep history available; archived shared working directories can later be reclaimed and restored. */
 	async archive(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
@@ -757,6 +964,16 @@ export class SessionManager {
 					return this.summary(meta);
 				if (autoArchivedPullRequest && meta.autoArchivedPullRequest === autoArchivedPullRequest)
 					return this.summary(meta);
+				if (!archived && meta.workspaceRecovery) {
+					try {
+						await this.restoreWorkspace(meta);
+					} catch (error) {
+						meta.workspaceCleanupError = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+						await this.save(meta);
+						this.emit(meta);
+						throw error;
+					}
+				}
 				if ((meta.archivedAt !== undefined) === archived) return this.summary(meta);
 				const worker = this.workers.get(id);
 				if (
@@ -883,6 +1100,8 @@ export class SessionManager {
 		const meta = this.require(id);
 		this.validateMode(meta);
 		if (meta.mode === "ask") throw new Conflict("Ask sessions are read-only");
+		if (meta.workspaceRecovery || this.workspaceMaintenance.has(id))
+			throw new Conflict("Restore the archived session before accessing its workspace");
 	}
 
 	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
@@ -1406,16 +1625,33 @@ export class SessionManager {
 					} else {
 						if (meta.cwd !== join(this.dir(id), "workspace"))
 							throw new Error("Invalid session workspace destination");
-						// A restart can leave a partial clone. No worker used it before the recipe was cleared.
-						await rm(meta.cwd, { recursive: true, force: true });
+						// Unregister linked jj/Git workspaces before removing an interrupted preparation.
+						if (!this.factories.workspace && existsSync(join(plan.source, ".jj")))
+							await this.sharedWorkspaces.discardPartial(meta.cwd, plan.source);
+						else await rm(meta.cwd, { recursive: true, force: true });
 						if (this.closing) return;
-						const preparation = (this.factories.workspace ?? createWorkspace)(
-							plan.source,
-							meta.cwd,
-							undefined,
-							this.shutdownSignal.signal,
-							plan.baseBranch,
-						);
+						const preparation = this.factories.workspace
+							? this.factories.workspace(
+									plan.source,
+									meta.cwd,
+									undefined,
+									this.shutdownSignal.signal,
+									plan.baseBranch,
+								)
+							: existsSync(join(plan.source, ".jj"))
+								? this.sharedWorkspaces.create(
+										plan.source,
+										meta.cwd,
+										this.shutdownSignal.signal,
+										plan.baseBranch,
+									)
+								: createWorkspace(
+										plan.source,
+										meta.cwd,
+										undefined,
+										this.shutdownSignal.signal,
+										plan.baseBranch,
+									);
 						this.preparations.add(preparation);
 						const created = await preparation.finally(() => this.preparations.delete(preparation));
 						if (this.closing) return;
@@ -1424,6 +1660,8 @@ export class SessionManager {
 							...(created.branch ? { branch: created.branch } : {}),
 							base: created.base,
 							jj: created.jj,
+							...(created.shared ? { shared: created.shared } : {}),
+							...(created.baseBranch ? { baseBranch: created.baseBranch } : {}),
 							...(created.upstream ? { upstream: created.upstream } : {}),
 						};
 						delete meta.preparing;
@@ -1508,6 +1746,7 @@ export class SessionManager {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
+		if (meta.workspaceRecovery) throw new Conflict("Restore the archived session before starting its worker");
 		this.validateMode(meta, true);
 		this.coldSnapshots.delete(id);
 		this.coldLoading.delete(id);
@@ -1650,6 +1889,7 @@ export class SessionManager {
 			meta.mode === "ask"
 				? meta.ask?.branch
 				: (meta.preparing?.baseBranch ??
+					meta.workspace?.baseBranch ??
 					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
 			id: meta.id,
@@ -1666,6 +1906,9 @@ export class SessionManager {
 			updatedAt: meta.updatedAt,
 			...(meta.lastUserMessageAt !== undefined ? { lastUserMessageAt: meta.lastUserMessageAt } : {}),
 			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
+			...(meta.workspace?.shared ? { workspaceStorage: "shared" as const } : {}),
+			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
+			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
 			state: meta.failure
 				? "failed"
 				: meta.initializing
@@ -1780,6 +2023,13 @@ export class SessionManager {
 			// Like archivedAt, the merge marker must not be lost to queued lifecycle snapshots.
 			const autoArchivedPullRequest = archive?.autoArchivedPullRequest ?? meta.autoArchivedPullRequest;
 			if (autoArchivedPullRequest !== undefined) persisted.autoArchivedPullRequest = autoArchivedPullRequest;
+			// Lifecycle/PR writes captured before a workspace transition cannot erase its restore recipe.
+			if (meta.workspaceRecovery) persisted.workspaceRecovery = meta.workspaceRecovery;
+			else delete persisted.workspaceRecovery;
+			if (meta.workspaceReclaimedAt !== undefined) persisted.workspaceReclaimedAt = meta.workspaceReclaimedAt;
+			else delete persisted.workspaceReclaimedAt;
+			if (meta.workspaceCleanupError) persisted.workspaceCleanupError = meta.workspaceCleanupError;
+			else delete persisted.workspaceCleanupError;
 			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600 });
 			await rename(temp, file);
 			// Commit in memory before the next queued save can read the metadata.

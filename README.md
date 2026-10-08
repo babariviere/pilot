@@ -15,6 +15,24 @@ MCP, shell tools or repository-write tools. It can create, update and preview it
 the repository stays read-only. To implement an idea, use **Start a Build chat** to carry the discussion
 into a separate chat. Build keeps the project's workspace default, with an optional per-chat override.
 
+New isolated **Build** sessions for jj projects (jj 0.46+ and Git 2.42+) use separate working copies of a shared repository in
+`$PILOT_HOME/repositories`. Workspace edits leave your own checkout untouched, but repository history
+and bookmarks are shared with sibling sessions. Agents use task-specific bookmarks for PR delivery,
+do not rewrite other sessions or run repository-wide undo/operation restore, and push only the chosen
+bookmark with `--bookmark`, never a broad `--all` push or rebase. Projects with **Require PR** disabled
+keep direct default-branch delivery after reconciling upstream, without force-pushing. Existing private
+clones, Git-only projects, direct checkouts, and Ask sessions keep their current behavior.
+
+Archiving retains chat history, not a guarantee that its working directory stays on disk. Archived
+shared jj workspaces are eligible for cleanup after 30 days, configurable with
+`PILOT_WORKSPACE_RETENTION_DAYS` (`0` disables cleanup). Safe cleanup pins the exact commit and change
+IDs plus the base for recovery, preserves the known ignored mise local configs (`mise.local.toml`,
+`.mise.local.toml`, `mise/config.local.toml`, `.mise/config.local.toml`) and bounded `.pi/todos` files,
+and blocks deletion when unknown files would be lost. Live workers/subprocesses, viewers, terminals,
+open/draft pull requests, non-default sparse checkouts and submodules prevent reclamation. Ignored
+dependency/build output is regenerated rather than backed up. Resuming restores a reclaimed workspace
+from its recoverable jj snapshot without fetching origin.
+
 Agents can create **Artifacts**: plain images or interactive HTML/JavaScript and React/JSX previews,
 including diagrams, graphs and animations. Revisions persist with their originating session and project.
 Chat cards open the revision published there; the session sidebar opens the latest. Expanded previews
@@ -79,6 +97,7 @@ See [the one-time setup](apps/macos/UPDATES.md) for signing keys, GitHub access 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PILOT_HOME` | `~/.local/share/pilot` | Session metadata and durable storage |
+| `PILOT_WORKSPACE_RETENTION_DAYS` | `30` | Archived shared jj workspace retention; `0` disables cleanup |
 | `PILOT_PORT` | `4319` | Daemon port |
 | `PILOT_AGENT_DIR` | pi's agent dir | Pi settings, packages and auth to load |
 

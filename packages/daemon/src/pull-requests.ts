@@ -14,7 +14,8 @@ export interface PullRequestSession {
 	id: string;
 	cwd: string;
 	archivedAt?: number;
-	workspace?: { branch?: string; upstream?: string; base?: string };
+	workspaceRecovery?: unknown;
+	workspace?: { branch?: string; upstream?: string; base?: string; baseBranch?: string };
 	pullRequest?: SessionPullRequest;
 }
 
@@ -146,6 +147,7 @@ export async function discoverPullRequest(
 	runner: Runner = run,
 ): Promise<PullRequestResult> {
 	if (!session.workspace) return {};
+	if (session.workspaceRecovery) return session.workspace.branch ? { branch: session.workspace.branch } : {};
 	let branch = session.workspace.branch;
 	try {
 		const validateBranch = (name: string) => {
@@ -159,7 +161,7 @@ export async function discoverPullRequest(
 		validateBranch(branch);
 		// Direct delivery on the default branch is not a session PR. Avoid matching unrelated
 		// historical PRs (and potentially auto-archiving the session based on their merge time).
-		if (session.workspace.base === `origin/${branch}`) return { branch };
+		if (session.workspace.base === `origin/${branch}` || session.workspace.baseBranch === branch) return { branch };
 		const head = branch;
 		const upstream =
 			session.workspace.upstream ?? (await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000));
