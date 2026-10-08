@@ -2,6 +2,28 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+test("verification and tagged release tests install checksum-verified jj before npm test", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	assert.match(workflow, /JJ_VERSION: 0\.46\.0/);
+	assert.match(workflow, /JJ_SHA256: [a-f0-9]{64}/);
+	const installations = [];
+	for (const name of ["verify", "release"]) {
+		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
+		const start = job.indexOf("- name: Install Jujutsu");
+		const end = job.indexOf("\n      -", start);
+		const test = job.indexOf("npm test");
+		assert.ok(start >= 0 && end > start && test > end, `${name} must install jj before testing`);
+		const installation = job.slice(start, end);
+		assert.match(installation, /releases\/download\/v\$JJ_VERSION\/jj-v\$JJ_VERSION-aarch64-apple-darwin\.tar\.gz/);
+		assert.ok(installation.indexOf("shasum -a 256 --check") < installation.indexOf("tar -xzf"));
+		assert.match(installation, /echo "\$JJ_SHA256  \$archive" \| shasum -a 256 --check/);
+		assert.match(installation, /echo "\$install_dir" >> "\$GITHUB_PATH"/);
+		assert.match(installation, /"\$install_dir\/jj" --version/);
+		installations.push(installation);
+	}
+	assert.equal(installations[0], installations[1]);
+});
+
 test("release job publishes only newly created stable releases or explicit draft retries", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
