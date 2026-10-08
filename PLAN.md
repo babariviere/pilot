@@ -385,6 +385,11 @@ reports), producing a morning summary in the app and Slack.
   and explicitly refreshes after settled work. It persists the last successful status. Failed lookups
   retain the cache but label it as last known, never as a fresh merge result. Direct/shared-folder
   sessions are not auto-linked.
+  A session can open several PRs: switching branches keeps earlier PRs linked, and private clones
+  also check their other local branches, so PRs opened from several branches in one run are found.
+  Shared jj workspaces only track branches the session was observed using. Rows show one badge per PR,
+  the current branch's first. Polling continues while any linked PR is open, and merge archiving waits
+  until every linked PR is merged or closed.
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
   user messages above the composer until consumed, restoring them on reconnect. Display steering before
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
@@ -517,7 +522,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/sessions/:id/artifacts/:artifactId?revision=N` | Read a pinned revision (latest when omitted) |
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
-| `SessionSummary.pullRequest`, `.pullRequestError` | Branch-linked GitHub PR status and cached-lookup errors (done for private manual sessions) |
+| `SessionSummary.pullRequest`, `.pullRequests`, `.pullRequestError` | Branch-linked GitHub PR status (current branch, and every PR the session opened) and cached-lookup errors (done for private manual sessions) |
 | `GET /api/sessions/:id/changes/summary` | Lightweight base, branch, changed-file count and added/deleted line totals for sidebar rows, without generating patches (done) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history with recoverable jj snapshots (done) |

@@ -76,7 +76,7 @@ struct SessionRepositoryMetadataContent: View {
             }
             HStack(spacing: 6) {
                 PullRequestBadge(session: session)
-                if session.pullRequest == nil && session.pullRequestError == nil {
+                if session.linkedPullRequests.isEmpty && session.pullRequestError == nil {
                     if let summary {
                         Text(summary.fileCountLabel).monospacedDigit()
                     } else if let branch, !branch.isEmpty {
@@ -110,7 +110,7 @@ struct SessionRepositoryMetadataContent: View {
                 }
             }
             if showBranch, let branch, !branch.isEmpty {
-                if session.pullRequest != nil || session.pullRequestError != nil || summary != nil {
+                if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil || summary != nil {
                     Text("·").accessibilityHidden(true)
                 }
                 Text(branch)

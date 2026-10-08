@@ -183,6 +183,7 @@ test("detached private sessions wait for the agent's branch before asking GitHub
 	let lookups = 0;
 	const runner: Runner = async (file, args) => {
 		if (file === "git") {
+			if (args[1] === "--format=%(refname:short)") return chosen;
 			assert.deepEqual(args, ["branch", "--show-current"]);
 			return chosen;
 		}
@@ -326,6 +327,112 @@ test("invalid branches and upstream identities cannot become command options", a
 		).error!,
 		/not a GitHub repository URL/,
 	);
+});
+
+test("discovers PRs from the session's other branches, skipping settled ones and the base", async () => {
+	const target = session();
+	target.previousPullRequests = [
+		{
+			number: 3,
+			url: "https://github.com/octo/repo/pull/3",
+			title: "Settled",
+			state: "merged",
+			branch: "fix/settled",
+			checkedAt: Date.now(),
+		},
+		{
+			number: 2,
+			url: "https://github.com/octo/repo/pull/2",
+			title: "Old",
+			state: "open",
+			branch: "fix/earlier",
+			checkedAt: 1,
+		},
+	];
+	target.previousBranches = ["fix/observed"];
+	target.workspace!.base = "origin/main";
+	const heads: string[] = [];
+	const result = await discoverPullRequest(target, async (file, args) => {
+		if (file === "git") return args[1] === "--show-current" ? branch : `main\n${branch}\nfix/split-off\nfix/settled`;
+		const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
+		heads.push(head);
+		const number = { [branch]: 1, "fix/earlier": 2, "fix/split-off": 4 }[head];
+		return JSON.stringify(number ? [candidate({ number, headRefName: head })] : []);
+	});
+	assert.equal(result.error, undefined);
+	assert.equal(result.pullRequest?.number, 1);
+	assert.equal(result.pullRequest?.branch, branch);
+	assert.deepEqual(
+		result.others?.map((pr) => [pr.number, pr.branch, pr.state]),
+		[
+			[2, "fix/earlier", "open"],
+			[4, "fix/split-off", "open"],
+		],
+	);
+	assert.ok(!heads.includes("main"), "the base branch is never a session PR head");
+	assert.ok(!heads.includes("fix/settled"), "merged and closed PRs on other branches never poll again");
+	assert.deepEqual(
+		heads.filter((head) => head === "fix/observed"),
+		["fix/observed", "fix/observed"],
+		"observed branches without a PR are still checked",
+	);
+});
+
+test("polling continues while an earlier branch's PR is open, and stops once every PR settles", async () => {
+	const merged = {
+		number: 2,
+		url: "https://github.com/octo/repo/pull/2",
+		title: "Current",
+		state: "merged",
+		checkedAt: 1,
+	} as const;
+	const earlier = {
+		number: 1,
+		url: "https://github.com/octo/repo/pull/1",
+		title: "Earlier",
+		state: "open",
+		branch: "fix/earlier",
+		checkedAt: 1,
+	} as const;
+	const target = {
+		...session(),
+		pullRequest: { ...merged },
+		previousPullRequests: [{ ...earlier }] as PullRequestSession["previousPullRequests"],
+	};
+	let calls = 0;
+	const tracker = new PullRequestTracker(
+		() => [target],
+		async () => {},
+		{
+			intervalMs: 60_000,
+			runner: async (file) => {
+				if (file === "gh") calls++;
+				return file === "gh" ? "[]" : "";
+			},
+		},
+	);
+	try {
+		assert.equal(tracker["due"](target), true);
+		target.previousPullRequests = [{ ...earlier, state: "closed" }];
+		assert.equal(tracker["due"](target), false);
+	} finally {
+		await tracker.stop();
+	}
+	assert.equal(calls, 0);
+});
+
+test("shared workspaces never attribute repository-wide bookmarks to the session", async () => {
+	const target = session();
+	target.workspace = { ...target.workspace!, shared: { repository: "/repo", name: "w" } };
+	const result = await discoverPullRequest(target, async (file, args) => {
+		if (file === "git") {
+			assert.deepEqual(args, ["branch", "--show-current"]);
+			return branch;
+		}
+		return JSON.stringify([candidate()]);
+	});
+	assert.equal(result.pullRequest?.number, 1);
+	assert.equal(result.others, undefined);
 });
 
 test("tracker deduplicates overlapping per-session requests and executes sessions serially", async () => {

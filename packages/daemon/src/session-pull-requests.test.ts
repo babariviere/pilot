@@ -289,6 +289,58 @@ test("agent branch changes persist for the UI, clear the prior PR, and survive d
 	);
 });
 
+test("a session can link several PRs: switching branches keeps earlier PRs, and archiving waits for all", async () => {
+	let chosen = branch;
+	const states: Record<string, string> = { [branch]: "OPEN", "fix-second": "OPEN" };
+	const numbers: Record<string, number> = { [branch]: 10, "fix-second": 11 };
+	await fixture(
+		{
+			runner: async (_file, args) => {
+				const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
+				const state = states[head]!;
+				if (args.includes("--state=open") && state !== "OPEN") return "[]";
+				const number = numbers[head]!;
+				return JSON.stringify([
+					{ ...candidate(state), number, url: `https://github.com/octo/repo/pull/${number}`, headRefName: head },
+				]);
+			},
+		},
+		async (manager, meta, home) => {
+			await manager["pullRequests"]["polling"];
+			assert.equal(manager.get(meta.id)?.pullRequest?.number, 10);
+			chosen = "fix-second";
+			await manager["pullRequests"].refresh(meta);
+			const summary = manager.get(meta.id)!;
+			assert.equal(summary.branch, "fix-second");
+			assert.equal(summary.pullRequest?.number, 11);
+			assert.deepEqual(
+				summary.pullRequests?.map((pr) => [pr.number, pr.branch]),
+				[
+					[11, "fix-second"],
+					[10, branch],
+				],
+			);
+			assert.deepEqual(
+				(await saved(home, meta.id)).previousPullRequests?.map((pr) => pr.number),
+				[10],
+			);
+			states["fix-second"] = "MERGED";
+			await manager["pullRequests"].refresh(meta);
+			assert.equal(manager.get(meta.id)?.pullRequest?.state, "merged");
+			assert.equal(manager.get(meta.id)?.archivedAt, undefined, "an earlier open PR keeps the chat active");
+			states[branch] = "MERGED";
+			await manager["pullRequests"].refresh(meta);
+			assert.deepEqual(
+				manager.get(meta.id)?.pullRequests?.map((pr) => pr.state),
+				["merged", "merged"],
+			);
+			assert.ok(manager.get(meta.id)?.archivedAt, "archives once every PR has merged");
+		},
+		cached,
+		() => chosen,
+	);
+});
+
 test("draft/open/merged/closed PR changes persist and broadcast independently of agent completion", async () => {
 	let state = "OPEN";
 	let isDraft = true;

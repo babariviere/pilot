@@ -1,8 +1,10 @@
 import Foundation
 
 extension SessionSummary {
+    /// The current branch's PR has settled and so has every earlier one.
     public var hasTerminalPullRequest: Bool {
-        pullRequest?.state == .closed || pullRequest?.state == .merged
+        guard pullRequest?.isTerminal == true else { return false }
+        return linkedPullRequests.allSatisfy(\.isTerminal)
     }
 
     /// Working sessions retain their live activity behavior. Settled results use stable user/finish

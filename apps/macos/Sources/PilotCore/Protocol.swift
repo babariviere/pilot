@@ -55,6 +55,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let outcomeAt: Double?
     public let outcomeReason: String?
     public let pullRequest: SessionPullRequest?
+    /// Every PR the session opened, the current branch's first. Omitted when none, or by older daemons.
+    public let pullRequests: [SessionPullRequest]?
     /// A lookup failed. Any retained pull request is last-known, not a fresh result.
     public let pullRequestError: String?
 
@@ -101,6 +103,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         updatedAt: Double, state: String, model: String? = nil, error: String? = nil, usage: SessionUsage? = nil,
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
+        pullRequests: [SessionPullRequest]? = nil,
         archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil,
         mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
         lastUserMessageAt: Double? = nil,
@@ -132,6 +135,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.outcomeAt = outcomeAt
         self.outcomeReason = outcomeReason
         self.pullRequest = pullRequest
+        self.pullRequests = pullRequests
         self.pullRequestError = pullRequestError
     }
 }

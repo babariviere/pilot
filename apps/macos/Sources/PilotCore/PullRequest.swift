@@ -24,16 +24,25 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
     public let url: String
     public let title: String
     public let state: PullRequestState
+    /// Head branch. Omitted by older daemons.
+    public let branch: String?
+    /// GitHub's merge time, epoch milliseconds, for merged PRs.
+    public let mergedAt: Double?
     /// Last successful lookup, epoch milliseconds.
     public let checkedAt: Double
 
-    public init(number: Int, url: String, title: String, state: PullRequestState, checkedAt: Double) {
+    public init(number: Int, url: String, title: String, state: PullRequestState, checkedAt: Double,
+                branch: String? = nil, mergedAt: Double? = nil) {
         self.number = number
         self.url = url
         self.title = title
         self.state = state
+        self.branch = branch
+        self.mergedAt = mergedAt
         self.checkedAt = checkedAt
     }
+
+    public var isTerminal: Bool { state == .merged || state == .closed }
 
     public var label: String { "\(state.label) #\(number)" }
     public var compactLabel: String { "\(state.compactLabel) #\(number)" }
@@ -54,17 +63,32 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
 }
 
 extension SessionSummary {
+    /// Every PR linked to the session, the current branch's first. Falls back to pullRequest for older daemons.
+    public var linkedPullRequests: [SessionPullRequest] {
+        if let pullRequests, !pullRequests.isEmpty { return pullRequests }
+        return pullRequest.map { [$0] } ?? []
+    }
+
     public var pullRequestIsStale: Bool { pullRequestError != nil }
 
     public var pullRequestHelpText: String? {
-        guard let pr = pullRequest else {
+        let prs = linkedPullRequests
+        guard !prs.isEmpty else {
             return pullRequestError.map { "Pull request lookup failed. No cached status available.\n\($0)" }
         }
-        var lines = ["\(pullRequestIsStale ? "Last known: " : "")\(pr.label): \(pr.title)"]
-        let checked = pr.checkedDate?.formatted(date: .abbreviated, time: .standard) ?? "Unknown"
-        lines.append("Last checked: \(checked)")
+        var lines: [String] = []
+        for pr in prs {
+            lines.append("\(pullRequestIsStale ? "Last known: " : "")\(pr.label): \(pr.title)")
+            if prs.count > 1, let branch = pr.branch { lines.append("Branch: \(branch)") }
+            let checked = pr.checkedDate?.formatted(date: .abbreviated, time: .standard) ?? "Unknown"
+            lines.append("Last checked: \(checked)")
+        }
         if let error = pullRequestError { lines.append("Lookup failed. Cached status may be out of date.\n\(error)") }
-        lines.append(pr.browserURL == nil ? "Invalid pull request link. Cannot open in browser." : "Open pull request in browser. No merge action.")
+        if prs.contains(where: { $0.browserURL == nil }) {
+            lines.append("Invalid pull request link. Cannot open in browser.")
+        } else {
+            lines.append(prs.count > 1 ? "Open pull requests in browser. No merge action." : "Open pull request in browser. No merge action.")
+        }
         return lines.joined(separator: "\n")
     }
 }

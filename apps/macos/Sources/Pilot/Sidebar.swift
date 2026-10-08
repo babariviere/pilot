@@ -158,8 +158,8 @@ struct SessionSidebar: View {
     private func matches(_ session: SessionSummary) -> Bool {
         let query = model.sidebarQuery.trimmingCharacters(in: .whitespaces).lowercased()
         guard !query.isEmpty else { return true }
-        return [session.title, session.branch ?? "", session.cwd, session.model ?? "",
-                session.pullRequest?.label ?? "", session.pullRequest?.title ?? ""]
+        return ([session.title, session.branch ?? "", session.cwd, session.model ?? ""]
+                + session.linkedPullRequests.flatMap { [$0.label, $0.title, $0.branch ?? ""] })
             .contains { $0.lowercased().contains(query) }
     }
 
@@ -322,9 +322,11 @@ struct SessionRow: View {
             if session.isWorking {
                 Button("Stop Session") { model.stopSession(session.id) }
             }
-            if let pr = session.pullRequest, let url = pr.browserURL {
-                Link("Open PR #\(pr.number) in Browser", destination: url)
-                    .help(session.pullRequestHelpText ?? "")
+            ForEach(session.linkedPullRequests, id: \.url) { pr in
+                if let url = pr.browserURL {
+                    Link("Open PR #\(pr.number) in Browser", destination: url)
+                        .help(session.pullRequestHelpText ?? "")
+                }
             }
             if model.isUnread(session) {
                 Button("Mark as reviewed") { model.review(session, explicit: true) }

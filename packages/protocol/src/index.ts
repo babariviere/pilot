@@ -23,12 +23,16 @@ export interface SessionCompletion {
 	outcomeReason?: string;
 }
 
-/** Latest GitHub pull request for the session's private branch, read by the daemon. */
+/** A GitHub pull request opened from one of the session's branches, read by the daemon. */
 export interface SessionPullRequest {
 	number: number;
 	url: string;
 	title: string;
 	state: "draft" | "open" | "merged" | "closed";
+	/** Head branch. Omitted by older daemons. */
+	branch?: string;
+	/** GitHub's merge time, epoch milliseconds, for merged PRs. */
+	mergedAt?: number;
 	/** Last successful GitHub lookup, epoch milliseconds. Cached across restarts. */
 	checkedAt: number;
 }
@@ -104,8 +108,14 @@ export interface SessionSummary {
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
 	outcomeReason?: string;
+	/** PR for the current branch. */
 	pullRequest?: SessionPullRequest;
-	/** A lookup failed; pullRequest, if present, is the last known status, not a fresh result. */
+	/**
+	 * Every PR the session opened, the current branch's first, then earlier branches newest first.
+	 * Omitted when there are none, or by older daemons (use pullRequest).
+	 */
+	pullRequests?: SessionPullRequest[];
+	/** A lookup failed; pull requests, if present, are the last known status, not a fresh result. */
 	pullRequestError?: string;
 	/** Resolved "provider/modelId", once the kernel has started. */
 	model?: string;

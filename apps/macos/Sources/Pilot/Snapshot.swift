@@ -87,6 +87,25 @@ enum Snapshot {
             window.setContentSize(CGSize(width: 860, height: 600))
             for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
             snapshot(frame, to: directory.appending(path: "session-toolbar-narrow.png"))
+            // A session that split its work: an open PR on the current branch and an earlier merged one.
+            let current = SessionPullRequest(number: 74, url: "https://github.com/babariviere/pilot/pull/74",
+                                             title: "Remove agent status reporting", state: .open,
+                                             checkedAt: Fixtures.now, branch: "refactor/remove-agent-status-reporting")
+            let earlier = SessionPullRequest(number: 61, url: "https://github.com/babariviere/pilot/pull/61",
+                                             title: "Extract status helpers", state: .merged,
+                                             checkedAt: Fixtures.now, branch: "refactor/extract-status-helpers")
+            let multiple = SessionSummary(
+                id: "toolbar", title: "Remove agent status reporting", cwd: Fixtures.projects[0].path,
+                projectId: "p1", branch: "refactor/remove-agent-status-reporting", createdAt: Fixtures.now,
+                updatedAt: Fixtures.now, state: "idle", model: "openai-codex/gpt-6.1-sol",
+                pullRequest: current, pullRequests: [current, earlier])
+            model.client.loadFixture(projects: Fixtures.projects, sessions: [multiple])
+            window.setContentSize(CGSize(width: 1280, height: 600))
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            snapshot(frame, to: directory.appending(path: "session-toolbar-multiple-prs.png"))
+            window.setContentSize(CGSize(width: 860, height: 600))
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            snapshot(frame, to: directory.appending(path: "session-toolbar-multiple-prs-narrow.png"))
             print("snapshots written to \(directory.path)")
             NSApp.terminate(nil)
             return
