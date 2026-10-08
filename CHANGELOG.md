@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.4.0](https://github.com/babariviere/pilot/compare/v1.3.0...v1.4.0) (2026-10-08)
+
+
+### Features
+
+* **sessions:** simplify attention and prioritize fresh completions ([5e70480](https://github.com/babariviere/pilot/commit/5e70480e3f57d10647c71dc6b6bf57e1b30319ca))
+
+
+### Bug Fixes
+
+* **sidebar:** toggle projects when clicking their names ([1c5270e](https://github.com/babariviere/pilot/commit/1c5270e0491cb57e0e342c76a65e10d6dcebc9d5))
+
+
+### Performance Improvements
+
+* reduce UI and background worker resource usage ([68a065d](https://github.com/babariviere/pilot/commit/68a065d59d6e32d0fff989b7bf543cce1a30939f))
+
 ## [1.3.0](https://github.com/babariviere/pilot/compare/v1.2.0...v1.3.0) (2026-10-08)
 
 
