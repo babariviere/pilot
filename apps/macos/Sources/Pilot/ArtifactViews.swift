@@ -33,26 +33,20 @@ struct ArtifactCard: View {
     @StateObject private var state = ArtifactViewState()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "cube.transparent")
-                Text(reference.title).font(.callout.weight(.medium)).lineLimit(1)
-                Text("r\(reference.revision)").font(.caption.monospaced()).foregroundStyle(.secondary)
-                Spacer()
-                Button(state.preview ? "Hide preview" : "Preview") { state.preview.toggle() }
-                Button { state.viewer = true } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
-                    .help("Expand artifact")
-            }
+        VStack(alignment: .leading, spacing: 0) {
             if state.preview, state.visible {
-                ArtifactContent(reference: reference, latest: false)
+                ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true })
                     .frame(height: 240)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Button("Show \(reference.title)") { state.preview = true }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
             }
         }
-        .padding(12)
-        .background(Theme.card)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
+        .contextMenu {
+            Button("Open artifact") { state.viewer = true }
+            Button(state.preview ? "Hide preview" : "Show preview") { state.preview.toggle() }
+        }
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
         .sheet(isPresented: $state.viewer) { ArtifactViewer(reference: reference, latest: false) }
@@ -88,27 +82,31 @@ struct ArtifactViewer: View {
 private struct ArtifactContent: View {
     let reference: ArtifactReference
     let latest: Bool
+    var inline = false
+    var onOpen: (() -> Void)?
     @StateObject private var state = ArtifactViewState()
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                if let revision = state.revision {
-                    Text("\(revision.kind.rawValue.uppercased()) · r\(revision.revision)")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                if state.revision?.kind != .image {
-                    Picker("View", selection: $state.source) {
-                        Text("Preview").tag(false)
-                        Text("Source").tag(true)
+            if !inline {
+                HStack {
+                    if let revision = state.revision {
+                        Text("\(revision.kind.rawValue.uppercased()) · r\(revision.revision)")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 160)
+                    Spacer()
+                    if state.revision?.kind != .image {
+                        Picker("View", selection: $state.source) {
+                            Text("Preview").tag(false)
+                            Text("Source").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .frame(width: 160)
+                    }
                 }
+                .padding(8)
             }
-            .padding(8)
             if state.loading {
                 ProgressView("Loading artifact…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = state.error {
@@ -124,6 +122,15 @@ private struct ArtifactContent: View {
                     }
                 } else {
                     ArtifactPreview(revision: revision).id("\(revision.id)-\(revision.revision)")
+                        .allowsHitTesting(!inline)
+                        .accessibilityHidden(inline)
+                        .overlay {
+                            if inline {
+                                EmbeddedPreviewButton(title: "Open \(reference.title)",
+                                    help: revision.kind == .react ? "Click to interact" : "Click to expand",
+                                    open: { onOpen?() })
+                            }
+                        }
                 }
             }
         }

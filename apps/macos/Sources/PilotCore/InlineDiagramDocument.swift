@@ -2,7 +2,7 @@ import Foundation
 
 /// Isolated diagram HTML. The host may read the ready promise and height, but no native bridge is needed.
 public enum InlineDiagramDocument {
-    public static func document(kind: MarkdownDiagramKind, source: String) -> String {
+    public static func document(kind: MarkdownDiagramKind, source: String, expanded: Bool = false) -> String {
         let nonce = UUID().uuidString.replacingOccurrences(of: "-", with: "")
         let oversized = source.utf8.count > 512 * 1024
         // Do not embed oversized input. Report the error through the same asynchronous API as render errors.
@@ -50,6 +50,7 @@ public enum InlineDiagramDocument {
         html { background: white; color-scheme: light; }
         body { margin: 0; padding: 12px; background: white; }
         img { display: block; max-width: 100%; height: auto; margin: auto; }
+        \#(expanded ? "img { width: 100%; }" : "")
         </style>
         <body><img id="diagram" alt="Diagram">
         <script nonce="\#(nonce)">

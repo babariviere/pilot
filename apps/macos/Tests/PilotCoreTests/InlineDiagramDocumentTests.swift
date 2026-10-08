@@ -8,6 +8,19 @@ private func bootstrapNonce(_ document: String) -> String? {
     return String(document[start.upperBound..<end])
 }
 
+@Test func expandedDiagramsZoomToTheViewerWidthWithoutChangingImageIsolation() {
+    for kind in [MarkdownDiagramKind.svg, .mermaid] {
+        let inline = InlineDiagramDocument.document(kind: kind, source: "source")
+        let expanded = InlineDiagramDocument.document(kind: kind, source: "source", expanded: true)
+        #expect(!inline.contains("img { width: 100%; }"))
+        #expect(expanded.contains("img { width: 100%; }"))
+        #expect(expanded.contains("height: auto;"))
+        #expect(expanded.contains("img-src data:;"))
+        #expect(expanded.contains("connect-src 'none'"))
+        #expect(expanded.contains("const url = svgImageURL(svg);"))
+    }
+}
+
 @Test func diagramSourceIsBase64EncodedNeverInterpolatedAsMarkupOrJavaScript() {
     let source = "</script><script>window.injected = true</script><svg onload=\"alert('🎨')\">\u{2028}\u{2029}&</svg>"
     for kind in [MarkdownDiagramKind.svg, .mermaid] {
