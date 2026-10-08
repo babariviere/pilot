@@ -57,6 +57,18 @@ enum Snapshot {
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
+        // Real sidebar preview: fresh completion first, metadata polling does not reset old ages,
+        // and terminal PRs stay below all other chats without unread dots.
+        if CommandLine.arguments.contains("--session-ordering-only") {
+            model.client.loadFixture(projects: [Fixtures.projects[0]], sessions: Fixtures.orderingSessions)
+            model.selectedSessionId = nil
+            await render(SessionSidebar(model: model, client: model.client),
+                         size: CGSize(width: 420, height: 680),
+                         to: directory.appending(path: "session-ordering.png"))
+            print("snapshots written to \(directory.path)")
+            exit(0)
+        }
+
         // Dense repository metadata must not push titles or timestamps out of narrow rows.
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sidebarLayoutSessions)
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sidebarLayoutSessions
@@ -331,16 +343,39 @@ enum Snapshot {
             NSGraphicsContext.restoreGraphicsState()
             try? rep.representation(using: .png, properties: [:])?.write(to: directory.appending(path: "\(name).png"))
         }
-        for session in Fixtures.sessions where session.outcome == .needsInput || session.outcome == .done {
+        for session in Fixtures.sessions where session.outcome == .done {
             model.selectedSessionId = session.id
             await render(
                 Frame(title: session.title, subtitle: "pilot · \(session.model ?? "default model")", status: session.status) {
-                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.settledTranscript(needsInput: session.outcome == .needsInput)))
+                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.settledTranscript(text: session.id == "s5" ? Fixtures.questionText : Fixtures.completionText)))
                 },
                 size: size,
-                to: directory.appending(path: session.outcome == .needsInput ? "needs-input-unread.png" : "done-unread.png")
+                to: directory.appending(path: session.id == "s5" ? "done-question-unread.png" : "done-unread.png")
             )
         }
+        let finishedAt = Date().timeIntervalSince1970 * 1_000
+        let prioritySessions: [SessionSummary] = [
+            SessionSummary(id: "priority-closed", title: "Closed PR, no attention", cwd: Fixtures.projects[0].path,
+                           projectId: "p1", createdAt: finishedAt - 86_400_000, updatedAt: finishedAt,
+                           state: "idle", outcome: .done, outcomeAt: finishedAt,
+                           pullRequest: SessionPullRequest(number: 5, url: "https://github.com/babariviere/pilot/pull/5",
+                                                          title: "Closed work", state: .closed, checkedAt: finishedAt)),
+            SessionSummary(id: "priority-working", title: "Still working", cwd: Fixtures.projects[0].path,
+                           projectId: "p1", createdAt: finishedAt - 3_600_000, updatedAt: finishedAt - 120_000,
+                           state: "working"),
+            SessionSummary(id: "priority-finished", title: "Just finished, ready to review", cwd: Fixtures.projects[0].path,
+                           projectId: "p1", createdAt: finishedAt - 3_600_000, updatedAt: finishedAt - 3_600_000,
+                           state: "idle", outcome: .done, outcomeAt: finishedAt),
+            SessionSummary(id: "priority-merged", title: "Merged PR, no attention", cwd: Fixtures.projects[0].path,
+                           projectId: "p1", createdAt: finishedAt - 86_400_000, updatedAt: finishedAt,
+                           state: "idle", outcome: .done, outcomeAt: finishedAt,
+                           pullRequest: SessionPullRequest(number: 4, url: "https://github.com/babariviere/pilot/pull/4",
+                                                          title: "Merged work", state: .merged, checkedAt: finishedAt)),
+        ]
+        model.client.loadFixture(projects: Fixtures.projects, sessions: prioritySessions)
+        model.selectedSessionId = nil
+        await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size,
+                     to: directory.appending(path: "thread-priority.png"))
         // A separate fixture set preserves the original attention/usage/diff screenshots.
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.pullRequestSessions)
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.pullRequestSessions.map {
@@ -356,7 +391,7 @@ enum Snapshot {
             model.selectedSessionId = session.id
             await render(
                 Frame(title: session.title, subtitle: "pilot · \(session.model ?? "default model")", status: session.status, session: session) {
-                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: session.isWorking ? Fixtures.transcript : Fixtures.settledTranscript(needsInput: false)))
+                    ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: session.isWorking ? Fixtures.transcript : Fixtures.settledTranscript()))
                 },
                 size: size,
                 to: directory.appending(path: "\(session.id).png")
@@ -647,8 +682,29 @@ enum Fixtures {
                        error: "Kernel exited with code 1"),
         SessionSummary(id: "s5", title: "Explain the Harness task graph", cwd: "\(home)/scratch",
                        createdAt: now - 6 * 86_400_000, updatedAt: now - 400_000_000, state: "parked",
-                       outcome: .needsInput, outcomeAt: now - 400_000_000, outcomeReason: "Which part of the task graph should I document first?"),
+                       outcome: .done, outcomeAt: now - 400_000_000, outcomeReason: "Which part of the task graph should I document first?"),
     ]
+
+    static let orderingSessions: [SessionSummary] = {
+        func session(_ id: String, _ title: String, activity: Double, finish: Double?,
+                     state: String = "idle", pr: PullRequestState? = nil) -> SessionSummary {
+            SessionSummary(id: id, title: title, cwd: projects[0].path, projectId: "p1",
+                           createdAt: now - 86_400_000, updatedAt: activity, state: state,
+                           outcome: finish == nil ? nil : .done, outcomeAt: finish,
+                           pullRequest: pr.map { SessionPullRequest(number: id == "order-merged" ? 12 : 11,
+                               url: "https://github.com/babariviere/pilot/pull/11", title: title,
+                               state: $0, checkedAt: now) },
+                           lastUserMessageAt: now - 7_200_000)
+        }
+        return [
+            session("order-merged", "Merged PR, no attention", activity: now, finish: now, pr: .merged),
+            session("order-closed", "Closed PR, no attention", activity: now, finish: now, pr: .closed),
+            session("order-polled", "Old completion, just polled", activity: now, finish: now - 3_600_000),
+            session("order-working", "Agent still working", activity: now - 60_000, finish: nil, state: "working", pr: .open),
+            session("order-finished", "Agent just finished", activity: now, finish: now),
+            session("order-draft", "Draft PR, completed earlier", activity: now, finish: now - 600_000, pr: .draft),
+        ]
+    }()
 
     static let pullRequestSessions: [SessionSummary] = [
         SessionSummary(id: "pr-open", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",
@@ -663,7 +719,7 @@ enum Fixtures {
                                                       title: "Add projects API", state: .merged, checkedAt: 1_781_524_800_000)),
         SessionSummary(id: "pr-draft", title: "Document durable storage", cwd: projects[0].path, projectId: "p1",
                        createdAt: now - 2 * 86_400_000, updatedAt: now - 600_000, state: "idle",
-                       outcome: .needsInput, outcomeAt: 1_781_524_800_001, outcomeReason: "Which storage flow should I document first?",
+                       outcome: .done, outcomeAt: 1_781_524_800_001, outcomeReason: "Which storage flow should I document first?",
                        pullRequest: SessionPullRequest(number: 8, url: "https://github.com/babariviere/pilot/pull/8",
                                                       title: "Document durable storage", state: .draft, checkedAt: 1_781_524_800_000)),
         SessionSummary(id: "pr-closed", title: "Explore alternate scheduler", cwd: projects[0].path, projectId: "p1",
@@ -679,11 +735,11 @@ enum Fixtures {
                        pullRequestError: "GitHub lookup failed: network offline"),
     ]
 
-    static func settledTranscript(needsInput: Bool) -> Transcript {
+    static let questionText = "I can document either the task scheduling flow or the durable storage flow. **Which should I cover first?**"
+    static let completionText = "Implemented the projects API, including create, update, list and delete. All tests passed."
+
+    static func settledTranscript(text: String = completionText) -> Transcript {
         var transcript = Transcript()
-        let text = needsInput
-            ? "I can document either the task scheduling flow or the durable storage flow. **Which should I cover first?**"
-            : "Implemented the projects API, including create, update, list and delete. All tests passed."
         transcript.apply(.object([
             "type": .string("snapshot"),
             "entries": .array([.object([

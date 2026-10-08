@@ -247,6 +247,36 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 	}
 }
 
+test("latest user submission is exposed and persists independently of worker and PR updates", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "initial task" });
+	assert.equal(created.lastUserMessageAt, created.createdAt);
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	assert.equal(sessions.get(created.id)?.lastUserMessageAt, created.createdAt);
+	await delay(2);
+	await sessions.send(created.id, "follow-up", "followUp", "follow-up-id");
+	const userAt = sessions.get(created.id)!.lastUserMessageAt!;
+	assert.ok(userAt > created.createdAt);
+	await sessions.stop(created.id);
+	const meta = sessions["metas"].get(created.id)!;
+	await sessions["applyPullRequest"](meta, {
+		pullRequest: {
+			number: 1,
+			url: "https://github.com/a/b/pull/1",
+			title: "PR",
+			state: "closed",
+			checkedAt: Date.now(),
+		},
+	});
+	assert.equal(sessions.get(created.id)?.lastUserMessageAt, userAt);
+	assert.equal((await f.stored(created.id)).lastUserMessageAt, userAt);
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	assert.equal(reopened.get(created.id)?.lastUserMessageAt, userAt);
+});
+
 test("generated title updates and persists without delaying startup", async (t) => {
 	const f = await fixture(t);
 	const gate = deferred();
@@ -377,6 +407,7 @@ async function fixture(t: TestContext) {
 		title: string;
 		titlePending?: { cwd: string; message: string };
 		cwd: string;
+		lastUserMessageAt?: number;
 		initializing?: boolean;
 		preparing?: { source: string; baseBranch?: string };
 		pending: Command[];
@@ -947,6 +978,60 @@ test("malformed preparing metadata never removes or runs in the source directory
 	assert.equal(f.workers.length, 1);
 });
 
+test("legacy persisted outcomes do not leak through HTTP or initial WebSocket session lists", async (t) => {
+	const f = await fixture(t);
+	const id = randomUUID();
+	await mkdir(join(f.home, "sessions", id), { recursive: true });
+	await writeFile(
+		join(f.home, "sessions", id, "meta.json"),
+		JSON.stringify({
+			id,
+			cwd: f.source,
+			title: "Legacy",
+			createdAt: 1,
+			updatedAt: 2,
+			outcome: "needs_input",
+			outcomeAt: 42,
+			outcomeReason: "Approval",
+		}),
+	);
+	const sessions = await f.manager();
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 },
+		sessions,
+		f.projects,
+		{} as ModelCatalog,
+		{} as TerminalManager,
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	let ws: WebSocket | undefined;
+	t.after(
+		() =>
+			new Promise<void>((resolve) => {
+				ws?.terminate();
+				server.closeAllConnections();
+				server.close(() => resolve());
+			}),
+	);
+	const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const single = (await (await fetch(`${url}/api/sessions/${id}`)).json()) as SessionSummary;
+	const list = (await (await fetch(`${url}/api/sessions`)).json()) as SessionSummary[];
+	const messages: { type: string; sessions?: SessionSummary[] }[] = [];
+	ws = new WebSocket(`${url.replace("http", "ws")}/api/ws`);
+	ws.on("message", (raw) => messages.push(JSON.parse(String(raw))));
+	await until(() => messages.some((message) => message.type === "sessions"));
+	const initial = messages.find((message) => message.type === "sessions")!.sessions![0]!;
+	for (const summary of [single, list[0]!, initial]) {
+		assert.equal(summary.outcome, "done");
+		assert.equal(summary.outcomeAt, 42);
+		assert.equal(summary.outcomeReason, undefined);
+		assert.equal(summary.updatedAt, 2);
+		assert.equal(summary.state, "parked");
+	}
+	assert.equal(f.workers.length, 0);
+});
+
 test("metadata with a mismatched session ID is skipped instead of trusted", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager({ worker: f.workerFactory(false) });
@@ -1112,13 +1197,13 @@ test("ready and working completions survive restart parked, replay does not chan
 		const worker = fakeWorker();
 		const changes: SessionSummary[] = [];
 		manager.onChange((summary) => changes.push(summary));
-		const completion: SessionCompletion = { outcome: "needs_input", outcomeAt: 42, outcomeReason: "Approval" };
+		const completion: SessionCompletion = { outcome: "done", outcomeAt: 42, outcomeReason: "Approval" };
 		manager["onPacket"](meta, worker, { type: "ready", model: "test/model", working: false, usage: {}, completion });
 		await flush(manager);
 		const reopened = new SessionManager(home, new ProjectStore(home));
 		await reopened.load();
 		assert.equal(reopened.get(meta.id)?.state, "parked");
-		assert.equal(reopened.get(meta.id)?.outcome, "needs_input");
+		assert.equal(reopened.get(meta.id)?.outcome, "done");
 		assert.equal(reopened.get(meta.id)?.outcomeAt, 42);
 		assert.equal(reopened.get(meta.id)?.outcomeReason, "Approval");
 		assert.equal(reopened["workers"].size, 0);

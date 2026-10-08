@@ -296,7 +296,7 @@ struct SessionRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isUnread(session) { UnreadBadge() }
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(SessionTimeFormatting.relative(session.updatedAt, now: context.date))
+                    Text(SessionTimeFormatting.relative(session.listActivityAt, now: context.date))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .monospacedDigit()

@@ -14,7 +14,7 @@ export type {
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
 
 /** Result of the latest settled run, independent of whether a worker is parked. */
-export type SessionOutcome = "done" | "needs_input" | "failed" | "stopped";
+export type SessionOutcome = "done" | "failed" | "stopped";
 
 export interface SessionCompletion {
 	outcome: SessionOutcome;
@@ -90,6 +90,8 @@ export interface SessionSummary {
 	branch?: string;
 	createdAt: number;
 	updatedAt: number;
+	/** Latest user submission, epoch milliseconds. Stable across metadata/PR polling. */
+	lastUserMessageAt?: number;
 	/** Epoch ms when archived. History and workspace are retained; restore before sending input. */
 	archivedAt?: number;
 	state: SessionState;

@@ -71,7 +71,7 @@ test("real working transitions advance activity but duplicate state and usage up
 
 test("ready hydration preserves completion and activity, while new settled work advances both", async (t) => {
 	const f = await fixture(t, false);
-	const completion = { outcome: "needs_input" as const, outcomeAt: f.updatedAt + 500, outcomeReason: "Review this" };
+	const completion = { outcome: "done" as const, outcomeAt: f.updatedAt + 500, outcomeReason: "Review this" };
 	f.manager["onPacket"](f.meta, f.worker, {
 		type: "ready",
 		model: "offline/model",

@@ -73,12 +73,16 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   `~/.config/ghostty/config`, which can be turned off), and projects.
 - **Menu bar.** Daemon status, recent sessions, open, restart/stop pilotd, open the log. The icon is the app
   icon's plane, with its contrail while agents are working.
-- **Results.** Color-only status dots are separate from lifecycle: blue for Working, green for Done,
-  orange for Needs your input, red for Failed, and gray for Stopped/Idle. Hover for the status label;
+- **Results.** Status icons are separate from lifecycle: green for Done, red for Failed, and gray for
+  Stopped/Idle, with an animated working indicator. Hover for the status label;
   screen readers announce it too.
   Chats show the working indicator, but no settled status icon or outcome-reason footer.
   Unread result dots persist until the loaded transcript end is visible in an active chat, or you choose
-  "Mark as reviewed" in the sidebar. Reviewing never answers a question or clears Needs your input.
+  "Mark as reviewed" in the sidebar. Reviewing never answers a question or changes a result.
+  Completed turns are Done even when the assistant asks a question. Legacy `needs_input` results decode as Done.
+  With older daemons, Swift retains any legacy reason as notification context; current daemons clear obsolete reasons.
+  Fresh completions move up and restart the elapsed indicator at `now`, without metadata polling resetting it.
+  Closed/merged PR chats sort below other chats and show no unread dots or completion notifications.
 - **Pull requests.** Browser links in the sidebar, session header, dashboard, context menu and menu bar
   show only a colored state icon and PR number, independently of results and unread dots.
   Hover for Draft, Open, Merged or Closed without merging, the title and last lookup time.
@@ -107,13 +111,15 @@ scripts/check-app.sh build/Pilot.app  # relocated app: packaged resources and te
 scripts/test.sh              # PilotCore tests
 .build/debug/Pilot --queue-edit-test  # native queue editing/removal keys, focus, drafts, failed/stale requests
 swift run Pilot              # unbundled dev run (no notifications)
-.build/debug/Pilot --snapshot /tmp/pilot-snap   # home, session, changes, settings, needs-input-unread, done-unread PNGs
+.build/debug/Pilot --snapshot /tmp/pilot-snap   # home, session, changes, settings, done-question-unread, done-unread PNGs
+                             # thread-priority.png: a fresh completion first, closed/merged PRs last without unread dots
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
                              # and menubar-idle.png / menubar-working.png: the menu bar plane glyph
                              # also pr-open.png, pr-merged.png, pr-stale.png and pr-dashboard.png
                              # also sidebar-folders.png, sidebar-folders-collapsed.png and sidebar-folders-search.png
                              # add --sidebar-folders-only to stop after the folder previews
+                             # add --session-ordering-only for completion ages and closed/merged PR ordering
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 # Run from the repository root, after building:

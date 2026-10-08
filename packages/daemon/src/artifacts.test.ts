@@ -77,7 +77,7 @@ async function registry(t: TestContext) {
 				createdAt: 1,
 				updatedAt: 20,
 				working: false,
-				outcome: "needs_input",
+				outcome: "done",
 				outcomeAt: 10,
 				outcomeReason: "Review requested",
 				lastOutcomeAt: 10,

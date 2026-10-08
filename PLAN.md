@@ -73,7 +73,7 @@ native macOS app, or from wherever the work came from.
 | **Policy** | Per-origin permissions: repositories, branches it may push, sandbox floor, tools, budget, auto-reply rights. |
 | **Workspace** | Daemon-owned Build working copy (private clone or project checkout). Ask uses a read-only checkout or pinned snapshot instead. |
 | **Human gate** | A durable pause where the agent waits for a human answer or approval (`waiting` state). |
-| **Outcome** | Structured end of a run: `fixed` (with PR/commit), `declined` (with reason), `needs-human`, `failed`. |
+| **Outcome** | Structured end of a run: `fixed` (with PR/commit), `declined` (with reason), `failed`, `stopped`. |
 
 ### Session states
 
@@ -81,15 +81,16 @@ native macOS app, or from wherever the work came from.
 human gate and costs nothing until answered.
 
 For manual sessions today, lifecycle (`parked`, `starting`, `working`, `idle`, `failed`) is separate from
-the latest settled-run outcome (`done`, `needs_input`, `failed`, `stopped`). The replay-safe
-`pilot_report_status` tool explicitly reports blocking questions, approvals or missing information
-before the final response, including design discussions awaiting a decision or permission to implement.
-Agents report `done` only when the requested work is complete, not merely when a reply ends.
-Fully answered standalone questions can be done; optional offers after completed work are not blockers.
-An otherwise successful run defaults to `done`; errors and aborts override reported status.
-This is not the suspended `ask_human` gate yet:
-the run ends normally, costs nothing while idle, and an ordinary user message resumes work.
-Outcomes and their stable completion version survive worker and daemon restarts.
+the latest settled-run outcome (`done`, `failed`, `stopped`). Outcomes are derived automatically
+from the run: a successful response settles as `done`, including questions or proposals; errors
+and aborts settle as `failed` or `stopped`. Agents do not report a separate status or human-attention
+outcome. Follow progress and questions through the transcript, live activity updates and unread
+completion indicators. A settled run costs nothing while idle, and an ordinary user message resumes
+work. This is not the suspended `ask_human` gate yet. Outcomes and their stable completion version
+survive worker and daemon restarts. Older human-attention outcomes are read as `done`, retaining their
+completion version without an obsolete attention reason in current daemon/kernel normalization. The
+native client's compatibility decoder maps older-daemon outcomes to `done` while retaining any legacy
+reason as notification context.
 
 ## 5. Shared machinery
 
@@ -103,7 +104,7 @@ A durable pilot tool available to every session:
 - Answers arrive from any channel through `POST /api/sessions/:id/answers` (or a trigger source) and
   complete the task; the tool returns the answers to the model.
 - Replay-safe: question IDs and channel message IDs are stored, so a restart never double-posts.
-- Timeouts per policy: remind, then end with `needs-human`.
+- Timeouts per policy: remind, then end with `stopped`.
 
 ### 5.2 Triage step
 
@@ -306,12 +307,21 @@ reports), producing a morning summary in the app and Slack.
   retained across restarts, never filesystem moves or daemon project changes. Search temporarily
   expands matching folders and projects without changing saved collapse state.
 - Manual sessions show a text-colored animated braille spinner while working, and colored status icons
-  (done checkmark, needs-input raised hand, failed warning triangle, stopped stop symbol, idle sleeping moon),
+  (done checkmark, failed warning triangle, stopped stop symbol, idle sleeping moon),
   with the status
   in tooltips and accessibility labels, separately from worker lifecycle. Unread completion dots persist
   until reviewed, independently of the outcome:
-  reading a question does not answer it. Native macOS notifications distinguish results, blocking
-  requests and failures, and deduplicate completion versions across reconnects.
+  reading a question does not answer it. Native macOS notifications distinguish settled runs,
+  stops and failures, and deduplicate completion versions across reconnects.
+- Session lists put chats with closed or merged PRs below chats with open/draft/no PRs, even if the
+  terminal PR chat is still working. Within each group, newest meaningful activity comes first.
+  A newly finished turn moves to the top of its group and resets the compact elapsed indicator to
+  `now` (the first minute), using its stable completion timestamp rather than generic metadata updates.
+  Settled chats use the later of completion and latest user submission; working chats retain live activity
+  ordering. Active session lists share this ordering; archives retain their archive-date order.
+  Closed/merged PR chats have no unread indicators or completion notifications. Suppressed completion
+  versions are still observed, so reopening a PR cannot replay old notifications (unreviewed results
+  may become unread again on reopening). Last-known terminal PR states obey the same rule.
 - The chat transcript shows an activity indicator while the agent is working, but no settled
   status icon or outcome-reason footer. Reaching the transcript end in the active window still
   marks the latest settled outcome as reviewed; status icons remain elsewhere in the app.
@@ -456,6 +466,7 @@ reports), producing a morning summary in the app and Slack.
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history and workspace (done) |
 | `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |
 | `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |
+| `SessionSummary.lastUserMessageAt` | Stable latest user-submission time for completion-aware session ordering and elapsed indicators (done) |
 | `SessionSummary.sessionPath` | Daemon-provided session data directory for debug drafts, independent of the workspace path (done) |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
 | `GET /api/audit` | External effects log |

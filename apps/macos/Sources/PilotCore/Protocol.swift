@@ -31,6 +31,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let branch: String?
     public let createdAt: Double
     public let updatedAt: Double
+    /// Latest user submission, epoch milliseconds. Stable across metadata/PR polling.
+    public let lastUserMessageAt: Double?
     /// Epoch milliseconds; nil means the chat is not archived. History and workspace are retained.
     public let archivedAt: Double?
     public let state: String
@@ -73,7 +75,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
         archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil,
-        mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil
+        mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
+        lastUserMessageAt: Double? = nil
     ) {
         self.id = id
         self.title = title
@@ -87,6 +90,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.branch = branch
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.lastUserMessageAt = lastUserMessageAt
         self.archivedAt = archivedAt
         self.state = state
         self.model = model

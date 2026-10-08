@@ -67,7 +67,7 @@ async function fixture(
 		updatedAt: 2,
 		workspace: { source: home, branch, upstream: "git@github.com:octo/repo.git", base: "origin/main", jj: false },
 		working: false,
-		outcome: "needs_input",
+		outcome: "done",
 		outcomeAt: 10,
 		outcomeReason: "Approval",
 		lastOutcomeAt: 10,
@@ -588,7 +588,7 @@ test("successful empty lookup without a cache clears discovery errors and cannot
 			await manager["pullRequests"].refresh(meta);
 			assert.equal(manager.get(meta.id)?.pullRequest, undefined);
 			assert.equal(manager.get(meta.id)?.pullRequestError, undefined);
-			assert.equal(manager.get(meta.id)?.outcome, "needs_input");
+			assert.equal(manager.get(meta.id)?.outcome, "done");
 		},
 	);
 });

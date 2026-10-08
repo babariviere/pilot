@@ -26,7 +26,7 @@ import { ArtifactStore } from "@pilot/artifacts";
 import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
-import { reconcileCompletion, withAttention } from "./attention.ts";
+import { reconcileCompletion } from "./attention.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
 import type { KernelSpec } from "./protocol.ts";
@@ -142,15 +142,13 @@ export class KernelSession {
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
 			const prepare = (extension: Extension) =>
-				withAttention(
-					replayUnsafe(
-						withPilotPolicy(
-							extension,
-							spec.pilot ?? {},
-							() =>
-								adapter!.session.getCallableToolNames().includes("artifact") ||
-								adapter!.session.getActiveToolNames().includes("artifact"),
-						),
+				replayUnsafe(
+					withPilotPolicy(
+						extension,
+						spec.pilot ?? {},
+						() =>
+							adapter!.session.getCallableToolNames().includes("artifact") ||
+							adapter!.session.getActiveToolNames().includes("artifact"),
 					),
 				);
 			const registry = createRegistry();

@@ -17,7 +17,7 @@ private func reviewMarker(in view: NSView) -> ChatReviewVisibility.ReviewView? {
     window.isReleasedWhenClosed = false
     defer { window.close() }
     var baseline: NSRect?
-    let outcomes: [SessionOutcome?] = [nil, .done, .needsInput, .failed, .stopped]
+    let outcomes: [SessionOutcome?] = [nil, .done, .failed, .stopped]
     for outcome in outcomes {
         let session = SessionSummary(id: "footer-test", title: "Test", cwd: "/tmp",
                                      createdAt: 0, updatedAt: 0, state: "idle", outcome: outcome,

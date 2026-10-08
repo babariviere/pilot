@@ -137,7 +137,7 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 	try {
 		const before = await readFile(join(durable, "harness.sqlite"));
 		const view = await readSessionSnapshot(durable, dir);
-		assert.deepEqual(view.completion, { outcome: "needs_input", outcomeAt: 50, outcomeReason: "approval" });
+		assert.deepEqual(view.completion, { outcome: "done", outcomeAt: 50 });
 		assert.deepEqual(await readSessionSnapshot(durable, dir), view, "restart reads keep the completion version");
 		assert.deepEqual(await readFile(join(durable, "harness.sqlite")), before, "no durable write or WAL checkpoint");
 	} finally {
