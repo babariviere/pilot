@@ -279,8 +279,9 @@ reports), producing a morning summary in the app and Slack.
   stopping the active run; Command-Delete removes the selected row only from its focused inline
   editor. Reject removal once a message has been consumed.
 - Inline diagrams: completed `svg` and `mermaid` Markdown fences render in chat; unclosed streaming
-  fences remain code. Previews fit the chat width, with source/copy controls and source fallback on
-  errors. Offscreen rows release their renderer. Nonce-CSP WebKit sandboxes display SVG only as inactive
+  fences remain code. Borderless previews fit the chat width and expand on click, with source/copy
+  controls in the expanded viewer and context menu, and source fallback on errors. Offscreen rows
+  release their renderer. Nonce-CSP WebKit sandboxes display SVG only as inactive
   data images, with strict bundled Mermaid rendering, no external resources, and a 512 KiB source limit.
 - Archive inactive chats without deleting their history or workspace. Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
@@ -322,7 +323,9 @@ reports), producing a morning summary in the app and Slack.
   create, update, list, read and preview them. Each publication saves an immutable revision; chat
   previews are shown by default and pin that revision, while sidebar access opens the latest.
   Plain PNG, JPEG, GIF and WebP files (or data URLs) are embedded with their revisions, up to 16 MiB.
-  Expanded viewers use 90% of the display's usable area.
+  Chat previews are borderless embedded content; clicking opens images and diagrams at a larger size,
+  or an interactive sandbox for apps. Source and revision controls live in the expanded viewer (diagram
+  source is also available from its context menu). Expanded viewers use 90% of the display's usable area.
   Offscreen chat rows release their renderer; previews can also be hidden manually. An older running
   daemon without artifact routes prompts for a restart once agents are idle. Native WebKit renders isolated,
   offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,

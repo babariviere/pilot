@@ -7,6 +7,7 @@ import WebKit
 final class InlineDiagramViewState: ObservableObject {
     @Published var source = false
     @Published var visible = false
+    @Published var viewer = false
 }
 
 /// Like artifact cards, offscreen chat blocks release their WebKit process and library tasks.
@@ -17,27 +18,26 @@ struct InlineDiagramBlock: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text(kind.rawValue).font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button(state.source ? "Preview" : "Source") { state.source.toggle() }
-                    .buttonStyle(.borderless).font(.caption)
-                CopyButton(text: text)
-            }
-            .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(Theme.subtleFill)
             if state.source {
                 CodeBlock(language: kind.rawValue, text: text)
             } else if state.visible {
-                InlineDiagramPreview(kind: kind, text: text)
+                InlineDiagramPreview(kind: kind, text: text, onOpen: { state.viewer = true })
             } else {
                 Color.clear.frame(height: 180)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline))
+        .contextMenu {
+            Button("Expand diagram") { state.viewer = true }
+            Button(state.source ? "Show preview" : "Show source") { state.source.toggle() }
+            Button("Copy source") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+            }
+        }
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
+        .sheet(isPresented: $state.viewer) { InlineDiagramViewer(kind: kind, text: text) }
     }
 }
 
@@ -52,9 +52,40 @@ final class InlineDiagramLayout: ObservableObject {
     }
 }
 
+private struct InlineDiagramViewer: View {
+    let kind: MarkdownDiagramKind
+    let text: String
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var state = InlineDiagramViewState()
+
+    var body: some View {
+        let size = ArtifactViewerLayout.size(available: NSApp.keyWindow?.screen?.visibleFrame.size
+            ?? NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
+        VStack(spacing: 0) {
+            HStack {
+                Text("\(kind.rawValue.uppercased()) diagram").font(.headline)
+                Spacer()
+                Button(state.source ? "Preview" : "Source") { state.source.toggle() }
+                CopyButton(text: text)
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(14)
+            Divider()
+            if state.source {
+                ScrollView { CodeBlock(language: kind.rawValue, text: text) }
+            } else {
+                InlineDiagramPreview(kind: kind, text: text, expanded: true)
+            }
+        }
+        .frame(width: size.width, height: size.height)
+    }
+}
+
 private struct InlineDiagramPreview: View {
     let kind: MarkdownDiagramKind
     let text: String
+    var expanded = false
+    var onOpen: (() -> Void)?
     @StateObject private var render = ArtifactRenderState()
     @StateObject private var layout = InlineDiagramLayout()
 
@@ -68,10 +99,18 @@ private struct InlineDiagramPreview: View {
         } else {
             GeometryReader { geometry in
                 InlineDiagramWebView(kind: kind, source: text, width: geometry.size.width,
-                                     state: render, layout: layout)
+                                     state: render, layout: layout, expanded: expanded)
+                    .allowsHitTesting(onOpen == nil)
+                    .accessibilityHidden(onOpen != nil)
                     .overlay { if render.loading { ProgressView("Rendering diagram…") } }
+                    .overlay {
+                        if let onOpen {
+                            EmbeddedPreviewButton(title: "Expand \(kind.rawValue) diagram",
+                                help: "Click to expand diagram", open: onOpen)
+                        }
+                    }
             }
-            .frame(height: layout.height)
+            .frame(height: expanded ? nil : layout.height)
         }
     }
 }
@@ -83,19 +122,22 @@ struct InlineDiagramWebView: NSViewRepresentable {
     let width: CGFloat
     @ObservedObject var state: ArtifactRenderState
     @ObservedObject var layout: InlineDiagramLayout
+    var expanded = false
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state, layout: layout) }
 
     func makeNSView(context: Context) -> WKWebView {
-        Self.makeView(kind: kind, source: source, coordinator: context.coordinator, client: AppModel.shared.client)
+        Self.makeView(kind: kind, source: source, coordinator: context.coordinator,
+                      client: AppModel.shared.client, expanded: expanded)
     }
 
     /// Shared with the native renderer integration test.
-    static func makeView(kind: MarkdownDiagramKind, source: String, coordinator: Coordinator, client: PilotClient) -> WKWebView {
+    static func makeView(kind: MarkdownDiagramKind, source: String, coordinator: Coordinator,
+                         client: PilotClient, expanded: Bool = false) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: kind == .mermaid ? [.mermaid] : [], client: client)
         let view = ArtifactWebView.makeSandboxView(coordinator: coordinator.sandbox, libraries: libraries)
         coordinator.sandbox.onLoad = { [weak coordinator] view in coordinator?.render(view) }
-        coordinator.sandbox.install(in: view, document: InlineDiagramDocument.document(kind: kind, source: source))
+        coordinator.sandbox.install(in: view, document: InlineDiagramDocument.document(kind: kind, source: source, expanded: expanded))
         return view
     }
 
