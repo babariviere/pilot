@@ -142,9 +142,13 @@ struct ChatView: View {
                     if transcript.working, !transcript.streaming ||
                         (transcript.liveRows.last ?? transcript.historyRows.last).map(isToolRow) == true {
                         WorkingIndicator(retry: transcript.retry)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
                     }
                     if let error = session.error, transcript.error == nil {
                         ErrorRow(text: error)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                         .background(ChatReviewVisibility {
@@ -157,7 +161,7 @@ struct ChatView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 24)
                 .padding(.bottom, bottomPadding)
-                .frame(maxWidth: Theme.column + 56)
+                .frame(maxWidth: ArtifactViewerLayout.inlineMaxWidth + 56)
                 .frame(maxWidth: .infinity)
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
@@ -274,7 +278,22 @@ private struct RowView: View, Equatable {
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.row == rhs.row && lhs.toolExpansions === rhs.toolExpansions }
 
+    private var maximumWidth: CGFloat {
+        switch row {
+        case .artifact: return ArtifactViewerLayout.inlineMaxWidth
+        case let .tools(_, items) where items.contains(where: { $0.artifact != nil }):
+            return ArtifactViewerLayout.inlineMaxWidth
+        default: return Theme.column
+        }
+    }
+
     var body: some View {
+        content
+            .frame(maxWidth: maximumWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+    }
+
+    @ViewBuilder private var content: some View {
         switch row {
         case let .user(_, text):
             UserMessage(text: text)

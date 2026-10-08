@@ -407,7 +407,9 @@ reports), producing a morning summary in the app and Slack.
   The right-hand inspector's Artifacts tab lists every artifact in the current chat, updates live,
   and opens the latest revision on click. Project-wide browsing remains in the navigation sidebar.
   Plain PNG, JPEG, GIF and WebP files (or data URLs) are embedded with their revisions, up to 16 MiB.
-  Chat previews are borderless embedded content; clicking opens images and diagrams at a larger size,
+  Chat previews are borderless embedded content, with artifact rows growing up to 1200 points wide
+  while prose keeps its readable column. Preview height follows a 4:3 viewport, bounded to 360 to 720 points.
+  Clicking opens images and diagrams at a larger size,
   or an interactive sandbox for apps. Source and revision controls live in the expanded viewer (diagram
   source is also available from its context menu). Expanded viewers use 90% of the display's usable area.
   Offscreen chat rows release their renderer; previews can also be hidden manually. An older running
