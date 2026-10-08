@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.1.0](https://github.com/babariviere/pilot/compare/v1.0.1...v1.1.0) (2026-10-08)
+
+
+### Features
+
+* **macos:** add per-chat thinking level selector ([ae29861](https://github.com/babariviere/pilot/commit/ae29861651360f6402d0c448f0be375f2a64636c))
+* **macos:** group projects into custom sidebar folders ([6ad28c9](https://github.com/babariviere/pilot/commit/6ad28c958ee973355c6086ac02d2b56595a86711))
+* **macos:** render SVG and Mermaid fences inline ([9b1311a](https://github.com/babariviere/pilot/commit/9b1311a6244b445789cc32e5043ba473543a156b))
+* **macos:** support native clipboard image pasting ([c9e749f](https://github.com/babariviere/pilot/commit/c9e749f12a849152f582c6db3fc66090564a0aa9))
+* **projects:** add per-project PR requirement ([619be05](https://github.com/babariviere/pilot/commit/619be05ec42d1a093bd682a48aac29225dd40551))
+
+
+### Bug Fixes
+
+* **kernel:** require conventional branch prefixes ([0cf56c1](https://github.com/babariviere/pilot/commit/0cf56c1a75b5983c7d22868b1452b693d26e62fa))
+* **macos:** hide settled status footer in chat ([91f2c0a](https://github.com/babariviere/pilot/commit/91f2c0a47a870428f099d2645c531d5d5432494d))
+* **macos:** keep sidebar footer readable over session rows ([23dc172](https://github.com/babariviere/pilot/commit/23dc1724383d4eb5c60e4d253bade49cf632ca6b))
+* **macos:** shorten thinking selector label ([81b444c](https://github.com/babariviere/pilot/commit/81b444cc7ad7857676ec6bcaf9af92f950b007df))
+
+
+### Performance Improvements
+
+* faster workspace creation, thread reopening and many-thread load ([7ef522f](https://github.com/babariviere/pilot/commit/7ef522f644cb230dc36bbd878f44e87a1aac1afe))
+* **release:** slim macOS bundles and publish stable ZIPs only ([07dfbfa](https://github.com/babariviere/pilot/commit/07dfbfa44b03836535b7c435ef2c30b0955f83df))
+
 ## [1.0.1](https://github.com/babariviere/pilot/compare/v1.0.0...v1.0.1) (2026-10-07)
 
 
