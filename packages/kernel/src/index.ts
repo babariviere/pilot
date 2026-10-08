@@ -1,4 +1,4 @@
-export type { PilotContext, WorkspaceContext } from "./policy.ts";
+export type { AskContext, PilotContext, WorkspaceContext } from "./policy.ts";
 export type { KernelCommand, KernelPacket, KernelSpec } from "./protocol.ts";
 export type { PersistedSessionView } from "./snapshot.ts";
 

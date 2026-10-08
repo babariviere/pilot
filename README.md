@@ -2,10 +2,18 @@
 
 Autopilot for your backlog. Pilot runs background [pi](https://github.com/earendil-works/pi) agents on
 [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable) sessions, so work survives restarts,
-and gives you a native macOS app to spawn, steer and stop them, with a libghostty terminal per session.
+and gives you a native macOS app to spawn, steer and stop them, with a libghostty terminal per Build session.
 
 Sessions load your pi configuration from `~/.pi/agent` (settings, packages, extensions, skills, MCP),
 so packages such as [pi-extensions](https://github.com/babariviere/pi-extensions) work by default.
+
+New chats default to **Build**. Choose **Ask** to explore code without creating a clone or granting
+write access. The existing branch picker offers **Current checkout** (including local changes) or
+an origin branch's committed snapshot. Branch snapshots are pinned for the chat and never switch
+your checkout. Ask loads only Pilot's read/search and session-local artifact tools, not user extensions,
+MCP, shell tools or repository-write tools. It can create, update and preview its own artifacts while
+the repository stays read-only. To implement an idea, use **Start a Build chat** to carry the discussion
+into a separate chat. Build keeps the project's workspace default, with an optional per-chat override.
 
 Agents can create **Artifacts**: plain images or interactive HTML/JavaScript and React/JSX previews,
 including diagrams, graphs and animations. Revisions persist with their originating session and project.

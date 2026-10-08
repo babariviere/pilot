@@ -5,7 +5,7 @@ import SwiftUI
 struct QueuedMessageEditor: View {
     @ObservedObject var state: ComposerState
     let available: Bool
-    let completionDirectory: String
+    let completionDirectory: String?
     let onSave: () -> Void
     let onRemove: () -> Void
     let onNavigate: (QueueNavigationDirection) -> Bool

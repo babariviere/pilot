@@ -7,6 +7,7 @@ import SwiftUI
 final class BranchSelectorState: ObservableObject {
     var onSelectionChanged: (() -> Void)?
     @Published private(set) var scope: String? { didSet { onSelectionChanged?() } }
+    @Published private(set) var mode: ChatMode = .build
     @Published private(set) var list = RemoteBranchList()
     @Published private(set) var selected: String? { didSet { onSelectionChanged?() } }
     @Published private(set) var loading = false
@@ -14,9 +15,17 @@ final class BranchSelectorState: ObservableObject {
     private var request = UUID()
 
     /// Validate this saved selection against origin when the composer next loads its branch list.
-    func restoreSelection(scope: String?, branch: String?) {
+    func restoreSelection(scope: String?, branch: String?, mode: ChatMode = .build) {
         self.scope = scope
+        self.mode = mode
         selected = branch
+    }
+
+    static func scope(project: Project?, mode: ChatMode, workspace: WorkspaceMode?) -> String? {
+        guard let project else { return nil }
+        let effectiveWorkspace = workspace ?? (project.usesPrivateClones ? .clone : .direct)
+        guard mode == .ask || effectiveWorkspace == .clone else { return nil }
+        return "\(project.id):\(project.path):\(mode.rawValue):\(mode == .ask ? "readonly" : effectiveWorkspace.rawValue)"
     }
 
     func selection(for scope: String?) -> String? {
@@ -30,11 +39,17 @@ final class BranchSelectorState: ObservableObject {
         selected = branch
     }
 
-    func load(scope: String?, fetch: () async throws -> RemoteBranchList) async {
+    func load(scope: String?, mode: ChatMode = .build, fetch: () async throws -> RemoteBranchList) async {
         let request = UUID()
         self.request = request
-        if self.scope != scope {
+        // Drafts saved before Ask/Build used only the project/path scope.
+        if mode == .build, let scope, scope.hasSuffix(":build:clone"),
+           self.scope == String(scope.dropLast(":build:clone".count)), self.mode == .build {
             self.scope = scope
+        }
+        if self.scope != scope || self.mode != mode {
+            self.scope = scope
+            self.mode = mode
             list = RemoteBranchList()
             selected = nil
         }
@@ -60,24 +75,37 @@ final class BranchSelectorState: ObservableObject {
 struct BranchMenu: View {
     @ObservedObject var state: BranchSelectorState
     let scope: String
+    var mode: ChatMode = .build
+    var onSelect: (String?) -> Void = { _ in }
     let refresh: () -> Void
 
     private var list: RemoteBranchList { state.scope == scope ? state.list : RemoteBranchList() }
     private var selected: String? { state.selection(for: scope) }
 
+    private func choose(_ branch: String?) {
+        state.select(branch, for: scope)
+        onSelect(branch)
+    }
+
     var body: some View {
         Menu {
-            Text("Base branch · origin only")
+            Text(mode == .ask ? "Read-only source · checkout or origin" : "Base branch · origin only")
             Button {
-                state.select(nil, for: scope)
+                choose(nil)
             } label: {
-                let title = list.defaultBranch.map { "Default (\($0))" } ?? "Default branch"
+                let title = mode == .ask ? "Current checkout" : (list.defaultBranch.map { "Default (\($0))" } ?? "Default branch")
                 if selected == nil { Label(title, systemImage: "checkmark") } else { Text(title) }
+            }
+            if mode == .ask, let branch = list.defaultBranch {
+                Button { choose(branch) } label: {
+                    if selected == branch { Label("Default (origin/\(branch))", systemImage: "checkmark") }
+                    else { Text("Default (origin/\(branch))") }
+                }
             }
             Divider()
             ForEach(list.branches, id: \.self) { branch in
                 Button {
-                    state.select(branch, for: scope)
+                    choose(branch)
                 } label: {
                     if selected == branch { Label(branch, systemImage: "checkmark") } else { Text(branch) }
                 }
@@ -88,15 +116,17 @@ struct BranchMenu: View {
             Divider()
             Button("Refresh branches", action: refresh).disabled(state.loading)
         } label: {
-            ChipLabel(title: selected ?? list.defaultBranch ?? "Default branch", templateImage: GitBranchGlyph.image)
+            ChipLabel(title: selected ?? (mode == .ask ? "Current checkout" : list.defaultBranch ?? "Default branch"), templateImage: GitBranchGlyph.image)
                 .frame(maxWidth: 170)
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize(horizontal: false, vertical: true)
-        .help(state.error ?? "Base branch: \(selected.map { "origin/\($0)" } ?? "remote default"). Starts a new private workspace.")
-        .accessibilityLabel("Base branch")
-        .accessibilityValue(selected ?? list.defaultBranch ?? "Remote default")
+        .help(state.error ?? (mode == .ask
+            ? "Read-only source: \(selected.map { "origin/\($0) branch snapshot" } ?? "current checkout"). No private clone."
+            : "Base branch: \(selected.map { "origin/\($0)" } ?? "remote default"). Starts a new private workspace."))
+        .accessibilityLabel(mode == .ask ? "Read-only source" : "Base branch")
+        .accessibilityValue(selected ?? (mode == .ask ? "Current checkout" : list.defaultBranch ?? "Remote default"))
     }
 }
 

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
+	type AskContext,
 	type KernelCommand,
 	type KernelPacket,
 	type PersistedSessionView,
@@ -27,6 +28,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
+import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
@@ -78,9 +80,10 @@ export interface SessionManagerOptions {
 
 export interface SessionFactories {
 	/** Read-only persisted view, independent of the worker/SDK factory. */
-	snapshot?: (directory: string, cwd: string) => Promise<PersistedSessionView>;
+	snapshot?: (directory: string, cwd: string, includeTodos?: boolean) => Promise<PersistedSessionView>;
 	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
 	workspace?: typeof createWorkspace;
+	askSnapshot?: typeof prepareAskSnapshot;
 	worker?: (
 		spec: WorkerSpec,
 		onPacket: (packet: KernelPacket) => void,
@@ -94,6 +97,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** Best-effort title generation resumes after a daemon restart. */
 	titlePending?: { cwd: string; message: string };
 	cwd: string;
+	mode?: "build" | "ask";
+	ask?: AskContext;
 	projectId?: string;
 	/** Private clone the session works in (its cwd), and where it came from. */
 	workspace?: WorkspaceContext;
@@ -361,7 +366,7 @@ export class SessionManager {
 	/** Serialized, immutable metadata snapshots per session. */
 	private readonly saving = new Map<string, Promise<void>>();
 	private readonly starting = new Map<string, Promise<Map<string, Error>>>();
-	private readonly preparations = new Set<Promise<Workspace>>();
+	private readonly preparations = new Set<Promise<Workspace | AskContext>>();
 	/** Workspaces start by borrowing their project's objects. Copy them in the background, one at a time. */
 	private dissociation: Promise<void> = Promise.resolve();
 	private readonly titleTasks = new Set<Promise<void>>();
@@ -528,6 +533,7 @@ export class SessionManager {
 	}
 
 	private dissociate(meta: SessionMeta): void {
+		if (meta.mode === "ask") return;
 		if (!meta.workspace || !workspaceBorrowsObjects(meta.cwd)) return;
 		this.dissociation = this.dissociation.then(async () => {
 			if (this.closing) return;
@@ -773,9 +779,52 @@ export class SessionManager {
 
 	/** Where the session's changes start: its workspace base, else the folder's HEAD. */
 	changeBase(id: string): { cwd: string; base?: string } {
+		this.assertWritable(id);
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
 		return { cwd: meta.cwd, ...(meta.workspace ? { base: meta.workspace.base } : {}) };
+	}
+
+	/** Server-side capability check, independent of client controls. */
+	assertWritable(id: string): void {
+		const meta = this.require(id);
+		this.validateMode(meta);
+		if (meta.mode === "ask") throw new Conflict("Ask sessions are read-only");
+	}
+
+	/** Corrupt metadata must never silently reopen an Ask chat as an unrestricted Build kernel. */
+	private validateMode(meta: SessionMeta, prepared = false): void {
+		if (meta.mode !== undefined && meta.mode !== "build" && meta.mode !== "ask")
+			throw new Error("Invalid session mode");
+		if (meta.mode !== "ask") {
+			if (meta.ask !== undefined) throw new Error("Ask context requires Ask mode");
+			return;
+		}
+		const ask = meta.ask;
+		if (!ask || typeof ask.source !== "string" || !ask.source || ask.source !== meta.cwd || meta.workspace)
+			throw new Error("Invalid Ask source context");
+		if (ask.branch === undefined) {
+			if (ask.gitDir !== undefined || ask.commit !== undefined || meta.preparing)
+				throw new Error("Invalid Ask checkout context");
+			return;
+		}
+		// Mirror check-ref-format's literal head constraints without launching Git during synchronous reopen checks.
+		if (
+			typeof ask.branch !== "string" ||
+			!ask.branch ||
+			ask.branch === "HEAD" ||
+			/[\x00-\x20\x7f~^:?*[\\]/.test(ask.branch) ||
+			ask.branch.includes("..") ||
+			ask.branch.includes("@{") ||
+			ask.branch.endsWith(".") ||
+			ask.branch.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock")) ||
+			ask.gitDir !== join(this.dir(meta.id), "ask.git") ||
+			(ask.commit !== undefined &&
+				(typeof ask.commit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ask.commit))) ||
+			((prepared || !meta.preparing) && !ask.commit) ||
+			(meta.preparing && (meta.preparing.source !== ask.source || meta.preparing.baseBranch !== ask.branch))
+		)
+			throw new Error("Invalid Ask snapshot context");
 	}
 
 	async spawn(request: SpawnRequest): Promise<SessionSummary> {
@@ -813,10 +862,22 @@ export class SessionManager {
 
 	private async spawnAdmitted(request: SpawnRequest): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
+		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
+			throw new Error("mode must be build or ask");
+		if (request.workspace !== undefined && request.workspace !== "clone" && request.workspace !== "direct")
+			throw new Error("workspace must be clone or direct");
+		const mode = request.mode ?? "build";
 		const project = request.projectId ? this.projects.require(request.projectId) : undefined;
+		if (request.workspace !== undefined && (mode === "ask" || !project || request.cwd !== undefined))
+			throw new Error("workspace override requires a Build project without a cwd override");
+		const direct = (request.workspace ?? project?.workspace) === "direct";
 		if (request.baseBranch !== undefined) {
-			if (!project || request.cwd !== undefined || project.workspace === "direct")
-				throw new Error("baseBranch requires a private-clone project without a cwd override");
+			if (!project || request.cwd !== undefined || (mode === "build" && direct))
+				throw new Error(
+					mode === "ask"
+						? "baseBranch requires an Ask project without a cwd override"
+						: "baseBranch requires a private-clone project without a cwd override",
+				);
 			await validateBaseBranch(request.baseBranch, project.path);
 		}
 		const directory = request.cwd?.trim() || project?.path;
@@ -831,7 +892,14 @@ export class SessionManager {
 		await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
 		// Persist the clone recipe and destination, never a runnable source-project cwd.
 		let preparing: SessionMeta["preparing"];
-		if (project && !request.cwd?.trim() && project.workspace !== "direct") {
+		let ask: AskContext | undefined;
+		if (mode === "ask") {
+			ask = { source: cwd };
+			if (request.baseBranch !== undefined) {
+				ask = { ...ask, branch: request.baseBranch, gitDir: join(this.dir(id), "ask.git") };
+				preparing = { source: cwd, baseBranch: request.baseBranch };
+			}
+		} else if (project && !request.cwd?.trim() && !direct) {
 			preparing = {
 				source: project.path,
 				...(request.baseBranch !== undefined ? { baseBranch: request.baseBranch } : {}),
@@ -840,6 +908,8 @@ export class SessionManager {
 		}
 		const meta: SessionMeta = {
 			id,
+			mode,
+			...(ask ? { ask } : {}),
 			title,
 			...(titlePending ? { titlePending } : {}),
 			cwd,
@@ -1025,6 +1095,13 @@ export class SessionManager {
 	subscribe(id: string, listener: EventListener): () => void {
 		const meta = this.require(id);
 		if (this.closing) throw new Error("pilotd is shutting down");
+		try {
+			this.validateMode(meta);
+		} catch (error) {
+			meta.failure = error instanceof Error ? error.message : String(error);
+			this.fail(meta, meta.failure);
+			this.emit(meta);
+		}
 		const worker = this.workers.get(id);
 		// Preserve the update lease guard before registering a new cold subscription. Existing
 		// live subscriptions and terminal failed-session snapshots do not start new work.
@@ -1103,6 +1180,11 @@ export class SessionManager {
 	}
 
 	private coldSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
+		try {
+			this.validateMode(meta);
+		} catch (error) {
+			return Promise.reject(error);
+		}
 		this.pruneColdSnapshots();
 		const existing = this.coldSnapshots.get(meta.id);
 		if (existing) {
@@ -1113,8 +1195,8 @@ export class SessionManager {
 		const loading = this.coldLoading.get(meta.id);
 		if (loading) return loading;
 		const snapshot = this.factories.snapshot
-			? this.factories.snapshot(join(this.dir(meta.id), "durable"), meta.cwd)
-			: this.coldReader.read(join(this.dir(meta.id), "durable"), meta.cwd);
+			? this.factories.snapshot(join(this.dir(meta.id), "durable"), meta.cwd, meta.mode !== "ask")
+			: this.coldReader.read(join(this.dir(meta.id), "durable"), meta.cwd, meta.mode !== "ask");
 		const entry = { promise: snapshot, expiresAt: Number.POSITIVE_INFINITY, bytes: 0 };
 		this.coldSnapshots.set(meta.id, entry);
 		this.coldLoading.set(meta.id, snapshot);
@@ -1187,34 +1269,51 @@ export class SessionManager {
 		const rejected = new Map<string, Error>();
 		const run = async () => {
 			try {
+				this.validateMode(meta);
 				if (meta.preparing) {
 					const plan = meta.preparing;
-					if (meta.cwd !== join(this.dir(id), "workspace"))
-						throw new Error("Invalid session workspace destination");
-					// A restart can leave a partial clone. No worker used it before the recipe was cleared.
-					await rm(meta.cwd, { recursive: true, force: true });
-					if (this.closing) return;
-					const preparation = (this.factories.workspace ?? createWorkspace)(
-						plan.source,
-						meta.cwd,
-						undefined,
-						this.shutdownSignal.signal,
-						plan.baseBranch,
-					);
-					this.preparations.add(preparation);
-					const created = await preparation.finally(() => this.preparations.delete(preparation));
-					if (this.closing) return;
-					meta.workspace = {
-						source: plan.source,
-						...(created.branch ? { branch: created.branch } : {}),
-						base: created.base,
-						jj: created.jj,
-						...(created.upstream ? { upstream: created.upstream } : {}),
-					};
-					delete meta.preparing;
-					await this.save(meta);
-					void this.pullRequests.refresh(meta);
-					this.dissociate(meta);
+					if (meta.mode === "ask") {
+						if (!meta.ask || meta.ask.gitDir !== join(this.dir(id), "ask.git"))
+							throw new Error("Invalid Ask snapshot destination");
+						const preparation = (this.factories.askSnapshot ?? prepareAskSnapshot)(
+							meta.ask,
+							undefined,
+							this.shutdownSignal.signal,
+						);
+						this.preparations.add(preparation);
+						meta.ask = await preparation.finally(() => this.preparations.delete(preparation));
+						// Pin once before starting the worker. The private ref also survives a crash before this save.
+						await this.save(meta);
+						delete meta.preparing;
+						await this.save(meta);
+					} else {
+						if (meta.cwd !== join(this.dir(id), "workspace"))
+							throw new Error("Invalid session workspace destination");
+						// A restart can leave a partial clone. No worker used it before the recipe was cleared.
+						await rm(meta.cwd, { recursive: true, force: true });
+						if (this.closing) return;
+						const preparation = (this.factories.workspace ?? createWorkspace)(
+							plan.source,
+							meta.cwd,
+							undefined,
+							this.shutdownSignal.signal,
+							plan.baseBranch,
+						);
+						this.preparations.add(preparation);
+						const created = await preparation.finally(() => this.preparations.delete(preparation));
+						if (this.closing) return;
+						meta.workspace = {
+							source: plan.source,
+							...(created.branch ? { branch: created.branch } : {}),
+							base: created.base,
+							jj: created.jj,
+							...(created.upstream ? { upstream: created.upstream } : {}),
+						};
+						delete meta.preparing;
+						await this.save(meta);
+						void this.pullRequests.refresh(meta);
+						this.dissociate(meta);
+					}
 				}
 				await this.unparked(id);
 				if (this.closing) return;
@@ -1284,6 +1383,7 @@ export class SessionManager {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
+		this.validateMode(meta, true);
 		this.coldSnapshots.delete(id);
 		this.coldLoading.delete(id);
 		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
@@ -1300,6 +1400,7 @@ export class SessionManager {
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 				pilot: {
+					...(meta.ask ? { ask: meta.ask } : {}),
 					...(meta.workspace ? { workspace: meta.workspace } : {}),
 					...(meta.projectId
 						? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
@@ -1395,8 +1496,17 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const sourceBranch =
+			meta.mode === "ask"
+				? meta.ask?.branch
+				: (meta.preparing?.baseBranch ??
+					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
 			id: meta.id,
+			mode: meta.mode === "ask" ? "ask" : "build",
+			...(meta.mode !== "ask" ? { workspace: meta.workspace || meta.preparing ? "clone" : "direct" } : {}),
+			...(sourceBranch ? { sourceBranch } : {}),
+			...(meta.ask?.commit ? { sourceCommit: meta.ask.commit } : {}),
 			title: meta.title,
 			cwd: meta.cwd,
 			sessionPath: this.dir(meta.id),

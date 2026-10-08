@@ -24,9 +24,10 @@ export type Runner = (
 	cwd: string,
 	timeoutMs?: number,
 	signal?: AbortSignal,
+	env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
-const run: Runner = (file, args, cwd, timeoutMs = 120_000, signal) =>
+export const run: Runner = (file, args, cwd, timeoutMs = 120_000, signal, env) =>
 	new Promise((resolve, reject) => {
 		let failure: Error | undefined;
 		let output = "";
@@ -35,6 +36,7 @@ const run: Runner = (file, args, cwd, timeoutMs = 120_000, signal) =>
 		let forceKill: ReturnType<typeof setTimeout> | undefined;
 		const child = spawn(file, args, {
 			cwd,
+			env,
 			detached: process.platform !== "win32",
 			stdio: ["ignore", "pipe", "pipe"],
 		});

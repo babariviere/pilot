@@ -110,7 +110,7 @@ struct ChatView: View {
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
         self.session = session
         _feed = StateObject(wrappedValue: feed ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client))
-        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? ComposerState()))
+        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? AppModel.shared.composer(for: session.id)))
     }
 
     private var composer: ComposerState { composerOwner.state }
@@ -160,7 +160,18 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                if !transcript.todos.isEmpty {
+                SessionContextBadge(session: session)
+                    .padding(.horizontal, 24).padding(.vertical, 6)
+                if session.isAsk {
+                    Button("Start a Build chat with this context") {
+                        model.buildWithContext(from: session, rows: transcript.rows)
+                    }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .disabled(!feed.hasSnapshot || transcript.streaming)
+                    .help("Prepare a separate Build draft with this discussion. This Ask chat stays read-only.")
+                    .padding(.bottom, 6)
+                }
+                if !session.isAsk && !transcript.todos.isEmpty {
                     TodosPanel(todos: transcript.todos, sessionId: session.id)
                 }
                 if session.isArchived {
@@ -170,7 +181,7 @@ struct ChatView: View {
                         state: composer,
                         working: transcript.working || session.state == "starting",
                         queuedMessages: transcript.queuedMessagesInDeliveryOrder,
-                        completionDirectory: session.cwd,
+                        completionDirectory: session.isAsk ? nil : session.cwd,
                         onSend: send,
                         onStop: { model.stopSession(session.id) },
                         onEditQueuedMessage: { id, text in

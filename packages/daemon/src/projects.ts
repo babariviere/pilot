@@ -60,10 +60,10 @@ export class ProjectStore {
 		return project;
 	}
 
-	/** Selectable live origin branches. Direct projects do not support base selection. */
-	async branches(id: string): Promise<RemoteBranchList> {
+	/** Selectable origin heads. Opt in for Ask or an explicit per-chat clone override on a direct project. */
+	async branches(id: string, includeDirect = false): Promise<RemoteBranchList> {
 		const project = this.require(id);
-		return project.workspace === "direct" ? { branches: [] } : listRemoteBranches(project.path);
+		return project.workspace === "direct" && !includeDirect ? { branches: [] } : listRemoteBranches(project.path);
 	}
 
 	async create(request: ProjectRequest): Promise<Project> {

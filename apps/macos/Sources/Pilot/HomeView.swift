@@ -17,21 +17,82 @@ final class NewSessionForm: ObservableObject {
     @Published var tab: ComposerTab = .newTask { didSet { onDraftChanged?() } }
     @Published var editorHeight: CGFloat = 60
     @Published var models = ModelList(models: [])
+    @Published var mode: ChatMode = .build { didSet { onDraftChanged?() } }
+    @Published var workspace: WorkspaceMode? { didSet { onDraftChanged?() } }
+    @Published var pendingBaseBranch: String? { didSet { onDraftChanged?() } }
+    private var draftRevision = 0
+
+    var hasUnsubmittedDraft: Bool { !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || busy }
+
+    func resetChatContext() {
+        mode = .build
+        workspace = nil
+        pendingBaseBranch = nil
+        branches.restoreSelection(scope: nil, branch: nil)
+    }
+
+    func effectiveWorkspace(for project: Project?) -> WorkspaceMode {
+        guard let project else { return .direct }
+        return workspace ?? (project.usesPrivateClones ? .clone : .direct)
+    }
+
+    func chooseMode(_ mode: ChatMode) {
+        if self.mode != mode {
+            pendingBaseBranch = nil
+            error = nil
+        }
+        self.mode = mode
+    }
+
+    func chooseBaseBranch(_ branch: String?) {
+        pendingBaseBranch = nil
+        error = nil
+    }
+
+    func resolvePendingBaseBranch(scope: String, branches: BranchSelectorState) {
+        guard branches.scope == scope, branches.error == nil, let branch = pendingBaseBranch else { return }
+        if branches.list.branches.contains(branch) {
+            branches.select(branch, for: scope)
+        } else {
+            error = "The Ask source branch is no longer on origin. Choose another Build base branch."
+        }
+    }
+
+    func canStart(in project: Project?, branches: BranchSelectorState? = nil) -> Bool {
+        let branches = branches ?? self.branches
+        let scope = BranchSelectorState.scope(project: project, mode: mode, workspace: workspace)
+        let sourceReady = pendingBaseBranch.map { branch in
+            branches.selection(for: scope) == branch && branches.list.branches.contains(branch)
+                && branches.error == nil && !branches.loading
+        } ?? true
+        return !busy && (project != nil || !folder.isEmpty) && sourceReady
+            && (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.items.isEmpty)
+    }
 
     /// Invalidate before the new-task view mounts, not just when it consumes the prefill.
     func invalidatePendingSubmission() { revision = UUID() }
 
-    func consumeDraft(from app: AppModel) {
+    func consumeDraft(from app: AppModel, branches: BranchSelectorState? = nil) {
+        if draftRevision != app.draftRevision || app.draftMessage != nil {
+            draftRevision = app.draftRevision
+            mode = .build
+            workspace = app.draftWorkspace
+            pendingBaseBranch = app.draftBaseBranch
+            (branches ?? self.branches).restoreSelection(scope: nil, branch: nil)
+        }
         guard let message = app.draftMessage else { return }
         revision = UUID()
         for image in attachments.items { attachments.remove(image.id) }
         attachments.error = nil
         self.message = message
-        folder = ""
+        folder = app.draftCwd ?? ""
         model = ""
         error = nil
         tab = .newTask
         app.draftMessage = nil
+        app.draftBaseBranch = nil
+        app.draftCwd = nil
+        app.draftWorkspace = nil
     }
 
     /// A spawn completing after a debug prefill must not erase or navigate away from the newer draft.
@@ -40,6 +101,7 @@ final class NewSessionForm: ObservableObject {
         self.revision = UUID()
         message = ""
         attachments = ImageAttachments()
+        resetChatContext()
         return true
     }
 }
@@ -60,7 +122,7 @@ struct HomeView: View {
                 DitherSky()
                     .frame(height: 300)
                 VStack(spacing: 0) {
-                    Text("What should Pilot work on?")
+                    Text("What’s on your mind?")
                         .font(.system(size: 24, weight: .semibold))
                         .tracking(-0.3)
                         .foregroundStyle(Theme.foreground)
@@ -92,7 +154,7 @@ struct TaskComposer: View {
     @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
 
-    @MainActor init(form: NewSessionForm? = nil, branches: BranchSelectorState? = nil, client: PilotClient? = nil) {
+    @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil) {
         let form = form ?? NewSessionForm()
         _form = StateObject(wrappedValue: form)
         _branches = StateObject(wrappedValue: branches ?? form.branches)
@@ -106,9 +168,16 @@ struct TaskComposer: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 14) {
-                TabButton(title: "New task", selected: form.tab == .newTask) { form.tab = .newTask }
+                TabButton(title: "New chat", selected: form.tab == .newTask) { form.tab = .newTask }
                 TabButton(title: "Running", count: client.workingCount, selected: form.tab == .running) { form.tab = .running }
                 Spacer()
+                Picker("Chat mode", selection: Binding(get: { form.mode }, set: form.chooseMode)) {
+                    Text("Build").tag(ChatMode.build)
+                    Text("Ask").tag(ChatMode.ask)
+                }
+                .pickerStyle(.segmented).labelsHidden().frame(width: 130)
+                .disabled(form.busy)
+                .help("Build can make changes. Ask is read-only and creates no private clone.")
             }
             .padding(.horizontal, 12)
             .padding(.top, 9)
@@ -126,8 +195,9 @@ struct TaskComposer: View {
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
-        .onAppear { form.consumeDraft(from: app) }
-        .onChange(of: app.draftMessage) { _, _ in form.consumeDraft(from: app) }
+        .onAppear { consumeDraft() }
+        .onChange(of: app.draftRevision) { _, _ in consumeDraft() }
+        .onChange(of: app.draftMessage) { _, message in if message != nil { consumeDraft() } }
     }
 
     private var newTask: some View {
@@ -137,14 +207,14 @@ struct TaskComposer: View {
                     .disabled(form.busy)
                 ZStack(alignment: .topLeading) {
                     if form.message.isEmpty {
-                        Text("Describe a task, a bug to fix, an idea to try…")
+                        Text(form.mode == .ask ? "Ask about the code, explore an idea, or plan a change…" : "Describe a task, a bug to fix, an idea to try…")
                             .font(fonts.body)
                             .foregroundStyle(Theme.faintForeground)
                             .allowsHitTesting(false)
                     }
                     ChatTextEditor(text: $form.message, height: $form.editorHeight, font: fonts.nsBody, minLines: 3, maxLines: 14,
                                    isEditable: !form.busy, onPasteImages: { form.attachments.paste(from: $0) },
-                                   completionDirectory: project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
+                                   completionDirectory: form.mode == .ask ? nil : project?.path ?? (form.folder.isEmpty ? FileManager.default.homeDirectoryForCurrentUser.path : form.folder)) { _ in
                         start()
                     }
                     .frame(height: form.editorHeight)
@@ -157,11 +227,13 @@ struct TaskComposer: View {
                 ProjectMenu(selected: project, folder: form.folder, projects: client.projects) { choice in
                     switch choice {
                     case let .project(id):
+                        form.pendingBaseBranch = nil
                         app.draftProjectId = id
                         form.folder = ""
                     case .folder:
                         if let path = chooseFolder(startingAt: form.folder) {
                             form.folder = path
+                            form.pendingBaseBranch = nil
                             app.draftProjectId = nil
                             lastProjectId = ""
                         }
@@ -170,12 +242,24 @@ struct TaskComposer: View {
                     }
                 }
                 if let scope = branchScopeKey {
-                    BranchMenu(state: branches, scope: scope) {
+                    BranchMenu(state: branches, scope: scope, mode: form.mode, onSelect: form.chooseBaseBranch) {
                         Task { await loadBranches() }
                     }
                     .disabled(form.busy)
                 }
                 ModelMenu(model: $form.model, projectDefault: project?.model, list: form.models)
+                if form.mode == .build, let project {
+                    Menu {
+                        Button("Project default (\(project.usesPrivateClones ? "Private clone" : "Current checkout"))") { form.workspace = nil }
+                        Button("Private clone") { form.workspace = .clone }
+                        Button("Current checkout") { form.workspace = .direct }
+                    } label: {
+                        ChipLabel(title: form.effectiveWorkspace(for: project) == .clone ? "Private clone" : "Checkout", icon: "square.on.square")
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .disabled(form.busy)
+                    .help("Build workspace for this chat only. Defaults to the project's settings.")
+                }
                 if let error = form.error {
                     Text(error).font(.caption).foregroundStyle(Theme.destructive).lineLimit(1)
                 }
@@ -188,20 +272,28 @@ struct TaskComposer: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
+            Text(form.mode == .ask
+                 ? "Ask · read-only · no private clone · \(branches.selection(for: branchScopeKey).map { "origin/\($0) snapshot" } ?? "current checkout")"
+                 : "Build · \(form.effectiveWorkspace(for: project) == .clone ? "private clone" : "current checkout") · \(branches.selection(for: branchScopeKey).map { "origin/\($0)" } ?? (form.effectiveWorkspace(for: project) == .clone ? "default base" : "local files"))")
+                .font(.caption).foregroundStyle(Theme.mutedForeground)
+                .padding(.horizontal, 12).padding(.bottom, 8)
         }
     }
 
     private var canStart: Bool {
-        !form.busy && (project != nil || !form.folder.isEmpty)
-            && (!form.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !form.attachments.items.isEmpty)
+        form.canStart(in: project, branches: branches)
     }
 
     /// Reloads the pi model scope when the project or folder changes.
     private var modelScopeKey: String { project?.id ?? form.folder }
 
     private var branchScopeKey: String? {
-        guard let project, project.workspace != "direct" else { return nil }
-        return "\(project.id):\(project.path)"
+        BranchSelectorState.scope(project: project, mode: form.mode, workspace: form.workspace)
+    }
+
+    private func consumeDraft() {
+        form.consumeDraft(from: app, branches: branches)
+        Task { await loadBranches() }
     }
 
     private var branchLoadKey: String { "\(client.hasProjectSnapshot):\(branchScopeKey ?? form.folder)" }
@@ -210,9 +302,19 @@ struct TaskComposer: View {
         // An empty catalog during startup is not a change to the restored draft's destination.
         guard client.hasProjectSnapshot || (app.draftProjectId == nil && !form.folder.isEmpty) else { return }
         let projectId = project?.id
-        await branches.load(scope: branchScopeKey) {
+        let mode = form.mode
+        let workspace = form.workspace
+        let scope = branchScopeKey
+        if scope == nil && mode == .build && form.effectiveWorkspace(for: project) == .direct {
+            // Choosing a direct workspace explicitly abandons a remote Build base.
+            if project != nil || !form.folder.isEmpty { form.chooseBaseBranch(nil) }
+        }
+        await branches.load(scope: scope, mode: mode) {
             guard let projectId else { return RemoteBranchList() }
-            return try await client.remoteBranches(projectId)
+            return try await client.remoteBranches(projectId, mode: mode, workspace: workspace)
+        }
+        if mode == form.mode, scope == branchScopeKey, let scope {
+            form.resolvePendingBaseBranch(scope: scope, branches: branches)
         }
     }
 
@@ -241,7 +343,9 @@ struct TaskComposer: View {
             cwd: project == nil ? form.folder : nil,
             message: form.attachments.message(text: form.message),
             model: model.isEmpty ? nil : model,
-            baseBranch: branches.selection(for: branchScopeKey)
+            baseBranch: branches.selection(for: branchScopeKey),
+            mode: form.mode,
+            workspace: form.mode == .build && project != nil ? form.workspace : nil
         )
         Task {
             defer { form.busy = false }

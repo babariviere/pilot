@@ -72,6 +72,14 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
+	/** Omitted by older daemons, meaning Build. */
+	mode?: ChatMode;
+	/** Actual Build workspace, including detached private clones without a task branch. */
+	workspace?: WorkspaceMode;
+	/** Exact origin branch selected for an Ask snapshot or resolved as a Build base, when known. */
+	sourceBranch?: string;
+	/** Commit resolved for the Ask source. */
+	sourceCommit?: string;
 	id: string;
 	title: string;
 	cwd: string;
@@ -142,7 +150,10 @@ export interface Project {
 
 export type WorkspaceMode = "clone" | "direct";
 
-/** GET /api/projects/:id/branches. Live origin heads only; direct/no-origin projects return an empty list. */
+/** Build may modify its workspace; Ask is read-only. Omitted mode defaults to Build. */
+export type ChatMode = "build" | "ask";
+
+/** GET /api/projects/:id/branches. Live origin heads only; mode=ask or workspace=clone also allows direct projects. */
 export interface RemoteBranchList {
 	/** Exact origin head names, sorted lexically. No remote-tracking prefix is added; HEAD is excluded. */
 	branches: string[];
@@ -219,11 +230,16 @@ export interface ModelList {
 /** POST /api/sessions. Needs a projectId, a cwd, or both (cwd overrides the project's path). */
 /** Returns a durable `starting` session before workspace preparation and kernel startup finish. */
 export interface SpawnRequest {
+	/** Omitted means Build. */
+	mode?: ChatMode;
+	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */
+	workspace?: WorkspaceMode;
 	projectId?: string;
 	cwd?: string;
 	/** Exact origin head name, without adding `origin/`. Prefixes within real names are literal.
-	 * Only private-clone projects without a cwd override may select.
-	 * Omitted uses the existing default-base policy; an explicit unavailable branch fails preparation. */
+	 * Build: only private-clone workspaces without a cwd override may select; omission uses default-base policy.
+	 * Ask: omission reads current checkout; selection reads a branch snapshot without a private clone.
+	 * An explicit unavailable branch fails preparation. */
 	baseBranch?: string;
 	message: string;
 	title?: string;

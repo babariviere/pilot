@@ -106,7 +106,7 @@ struct Composer: View {
     @ObservedObject var state: ComposerState
     let working: Bool
     let queuedMessages: [QueuedMessage]
-    let completionDirectory: String
+    let completionDirectory: String?
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
     let onEditQueuedMessage: (Int, String) async throws -> Void
@@ -231,7 +231,7 @@ private struct ComposerDraftEditor: View {
     let onNavigateQueue: (QueueNavigationDirection) -> Bool
     let onCancel: (() -> Void)?
     let onPasteImages: (NSPasteboard) -> Bool
-    let completionDirectory: String
+    let completionDirectory: String?
     let onSubmit: (NSEvent.ModifierFlags) -> Void
     @Environment(\.pilotFonts) private var fonts
 
@@ -279,7 +279,7 @@ private struct QueuedMessagesView: View {
     @Environment(\.pilotFonts) private var fonts
     @ObservedObject var state: ComposerState
     let messages: [QueuedMessage]
-    let completionDirectory: String
+    let completionDirectory: String?
     let onSave: () -> Void
     let onRemove: (Int) -> Void
 
