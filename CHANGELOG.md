@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/babariviere/pilot/compare/v1.2.0...v1.3.0) (2026-10-08)
+
+
+### Features
+
+* **chats:** add read-only Ask mode and Build handoff ([6d88292](https://github.com/babariviere/pilot/commit/6d8829260eee90ee6e81aab0a0f9ff7c0fb0a2fc))
+* **macos:** persist message drafts across app restarts ([bb528e9](https://github.com/babariviere/pilot/commit/bb528e92025d2811e151edb968fa26fd5895204e))
+
+
+### Bug Fixes
+
+* **macos:** preserve message drafts across navigation ([e682d63](https://github.com/babariviere/pilot/commit/e682d630172291f1da4617a630c6ba8122399fa6))
+
 ## [1.2.0](https://github.com/babariviere/pilot/compare/v1.1.0...v1.2.0) (2026-10-08)
 
 
