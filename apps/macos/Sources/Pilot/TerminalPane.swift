@@ -63,9 +63,11 @@ final class TerminalStore: ObservableObject {
 
     /// Only the displayed surface is protected. A hidden tab/window has no active surface.
     func select(_ session: SessionSummary, isVisible: Bool, paneID: UUID) {
+        let shouldFocus = isVisible && (retention.visibleSessionId != session.id || !retention.ownsSurfaceCallbacks(paneID: paneID))
         retention.select(session.id, isVisible: isVisible, paneID: paneID)
         ensure(session)
         synchronizeSurfaceVisibility()
+        if shouldFocus { states[session.id]?.requestFocus() }
         evictInactiveSurfaces()
     }
 
@@ -127,6 +129,9 @@ final class TerminalStore: ObservableObject {
         }
         states[id] = state
         memories[id] = memory
+        // Covers shells created after workspace preparation and explicit restarts. Ghostty
+        // replays this request once the new surface attaches to a window.
+        if state.isSurfaceVisible { state.requestFocus() }
         order.append(id)
         retention.touch(id)
         client.attachTerminal(
