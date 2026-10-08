@@ -127,6 +127,8 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
 - New chats default to **Build**. A per-chat workspace override does not change the project default.
   **Ask** uses the current checkout without cloning, including local changes, or an explicitly
   selected origin branch. The existing branch chip beside the project picker selects the source.
+- Open chats show mode and workspace context in the top toolbar beside branch/source and PR metadata,
+  not as a separate row above the composer. Ask source details include the pinned commit in the tooltip.
 - Branch-specific Ask sessions fetch the selected origin head into a session-owned bare object store,
   fetch only the selected head's snapshot, pin its commit before starting the worker, and read/search
   that tree without creating a checkout.

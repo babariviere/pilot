@@ -51,10 +51,31 @@ import Testing
     #expect(image.height > 0 && image.height <= 22)
 }
 
-@Test @MainActor func askToolbarOmitsBuildRepositoryMetadata() {
+@Test @MainActor func askToolbarShowsReadOnlySourceContext() throws {
     let session = SessionSummary(id: "ask", title: "Question", cwd: "/repository", branch: "main",
-                                 createdAt: 1, updatedAt: 1, state: "idle", mode: .ask)
-    let renderer = ImageRenderer(content: SessionToolbarMetadata(session: session))
-    let image = renderer.cgImage
-    #expect(image == nil || image?.width == 0 || image?.height == 0)
+                                 createdAt: 1, updatedAt: 1, state: "idle", mode: .ask,
+                                 sourceBranch: "read-only-source")
+    let metadata = SessionToolbarMetadata(session: session)
+    #expect(metadata.source == "origin/read-only-source")
+    for width in [140.0, 220.0, 360.0] {
+        let renderer = ImageRenderer(content: metadata)
+        renderer.proposedSize = ProposedViewSize(width: width, height: nil)
+        let image = try #require(renderer.cgImage)
+        #expect(Double(image.width) <= width + 1)
+        #expect(image.height > 0 && image.height <= 22)
+    }
+}
+
+@Test @MainActor func toolbarShowsWorkspaceContextWithoutBranchOrPullRequest() throws {
+    for mode in [ChatMode.build, .ask] {
+        let session = SessionSummary(id: "context", title: "Chat", cwd: "/repository",
+                                     createdAt: 1, updatedAt: 1, state: "idle", mode: mode)
+        let metadata = SessionToolbarMetadata(session: session)
+        #expect(metadata.source == (mode == .ask ? "Current checkout" : nil))
+        let renderer = ImageRenderer(content: metadata)
+        renderer.proposedSize = ProposedViewSize(width: 220, height: nil)
+        let image = try #require(renderer.cgImage)
+        #expect(image.width > 0 && image.width <= 221)
+        #expect(image.height > 0 && image.height <= 22)
+    }
 }

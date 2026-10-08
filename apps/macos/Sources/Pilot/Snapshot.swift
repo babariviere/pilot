@@ -61,6 +61,38 @@ enum Snapshot {
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
+        // Capture workspace context in the real native toolbar, not above the composer.
+        if CommandLine.arguments.contains("--session-context-only") {
+            model.inspectorVisible = false
+            for mode in [ChatMode.build, .ask] {
+                for archived in [false, true] {
+                    let session = SessionSummary(
+                        id: "context-\(mode.rawValue)-\(archived)", title: "Workspace context", cwd: Fixtures.projects[0].path,
+                        projectId: "p1", branch: mode == .build ? "fix/workspace-context-toolbar" : nil, createdAt: Fixtures.now,
+                        updatedAt: Fixtures.now, state: "idle", model: "anthropic/claude-opus-5-5",
+                        archivedAt: archived ? Fixtures.now : nil, mode: mode,
+                        sourceBranch: mode == .ask ? "main" : nil)
+                    model.client.loadFixture(projects: Fixtures.projects, sessions: [session])
+                    model.selectedSessionId = session.id
+                    for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+                    guard let window = NSApp.windows.first(where: { $0.toolbar != nil }),
+                          let frame = window.contentView?.superview else {
+                        print("No native toolbar window available")
+                        exit(1)
+                    }
+                    for width in [860.0, 2000.0] {
+                        window.setContentSize(CGSize(width: width, height: 600))
+                        window.setFrameOrigin(NSPoint(x: 100, y: 100))
+                        window.makeKeyAndOrderFront(nil)
+                        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+                        snapshot(frame, to: directory.appending(path: "context-\(mode.rawValue)-\(archived ? "archived" : "live")-\(Int(width)).png"))
+                    }
+                }
+            }
+            NSApp.terminate(nil)
+            return
+        }
+
         // Capture the real SwiftUI window toolbar, including native shared backgrounds.
         if CommandLine.arguments.contains("--session-toolbar-only") {
             let session = SessionSummary(
