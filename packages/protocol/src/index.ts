@@ -142,6 +142,14 @@ export interface Project {
 
 export type WorkspaceMode = "clone" | "direct";
 
+/** GET /api/projects/:id/branches. Live origin heads only; direct/no-origin projects return an empty list. */
+export interface RemoteBranchList {
+	/** Exact origin head names, sorted lexically. No remote-tracking prefix is added; HEAD is excluded. */
+	branches: string[];
+	/** Origin's symbolic HEAD, when it names an advertised branch. */
+	defaultBranch?: string;
+}
+
 /** Offline libraries available inside the artifact sandbox. */
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
 export type ArtifactKind = "html" | "react" | "image";
@@ -213,6 +221,10 @@ export interface ModelList {
 export interface SpawnRequest {
 	projectId?: string;
 	cwd?: string;
+	/** Exact origin head name, without adding `origin/`. Prefixes within real names are literal.
+	 * Only private-clone projects without a cwd override may select.
+	 * Omitted uses the existing default-base policy; an explicit unavailable branch fails preparation. */
+	baseBranch?: string;
 	message: string;
 	title?: string;
 	/** "provider/modelId", optionally with ":thinking". Defaults to the project's, then pi's default model. */

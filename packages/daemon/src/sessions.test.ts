@@ -375,7 +375,7 @@ async function fixture(t: TestContext) {
 		titlePending?: { cwd: string; message: string };
 		cwd: string;
 		initializing?: boolean;
-		preparing?: { source: string };
+		preparing?: { source: string; baseBranch?: string };
 		pending: Command[];
 		cancelled?: boolean;
 		inputError?: string;
@@ -531,36 +531,82 @@ test("restart retries an unfinished clone, removes only its partial destination 
 	const clone = deferred();
 	const entered = deferred();
 	const sessions = await f.manager({
-		workspace: async (_source, path, _runner, signal) => {
+		workspace: async (_source, path, _runner, signal, baseBranch) => {
+			assert.equal(baseBranch, "release/stable");
 			entered.resolve();
 			await waitFor(clone.promise, signal);
 			return { path, base: "HEAD", jj: false };
 		},
 	});
-	const created = await sessions.spawn({ projectId: f.project.id, message: "recover clone" });
+	const created = await sessions.spawn({
+		projectId: f.project.id,
+		message: "recover clone",
+		baseBranch: "release/stable",
+	});
 	await entered.promise;
 	await mkdir(created.cwd);
 	await writeFile(join(created.cwd, "partial"), "unfinished");
 	await writeFile(join(f.source, "keep"), "source");
 	await sessions.send(created.id, "second", "steer", "second-id");
 	const before = await f.stored(created.id);
+	assert.deepEqual(before.preparing, { source: f.source, baseBranch: "release/stable" });
 	await sessions.shutdown();
 	clone.resolve();
 	let clones = 0;
 	const reopened = await f.manager({
-		workspace: async (source, path) => {
+		workspace: async (source, path, _runner, _signal, baseBranch) => {
 			clones++;
+			assert.equal(baseBranch, "release/stable");
 			assert.equal(source, f.source);
 			assert.equal(path, created.cwd);
 			assert.equal(await stat(path).catch(() => undefined), undefined);
-			return { path, base: "HEAD", jj: false };
+			return { path, base: `origin/${baseBranch}`, jj: false };
 		},
 	});
 	await until(() => reopened.get(created.id)?.state === "working");
 	assert.equal(clones, 1);
+	assert.deepEqual(reopened.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable" });
 	assert.equal(await readFile(join(f.source, "keep"), "utf8"), "source");
 	assert.deepEqual(f.workers[0]!.requests, before.pending);
 	assert.deepEqual((await f.stored(created.id)).pending, []);
+	await reopened.shutdown();
+	const readyRestart = await f.manager({
+		workspace: async () => {
+			throw new Error("must reuse prepared base");
+		},
+	});
+	assert.deepEqual(readyRestart.changeBase(created.id), { cwd: created.cwd, base: "origin/release/stable" });
+});
+
+test("baseBranch validates before admission and is only accepted for private-clone project sessions", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({
+		workspace: async () => {
+			throw new Error("must not prepare");
+		},
+	});
+	for (const baseBranch of ["", "HEAD", "main~1", "a b", null, 123])
+		await assert.rejects(
+			sessions.spawn({ projectId: f.project.id, message: "invalid", baseBranch: baseBranch as string }),
+			/valid exact origin branch name/,
+		);
+	for (const request of [
+		{ cwd: f.source },
+		{},
+		{ projectId: f.project.id, cwd: f.source },
+		{ projectId: f.project.id, cwd: "" },
+	])
+		await assert.rejects(
+			sessions.spawn({ ...request, message: "invalid", baseBranch: "main" }),
+			/private-clone project without a cwd override/,
+		);
+	await f.projects.update(f.project.id, { workspace: "direct" });
+	await assert.rejects(
+		sessions.spawn({ projectId: f.project.id, message: "invalid", baseBranch: "main" }),
+		/private-clone project without a cwd override/,
+	);
+	assert.deepEqual(sessions.list(), []);
+	assert.equal(f.workers.length, 0);
 });
 
 test("restart after clone but before ready reuses the workspace and recovers idle pending input", async (t) => {

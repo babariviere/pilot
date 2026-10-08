@@ -126,6 +126,8 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "artifacts" && req.method === "GET")
 			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "branches" && req.method === "GET")
+			return json(res, 200, await projects.branches(parts[2]!));
 		if (parts[1] === "sessions" && parts.length === 2) {
 			if (req.method === "GET") {
 				const archived = url.searchParams.get("archived") ?? "false";

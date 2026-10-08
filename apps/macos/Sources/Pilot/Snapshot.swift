@@ -51,6 +51,9 @@ enum Snapshot {
             ],
             defaultModel: "openai-codex/gpt-6.1-sol"
         )
+        model.client.fixtureBranches = RemoteBranchList(
+            branches: ["feat/billing", "fix/invoice-rounding", "main"], defaultBranch: "main"
+        )
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
@@ -78,6 +81,17 @@ enum Snapshot {
                                         additions: $0.id == "s1" ? 13 : 0, deletions: $0.id == "s1" ? 1 : 0))
         })
 
+        if CommandLine.arguments.contains("--pr-icons-only") {
+            model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.pullRequestSessions)
+            model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.pullRequestSessions.map {
+                ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: 2, additions: 13, deletions: 1))
+            })
+            await render(SessionSidebar(model: model, client: model.client), size: CGSize(width: 280, height: 680),
+                         to: directory.appending(path: "pr-sidebar-icons.png"))
+            NSApp.terminate(nil)
+            return
+        }
+
         model.selectedSessionId = nil
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions + [
             SessionSummary(id: "status-idle", title: "Idle, ready for a task", cwd: Fixtures.projects[0].path, projectId: "p1",
@@ -88,6 +102,31 @@ enum Snapshot {
         await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "status-icons.png"))
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
         await render(Frame(title: "Pilot", subtitle: nil) { HomeView() }, size: size, to: directory.appending(path: "home.png"))
+
+        let savedDraftProject = model.draftProjectId
+        model.draftProjectId = Fixtures.projects[0].id
+        let branchScope = "\(Fixtures.projects[0].id):\(Fixtures.projects[0].path)"
+        let branchState = BranchSelectorState()
+        await branchState.load(scope: branchScope) { model.client.fixtureBranches! }
+        for branch in [nil, "feat/billing"] as [String?] {
+            branchState.select(branch, for: branchScope)
+            await render(
+                VStack(spacing: 16) {
+                    Text("What should Pilot work on?")
+                        .font(.system(size: 24, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    TaskComposer(branches: branchState).frame(width: 640)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .padding(.top, 40).background(Theme.background),
+                size: CGSize(width: 840, height: 320),
+                to: directory.appending(path: branch == nil ? "branch-default.png" : "branch-selected.png")
+            )
+        }
+        model.draftProjectId = savedDraftProject
+        if CommandLine.arguments.contains("--branches-only") {
+            NSApp.terminate(nil)
+            return
+        }
 
         // A short sidebar forces session rows beneath the fixed connection footer.
         for width in [230, 280] {

@@ -73,7 +73,12 @@ struct TaskComposer: View {
     @Environment(\.pilotFonts) private var fonts
     @AppStorage("lastProjectId") private var lastProjectId = ""
     @StateObject private var form = NewSessionForm()
+    @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
+
+    @MainActor init(branches: BranchSelectorState? = nil) {
+        _branches = StateObject(wrappedValue: branches ?? BranchSelectorState())
+    }
 
     private var project: Project? {
         client.project(app.draftProjectId) ?? (form.folder.isEmpty ? client.project(lastProjectId) ?? client.projects.first : nil)
@@ -101,6 +106,7 @@ struct TaskComposer: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0xF5F5F5)))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
+        .task(id: branchScopeKey) { await loadBranches() }
         .onAppear { form.consumeDraft(from: app) }
         .onChange(of: app.draftMessage) { _, _ in form.consumeDraft(from: app) }
     }
@@ -144,6 +150,12 @@ struct TaskComposer: View {
                         app.addProject()
                     }
                 }
+                if let scope = branchScopeKey {
+                    BranchMenu(state: branches, scope: scope) {
+                        Task { await loadBranches() }
+                    }
+                    .disabled(form.busy)
+                }
                 ModelMenu(model: $form.model, projectDefault: project?.model, list: form.models)
                 if let error = form.error {
                     Text(error).font(.caption).foregroundStyle(Theme.destructive).lineLimit(1)
@@ -168,6 +180,19 @@ struct TaskComposer: View {
     /// Reloads the pi model scope when the project or folder changes.
     private var modelScopeKey: String { project?.id ?? form.folder }
 
+    private var branchScopeKey: String? {
+        guard let project, project.workspace != "direct" else { return nil }
+        return "\(project.id):\(project.path)"
+    }
+
+    private func loadBranches() async {
+        let projectId = project?.id
+        await branches.load(scope: branchScopeKey) {
+            guard let projectId else { return RemoteBranchList() }
+            return try await client.remoteBranches(projectId)
+        }
+    }
+
     private func loadModels() async {
         form.models = (try? await client.models(projectId: project?.id, cwd: project == nil ? form.folder : nil)) ?? ModelList(models: [])
     }
@@ -182,7 +207,8 @@ struct TaskComposer: View {
             projectId: project?.id,
             cwd: project == nil ? form.folder : nil,
             message: form.attachments.message(text: form.message),
-            model: model.isEmpty ? nil : model
+            model: model.isEmpty ? nil : model,
+            baseBranch: branches.selection(for: branchScopeKey)
         )
         Task {
             defer { form.busy = false }

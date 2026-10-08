@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
+import type { RemoteBranchList } from "@pilot/protocol";
+import { ServiceUnavailable } from "./errors.ts";
 
 export interface Workspace {
 	path: string;
@@ -94,6 +96,42 @@ async function attempt(runner: Runner, file: string, args: string[], cwd: string
 	}
 }
 
+/** Validate an exact origin head name. Prefixes are literal name components, never ref/revision syntax. */
+export async function validateBaseBranch(name: unknown, cwd: string, runner: Runner = run): Promise<void> {
+	if (
+		typeof name !== "string" ||
+		!name ||
+		name === "HEAD" ||
+		(await attempt(runner, "git", ["check-ref-format", `refs/heads/${name}`], cwd)) === undefined
+	)
+		throw new Error("baseBranch must be a valid exact origin branch name (HEAD is not selectable)");
+}
+
+/** Read origin's advertised heads without fetching or changing the user's checkout. */
+export async function listRemoteBranches(cwd: string, runner: Runner = run): Promise<RemoteBranchList> {
+	if (!(await attempt(runner, "git", ["remote", "get-url", "origin"], cwd))) return { branches: [] };
+	let output: string;
+	try {
+		output = await runner("git", ["ls-remote", "--symref", "origin", "HEAD", "refs/heads/*"], cwd, 30_000);
+	} catch (error) {
+		throw new ServiceUnavailable(`Unable to list origin branches: ${error instanceof Error ? error.message : error}`);
+	}
+	const branches = new Set<string>();
+	let defaultBranch: string | undefined;
+	for (const line of output.split("\n")) {
+		const [value, ref] = line.split("\t");
+		if (ref === "HEAD" && value?.startsWith("ref: refs/heads/"))
+			defaultBranch = value.slice("ref: refs/heads/".length);
+		// HEAD is reserved by the selection contract, even if a remote advertises a real head with that name.
+		else if (ref?.startsWith("refs/heads/") && ref !== "refs/heads/HEAD" && /^[0-9a-f]+$/i.test(value ?? ""))
+			branches.add(ref.slice("refs/heads/".length));
+	}
+	return {
+		branches: [...branches].sort(),
+		...(defaultBranch && branches.has(defaultBranch) ? { defaultBranch } : {}),
+	};
+}
+
 // Deliberately bounded: ignored dependency trees, build output and unrelated secrets are not workspace inputs.
 const localConfigs = ["mise.local.toml", ".mise.local.toml", "mise/config.local.toml", ".mise/config.local.toml"];
 
@@ -162,7 +200,8 @@ export async function workspaceBranch(
 
 /**
  * Clone `source` into `destination` (a fresh directory), point `origin` at the source's real remote,
- * fetch it, and start detached from the remote's default branch. Delivery policy determines the agent's branch.
+ * fetch it, and start detached from the selected origin branch, or the default base when omitted.
+ * Explicit selections must exist upstream and never fall back to stale/local refs. Delivery policy determines the agent's branch.
  * Ignored mise local configuration is copied too; other uncommitted changes in the user's checkout stay there.
  *
  * The clone borrows the source's object store through Git alternates, so preparation never copies or
@@ -174,11 +213,13 @@ export async function createWorkspace(
 	destination: string,
 	providedRunner: Runner = run,
 	signal?: AbortSignal,
+	baseBranch?: string,
 ): Promise<Workspace> {
 	const runner: Runner = (file, args, cwd, timeoutMs) => {
 		signal?.throwIfAborted();
 		return providedRunner(file, args, cwd, timeoutMs, signal);
 	};
+	if (baseBranch !== undefined) await validateBaseBranch(baseBranch, source, runner);
 	if ((await attempt(runner, "git", ["rev-parse", "--is-inside-work-tree"], source)) !== "true")
 		throw new Error(`Project is not a git repository: ${source}`);
 	const [upstream, commonDir, sourceHead] = await Promise.all([
@@ -186,6 +227,7 @@ export async function createWorkspace(
 		runner("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], source),
 		runner("git", ["rev-parse", "--verify", "HEAD"], source),
 	]);
+	if (baseBranch !== undefined && !upstream) throw new Error("Cannot select baseBranch: project has no origin remote");
 	await mkdir(destination, { recursive: true });
 	await runner("git", ["init", "--quiet", destination], source);
 	const gitDir = join(destination, ".git");
@@ -197,22 +239,43 @@ export async function createWorkspace(
 	await runner("git", ["config", "core.alternateRefsCommand", "true"], destination);
 	// Seed remote-tracking refs from the source's own view of origin. Objects are already shared, so this
 	// transfers nothing, and an offline fetch below still leaves the remote's branches available.
-	await runner(
-		"git",
-		[
-			...noMaintenance,
-			"fetch",
-			"--quiet",
-			"--no-tags",
-			"--no-write-fetch-head",
-			source,
-			upstream ? "+refs/remotes/origin/*:refs/remotes/origin/*" : "+refs/heads/*:refs/remotes/origin/*",
-		],
-		destination,
-	);
+	if (baseBranch === undefined)
+		await runner(
+			"git",
+			[
+				...noMaintenance,
+				"fetch",
+				"--quiet",
+				"--no-tags",
+				"--no-write-fetch-head",
+				source,
+				upstream ? "+refs/remotes/origin/*:refs/remotes/origin/*" : "+refs/heads/*:refs/remotes/origin/*",
+			],
+			destination,
+		);
 
 	let base: string | undefined;
-	if (upstream) {
+	if (baseBranch !== undefined) {
+		// Fetch exactly a real remote head. Never accept a stale tracking ref, tag, local branch or revision.
+		try {
+			await runner(
+				"git",
+				[
+					...noMaintenance,
+					"fetch",
+					"--quiet",
+					"--no-tags",
+					"--no-write-fetch-head",
+					"origin",
+					`+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+				],
+				destination,
+			);
+		} catch (error) {
+			throw new Error(`Origin branch unavailable: ${baseBranch}: ${error instanceof Error ? error.message : error}`);
+		}
+		base = `origin/${baseBranch}`;
+	} else if (upstream) {
 		// Offline is fine: fall back to what the source already knows about its remote.
 		await attempt(runner, "git", [...noMaintenance, "fetch", "--quiet", "origin"], destination);
 		// Recent Git records the remote HEAD during fetch. Otherwise ask the source, which has the same remote.
@@ -236,7 +299,11 @@ export async function createWorkspace(
 	}
 	// Pin the fallback before the agent commits: HEAD would otherwise move the diff's base with it.
 	base ??= sourceHead;
-	await runner("git", ["checkout", "--quiet", "--detach", base], destination);
+	await runner(
+		"git",
+		["checkout", "--quiet", "--detach", baseBranch === undefined ? base : `refs/remotes/origin/${baseBranch}`],
+		destination,
+	);
 	await copyLocalConfigs(source, destination, runner);
 
 	let jj = false;

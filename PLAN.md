@@ -127,7 +127,12 @@ Decided: **every session gets its own private clone** (done for manual sessions)
   history and ignored mise local configuration files (`mise.local.toml`, `.mise.local.toml`,
   `mise/config.local.toml`, `.mise/config.local.toml`) are copied; other uncommitted work, dependencies
   and build output stay behind. Copied local configuration stays ignored, and the user's checkout is never touched.
-- Start private clones detached from the remote default branch. When a PR is required, new agent-chosen
+- The new-task composer offers a Base branch selector for private-clone projects, listing only real
+  branches advertised by `origin` (no local branches or HEAD pseudoref). The remote default remains
+  the default; an explicit selection is persisted through startup/recovery and must still exist remotely.
+  Starting from an existing branch does not change that branch or the user's checkout.
+- Start private clones detached from the selected remote branch, or the remote default when none is
+  selected. When a PR is required, new agent-chosen
   branches and bookmarks use `<type>/<short-description>` with a conventional task prefix
   (`feat/`, `fix/`, `docs/`, etc.), never `pilot/`. Existing branch and bookmark names are preserved;
   PR sessions check out and keep the PR head instead.
@@ -261,7 +266,8 @@ reports), producing a morning summary in the app and Slack.
   status icon or outcome-reason footer. Reaching the transcript end in the active window still
   marks the latest settled outcome as reviewed; status icons remain elsewhere in the app.
 - Private-branch sessions show a linked colored PR icon and number independently of run outcome;
-  tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
+  open PRs share the three-node Git branch glyph with the base-branch selector, retaining their green color.
+  Tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
   Sidebar rows also show the changed-file count, added/deleted line totals since the session base,
   and the workspace branch after a middle-dot separator,
   including before a PR exists. Visible rows refresh lightweight repository summaries every ten seconds,
@@ -365,6 +371,7 @@ reports), producing a morning summary in the app and Slack.
 | Endpoint / message | Purpose |
 | --- | --- |
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
+| `GET /api/projects/:id/branches`, `SpawnRequest.baseBranch` | List origin's live branches and choose the base of a new private-clone session (done) |
 | `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
 | `PATCH /api/sessions/:id/queue/:submissionId`, `DELETE /api/sessions/:id/queue/:submissionId` | Edit or remove a still-queued user message without resubmitting or interrupting the active run (done) |
 | `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |

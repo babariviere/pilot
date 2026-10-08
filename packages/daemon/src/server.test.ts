@@ -12,6 +12,73 @@ import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
+test("project branches GET returns live origin heads/default, sensible empty lists and clear remote errors", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-server-branches-"));
+	const remote = join(root, "remote.git");
+	const source = join(root, "source");
+	const git = (cwd: string, ...args: string[]) =>
+		execFileSync("git", args, {
+			cwd,
+			encoding: "utf8",
+			env: {
+				...process.env,
+				GIT_AUTHOR_NAME: "t",
+				GIT_AUTHOR_EMAIL: "t@t",
+				GIT_COMMITTER_NAME: "t",
+				GIT_COMMITTER_EMAIL: "t@t",
+			},
+		});
+	git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+	git(root, "clone", "--quiet", remote, source);
+	writeFileSync(join(source, "a.txt"), "base\n");
+	git(source, "add", ".");
+	git(source, "commit", "--quiet", "-m", "base");
+	git(source, "push", "--quiet", "origin", "HEAD:main", "HEAD:topic");
+	const projects = new ProjectStore(join(root, "home"));
+	await projects.load();
+	const project = await projects.create({ path: source });
+	const noOrigin = await projects.create({ path: root });
+	const sessions = new SessionManager(root, projects);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: root, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog(root),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		rmSync(root, { recursive: true, force: true });
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/projects`;
+	const url = `${base}/${project.id}/branches`;
+	const response = await fetch(url);
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), { branches: ["main", "topic"], defaultBranch: "main" });
+	assert.deepEqual(await (await fetch(`${base}/${noOrigin.id}/branches`)).json(), { branches: [] });
+	for (const [path, options, status] of [
+		[`${base}/missing/branches`, {}, 404],
+		[url, { method: "POST" }, 404],
+		[`${url}/extra`, {}, 404],
+		[url, { headers: { origin: "https://example.com" } }, 403],
+	] as const) {
+		const rejected = await fetch(path, options);
+		assert.equal(rejected.status, status);
+		await rejected.arrayBuffer();
+	}
+	await projects.update(project.id, { workspace: "direct" });
+	rmSync(remote, { recursive: true, force: true });
+	assert.deepEqual(await (await fetch(url)).json(), { branches: [] });
+	await projects.update(project.id, { workspace: "clone" });
+	const unavailable = await fetch(url);
+	assert.equal(unavailable.status, 503);
+	assert.match(((await unavailable.json()) as { error: string }).error, /Unable to list origin branches/);
+});
+
 test("changes summary GET returns only metadata and counts and preserves route guards", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-server-summary-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
