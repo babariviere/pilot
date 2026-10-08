@@ -161,6 +161,170 @@ test("archives and restores durably, retaining history, workspace and project as
 	}
 });
 
+test("pins persist, sort first, broadcast once and survive manual archive and restore", async () => {
+	const { sessions, ids, first, manager, cleanup } = await fixture();
+	const id = ids[0]!;
+	try {
+		const original = sessions.get(id)!;
+		const changes: SessionSummary[] = [];
+		sessions.onChange((summary) => changes.push(summary));
+		assert.equal(original.pinned, undefined, "legacy metadata is unpinned");
+		const pinned = await sessions.setPinned(id, true);
+		assert.deepEqual(pinned, { ...original, pinned: true });
+		assert.deepEqual(await sessions.setPinned(id, true), pinned);
+		assert.equal(changes.length, 1);
+		assert.equal(sessions.list()[0]?.id, id);
+		assert.deepEqual(sessions.list({ projectId: first.id }), [pinned]);
+		assert.deepEqual((await manager()).get(id), pinned);
+		assert.equal((await sessions.archive(id)).pinned, true, "manual archive remains available");
+		assert.deepEqual(await sessions.restore(id), pinned);
+		assert.deepEqual(await sessions.setPinned(id, false), original, "pinning never changes activity");
+		assert.deepEqual((await manager()).get(id), original);
+		assert.equal(sessions.list()[0]?.id, ids[2]);
+		await assert.rejects(sessions.setPinned(randomUUID(), true), NotFound);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("pins prevent inactivity and merged PR automatic archival across restarts until unpinned", async (t) => {
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const { sessions, ids, manager, cleanup } = await fixture();
+	try {
+		for (const id of ids.slice(0, 2)) {
+			const meta = sessions["metas"].get(id)!;
+			meta.updatedAt = now - 8 * 86_400_000;
+			if (id === ids[1]) {
+				meta.updatedAt = now;
+				meta.pullRequest!.state = "merged";
+				meta.pullRequest!.mergedAt = now - 2 * 86_400_000;
+				meta.pullRequestMergedAt = meta.pullRequest!.mergedAt;
+				delete meta.pullRequestError;
+			}
+			await sessions.setPinned(id, true);
+		}
+		const reopened = await manager();
+		await reopened["archiveInactiveSessions"]();
+		for (const id of ids.slice(0, 2)) assert.equal(reopened.get(id)?.archivedAt, undefined);
+		for (const id of ids.slice(0, 2)) await reopened.setPinned(id, false);
+		await reopened["archiveInactiveSessions"]();
+		for (const id of ids.slice(0, 2)) assert.equal(reopened.get(id)?.archivedAt, now);
+		assert.equal(
+			reopened["metas"].get(ids[1]!)!.autoArchivedPullRequest,
+			reopened.get(ids[1]!)!.pullRequest!.url,
+			"merge-based archiving resumes too",
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
+test("queued automatic archives recheck pins and interleaved lifecycle snapshots preserve committed pins", async () => {
+	const { home, sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const meta = sessions["metas"].get(id)!;
+	const save = sessions["save"].bind(sessions);
+	const gate = deferred();
+	const entered = deferred();
+	const changes: SessionSummary[] = [];
+	sessions.onChange((summary) => changes.push(summary));
+	try {
+		sessions["save"] = async (current, archive, pin) => {
+			if (pin) {
+				entered.resolve();
+				await gate.promise;
+			}
+			await save(current, archive, pin);
+		};
+		const pin = sessions.setPinned(id, true);
+		await entered.promise;
+		assert.equal(sessions.get(id)?.pinned, undefined, "uncommitted pin is not published");
+		const archive = sessions["setArchived"](id, true, undefined, Date.now());
+		gate.resolve();
+		await pin;
+		await archive;
+		assert.equal(sessions.get(id)?.archivedAt, undefined);
+		assert.equal(changes.length, 1);
+		// Queue a lifecycle snapshot behind an unpin; it captures the old pin but must persist the new one.
+		const writeGate = deferred();
+		const writing = deferred();
+		sessions["saving"].set(id, writeGate.promise);
+		sessions["save"] = (current, archive, pin) => {
+			const result = save(current, archive, pin);
+			if (pin) writing.resolve();
+			return result;
+		};
+		const unpin = sessions.setPinned(id, false);
+		await writing.promise;
+		const lifecycle = save(meta);
+		writeGate.resolve();
+		await Promise.all([unpin, lifecycle]);
+		const persisted = JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8"));
+		assert.equal(persisted.pinned, undefined);
+		assert.equal(sessions.get(id)?.pinned, undefined);
+	} finally {
+		gate.resolve();
+		await cleanup();
+	}
+});
+
+test("manual archive does not share an automatic archive skipped by a queued pin", async () => {
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	const gate = deferred();
+	const entered = deferred();
+	const save = sessions["save"].bind(sessions);
+	try {
+		sessions["save"] = async (meta, archive, pin) => {
+			if (pin) {
+				entered.resolve();
+				await gate.promise;
+			}
+			await save(meta, archive, pin);
+		};
+		const pin = sessions.setPinned(id, true);
+		await entered.promise;
+		const automatic = sessions["setArchived"](id, true, undefined, Date.now());
+		const manual = sessions.archive(id);
+		gate.resolve();
+		await pin;
+		assert.equal((await automatic).archivedAt, undefined);
+		assert.ok((await manual).archivedAt);
+		assert.equal(sessions.get(id)?.pinned, true);
+	} finally {
+		gate.resolve();
+		await cleanup();
+	}
+});
+
+test("failed pin writes publish nothing, retries persist and opposite pin requests execute in order", async () => {
+	const { sessions, ids, manager, cleanup } = await fixture();
+	const id = ids[0]!;
+	const save = sessions["save"].bind(sessions);
+	const changes: SessionSummary[] = [];
+	sessions.onChange((summary) => changes.push(summary));
+	try {
+		sessions["save"] = async (meta, archive, pin) => {
+			if (pin) throw new Error("disk full");
+			await save(meta, archive, pin);
+		};
+		await assert.rejects(sessions.setPinned(id, true), /disk full/);
+		assert.equal(sessions.get(id)?.pinned, undefined);
+		assert.equal(changes.length, 0);
+		sessions["save"] = save;
+		const pin = sessions.setPinned(id, true);
+		const unpin = sessions.setPinned(id, false);
+		const repin = sessions.setPinned(id, true);
+		assert.equal((await pin).pinned, true);
+		assert.equal((await unpin).pinned, undefined);
+		assert.equal((await repin).pinned, true);
+		assert.equal((await manager()).get(id)?.pinned, true);
+	} finally {
+		await cleanup();
+	}
+});
+
 test("age sweep archives at one week since activity, retains files and grants a durable week on restore", async (t) => {
 	const now = Date.now();
 	t.mock.method(Date, "now", () => now);
@@ -607,6 +771,10 @@ test("HTTP archive browsing works globally and per project; WebSocket sync inclu
 	let ws: WebSocket | undefined;
 	try {
 		const id = ids[0]!;
+		const pinResponse = await request(`/${id}/pin`, "POST");
+		assert.equal(pinResponse.status, 200);
+		assert.equal(((await pinResponse.json()) as SessionSummary).pinned, true);
+		assert.equal((await request(`/${randomUUID()}/pin`, "POST")).status, 404);
 		assert.equal((await request(`/${id}/archive`, "POST")).status, 200);
 		await sessions.archive(ids[1]!);
 		await sessions.archive(ids[2]!);
@@ -639,6 +807,15 @@ test("HTTP archive browsing works globally and per project; WebSocket sync inclu
 		});
 		assert.equal(initial.sessions.length, 3);
 		assert.ok(initial.sessions.every((session) => session.archivedAt !== undefined));
+		assert.equal(initial.sessions.find((session) => session.id === id)?.pinned, true);
+		const unpinUpdate = once(ws, "message");
+		const unpinned = await request(`/${id}/unpin`, "POST");
+		assert.equal(unpinned.status, 200);
+		assert.equal(((await unpinned.json()) as SessionSummary).pinned, undefined);
+		const [unpinRaw] = await unpinUpdate;
+		const pinMessage = JSON.parse(String(unpinRaw)) as Extract<ServerMessage, { type: "session" }>;
+		assert.equal(pinMessage.session.id, id);
+		assert.equal(pinMessage.session.pinned, undefined);
 		const update = once(ws, "message");
 		const restored = await request(`/${id}/restore`, "POST");
 		assert.equal(restored.status, 200);

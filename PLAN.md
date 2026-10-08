@@ -362,7 +362,10 @@ reports), producing a morning summary in the app and Slack.
   until reviewed, independently of the outcome:
   reading a question does not answer it. Native macOS notifications distinguish settled runs,
   stops and failures, and deduplicate completion versions across reconnects.
-- Session lists put chats with closed or merged PRs below chats with open/draft/no PRs, even if the
+- Pin or unpin chats from the sidebar context menu. Pinned chats show a pin indicator and sort first
+  in their project, ahead of PR state and activity ordering. Pins persist across restarts and sync to
+  connected clients. Multiple pins retain the normal ordering within the pinned group.
+- Session lists put unpinned chats with closed or merged PRs below chats with open/draft/no PRs, even if the
   terminal PR chat is still working. Within each group, newest meaningful activity comes first.
   A newly finished turn moves to the top of its group and resets the compact elapsed indicator to
   `now` (the first minute), using its stable completion timestamp rather than generic metadata updates.
@@ -422,6 +425,8 @@ reports), producing a morning summary in the app and Slack.
   time persists and the local archive sweep enforces that deadline without polling merged PRs again.
   Failed lookups and closed, unmerged PRs never trigger merge-based archiving. Restoring a merge-archived
   chat keeps it active for that PR, including after daemon restarts (the one-week inactivity rule still applies).
+  Pinned chats are exempt from both inactivity and merge-based automatic archiving until unpinned;
+  manual archiving remains available and preserves the pin on restore.
 - The compact session header keeps title and project/model on the left. Branch and linked PR metadata
   sit immediately left of the top-right inspector toggles, outside their shared button background;
   branch labels use the three-node Git glyph and truncate in the middle with a full-name tooltip.
@@ -543,6 +548,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/sessions/:id/changes/summary` | Lightweight base, branch, changed-file count and added/deleted line totals for sidebar rows, without generating patches (done) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history with recoverable jj snapshots (done) |
+| `POST /api/sessions/:id/pin`, `POST /api/sessions/:id/unpin`, `SessionSummary.pinned` | Persist a user pin, sort pinned chats first, and prevent automatic archival until unpinned (done) |
 | `POST /api/sessions/:id/reclaim-workspace` | Manually reclaim an eligible archived shared jj workspace using the same snapshot/config preservation and unknown-file safety checks |
 | `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |
 | `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |

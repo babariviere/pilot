@@ -178,6 +178,20 @@ final class PilotClient: ObservableObject {
     }
 
     @discardableResult
+    func pin(_ sessionId: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call("api/sessions/\(sessionId)/pin")
+        update(session)
+        return session
+    }
+
+    @discardableResult
+    func unpin(_ sessionId: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call("api/sessions/\(sessionId)/unpin")
+        update(session)
+        return session
+    }
+
+    @discardableResult
     func archive(_ sessionId: String) async throws -> SessionSummary {
         guard session(sessionId)?.isWorking != true else { throw ClientError("Stop this session before archiving it.") }
         let session: SessionSummary = try await call("api/sessions/\(sessionId)/archive", body: [String: String]())
@@ -346,6 +360,13 @@ final class PilotClient: ObservableObject {
     private struct Ack: Decodable {}
     private struct APIError: Decodable { let error: String }
 
+    private func call<Response: Decodable>(_ path: String, method: String = "POST") async throws -> Response {
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        var request = URLRequest(url: baseURL.appending(path: path))
+        request.httpMethod = method
+        return try await call(request)
+    }
+
     private func call<Body: Encodable, Response: Decodable>(
         _ path: String,
         method: String = "POST",
@@ -364,6 +385,10 @@ final class PilotClient: ObservableObject {
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONEncoder().encode(body)
+        return try await call(request)
+    }
+
+    private func call<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {

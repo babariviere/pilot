@@ -44,6 +44,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let lastUserMessageAt: Double?
     /// Epoch milliseconds; nil means the chat is not archived. History is retained with recoverable jj snapshots.
     public let archivedAt: Double?
+    /// Sorts first and prevents automatic archiving. Omitted by older daemons, meaning unpinned.
+    public let pinned: Bool?
     public let state: String
     public let model: String?
     /// Effective thinking level pinned for this chat. Omitted by older daemons.
@@ -97,6 +99,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         return help
     }
     public var isArchived: Bool { archivedAt != nil }
+    public var isPinned: Bool { pinned ?? false }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
     public var canArchive: Bool { !isArchived && !isWorking }
 
@@ -110,7 +113,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
         lastUserMessageAt: Double? = nil,
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
-        subagents: [SessionSubagent]? = nil
+        subagents: [SessionSubagent]? = nil, pinned: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -129,6 +132,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.updatedAt = updatedAt
         self.lastUserMessageAt = lastUserMessageAt
         self.archivedAt = archivedAt
+        self.pinned = pinned
         self.state = state
         self.model = model
         self.thinking = thinking

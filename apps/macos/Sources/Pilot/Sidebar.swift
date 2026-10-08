@@ -2,7 +2,7 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Sessions grouped by project and optional user-created folders, newest first.
+/// Sessions grouped by project and optional user-created folders, pinned first, then PR status and stable activity.
 struct SessionSidebar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
@@ -302,6 +302,13 @@ struct SessionRow: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isUnread(session) { UnreadBadge() }
+                if session.isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .help("Pinned chat. Automatic archiving is disabled until unpinned.")
+                        .accessibilityLabel("Pinned chat")
+                }
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     Text(SessionTimeFormatting.relative(session.listActivityAt, now: context.date))
                         .font(.caption)
@@ -318,6 +325,14 @@ struct SessionRow: View {
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
         .contextMenu {
+            Button {
+                model.setPinned(!session.isPinned, sessionId: session.id)
+            } label: {
+                Label(session.isPinned ? "Unpin" : "Pin", systemImage: session.isPinned ? "pin.slash" : "pin")
+            }
+            .disabled(model.pendingSessionActions.contains(session.id))
+            .help(session.isPinned ? "Return this chat to its usual list position and allow automatic archiving" :
+                  "Keep this chat first and prevent automatic archiving")
             SessionArchiveAction(session: session)
             if session.isWorking {
                 Button("Stop Session") { model.stopSession(session.id) }

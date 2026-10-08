@@ -55,7 +55,7 @@ private func sidebarMeasuredSizes<V: View>(_ view: V, width: CGFloat) -> [CGSize
                                  branch: "fix/a-very-long-branch-name-for-sidebar-layout", createdAt: now,
                                  updatedAt: now - 14 * 3_600_000, state: "idle", outcome: .done,
                                  pullRequest: SessionPullRequest(number: 12345, url: "https://github.com/example/repo/pull/12345",
-                                                                title: "A large change", state: .merged, checkedAt: now))
+                                                                title: "A large change", state: .merged, checkedAt: now), pinned: true)
     let summary = SessionChangeSummary(base: "origin/main", branch: session.branch,
                                        fileCount: 1234, additions: 123456, deletions: 98765)
     model.client.loadFixture(projects: [], sessions: [session])
