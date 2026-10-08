@@ -197,6 +197,46 @@ test("without a usage extension, refresh reads committed Harness context without
 	assert.equal(changes.length, 1);
 });
 
+test("native sync borrows its return view while prompt preparation and native history remain isolated", async (t) => {
+	const f = await fixture(t);
+	const adapter = await f.open();
+	const { harness, conversation } = await bindHarness(f, adapter);
+	await conversation.commit(async (tx) => {
+		await tx.appendEntry(UserEntry, conversation.id, {
+			model: [{ role: "user", content: [{ type: "text", text: "original" }], timestamp: 1 }],
+		});
+	}, context);
+	const view = await conversation.context(context);
+	t.mock.method(harness, "conversation", async () => conversation);
+	t.mock.method(conversation, "context", async () => view);
+	const clone = structuredClone;
+	let messageArrayClones = 0;
+	t.mock.method(globalThis, "structuredClone", <T>(value: T, options?: Parameters<typeof structuredClone>[1]) => {
+		if (
+			Array.isArray(value) &&
+			value.length === view.messages.length &&
+			value.every((message, index) => message === view.messages[index])
+		)
+			messageArrayClones++;
+		return clone(value, options);
+	});
+	// biome-ignore lint/complexity/useLiteralKeys: Inspect the private synchronization boundary.
+	assert.equal(await adapter["sync"](context), view.messages);
+	assert.equal(messageArrayClones, 0, "ignored sync results do not clone the entire message array");
+	const mirrored = adapter.session.messages.find((message) => message.role === "user");
+	assert.ok(mirrored?.role === "user" && Array.isArray(mirrored.content));
+	const block = mirrored.content[0];
+	assert.ok(block?.type === "text");
+	block.text = "native mutation";
+	const canonical = view.messages.find((message) => message.role === "user");
+	assert.ok(canonical?.role === "user");
+	assert.deepEqual(canonical.content, [{ type: "text", text: "original" }]);
+	// biome-ignore lint/complexity/useLiteralKeys: Inspect the private prompt isolation boundary.
+	await adapter["preparePrompt"](context);
+	assert.equal(messageArrayClones, 1, "prompt preparation retains its detached message copy");
+	assert.deepEqual(canonical.content, [{ type: "text", text: "original" }]);
+});
+
 test("committed response usage anchors trailing context, while resets discard old measurements", async (t) => {
 	const f = await fixture(t);
 	const adapter = await f.open();

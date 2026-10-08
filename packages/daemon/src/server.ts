@@ -9,6 +9,7 @@ import type {
 	ProjectRequest,
 	SendRequest,
 	ServerMessage,
+	SessionSummary,
 	SpawnRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -23,6 +24,20 @@ import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
 
 const MAX_BODY = 1024 * 1024;
+
+/** Telemetry and generated titles are not evidence of a changed working copy. */
+function repositoryVersion(session: SessionSummary): string {
+	return JSON.stringify([
+		session.cwd,
+		session.state,
+		session.updatedAt,
+		session.outcome,
+		session.outcomeAt,
+		session.branch,
+		session.sourceBranch,
+		session.sourceCommit,
+	]);
+}
 
 class HttpError extends Error {
 	readonly status: number;
@@ -253,6 +268,11 @@ export function createDaemonServer(
 	});
 
 	const clients = new Map<WebSocket, (data: string) => void>();
+	const repositoryVersions = new Map(
+		sessions
+			.list({ archived: "all" })
+			.map((session) => [session.id, { cwd: session.cwd, version: repositoryVersion(session) }]),
+	);
 	const artifactVersions = new Map<string, number>();
 	const send = (ws: WebSocket, message: ServerMessage) => {
 		if (ws.readyState === ws.OPEN) clients.get(ws)?.(JSON.stringify(message));
@@ -263,7 +283,13 @@ export function createDaemonServer(
 		for (const send of clients.values()) send(data);
 	};
 	sessions.onChange((session) => {
-		repositoryChanges.invalidate(session.cwd);
+		const previous = repositoryVersions.get(session.id);
+		const version = repositoryVersion(session);
+		if (previous?.version !== version) {
+			if (previous && previous.cwd !== session.cwd) repositoryChanges.invalidate(previous.cwd);
+			repositoryChanges.invalidate(session.cwd);
+			repositoryVersions.set(session.id, { cwd: session.cwd, version });
+		}
 		broadcast({ type: "session", session });
 	});
 	projects.onChange((list) => {

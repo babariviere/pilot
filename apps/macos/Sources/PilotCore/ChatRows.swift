@@ -74,8 +74,6 @@ extension Transcript {
     // Separating committed history from the streaming suffix lets the processor reuse
     // history on every text delta. Both paths use the same identity/grouping rules.
     func renderRows(entries: [Entry], streaming: ChatMessage?, error: String?, context: RowContext) -> [ChatRow] {
-        let results = context.results
-        let published = context.published
         var rows: [ChatRow] = []
         var toolGroupId: String?
         var toolGroup: [ToolItem] = []
@@ -108,9 +106,7 @@ extension Transcript {
                 case let .thinking(text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                     append(.thinking(id: blockId, text: text, streaming: streaming && isLast))
                 case let .toolCall(callId, name, arguments):
-                    var item = tool(callId, name: name, arguments: arguments, results: results)
-                    if let artifact = item.artifact,
-                       published.contains("\(artifact.sessionId)/\(artifact.id)/\(artifact.revision)") { item.artifact = nil }
+                    let item = tool(callId, name: name, arguments: arguments, context: context)
                     append(.tools(id: blockId, items: [item]))
                 default:
                     break
@@ -144,6 +140,13 @@ extension Transcript {
         if let error { append(.error(id: "transcript-error", text: error)) }
         flushTools()
         return rows
+    }
+
+    func tool(_ callId: String, name: String, arguments: JSONValue, context: RowContext) -> ToolItem {
+        var item = tool(callId, name: name, arguments: arguments, results: context.results)
+        if let artifact = item.artifact,
+           context.published.contains("\(artifact.sessionId)/\(artifact.id)/\(artifact.revision)") { item.artifact = nil }
+        return item
     }
 
     private func tool(_ callId: String, name: String, arguments: JSONValue, results: [String: ChatMessage]) -> ToolItem {

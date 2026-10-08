@@ -28,6 +28,7 @@ private func askDraftDirectory() -> URL {
     #expect(form.mode == .ask && form.workspace == .clone)
     #expect(form.branches.selection(for: scope) == "topic")
     #expect(app.draftProjectId == draftProject.id)
+    app.flushDrafts()
     let restored = AppModel(draftStore: DraftStore(directory: root))
     restored.newSessionForm.consumeDraft(from: restored)
     #expect(restored.newSessionForm.message == "Explain this branch")
@@ -36,6 +37,7 @@ private func askDraftDirectory() -> URL {
     #expect(restored.newSessionForm.branches.selection(for: scope) == "topic")
     await restored.newSessionForm.branches.load(scope: scope, mode: .ask) { RemoteBranchList(branches: ["topic"]) }
     #expect(restored.newSessionForm.branches.selection(for: scope) == "topic")
+    restored.flushDrafts()
 }
 
 @Test @MainActor func submittingAskResetsNextChatAndPersistedDefaultsToBuild() throws {
@@ -54,6 +56,7 @@ private func askDraftDirectory() -> URL {
     app.newSession(in: nil)
     form.consumeDraft(from: app)
     #expect(form.mode == .build && app.draftProjectId == draftProject.id)
+    app.flushDrafts()
     let restored = AppModel(draftStore: DraftStore(directory: root))
     #expect(restored.newSessionForm.mode == .build && restored.newSessionForm.workspace == nil)
     #expect(restored.newSessionForm.message.isEmpty && restored.newSessionForm.pendingBaseBranch == nil)
@@ -73,6 +76,7 @@ private func askDraftDirectory() -> URL {
     app.buildWithContext(from: ask, rows: [.user(id: "u", text: "Plan it"), .text(id: "a", text: "The plan")])
     #expect(!app.newSessionForm.completeSubmission(revision: previousRevision))
     // The app can close before Home consumes the one-shot prefill.
+    app.flushDrafts()
     let restored = AppModel(draftStore: DraftStore(directory: root))
     #expect(restored.draftBaseBranch == "origin/literal" && restored.draftWorkspace == .clone)
     restored.newSessionForm.consumeDraft(from: restored)
@@ -85,6 +89,7 @@ private func askDraftDirectory() -> URL {
     form.resolvePendingBaseBranch(scope: scope, branches: form.branches)
     #expect(form.canStart(in: draftProject))
     // Keep the handoff source durable even after successful origin validation.
+    restored.flushDrafts()
     let again = AppModel(draftStore: DraftStore(directory: root))
     let saved = again.newSessionForm
     #expect(saved.pendingBaseBranch == "origin/literal" && saved.mode == .build && saved.workspace == .clone)
@@ -96,6 +101,7 @@ private func askDraftDirectory() -> URL {
     saved.chooseBaseBranch(nil)
     #expect(saved.canStart(in: draftProject))
     #expect(again.draftProjectId == draftProject.id)
+    again.flushDrafts()
 }
 
 @Test @MainActor func checkoutHandoffDoesNotInheritRetainedProjectsDestination() throws {
@@ -106,11 +112,13 @@ private func askDraftDirectory() -> URL {
     let ask = SessionSummary(id: "cwd-ask", title: "Checkout", cwd: "/tmp/other", createdAt: 1, updatedAt: 2,
                              state: "idle", mode: .ask)
     app.buildWithContext(from: ask, rows: [])
+    app.flushDrafts()
     let restored = AppModel(draftStore: DraftStore(directory: root))
     restored.newSessionForm.consumeDraft(from: restored)
     #expect(restored.draftProjectId == nil)
     #expect(restored.newSessionForm.folder == ask.cwd && restored.newSessionForm.mode == .build)
     #expect(restored.newSessionForm.pendingBaseBranch == nil)
+    restored.flushDrafts()
 }
 
 @Test @MainActor func legacyTaskDraftDefaultsToBuildAndMigratesBranchScope() async throws {

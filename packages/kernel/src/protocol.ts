@@ -27,6 +27,7 @@ export type KernelCommand =
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
 	| { type: "abort"; requestId: string }
+	| { type: "inspectChildren"; requestId: string }
 	| { type: "watch"; watchId: string; includeTodos?: boolean; activityOnly?: boolean }
 	| { type: "unwatch"; watchId: string }
 	| { type: "shutdown" };
@@ -41,6 +42,7 @@ export type KernelPacket =
 			completion?: SessionCompletion;
 	  }
 	| { type: "usage"; usage: SessionUsage }
+	| { type: "children"; requestId: string; hasChildren: boolean }
 	| { type: "artifacts.changed" }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }

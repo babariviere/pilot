@@ -55,11 +55,15 @@ native macOS app, or from wherever the work came from.
 - **pilotd** (`packages/daemon`): owns sessions, trigger sources and policies. Runs as a per-user launchd
   agent, independent of the app.
 - **kernel** (`packages/kernel`): one process per open session. Kernels idle and unwatched for 10 minutes
-  (`PILOT_IDLE_PARK_MS`), with no subprocesses such as background jobs, are closed and reopen on demand; one
-  pre-forked spare with its modules loaded keeps reopening fast. pi-durable owns the transcript and model loop;
+  (`PILOT_IDLE_PARK_MS`), with no work subprocesses such as background jobs, are closed and reopen on demand.
+  Exact SDK-owned MCP transports are exempt only while they have no outstanding requests or unowned descendants;
+  unknown children still prevent parking. One pre-forked spare with its modules loaded keeps reopening fast.
+  pi-durable owns the transcript and model loop;
   the native pi kernel provides tools, prompts, extension hooks and provider auth from `~/.pi/agent`.
 - **Pilot.app** (`apps/macos`): session list, native chat, per-session terminal, menu bar, notifications.
   Installs and supervises the launch agent. Closing or quitting the app never stops agents.
+  Terminal rendering retains the visible surface plus five inactive surfaces, detaching without killing
+  daemon shells. Draft writes are debounced off-main, with window/deactivation/quit durability flushes.
 - **protocol** (`packages/protocol`, mirrored in `PilotCore`): HTTP commands and WS event streams.
 
 ## 4. Core concepts

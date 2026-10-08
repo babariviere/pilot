@@ -82,6 +82,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminate(_: NSApplication) -> NSApplication.TerminateReply {
-        AppUpdater.shared.shouldDelayTermination() ? .terminateCancel : .terminateNow
+        AppModel.shared.flushDrafts()
+        return AppUpdater.shared.shouldDelayTermination() ? .terminateCancel : .terminateNow
+    }
+
+    func applicationDidResignActive(_: Notification) {
+        AppModel.shared.flushDrafts()
     }
 }

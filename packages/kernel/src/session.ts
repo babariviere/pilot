@@ -351,18 +351,29 @@ export class KernelSession {
 		await this.conversation.abort(context, { background: true });
 	}
 
+	hasChildren(): Promise<boolean> {
+		return this.adapter.hasChildren();
+	}
+
 	async watch(
 		watchId: string,
-		listener: (events: AgentEvent[]) => void,
+		listener: (events: AgentEvent[]) => unknown,
 		includeTodos = true,
 		activityOnly = false,
 	): Promise<void> {
 		if (this.#watches.has(watchId)) return;
 		if (activityOnly) {
 			const stream = await watchActivity(this.harness, this.conversation.id, context);
-			listener([stream.snapshot]);
+			try {
+				await listener([stream.snapshot]);
+			} catch (error) {
+				await stream.stop();
+				throw error;
+			}
 			this.#watches.set(watchId, () => stream.stop());
-			stream.start(async (events) => listener([...events]));
+			stream.start(async (events) => {
+				await listener([...events]);
+			});
 			return;
 		}
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
@@ -373,16 +384,32 @@ export class KernelSession {
 			await stream.stop();
 			throw error;
 		}
-		listener([stream.snapshot, queueUpdate(queue.value)]);
-		// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
-		if (includeTodos && this.#ask) listener([{ type: "todos_update", items: [] }]);
-		const stopTodos = includeTodos && !this.#ask ? this.todos.subscribe((event) => listener([event])) : () => {};
+		try {
+			await listener([stream.snapshot, queueUpdate(queue.value)]);
+			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
+			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
+		} catch (error) {
+			await Promise.all([stream.stop(), queue.stop()]);
+			throw error;
+		}
+		const stopTodos =
+			includeTodos && !this.#ask
+				? this.todos.subscribe((event) => {
+						void Promise.resolve(listener([event])).catch((error) =>
+							console.warn("pilot: TODO listener failed", error),
+						);
+					})
+				: () => {};
 		this.#watches.set(watchId, async () => {
 			stopTodos();
 			await Promise.all([stream.stop(), queue.stop()]);
 		});
-		stream.start(async (events) => listener([...events]));
-		queue.start(async (inbox) => listener([queueUpdate(inbox)]));
+		stream.start(async (events) => {
+			await listener([...events]);
+		});
+		queue.start(async (inbox) => {
+			await listener([queueUpdate(inbox)]);
+		});
 	}
 
 	async unwatch(watchId: string): Promise<void> {

@@ -29,10 +29,40 @@ const live: AgentEvent = { ...cold, agent: { instructions: "live replacement" } 
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
+	let reject!: (error: Error) => void;
+	const promise = new Promise<T>((done, fail) => {
 		resolve = done;
+		reject = fail;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
+}
+
+/** Exercise manager accounting deterministically; reader admission/cancellation has real-worker tests. */
+function controlledReads(t: TestContext, manager: SessionManager) {
+	const reads: (ReturnType<typeof deferred<PersistedSessionView & { bytes: number }>> & { queued: boolean })[] = [];
+	const finish = (index: number) => {
+		reads[index].queued = false;
+		reads[index].resolve({ events: [cold], bytes: 1 });
+	};
+	t.mock.method(manager["coldReader"], "read", () => {
+		const read = { ...deferred<PersistedSessionView & { bytes: number }>(), queued: true };
+		reads.push(read);
+		const shutdown = () => read.resolve({ events: [cold], bytes: 1 });
+		manager["shutdownSignal"].signal.addEventListener("abort", shutdown, { once: true });
+		void read.promise.then(shutdownCleanup, shutdownCleanup);
+		function shutdownCleanup() {
+			manager["shutdownSignal"].signal.removeEventListener("abort", shutdown);
+		}
+		return read.promise;
+	});
+	t.mock.method(manager["coldReader"], "cancel", (promise: Promise<PersistedSessionView>) => {
+		const read = reads.find((read) => read.promise === promise);
+		if (!read?.queued) return false;
+		read.queued = false;
+		read.reject(new DOMException("Session snapshot read cancelled", "AbortError"));
+		return true;
+	});
+	return { reads, finish };
 }
 
 async function until(check: () => boolean) {
@@ -234,6 +264,88 @@ test("unsubscribe while cold reading prevents delivery and later live attachment
 	gate.resolve({ events: [cold] });
 	await manager.send(f.id, "new input");
 	assert.equal(f.workers[0]!.sent.filter((command) => command.type === "watch").length, 0);
+});
+
+test("shared queued cold reads survive one viewer leaving and cache eviction", async (t) => {
+	const f = await fixture(t);
+	const manager = await f.open();
+	const { reads, finish } = controlledReads(t, manager);
+	const first = manager.subscribe(f.id, () => assert.fail("departed viewer received history"));
+	const second = manager.subscribe(f.id, () => assert.fail("departed viewer received history"));
+	const shared = manager["coldLoading"].get(f.id)!;
+	assert.equal(reads.length, 1);
+	assert.equal(manager["coldConsumers"].get(shared), 2);
+	first();
+	first();
+	assert.equal(reads[0].queued, true, "idempotent departure cannot cancel another viewer's read");
+	manager["coldSnapshots"].delete(f.id);
+	const batches: AgentEvent[][] = [];
+	const third = manager.subscribe(f.id, (events) => batches.push(events));
+	t.after(third);
+	assert.equal(manager["coldLoading"].get(f.id), shared, "loading dedup survives settled-cache eviction");
+	assert.equal(manager["coldConsumers"].get(shared), 2);
+	second();
+	assert.equal(reads.length, 1);
+	assert.equal(reads[0].queued, true);
+	finish(0);
+	await until(() => batches.length === 1 && manager["coldConsumers"].size === 0);
+	assert.ok(batches[0]!.some((event) => event.type === "snapshot"));
+	assert.equal(f.workers.length, 0);
+});
+
+test("last cold viewer cancels queued work and immediate resubscription creates a fresh shared flight", async (t) => {
+	const f = await fixture(t);
+	const manager = await f.open();
+	const { reads, finish } = controlledReads(t, manager);
+	const warnings = t.mock.method(console, "warn", () => {});
+	const first = manager.subscribe(f.id, () => assert.fail("cancelled viewer received history"));
+	const second = manager.subscribe(f.id, () => assert.fail("cancelled viewer received history"));
+	const cancelled = manager["coldLoading"].get(f.id)!;
+	first();
+	assert.equal(reads[0].queued, true);
+	second();
+	assert.equal(reads[0].queued, false);
+	assert.equal(manager["coldLoading"].has(f.id), false);
+	assert.equal(manager["coldSnapshots"].has(f.id), false);
+	assert.equal(manager["coldConsumers"].size, 0);
+	const batches: AgentEvent[][] = [];
+	const off = manager.subscribe(f.id, (events) => batches.push(events));
+	t.after(off);
+	const fresh = manager["coldLoading"].get(f.id)!;
+	assert.notEqual(fresh, cancelled);
+	assert.equal(reads.length, 2);
+	assert.equal(reads[1].queued, true);
+	await assert.rejects(cancelled, { name: "AbortError" });
+	assert.equal(manager["coldLoading"].get(f.id), fresh);
+	finish(1);
+	await until(() => batches.length === 1 && manager["coldReads"].size === 0 && manager["coldConsumers"].size === 0);
+	assert.equal(manager["coldSnapshots"].get(f.id)?.promise, fresh, "old settlement cannot evict the new read");
+	assert.equal(warnings.mock.callCount(), 0, "expected queued cancellation is silent");
+	assert.equal(f.workers.length, 0);
+});
+
+test("departing cold viewers leave started reads cacheable and a new viewer shares the active flight", async (t) => {
+	const f = await fixture(t);
+	const manager = await f.open();
+	const { reads, finish } = controlledReads(t, manager);
+	const first = manager.subscribe(f.id, () => assert.fail("departed viewer received history"));
+	const second = manager.subscribe(f.id, () => assert.fail("departed viewer received history"));
+	const active = manager["coldLoading"].get(f.id)!;
+	assert.equal(reads.length, 1);
+	reads[0].queued = false;
+	first();
+	second();
+	assert.equal(manager["coldLoading"].get(f.id), active, "started reads are not cancelled");
+	assert.equal(manager["coldConsumers"].size, 0);
+	const batches: AgentEvent[][] = [];
+	const off = manager.subscribe(f.id, (events) => batches.push(events));
+	t.after(off);
+	assert.equal(manager["coldLoading"].get(f.id), active);
+	assert.equal(reads.length, 1);
+	finish(0);
+	await until(() => batches.length === 1 && manager["coldConsumers"].size === 0);
+	assert.equal(manager["coldSnapshots"].get(f.id)?.promise, active);
+	assert.equal(f.workers.length, 0);
 });
 
 test("failed, cancelled preparation, update lease and archived guards do not wake cold sessions", async (t) => {

@@ -55,6 +55,12 @@ final class SessionFeed: ObservableObject {
         }
     }
 
+    /// Offline performance fixtures use the production reduction/publication path without a socket.
+    func applyFixtureEvents(_ events: [JSONValue]) {
+        guard client == nil else { return }
+        enqueue(events)
+    }
+
     private func enqueue(_ events: [JSONValue]) {
         pending.append(events)
         guard processing == nil else { return }
@@ -105,6 +111,8 @@ struct ChatView: View {
     @StateObject private var feed: SessionFeed
     @StateObject private var composerOwner: ChatComposerOwner
     @StateObject private var scroll = TranscriptScrollState()
+    @StateObject private var preparedAction = TranscriptPreparedAction()
+    @StateObject private var toolExpansions = TranscriptToolExpansions()
     private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
@@ -117,7 +125,6 @@ struct ChatView: View {
 
     var body: some View {
         let transcript = feed.presentation
-        let rows = transcript.rows
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -125,10 +132,15 @@ struct ChatView: View {
                         ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
                             .frame(maxWidth: .infinity)
                     }
-                    ForEach(rows) { row in
-                        RowView(row: row).equatable()
+                    if transcript.historyRowCount > 0 {
+                        TranscriptHistoryRows(revision: transcript.historyRevision,
+                            rows: transcript.historyRows[...], toolExpansions: toolExpansions).equatable()
                     }
-                    if transcript.working, !transcript.streaming || rows.last.map(isToolRow) == true {
+                    ForEach(transcript.liveRows) { row in
+                        RowView(row: row, toolExpansions: toolExpansions).equatable()
+                    }
+                    if transcript.working, !transcript.streaming ||
+                        (transcript.liveRows.last ?? transcript.historyRows.last).map(isToolRow) == true {
                         WorkingIndicator(retry: transcript.retry)
                     }
                     if let error = session.error, transcript.error == nil {
@@ -149,14 +161,16 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity)
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
-            .environment(\.transcriptContentPrepared, {
-                scroll.contentPrepared { proxy.scrollTo("bottom", anchor: .bottom) }
-            })
+            .environment(\.transcriptContentPrepared, preparedAction.callback)
             .onChange(of: transcript.revision) { _, _ in
                 guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onAppear {
+                let state = scroll
+                preparedAction.action = { state.contentPrepared { proxy.scrollTo("bottom", anchor: .bottom) } }
+                proxy.scrollTo("bottom", anchor: .bottom)
+            }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
@@ -196,7 +210,7 @@ struct ChatView: View {
             }
         }
         .onAppear { feed.start() }
-        .onDisappear { feed.stop(); scroll.cancelPreparedScroll() }
+        .onDisappear { feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil }
     }
 
     private func isToolRow(_ row: ChatRow) -> Bool {
@@ -228,8 +242,37 @@ struct ChatView: View {
     }
 }
 
+/// One equatable layout subtree, rather than diffing the historical ForEach on each token.
+/// Equality uses the processor's key, never the history-sized row collection.
+struct TranscriptHistoryRows: View, Equatable {
+    let revision: UUID
+    let rows: ArraySlice<ChatRow>
+    var toolExpansions: TranscriptToolExpansions? = nil
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.revision == rhs.revision && lhs.rows.count == rhs.rows.count && lhs.toolExpansions === rhs.toolExpansions
+    }
+
+    var body: some View {
+        LazyVStack(alignment: .leading, spacing: 16) {
+            ForEach(rows) { row in RowView(row: row, toolExpansions: toolExpansions).equatable() }
+        }
+    }
+}
+
+/// A stable environment closure prevents unrelated Markdown descendants from being invalidated
+/// merely because ChatView supplies a newly allocated scroll callback on every streamed value.
+@MainActor
+private final class TranscriptPreparedAction: ObservableObject {
+    var action: (() -> Void)?
+    lazy var callback: () -> Void = { [weak self] in self?.action?() }
+}
+
 private struct RowView: View, Equatable {
     let row: ChatRow
+    var toolExpansions: TranscriptToolExpansions? = nil
+
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.row == rhs.row && lhs.toolExpansions === rhs.toolExpansions }
 
     var body: some View {
         switch row {
@@ -240,7 +283,7 @@ private struct RowView: View, Equatable {
         case let .thinking(_, text, streaming):
             ThinkingRow(text: text, streaming: streaming)
         case let .tools(_, items):
-            ToolGroupView(items: items)
+            ToolGroupView(items: items, expansions: toolExpansions)
         case let .artifact(_, reference):
             ArtifactCard(reference: reference)
         case let .error(_, text):

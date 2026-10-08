@@ -45,7 +45,8 @@ private func persistenceDirectory() -> URL {
     }
     form.branches.select("release", for: "project:/tmp/project")
 
-    // Open a fresh store while the first app is still alive. No termination flush is required.
+    // Explicit durability boundary, also used by window/app lifecycle callbacks.
+    app.flushDrafts()
     let restored = AppModel(draftStore: persistenceStore(root))
     let reply = restored.composer(for: "first/with unsafe filename characters")
     #expect(reply.draft == first.draft)
@@ -70,11 +71,14 @@ private func persistenceDirectory() -> URL {
         RemoteBranchList(branches: ["main"], defaultBranch: "main")
     }
     #expect(restored.newSessionForm.branches.selected == nil)
+    restored.flushDrafts()
     #expect(AppModel(draftStore: persistenceStore(root)).newSessionForm.branches.selected == nil)
     reply.draft = ""
     reply.cancelQueueEdit()
+    restored.flushDrafts()
     #expect(try persistenceStore(root).load().chats["first/with unsafe filename characters"] == nil)
     #expect(restored.newSessionForm.completeSubmission(revision: restored.newSessionForm.revision))
+    restored.flushDrafts()
     #expect(AppModel(draftStore: persistenceStore(root)).newSessionForm.message.isEmpty)
     let directory = root.appendingPathComponent("Drafts")
     let permissions = try FileManager.default.attributesOfItem(atPath: directory.path)[.posixPermissions] as? NSNumber
@@ -99,6 +103,7 @@ private func persistenceDirectory() -> URL {
     let unsentURL = try #require(app!.composer(for: "chat").attachments.items.first?.url)
     let submittedURL = try #require(app!.newSessionForm.attachments.items.first?.url)
     try app!.newSessionForm.attachments.retainForHistory()
+    app!.flushDrafts()
     app = nil
     #expect(FileManager.default.fileExists(atPath: unsentURL.path))
     #expect(FileManager.default.fileExists(atPath: submittedURL.path))
@@ -114,6 +119,7 @@ private func persistenceDirectory() -> URL {
     #expect(chat.canSend(changingModel: false))
     chat.attachments.remove(unsent.id)
     restored.newSessionForm.attachments.remove(submitted.id)
+    restored.flushDrafts()
     #expect(!FileManager.default.fileExists(atPath: unsentURL.path))
     #expect(FileManager.default.fileExists(atPath: submittedURL.path))
     let again = AppModel(draftStore: persistenceStore(root))
@@ -132,10 +138,12 @@ private func persistenceDirectory() -> URL {
         let app = AppModel(draftStore: persistenceStore(root))
         #expect(app.sessionActionError?.contains("persist message drafts") == true)
         app.composer(for: "chat").draft = "Keep the new draft in memory"
+        app.flushDrafts()
         #expect(app.composer(for: "chat").draft == "Keep the new draft in memory")
         #expect(try Data(contentsOf: file) == data)
         app.sessionActionError = nil
         app.composer(for: "chat").draft += " without repeatedly alerting"
+        app.flushDrafts()
         #expect(app.sessionActionError == nil)
         #expect(try Data(contentsOf: file) == data)
     }
@@ -162,6 +170,7 @@ private func persistenceDirectory() -> URL {
     #expect(chat.draft == "Keep this text")
     #expect(chat.attachments.items.map(\.url) == [safeURL])
     chat.attachments.remove(try #require(chat.attachments.items.first?.id))
+    app.flushDrafts()
     #expect(FileManager.default.fileExists(atPath: outsideURL.path))
     #expect(AppModel(draftStore: persistenceStore(root)).composer(for: "chat").draft == "Keep this text")
 }
@@ -172,6 +181,7 @@ private func persistenceDirectory() -> URL {
     let app = AppModel(draftStore: persistenceStore(root))
     app.newSessionForm.message = "Earlier draft"
     app.newSession(in: "pilot", message: "Debug this session")
+    app.flushDrafts()
     let restored = AppModel(draftStore: persistenceStore(root))
     #expect(restored.draftProjectId == "pilot")
     #expect(restored.draftMessage == "Debug this session")
@@ -179,6 +189,7 @@ private func persistenceDirectory() -> URL {
     #expect(restored.newSessionForm.message == "Debug this session")
     #expect(restored.draftMessage == nil)
     restored.newSessionForm.message += " because the tool failed"
+    restored.flushDrafts()
     let again = AppModel(draftStore: persistenceStore(root))
     #expect(again.draftMessage == nil)
     #expect(again.newSessionForm.message == "Debug this session because the tool failed")
@@ -196,11 +207,13 @@ private func persistenceDirectory() -> URL {
     var app: AppModel? = AppModel(draftStore: persistenceStore(root))
     try Data("Not a directory".utf8).write(to: root.appendingPathComponent("Drafts"))
     app!.composer(for: "chat").draft = "Keep typing even if saving fails"
+    app!.flushDrafts()
     #expect(app!.composer(for: "chat").draft == "Keep typing even if saving fails")
     #expect(app!.sessionActionError != nil)
     board.setData(try persistencePNG(), forType: .png)
     #expect((app!.composer(for: "chat").attachments.paste(from: board, directory: root.appendingPathComponent("Attachments"))) == true)
     let url = try #require(app!.composer(for: "chat").attachments.items.first?.url)
+    app!.flushDrafts()
     app = nil
     #expect(!FileManager.default.fileExists(atPath: url.path))
 }
@@ -227,8 +240,10 @@ private func restoreDraftWrites(_ root: URL) throws {
     #expect((app!.composer(for: "chat").attachments.paste(from: board, directory: root.appendingPathComponent("Attachments"))) == true)
     let id = try #require(app!.composer(for: "chat").attachments.items.first?.id)
     let url = try #require(app!.composer(for: "chat").attachments.items.first?.url)
+    app!.flushDrafts()
     try blockDraftWrites(root)
     app!.composer(for: "chat").attachments.remove(id)
+    app!.flushDrafts()
     #expect(app!.sessionActionError != nil)
     #expect(FileManager.default.fileExists(atPath: url.path))
     app = nil
@@ -236,6 +251,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     let restored = AppModel(draftStore: persistenceStore(root))
     #expect(restored.composer(for: "chat").attachments.items.map(\.url) == [url])
     restored.composer(for: "chat").attachments.remove(id)
+    restored.flushDrafts()
     #expect(!FileManager.default.fileExists(atPath: url.path))
 }
 
@@ -250,9 +266,11 @@ private func restoreDraftWrites(_ root: URL) throws {
     var app: AppModel? = AppModel(draftStore: persistenceStore(root))
     #expect((app!.composer(for: "chat").attachments.paste(from: board, directory: root.appendingPathComponent("Attachments"))) == true)
     let url = try #require(app!.composer(for: "chat").attachments.items.first?.url)
+    app!.flushDrafts()
     try blockDraftWrites(root)
     try app!.composer(for: "chat").attachments.retainForHistory()
     app!.composer(for: "chat").attachments = ImageAttachments()
+    app!.flushDrafts()
     app = nil
     try restoreDraftWrites(root)
     #expect(try persistenceStore(root).load().chats["chat"]?.attachments.first?.submitted == false)
@@ -260,6 +278,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     let image = try #require(restored.composer(for: "chat").attachments.items.first)
     #expect(image.submitted)
     restored.composer(for: "chat").attachments.remove(image.id)
+    restored.flushDrafts()
     #expect(FileManager.default.fileExists(atPath: url.path))
     #expect(FileManager.default.fileExists(atPath: url.appendingPathExtension("submitted").path))
 }
@@ -280,6 +299,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     #expect(!image.submitted)
     #expect(app.composer(for: "chat").attachments.items.count == 1)
     #expect(FileManager.default.fileExists(atPath: image.url.path))
+    app.flushDrafts()
 }
 
 @Test @MainActor func restoredBranchWaitsForProjectDiscoveryAndRemembersTheEffectiveDefaultProject() throws {
@@ -306,9 +326,11 @@ private func restoreDraftWrites(_ root: URL) throws {
     hosting.layoutSubtreeIfNeeded()
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(app.draftProjectId == "project")
+    app.flushDrafts()
     #expect(try persistenceStore(root).load().newTask.projectId == "project")
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [], sessions: [])
     RunLoop.main.run(until: Date().addingTimeInterval(0.1))
     #expect(app.newSessionForm.branches.selected == nil)
+    app.flushDrafts()
 }

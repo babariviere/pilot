@@ -48,6 +48,8 @@ struct MainWindow: View {
             NSApp.setActivationPolicy(.regular)
         }
         .onDisappear {
+            // SwiftUI owns the window lifecycle; scene IDs need not be NSWindow identifiers.
+            model.flushDrafts()
             // The window is gone; stay available from the menu bar only.
             NSApp.setActivationPolicy(.accessory)
         }
@@ -170,7 +172,7 @@ struct Inspector: View {
                 }
                 // Mounted once opened, so browsing other tabs never starts a shell.
                 if !session.isAsk && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
-                    TerminalPane(store: model.terminals, session: session)
+                    TerminalPane(store: model.terminals, session: session, isVisible: model.inspectorTab == .terminal)
                         .opacity(model.inspectorTab == .terminal ? 1 : 0)
                         .allowsHitTesting(model.inspectorTab == .terminal)
                         .accessibilityHidden(model.inspectorTab != .terminal)

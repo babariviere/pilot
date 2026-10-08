@@ -1,12 +1,17 @@
 /** Keep SQLite scans and snapshot construction off the daemon's WebSocket event loop. */
 import { Worker } from "node:worker_threads";
 import { type PersistedSessionView, snapshotWorkerEntry } from "@pilot/kernel";
+import { ServiceUnavailable } from "./errors.ts";
+
+const MAX_QUEUED_READS = 32;
 
 export type SizedSessionView = PersistedSessionView & { bytes: number };
 type Job = {
 	directory: string;
 	cwd: string;
 	includeTodos: boolean;
+	promise?: Promise<PersistedSessionView>;
+	unlisten?(): void;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -16,17 +21,46 @@ export class ColdViewReader {
 	private readonly active = new Set<Worker>();
 	private closed = false;
 
-	read(directory: string, cwd: string, includeTodos = true): Promise<SizedSessionView> {
+	/** Abort only queued work. Once started, a read can still populate a shared snapshot cache. */
+	read(directory: string, cwd: string, includeTodos = true, signal?: AbortSignal): Promise<SizedSessionView> {
 		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
-		return new Promise((resolve, reject) => {
-			this.waiting.push({ directory, cwd, includeTodos, resolve, reject });
+		if (signal?.aborted) return Promise.reject(new DOMException("Session snapshot read cancelled", "AbortError"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
+		let job!: Job;
+		const promise = new Promise<SizedSessionView>((resolve, reject) => {
+			job = { directory, cwd, includeTodos, resolve, reject };
+			if (signal) {
+				const cancel = () => this.cancelQueued(job);
+				job.unlisten = () => signal.removeEventListener("abort", cancel);
+				signal.addEventListener("abort", cancel, { once: true });
+			}
+			this.waiting.push(job);
 			this.drain();
 		});
+		job.promise = promise;
+		return promise;
+	}
+
+	/** Return whether the shared read was still queued and has now been cancelled. */
+	cancel(promise: Promise<PersistedSessionView>): boolean {
+		const job = this.waiting.find((job) => job.promise === promise);
+		return job ? this.cancelQueued(job) : false;
+	}
+
+	private cancelQueued(job: Job): boolean {
+		const index = this.waiting.indexOf(job);
+		if (index < 0) return false;
+		this.waiting.splice(index, 1);
+		job.unlisten?.();
+		job.reject(new DOMException("Session snapshot read cancelled", "AbortError"));
+		return true;
 	}
 
 	private drain(): void {
 		while (!this.closed && this.active.size < 2 && this.waiting.length) {
 			const job = this.waiting.shift()!;
+			job.unlisten?.();
 			let worker: Worker;
 			try {
 				worker = new Worker(snapshotWorkerEntry, {
@@ -64,7 +98,10 @@ export class ColdViewReader {
 
 	async close(): Promise<void> {
 		this.closed = true;
-		for (const job of this.waiting.splice(0)) job.reject(new Error("Session reader is closed"));
+		for (const job of this.waiting.splice(0)) {
+			job.unlisten?.();
+			job.reject(new Error("Session reader is closed"));
+		}
 		await Promise.all([...this.active].map((worker) => worker.terminate()));
 	}
 }

@@ -1,7 +1,8 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Bracket access tests private supervision seams.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
+import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -18,6 +19,8 @@ import {
 	CommandRejected,
 	type SessionFactories,
 	SessionManager,
+	Worker as KernelWorker,
+	WorkerUnavailable,
 	type SessionManagerOptions,
 	type SessionWorker,
 } from "./sessions.ts";
@@ -25,6 +28,131 @@ import type { TerminalManager } from "./terminals.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
+
+class IpcProcess extends EventEmitter {
+	connected = true;
+	exitCode: number | null = null;
+	signalCode: NodeJS.Signals | null = null;
+	readonly sent: KernelCommand[] = [];
+	readonly killed: NodeJS.Signals[] = [];
+	send(command: KernelCommand, callback?: (error: Error | null) => void): boolean {
+		this.sent.push(command);
+		callback?.(null);
+		return true;
+	}
+	kill(signal: NodeJS.Signals): boolean {
+		this.killed.push(signal);
+		this.connected = false;
+		this.signalCode = signal;
+		this.emit("exit", null, signal);
+		return true;
+	}
+}
+
+function supervisedWorker(t: TestContext, commandTimeoutMs = 1_000) {
+	const child = new IpcProcess();
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const worker = new KernelWorker(
+		{ sessionId: "supervision", cwd: "/unused", storageDir: "/unused" },
+		() => {},
+		() => {},
+		undefined,
+		{ child: child as unknown as ChildProcess, startupTimeoutMs: 1_000, commandTimeoutMs },
+	);
+	t.after(() => child.emit("exit", 0, null));
+	const ready = () => {
+		child.emit("message", { type: "ready", model: "test/model", working: false, usage: {} });
+		const watch = child.sent.findLast((command) => command.type === "watch");
+		assert.ok(watch?.type === "watch");
+		child.emit("message", { type: "events", watchId: watch.watchId, events: [snapshot] });
+	};
+	return { child, worker, ready };
+}
+
+test("startup deadline terminates a hung worker and rejects readiness as uncertain transport", async (t) => {
+	const { child, worker } = supervisedWorker(t);
+	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
+	t.mock.timers.tick(1_000);
+	await rejected;
+	assert.deepEqual(child.killed, ["SIGTERM"]);
+	assert.equal(worker.state, "failed");
+	assert.equal(worker["killTimer"], undefined, "confirmed exit cancels the forced-retirement timer");
+	t.mock.timers.tick(10_000);
+	assert.deepEqual(child.killed, ["SIGTERM"], "an exited process must never receive the fallback signal");
+	child.emit("message", { type: "ready", model: "late/model", working: false, usage: {} });
+	assert.equal(worker.state, "failed", "late acknowledgement cannot revive a terminated worker");
+});
+
+test("command acknowledgement deadline rejects all uncertain admissions and terminates the worker", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t);
+	ready();
+	await worker.ready;
+	const input = worker.request({ type: "input", requestId: "stable-id", content: "work", mode: "followUp" });
+	const abort = worker.request({ type: "abort", requestId: "abort-id" });
+	const rejected = Promise.all([assert.rejects(input, WorkerUnavailable), assert.rejects(abort, WorkerUnavailable)]);
+	t.mock.timers.tick(1_000);
+	await rejected;
+	assert.deepEqual(child.killed, ["SIGTERM"]);
+	assert.equal(worker["pending"].size, 0);
+	assert.equal(child.sent.find((command) => command.type === "input")?.requestId, "stable-id");
+});
+
+test("inspection deadline protects the worker without killing it or clearing unrelated admissions", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t, 60_000);
+	ready();
+	await worker.ready;
+	const input = worker.request({ type: "input", requestId: "unrelated", content: "work", mode: "followUp" });
+	const children = worker.hasChildren();
+	t.mock.timers.tick(10_000);
+	assert.equal(await children, true);
+	assert.deepEqual(child.killed, []);
+	assert.equal(worker["pending"].has("unrelated"), true);
+	assert.equal(worker["pending"].size, 1);
+	child.emit("message", { type: "accepted", requestId: "unrelated" });
+	await input;
+	assert.equal(worker["pending"].size, 0);
+});
+
+test("transport retirement sends SIGTERM first, escalates once after eight seconds, and waits for confirmed exit", async (t) => {
+	const { child, worker } = supervisedWorker(t);
+	child.kill = (signal) => {
+		child.killed.push(signal);
+		return true;
+	};
+	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
+	t.mock.timers.tick(1_000);
+	await rejected;
+	assert.deepEqual(child.killed, ["SIGTERM"]);
+	let closed = false;
+	const closing = worker.close().then(() => {
+		closed = true;
+	});
+	t.mock.timers.tick(7_999);
+	assert.deepEqual(child.killed, ["SIGTERM"]);
+	t.mock.timers.tick(1);
+	assert.deepEqual(child.killed, ["SIGTERM", "SIGKILL"]);
+	await Promise.resolve();
+	assert.equal(closed, false, "sending SIGKILL is not proof that the writer lease has been released");
+	child.emit("exit", null, "SIGKILL");
+	await closing;
+	assert.equal(worker["killTimer"], undefined);
+	t.mock.timers.tick(10_000);
+	assert.deepEqual(child.killed, ["SIGTERM", "SIGKILL"], "retirement has only one shared fallback timer");
+});
+
+test("acknowledged commands cancel their deadline and idle-child inspection does not reset activity", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t);
+	ready();
+	const inspection = worker.hasChildren();
+	const command = child.sent.at(-1)!;
+	assert.equal(command.type, "inspectChildren");
+	assert.ok("requestId" in command);
+	child.emit("message", { type: "children", requestId: command.requestId, hasChildren: false });
+	assert.equal(await inspection, false);
+	t.mock.timers.tick(5_000);
+	assert.deepEqual(child.killed, []);
+	assert.equal(worker.busy, false);
+});
 function deferred() {
 	let resolve!: () => void;
 	let reject!: (error: Error) => void;
@@ -33,6 +161,91 @@ function deferred() {
 		reject = no;
 	});
 	return { promise, resolve, reject };
+}
+
+for (const phase of ["startup", "ack"] as const) {
+	test(`${phase} deadline retains durable IDs and demand waits for exit without duplicating accepted work`, async (t) => {
+		const f = await fixture(t);
+		t.mock.timers.enable({ apis: ["setTimeout"] });
+		let attempts = 0;
+		let executions = 0;
+		const committed = new Set<string>();
+		const blocked = deferred();
+		let firstChild!: IpcProcess;
+		const sessions = await f.manager(
+			{
+				worker: (spec, onPacket, onExit) => {
+					const attempt = ++attempts;
+					const child = new IpcProcess();
+					if (attempt === 1) {
+						firstChild = child;
+						// Model the gap between SIGTERM and OS-confirmed exit/storage lease release.
+						child.kill = (signal) => {
+							child.killed.push(signal);
+							return true;
+						};
+					}
+					const send = child.send.bind(child);
+					child.send = (command, callback) => {
+						const result = send(command, callback);
+						queueMicrotask(() => {
+							if (command.type === "start") {
+								if (attempt === 1 && phase === "startup") {
+									blocked.resolve();
+									return;
+								}
+								child.emit("message", { type: "ready", model: "test/model", working: false, usage: {} });
+							} else if (command.type === "watch") {
+								child.emit("message", { type: "events", watchId: command.watchId, events: [snapshot] });
+							} else if (command.type === "input") {
+								if (!committed.has(command.requestId)) {
+									committed.add(command.requestId);
+									executions++;
+								}
+								if (attempt === 1) {
+									blocked.resolve();
+									return;
+								}
+								child.emit("message", { type: "accepted", requestId: command.requestId });
+							} else if (command.type === "shutdown") child.emit("exit", 0, null);
+						});
+						return result;
+					};
+					return new KernelWorker(spec, onPacket, onExit, undefined, {
+						child: child as unknown as ChildProcess,
+						startupTimeoutMs: 1_000,
+						commandTimeoutMs: 1_000,
+					});
+				},
+			},
+			{ idleParkMs: Number.POSITIVE_INFINITY },
+		);
+		const created = await sessions.spawn({ cwd: f.source, message: "durable work" });
+		await blocked.promise;
+		const drain = sessions["starting"].get(created.id)!;
+		const original = (await f.stored(created.id)).pending[0]!;
+		t.mock.timers.tick(1_000);
+		await drain;
+		assert.deepEqual(firstChild.killed, ["SIGTERM"]);
+		const timedOut = await f.stored(created.id);
+		assert.equal(timedOut.failure, undefined, "transport deadlines must not permanently disable recovery");
+		assert.deepEqual(timedOut.pending, [original], "uncertain admission preserves ID and payload");
+		assert.match(timedOut.inputError!, /timed out/);
+		const resuming = sessions.send(
+			created.id,
+			"retry payload must not replace original",
+			"followUp",
+			original.requestId,
+		);
+		await Promise.resolve();
+		assert.equal(attempts, 1, "a replacement cannot open while the old process still owns storage");
+		firstChild.connected = false;
+		firstChild.emit("exit", null, "SIGTERM");
+		await resuming;
+		assert.equal(attempts, 2);
+		assert.equal(executions, 1, "a lost acknowledgement retries the durable ID, not a new input");
+		assert.deepEqual((await f.stored(created.id)).pending, []);
+	});
 }
 
 async function waitFor(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -918,6 +1131,76 @@ test("runtime worker exit publishes parked rather than the exited worker's stale
 	await f.workers[0]!.close();
 	assert.equal(sessions.get(created.id)?.state, "parked");
 	assert.equal(changes.at(-1)?.state, "parked");
+});
+
+for (const telemetry of ["usage", "artifacts.changed"] as const) {
+	test(`${telemetry} telemetry does not delay parking an idle unwatched worker`, async (t) => {
+		const f = await fixture(t);
+		const idleParkMs = 60_000;
+		let coldReads = 0;
+		const sessions = await f.manager(
+			{
+				snapshot: async () => {
+					coldReads++;
+					return { events: [snapshot] };
+				},
+			},
+			{ idleParkMs },
+		);
+		const created = await sessions.spawn({ cwd: f.source, message: "work" });
+		await until(() => sessions.get(created.id)?.state === "working");
+		await sessions.stop(created.id);
+		const worker = f.workers[0]!;
+		const lastUse = sessions["lastUse"].get(created.id)!;
+		let now = lastUse + idleParkMs - 1;
+		t.mock.method(Date, "now", () => now);
+		if (telemetry === "usage") worker.reportUsage({ subscription: { fetchedAt: now, windows: [] } });
+		else sessions["onPacket"](sessions["metas"].get(created.id)!, worker, { type: telemetry });
+		assert.equal(sessions["lastUse"].get(created.id), lastUse, "telemetry is not execution activity");
+		await sessions["parkIdleWorkers"]();
+		assert.equal(worker.closed, false, "the original inactivity deadline still applies");
+		now += 2;
+		if (telemetry === "usage") worker.reportUsage({ subscription: { fetchedAt: now, windows: [] } });
+		else sessions["onPacket"](sessions["metas"].get(created.id)!, worker, { type: telemetry });
+		await sessions["parkIdleWorkers"]();
+		await sessions["unparked"](created.id);
+		assert.equal(worker.closed, true);
+		assert.equal(sessions.get(created.id)?.state, "parked");
+		assert.equal(coldReads, 0, "parking without viewers never reconstructs the transcript");
+		const events: AgentEvent[][] = [];
+		const off = sessions.subscribe(created.id, (batch) => events.push(batch));
+		await until(() => events.length === 1);
+		assert.equal(coldReads, 1, "a viewer loads the parked transcript on demand");
+		assert.deepEqual(events[0], [snapshot]);
+		assert.equal(f.workers.length, 1, "viewing parked history does not reopen the kernel");
+		off();
+	});
+}
+
+test("execution packets reset the parking deadline and working workers remain protected", async (t) => {
+	const f = await fixture(t);
+	const idleParkMs = 60_000;
+	const sessions = await f.manager({ snapshot: async () => ({ events: [snapshot] }) }, { idleParkMs });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	const worker = f.workers[0]!;
+	let now = sessions["lastUse"].get(created.id)! + idleParkMs + 1;
+	t.mock.method(Date, "now", () => now);
+	await worker.request({ type: "input", requestId: "active", content: "work", mode: "followUp" });
+	assert.equal(sessions["lastUse"].get(created.id), now);
+	now += idleParkMs + 1;
+	await sessions["parkIdleWorkers"]();
+	assert.equal(worker.closed, false, "working kernels never park even past the deadline");
+	await worker.request({ type: "abort", requestId: "idle" });
+	assert.equal(sessions["lastUse"].get(created.id), now);
+	now += idleParkMs - 1;
+	await sessions["parkIdleWorkers"]();
+	assert.equal(worker.closed, false, "execution starts a fresh inactivity window");
+	now += 2;
+	await sessions["parkIdleWorkers"]();
+	await sessions["unparked"](created.id);
+	assert.equal(worker.closed, true);
 });
 
 test("idle unwatched kernels without subprocesses park, and reopen only after releasing storage", async (t) => {

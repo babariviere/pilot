@@ -10,6 +10,10 @@ import SwiftUI
 enum Snapshot {
     static func runIfRequested() -> Bool {
         let arguments = CommandLine.arguments
+        if arguments.contains("--performance-check") {
+            Task { await PerformanceCheck.run() }
+            return true
+        }
         if arguments.contains("--terminal-resource-test") {
             TerminalResourceTest.run()
             return true

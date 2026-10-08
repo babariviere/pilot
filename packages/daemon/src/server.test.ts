@@ -6,13 +6,57 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { AgentEvent, ServerMessage } from "@pilot/protocol";
+import type { AgentEvent, ServerMessage, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { RepositoryChanges } from "./changes.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+
+test("repository invalidation ignores title and quota updates, but preserves work and workspace refreshes", (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const initial: SessionSummary = {
+		id: "one",
+		cwd: "/work",
+		title: "old",
+		state: "working",
+		createdAt: 1,
+		updatedAt: 2,
+	};
+	t.mock.method(sessions, "list", () => [initial]);
+	let updated!: Parameters<SessionManager["onChange"]>[0];
+	t.mock.method(sessions, "onChange", (listener: typeof updated) => {
+		updated = listener;
+		return () => {};
+	});
+	const invalidated: string[] = [];
+	t.mock.method(RepositoryChanges.prototype, "invalidate", (cwd: string) => invalidated.push(cwd));
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		new TerminalManager(),
+	);
+	t.after(() => server.close());
+	updated({ ...initial, title: "generated" });
+	updated({ ...initial, usage: { subscription: { fetchedAt: 3, windows: [] } } });
+	updated({ ...initial, model: "other/model", thinking: "high" });
+	assert.deepEqual(invalidated, [], "metadata-only updates keep repository cache hits, even during work");
+	const working = { ...initial, updatedAt: 4 };
+	updated(working);
+	updated({ ...working, title: "new title" });
+	assert.deepEqual(invalidated, ["/work"], "new work invalidates once");
+	const completed = { ...working, state: "idle" as const, outcome: "done" as const, outcomeAt: 5 };
+	updated(completed);
+	updated({ ...completed, usage: { subscription: { fetchedAt: 6, windows: [] } } });
+	assert.deepEqual(invalidated, ["/work", "/work"], "completion refreshes repository changes");
+	updated({ ...completed, cwd: "/new-work" });
+	assert.deepEqual(invalidated, ["/work", "/work", "/work", "/new-work"]);
+});
 
 test("project branches GET returns live origin heads/default, sensible empty lists and clear remote errors", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-server-branches-"));

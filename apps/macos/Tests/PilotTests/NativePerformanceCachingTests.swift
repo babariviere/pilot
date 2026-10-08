@@ -143,6 +143,33 @@ import Testing
     #expect(!feed.isSubscribed)
 }
 
+@Test @MainActor func sessionPresentationCacheEvictsPreparedDiffStorage() async throws {
+    let patch = "*** Begin Patch\n*** Add File: many-lines.txt\n" + String(repeating: "+x\n", count: 2000)
+        + "*** End Patch\n"
+    let processor = TranscriptProcessor()
+    let presentation = try await processor.apply([.object([
+        "type": .string("snapshot"),
+        "entries": .array([.object([
+            "id": .number(1), "kind": .string("pi.assistant"),
+            "model": .array([.object([
+                "role": .string("assistant"), "content": .array([.object([
+                    "type": .string("toolCall"), "id": .string("patch"), "name": .string("applyPatch"),
+                    "arguments": .object(["patch": .string(patch)]),
+                ])]),
+            ])]),
+        ])]),
+    ])])
+    // The source alone fits easily. Prepared short lines have substantial per-line storage.
+    let budget = patch.utf8.count * 4 + 4096
+    #expect(presentation.cachedByteCount > budget)
+    let client = PilotClient()
+    let cache = SessionFeedCache(byteLimit: budget)
+    let feed = SessionFeed(sessionId: "diff", client: client, initialPresentation: presentation)
+    cache.retain(feed, sessionId: "diff")
+    #expect(!cache.contains("diff"))
+    #expect(cache.count == 0)
+}
+
 @Test func preparedMarkdownPreservesInlineTextAndCodeVerbatim() async throws {
     let renderer = MarkdownRenderer(byteLimit: 1024, countLimit: 2)
     let source = "# Heading\n\n**bold** text\n\n- one\n- two\n\n```js\nconst answer = 42;\n```"
