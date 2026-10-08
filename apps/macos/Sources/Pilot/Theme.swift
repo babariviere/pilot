@@ -163,7 +163,6 @@ extension SessionStatus {
         switch self {
         case .working: nil
         case .done: "checkmark"
-        case .needsInput: "hand.raised.fill"
         case .failed: "exclamationmark.triangle.fill"
         case .stopped: "stop.circle.fill"
         case .idle: "moon.zzz.fill"
@@ -174,7 +173,6 @@ extension SessionStatus {
         switch self {
         case .working: Theme.foreground
         case .done: Theme.success
-        case .needsInput: Theme.warning
         case .failed: Theme.destructive
         default: Theme.mutedForeground
         }

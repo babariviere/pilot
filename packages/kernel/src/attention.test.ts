@@ -16,14 +16,14 @@ import {
 	type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { AttentionDoc, classifyCompletion, reconcileCompletion, reportStatus, withAttention } from "./attention.ts";
+import { AttentionDoc, classifyCompletion, reconcileCompletion, normalizeCompletion } from "./attention.ts";
 
 async function fixture(storage = new MemoryStorage()) {
 	const faux = fauxProvider({ tokensPerSecond: 0 });
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const registry = createRegistry();
-	registry.install(withAttention({ name: "native" }));
+	registry.install({ name: "native" });
 	const harness = await Harness.open(storage, { models, registry, settings: { retry: { maxRetries: 0 } } }, context);
 	const model = faux.getModel();
 	const conversation = await harness.root(context, {
@@ -46,63 +46,61 @@ test("an ordinary final response is done, including an optional question", async
 	}
 });
 
-test("explicit blocking signal is needs_input, a new run does not inherit it", async () => {
+test("questions settle automatically, and a reply creates a new completion version", async () => {
 	const f = await fixture();
 	try {
 		f.faux.setResponses([
-			fauxAssistantMessage(
-				fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Choose which database to use" }),
-				{ stopReason: "toolUse" },
-			),
 			fauxAssistantMessage("Which database should I use?"),
 			fauxAssistantMessage("Implemented using SQLite."),
 		]);
 		const first = await f.conversation.submit({ type: "input", content: "implement storage" }, context);
 		await first.wait(context);
-		const blocked = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
-		assert.equal(blocked?.outcome, "needs_input");
-		assert.equal(blocked?.outcomeReason, "Choose which database to use");
+		// Older persisted signals are ignored even when they match the settled input.
+		await f.conversation.commit(async (tx) => {
+			Object.assign(await tx.doc(AttentionDoc, f.conversation.id), {
+				signal: { input: first.id, outcome: "needs_input", reason: "Choose a database" },
+			});
+		}, context);
+		const question = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
+		assert.equal(question?.outcome, "done");
+		assert.equal(question?.outcomeReason, undefined);
+		assert.equal((await f.harness.snapshot(LiveDoc, f.conversation.id, context))?.run, undefined);
+		assert.equal((await f.harness.inspect(context)).tasks.length, 0);
 		const reply = await f.conversation.submit({ type: "input", content: "SQLite" }, context);
 		await reply.wait(context);
 		const done = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
 		assert.equal(done?.outcome, "done");
-		assert.ok(done!.outcomeAt > blocked!.outcomeAt);
+		assert.ok(done!.outcomeAt > question!.outcomeAt);
 	} finally {
 		await f.harness.close(context);
 	}
 });
 
-test("a design proposal awaiting implementation approval remains needs_input", async () => {
+test("legacy needs-input completions normalize without changing their version", () => {
+	assert.deepEqual(
+		normalizeCompletion({ input: 1, entry: 2, outcome: "needs_input", outcomeAt: 42, outcomeReason: "Approve?" }),
+		{ input: 1, entry: 2, outcome: "done", outcomeAt: 42 },
+	);
+});
+
+test("persisted legacy completions normalize on reconciliation", async () => {
 	const f = await fixture();
 	try {
-		f.faux.setResponses([
-			fauxAssistantMessage(
-				fauxToolCall(reportStatus.name, {
-					status: "needs_input",
-					reason: "Awaiting approval of the status icon design",
-				}),
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage(
-				"I suggest a warning triangle, sleeping moon, checkmark and raised hand. Shall I implement it?",
-			),
-			fauxAssistantMessage(
-				fauxToolCall(reportStatus.name, { status: "done", reason: "Implemented and verified the approved icons" }),
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage("Implemented the icons. Tests pass."),
-		]);
-		await (
-			await f.conversation.submit({ type: "input", content: "Can we replace status dots with icons?" }, context)
-		).wait(context);
-		const proposal = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
-		assert.equal(proposal?.outcome, "needs_input");
-		assert.equal(proposal?.outcomeReason, "Awaiting approval of the status icon design");
-		await (await f.conversation.submit({ type: "input", content: "Yes, implement it" }, context)).wait(context);
-		const implemented = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
-		assert.equal(implemented?.outcome, "done");
-		assert.equal(implemented?.outcomeReason, "Implemented and verified the approved icons");
-		assert.ok(implemented!.outcomeAt > proposal!.outcomeAt);
+		await f.conversation.commit(async (tx) => {
+			(await tx.doc(AttentionDoc, f.conversation.id)).completion = {
+				input: 1,
+				entry: 2,
+				outcome: "needs_input",
+				outcomeAt: 42,
+				outcomeReason: "Approve?",
+			};
+		}, context);
+		assert.deepEqual(await reconcileCompletion(f.storage, f.harness, f.conversation, context), {
+			input: 1,
+			entry: 2,
+			outcome: "done",
+			outcomeAt: 42,
+		});
 	} finally {
 		await f.harness.close(context);
 	}
@@ -122,14 +120,13 @@ test("failed generations are not completed successfully", async () => {
 	}
 });
 
-test("stops and errors override earlier needs_input signals", () => {
-	const signal = { input: 1, outcome: "needs_input", reason: "Please approve" } as const;
+test("stops and errors are classified automatically", () => {
 	const record = { id: 1, type: "input", status: "unanswered", reason: "aborted" } as SubmissionRecord;
-	assert.deepEqual(classifyCompletion(record, signal), { outcome: "stopped" });
-	assert.deepEqual(
-		classifyCompletion({ ...record, reason: "model_error", detail: "Offline" } as SubmissionRecord, signal),
-		{ outcome: "failed", outcomeReason: "Offline" },
-	);
+	assert.deepEqual(classifyCompletion(record), { outcome: "stopped" });
+	assert.deepEqual(classifyCompletion({ ...record, reason: "model_error", detail: "Offline" } as SubmissionRecord), {
+		outcome: "failed",
+		outcomeReason: "Offline",
+	});
 });
 
 test("recovery after run settles but before publication, and outcome version survives reopen", async () => {
@@ -139,7 +136,7 @@ test("recovery after run settles but before publication, and outcome version sur
 	const models = createModels();
 	models.setProvider(faux.provider);
 	const registry = createRegistry();
-	registry.install(withAttention({ name: "native" }));
+	registry.install({ name: "native" });
 	const open = async () => {
 		const storage = await openNodeSqliteStorage(file);
 		const harness = await Harness.open(storage, { models, registry }, context);
@@ -151,62 +148,19 @@ test("recovery after run settles but before publication, and outcome version sur
 	};
 	try {
 		let f = await open();
-		faux.setResponses([
-			fauxAssistantMessage(fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Need credentials" }), {
-				stopReason: "toolUse",
-			}),
-			fauxAssistantMessage("Please provide credentials."),
-		]);
+		faux.setResponses([fauxAssistantMessage("Please provide credentials.")]);
 		await (await f.conversation.submit({ type: "input", content: "connect" }, context)).wait(context);
 		assert.equal((await f.harness.snapshot(AttentionDoc, f.conversation.id, context))?.completion, undefined);
 		await f.harness.close(context);
 		f = await open();
 		const recovered = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
-		assert.equal(recovered?.outcome, "needs_input");
+		assert.equal(recovered?.outcome, "done");
 		await f.harness.close(context);
 		f = await open();
 		assert.deepEqual(await reconcileCompletion(f.storage, f.harness, f.conversation, context), recovered);
 		await f.harness.close(context);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
-	}
-});
-
-test("reporting records state without keeping a live run or a blocked tool", async () => {
-	const f = await fixture();
-	try {
-		f.faux.setResponses([
-			fauxAssistantMessage(fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Need approval" }), {
-				stopReason: "toolUse",
-			}),
-			fauxAssistantMessage("May I proceed?"),
-		]);
-		await (await f.conversation.submit({ type: "input", content: "do it" }, context)).wait(context);
-		assert.equal((await f.harness.snapshot(LiveDoc, f.conversation.id, context))?.run, undefined);
-		assert.equal((await f.harness.inspect(context)).tasks.length, 0);
-		assert.equal(reportStatus.replay, "safe");
-	} finally {
-		await f.harness.close(context);
-	}
-});
-
-test("a later explicit done report supersedes a blocking signal in the same run", async () => {
-	const f = await fixture();
-	try {
-		f.faux.setResponses([
-			fauxAssistantMessage(fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Need a directory" }), {
-				stopReason: "toolUse",
-			}),
-			fauxAssistantMessage(
-				fauxToolCall(reportStatus.name, { status: "done", reason: "Found the configured directory" }),
-				{ stopReason: "toolUse" },
-			),
-			fauxAssistantMessage("Done."),
-		]);
-		await (await f.conversation.submit({ type: "input", content: "find the directory" }, context)).wait(context);
-		assert.equal((await reconcileCompletion(f.storage, f.harness, f.conversation, context))?.outcome, "done");
-	} finally {
-		await f.harness.close(context);
 	}
 });
 
@@ -229,12 +183,10 @@ test("recovery orders completed work by placement, not admission, and ignores wi
 			tx.placeSubmission(steer.id, entry.id);
 			const answer = await tx.appendEntry(f.conversation.id, { kind: "test.answer" });
 			tx.settleSubmission(steer.id, { status: "done", answer: answer.id });
-			const attention = await tx.doc(AttentionDoc, f.conversation.id);
-			attention.signal = { input: steer.id, outcome: "needs_input", reason: "Need an answer" };
 			return { followUp, steer };
 		}, context);
-		const blocked = await reconcileCompletion(f.storage, f.harness, f.conversation, context, [steer.id]);
-		assert.equal(blocked?.outcome, "needs_input");
+		const firstCompletion = await reconcileCompletion(f.storage, f.harness, f.conversation, context, [steer.id]);
+		assert.equal(firstCompletion?.outcome, "done");
 		await f.conversation.commit(async (tx) => {
 			const entry = await tx.appendEntry(f.conversation.id, { kind: "test.input" });
 			tx.placeSubmission(followUp.id, entry.id);
@@ -249,57 +201,66 @@ test("recovery orders completed work by placement, not admission, and ignores wi
 		}, context);
 		const completed = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
 		assert.equal(completed?.outcome, "done");
-		assert.ok(completed!.outcomeAt > blocked!.outcomeAt);
+		assert.ok(completed!.outcomeAt > firstCompletion!.outcomeAt);
 	} finally {
 		await f.harness.close(context);
 	}
 });
 
-test("blocking report follows placement order when an older queued steer joins a later follow-up", async () => {
-	const f = await fixture();
-	const probe = defineTool({
-		name: "probe",
-		description: "A no-op test tool",
+test("an old session with status-tool history reopens without the retired declaration", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-legacy-status-"));
+	const file = join(dir, "session.sqlite");
+	const faux = fauxProvider({ tokensPerSecond: 0 });
+	const models = createModels();
+	models.setProvider(faux.provider);
+	const registry = createRegistry();
+	const retired = defineTool({
+		name: "pilot_report_status",
+		description: "Legacy status reporter",
 		parameters: Type.Object({}),
-		execute: async () => ({}),
+		replay: "safe",
+		execute: async (_args, api) => {
+			await api.commit(async (tx) => {
+				const inputs = (await tx.doc(LiveDoc, api.conversationId)).run!.inputs;
+				Object.assign(await tx.doc(AttentionDoc, api.conversationId), {
+					signal: { input: inputs.at(-1), outcome: "needs_input", reason: "Need approval" },
+				});
+			}, context);
+			return { content: [{ type: "text", text: "Status recorded" }] };
+		},
 	});
-	f.registry.install(withAttention({ name: "native", tools: [probe] }));
-	let release!: () => void;
-	let started!: () => void;
-	const gate = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const ready = new Promise<void>((resolve) => {
-		started = resolve;
-	});
+	registry.install({ name: "native", tools: [retired] });
+	let harness: Harness | undefined;
 	try {
-		f.faux.setResponses([
-			async () => {
-				started();
-				await gate;
-				return fauxAssistantMessage("Initial work done.");
-			},
-			fauxAssistantMessage(fauxToolCall(probe.name, {}), { stopReason: "toolUse" }),
-			fauxAssistantMessage(fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Need approval" }), {
-				stopReason: "toolUse",
-			}),
+		const open = async () => {
+			const storage = await openNodeSqliteStorage(file);
+			harness = await Harness.open(storage, { models, registry }, context);
+			const model = faux.getModel();
+			const conversation = await harness.root(context, {
+				agent: { model: { provider: model.provider, modelId: model.id }, extensions: [{ name: "native" }] },
+			});
+			return { storage, harness, conversation };
+		};
+		let f = await open();
+		faux.setResponses([
+			fauxAssistantMessage(fauxToolCall(retired.name, {}), { stopReason: "toolUse" }),
 			fauxAssistantMessage("May I proceed?"),
 		]);
-		const initial = await f.conversation.submit({ type: "input", content: "initial task" }, context);
-		await ready;
-		const steerA = await f.conversation.submit({ type: "input", content: "steer A", whenBusy: "steer" }, context);
-		const steerB = await f.conversation.submit({ type: "input", content: "steer B", whenBusy: "steer" }, context);
-		const followUp = await f.conversation.submit(
-			{ type: "input", content: "follow-up", whenBusy: "followUp" },
-			context,
-		);
-		release();
-		await Promise.all([initial.wait(context), steerA.wait(context), steerB.wait(context), followUp.wait(context)]);
-		const state = await f.harness.snapshot(AttentionDoc, f.conversation.id, context);
-		assert.equal(state?.signal?.input, steerB.id);
-		assert.equal((await reconcileCompletion(f.storage, f.harness, f.conversation, context))?.outcome, "needs_input");
-	} finally {
-		release();
+		await (await f.conversation.submit({ type: "input", content: "implement" }, context)).wait(context);
 		await f.harness.close(context);
+		registry.install({ name: "native" });
+		f = await open();
+		assert.ok(!(await f.conversation.agent(context)).tools.some((tool) => tool.name === retired.name));
+		const recovered = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
+		assert.equal(recovered?.outcome, "done");
+		assert.equal(recovered?.outcomeReason, undefined);
+		faux.setResponses([fauxAssistantMessage("Implemented.")]);
+		await (await f.conversation.submit({ type: "input", content: "go ahead" }, context)).wait(context);
+		const completed = await reconcileCompletion(f.storage, f.harness, f.conversation, context);
+		assert.equal(completed?.outcome, "done");
+		assert.ok(completed!.outcomeAt > recovered!.outcomeAt);
+	} finally {
+		await harness?.close(context);
+		await rm(dir, { recursive: true, force: true });
 	}
 });

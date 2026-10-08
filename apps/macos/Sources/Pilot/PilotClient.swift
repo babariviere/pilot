@@ -61,7 +61,7 @@ final class PilotClient: ObservableObject {
     func loadFixture(projects: [Project], sessions: [SessionSummary]) {
         self.projects = projects
         hasProjectSnapshot = true
-        self.sessions = sessions
+        self.sessions = sessions.sorted(by: SessionSummary.listPrecedes)
         connected = true
     }
 
@@ -422,7 +422,7 @@ final class PilotClient: ObservableObject {
         if self.session(session.id)?.updatedAt != session.updatedAt { summaryCache.invalidate(session.id) }
         sessions.removeAll { $0.id == session.id }
         sessions.append(session)
-        sessions.sort { $0.updatedAt > $1.updatedAt }
+        sessions.sort(by: SessionSummary.listPrecedes)
         onSessionsChanged?([session], false)
     }
 
@@ -434,7 +434,7 @@ final class PilotClient: ObservableObject {
         case let .sessions(list):
             for session in list { awaitingList[session.id] = nil }
             // A list captured before POST completed must not undo immediate navigation.
-            sessions = (list + Array(awaitingList.values)).sorted { $0.updatedAt > $1.updatedAt }
+            sessions = (list + Array(awaitingList.values)).sorted(by: SessionSummary.listPrecedes)
             onSessionsChanged?(sessions, true)
         case let .session(session):
             awaitingList[session.id] = nil

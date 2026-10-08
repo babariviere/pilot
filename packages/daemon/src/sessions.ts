@@ -32,7 +32,7 @@ import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
-import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
+import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import {
@@ -104,6 +104,8 @@ interface SessionMeta extends OutcomeMeta {
 	workspace?: WorkspaceContext;
 	createdAt: number;
 	updatedAt: number;
+	/** User-submission time, separate from worker lifecycle and metadata changes. */
+	lastUserMessageAt?: number;
 	archivedAt?: number;
 	/** Restoring gives an inactive chat a new week without changing its activity ordering. */
 	restoredAt?: number;
@@ -451,6 +453,7 @@ export class SessionManager {
 			try {
 				const meta = JSON.parse(await readFile(join(this.sessionsDir, id, "meta.json"), "utf8")) as SessionMeta;
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
+				normalizeLegacyOutcome(meta);
 				this.metas.set(meta.id, meta);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
@@ -919,6 +922,7 @@ export class SessionManager {
 			pending: [{ type: "input", requestId: randomUUID(), content: request.message, mode: "followUp" }],
 			createdAt: now,
 			updatedAt: now,
+			lastUserMessageAt: now,
 			...(model ? { model } : {}),
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
@@ -1001,6 +1005,7 @@ export class SessionManager {
 				meta.pending.push({ type: "input", requestId, content: message, mode });
 			}
 			meta.updatedAt = Date.now();
+			meta.lastUserMessageAt = meta.updatedAt;
 			await this.save(meta);
 			this.emit(meta);
 			const starting = meta.initializing;
@@ -1514,6 +1519,7 @@ export class SessionManager {
 			...(meta.workspace?.branch ? { branch: meta.workspace.branch } : {}),
 			createdAt: meta.createdAt,
 			updatedAt: meta.updatedAt,
+			...(meta.lastUserMessageAt !== undefined ? { lastUserMessageAt: meta.lastUserMessageAt } : {}),
 			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
 			state: meta.failure
 				? "failed"

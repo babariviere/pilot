@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { reportStatus } from "./attention.ts";
 import { githubPosting, pilotPrompt } from "./policy.ts";
 
 test("Pilot diagram guidance is conditional on artifact availability", () => {
@@ -107,15 +106,8 @@ test("Git delivery uses the agent-chosen branch, including on restored sessions"
 	assert.doesNotMatch(restored, /initially detached/);
 });
 
-test("status guidance distinguishes completed work from an unfinished discussion", () => {
-	for (const guidance of [pilotPrompt({}), reportStatus.description]) {
-		assert.match(guidance, /Use done only when the requested work is complete/);
-		assert.match(guidance, /ongoing design discussion awaiting a decision or permission to implement/);
-		assert.match(guidance, /Do not mark an unfinished task done/);
-		assert.match(guidance, /fully answered standalone question can be done/);
-		assert.match(guidance, /optional offers after completed work are not blockers/);
-		assert.match(guidance, /actual question in your final response/);
-	}
+test("prompt does not require model-reported session status", () => {
+	assert.doesNotMatch(pilotPrompt({}), /pilot_report_status|needs_input|report the task outcome/);
 });
 
 test("opting out of PR delivery permits safe default-branch pushes for Git and jj clones", () => {

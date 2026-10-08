@@ -2,15 +2,31 @@ import Foundation
 
 public enum SessionOutcome: String, Codable, Sendable {
     case done
-    case needsInput = "needs_input"
     case failed
     case stopped
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let value = try container.decode(String.self)
+        // Older daemons persisted questions as a separate outcome. They are completed turns now.
+        if value == "needs_input" {
+            self = .done
+        } else if let outcome = Self(rawValue: value) {
+            self = outcome
+        } else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unknown session outcome: \(value)")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 public enum SessionStatus: String, Sendable {
     case working = "Working"
     case done = "Done"
-    case needsInput = "Needs your input"
     case failed = "Failed"
     case stopped = "Stopped"
     case idle = "Idle"
@@ -22,7 +38,6 @@ extension SessionSummary {
         if isWorking { return .working }
         switch outcome {
         case .done: return .done
-        case .needsInput: return .needsInput
         case .failed: return .failed
         case .stopped: return .stopped
         case nil: return state == "failed" ? .failed : .idle
@@ -60,6 +75,7 @@ public final class SessionAttention {
     }
 
     public func isUnread(_ session: SessionSummary) -> Bool {
+        guard !session.hasTerminalPullRequest else { return false }
         guard let version = session.visibleOutcomeAt else { return false }
         return reviewed[session.id].map { $0 < version } ?? true
     }
@@ -81,14 +97,13 @@ public final class SessionAttention {
         var notifications: [SessionOutcomeNotification] = []
         for session in sessions {
             guard session.outcome != nil, let version = session.outcomeAt, version.isFinite else { continue }
-            if !baseline && session.isWorking { continue }
+            if !baseline && session.isWorking && !session.hasTerminalPullRequest { continue }
             guard observed[session.id].map({ $0 < version }) ?? true else { continue }
             observed[session.id] = version
             guard !baseline, isUnread(session) else { continue }
             let title: String
             switch session.outcome {
             case .done: title = "Session done"
-            case .needsInput: title = "Needs your input"
             case .failed: title = "Session failed"
             case .stopped: title = "Session stopped"
             case nil: continue

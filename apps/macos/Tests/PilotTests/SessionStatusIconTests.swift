@@ -7,7 +7,6 @@ import Testing
 @Test func settledSessionStatusesUseDistinctAvailableSymbols() {
     let symbols: [(SessionStatus, String)] = [
         (.done, "checkmark"),
-        (.needsInput, "hand.raised.fill"),
         (.failed, "exclamationmark.triangle.fill"),
         (.stopped, "stop.circle.fill"),
         (.idle, "moon.zzz.fill"),
@@ -46,7 +45,6 @@ import Testing
 @Test func sessionStatusIconsUseNeutralWorkingAndColoredOutcomes() {
     #expect(SessionStatus.working.color == Theme.foreground)
     #expect(SessionStatus.done.color == Theme.success)
-    #expect(SessionStatus.needsInput.color == Theme.warning)
     #expect(SessionStatus.failed.color == Theme.destructive)
     #expect(SessionStatus.stopped.color == Theme.mutedForeground)
     #expect(SessionStatus.idle.color == Theme.mutedForeground)
@@ -54,7 +52,7 @@ import Testing
 
 @Test @MainActor func sessionStatusIconsShareATitleAlignedBaseline() throws {
     _ = NSApplication.shared
-    let statuses: [SessionStatus] = [.working, .done, .needsInput, .failed, .stopped, .idle]
+    let statuses: [SessionStatus] = [.working, .done, .failed, .stopped, .idle]
     var baselines: [String: CGFloat] = [:]
     let root = HStack(alignment: .firstTextBaseline) {
         ForEach(statuses, id: \.rawValue) { status in

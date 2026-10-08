@@ -66,7 +66,7 @@ private struct WorkingNowCard: View {
                                 SessionStatusIcon(status: session.status)
                                 Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
                                 Spacer()
-                                Text(elapsed(session.updatedAt)).font(.system(size: 11).monospacedDigit())
+                                Text(elapsed(session.listActivityAt)).font(.system(size: 11).monospacedDigit())
                                     .foregroundStyle(Theme.mutedForeground)
                             }
                             Text("\(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome) · \(session.model ?? "default model")")

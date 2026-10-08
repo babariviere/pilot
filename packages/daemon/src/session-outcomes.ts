@@ -12,6 +12,13 @@ export interface OutcomeMeta {
 	lastOutcomeAt?: number;
 }
 
+/** Normalize old persisted attention without changing its completion/replay versions. */
+export function normalizeLegacyOutcome(meta: { outcome?: string; outcomeReason?: string }): void {
+	if (meta.outcome !== "needs_input") return;
+	meta.outcome = "done";
+	delete meta.outcomeReason;
+}
+
 /** Apply kernel activity without guessing a completion from an idle transition. */
 export function applyActivity(meta: OutcomeMeta, working: boolean, completion?: SessionCompletion): boolean {
 	let changed = meta.working !== working;
@@ -28,6 +35,9 @@ export function applyActivity(meta: OutcomeMeta, working: boolean, completion?: 
 		delete meta.outcomeAt;
 		delete meta.outcomeReason;
 	} else if (completion && completion.outcomeAt > lastCompletion) {
+		// Cold views (or an older worker) can still contain the retired persisted outcome.
+		completion = { ...completion };
+		normalizeLegacyOutcome(completion);
 		meta.outcome = completion.outcome;
 		// Keep client attention versions monotonic across the independent kernel and daemon clocks.
 		meta.outcomeAt = Math.max(completion.outcomeAt, last + 1);

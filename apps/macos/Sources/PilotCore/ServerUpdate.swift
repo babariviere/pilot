@@ -21,7 +21,7 @@ public enum ServerUpdate: Sendable {
             })
         case "sessions":
             guard let list = json["sessions"] else { return nil }
-            return .sessions(try list.decode([SessionSummary].self).sorted { $0.updatedAt > $1.updatedAt })
+            return .sessions(try list.decode([SessionSummary].self).sorted(by: SessionSummary.listPrecedes))
         case "session":
             guard let session = json["session"] else { return nil }
             return .session(try session.decode(SessionSummary.self))

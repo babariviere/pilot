@@ -22,16 +22,56 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     #expect(old.outcome == nil)
     #expect(old.outcomeAt == nil)
     #expect(old.status == .idle)
-    let session = summary(outcome: .needsInput, at: 1234, reason: "Choose a provider")
+    for outcome in [SessionOutcome.done, .failed, .stopped] {
+        let session = summary(outcome: outcome, at: 1234, reason: "Turn completed")
+        let encoded = try JSONEncoder().encode(session)
+        #expect(String(decoding: encoded, as: UTF8.self).contains("\"outcome\":\"\(outcome.rawValue)\""))
+        #expect(try JSONDecoder().decode(SessionSummary.self, from: encoded) == session)
+    }
+}
+
+@Test func legacyNeedsInputDecodesAsDoneAndEncodesNormally() throws {
+    let outcome = try JSONDecoder().decode(SessionOutcome.self, from: Data(#""needs_input""#.utf8))
+    #expect(outcome == .done)
+    #expect(String(decoding: try JSONEncoder().encode(outcome), as: UTF8.self) == #""done""#)
+    let json = #"{"id":"s","title":"Task","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"stopped","outcome":"needs_input","outcomeAt":100,"outcomeReason":"Choose a provider"}"#
+    let session = try JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
+    #expect(session.status == .done)
+    #expect(session.visibleOutcomeAt == 100)
+    #expect(session.outcomeReason == "Choose a provider")
+    for update in ["{\"type\":\"session\",\"session\":\(json)}", "{\"type\":\"sessions\",\"sessions\":[\(json)]}"] {
+        switch try ServerUpdate.decode(Data(update.utf8)) {
+        case let .session(decoded): #expect(decoded == session)
+        case let .sessions(decoded): #expect(decoded == [session])
+        default: Issue.record("Expected a typed session update")
+        }
+    }
     let encoded = try JSONEncoder().encode(session)
-    #expect(String(decoding: encoded, as: UTF8.self).contains("needs_input"))
+    #expect(!String(decoding: encoded, as: UTF8.self).contains("needs_input"))
     #expect(try JSONDecoder().decode(SessionSummary.self, from: encoded) == session)
+    withDefaults { defaults in
+        let attention = SessionAttention(defaults: defaults)
+        _ = attention.observe([], snapshot: true)
+        #expect(attention.isUnread(session))
+        let notification = attention.observe([session], snapshot: false).first
+        #expect(notification?.title == "Session done")
+        #expect(notification?.body == "Task\nChoose a provider")
+        #expect(attention.review(session, chatVisible: true, appActive: true))
+        #expect(!attention.isUnread(session))
+    }
+}
+
+@Test func unknownOutcomeStillFailsDecoding() {
+    for json in [#""unknown""#, "null", "123"] {
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(SessionOutcome.self, from: Data(json.utf8))
+        }
+    }
 }
 
 @Test func statusIsIndependentOfLifecycleAndHiddenWhileWorking() {
     for state in ["idle", "stopped", "failed"] {
         #expect(summary(state: state).status == .done)
-        #expect(summary(state: state, outcome: .needsInput).status == .needsInput)
     }
     for state in ["working", "starting"] {
         #expect(summary(state: state, outcome: .failed).status == .working)
@@ -39,24 +79,24 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     }
     #expect(summary(outcome: .failed).status.rawValue == "Failed")
     #expect(summary(outcome: .stopped).status.rawValue == "Stopped")
-    #expect(summary(outcome: .needsInput).status.rawValue == "Needs your input")
+    #expect(summary(outcome: .done).status.rawValue == "Done")
     #expect(summary(outcome: nil).status == .idle)
 }
 
 @Test func reviewRequiresVisibleActiveChatOrExplicitActionAndPersists() {
     withDefaults { defaults in
         let attention = SessionAttention(defaults: defaults)
-        let session = summary(outcome: .needsInput)
+        let session = summary(outcome: .done)
         #expect(attention.isUnread(session))
         #expect(!attention.review(session, chatVisible: true, appActive: false))
         #expect(!attention.review(session, chatVisible: false, appActive: true))
         #expect(attention.isUnread(session))
         #expect(attention.review(session, chatVisible: true, appActive: true))
         #expect(!attention.isUnread(session))
-        #expect(session.status == .needsInput)
+        #expect(session.status == .done)
         let reopened = SessionAttention(defaults: defaults)
-        #expect(!reopened.isUnread(summary(state: "stopped", outcome: .needsInput, updatedAt: 999)))
-        #expect(reopened.isUnread(summary(outcome: .needsInput, at: 101)))
+        #expect(!reopened.isUnread(summary(state: "stopped", outcome: .done, updatedAt: 999)))
+        #expect(reopened.isUnread(summary(outcome: .done, at: 101)))
         #expect(reopened.review(summary(at: 101), chatVisible: false, appActive: false, explicit: true))
         #expect(!SessionAttention(defaults: defaults).isUnread(summary(at: 101)))
     }
@@ -65,10 +105,10 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
 @Test func oldRetainedOutcomeIsHiddenWhileWorkingAndReturnsAfterParking() {
     withDefaults { defaults in
         let attention = SessionAttention(defaults: defaults)
-        let working = summary(state: "working", outcome: .needsInput)
+        let working = summary(state: "working", outcome: .done)
         #expect(!attention.isUnread(working))
         #expect(!attention.review(working, chatVisible: true, appActive: true))
-        #expect(attention.isUnread(summary(state: "stopped", outcome: .needsInput)))
+        #expect(attention.isUnread(summary(state: "stopped", outcome: .done)))
         #expect(!attention.isUnread(summary(outcome: nil)))
         #expect(!attention.isUnread(summary(at: nil)))
     }
@@ -80,10 +120,10 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
         #expect(attention.observe([summary()], snapshot: true).isEmpty)
         #expect(attention.isUnread(summary()))
         #expect(attention.observe([summary(updatedAt: 999)], snapshot: true).isEmpty)
-        let notifications = attention.observe([summary(state: "stopped", outcome: .needsInput, at: 101)], snapshot: true)
+        let notifications = attention.observe([summary(state: "stopped", outcome: .done, at: 101)], snapshot: true)
         #expect(notifications.count == 1)
-        #expect(notifications.first?.title == "Needs your input")
-        #expect(attention.observe([summary(state: "stopped", outcome: .needsInput, at: 101, updatedAt: 1234)], snapshot: false).isEmpty)
+        #expect(notifications.first?.title == "Session done")
+        #expect(attention.observe([summary(state: "stopped", outcome: .done, at: 101, updatedAt: 1234)], snapshot: false).isEmpty)
         #expect(attention.observe([summary(at: 101)], snapshot: true).isEmpty)
         let reopened = SessionAttention(defaults: defaults)
         #expect(reopened.observe([summary(at: 101)], snapshot: true).isEmpty)
@@ -96,7 +136,7 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
         let attention = SessionAttention(defaults: defaults)
         _ = attention.observe([], snapshot: true)
         let cases: [(SessionOutcome, String)] = [
-            (.done, "Session done"), (.needsInput, "Needs your input"),
+            (.done, "Session done"),
             (.failed, "Session failed"), (.stopped, "Session stopped"),
         ]
         for (index, item) in cases.enumerated() {

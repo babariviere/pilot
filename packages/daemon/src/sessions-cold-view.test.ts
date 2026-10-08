@@ -10,7 +10,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import type { KernelCommand, PersistedSessionView } from "@pilot/kernel";
-import type { AgentEvent } from "@pilot/protocol";
+import type { AgentEvent, SessionCompletion, SessionSummary } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { type SessionFactories, SessionManager, type SessionWorker } from "./sessions.ts";
 import { AttentionDoc } from "../../kernel/src/attention.ts";
@@ -126,7 +126,7 @@ test("cold viewing after daemon restart never starts a worker, then receives a f
 	assert.equal(reads, 1);
 });
 
-test("daemon restart loads actual persisted history and attention without the worker or native SDK", async (t) => {
+test("daemon restart normalizes legacy persisted attention without the worker or native SDK", async (t) => {
 	const f = await fixture(t);
 	const owned = await openSessionStorage(join(f.home, "sessions", f.id, "durable"));
 	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
@@ -157,8 +157,59 @@ test("daemon restart loads actual persisted history and attention without the wo
 	if (snapshot.type === "snapshot") assert.deepEqual(snapshot.entries[0]?.data, { text: "survives restart" });
 	assert.equal(f.workers.length, 0);
 	assert.equal(manager.get(f.id)?.state, "parked");
-	assert.equal(manager.get(f.id)?.outcome, "needs_input");
+	assert.equal(manager.get(f.id)?.outcome, "done");
 	assert.equal(manager.get(f.id)?.outcomeAt, 1234);
+	assert.equal(manager.get(f.id)?.outcomeReason, undefined);
+});
+
+test("legacy injected cold views publish done without an obsolete reason or metadata writes", async (t) => {
+	const completion = JSON.parse(
+		'{"outcome":"needs_input","outcomeAt":1234,"outcomeReason":"Approval"}',
+	) as SessionCompletion;
+	const f = await fixture(t, {}, async () => ({ events: [cold], completion }));
+	const manager = await f.open();
+	const before = await readFile(f.file, "utf8");
+	const changes: SessionSummary[] = [];
+	manager.onChange((summary) => changes.push(summary));
+	manager.subscribe(f.id, () => {});
+	await until(() => changes.length === 1);
+	assert.equal(changes[0]?.outcome, "done");
+	assert.equal(changes[0]?.outcomeAt, 1234);
+	assert.equal(changes[0]?.outcomeReason, undefined);
+	assert.equal(manager.get(f.id)?.outcome, "done");
+	assert.equal(manager.list()[0]?.outcome, "done");
+	assert.equal(f.workers.length, 0);
+	assert.equal(await readFile(f.file, "utf8"), before);
+});
+
+test("loading parked and archived legacy metadata normalizes summaries before a cold view", async (t) => {
+	for (const archivedAt of [undefined, 100]) {
+		const f = await fixture(t, {
+			outcome: "needs_input",
+			outcomeAt: 42,
+			outcomeReason: "Approval",
+			lastOutcomeAt: 50,
+			lastCompletionAt: 42,
+			updatedAt: 2,
+			...(archivedAt === undefined ? {} : { archivedAt }),
+		});
+		const manager = await f.open();
+		for (const summary of [manager.get(f.id)!, manager.list({ archived: "all" })[0]!]) {
+			assert.equal(summary.outcome, "done");
+			assert.equal(summary.outcomeAt, 42);
+			assert.equal(summary.outcomeReason, undefined);
+			assert.equal(summary.updatedAt, 2);
+		}
+		assert.equal(f.workers.length, 0);
+		const meta = manager["metas"].get(f.id)!;
+		assert.equal(meta.lastOutcomeAt, 50);
+		assert.equal(meta.lastCompletionAt, 42);
+		await manager["save"](meta);
+		const saved = JSON.parse(await readFile(f.file, "utf8"));
+		assert.equal(saved.outcome, "done");
+		assert.equal(saved.outcomeReason, undefined);
+		assert.equal(saved.outcomeAt, 42);
+	}
 });
 
 test("a delayed cold read cannot replace a started worker's snapshot, even after that worker exits", async (t) => {

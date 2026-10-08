@@ -1,13 +1,57 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { SessionOutcome } from "@pilot/protocol";
-import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
+import type { SessionCompletion, SessionOutcome } from "@pilot/protocol";
+import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
+
+test("legacy persisted outcomes normalize without changing versions or unrelated metadata", () => {
+	const legacy = {
+		outcome: "needs_input",
+		outcomeReason: "Choose a branch",
+		outcomeAt: 42,
+		lastOutcomeAt: 50,
+		lastCompletionAt: 42,
+		working: false,
+	};
+	normalizeLegacyOutcome(legacy);
+	assert.deepEqual(legacy, {
+		outcome: "done",
+		outcomeAt: 42,
+		lastOutcomeAt: 50,
+		lastCompletionAt: 42,
+		working: false,
+	});
+	for (const outcome of ["done", "failed", "stopped"] as const) {
+		const meta = { outcome, outcomeAt: 42, outcomeReason: "Preserved reason" };
+		normalizeLegacyOutcome(meta);
+		assert.deepEqual(meta, { outcome, outcomeAt: 42, outcomeReason: "Preserved reason" });
+	}
+});
+
+test("legacy cold completions normalize before publication and retain replay guards", () => {
+	const completion = JSON.parse(
+		'{"outcome":"needs_input","outcomeAt":42,"outcomeReason":"Question","input":1,"entry":2}',
+	) as SessionCompletion;
+	const meta: OutcomeMeta = {};
+	assert.equal(applyActivity(meta, false, completion), true);
+	assert.deepEqual(meta, {
+		working: false,
+		outcome: "done",
+		outcomeAt: 42,
+		lastOutcomeAt: 42,
+		lastCompletionAt: 42,
+	});
+	assert.equal(completion.outcomeReason, "Question", "normalization does not mutate the cold cache");
+	assert.equal(applyActivity(meta, false, completion), false);
+	applyActivity(meta, true);
+	applyActivity(meta, false, completion);
+	assert.equal(meta.outcome, undefined, "replayed legacy completions cannot resurrect cleared attention");
+});
 
 test("idle is not a completion, and working clears all public outcome fields", () => {
 	const meta: OutcomeMeta = {};
 	assert.equal(applyActivity(meta, false), true);
 	assert.deepEqual(meta, { working: false });
-	applyActivity(meta, false, { outcome: "needs_input", outcomeAt: 42, outcomeReason: "Choose a branch" });
+	applyActivity(meta, false, { outcome: "done", outcomeAt: 42, outcomeReason: "Choose a branch" });
 	assert.equal(applyActivity(meta, true, { outcome: "done", outcomeAt: 43 }), true);
 	assert.deepEqual(meta, { working: true, lastOutcomeAt: 42, lastCompletionAt: 42 });
 	applyActivity(meta, false);
@@ -16,7 +60,7 @@ test("idle is not a completion, and working clears all public outcome fields", (
 
 test("settled packets persist each explicit outcome and replace obsolete reasons", () => {
 	const meta: OutcomeMeta = {};
-	const outcomes: SessionOutcome[] = ["done", "needs_input", "failed", "stopped"];
+	const outcomes: SessionOutcome[] = ["done", "failed", "stopped"];
 	for (const [index, outcome] of outcomes.entries()) {
 		assert.equal(applyActivity(meta, false, { outcome, outcomeAt: index + 1, outcomeReason: "reason" }), true);
 		assert.equal(meta.outcome, outcome);
@@ -27,7 +71,7 @@ test("settled packets persist each explicit outcome and replace obsolete reasons
 });
 
 test("completion replay keeps its version and older recovered completions cannot overwrite newer ones", () => {
-	const completion = { outcome: "needs_input" as const, outcomeAt: 100, outcomeReason: "Question" };
+	const completion = { outcome: "done" as const, outcomeAt: 100, outcomeReason: "Question" };
 	const meta: OutcomeMeta = {};
 	applyActivity(meta, false, completion);
 	const before = { ...meta };

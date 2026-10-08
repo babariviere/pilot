@@ -109,7 +109,6 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 		}
 	}
 	lines.push(
-		"- Before your final response, call pilot_report_status to report the task outcome, not merely that your reply is finished. Use done only when the requested work is complete. Use needs_input when an answer, decision, approval or missing information blocks further work, including an ongoing design discussion awaiting a decision or permission to implement. Do not mark an unfinished task done just because you proposed a plan or answered one part of it. A fully answered standalone question can be done; optional offers after completed work are not blockers. Briefly explain the blocker in the reason, and put the actual question in your final response. A new user message starts work again; do not keep running while waiting for an answer.",
 		"- Never post on GitHub: no comments, reviews or replies on pull requests or issues, and no merging or closing. Put results, questions and anything you decided not to do in your final answer instead.",
 	);
 	return lines.join("\n");

@@ -18,7 +18,6 @@ import type { SubmissionDraft } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
 import { createArtifactTools } from "./artifact-tools.ts";
-import { reportStatus } from "./attention.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 
@@ -304,7 +303,7 @@ for (const mode of ["on", "only"] as const) {
 	}
 }
 
-test("busy codemode publications and attention survive native tool refresh and reopen", {
+test("busy codemode publications and automatic completion survive native tool refresh and reopen", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await fixture(t);
@@ -354,7 +353,7 @@ test("busy codemode publications and attention survive native tool refresh and r
 	f.cleanup.push(() => session.close());
 	const assertReplaySafety = async (kernel: KernelSession) => {
 		const tools = (await kernel.conversation.agent(context)).tools;
-		assert.equal(tools.find((tool) => tool.name === reportStatus.name)?.replay, "safe");
+		assert.ok(!tools.some((tool) => tool.name === "pilot_report_status"));
 		for (const name of ["codemode", "artifact"]) {
 			const tool = tools.find((candidate) => candidate.name === name);
 			assert.ok(tool, name);
@@ -401,7 +400,7 @@ text("Published two revisions");
 			assert.ok(adapter);
 			const before = adapter.extension;
 			// Change the declaration fingerprint, exercising the real onToolsChanged replacement,
-			// rather than a no-op refresh which would never reinstall the attention wrapper.
+			// rather than a no-op refresh which would never reinstall the policy wrapper.
 			adapter.session.setActiveToolsByName(
 				adapter.session.getActiveToolNames().filter((name) => name !== "artifact"),
 			);
@@ -411,19 +410,15 @@ text("Published two revisions");
 			adapter.session.setActiveToolsByName([...adapter.session.getActiveToolNames(), "artifact"]);
 			adapter.refreshTools();
 			await assertReplaySafety(session);
-			return fauxAssistantMessage(
-				fauxToolCall(reportStatus.name, { status: "needs_input", reason: "Choose which graph to keep" }),
-				{ stopReason: "toolUse" },
-			);
+			return fauxAssistantMessage("Which graph should I keep?");
 		},
-		fauxAssistantMessage("Which graph should I keep?"),
 	]);
 	await session.submit("make-artifact", "Create and revise a graph using codemode", "followUp");
 	await session.conversation.waitForIdle(context);
 	await live;
 	const completion = await completed;
-	assert.equal(completion.outcome, "needs_input");
-	assert.equal(completion.outcomeReason, "Choose which graph to keep");
+	assert.equal(completion.outcome, "done");
+	assert.equal(completion.outcomeReason, undefined);
 	assert.deepEqual(session.completion, completion);
 	assert.deepEqual(
 		transitions.map(({ working }) => working),
@@ -474,9 +469,9 @@ text("Published two revisions");
 		(await session.conversation.context(context)).entries.filter((entry) => entry.kind === "pilot.artifact").length,
 		2,
 	);
-	assert.equal(f.faux.state.callCount, 3, "passive writes do not start extra model runs");
+	assert.equal(f.faux.state.callCount, 2, "passive writes do not start extra model runs");
 	await Promise.all(usageRefreshes);
-	assert.ok(session.usage.context, "artifact and attention events retain context usage updates");
+	assert.ok(session.usage.context, "artifact and completion events retain context usage updates");
 	await session.close();
 	let finishRestored!: (completion: SessionCompletion) => void;
 	const restoredCompletion = new Promise<SessionCompletion>((resolve) => {
@@ -488,7 +483,7 @@ text("Published two revisions");
 		},
 	});
 	f.cleanup.push(() => restored.close());
-	assert.deepEqual(restored.completion, completion, "blocking outcome and completion version survive reopen");
+	assert.deepEqual(restored.completion, completion, "automatic outcome and completion version survive reopen");
 	await assertReplaySafety(restored);
 	let restoredEntries: unknown[] = [];
 	await restored.watch("artifact-reopen", (events) => {
@@ -497,7 +492,7 @@ text("Published two revisions");
 				restoredEntries = event.entries.filter((entry) => entry.kind === "pilot.artifact");
 	});
 	assert.deepEqual(restoredEntries, entries, "reconnect snapshots retain both pinned revision references");
-	assert.equal(f.faux.state.callCount, 3);
+	assert.equal(f.faux.state.callCount, 2);
 	f.faux.setResponses([fauxAssistantMessage("Kept the updated graph.")]);
 	await restored.submit("choose-graph", "Keep the updated graph", "followUp");
 	await restored.conversation.waitForIdle(context);
@@ -507,8 +502,8 @@ text("Published two revisions");
 	await restored.close();
 	const settled = await KernelSession.open(spec, { onWorking: () => {} });
 	f.cleanup.push(() => settled.close());
-	assert.equal(settled.completion?.outcome, "done", "new input must not inherit the blocking signal");
+	assert.equal(settled.completion?.outcome, "done", "new input settles automatically");
 	assert.ok(settled.completion!.outcomeAt > completion.outcomeAt);
 	assert.equal((await new ArtifactStore(f.root, { sessionId: spec.sessionId }).list())[0]?.revision, 2);
-	assert.equal(f.faux.state.callCount, 4);
+	assert.equal(f.faux.state.callCount, 3);
 });

@@ -78,7 +78,7 @@ async function fixture() {
 				createdAt: 100,
 				updatedAt: 200 + index,
 				working: false,
-				outcome: "needs_input",
+				outcome: "done",
 				outcomeAt: 150,
 				outcomeReason: "Review requested",
 				lastOutcomeAt: 150,
@@ -552,7 +552,7 @@ for (const archived of [true, false]) {
 			const afterSnapshot = structuredClone(meta);
 			const afterWrite = save.call(sessions, meta);
 			// Mutate completion and nested PR data again before any queued write executes.
-			applyActivity(meta, false, { outcome: "needs_input", outcomeAt: 600, outcomeReason: "New question" });
+			applyActivity(meta, false, { outcome: "done", outcomeAt: 600, outcomeReason: "New question" });
 			meta.updatedAt = 600;
 			meta.pullRequest!.title = "Later PR metadata";
 

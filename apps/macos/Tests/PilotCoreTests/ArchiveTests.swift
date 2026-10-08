@@ -50,7 +50,7 @@ private func archiveSession(state: String = "idle", archivedAt: Double? = nil, p
         id: "archived", title: "Chat", cwd: "/tmp", projectId: "p", branch: "pilot/chat",
         createdAt: 1, updatedAt: 10, state: "stopped", error: "Previous error",
         usage: SessionUsage(context: ContextUsage(tokens: 100, contextWindow: 1000)),
-        outcome: .needsInput, outcomeAt: 5, outcomeReason: "Review the PR",
+        outcome: .done, outcomeAt: 5, outcomeReason: "Review the PR",
         pullRequest: SessionPullRequest(number: 11, url: "https://github.com/example/repo/pull/11",
                                        title: "Archive chats", state: .open, checkedAt: 6),
         pullRequestError: "Cached lookup", archivedAt: 10
@@ -64,7 +64,7 @@ private func archiveSession(state: String = "idle", archivedAt: Double? = nil, p
         return
     }
     #expect(decoded == session)
-    #expect(decoded.status == .needsInput)
+    #expect(decoded.status == .done)
     #expect(decoded.pullRequestIsStale)
     #expect(!decoded.canArchive)
     let snapshot = try ServerUpdate.decode(Data("{\"type\":\"sessions\",\"sessions\":[\(json)]}".utf8))

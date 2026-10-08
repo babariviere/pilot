@@ -49,10 +49,8 @@ struct MenuBarContent: View {
         case .running:
             let working = client.workingCount
             let unread = client.activeSessions.filter { model.isUnread($0) }.count
-            let needsInput = client.activeSessions.filter { $0.status == .needsInput }.count
             var activity: [String] = []
             if working > 0 { activity.append("\(working) working") }
-            if needsInput > 0 { activity.append("\(needsInput) need input") }
             if unread > 0 { activity.append("\(unread) unread") }
             return "pilotd running · \(activity.isEmpty ? "idle" : activity.joined(separator: " · "))"
         case .starting, .unknown: return "pilotd starting…"

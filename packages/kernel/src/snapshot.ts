@@ -11,7 +11,7 @@ import {
 	UsageDoc,
 } from "@earendil-works/pi-durable";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
-import { AttentionDoc } from "./attention.ts";
+import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { queueUpdate } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
@@ -84,7 +84,7 @@ export async function readSessionSnapshot(
 			};
 			events = [snapshot, queueUpdate(inbox ?? null)];
 			if (!live?.run && attention?.completion) {
-				const { outcome, outcomeAt, outcomeReason } = attention.completion;
+				const { outcome, outcomeAt, outcomeReason } = normalizeCompletion(attention.completion);
 				completion = { outcome, outcomeAt, ...(outcomeReason === undefined ? {} : { outcomeReason }) };
 			}
 		} finally {

@@ -257,7 +257,7 @@ export class NativeAdapter {
 			if (options.ask) {
 				// Covers nested codemode execution too, not just model declarations.
 				pi.on("tool_call", (event) => {
-					if (!ASK_TOOL_NAMES.includes(event.toolName) && event.toolName !== "pilot_report_status")
+					if (!ASK_TOOL_NAMES.includes(event.toolName))
 						return { block: true, reason: `Ask mode denies tool: ${event.toolName}` };
 				});
 			}
@@ -626,7 +626,7 @@ export class NativeAdapter {
 				}),
 				hook(ToolTask, {
 					beforeTool: async (call, _api, context) => {
-						if (this.#ask && !ASK_TOOL_NAMES.includes(call.name) && call.name !== "pilot_report_status")
+						if (this.#ask && !ASK_TOOL_NAMES.includes(call.name))
 							return { block: `Ask mode denies tool: ${call.name}` };
 						await this.sync(context);
 						const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
