@@ -5,13 +5,34 @@ import Testing
 private func listSession(
     _ id: String, state: String = "idle", updatedAt: Double = 1_000,
     userAt: Double? = nil, outcome: SessionOutcome? = .done, finishAt: Double? = 500,
-    prState: PullRequestState? = nil, prError: String? = nil
+    prState: PullRequestState? = nil, prError: String? = nil, pinned: Bool? = nil
 ) -> SessionSummary {
     SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: updatedAt, state: state,
                    outcome: outcome, outcomeAt: finishAt,
                    pullRequest: prState.map { SessionPullRequest(number: 1, url: "https://github.com/a/b/pull/1",
                                                                 title: "PR", state: $0, checkedAt: 1) },
-                   pullRequestError: prError, lastUserMessageAt: userAt)
+                   pullRequestError: prError, lastUserMessageAt: userAt, pinned: pinned)
+}
+
+@Test func pinnedSessionsPrecedeTerminalPRAndActivityGroups() throws {
+    let sessions = [
+        listSession("unpinned-working", state: "working", updatedAt: 99_000),
+        listSession("pinned-closed", prState: .closed, pinned: true),
+        listSession("unpinned-explicit", finishAt: 3_000, pinned: false),
+        listSession("pinned-old", finishAt: 100, pinned: true),
+        listSession("pinned-new", finishAt: 200, pinned: true),
+        listSession("unpinned-merged", prState: .merged),
+    ]
+    let expected = ["pinned-new", "pinned-old", "pinned-closed", "unpinned-working", "unpinned-explicit", "unpinned-merged"]
+    #expect(sessions.sorted(by: SessionSummary.listPrecedes).map(\.id) == expected)
+    let json = String(decoding: try JSONEncoder().encode(sessions), as: UTF8.self)
+    let update = try ServerUpdate.decode(Data("{\"type\":\"sessions\",\"sessions\":\(json)}".utf8))
+    guard case let .sessions(decoded) = update else { Issue.record("Expected sessions"); return }
+    #expect(decoded.map(\.id) == expected)
+    let first = listSession("a", pinned: true)
+    let second = listSession("b", pinned: true)
+    #expect(SessionSummary.listPrecedes(first, second))
+    #expect(!SessionSummary.listPrecedes(first, first))
 }
 
 @Test func sessionOrderingPromotesCompletionsButKeepsTerminalPRsLast() throws {

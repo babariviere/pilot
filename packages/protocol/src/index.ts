@@ -104,6 +104,8 @@ export interface SessionSummary {
 	lastUserMessageAt?: number;
 	/** Epoch ms when archived. History is retained with recoverable jj snapshots; restore before sending input. */
 	archivedAt?: number;
+	/** Pinned chats sort first and are exempt from automatic archiving. Omitted means unpinned. */
+	pinned?: boolean;
 	state: SessionState;
 	outcome?: SessionOutcome;
 	outcomeAt?: number;

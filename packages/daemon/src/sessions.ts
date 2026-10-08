@@ -148,6 +148,8 @@ interface SessionMeta extends OutcomeMeta {
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
 	lastUserMessageAt?: number;
 	archivedAt?: number;
+	/** User pin, independent of activity and manual archival. */
+	pinned?: boolean;
 	/** Restoring gives an inactive chat a new week without changing its activity ordering. */
 	restoredAt?: number;
 	/** Remember successful merge archives so restoring a chat survives polling and restarts. */
@@ -533,7 +535,12 @@ export class SessionManager {
 	/** Same-target retries share the durable result; opposite transitions execute in order. */
 	private readonly archiveTransitions = new Map<
 		string,
-		{ archived: boolean | "reclaim"; promise: Promise<SessionSummary> }
+		{
+			archived: boolean | "reclaim" | "pin" | "unpin";
+			autoArchivedPullRequest?: string;
+			staleBefore?: number;
+			promise: Promise<SessionSummary>;
+		}
 	>();
 	private closing = false;
 	private archiveTimer?: ReturnType<typeof setTimeout>;
@@ -741,7 +748,12 @@ export class SessionManager {
 				if (!(error instanceof Conflict))
 					console.warn(`pilotd: could not archive merged PR session ${meta.id}: ${error}`);
 			}
-			if (meta.archivedAt !== undefined || Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore) continue;
+			if (
+				meta.pinned ||
+				meta.archivedAt !== undefined ||
+				Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore
+			)
+				continue;
 			try {
 				await this.setArchived(meta.id, true, undefined, staleBefore);
 			} catch (error) {
@@ -988,7 +1000,36 @@ export class SessionManager {
 				);
 			})
 			.map((meta) => this.summary(meta))
-			.sort((a, b) => b.updatedAt - a.updatedAt);
+			.sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true) || b.updatedAt - a.updatedAt);
+	}
+
+	/** Serialize pin changes with archiving so automatic transitions recheck the committed pin. */
+	async setPinned(id: string, pinned: boolean): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			if (this.closing) throw new Error("pilotd is shutting down");
+			this.require(id);
+			const target = pinned ? "pin" : "unpin";
+			const previous = this.archiveTransitions.get(id);
+			if (previous?.archived === target) return await previous.promise;
+			const promise = (previous?.promise ?? Promise.resolve())
+				.catch(() => undefined)
+				.then(async () => {
+					const meta = this.require(id);
+					if ((meta.pinned === true) === pinned) return this.summary(meta);
+					await this.save(meta, undefined, { value: pinned });
+					this.emit(meta);
+					return this.summary(meta);
+				});
+			this.archiveTransitions.set(id, { archived: target, promise });
+			try {
+				return await promise;
+			} finally {
+				if (this.archiveTransitions.get(id)?.promise === promise) this.archiveTransitions.delete(id);
+			}
+		} finally {
+			end();
+		}
 	}
 
 	/** Keep history available; archived shared working directories can later be reclaimed and restored. */
@@ -1019,12 +1060,19 @@ export class SessionManager {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		this.require(id);
 		const previous = this.archiveTransitions.get(id);
-		if (previous?.archived === archived) return previous.promise;
+		if (
+			previous?.archived === archived &&
+			previous.autoArchivedPullRequest === autoArchivedPullRequest &&
+			previous.staleBefore === staleBefore
+		)
+			return previous.promise;
 		const promise = (previous?.promise ?? Promise.resolve())
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
 				// Activity or restoration may have arrived after the sweep selected this chat.
+				if (meta.pinned && (staleBefore !== undefined || autoArchivedPullRequest !== undefined))
+					return this.summary(meta);
 				if (staleBefore !== undefined && Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore)
 					return this.summary(meta);
 				if (autoArchivedPullRequest && meta.autoArchivedPullRequest === autoArchivedPullRequest)
@@ -1069,7 +1117,7 @@ export class SessionManager {
 				this.emit(meta);
 				return this.summary(meta);
 			});
-		this.archiveTransitions.set(id, { archived, promise });
+		this.archiveTransitions.set(id, { archived, autoArchivedPullRequest, staleBefore, promise });
 		const clear = () => {
 			if (this.archiveTransitions.get(id)?.promise === promise) this.archiveTransitions.delete(id);
 		};
@@ -2187,6 +2235,7 @@ export class SessionManager {
 			updatedAt: meta.updatedAt,
 			...(meta.lastUserMessageAt !== undefined ? { lastUserMessageAt: meta.lastUserMessageAt } : {}),
 			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
+			...(meta.pinned ? { pinned: true } : {}),
 			...(meta.workspace?.shared ? { workspaceStorage: "shared" as const } : {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
@@ -2334,6 +2383,7 @@ export class SessionManager {
 		const target = this.mergeArchiveTarget(meta);
 		if (
 			target !== undefined &&
+			!meta.pinned &&
 			Date.now() >= target.mergedAt + DAY_MS &&
 			!this.closing &&
 			meta.archivedAt === undefined &&
@@ -2453,6 +2503,7 @@ export class SessionManager {
 	private save(
 		meta: SessionMeta,
 		archive?: { timestamp?: number; restoredAt?: number; autoArchivedPullRequest?: string },
+		pin?: { value: boolean },
 	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
@@ -2461,6 +2512,9 @@ export class SessionManager {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = JSON.parse(snapshot) as SessionMeta;
+			// Pin state, like archive state, commits only after rename. Stale lifecycle snapshots cannot erase it.
+			if (pin ? pin.value : meta.pinned) persisted.pinned = true;
+			else delete persisted.pinned;
 			// Archive state commits only after rename, unlike captured lifecycle transitions.
 			const archivedAt = archive ? archive.timestamp : meta.archivedAt;
 			if (archivedAt === undefined) delete persisted.archivedAt;
@@ -2479,6 +2533,10 @@ export class SessionManager {
 			else delete persisted.workspaceCleanupError;
 			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600 });
 			await rename(temp, file);
+			if (pin) {
+				if (pin.value) meta.pinned = true;
+				else delete meta.pinned;
+			}
 			// Commit in memory before the next queued save can read the metadata.
 			if (archive) {
 				if (archive.timestamp === undefined) delete meta.archivedAt;

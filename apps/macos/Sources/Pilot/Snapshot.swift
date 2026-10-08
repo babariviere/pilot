@@ -172,8 +172,8 @@ enum Snapshot {
             return
         }
 
-        // Real sidebar preview: fresh completion first, metadata polling does not reset old ages,
-        // and terminal PRs stay below all other chats without unread dots.
+        // Real sidebar preview: pinned chats lead, polling does not reset old ages,
+        // and unpinned terminal PRs stay below other chats without unread dots.
         if CommandLine.arguments.contains("--session-ordering-only") {
             model.client.loadFixture(projects: [Fixtures.projects[0]], sessions: Fixtures.orderingSessions)
             model.selectedSessionId = nil
@@ -852,16 +852,20 @@ enum Fixtures {
 
     static let orderingSessions: [SessionSummary] = {
         func session(_ id: String, _ title: String, activity: Double, finish: Double?,
-                     state: String = "idle", pr: PullRequestState? = nil) -> SessionSummary {
+                     state: String = "idle", pr: PullRequestState? = nil, pinned: Bool? = nil) -> SessionSummary {
             SessionSummary(id: id, title: title, cwd: projects[0].path, projectId: "p1",
                            createdAt: now - 86_400_000, updatedAt: activity, state: state,
                            outcome: finish == nil ? nil : .done, outcomeAt: finish,
                            pullRequest: pr.map { SessionPullRequest(number: id == "order-merged" ? 12 : 11,
                                url: "https://github.com/babariviere/pilot/pull/11", title: title,
                                state: $0, checkedAt: now) },
-                           lastUserMessageAt: now - 7_200_000)
+                           lastUserMessageAt: now - 7_200_000, pinned: pinned)
         }
         return [
+            session("order-pinned-merged", "Pinned merged PR", activity: now, finish: now - 3_600_000,
+                    pr: .merged, pinned: true),
+            session("order-pinned-working", "Pinned working chat", activity: now - 60_000, finish: nil,
+                    state: "working", pinned: true),
             session("order-merged", "Merged PR, no attention", activity: now, finish: now, pr: .merged),
             session("order-closed", "Closed PR, no attention", activity: now, finish: now, pr: .closed),
             session("order-polled", "Old completion, just polled", activity: now, finish: now - 3_600_000),

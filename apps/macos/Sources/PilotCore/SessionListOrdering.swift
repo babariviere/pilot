@@ -18,7 +18,9 @@ extension SessionSummary {
     }
 
     /// One ordering for snapshots, deltas, fixture lists, sidebar, dashboard and menu bar.
+    /// Pinned chats come first, then unsettled PRs and stable activity within each group.
     public static func listPrecedes(_ lhs: SessionSummary, _ rhs: SessionSummary) -> Bool {
+        if lhs.isPinned != rhs.isPinned { return lhs.isPinned }
         if lhs.hasTerminalPullRequest != rhs.hasTerminalPullRequest { return !lhs.hasTerminalPullRequest }
         if lhs.listActivityAt != rhs.listActivityAt { return lhs.listActivityAt > rhs.listActivityAt }
         if lhs.createdAt != rhs.createdAt { return lhs.createdAt > rhs.createdAt }

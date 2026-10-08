@@ -320,6 +320,20 @@ final class AppModel: ObservableObject {
         selectedSessionId = nil
     }
 
+    func setPinned(_ pinned: Bool, sessionId: String) {
+        guard !pendingSessionActions.contains(sessionId) else { return }
+        pendingSessionActions.insert(sessionId)
+        Task {
+            defer { pendingSessionActions.remove(sessionId) }
+            do {
+                if pinned { try await client.pin(sessionId) }
+                else { try await client.unpin(sessionId) }
+            } catch {
+                sessionActionError = error.localizedDescription
+            }
+        }
+    }
+
     func setArchived(_ archived: Bool, sessionId: String) {
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
