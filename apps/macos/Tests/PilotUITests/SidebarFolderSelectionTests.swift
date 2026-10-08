@@ -13,7 +13,7 @@ private func folderSidebarOutline(in view: NSView) -> NSOutlineView? {
 @MainActor
 private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView) throws {
     let window = try #require(outline.window)
-    // Hit the title area, not the project's disclosure or action buttons.
+    // Hit the title area, not the project's chevron or action buttons.
     let point = outline.convert(NSPoint(x: 70, y: outline.rect(ofRow: row).midY), to: nil)
     let timestamp = ProcessInfo.processInfo.systemUptime
     let down = try #require(NSEvent.mouseEvent(
@@ -24,12 +24,13 @@ private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView) throws
         with: .leftMouseUp, location: point, modifierFlags: [], timestamp: timestamp + 0.01,
         windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0
     ))
-    // AppKit may track the mouse until its matching mouse-up. Unlike selectRowIndexes,
-    // mouseDown goes through the native delegate's selection-disabled checks.
+    // AppKit may track the mouse until its matching mouse-up. Dispatch through the
+    // window so SwiftUI buttons receive clicks as well as native selection checks.
     NSApp.postEvent(up, atStart: true)
-    outline.mouseDown(with: down)
-    // A disabled row can return without consuming the queued mouse-up.
-    _ = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true)
+    window.sendEvent(down)
+    if let pending = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+        window.sendEvent(pending)
+    }
 }
 
 @MainActor
@@ -54,7 +55,8 @@ private func settleFolderSidebar(_ hosting: NSView) {
     hosting.layoutSubtreeIfNeeded()
 }
 
-@Test @MainActor func groupedSidebarHeadersCannotSelectProjectsButSessionsRemainSelectable() throws {
+@Test(arguments: [false, true]) @MainActor
+func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
     _ = NSApplication.shared
     let suite = "SidebarFolderSelectionTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
@@ -66,9 +68,13 @@ private func settleFolderSidebar(_ hosting: NSView) {
     let second = SessionSummary(id: "second", title: "Second session", cwd: project.path, projectId: project.id,
                                 createdAt: 1, updatedAt: 2, state: "idle")
     model.client.loadFixture(projects: [project], sessions: [first, second])
-    let created = model.projectFolders.create(name: "Work")
-    let folder = try #require(created)
-    model.projectFolders.move(projectId: project.id, to: folder.id)
+    if grouped {
+        let created = model.projectFolders.create(name: "Work")
+        let folder = try #require(created)
+        model.projectFolders.move(projectId: project.id, to: folder.id)
+    }
+    let headerRow = grouped ? 1 : 0
+    let expandedRowCount = headerRow + 3
 
     let hosting = NSHostingView(rootView: SessionSidebar(model: model, client: model.client)
         .environmentObject(model))
@@ -81,37 +87,46 @@ private func settleFolderSidebar(_ hosting: NSView) {
     window.orderFrontRegardless()
     for _ in 0..<20 {
         hosting.layoutSubtreeIfNeeded()
-        if let outline = folderSidebarOutline(in: hosting), outline.numberOfRows == 4 { break }
+        if let outline = folderSidebarOutline(in: hosting), outline.numberOfRows == expandedRowCount { break }
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     }
     let outline = try #require(folderSidebarOutline(in: hosting))
-    // This fixture has exactly a folder header, a project header, and two sessions.
-    #expect(outline.numberOfRows == 4)
-    try #require(outline.numberOfRows >= 4)
+    // A project header and two sessions, with an optional folder header.
+    try #require(outline.numberOfRows == expandedRowCount)
 
-    try clickFolderSidebarRow(1, in: outline)
+    try clickFolderSidebarRow(headerRow, in: outline)
     settleFolderSidebar(hosting)
+    #expect(model.collapsedProjects.contains(project.id))
+    #expect(outline.numberOfRows == expandedRowCount - 2)
     #expect(model.selectedSessionId == nil)
-    try clickFolderSidebarRow(2, in: outline)
+    try clickFolderSidebarRow(headerRow, in: outline)
+    settleFolderSidebar(hosting)
+    #expect(!model.collapsedProjects.contains(project.id))
+    #expect(outline.numberOfRows == expandedRowCount)
+    #expect(model.selectedSessionId == nil)
+    try clickFolderSidebarRow(headerRow + 1, in: outline)
     settleFolderSidebar(hosting)
     #expect(model.selectedSessionId == first.id)
-    try clickFolderSidebarRow(1, in: outline)
+    try clickFolderSidebarRow(headerRow, in: outline)
+    settleFolderSidebar(hosting)
+    #expect(model.selectedSessionId == first.id)
+    try clickFolderSidebarRow(headerRow, in: outline)
     settleFolderSidebar(hosting)
     #expect(model.selectedSessionId == first.id)
 
     // Start keyboard traversal from a session, not the disabled header's focus anchor.
-    try clickFolderSidebarRow(2, in: outline)
+    try clickFolderSidebarRow(headerRow + 1, in: outline)
     settleFolderSidebar(hosting)
     try arrowInFolderSidebar(outline, up: true)
     settleFolderSidebar(hosting)
-    #expect(model.selectedSessionId == first.id) // Skip both non-session headers.
+    #expect(model.selectedSessionId == first.id) // Skip non-session headers.
     try arrowInFolderSidebar(outline, up: false)
     settleFolderSidebar(hosting)
     #expect(model.selectedSessionId == second.id)
     try arrowInFolderSidebar(outline, up: true)
     settleFolderSidebar(hosting)
     #expect(model.selectedSessionId == first.id)
-    try clickFolderSidebarRow(3, in: outline)
+    try clickFolderSidebarRow(headerRow + 2, in: outline)
     settleFolderSidebar(hosting)
     #expect(model.selectedSessionId == second.id)
 }

@@ -204,21 +204,28 @@ private struct ProjectHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "folder").font(.system(size: 10)).frame(width: 14)
-            Text(project.name)
-                .font(.system(size: 11, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            if working > 0 {
-                Text("\(working)")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 1)
-                    .background(Capsule().fill(Color.accentColor.opacity(0.18)))
-                    .foregroundStyle(Color.accentColor)
-                    .fixedSize()
+            Button { isExpanded.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder").font(.system(size: 10)).frame(width: 14)
+                    Text(project.name)
+                        .font(.system(size: 11, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if working > 0 {
+                        Text("\(working)")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                            .foregroundStyle(Color.accentColor)
+                            .fixedSize()
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
             }
-            Spacer(minLength: 0)
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
             ProjectArtifactsButton(project: project, client: client)
                 .frame(width: 16, height: 16)
             Button(action: onArchive) { Image(systemName: "archivebox") }
