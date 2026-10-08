@@ -3,8 +3,16 @@ import PilotCore
 
 /// AppKit renderings of the app icon's plane, for places that cannot use the bundled .icns.
 enum PlaneImage {
+    // Keep image identity stable across SwiftUI menu updates, not just its pixels.
+    private static let idleMenuBarImage = makeMenuBar(working: false)
+    private static let workingMenuBarImage = makeMenuBar(working: true)
+
     /// Menu bar template image: the plane alone when idle, with its contrail while agents work.
     static func menuBar(working: Bool) -> NSImage {
+        working ? workingMenuBarImage : idleMenuBarImage
+    }
+
+    private static func makeMenuBar(working: Bool) -> NSImage {
         let size = NSSize(width: 18, height: 18)
         let image = NSImage(size: size, flipped: true) { rect in
             guard let context = NSGraphicsContext.current?.cgContext else { return false }

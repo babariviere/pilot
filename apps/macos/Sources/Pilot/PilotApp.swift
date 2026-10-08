@@ -45,8 +45,7 @@ struct PilotApp: App {
         }
 
         MenuBarExtra {
-            MenuBarContent()
-                .environmentObject(model)
+            MenuBarContent(model: model)
         } label: {
             MenuBarLabel(client: model.client)
         }
@@ -54,10 +53,14 @@ struct PilotApp: App {
 }
 
 private struct MenuBarLabel: View {
-    @ObservedObject var client: PilotClient
+    @StateObject private var icon: MenuBarIconModel
+
+    init(client: PilotClient) {
+        _icon = StateObject(wrappedValue: MenuBarIconModel(client: client))
+    }
 
     var body: some View {
-        Image(nsImage: PlaneImage.menuBar(working: client.workingCount > 0))
+        Image(nsImage: PlaneImage.menuBar(working: icon.isWorking))
     }
 }
 
