@@ -7,6 +7,7 @@ import PilotCore
 final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var projects: [Project] = []
+    @Published private(set) var hasProjectSnapshot = false
     @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
     private var artifactVersions: [String: Int] = [:]
     @Published private(set) var connected = false
@@ -59,6 +60,7 @@ final class PilotClient: ObservableObject {
     /// Static data for snapshots and previews.
     func loadFixture(projects: [Project], sessions: [SessionSummary]) {
         self.projects = projects
+        hasProjectSnapshot = true
         self.sessions = sessions
         connected = true
     }
@@ -418,7 +420,9 @@ final class PilotClient: ObservableObject {
 
     private func handle(_ message: ServerUpdate) {
         switch message {
-        case let .projects(list): projects = list
+        case let .projects(list):
+            projects = list
+            hasProjectSnapshot = true
         case let .sessions(list):
             for session in list { awaitingList[session.id] = nil }
             // A list captured before POST completed must not undo immediate navigation.

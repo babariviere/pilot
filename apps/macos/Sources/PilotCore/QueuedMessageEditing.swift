@@ -6,7 +6,7 @@ public enum QueueNavigationDirection: Sendable {
 }
 
 /// Local drafts only. Navigation never submits or mutates the durable queue.
-public struct QueuedMessageEditing: Equatable, Sendable {
+public struct QueuedMessageEditing: Codable, Equatable, Sendable {
     public private(set) var selected: QueuedMessage?
     private var drafts: [Int: String] = [:]
 

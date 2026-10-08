@@ -82,7 +82,7 @@ public struct LiveTool: Equatable, Sendable {
 }
 
 /// Mirrors packages/protocol's QueuedMessage, not the agent stream's content-free inbox IDs.
-public struct QueuedMessage: Identifiable, Equatable, Sendable {
+public struct QueuedMessage: Identifiable, Codable, Equatable, Sendable {
     public let id: Int
     public let mode: DeliveryMode
     public let text: String

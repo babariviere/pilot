@@ -7,23 +7,38 @@ final class PastedImage: Identifiable {
     let id: UUID
     let url: URL
     let preview: NSImage
-    private var submitted = false
+    private(set) var submitted = false
+    private var persistedDraft = false
 
-    init(id: UUID, url: URL, preview: NSImage) {
+    init(id: UUID, url: URL, preview: NSImage, submitted: Bool = false) {
         self.id = id
         self.url = url
         self.preview = preview
+        self.submitted = submitted || FileManager.default.fileExists(atPath: url.appendingPathExtension("submitted").path)
     }
 
-    func retainForHistory() { submitted = true }
+    /// Record retention independently of the draft JSON before any request can reference this file.
+    func retainForHistory() throws {
+        guard !submitted else { return }
+        try Data().write(to: url.appendingPathExtension("submitted"), options: .atomic)
+        submitted = true
+    }
+    func retainForDraft() { persistedDraft = true }
 
     func discard() {
-        if !submitted { try? FileManager.default.removeItem(at: url) }
+        if !persistedDraft { discardPersistedDraft() }
+    }
+
+    /// Only after a new snapshot no longer references this file may it be deleted.
+    func discardPersistedDraft() {
+        if !submitted && !FileManager.default.fileExists(atPath: url.appendingPathExtension("submitted").path) {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     deinit {
-        // Dropping a draft cleans up staged images, never submitted ones.
-        if !submitted { try? FileManager.default.removeItem(at: url) }
+        // Saved drafts must remain readable on the next launch. Explicit removal still discards unsent images.
+        if !submitted && !persistedDraft { try? FileManager.default.removeItem(at: url) }
     }
 }
 
@@ -128,8 +143,8 @@ struct ImageAttachments {
 
     /// A lost HTTP response does not mean the daemon rejected the message. Once attempted,
     /// keep these files even if the restored attachment is removed from the draft.
-    func retainForHistory() {
-        for image in items { image.retainForHistory() }
+    mutating func retainForHistory() throws {
+        for image in items { try image.retainForHistory() }
     }
 
     func message(text: String) -> String {
