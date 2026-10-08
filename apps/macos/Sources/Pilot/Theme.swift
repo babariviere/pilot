@@ -104,14 +104,17 @@ struct CircleIconButtonStyle: ButtonStyle {
 /// Small rounded chip used for pickers in composers.
 struct ChipLabel: View {
     let title: String
-    let icon: String
+    var icon: String? = nil
     var dot: Color?
+    var templateImage: NSImage?
 
     var body: some View {
         HStack(spacing: 5) {
             if let dot {
                 Circle().fill(dot).frame(width: 6, height: 6)
-            } else {
+            } else if let templateImage {
+                Image(nsImage: templateImage).resizable().frame(width: 12, height: 12)
+            } else if let icon {
                 Image(systemName: icon).font(.system(size: 11))
             }
             Text(title).lineLimit(1)

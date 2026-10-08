@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import type { Project, ProjectRequest } from "@pilot/protocol";
+import type { Project, ProjectRequest, RemoteBranchList } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
+import { listRemoteBranches } from "./workspaces.ts";
 
 export function expandHome(path: string): string {
 	return resolve(path.replace(/^~(?=$|\/)/, process.env.HOME ?? "~"));
@@ -57,6 +58,12 @@ export class ProjectStore {
 		const project = this.get(id);
 		if (!project) throw new NotFound(`Unknown project: ${id}`);
 		return project;
+	}
+
+	/** Selectable live origin branches. Direct projects do not support base selection. */
+	async branches(id: string): Promise<RemoteBranchList> {
+		const project = this.require(id);
+		return project.workspace === "direct" ? { branches: [] } : listRemoteBranches(project.path);
 	}
 
 	async create(request: ProjectRequest): Promise<Project> {

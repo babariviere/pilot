@@ -214,6 +214,17 @@ public struct ModelList: Codable, Equatable, Sendable {
     }
 }
 
+/// GET /api/projects/:id/branches. Only real branches advertised by origin.
+public struct RemoteBranchList: Codable, Equatable, Sendable {
+    public let branches: [String]
+    public let defaultBranch: String?
+
+    public init(branches: [String] = [], defaultBranch: String? = nil) {
+        self.branches = branches
+        self.defaultBranch = defaultBranch
+    }
+}
+
 /// Needs a projectId, a cwd, or both (cwd overrides the project's path).
 /// POST returns a durable `starting` session while its workspace and kernel initialize.
 public struct SpawnRequest: Codable, Sendable {
@@ -223,10 +234,12 @@ public struct SpawnRequest: Codable, Sendable {
     public var title: String?
     public var model: String?
     public var thinking: String?
+    /// Plain origin branch name, only for a project's private clone.
+    public var baseBranch: String?
 
     public init(
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
-        thinking: String? = nil
+        thinking: String? = nil, baseBranch: String? = nil
     ) {
         self.projectId = projectId
         self.cwd = cwd
@@ -234,6 +247,7 @@ public struct SpawnRequest: Codable, Sendable {
         self.title = title
         self.model = model
         self.thinking = thinking
+        self.baseBranch = baseBranch
     }
 }
 

@@ -163,6 +163,13 @@ final class PilotClient: ObservableObject {
     }
 
     var fixtureModels: ModelList?
+    var fixtureBranches: RemoteBranchList?
+
+    func remoteBranches(_ projectId: String) async throws -> RemoteBranchList {
+        if let fixtureBranches { return fixtureBranches }
+        return try await get(artifactURL(["projects", projectId, "branches"]))
+    }
+
     var fixtureChanges: SessionChanges?
     var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
 

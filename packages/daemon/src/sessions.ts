@@ -26,7 +26,13 @@ import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } f
 import { applyActivity, applyFailure, type OutcomeMeta } from "./session-outcomes.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
-import { createWorkspace, dissociateWorkspace, type Workspace, workspaceBorrowsObjects } from "./workspaces.ts";
+import {
+	createWorkspace,
+	dissociateWorkspace,
+	validateBaseBranch,
+	type Workspace,
+	workspaceBorrowsObjects,
+} from "./workspaces.ts";
 
 export { NotFound } from "./errors.ts";
 
@@ -93,7 +99,8 @@ interface SessionMeta extends OutcomeMeta {
 	thinking?: string;
 	/** Cleared only after initialization and durable input admission. */
 	initializing?: boolean;
-	preparing?: { source: string };
+	/** Durable clone recipe, including the selected plain origin branch across restarts. */
+	preparing?: { source: string; baseBranch?: string };
 	pending?: PendingCommand[];
 	/** A stopped, unopened workspace has no conversation history to load yet. */
 	cancelled?: boolean;
@@ -783,6 +790,11 @@ export class SessionManager {
 	private async spawnAdmitted(request: SpawnRequest): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		const project = request.projectId ? this.projects.require(request.projectId) : undefined;
+		if (request.baseBranch !== undefined) {
+			if (!project || request.cwd !== undefined || project.workspace === "direct")
+				throw new Error("baseBranch requires a private-clone project without a cwd override");
+			await validateBaseBranch(request.baseBranch, project.path);
+		}
 		const directory = request.cwd?.trim() || project?.path;
 		if (!directory) throw new Error("projectId or cwd is required");
 		if (this.closing) throw new Error("pilotd is shutting down");
@@ -796,7 +808,10 @@ export class SessionManager {
 		// Persist the clone recipe and destination, never a runnable source-project cwd.
 		let preparing: SessionMeta["preparing"];
 		if (project && !request.cwd?.trim() && project.workspace !== "direct") {
-			preparing = { source: project.path };
+			preparing = {
+				source: project.path,
+				...(request.baseBranch !== undefined ? { baseBranch: request.baseBranch } : {}),
+			};
 			cwd = join(this.dir(id), "workspace");
 		}
 		const meta: SessionMeta = {
@@ -1062,6 +1077,7 @@ export class SessionManager {
 						meta.cwd,
 						undefined,
 						this.shutdownSignal.signal,
+						plan.baseBranch,
 					);
 					this.preparations.add(preparation);
 					const created = await preparation.finally(() => this.preparations.delete(preparation));

@@ -26,7 +26,7 @@ struct PullRequestBadge: View {
 
     private func badge(_ pr: SessionPullRequest) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: pr.state.icon)
+            pr.state.icon
             Text("#\(pr.number)")
             if session.pullRequestIsStale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
@@ -41,12 +41,12 @@ struct PullRequestBadge: View {
 }
 
 extension PullRequestState {
-    var icon: String {
+    @ViewBuilder var icon: some View {
         switch self {
-        case .draft: "pencil.circle"
-        case .open: "arrow.triangle.branch"
-        case .merged: "arrow.triangle.pull"
-        case .closed: "xmark.circle"
+        case .draft: Image(systemName: "pencil.circle")
+        case .open: Image(nsImage: GitBranchGlyph.image).resizable().frame(width: 11, height: 11)
+        case .merged: Image(systemName: "arrow.triangle.pull")
+        case .closed: Image(systemName: "xmark.circle")
         }
     }
 

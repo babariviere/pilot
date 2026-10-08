@@ -14,7 +14,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { createWorkspace, dissociateWorkspace, workspaceBorrowsObjects, workspaceBranch } from "./workspaces.ts";
+import { collectChanges } from "./changes.ts";
+import {
+	createWorkspace,
+	dissociateWorkspace,
+	listRemoteBranches,
+	workspaceBorrowsObjects,
+	workspaceBranch,
+} from "./workspaces.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -38,6 +45,175 @@ const hasJj = (() => {
 		return false;
 	}
 })();
+
+test("lists only origin's live heads and symbolic default without changing the checkout", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-remote-branches-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "release", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "a.txt"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "base");
+		git(source, "push", "--quiet", "origin", "HEAD:release", "HEAD:z-topic", "HEAD:a/topic", "HEAD:deleted");
+		git(remote, "update-ref", "refs/heads/HEAD", "refs/heads/release");
+		git(source, "push", "--quiet", "origin", ":deleted");
+		git(source, "update-ref", "refs/remotes/origin/deleted", "HEAD");
+		git(source, "branch", "local-only");
+		git(source, "tag", "tag-only");
+		git(source, "push", "--quiet", "origin", "tag-only");
+		git(root, "init", "--quiet", "--bare", join(root, "other.git"));
+		git(source, "remote", "add", "other", join(root, "other.git"));
+		git(source, "push", "--quiet", "other", "HEAD:other-only");
+		writeFileSync(join(source, "a.txt"), "dirty\n");
+		const refs = git(source, "show-ref");
+		const status = git(source, "status", "--porcelain");
+		const fetchHead = existsSync(join(source, ".git", "FETCH_HEAD"))
+			? readFileSync(join(source, ".git", "FETCH_HEAD"), "utf8")
+			: undefined;
+		assert.deepEqual(await listRemoteBranches(source), {
+			branches: ["a/topic", "release", "z-topic"],
+			defaultBranch: "release",
+		});
+		assert.equal(git(source, "show-ref"), refs);
+		assert.equal(git(source, "status", "--porcelain"), status);
+		assert.equal(
+			existsSync(join(source, ".git", "FETCH_HEAD"))
+				? readFileSync(join(source, ".git", "FETCH_HEAD"), "utf8")
+				: undefined,
+			fetchHead,
+		);
+		git(remote, "symbolic-ref", "HEAD", "refs/heads/missing");
+		assert.deepEqual(await listRemoteBranches(source), { branches: ["a/topic", "release", "z-topic"] });
+		rmSync(remote, { recursive: true, force: true });
+		await assert.rejects(listRemoteBranches(source), /Unable to list origin branches/);
+		git(source, "remote", "remove", "origin");
+		assert.deepEqual(await listRemoteBranches(source), { branches: [] });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("selected origin branch starts at its fresh remote tip detached and supplies the diff base", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-selected-base-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "a.txt"), "main\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "main");
+		git(source, "push", "--quiet", "origin", "HEAD:main", "HEAD:release/stable");
+		const publisher = join(root, "publisher");
+		git(root, "clone", "--quiet", remote, publisher);
+		git(publisher, "switch", "--quiet", "release/stable");
+		writeFileSync(join(publisher, "a.txt"), "selected tip\n");
+		git(publisher, "commit", "--quiet", "-am", "selected");
+		git(publisher, "push", "--quiet", "origin", "HEAD");
+		const tip = git(publisher, "rev-parse", "HEAD");
+		assert.notEqual(git(source, "rev-parse", "origin/release/stable"), tip);
+		writeFileSync(join(source, "a.txt"), "user dirty\n");
+		const refs = git(source, "show-ref");
+		const workspace = await createWorkspace(source, join(root, "workspace"), undefined, undefined, "release/stable");
+		assert.equal(workspace.base, "origin/release/stable");
+		assert.equal(git(workspace.path, "rev-parse", "HEAD"), tip);
+		assert.equal(git(workspace.path, "branch", "--show-current"), "");
+		assert.equal(readFileSync(join(workspace.path, "a.txt"), "utf8"), "selected tip\n");
+		git(workspace.path, "switch", "--quiet", "-c", "agent-topic");
+		writeFileSync(join(workspace.path, "a.txt"), "agent edit\n");
+		const changes = await collectChanges(workspace.path, workspace.base);
+		assert.match(changes.base, /^origin\/release\/stable/);
+		assert.match(changes.diff, /-selected tip\n\+agent edit/);
+		assert.doesNotMatch(changes.diff, /-main/);
+		assert.equal(git(source, "show-ref"), refs);
+		assert.equal(readFileSync(join(source, "a.txt"), "utf8"), "user dirty\n");
+		// These are real head names, not remote-tracking refs, full ref paths or command options.
+		const literalNames = ["origin/main", "refs/heads/main", "--upload-pack=bad"];
+		git(publisher, "push", "--quiet", "origin", ...literalNames.map((name) => `HEAD:refs/heads/${name}`));
+		const advertised = await listRemoteBranches(source);
+		assert.deepEqual(advertised.branches, [
+			"--upload-pack=bad",
+			"main",
+			"origin/main",
+			"refs/heads/main",
+			"release/stable",
+		]);
+		for (const [index, name] of advertised.branches.entries()) {
+			const selected = await createWorkspace(source, join(root, `literal-${index}`), undefined, undefined, name);
+			assert.equal(selected.base, `origin/${name}`);
+			assert.equal(git(selected.path, "rev-parse", "HEAD"), git(remote, "rev-parse", `refs/heads/${name}`));
+		}
+		assert.equal(git(source, "show-ref"), refs);
+		assert.equal(readFileSync(join(source, "a.txt"), "utf8"), "user dirty\n");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("explicit bases reject deleted, missing, local-only, tag-only and invalid references instead of falling back", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-invalid-base-"));
+	try {
+		const remote = join(root, "remote.git");
+		const source = join(root, "source");
+		git(root, "init", "--quiet", "--bare", "-b", "main", remote);
+		git(root, "clone", "--quiet", remote, source);
+		writeFileSync(join(source, "a.txt"), "base\n");
+		git(source, "add", ".");
+		git(source, "commit", "--quiet", "-m", "base");
+		git(source, "push", "--quiet", "origin", "HEAD:main", "HEAD:deleted");
+		git(source, "push", "--quiet", "origin", ":deleted");
+		git(source, "update-ref", "refs/remotes/origin/deleted", "HEAD");
+		git(source, "branch", "local-only");
+		git(source, "tag", "tag-only");
+		git(source, "push", "--quiet", "origin", "tag-only");
+		let index = 0;
+		for (const name of [
+			"deleted",
+			"nonexistent",
+			"local-only",
+			"tag-only",
+			"origin/main",
+			"refs/heads/main",
+			"--upload-pack=bad",
+			git(source, "rev-parse", "HEAD"),
+		])
+			await assert.rejects(
+				createWorkspace(source, join(root, `w${index++}`), undefined, undefined, name),
+				/Origin branch unavailable/,
+			);
+		for (const name of [
+			"",
+			"HEAD",
+			"main~1",
+			"main^{commit}",
+			"main:other",
+			"a..b",
+			"a b",
+			"a\n",
+			"@{-1}",
+			"a*",
+			"a.lock",
+		])
+			await assert.rejects(
+				createWorkspace(source, join(root, `w${index++}`), undefined, undefined, name),
+				/valid exact origin branch name/,
+			);
+		rmSync(remote, { recursive: true, force: true });
+		await assert.rejects(
+			createWorkspace(source, join(root, `w${index++}`), undefined, undefined, "main"),
+			/Origin branch unavailable/,
+		);
+		git(source, "remote", "remove", "origin");
+		await assert.rejects(
+			createWorkspace(source, join(root, `w${index++}`), undefined, undefined, "main"),
+			/no origin remote/,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 test("clones a project into a private workspace detached from the remote default, leaving the branch choice to the agent", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-ws-"));

@@ -1,5 +1,17 @@
 # UI screenshots
 
+## Remote base branch selector
+
+`branch-default.png` and `branch-selected.png` show the actual new-task composer with deterministic
+origin branch fixtures, defaulting to `main` and explicitly selecting `feat/billing`. Only
+private-clone projects offer the selector. Regenerate without a live daemon:
+
+```sh
+swift build --package-path apps/macos
+apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-branch-screenshots --branches-only
+cp /tmp/pilot-branch-screenshots/branch-{default,selected}.png docs/screenshots/
+```
+
 ## Session debugging
 
 - `session-debug-button.png`: the bug button at the top right of a session.
@@ -34,6 +46,10 @@ cp /tmp/pilot-status-screenshots/status-icons.png docs/screenshots/
 ```
 
 ## PR status
+
+`pr-sidebar-icons.png` shows the shared three-node Git branch glyph for open PRs in the sidebar.
+Green color and PR numbers are preserved; draft, merged, closed and stale indicators remain distinct.
+Regenerate with `Pilot --snapshot /tmp/pilot-pr-icons --pr-icons-only`, then copy the image here.
 
 These screenshots use deterministic fixture data, not live session conversations.
 They show PR state separately from agent outcome and unread indicators.
