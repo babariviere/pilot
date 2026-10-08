@@ -6,6 +6,7 @@ import SwiftUI
 final class TranscriptScrollState: ObservableObject {
     @Published var follow = TranscriptScrollFollow()
     private var renderedScroll: Task<Void, Never>?
+    lazy var messageToggled: () -> Void = { [weak self] in self?.follow.pauseFollowing() }
 
     /// Several visible Markdown/code rows can finish together. Scroll once, after publication/layout.
     func contentPrepared(_ action: @escaping () -> Void) {

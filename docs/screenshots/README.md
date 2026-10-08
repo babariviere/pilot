@@ -1,5 +1,19 @@
 # UI screenshots
 
+## Long chat messages
+
+Render the production message views with synthetic crash-report and assistant fixtures:
+
+```sh
+swift build --package-path apps/macos
+apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-long-messages --long-messages-only
+```
+
+`long-messages-400.png` and `long-messages-760.png` show the soft fade/shadow and expansion chevron
+at narrow and wide widths, without an ellipsis or a separate "Show full message" action row.
+`long-message-expanded.png` shows the full selectable user bubble and its collapse control.
+These native fixture screenshots verify message layout, not live transcript scrolling.
+
 ## Remote base branch selector
 
 `branch-default.png` and `branch-selected.png` show the actual new-task composer with deterministic

@@ -1,5 +1,5 @@
 /// Auto-follow is suspended during a scroll gesture and while reading older messages.
-/// Only user scroll events update this policy, not layout changes from streaming output.
+/// User scrolling and explicit message expansion update this policy, not streaming layout.
 public struct TranscriptScrollFollow: Equatable {
     public private(set) var isFollowing = true
     public private(set) var isUserScrolling = false
@@ -7,6 +7,10 @@ public struct TranscriptScrollFollow: Equatable {
     public init() {}
 
     public var shouldScrollToBottom: Bool { isFollowing && !isUserScrolling }
+
+    public mutating func pauseFollowing() {
+        isFollowing = false
+    }
 
     public mutating func beginUserScroll() {
         isUserScrolling = true

@@ -6,6 +6,16 @@ import Testing
     #expect(follow.shouldScrollToBottom)
 }
 
+@Test func messageExpansionPausesFollowUntilUserReturnsToBottom() {
+    var follow = TranscriptScrollFollow()
+    follow.pauseFollowing()
+    #expect(!follow.shouldScrollToBottom && !follow.isUserScrolling)
+    follow.endUserScroll(distanceToBottom: 100)
+    #expect(!follow.shouldScrollToBottom)
+    follow.endUserScroll(distanceToBottom: 0)
+    #expect(follow.shouldScrollToBottom)
+}
+
 @Test func scrollingUpSuspendsFollowBeforeTheViewportMoves() {
     var follow = TranscriptScrollFollow()
     follow.beginUserScroll()

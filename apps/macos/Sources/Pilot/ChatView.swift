@@ -16,6 +16,7 @@ final class SessionFeed: ObservableObject {
     private var generation = UUID()
     private var processorRevision = 0
     var onPresentationChanged: (() -> Void)?
+    var onEventsApplied: (([JSONValue]) -> Void)?
     var isSubscribed: Bool { token != nil }
     var cachedByteCount: Int { presentation.cachedByteCount }
 
@@ -75,6 +76,7 @@ final class SessionFeed: ObservableObject {
                     return
                 }
                 guard !Task.isCancelled, self.generation == generation else { return }
+                self.onEventsApplied?(events)
                 if presentation.revision != self.processorRevision {
                     self.processorRevision = presentation.revision
                     presentation.revision = self.presentation.revision + 1
@@ -112,7 +114,8 @@ struct ChatView: View {
     @StateObject private var composerOwner: ChatComposerOwner
     @StateObject private var scroll = TranscriptScrollState()
     @StateObject private var preparedAction = TranscriptPreparedAction()
-    @StateObject private var toolExpansions = TranscriptToolExpansions()
+    @StateObject private var toolExpansions = TranscriptExpansions()
+    @StateObject private var messageExpansions = TranscriptExpansions()
     private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
@@ -134,10 +137,12 @@ struct ChatView: View {
                     }
                     if transcript.historyRowCount > 0 {
                         TranscriptHistoryRows(revision: transcript.historyRevision,
-                            rows: transcript.historyRows[...], toolExpansions: toolExpansions).equatable()
+                            rows: transcript.historyRows[...], toolExpansions: toolExpansions,
+                            messageExpansions: messageExpansions).equatable()
                     }
                     ForEach(transcript.liveRows) { row in
-                        RowView(row: row, toolExpansions: toolExpansions).equatable()
+                        RowView(row: row, toolExpansions: toolExpansions,
+                            messageExpansions: messageExpansions).equatable()
                     }
                     if transcript.working, !transcript.streaming ||
                         (transcript.liveRows.last ?? transcript.historyRows.last).map(isToolRow) == true {
@@ -166,6 +171,7 @@ struct ChatView: View {
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
             .environment(\.transcriptContentPrepared, preparedAction.callback)
+            .environment(\.transcriptMessageToggled, scroll.messageToggled)
             .onChange(of: transcript.revision) { _, _ in
                 guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
@@ -214,8 +220,14 @@ struct ChatView: View {
                 }
             }
         }
-        .onAppear { feed.start() }
-        .onDisappear { feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil }
+        .onAppear {
+            feed.onEventsApplied = { [messageExpansions] in messageExpansions.applyMessageEvents($0) }
+            feed.start()
+        }
+        .onDisappear {
+            feed.onEventsApplied = nil
+            feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
+        }
     }
 
     private func isToolRow(_ row: ChatRow) -> Bool {
@@ -252,15 +264,19 @@ struct ChatView: View {
 struct TranscriptHistoryRows: View, Equatable {
     let revision: UUID
     let rows: ArraySlice<ChatRow>
-    var toolExpansions: TranscriptToolExpansions? = nil
+    var toolExpansions: TranscriptExpansions? = nil
+    var messageExpansions: TranscriptExpansions? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.revision == rhs.revision && lhs.rows.count == rhs.rows.count && lhs.toolExpansions === rhs.toolExpansions
+        lhs.revision == rhs.revision && lhs.rows.count == rhs.rows.count
+            && lhs.toolExpansions === rhs.toolExpansions && lhs.messageExpansions === rhs.messageExpansions
     }
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: 16) {
-            ForEach(rows) { row in RowView(row: row, toolExpansions: toolExpansions).equatable() }
+            ForEach(rows) { row in
+                RowView(row: row, toolExpansions: toolExpansions, messageExpansions: messageExpansions).equatable()
+            }
         }
     }
 }
@@ -275,9 +291,22 @@ private final class TranscriptPreparedAction: ObservableObject {
 
 struct RowView: View, Equatable {
     let row: ChatRow
-    var toolExpansions: TranscriptToolExpansions? = nil
+    let toolExpansions: TranscriptExpansions?
+    let messageExpansions: TranscriptExpansions?
+    private let streamingGeneration: UUID?
 
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.row == rhs.row && lhs.toolExpansions === rhs.toolExpansions }
+    init(row: ChatRow, toolExpansions: TranscriptExpansions? = nil, messageExpansions: TranscriptExpansions? = nil) {
+        self.row = row
+        self.toolExpansions = toolExpansions
+        self.messageExpansions = messageExpansions
+        streamingGeneration = row.id.hasPrefix("streaming-") ? messageExpansions?.streamingGeneration : nil
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.row == rhs.row && lhs.toolExpansions === rhs.toolExpansions
+            && lhs.messageExpansions === rhs.messageExpansions
+            && lhs.streamingGeneration == rhs.streamingGeneration
+    }
 
     private var maximumWidth: CGFloat {
         switch row {
@@ -296,14 +325,19 @@ struct RowView: View, Equatable {
 
     @ViewBuilder private var content: some View {
         switch row {
-        case let .user(_, text):
+        case let .user(id, text):
             if let notification = SubagentNotification(message: text) {
                 SubagentAnswerRow(notification: notification)
             } else {
-                UserMessage(text: text)
+                UserMessage(text: text, expansion: messageExpansions?.state(for: id))
             }
-        case let .text(_, text):
-            MarkdownView(text: text)
+        case let .text(id, text):
+            if let expansion = messageExpansions?.state(for: id) {
+                CollapsibleMessage(text: text, expansion: expansion) { MarkdownView(text: text) }
+                    .id(ObjectIdentifier(expansion))
+            } else {
+                CollapsibleMessage(text: text) { MarkdownView(text: text) }
+            }
         case let .thinking(_, text, streaming):
             ThinkingRow(text: text, streaming: streaming)
         case let .tools(_, items):
@@ -322,21 +356,20 @@ struct RowView: View, Equatable {
     }
 }
 
-private struct UserMessage: View {
+struct UserMessage: View {
     @Environment(\.pilotFonts) private var fonts
     let text: String
+    var expansion: ExpansionState? = nil
 
     var body: some View {
         HStack {
             Spacer(minLength: 72)
-            Text(text)
-                .font(fonts.body)
-                .lineSpacing(3)
-                .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.muted))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
+            CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
+                Text(text)
+                    .font(fonts.body)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+            }
         }
         .padding(.top, 6)
     }
