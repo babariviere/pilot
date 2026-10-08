@@ -151,7 +151,7 @@ export function runKernelWorker(): void {
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
 			case "input":
-				await session.submit(command.requestId, command.content, command.mode);
+				await session.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "abort":
@@ -208,6 +208,7 @@ export function runKernelWorker(): void {
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
+					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
 				});
 				await send({
 					type: "ready",

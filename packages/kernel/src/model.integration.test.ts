@@ -11,7 +11,7 @@ import {
 	InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
 import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import { ConversationBusy, InboxDoc } from "@earendil-works/pi-durable";
+import { ConversationBusy, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import type { SessionUsage } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
@@ -313,4 +313,70 @@ test("failed durable thinking edits restore the native level without reselecting
 	assert.equal(session.thinkingLevel, "high");
 	assert.equal(session.model, second);
 	assert.deepEqual(await session.conversation.agent(context), before);
+});
+
+test("idle-only input rejects live runs and retained inbox items but permits idempotent retry", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	f.a.setResponses([() => response.promise]);
+	await session.submit("idle-first", "Start only if idle", "steer", true);
+	const before = await session.harness.inspect(context);
+	await session.submit("idle-first", "Retry", "followUp", true);
+	assert.deepEqual(await session.harness.inspect(context), before);
+	await assert.rejects(session.submit("idle-rejected", "No queue", "steer", true), ConversationBusy);
+	response.resolve(fauxAssistantMessage("done"));
+	await session.conversation.waitForIdle(context);
+	await session.conversation.commit(async (tx) => {
+		(await tx.doc(InboxDoc, session.conversation.id)).items.push({
+			id: 999 as never,
+			mode: "followUp",
+			content: "retained",
+		});
+	}, context);
+	await session.submit("idle-first", "Retry after completion", "followUp", true);
+	await assert.rejects(session.submit("idle-inbox", "Must not consume inbox", "followUp", true), ConversationBusy);
+	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))?.items.length, 1);
+	await session.conversation.commit(async (tx) => {
+		(await tx.doc(InboxDoc, session.conversation.id)).items = [];
+		(await tx.doc(LiveDoc, session.conversation.id)).compactions = [
+			{ taskId: 999 as never, reason: "manual", blocking: false, attempt: 0 },
+		];
+	}, context);
+	await assert.rejects(session.submit("idle-compacting", "No compaction race", "followUp", true), ConversationBusy);
+	await session.conversation.commit(async (tx) => {
+		delete (await tx.doc(LiveDoc, session.conversation.id)).compactions;
+	}, context);
+	f.a.setResponses([fauxAssistantMessage("done")]);
+	await session.submit("idle-after", "Now idle", "followUp", true);
+	await session.conversation.waitForIdle(context);
+});
+
+test("idle-only input checks durable state after native preparation and guards concurrent admissions", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const prepared = deferred<string>();
+	const prepare = t.mock.method(f.adapters[0]!, "prepareInput", () => prepared.promise);
+	const input = session.submit("idle-preparing", "Prepare first", "followUp", true);
+	await assert.rejects(session.submit("idle-racing", "Concurrent", "followUp", true), ConversationBusy);
+	await session.conversation.commit(async (tx) => {
+		(await tx.doc(InboxDoc, session.conversation.id)).items.push({
+			id: 999 as never,
+			mode: "followUp",
+			content: "raced preparation",
+		});
+	}, context);
+	prepared.resolve("Prepared");
+	await assert.rejects(input, ConversationBusy);
+	prepare.mock.restore();
+	await session.conversation.commit(async (tx) => {
+		(await tx.doc(InboxDoc, session.conversation.id)).items = [];
+	}, context);
+	f.a.setResponses([fauxAssistantMessage("done")]);
+	await session.submit("idle-preparing", "Can retry rejected admission", "followUp", true);
+	await session.conversation.waitForIdle(context);
 });

@@ -88,6 +88,8 @@ export interface NativeAdapterOptions {
 	sessionFile?: string;
 	/** Live display data, independent from the durable transcript. */
 	onUsageChanged?: (usage: SessionUsage) => void;
+	/** Host observers, also applied to nested native tool calls. Build sessions only. */
+	hostExtensions?: ExtensionFactory[];
 	/** Dependency injection for offline tests. */
 	settingsManager?: SettingsManager;
 	loaderOptions?: LoaderOptions;
@@ -332,6 +334,7 @@ export class NativeAdapter {
 							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
 							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
 							...(options.loaderOptions?.extensionFactories ?? []),
+							...(options.hostExtensions ?? []),
 							capture,
 						],
 					},
