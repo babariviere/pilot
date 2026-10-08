@@ -45,8 +45,14 @@ function strings(value: unknown): string[] {
 	return [];
 }
 
-export function pilotPrompt(context: PilotContext): string {
+export function pilotPrompt(context: PilotContext, artifactsAvailable = false): string {
 	const lines = ["You are running inside Pilot as a background agent. The user reviews your work in the Pilot app."];
+	if (artifactsAvailable) {
+		lines.push(
+			"- When explaining architecture, workflows, relationships or complex behavior, proactively publish a diagram with the artifact tool when it makes the explanation clearer, without waiting for the user to request one. Prefer simple Mermaid diagrams in HTML artifacts using the bundled mermaid library. Accompany the diagram with a short explanation; skip diagrams for trivial answers or when the user asks for text only.",
+			"- Artifact preview is optional verification, never a prerequisite for publishing. If preview is unavailable or fails, publish without it. Do not ask the user to install a browser just to create a diagram.",
+		);
+	}
 	const workspace = context.workspace;
 	const requirePullRequest = context.requirePullRequest !== false;
 	if (workspace) {
@@ -93,10 +99,14 @@ export function pilotPrompt(context: PilotContext): string {
 }
 
 /** Adds Pilot's prompt section and GitHub policy to the native extension. */
-export function withPilotPolicy(extension: Extension, context: PilotContext): Extension {
+export function withPilotPolicy(
+	extension: Extension,
+	context: PilotContext,
+	artifactsAvailable: () => boolean = () => false,
+): Extension {
 	return {
 		...extension,
-		sections: [...(extension.sections ?? []), section("pilot", () => pilotPrompt(context))],
+		sections: [...(extension.sections ?? []), section("pilot", () => pilotPrompt(context, artifactsAvailable()))],
 		hooks: [
 			...(extension.hooks ?? []),
 			hook(ToolTask, {

@@ -3,6 +3,20 @@ import { test } from "node:test";
 import { reportStatus } from "./attention.ts";
 import { githubPosting, pilotPrompt } from "./policy.ts";
 
+test("Pilot diagram guidance is conditional on artifact availability", () => {
+	const enabled = pilotPrompt({}, true);
+	assert.match(enabled, /proactively publish a diagram with the artifact tool/);
+	assert.match(enabled, /without waiting for the user to request one/);
+	assert.match(enabled, /Prefer simple Mermaid diagrams/);
+	assert.match(enabled, /short explanation/);
+	assert.match(enabled, /skip diagrams for trivial answers/);
+	assert.match(enabled, /text only/);
+	assert.match(enabled, /preview is optional verification, never a prerequisite/);
+	assert.match(enabled, /Do not ask the user to install a browser/);
+	for (const prompt of [pilotPrompt({}), pilotPrompt({}, false)])
+		assert.doesNotMatch(prompt, /artifact|diagram|Mermaid|preview/);
+});
+
 test("blocks GitHub posting in commands and codemode scripts", () => {
 	assert.ok(githubPosting({ command: 'gh pr comment 12 --body "done"' }));
 	assert.ok(githubPosting({ command: "gh pr review 12 --approve" }));

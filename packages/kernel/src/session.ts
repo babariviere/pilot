@@ -141,7 +141,17 @@ export class KernelSession {
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
 			const prepare = (extension: Extension) =>
-				withAttention(replayUnsafe(withPilotPolicy(extension, spec.pilot ?? {})));
+				withAttention(
+					replayUnsafe(
+						withPilotPolicy(
+							extension,
+							spec.pilot ?? {},
+							() =>
+								adapter!.session.getCallableToolNames().includes("artifact") ||
+								adapter!.session.getActiveToolNames().includes("artifact"),
+						),
+					),
+				);
 			const registry = createRegistry();
 			registry.install(prepare(adapter.extension));
 			harness = await Harness.open(

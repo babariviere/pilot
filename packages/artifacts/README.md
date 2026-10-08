@@ -98,12 +98,21 @@ and prepared HTML, not temporary workspace files.
 
 ## Verification
 
+Pilot-only system guidance encourages agents to publish explanatory diagrams when useful, preferring
+simple Mermaid diagrams with a short explanation. It is included only when the artifact tool is
+available, including through codemode. Normal Pi sessions and `AGENTS.md` are unchanged.
+
 `artifact({action: "preview", ...})` renders a draft without saving it, returning PNG image content,
 console messages and content height. When using codemode, display the structured `screenshot` with
 `image`, not `text`.
 
-Install Chromium once with `npm run artifacts:browser`. Installation is never triggered by a model tool.
-For an installed release app without npm, run its bundled Node explicitly:
+Preview is optional, never a prerequisite for publication. The tool advertises and accepts the preview
+action only if Chromium is installed when the session opens. Without it, agents can still create,
+update and view artifacts, and should not ask for a browser installation to publish diagrams. After
+installing Chromium, reopen the session to enable agent-side previews.
+
+To enable previews, install Chromium once with `npm run artifacts:browser`. Installation is never
+triggered by a model tool. For an installed release app without npm, run its bundled Node explicitly:
 
 ```sh
 runtime="/Applications/Pilot.app/Contents/Resources/runtime"

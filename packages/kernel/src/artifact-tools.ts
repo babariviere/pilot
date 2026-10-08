@@ -5,6 +5,7 @@ import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil
 import {
 	type ArtifactStore,
 	artifactLibraries,
+	isArtifactPreviewAvailable,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
 	previewArtifact,
@@ -59,15 +60,15 @@ Mermaid example: libraries:["mermaid"], source:'<pre class="mermaid">graph TD; A
 React: source is a JSX/TSX module with a default-export component. Allowed imports only: react, react-dom (including react-dom/client), mermaid, echarts, motion (including motion/react), and optional d3 or three. React and ReactDOM mounting are provided; do not mount the component yourself.
 React example: {title:"Counter",kind:"react",source:'import {useState} from "react"; export default function App(){const [n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>Count: {n}</button>}'}.
 Available pinned offline libraries: ${JSON.stringify(artifactLibraries)}.
-Use artifact({action:"preview",...}) to inspect screenshots and diagnostics before publishing. Update an existing artifact instead of creating duplicates; get its current editable source first and pass expectedRevision to avoid overwriting a newer revision.`;
+Update an existing artifact instead of creating duplicates; get its current editable source first and pass expectedRevision to avoid overwriting a newer revision.`;
 
 export interface ArtifactToolOptions {
 	store: Pick<ArtifactStore, "create" | "update" | "get" | "list">;
 	/** Persist a display-only transcript reference, including publications nested inside codemode. */
 	onArtifactPublished?: (artifact: ArtifactReference) => Promise<void>;
 	onArtifactsChanged?: () => void;
-	/** Allows tool tests to avoid launching a browser. */
-	preview?: typeof previewArtifact;
+	/** Override the renderer for tests, or disable preview. By default, require installed Chromium. */
+	preview?: typeof previewArtifact | false;
 }
 
 function checkSource(write: ArtifactWrite): void {
@@ -95,6 +96,14 @@ function dataResult<T extends JsonValue>(data: T): AgentToolResult<T> {
 /** Register through createAgentSession(customTools), so codemode and extension hooks see these tools. */
 export function createArtifactTools(options: ArtifactToolOptions): ToolDefinition[] {
 	const { store } = options;
+	const preview =
+		options.preview === false
+			? undefined
+			: (options.preview ?? (isArtifactPreviewAvailable() ? previewArtifact : undefined));
+	const actions = ["create", "update", "get", "list", ...(preview ? ["preview" as const] : [])] as const;
+	const previewDescription = preview
+		? '- preview: optionally render a draft to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. Preview is not required before publishing. If it fails, publish without preview; do not request a browser installation. In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.\n'
+		: "";
 	const published = async (value: ArtifactRevision) => {
 		const artifact = {
 			id: value.id,
@@ -120,19 +129,18 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		defineTool({
 			name: "artifact",
 			label: "Artifact",
-			description: `Publish, inspect and preview session-local offline artifacts.
+			description: `Publish and inspect session-local offline artifacts.
 Actions:
 - create: publish a new artifact with title, kind, source and optional libraries. Returns a compact pinned reference, not compiled HTML.
 - update: publish a revision by id with the complete replacement title, kind, source and libraries, not a patch. Optional expectedRevision rejects stale updates. Returns a compact pinned reference.
 - get: read editable source and metadata by id, optionally at a historical revision. Omitting revision reads the latest. Never returns compiled HTML. Use before updating and pass its revision as expectedRevision.
 - list: list current session artifact summaries without source or compiled HTML.
-- preview: render draft title, kind, source and optional libraries to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. Requires Playwright Chromium; if missing, install with npm run artifacts:browser (npx playwright install chromium). In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.
-${authoring}`,
-			promptSnippet: "Publish, inspect or preview offline HTML, React or image artifacts",
+${previewDescription}${authoring}`,
+			promptSnippet: "Publish and inspect offline HTML, React or image artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },
 			parameters: Type.Object({
-				action: StringEnum(["create", "update", "get", "list", "preview"] as const),
+				action: StringEnum(actions),
 				id: Type.Optional(Type.String({ description: "Artifact ID, required for get and update." })),
 				title: Type.Optional(writeProperties.title),
 				kind: Type.Optional(kind),
@@ -140,12 +148,24 @@ ${authoring}`,
 				libraries: writeProperties.libraries,
 				expectedRevision: Type.Optional(revisionNumber),
 				revision: Type.Optional(revisionNumber),
-				width: Type.Optional(
-					Type.Integer({ minimum: 240, maximum: 1600, description: "Preview width in CSS pixels, default 800." }),
-				),
-				height: Type.Optional(
-					Type.Integer({ minimum: 200, maximum: 1600, description: "Preview height in CSS pixels, default 600." }),
-				),
+				...(preview
+					? {
+							width: Type.Optional(
+								Type.Integer({
+									minimum: 240,
+									maximum: 1600,
+									description: "Preview width in CSS pixels, default 800.",
+								}),
+							),
+							height: Type.Optional(
+								Type.Integer({
+									minimum: 200,
+									maximum: 1600,
+									description: "Preview height in CSS pixels, default 600.",
+								}),
+							),
+						}
+					: {}),
 			}),
 			outputSchema: Type.Union([
 				referenceSchema,
@@ -153,19 +173,25 @@ ${authoring}`,
 					artifact: Type.Object({ ...summaryProperties, source: Type.String(), libraries: Type.Array(library) }),
 				}),
 				Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
-				Type.Object({
-					screenshot: Type.Object({
-						mimeType: Type.Literal("image/png"),
-						data: Type.String(),
-						width: Type.Number(),
-						height: Type.Number(),
-					}),
-					...diagnosticsProperties,
-				}),
+				...(preview
+					? [
+							Type.Object({
+								screenshot: Type.Object({
+									mimeType: Type.Literal("image/png"),
+									data: Type.String(),
+									width: Type.Number(),
+									height: Type.Number(),
+								}),
+								...diagnosticsProperties,
+							}),
+						]
+					: []),
 			]),
 			async execute(_callId, params, signal, _onUpdate, ctx): Promise<AgentToolResult<JsonValue>> {
 				signal?.throwIfAborted();
 				const { action, id } = params;
+				if (action === "preview" && !preview)
+					throw new Error("Artifact preview is unavailable; publish without preview");
 				if ((action === "get" || action === "update") && id === undefined)
 					throw new Error(`Artifact ${action} requires id`);
 				switch (action) {
@@ -198,9 +224,9 @@ ${authoring}`,
 						checkSource(write);
 						if (action === "create") return published(await store.create(write));
 						if (action === "update") return published(await store.update(id!, write, params.expectedRevision));
-						const result = await (options.preview ?? previewArtifact)(write, {
-							width: params.width,
-							height: params.height,
+						const result = await preview!(write, {
+							width: typeof params.width === "number" ? params.width : undefined,
+							height: typeof params.height === "number" ? params.height : undefined,
 							signal,
 						});
 						const diagnostics = { consoleMessages: result.consoleMessages, contentHeight: result.contentHeight };
