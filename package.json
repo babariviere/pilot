@@ -1,6 +1,6 @@
 {
 	"name": "pilot",
-	"version": "1.5.0",
+	"version": "1.6.0",
 	"private": true,
 	"description": "Background pi agents: durable sessions, a native macOS app, and triggers from GitHub, Slack and Linear.",
 	"type": "module",

@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/babariviere/pilot/compare/v1.5.0...v1.6.0) (2026-10-08)
+
+
+### Features
+
+* **sessions:** add persistent session pinning ([de59430](https://github.com/babariviere/pilot/commit/de59430743c7d86b5b116949806bd44097ad262a))
+
+
+### Bug Fixes
+
+* **lint:** clear daemon lint and Biome deprecation ([51c39e1](https://github.com/babariviere/pilot/commit/51c39e19648d3b631b87faf2a945fece472a5960))
+* **macos:** fold long chat messages with a soft fade ([c8a96c8](https://github.com/babariviere/pilot/commit/c8a96c8be4c1f601fb69fc75621ff741f498a87c))
+
 ## [1.5.0](https://github.com/babariviere/pilot/compare/v1.4.0...v1.5.0) (2026-10-08)
 
 
