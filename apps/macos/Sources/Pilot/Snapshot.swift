@@ -93,6 +93,35 @@ enum Snapshot {
             return
         }
 
+        if CommandLine.arguments.contains("--long-messages-only") {
+            let report = "I had a crash:\n\nTranslated Report\nProcess: Pilot\nException: Stack overflow\nThread 0:\n"
+                + String(repeating: "SwiftUI menuHostDidChangeMenuItems\n", count: 2000)
+            let response = "## Investigation\n\n" + String(repeating: "The menu update repeated recursively.\n", count: 40)
+            for width in [400.0, 760.0] {
+                renderMessageFixture(VStack(alignment: .leading, spacing: 20) {
+                    Text("Long messages, folded by default").font(.headline)
+                    UserMessage(text: report)
+                    CollapsibleMessage(text: response) { MarkdownView(text: response) }
+                    Divider()
+                    Text("The rest of the conversation stays in view.").font(.body)
+                    Spacer()
+                }.padding(24), size: CGSize(width: width, height: 520),
+                    to: directory.appending(path: "long-messages-\(Int(width)).png"))
+            }
+            let expansion = ExpansionState()
+            expansion.expanded = true
+            let expanded = (1...17).map { "Frame \($0): SwiftUI menu update" }.joined(separator: "\n")
+            renderMessageFixture(VStack(alignment: .leading, spacing: 16) {
+                Text("Expanded message").font(.headline)
+                UserMessage(text: expanded, expansion: expansion)
+                Spacer()
+            }.padding(24), size: CGSize(width: 760, height: 600),
+                to: directory.appending(path: "long-message-expanded.png"))
+            print("snapshots written to \(directory.path)")
+            NSApp.terminate(nil)
+            return
+        }
+
         // Capture the real SwiftUI window toolbar, including native shared backgrounds.
         if CommandLine.arguments.contains("--session-toolbar-only") {
             let session = SessionSummary(
@@ -619,6 +648,19 @@ enum Snapshot {
     private static func snapshot(_ view: NSView, to url: URL) {
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
+        try? rep.representation(using: .png, properties: [:])?.write(to: url)
+    }
+
+    /// These message fixtures are pure SwiftUI. ImageRenderer avoids macOS compositing
+    /// omitting offscreen NSHostingView content from cacheDisplay screenshots.
+    private static func renderMessageFixture<V: View>(_ view: V, size: CGSize, to url: URL) {
+        let renderer = ImageRenderer(content: view
+            .environment(\.pilotFonts, AppSettings.shared.fonts)
+            .frame(width: size.width, height: size.height)
+            .background(Theme.background))
+        renderer.scale = 1
+        guard let image = renderer.cgImage else { return }
+        let rep = NSBitmapImageRep(cgImage: image)
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 

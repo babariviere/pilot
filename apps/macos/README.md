@@ -20,7 +20,11 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   collapsed folders automatically.
 - **Chat.** Native transcript fed by pilotd's agent event stream: block Markdown (headings, lists, code
   blocks with copy), collapsible thinking, grouped tool rows with summaries ("Ran command npm test"),
-  live output and stop. Return steers the current run (or sends when idle), Option-Return queues a
+  live output and stop. User and assistant messages over 1,600 characters or 16 source lines fold
+  into a six-line preview with a soft fade and shadow at the bottom edge. Click the bubble or
+  chevron to expand, **Show less** to fold again. Right-click a folded message to copy its full
+  source (expanded messages also have a copy button). Expanding pauses bottom-follow until you scroll back
+  to the bottom. Return steers the current run (or sends when idle), Option-Return queues a
   follow-up, Shift-Return adds a line. All queued messages appear above the composer, with their delivery
   mode and full text; steering appears before follow-ups, with FIFO order within each mode. Long queues
   scroll and survive reconnects. Edit queued messages inline with Edit or Option-Up/Option-Down.

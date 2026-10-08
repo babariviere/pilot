@@ -4,7 +4,7 @@ import SwiftUI
 /// Consecutive tool calls, as one compact card with a row per call.
 struct ToolGroupView: View {
     let items: [ToolItem]
-    var expansions: TranscriptToolExpansions? = nil
+    var expansions: TranscriptExpansions? = nil
 
     var body: some View {
         LazyVStack(spacing: 0) {
@@ -26,14 +26,70 @@ final class ExpansionState: ObservableObject {
 /// Chat-scoped ownership keeps expansion alive when a group moves between the live tail and
 /// committed history. Individual rows still observe only their own expansion changes.
 @MainActor
-final class TranscriptToolExpansions: ObservableObject {
+final class TranscriptExpansions: ObservableObject {
     private var states: [String: ExpansionState] = [:]
+    private var streamingStates: [String: ExpansionState] = [:]
+    private var streamingTimestamp: Int?
+    @Published private(set) var streamingGeneration = UUID()
 
     func state(for callID: String) -> ExpansionState {
+        if callID.hasPrefix("streaming-") {
+            if let state = streamingStates[callID] { return state }
+            let state = ExpansionState()
+            streamingStates[callID] = state
+            return state
+        }
         if let state = states[callID] { return state }
         let state = ExpansionState()
         states[callID] = state
         return state
+    }
+
+    /// Consume the ordered event batch, not just the final streaming flag: end/start can
+    /// arrive in one publication and reuse the same visible streaming row ID.
+    func applyMessageEvents(_ events: [JSONValue]) {
+        for event in events {
+            switch event["type"]?.string {
+            case "snapshot":
+                let timestamp = event["generation"]?["message"]?["timestamp"]?.int
+                if let streamingTimestamp, streamingTimestamp == timestamp { continue }
+                // Recovery may skip message_end. Use the assistant's stable timestamp,
+                // never its changing text, to reconcile an expanded streamed response.
+                if let streamingTimestamp, !streamingStates.isEmpty {
+                    for rawEntry in event["entries"]?.array ?? [] {
+                        for (index, message) in (rawEntry["model"]?.array ?? []).enumerated()
+                            where message["role"]?.string == "assistant" && message["timestamp"]?.int == streamingTimestamp {
+                            guard let entry = Entry(json: rawEntry) else { continue }
+                            transferStreamingStates(entry: entry, messageIndex: index)
+                        }
+                    }
+                }
+                streamingStates = [:]
+                streamingTimestamp = timestamp
+                streamingGeneration = UUID()
+            case "message_start":
+                streamingStates = [:]
+                streamingTimestamp = event["message"]?["timestamp"]?.int
+                streamingGeneration = UUID()
+            case "message_end":
+                if let entry = event["entry"].flatMap(Entry.init(json:)) {
+                    for (messageIndex, message) in entry.messages.enumerated() where message.role == "assistant" {
+                        transferStreamingStates(entry: entry, messageIndex: messageIndex)
+                    }
+                }
+                streamingStates = [:]
+                streamingTimestamp = nil
+            default: break
+            }
+        }
+    }
+
+    private func transferStreamingStates(entry: Entry, messageIndex: Int) {
+        for blockIndex in entry.messages[messageIndex].blocks.indices {
+            if let state = streamingStates["streaming-\(blockIndex)"] {
+                states["\(entry.id)-\(messageIndex)-\(blockIndex)"] = state
+            }
+        }
     }
 }
 

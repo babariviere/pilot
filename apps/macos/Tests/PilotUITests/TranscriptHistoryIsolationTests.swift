@@ -52,7 +52,7 @@ import Testing
         ])]),
     ])])
     #expect(first.historyRowCount == 0 && first.liveRows.count == 1)
-    let owner = TranscriptToolExpansions()
+    let owner = TranscriptExpansions()
     let expansion = owner.state(for: "c")
     expansion.expanded = true
     let committed = try await processor.apply([.object([
@@ -66,7 +66,7 @@ import Testing
 
     // Exercise the actual historical RowView -> ToolGroupView -> ToolRowView ownership chain.
     // A fresh owner renders the same tool collapsed, while the moved group stays expanded.
-    func height(owner: TranscriptToolExpansions) -> CGFloat {
+    func height(owner: TranscriptExpansions) -> CGFloat {
         let view = NSHostingView(rootView: TranscriptHistoryRows(revision: committed.historyRevision,
             rows: committed.historyRows[...], toolExpansions: owner)
             .fixedSize(horizontal: false, vertical: true).frame(width: 500))
@@ -74,5 +74,5 @@ import Testing
         view.layoutSubtreeIfNeeded()
         return view.fittingSize.height
     }
-    #expect(height(owner: owner) > height(owner: TranscriptToolExpansions()) + 40)
+    #expect(height(owner: owner) > height(owner: TranscriptExpansions()) + 40)
 }
