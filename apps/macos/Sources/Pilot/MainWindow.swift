@@ -74,7 +74,6 @@ struct SessionDetail: View {
         .navigationSubtitle(subtitle)
         .toolbar {
             ToolbarItemGroup {
-                SessionStatusIcon(status: session.status)
                 if model.isUnread(session) { UnreadBadge() }
                 PullRequestBadge(session: session)
                 if session.isArchived {
