@@ -1616,7 +1616,10 @@ export class SessionManager {
 			}
 		};
 		let attachers = this.subagentAttachers.get(id);
-		if (!attachers) this.subagentAttachers.set(id, (attachers = new Set()));
+		if (!attachers) {
+			attachers = new Set();
+			this.subagentAttachers.set(id, attachers);
+		}
 		attachers.add(attach);
 		attach();
 		return () => {
