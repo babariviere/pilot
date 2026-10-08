@@ -145,7 +145,7 @@ struct SessionToolbarMetadata: View {
                 .accessibilityLabel(session.isAsk ? "Source \(source)" : "Branch \(source)")
             }
             if !session.isAsk {
-                PullRequestBadge(session: session)
+                PullRequestBadge(session: session, showsStateIcon: false)
             }
         }
     }
@@ -156,7 +156,7 @@ struct SessionInspectorActions: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 8) {
             if !session.isAsk {
                 InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
                 InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
@@ -192,6 +192,7 @@ struct SessionMoreActions: View {
             }
         } label: {
             Image(systemName: "ellipsis")
+                .frame(width: 36, height: 36)
         }
         .menuIndicator(.hidden)
         .help("More session actions")
@@ -210,8 +211,9 @@ struct InspectorToggle: View {
         Button { model.toggleInspector(tab) } label: {
             Image(systemName: icon)
                 .foregroundStyle(active ? Theme.foreground : Theme.mutedForeground)
-                .frame(width: 26, height: 22)
+                .frame(width: 36, height: 36)
                 .background(RoundedRectangle(cornerRadius: 6).fill(active ? Theme.selected : .clear))
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .help(help)
