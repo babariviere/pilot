@@ -48,6 +48,13 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   Chats have a separate Thinking selector offering only the selected model's supported levels.
   Model and thinking changes require an idle chat with no queued messages; both persist across reopening.
   Thinking is disabled when the model has only one level or no reported levels.
+- **Subagents.** When a chat starts pi-extensions subagents, chips above the composer show each one's
+  state: working, new answer, failed or idle. Click a chip for its task, latest tool calls and text,
+  Stop, and Open transcript. The inspector's Agents tab (person icon in the toolbar, with a green dot for
+  unread answers) lists every subagent and shows the selected one's full, read-only transcript. Its
+  message box steers the current work (Steer), queues a follow-up (Queue) or resumes an idle subagent
+  (Send). Answers delivered to the chat appear as compact cards with an Open link. Transcripts refresh
+  every 1.5 seconds while a subagent works and once when it answers; reading never wakes a parked chat.
 - **Artifacts.** Structured artifact tool results show a pinned-revision card with an opt-in inline
   preview and expanded viewer. Durable publication entries also show artifacts published inside
   codemode without duplicating direct tool cards. The right-hand inspector's Artifacts tab lists all

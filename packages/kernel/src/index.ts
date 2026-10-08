@@ -1,5 +1,5 @@
 export type { AskContext, PilotContext, WorkspaceContext } from "./policy.ts";
-export type { KernelCommand, KernelPacket, KernelSpec } from "./protocol.ts";
+export type { KernelCommand, KernelPacket, KernelSpec, KernelSubagent } from "./protocol.ts";
 export type { PersistedSessionView } from "./snapshot.ts";
 
 /** Absolute path of the worker entry, for `child_process.fork`. Plain Node runs it: no loader is needed. */

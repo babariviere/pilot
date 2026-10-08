@@ -5,6 +5,7 @@
  * and the model loop; this adapter supplies the native system prompt, tools, extension hooks and
  * provider authentication from the user's pi configuration (settings, packages, extensions, MCP).
  */
+import { createHash, randomUUID } from "node:crypto";
 import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import {
@@ -53,16 +54,27 @@ import {
 	type ToolExecutionResult,
 	type ToolRegistration,
 	ToolTask,
+	type UserInput,
 } from "@earendil-works/pi-durable";
-import type { SessionUsage } from "@pilot/protocol";
+import type { DeliveryMode, SessionUsage } from "@pilot/protocol";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
+import type { SubagentBridge } from "./subagents.ts";
 import { contextUsage, UsageTracker } from "./usage.ts";
 import { InfrastructureChildren, inspectChildren } from "./activity.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
+
+/** Input an extension asked to start a turn with (`sendMessage` with `triggerTurn`, or `sendUserMessage`). */
+export interface ExtensionInput {
+	content: UserInput;
+	mode: DeliveryMode;
+	/** Stable for identical custom messages, so a repeated notification is admitted once. */
+	requestId: string;
+}
+
 export interface NativeAdapterOptions {
 	/** Host-enforced read-only source or pinned object tree. Overrides all resource/tool configuration. */
 	ask?: AskContext;
@@ -90,6 +102,8 @@ export interface NativeAdapterOptions {
 	onUsageChanged?: (usage: SessionUsage) => void;
 	/** Host observers, also applied to nested native tool calls. Build sessions only. */
 	hostExtensions?: ExtensionFactory[];
+	/** Receives pi-extensions subagents host events. */
+	subagents?: SubagentBridge;
 	/** Dependency injection for offline tests. */
 	settingsManager?: SettingsManager;
 	loaderOptions?: LoaderOptions;
@@ -207,6 +221,8 @@ export class NativeAdapter {
 	#startMessages: Message[] = [];
 	#toolFingerprint = "";
 	#inputKey = "";
+	#extensionInputs: ExtensionInput[] = [];
+	#onExtensionInput?: (input: ExtensionInput) => void;
 	readonly #ask: boolean;
 
 	readonly session: AgentSession;
@@ -298,8 +314,10 @@ export class NativeAdapter {
 				});
 			}
 			stopUsage = pi.events.on("usage:snapshot", (data) => usage.receive(data));
+			if (!options.ask) options.subagents?.attach(pi.events);
 			pi.on("session_shutdown", () => {
 				stopUsage?.();
+				options.subagents?.detach();
 			});
 			// Last inline handler retains the public event's SDK-rendered prompt getter. Calling it
 			// after dispatch avoids duplicating the native prompt renderer or importing internals.
@@ -376,6 +394,30 @@ export class NativeAdapter {
 		session.agent.prompt = noGeneration;
 		session.agent.continue = noGeneration;
 		session.compact = noGeneration;
+		// Extensions cannot run the native loop. Turn-starting messages (for example subagent answer
+		// notifications) become durable Harness input instead; other custom messages keep native behavior.
+		const sendCustomMessage = session.sendCustomMessage.bind(session);
+		session.sendCustomMessage = async (message, sendOptions) => {
+			if (!sendOptions?.triggerTurn || sendOptions.deliverAs === "nextTurn")
+				return sendCustomMessage(message, sendOptions);
+			const content = (json(message.content ?? []) ?? []) as UserInput;
+			const identity = createHash("sha256")
+				.update(JSON.stringify([message.customType, content, json(message.details) ?? null]))
+				.digest("hex")
+				.slice(0, 32);
+			adapter.deliverExtensionInput({
+				content,
+				mode: sendOptions.deliverAs === "steer" ? "steer" : "followUp",
+				requestId: `native:${message.customType}:${identity}`,
+			});
+		};
+		session.sendUserMessage = async (content, sendOptions) => {
+			adapter.deliverExtensionInput({
+				content: (json(content) ?? "") as UserInput,
+				mode: sendOptions?.deliverAs === "steer" ? "steer" : "followUp",
+				requestId: `native:user:${randomUUID()}`,
+			});
+		};
 		try {
 			const errors: string[] = [];
 			await session.bindExtensions({
@@ -383,6 +425,7 @@ export class NativeAdapter {
 				onError: (error) => errors.push(`${error.event}: ${error.error}`),
 			});
 			if (errors.length) throw new Error(`Native extension startup failed: ${errors.join("; ")}`);
+			options.subagents?.refresh();
 			const modelName = options.model;
 			if (modelName) {
 				const resolved = resolveCliModel({ cliModel: modelName, modelRuntime: session.modelRuntime });
@@ -416,6 +459,19 @@ export class NativeAdapter {
 	}
 	get thinkingLevel() {
 		return this.session.thinkingLevel;
+	}
+	/** Extension input is held until the session can admit it, then delivered in order. */
+	set onExtensionInput(handler: ((input: ExtensionInput) => void) | undefined) {
+		this.#onExtensionInput = handler;
+		if (!handler) return;
+		const pending = this.#extensionInputs;
+		this.#extensionInputs = [];
+		for (const input of pending) handler(input);
+	}
+	private deliverExtensionInput(input: ExtensionInput): void {
+		if (this.#closed) return;
+		if (this.#onExtensionInput) this.#onExtensionInput(input);
+		else this.#extensionInputs.push(input);
 	}
 	/** Resolve only an exact, authenticated choice in this workspace's native model scope. */
 	async resolveModel(name: string) {

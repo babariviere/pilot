@@ -31,9 +31,10 @@ import { submitIdleInput } from "./idle-input.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
-import type { KernelSpec } from "./protocol.ts";
+import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { editQueuedMessage, queueUpdate, removeQueuedMessage, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
+import { type SubagentCommand, SubagentBridge } from "./subagents.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
@@ -68,6 +69,8 @@ export interface KernelSessionHooks {
 	onArtifactsChanged?(): void;
 	/** Created by an agent tool, committed before notification; replayed on open. */
 	onPullRequestCreated?(url: string): void;
+	/** Full replacement whenever the subagents extension reports a change. */
+	onSubagentsChanged?(subagents: KernelSubagent[]): void;
 }
 
 export class KernelSession {
@@ -85,6 +88,7 @@ export class KernelSession {
 	private readonly release: () => void;
 	private readonly status: AgentEventStream;
 	private readonly todos: TodosWatch;
+	private readonly subagents: SubagentBridge;
 
 	private constructor(
 		harness: Harness,
@@ -93,6 +97,7 @@ export class KernelSession {
 		release: () => void,
 		status: AgentEventStream,
 		todos: TodosWatch,
+		subagents: SubagentBridge,
 		ask: boolean,
 	) {
 		this.harness = harness;
@@ -101,6 +106,7 @@ export class KernelSession {
 		this.release = release;
 		this.status = status;
 		this.todos = todos;
+		this.subagents = subagents;
 		this.#ask = ask;
 	}
 
@@ -109,6 +115,7 @@ export class KernelSession {
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
 		let artifactConversation: Conversation | undefined;
+		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		try {
 			const provenance =
 				spec.pilot?.workspace && !spec.pilot.ask
@@ -153,6 +160,7 @@ export class KernelSession {
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
 				hostExtensions: provenance ? [provenance.native] : [],
+				subagents,
 				...(spec.pilot?.ask
 					? { askArtifacts: artifactOptions }
 					: { sessionOptions: { customTools: createArtifactTools(artifactOptions) } }),
@@ -204,6 +212,7 @@ export class KernelSession {
 				owned.release,
 				status,
 				new TodosWatch(todosDirectory(spec.cwd)),
+				subagents,
 				!!spec.pilot?.ask,
 			);
 			session.#working = status.snapshot.run !== undefined;
@@ -257,6 +266,15 @@ export class KernelSession {
 			});
 			await adapter.refreshUsage(context);
 			harness.resume();
+			// Extension messages that start a turn (subagent answers) become durable follow-ups.
+			adapter.onExtensionInput = (input) => {
+				void conversation
+					.submit(
+						{ type: "input", content: input.content, requestId: input.requestId, whenBusy: input.mode },
+						context,
+					)
+					.catch((error: unknown) => console.warn("pilot: could not admit extension input", error));
+			};
 			return session;
 		} catch (error) {
 			if (harness) await harness.close(context).catch(() => undefined);
@@ -344,6 +362,16 @@ export class KernelSession {
 
 	get completion(): SessionCompletion | undefined {
 		return this.#completion;
+	}
+
+	get subagentList(): KernelSubagent[] {
+		return this.subagents.current;
+	}
+
+	/** Steer, queue for, or stop a subagent on the user's behalf. */
+	subagentCommand(command: SubagentCommand): Promise<void> {
+		if (this.#closing) return Promise.reject(new Error("Session is closing"));
+		return this.subagents.command(command);
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */

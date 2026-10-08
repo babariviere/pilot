@@ -141,6 +141,11 @@ enum Snapshot {
             NSApp.terminate(nil)
             return
         }
+        if CommandLine.arguments.contains("--subagents-only") {
+            await renderSubagents(model: model, to: directory)
+            NSApp.terminate(nil)
+            return
+        }
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sessions.map {
             ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: $0.id == "s1" ? 2 : 0,
@@ -455,6 +460,49 @@ enum Snapshot {
         exit(0)
     }
 
+    /// The subagent strip above the composer, its popover, the Agents tab and an answer card.
+    private static func renderSubagents(model: AppModel, to directory: URL) async {
+        let session = Fixtures.subagentSession
+        model.client.loadFixture(projects: Fixtures.projects, sessions: [session] + Fixtures.sessions)
+        model.client.fixtureChangeSummaries = [session.id: SessionChangeSummary(
+            base: "origin/main", branch: session.branch, fileCount: 3, additions: 48, deletions: 6
+        )]
+        model.client.fixtureSubagentTranscripts = Fixtures.subagentTranscripts
+        let subagents = session.subagents ?? []
+        if let read = subagents.first(where: { $0.name == "docs-check" }) { model.markSubagentRead(read, in: session.id) }
+        model.selectedSessionId = session.id
+        model.selectedSubagents[session.id] = "protocol-audit"
+        model.inspectorTab = .agents
+        model.inspectorVisible = true
+        let feed = SessionFeed(sessionId: session.id, transcript: Fixtures.subagentParentTranscript)
+        await render(
+            Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")", session: session) {
+                HStack(spacing: 0) {
+                    ChatView(session: session, feed: feed)
+                    Rectangle().fill(Theme.border).frame(width: 1)
+                    Inspector(session: session).frame(width: 560)
+                }
+            },
+            size: CGSize(width: 1560, height: 860),
+            to: directory.appending(path: "subagents.png")
+        )
+        await render(
+            Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")", session: session) {
+                ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.subagentParentTranscript))
+            },
+            size: CGSize(width: 1100, height: 760),
+            to: directory.appending(path: "subagents-strip.png")
+        )
+        for subagent in subagents.prefix(3) {
+            await render(
+                SubagentPopover(session: session, subagent: subagent, dismiss: {})
+                    .background(Theme.background),
+                size: CGSize(width: 380, height: 300),
+                to: directory.appending(path: "subagent-popover-\(subagent.name).png")
+            )
+        }
+    }
+
     /// Against a running pilotd (PILOT_PORT) and an existing session (PILOT_TEST_SESSION): opens a real window
     /// with the session's terminal, types into the daemon-owned shell, reattaches (as after an app restart) and
     /// checks the scrollback replay, then exits the shell and restarts it.
@@ -748,6 +796,68 @@ enum Fixtures {
             session("order-draft", "Draft PR, completed earlier", activity: now, finish: now - 600_000, pr: .draft),
         ]
     }()
+
+    static let subagentSession = SessionSummary(
+        id: "subagents", title: "Audit protocol sync between daemon and app", cwd: projects[0].path, projectId: "p1",
+        branch: "feat/protocol-audit", createdAt: now - 1_800_000, updatedAt: now - 20_000, state: "working",
+        model: "anthropic/claude-opus-5-5", usage: claudeUsage,
+        subagents: [
+            SessionSubagent(name: "protocol-audit", state: .working,
+                            task: "Map every SessionEvent the daemon emits and list the ones the Swift client ignores. Do not edit files.",
+                            createdAt: now - 72_000, cwd: projects[0].path, model: "anthropic/claude-sonnet-5-5"),
+            SessionSubagent(name: "swift-mirror", state: .idle,
+                            task: "Check that PilotCore mirrors packages/protocol. Report missing or extra fields.",
+                            createdAt: now - 400_000, cwd: projects[0].path, model: "anthropic/claude-sonnet-5-5", lastAnswerId: "41"),
+            SessionSubagent(name: "test-runner", state: .idle, task: "Run the kernel tests and summarize failures.",
+                            createdAt: now - 300_000, cwd: projects[0].path, model: "anthropic/claude-sonnet-5-5",
+                            error: "model_error: overloaded"),
+            SessionSubagent(name: "docs-check", state: .idle, task: "Find stale references in PLAN.md.",
+                            createdAt: now - 500_000, cwd: projects[0].path, model: "anthropic/claude-sonnet-5-5", lastAnswerId: "12"),
+        ]
+    )
+
+    static var subagentParentTranscript: Transcript {
+        var transcript = Transcript()
+        let events = #"""
+        [{"type":"snapshot","entries":[
+          {"id":1,"kind":"pi.user","model":[{"role":"user","content":"Audit the protocol and make sure the Swift side is in sync."}]},
+          {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"I'll split this across four subagents and merge their findings."},{"type":"toolCall","id":"s1","name":"subagent","arguments":{"action":"spawn","name":"protocol-audit","message":"Map every SessionEvent the daemon emits."}},{"type":"toolCall","id":"s2","name":"subagent","arguments":{"action":"spawn","name":"swift-mirror","message":"Check that PilotCore mirrors packages/protocol."}}]}]},
+          {"id":3,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"s1","toolName":"subagent","isError":false,"content":[{"type":"text","text":"Started protocol-audit."}]}]},
+          {"id":4,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"s2","toolName":"subagent","isError":false,"content":[{"type":"text","text":"Started swift-mirror."}]}]},
+          {"id":5,"kind":"pi.user","model":[{"role":"user","content":"[subagent \"docs-check\" answered, no reply needed] No stale references in PLAN.md. The milestone table already lists subagents as experimental."}]},
+          {"id":6,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"docs-check found nothing stale. Waiting on protocol-audit before editing Protocol.swift."}]}]},
+          {"id":7,"kind":"pi.user","model":[{"role":"user","content":"[subagent \"swift-mirror\" answered, no reply needed] SessionSummary is missing three fields on the Swift side: sourceCommit, outcomeReason and pullRequestError."}]}
+        ],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{},"run":{"inputs":[7]}}]
+        """#
+        if let parsed = try? JSONValue.decode(Data(events.utf8)), let list = parsed.array { transcript.apply(list) }
+        return transcript
+    }
+
+    static var subagentTranscripts: [String: [JSONValue]] {
+        let audit = #"""
+        [{"type":"snapshot","entries":[
+          {"id":1,"kind":"pi.user","model":[{"role":"user","content":"Map every SessionEvent the daemon emits and list the ones the Swift client ignores. Do not edit files."}]},
+          {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"I'll start from the protocol types, then check the Swift decoder."},{"type":"toolCall","id":"a1","name":"read","arguments":{"path":"packages/protocol/src/index.ts"}},{"type":"toolCall","id":"a2","name":"bash","arguments":{"command":"rg -n 'type:' packages/daemon/src"}}]}]},
+          {"id":3,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"a1","toolName":"read","isError":false,"content":[{"type":"text","text":"export type AgentEvent = ..."}]}]},
+          {"id":4,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"a2","toolName":"bash","isError":false,"content":[{"type":"text","text":"11 matches"}]}]},
+          {"id":5,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"The daemon emits **11** event kinds. PilotCore decodes 9; compaction events fall through to the unknown case."},{"type":"toolCall","id":"a3","name":"read","arguments":{"path":"apps/macos/Sources/PilotCore/Transcript.swift"}}]}]}
+        ],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}]
+        """#
+        let mirror = #"""
+        [{"type":"snapshot","entries":[
+          {"id":1,"kind":"pi.user","model":[{"role":"user","content":"Check that PilotCore mirrors packages/protocol. Report missing or extra fields."}]},
+          {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"SessionSummary is missing three fields on the Swift side: sourceCommit, outcomeReason and pullRequestError."}]}]}
+        ],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}]
+        """#
+        let tests = #"""
+        [{"type":"snapshot","entries":[
+          {"id":1,"kind":"pi.user","model":[{"role":"user","content":"Run the kernel tests and summarize failures."}]},
+          {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"error","errorMessage":"model_error: overloaded","content":[]}]}
+        ],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}]
+        """#
+        func parse(_ text: String) -> [JSONValue] { (try? JSONValue.decode(Data(text.utf8)))?.array ?? [] }
+        return ["protocol-audit": parse(audit), "swift-mirror": parse(mirror), "test-runner": parse(tests)]
+    }
 
     static let pullRequestSessions: [SessionSummary] = [
         SessionSummary(id: "pr-open", title: "Fix flaky reopen test in kernel session", cwd: projects[0].path, projectId: "p1",

@@ -112,6 +112,8 @@ export function runKernelWorker(): void {
 	let session: KernelSession | undefined;
 	let initialization: Promise<void> | undefined;
 	let commands: Promise<void> = Promise.resolve();
+	/** Subagent commands may wait on a child worker; they never block session commands. */
+	const subagentCommands = new Set<Promise<void>>();
 	let exiting = false;
 	const sender = new IpcSender(
 		{
@@ -137,6 +139,7 @@ export function runKernelWorker(): void {
 		try {
 			await initialization?.catch(() => undefined);
 			await commands;
+			await Promise.allSettled(subagentCommands);
 			await session?.close();
 		} catch (error) {
 			await send({ type: "error", message: `Shutdown failed: ${errorText(error)}` }).catch(() => undefined);
@@ -146,7 +149,7 @@ export function runKernelWorker(): void {
 		process.exit(code);
 	}
 
-	async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdown" }>): Promise<void> {
+	async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdown" | "subagent" }>): Promise<void> {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
@@ -209,6 +212,7 @@ export function runKernelWorker(): void {
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
+					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 				});
 				await send({
 					type: "ready",
@@ -225,6 +229,29 @@ export function runKernelWorker(): void {
 				);
 				await shutdown(1);
 			});
+			return;
+		}
+		if (command.type === "subagent") {
+			const running = (async () => {
+				await initialization;
+				if (!session) throw new Error("Kernel has not started");
+				await session.subagentCommand(
+					command.action === "send"
+						? {
+								action: "send",
+								name: command.name,
+								message: command.message ?? "",
+								mode: command.mode,
+								requestId: command.requestId,
+							}
+						: { action: "stop", name: command.name, requestId: command.requestId },
+				);
+				await send({ type: "accepted", requestId: command.requestId });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
+			subagentCommands.add(running);
+			void running.finally(() => subagentCommands.delete(running));
 			return;
 		}
 		commands = commands

@@ -419,3 +419,62 @@ test("queued message DELETE forwards only the ID, reports stale removal, and rej
 	assert.equal(remove.mock.callCount(), 2);
 	assert.equal(send.mock.callCount(), 0);
 });
+
+test("subagent routes decode names, validate bodies and forward transcript, message and stop requests", async (t) => {
+	const projects = new ProjectStore("/tmp/pilot-server-test-unused");
+	const sessions = new SessionManager("/tmp/pilot-server-test-unused", projects);
+	const terminals = new TerminalManager();
+	const transcript = t.mock.method(sessions, "subagentTranscript", async (_id: string, name: string) => ({
+		name,
+		events: [],
+	}));
+	const command = t.mock.method(sessions, "subagentCommand", async () => {});
+	const server = createDaemonServer(
+		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/tmp/pilot-server-test-unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/session-1/subagents`;
+	const name = encodeURIComponent("code review/1");
+	const read = await fetch(`${base}/${name}/transcript`);
+	assert.equal(read.status, 200);
+	assert.deepEqual(await read.json(), { name: "code review/1", events: [] });
+	assert.deepEqual(transcript.mock.calls[0]?.arguments, ["session-1", "code review/1"]);
+	const post = (path: string, body: unknown) =>
+		fetch(`${base}/${path}`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+	const sent = await post(`${name}/messages`, { message: "focus", mode: "followUp", requestId: "r-1" });
+	assert.equal(sent.status, 202);
+	await sent.arrayBuffer();
+	assert.deepEqual(command.mock.calls[0]?.arguments, [
+		"session-1",
+		"code review/1",
+		{ action: "send", message: "focus", mode: "followUp", requestId: "r-1" },
+	]);
+	const stopped = await post(`${name}/stop`, {});
+	assert.equal(stopped.status, 202);
+	await stopped.arrayBuffer();
+	assert.deepEqual(command.mock.calls[1]?.arguments, ["session-1", "code review/1", { action: "stop" }]);
+	for (const [path, body] of [
+		[`${name}/messages`, { message: " " }],
+		[`${name}/messages`, { message: "x", mode: "later" }],
+		[`${name}/messages`, { message: "x", requestId: "../bad" }],
+		["%E0%A4%A/messages", { message: "x" }],
+	] as const) {
+		const rejected = await post(path, body);
+		assert.equal(rejected.status, 400);
+		await rejected.arrayBuffer();
+	}
+	assert.equal(command.mock.callCount(), 2);
+});

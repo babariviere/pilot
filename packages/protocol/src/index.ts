@@ -123,6 +123,8 @@ export interface SessionSummary {
 	thinking?: string;
 	/** Latest context estimate and optional pi-extensions subscription snapshot. */
 	usage?: SessionUsage;
+	/** Named background subagents, in spawn order. Omitted when the session has none. */
+	subagents?: SessionSubagent[];
 	error?: string;
 }
 
@@ -149,6 +151,41 @@ export interface SubscriptionUsage {
 export interface SessionUsage {
 	context?: ContextUsage;
 	subscription?: SubscriptionUsage;
+}
+
+/** One named background subagent of a session, from the pi-extensions subagents host events. */
+export interface SessionSubagent {
+	name: string;
+	/** "working" while the subagent has admitted input it has not answered. */
+	state: "working" | "idle";
+	/** The spawn message. */
+	task: string;
+	/** Epoch milliseconds. */
+	createdAt: number;
+	/** Working directory pinned at spawn. */
+	cwd: string;
+	/** "provider/modelId" pinned at spawn. */
+	model?: string;
+	/** Identity of the latest completed answer. A change means a new answer. */
+	lastAnswerId?: string;
+	error?: string;
+	/** Retired night conversation. It cannot accept new messages. */
+	retired?: boolean;
+}
+
+/** GET /api/sessions/:id/subagents/:name/transcript: a read-only snapshot of the subagent's conversation. */
+export interface SubagentTranscript {
+	name: string;
+	/** A single durable snapshot event, or an empty list before the subagent has started. */
+	events: AgentEvent[];
+}
+
+/** POST /api/sessions/:id/subagents/:name/messages. Steers current work by default. */
+export interface SubagentMessageRequest {
+	message: string;
+	mode?: DeliveryMode;
+	/** Idempotency key. Retrying with the same ID admits the message once. */
+	requestId?: string;
 }
 
 /** A named working directory. Sessions and triggers belong to projects. */

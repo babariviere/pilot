@@ -3,13 +3,14 @@ import { type ChildProcess, fork } from "node:child_process";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
 	type KernelCommand,
 	type KernelPacket,
+	type KernelSubagent,
 	type PersistedSessionView,
 	type WorkspaceContext,
 	workerEntry,
@@ -22,9 +23,11 @@ import type {
 	SessionListQuery,
 	SessionPullRequest,
 	SessionState,
+	SessionSubagent,
 	SessionSummary,
 	SessionUsage,
 	SpawnRequest,
+	SubagentTranscript,
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
@@ -108,6 +111,8 @@ export interface SessionManagerOptions {
 export interface SessionFactories {
 	/** Read-only persisted view, independent of the worker/SDK factory. */
 	snapshot?: (directory: string, cwd: string, includeTodos?: boolean) => Promise<PersistedSessionView>;
+	/** Read-only subagent transcript events from a child's private storage directory. */
+	subagentSnapshot?: (directory: string, conversationId: string) => Promise<AgentEvent[]>;
 	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
 	workspace?: typeof createWorkspace;
 	askSnapshot?: typeof prepareAskSnapshot;
@@ -168,6 +173,8 @@ interface SessionMeta extends OutcomeMeta {
 	previousPullRequests?: SessionPullRequest[];
 	/** Earlier branches without a known PR, still checked in case one is opened from them. */
 	previousBranches?: string[];
+	/** Latest subagents reported by the kernel, kept while it is parked. Includes private storage paths. */
+	subagents?: KernelSubagent[];
 }
 
 type EventListener = (events: AgentEvent[]) => void;
@@ -198,6 +205,15 @@ const COLD_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 function titleFrom(message: string): string {
 	const line = message.trim().split("\n")[0] ?? "";
 	return line.length > 60 ? `${line.slice(0, 57)}...` : line || "Untitled session";
+}
+
+/** Client view of a kernel subagent: no private storage path or child conversation identity. */
+function publicSubagent({
+	storage: _storage,
+	conversationId: _conversation,
+	...subagent
+}: KernelSubagent): SessionSubagent {
+	return subagent;
 }
 
 function forkWorker(): ChildProcess {
@@ -1457,6 +1473,72 @@ export class SessionManager {
 		}
 	}
 
+	/** Read-only transcript of one subagent, without waking the kernel. */
+	async subagentTranscript(id: string, name: string): Promise<SubagentTranscript> {
+		const meta = this.require(id);
+		const subagent = meta.subagents?.find((candidate) => candidate.name === name);
+		if (!subagent) throw new NotFound(`No subagent named ${name}`);
+		if (subagent.conversationId === undefined) return { name, events: [] };
+		// Storage comes from extension code; only read inside this session's private subagent runs.
+		const root = resolve(this.dir(id), "durable", "subagent-runs");
+		const directory = resolve(subagent.storage);
+		if (!directory.startsWith(root + sep)) throw new Error("Subagent storage is outside the session");
+		const events = this.factories.subagentSnapshot
+			? await this.factories.subagentSnapshot(directory, subagent.conversationId)
+			: (await this.coldReader.readSubagent(directory, subagent.conversationId)).events;
+		return { name, events };
+	}
+
+	/** Steer, queue for, or stop a subagent on the user's behalf. Reopens a parked kernel. */
+	async subagentCommand(
+		id: string,
+		name: string,
+		command: { action: "stop" } | { action: "send"; message: string; mode?: DeliveryMode; requestId?: string },
+	): Promise<void> {
+		const end = this.updateGate.begin();
+		let admitted = false;
+		try {
+			const meta = this.require(id);
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined)
+				throw new Conflict("Restore the archived session before messaging subagents");
+			if (meta.mode === "ask") throw new Conflict("Ask sessions have no subagents");
+			const subagent = meta.subagents?.find((candidate) => candidate.name === name);
+			if (!subagent) throw new NotFound(`No subagent named ${name}`);
+			if (subagent.retired) throw new Conflict(`${name} is retired and cannot accept messages`);
+			if (command.action === "send" && (typeof command.message !== "string" || !command.message.trim()))
+				throw new Error("message is required");
+			if (command.action === "send" && command.mode !== undefined && !["steer", "followUp"].includes(command.mode))
+				throw new Error("mode must be steer or followUp");
+			// Prevent archiving between the checks above, worker readiness, and the acknowledgement.
+			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+			admitted = true;
+			await this.unparked(id);
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			await worker.request(
+				command.action === "send"
+					? {
+							type: "subagent",
+							action: "send",
+							requestId: command.requestId ?? randomUUID(),
+							name,
+							message: command.message,
+							mode: command.mode ?? "steer",
+						}
+					: { type: "subagent", action: "stop", requestId: randomUUID(), name },
+			);
+		} finally {
+			if (admitted) {
+				const count = (this.sending.get(id) ?? 1) - 1;
+				if (count) this.sending.set(id, count);
+				else this.sending.delete(id);
+			}
+			end();
+		}
+	}
+
 	/** View parked history without waking the kernel; attach live if work starts later. */
 	subscribe(id: string, listener: EventListener): () => void {
 		const meta = this.require(id);
@@ -1955,6 +2037,15 @@ export class SessionManager {
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}
+		if (packet.type === "subagents") {
+			if (this.workers.get(meta.id) !== worker) return;
+			if (JSON.stringify(packet.subagents) === JSON.stringify(meta.subagents ?? [])) return;
+			if (packet.subagents.length) meta.subagents = packet.subagents;
+			else delete meta.subagents;
+			void this.save(meta);
+			this.emit(meta, worker);
+			return;
+		}
 		if (packet.type === "modelChanged") {
 			meta.model = packet.model;
 			meta.thinking = packet.thinking;
@@ -2017,6 +2108,7 @@ export class SessionManager {
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(worker?.usage ? { usage: worker.usage } : {}),
+			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
 			...(meta.outcome ? { outcome: meta.outcome } : {}),
 			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
 			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),

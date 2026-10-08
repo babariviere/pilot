@@ -453,6 +453,16 @@ reports), producing a morning summary in the app and Slack.
   `PI_TODO_PATH`), with this session's claimed open tasks first, titles/statuses visible above the
   composer, and expansion for the full list. Poll only while subscribed, including during codemode
   work; reconnects reload files without modifying extension-owned state.
+- Subagents: pi-extensions `subagents` reports named background subagents over the extension event bus
+  (`subagents:snapshot`); the kernel forwards them and pilotd keeps the latest list in session metadata,
+  so parked sessions still show them. Clients get name, state, task, model, cwd, answer identity and
+  error, never storage paths. A chip strip above the composer shows each subagent's state (working,
+  new answer, failed, idle) and opens a popover with recent activity, Stop and "Open transcript". The
+  inspector's Agents tab lists them with the selected subagent's full read-only transcript (read from its
+  private `runs.sqlite`, never waking a parked kernel), plus Steer, Queue and Stop. Answers delivered
+  to the parent render as compact answer cards. Unread answers are tracked locally per answer ID.
+  Extension messages that start a turn (`sendMessage` with `triggerTurn`, `sendUserMessage`) become
+  durable Harness input, so subagent answers wake the parent; identical notifications are admitted once.
 - Responsiveness: decode conversation snapshots and prepare transcript rows/tool summaries off the UI
   actor, preserve stream ordering, and publish prepared rows once per batch. Long tool groups render
   lazily; loading and startup have visible progress. Procedural home artwork renders off main as well.

@@ -49,6 +49,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Effective thinking level pinned for this chat. Omitted by older daemons.
     public let thinking: String?
     public let usage: SessionUsage?
+    /// Named background subagents in spawn order. Omitted when the session has none.
+    public let subagents: [SessionSubagent]?
     public let error: String?
     public let outcome: SessionOutcome?
     /// Stable completion version, in milliseconds. Unlike updatedAt, survives parking.
@@ -107,7 +109,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil,
         mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
         lastUserMessageAt: Double? = nil,
-        workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil
+        workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
+        subagents: [SessionSubagent]? = nil
     ) {
         self.id = id
         self.title = title
@@ -130,6 +133,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.model = model
         self.thinking = thinking
         self.usage = usage
+        self.subagents = subagents
         self.error = error
         self.outcome = outcome
         self.outcomeAt = outcomeAt
