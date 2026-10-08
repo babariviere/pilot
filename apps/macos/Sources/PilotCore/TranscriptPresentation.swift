@@ -99,12 +99,17 @@ public struct TranscriptPresentation: Equatable, Sendable {
     }
 
     private mutating func updateMetadataByteCount() {
-        metadataByteCount = (retry?.utf8.count ?? 0) + (error?.utf8.count ?? 0)
-            + queuedMessages.reduce(0) { $0 + 128 + $1.text.utf8.count }
-            + todos.reduce(0) {
-                $0 + 128 + $1.id.utf8.count + $1.title.utf8.count + $1.status.utf8.count
-                    + $1.createdAt.utf8.count + ($1.assignedToSession?.utf8.count ?? 0)
-            }
+        var bytes = retry?.utf8.count ?? 0
+        bytes += error?.utf8.count ?? 0
+        for message in queuedMessages {
+            bytes += 128 + message.text.utf8.count
+        }
+        for todo in todos {
+            bytes += 128 + todo.id.utf8.count + todo.title.utf8.count
+            bytes += todo.status.utf8.count + todo.createdAt.utf8.count
+            bytes += todo.assignedToSession?.utf8.count ?? 0
+        }
+        metadataByteCount = bytes
     }
 
     static func byteCount(of rows: [ChatRow]) -> Int {
@@ -123,12 +128,15 @@ public struct TranscriptPresentation: Equatable, Sendable {
 
     static func byteCount(of item: ToolItem) -> Int {
         let summary = item.summary
-        let summaryBytes = 256 + summary.icon.utf8.count + summary.title.utf8.count
-            + (summary.detail?.utf8.count ?? 0) + (summary.body?.utf8.count ?? 0)
-            + summary.diffs.reduce(0) { total, diff in
-                total + MemoryLayout<FileDiff>.stride + diff.path.utf8.count
-                    + diff.lines.reduce(0) { $0 + MemoryLayout<DiffLine>.stride + 32 + $1.text.utf8.count }
+        var summaryBytes = 256 + summary.icon.utf8.count + summary.title.utf8.count
+        summaryBytes += summary.detail?.utf8.count ?? 0
+        summaryBytes += summary.body?.utf8.count ?? 0
+        for diff in summary.diffs {
+            summaryBytes += MemoryLayout<FileDiff>.stride + diff.path.utf8.count
+            for line in diff.lines {
+                summaryBytes += MemoryLayout<DiffLine>.stride + 32 + line.text.utf8.count
             }
+        }
         return 512 + item.id.utf8.count + item.name.utf8.count + item.output.utf8.count
             + item.arguments.cachedByteCount + summaryBytes + artifactByteCount(item.artifact)
     }

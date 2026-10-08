@@ -248,12 +248,18 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
     presentation.error = "error"
     #expect(presentation.cachedByteCount == rowCost + 2005)
     presentation.queuedMessages = [QueuedMessage(json: try corePerformanceEvent(
-        #"{"id":1,"mode":"followUp","content":"queued text"}"#))!]
+        #"{"id":1,"mode":"followUp","content":"queued é"}"#))!]
     let withQueue = presentation.cachedByteCount
-    #expect(withQueue > rowCost + 2005)
-    presentation.todos = [SessionTodo(json: try corePerformanceEvent(
-        #"{"id":"todo","title":"Task","status":"open","createdAt":"today","assignedToSession":"s"}"#))!]
-    #expect(presentation.cachedByteCount > withQueue)
+    #expect(withQueue == rowCost + 2005 + 128 + 9)
+    presentation.todos = [
+        SessionTodo(json: try corePerformanceEvent(
+            #"{"id":"todo","title":"Task é","status":"open","createdAt":"today","assignedToSession":"s"}"#))!,
+        SessionTodo(json: try corePerformanceEvent(
+            #"{"id":"t2","title":"🙂","status":"done","createdAt":""}"#))!,
+    ]
+    let assignedTodoBytes = 128 + 4 + 7 + 4 + 5 + 1
+    let unassignedTodoBytes = 128 + 2 + 4 + 4
+    #expect(presentation.cachedByteCount == withQueue + assignedTodoBytes + unassignedTodoBytes)
     presentation.rows.removeAll()
     presentation.retry = nil
     presentation.error = nil
@@ -265,6 +271,37 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
     let fixture = TranscriptPresentation(transcript: transcript)
     #expect(fixture.cachedByteCount > 0)
     #expect(fixture.cachedByteCount == TranscriptPresentation.byteCount(of: fixture.rows))
+}
+
+@Test func corePerformanceToolCostsIncludePreparedDiffStorage() {
+    let patch = """
+    *** Begin Patch
+    *** Update File: café.txt
+    @@
+    -é
+    +🙂
+    *** Add File: 二.txt
+    +漢
+    *** End Patch
+    """
+    let arguments: JSONValue = .object(["patch": .string(patch)])
+    var item = ToolItem(id: "call", name: "applyPatch", arguments: arguments, status: .done, output: "é")
+    let summary = item.summary
+    item.prepare(summary: summary)
+    #expect(summary.diffs.map { $0.lines.count } == [3, 1])
+    #expect(summary.detail == "café.txt, 二.txt")
+    // Fixed UTF-8 byte totals make this independent of the accounting implementation.
+    let argumentsBytes = 32 + 5 + 32 + patch.utf8.count + 32
+    var summaryBytes = 256 + 6 + 12 + patch.utf8.count
+    // Foundation may decompose accents when extracting filenames for the detail.
+    summaryBytes += summary.detail?.utf8.count ?? 0
+    summaryBytes += 2 * MemoryLayout<FileDiff>.stride + 16
+    summaryBytes += 4 * (MemoryLayout<DiffLine>.stride + 32) + 11
+    let expected = 512 + 4 + 10 + 2 + argumentsBytes + summaryBytes
+    #expect(TranscriptPresentation.byteCount(of: item) == expected)
+    let reference = ArtifactReference(id: "a", sessionId: "s", title: "🙂", revision: 1)
+    item.artifact = reference
+    #expect(TranscriptPresentation.byteCount(of: item) == expected + 128 + 1 + 1 + 4)
 }
 
 @Test func corePerformanceLiveToolOutputTouchesOnlyItsCommittedItem() async throws {
