@@ -75,39 +75,36 @@ struct SessionDetail: View {
         .navigationTitle(session.title)
         .navigationSubtitle(subtitle)
         .toolbar {
-            ToolbarItemGroup {
+            repositoryToolbar
+            ToolbarItem(placement: .primaryAction) {
+                SessionInspectorActions(session: session)
+            }
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.fixed, placement: .primaryAction)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                SessionMoreActions(session: session)
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var repositoryToolbar: some ToolbarContent {
+        if model.isUnread(session) || (!session.isAsk &&
+            (session.branch != nil || session.pullRequest != nil || session.pullRequestError != nil)) {
+            if #available(macOS 26.0, *) {
+                repositoryToolbarItem.sharedBackgroundVisibility(.hidden)
+            } else {
+                repositoryToolbarItem
+            }
+        }
+    }
+
+    private var repositoryToolbarItem: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            HStack(spacing: 8) {
                 if model.isUnread(session) { UnreadBadge() }
-                if !session.isAsk { PullRequestBadge(session: session) }
-                if session.isArchived {
-                    Button { model.showArchive(in: model.archiveProjectId) } label: {
-                        Label("Archived chats", systemImage: "archivebox")
-                    }
-                }
-                SessionArchiveAction(session: session)
-                if !session.isAsk, let branch = session.branch {
-                    Label(branch, systemImage: "arrow.triangle.branch")
-                        .labelStyle(.titleAndIcon)
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(Theme.mutedForeground)
-                        .lineLimit(1)
-                        .help("Private clone on \(branch)")
-                }
-                Button {
-                    NSWorkspace.shared.open(URL(filePath: session.cwd))
-                } label: {
-                    Label("Open in Finder", systemImage: "folder")
-                }
-                .help("Open \(session.cwd.abbreviatingHome) in Finder")
-                if !session.isAsk {
-                    InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
-                    InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
-                }
-                InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
-                Button { model.debugSession(session) } label: {
-                    Label("Debug session", systemImage: "ladybug")
-                }
-                .labelStyle(.iconOnly)
-                .help("Debug this session in the pilot project")
+                SessionToolbarMetadata(session: session)
             }
         }
     }
@@ -115,6 +112,75 @@ struct SessionDetail: View {
     private var subtitle: String {
         let place = client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
         return [place, session.model].compactMap { $0 }.joined(separator: " · ")
+    }
+}
+
+/// Read-only repository context sits beside, not inside, the toolbar's action group.
+struct SessionToolbarMetadata: View {
+    let session: SessionSummary
+
+    var body: some View {
+        if !session.isAsk {
+            HStack(spacing: 8) {
+                if let branch = session.branch, !branch.isEmpty {
+                    HStack(spacing: 5) {
+                        Image(nsImage: GitBranchGlyph.image)
+                            .resizable()
+                            .frame(width: 14, height: 14)
+                            .accessibilityHidden(true)
+                        Text(branch)
+                            .font(.system(size: 11, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .foregroundStyle(Theme.mutedForeground)
+                    .frame(maxWidth: 260)
+                    .help("Branch: \(branch)")
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Branch \(branch)")
+                }
+                PullRequestBadge(session: session)
+            }
+        }
+    }
+}
+
+struct SessionInspectorActions: View {
+    let session: SessionSummary
+
+    var body: some View {
+        HStack(spacing: 2) {
+            if !session.isAsk {
+                InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
+                InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+            }
+            InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
+        }
+    }
+}
+
+struct SessionMoreActions: View {
+    let session: SessionSummary
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Menu {
+            SessionArchiveAction(session: session)
+            if session.isArchived {
+                Button { model.showArchive(in: model.archiveProjectId) } label: {
+                    Label("Archived chats", systemImage: "archivebox")
+                }
+            }
+            Divider()
+            Button { model.debugSession(session) } label: {
+                Label("Debug session", systemImage: "ladybug")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+        }
+        .menuIndicator(.hidden)
+        .help("More session actions")
+        .accessibilityLabel("More session actions")
     }
 }
 

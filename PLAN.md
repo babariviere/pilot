@@ -392,7 +392,12 @@ reports), producing a morning summary in the app and Slack.
   inactive linked chats no earlier than 24 hours after GitHub's merge timestamp. Failed lookups and
   closed, unmerged PRs never trigger merge-based archiving. Restoring a merge-archived chat keeps it
   active for that PR, including after daemon restarts (the one-week inactivity rule still applies).
-- Debug a session from the top-right bug button, including failed and archived chats. Open the new-task
+- The compact session header keeps title and project/model on the left. Branch and linked PR metadata
+  sit immediately left of the top-right inspector toggles, outside their shared button background;
+  branch labels use the three-node Git glyph and truncate in the middle with a full-name tooltip.
+  Changes, Terminal and Artifacts remain visible; Archive/Restore and Debug live in the overflow menu.
+  There is no Finder button or extra metadata row.
+- Debug a session from the top-right overflow menu, including failed and archived chats. Open the new-task
   composer in the project named `pilot`, prefilled with the source session ID, daemon-provided data path
   and working directory. The user adds an issue/reason before submitting; opening the draft never starts
   an agent or changes the source session. Missing or ambiguous `pilot` projects surface an actionable error.

@@ -61,6 +61,37 @@ enum Snapshot {
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
+        // Capture the real SwiftUI window toolbar, including native shared backgrounds.
+        if CommandLine.arguments.contains("--session-toolbar-only") {
+            let session = SessionSummary(
+                id: "toolbar", title: "Remove agent status reporting", cwd: Fixtures.projects[0].path,
+                projectId: "p1", branch: "refactor/remove-agent-status-reporting", createdAt: Fixtures.now,
+                updatedAt: Fixtures.now, state: "idle", model: "openai-codex/gpt-6.1-sol",
+                pullRequest: SessionPullRequest(number: 61, url: "https://github.com/babariviere/pilot/pull/61",
+                                               title: "Remove agent status reporting", state: .merged, checkedAt: Fixtures.now))
+            model.client.loadFixture(projects: Fixtures.projects, sessions: [session])
+            model.selectedSessionId = session.id
+            model.inspectorVisible = true
+            model.inspectorTab = .changes
+            for _ in 0..<10 { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let window = NSApp.windows.first(where: { $0.toolbar != nil }),
+                  let frame = window.contentView?.superview else {
+                print("No native toolbar window available")
+                exit(1)
+            }
+            window.setContentSize(CGSize(width: 1280, height: 600))
+            window.setFrameOrigin(NSPoint(x: 100, y: 100))
+            window.makeKeyAndOrderFront(nil)
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            snapshot(frame, to: directory.appending(path: "session-toolbar.png"))
+            window.setContentSize(CGSize(width: 860, height: 600))
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            snapshot(frame, to: directory.appending(path: "session-toolbar-narrow.png"))
+            print("snapshots written to \(directory.path)")
+            NSApp.terminate(nil)
+            return
+        }
+
         // Real sidebar preview: fresh completion first, metadata polling does not reset old ages,
         // and terminal PRs stay below all other chats without unread dots.
         if CommandLine.arguments.contains("--session-ordering-only") {
@@ -597,22 +628,11 @@ enum Snapshot {
                         }
                         Spacer()
                         if subtitle != nil {
-                            SessionStatusIcon(status: status)
                             if let session {
                                 if AppModel.shared.isUnread(session) { UnreadBadge() }
-                                if !session.isAsk { PullRequestBadge(session: session) }
-                            }
-                            Image(systemName: "folder").foregroundStyle(Theme.mutedForeground)
-                            if session?.isAsk != true {
-                                Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
-                            }
-                            if let session {
-                                Button { AppModel.shared.debugSession(session) } label: {
-                                    Label("Debug session", systemImage: "ladybug")
-                                }
-                                .labelStyle(.iconOnly)
-                                .buttonStyle(.borderless)
-                                .help("Debug this session in the pilot project")
+                                SessionToolbarMetadata(session: session)
+                                SessionInspectorActions(session: session)
+                                SessionMoreActions(session: session)
                             }
                         }
                     }
