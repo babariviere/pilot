@@ -38,6 +38,42 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     let small = ArtifactViewerLayout.size(available: CGSize(width: 800, height: 600))
     #expect(small == CGSize(width: 720, height: 540))
     #expect(small.width < 800 && small.height < 600)
+    #expect(ArtifactViewerLayout.size(available: CGSize(width: 1440, height: 900), contentSize: CGSize(width: 1650, height: 1400))
+            == CGSize(width: 1408, height: 868))
+    #expect(ArtifactViewerLayout.size(available: CGSize(width: 1440, height: 900), contentSize: CGSize(width: 240, height: 120)) == large)
+}
+
+@Test func nativeImagePreviewOverridesSavedFullViewportSizingWithoutChangingRevision() throws {
+    let html = "<html><body><style>body{padding:0}img{display:block;width:100%;height:100vh;object-fit:contain}</style><img src='data:image/png;base64,test'></body></html>"
+    let revision = ArtifactRevision(id: "a", sessionId: "s", projectId: nil, title: "Image", kind: .image,
+                                    revision: 1, createdAt: 1, updatedAt: 1, source: "image", html: html, libraries: [])
+    let document = ArtifactPreviewDocument.document(revision)
+    #expect(document.hasPrefix("<!doctype html><meta http-equiv=\"Content-Security-Policy\""))
+    #expect(document.contains("connect-src 'none'"))
+    #expect(document.contains(html))
+    #expect(document.range(of: html)!.lowerBound < document.range(of: "pilot-artifact-preview-sizing")!.lowerBound)
+    #expect(document.contains("width:auto!important;height:auto!important;max-width:100vw!important;max-height:100vh!important"))
+    #expect(document.contains("place-items:center!important"))
+    #expect(revision.html == html)
+}
+
+@Test func nativeSwiftUIPreviewUsesLogicalViewportRatherThanExpandingToViewer() {
+    let revision = ArtifactRevision(id: "a", sessionId: "s", projectId: nil, title: "Native", kind: .swiftui,
+                                    revision: 1, createdAt: 1, updatedAt: 1, source: "struct ArtifactView: View {}",
+                                    html: "<img src='data:image/png;base64,test'>", libraries: [])
+    let document = ArtifactPreviewDocument.document(revision)
+    #expect(document.contains("width:auto!important;height:auto!important"))
+    #expect(document.contains("max-width:min(100vw,800px)!important;max-height:min(100vh,600px)!important"))
+    #expect(!document.contains(revision.source))
+}
+
+@Test func nativeHTMLAndReactPreviewsKeepTheirOriginalSizing() {
+    for kind in [ArtifactKind.html, .react] {
+        let revision = ArtifactRevision(id: "a", sessionId: "s", projectId: nil, title: "UI", kind: kind,
+                                        revision: 1, createdAt: 1, updatedAt: 1, source: "source",
+                                        html: "<style>img{width:100%}</style><img><div id='artifact-root'></div>", libraries: [])
+        #expect(ArtifactPreviewDocument.document(revision) == ArtifactSandboxPolicy.document(revision.html))
+    }
 }
 
 @Test func inlineArtifactPreviewsGrowWithChatWidthAndStayBounded() {
@@ -46,6 +82,47 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800) == CGSize(width: 1200, height: 720))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 320) == CGSize(width: 320, height: 360))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 0) == CGSize(width: 0, height: 360))
+}
+
+@Test func inlineArtifactsGrowForTallAndWideContentWithoutTakingUnavailableSpace() {
+    let tall = CGSize(width: 1000, height: 1400)
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1000, contentSize: tall) == tall)
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 1650, height: 900))
+            == CGSize(width: 1650, height: 900))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 5000, height: 9000))
+            == CGSize(width: 760, height: 1600))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: CGFloat.infinity, height: CGFloat.nan))
+            == ArtifactViewerLayout.inlineSize(availableWidth: 760))
+}
+
+@Test func inlineImageGrowthUsesAspectRatioWithoutEnlargingTheImage() {
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 800, height: 1600), image: true)
+            == CGSize(width: 760, height: 1520))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 1600, height: 1000), image: true)
+            == CGSize(width: 1600, height: 1000))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 200, height: 100), image: true)
+            == CGSize(width: 1200, height: 720))
+}
+
+@Test func contentMeasurementsIgnoreViewportFeedbackButAcceptRealContentChanges() {
+    var measurement = ArtifactContentMeasurement()
+    #expect(measurement.record(content: CGSize(width: 1200, height: 752), viewport: CGSize(width: 1200, height: 720))
+            == CGSize(width: 1200, height: 752))
+    for _ in 0..<5 {
+        #expect(measurement.record(content: CGSize(width: 1200, height: 784), viewport: CGSize(width: 1200, height: 752))
+                == CGSize(width: 1200, height: 752))
+    }
+    #expect(measurement.record(content: CGSize(width: 1700, height: 1400), viewport: CGSize(width: 1200, height: 752))
+            == CGSize(width: 1700, height: 1400))
+    #expect(measurement.record(content: CGSize(width: CGFloat.nan, height: 0), viewport: .zero)
+            == CGSize(width: 1700, height: 1400))
+}
+
+@Test func intrinsicImageMeasurementsDoNotMistakeNaturalSizeChangesForHostResizing() {
+    var measurement = ArtifactContentMeasurement()
+    _ = measurement.record(content: CGSize(width: 800, height: 800), viewport: CGSize(width: 800, height: 600), intrinsicImage: true)
+    #expect(measurement.record(content: CGSize(width: 800, height: 1000), viewport: CGSize(width: 800, height: 800), intrinsicImage: true)
+            == CGSize(width: 800, height: 1000))
 }
 
 @Test func toolArtifactChangesRemainVisibleWithCachedSummaries() {

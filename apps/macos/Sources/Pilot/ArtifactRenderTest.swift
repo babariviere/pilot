@@ -1,6 +1,7 @@
 import AppKit
 import Network
 import PilotCore
+import SwiftUI
 import WebKit
 
 /// Explicit CLI-only verification. Evaluating JavaScript here is test instrumentation,
@@ -113,13 +114,17 @@ enum ArtifactRenderTest {
                 guard requests == ["/api/artifact-libraries/echarts"] else {
                     throw ClientError("Unexpected native/network requests (CSP \(csp)): \(requests)")
                 }
-                let image = try await view.takeSnapshot(configuration: nil)
-                guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-                      let png = bitmap.representation(using: .png, properties: [:]) else { throw ClientError("Snapshot unavailable") }
+                let png = try await state.snapshotPNG()
+                guard png.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]),
+                      let bitmap = NSBitmapImageRep(data: png), bitmap.pixelsWide >= 760,
+                      bitmap.pixelsHigh >= 480 else { throw ClientError("Exported snapshot unavailable") }
                 try png.write(to: directory.appending(path: csp ? "artifact-chart.png" : "artifact-blocker-only.png"))
                 print("artifact-render-test passed: CSP=\(csp), ECharts, animations, library GET, data/blob SVGs, blocker, navigation, immutable RTC/WebTransport guards (main/about:blank), no bridge/popups/dialogs")
             }
             try await renderInlineDiagrams(directory: directory, client: client, server: server, base: base.absoluteString)
+            try await renderImageDefaults(directory: directory, client: client)
+            try await renderViewerHeader(directory: directory)
+            try await renderContentGrowth(directory: directory, client: client)
             if let reactPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_REACT"] {
                 try await renderReact(htmlURL: URL(filePath: reactPath), directory: directory, client: client, server: server)
             }
@@ -127,6 +132,131 @@ enum ArtifactRenderTest {
         } catch {
             print("artifact-render-test failed: \(error)")
             exit(1)
+        }
+    }
+
+    private static func renderContentGrowth(directory: URL, client: PilotClient) async throws {
+        for (name, html) in [
+            ("tall-wide", "<style>body{margin:0}</style><div id='content' style='width:1650px;height:1350px;background:#ecf7f7'>Tall and wide artifact</div>"),
+            ("svg", "<style>body{margin:0}</style><svg viewBox='0 0 1650 1350' style='display:block;width:1650px;max-width:100%;height:auto'><rect width='1650' height='1350' fill='#ecf7f7'/><text x='40' y='80' font-size='32'>Natural drawing size</text></svg>"),
+            ("viewport", "<style>body{margin:0;padding:16px}*{box-sizing:border-box}</style><div style='height:100vh;background:#ecf7f7'>Viewport-sized artifact</div>")
+        ] {
+            let state = ArtifactRenderState()
+            let coordinator = ArtifactWebView.Coordinator(state: state)
+            coordinator.measurementKind = .html
+            let handler = ArtifactLibraryHandler(libraries: [], client: client)
+            let view = ArtifactWebView.makeSandboxView(coordinator: coordinator, libraries: handler)
+            view.frame = CGRect(x: 0, y: 0, width: 1200, height: 720)
+            let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            window.orderFront(nil)
+            defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator); window.close() }
+            coordinator.install(in: view, document: ArtifactSandboxPolicy.document(html))
+            try await wait("Content measurement") { state.contentSize != nil }
+            let size = ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: state.contentSize)
+            view.frame.size = size
+            try await Task.sleep(for: .milliseconds(1200))
+            if name == "tall-wide" {
+                guard size == CGSize(width: 1650, height: 1350) else { throw ClientError("Content did not grow: \(size)") }
+                _ = try await view.evaluateJavaScript("document.getElementById('content').style.height='1500px'")
+                try await wait("Dynamic content measurement") { state.contentSize?.height == 1500 }
+                view.frame.size = ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: state.contentSize)
+            } else if name == "svg" {
+                guard size.width == 1650 else { throw ClientError("SVG did not request its natural width: \(size)") }
+                try await wait("SVG height after widening") { state.contentSize?.height == 1350 }
+                view.frame.size = ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: state.contentSize)
+            } else {
+                guard state.contentSize?.height == size.height, size.height < 800 else {
+                    throw ClientError("Viewport sizing feedback: \(String(describing: state.contentSize))")
+                }
+            }
+            let png = try await state.snapshotPNG()
+            try png.write(to: directory.appending(path: "artifact-content-\(name).png"))
+            ArtifactWebView.dismantleNSView(view, coordinator: coordinator)
+            let previous = state.contentSize
+            try await Task.sleep(for: .milliseconds(600))
+            guard state.contentSize == previous else { throw ClientError("Offscreen measurement continued") }
+            print("artifact-render-test passed: \(name), adaptive content measurement, no resize loop, teardown")
+        }
+    }
+
+    private static func renderViewerHeader(directory: URL) async throws {
+        let data = Data("""
+        {"id":"header","sessionId":"test","title":"Release overview","kind":"swiftui","revision":1,
+         "createdAt":1,"updatedAt":1,"source":"SwiftUI source","html":"<img>","libraries":[]}
+        """.utf8)
+        let revision = try JSONDecoder().decode(ArtifactRevision.self, from: data)
+        let state = ArtifactViewState()
+        state.revision = revision
+        let reference = ArtifactReference(id: revision.id, sessionId: revision.sessionId, title: revision.title, revision: 1)
+        let header = ArtifactViewerHeader(reference: reference, latest: false, state: state,
+                                          render: ArtifactRenderState(), close: {})
+        let hosting = NSHostingView(rootView: header.frame(width: 800, height: 80).background(Color(nsColor: .windowBackgroundColor)))
+        hosting.frame = CGRect(x: 0, y: 0, width: 800, height: 80)
+        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = hosting
+        window.orderFront(nil)
+        defer { window.close() }
+        try await Task.sleep(for: .milliseconds(300))
+        guard let bitmap = hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds) else { throw ClientError("Header snapshot unavailable") }
+        hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { throw ClientError("Header PNG unavailable") }
+        try png.write(to: directory.appending(path: "artifact-viewer-header.png"))
+        print("artifact-render-test passed: actual native viewer header snapshot")
+    }
+
+    private static func renderImageDefaults(directory: URL, client: PilotClient) async throws {
+        for (kind, size) in [(ArtifactKind.image, CGSize(width: 240, height: 120)),
+                             (.swiftui, CGSize(width: 800, height: 600))] {
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width),
+                                                 pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
+                                                 hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                                 bytesPerRow: 0, bitsPerPixel: 0),
+                  let context = NSGraphicsContext(bitmapImageRep: bitmap) else { throw ClientError("Image fixture unavailable") }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            NSColor.systemTeal.setFill()
+            NSBezierPath(rect: CGRect(origin: .zero, size: size)).fill()
+            NSGraphicsContext.restoreGraphicsState()
+            guard let png = bitmap.representation(using: .png, properties: [:]) else { throw ClientError("Image fixture unavailable") }
+            let source = "data:image/png;base64,\(png.base64EncodedString())"
+            let html = "<style>body{margin:0;padding:0}img{width:100%;height:100vh;object-fit:contain}</style><img src='\(source)'>"
+            let values: [String: Any] = ["id": "image", "sessionId": "test", "title": "Image", "kind": kind.rawValue,
+                                       "revision": 1, "createdAt": 1, "updatedAt": 1, "source": source,
+                                       "html": html, "libraries": []]
+            let revision = try JSONDecoder().decode(ArtifactRevision.self, from: JSONSerialization.data(withJSONObject: values))
+            let state = ArtifactRenderState()
+            let coordinator = ArtifactWebView.Coordinator(state: state)
+            coordinator.measurementKind = kind
+            let handler = ArtifactLibraryHandler(libraries: [], client: client)
+            let view = ArtifactWebView.makeSandboxView(coordinator: coordinator, libraries: handler)
+            view.frame = CGRect(x: 0, y: 0, width: 1000, height: 700)
+            let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            window.orderFront(nil)
+            defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator); window.close() }
+            coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision))
+            try await wait("Image load") { !state.loading || state.error != nil }
+            if let error = state.error { throw ClientError(error) }
+            try await waitJS(view, label: "Image decode") { "document.images[0].complete && document.images[0].naturalWidth > 0" }
+            for viewport in [CGSize(width: 1000, height: 700), CGSize(width: 320, height: 240)] {
+                view.frame.size = viewport
+                try await Task.sleep(for: .milliseconds(150))
+                let dimensions = try await view.evaluateJavaScript("(() => {const b=document.images[0].getBoundingClientRect();return [b.width,b.height,b.x,b.y]})()") as? [Double]
+                guard let dimensions, dimensions.count == 4 else { throw ClientError("Image dimensions unavailable") }
+                let scale = min(1, viewport.width / size.width, viewport.height / size.height)
+                let expected = [size.width * scale, size.height * scale,
+                                (viewport.width - size.width * scale) / 2, (viewport.height - size.height * scale) / 2]
+                guard zip(dimensions, expected).allSatisfy({ abs($0 - $1) < 0.5 }) else {
+                    throw ClientError("\(kind) preview sizing incorrect: \(dimensions), expected \(expected)")
+                }
+                let screenshot = try await state.snapshotPNG()
+                try screenshot.write(to: directory.appending(path: "artifact-\(kind.rawValue)-\(Int(viewport.width)).png"))
+            }
+            print("artifact-render-test passed: saved \(kind.rawValue), natural-size cap, proportional fit, PNG screenshot export")
         }
     }
 

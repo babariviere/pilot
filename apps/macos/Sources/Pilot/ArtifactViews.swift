@@ -7,7 +7,9 @@ final class ArtifactViewState: ObservableObject {
     @Published var preview = true
     @Published var visible = false
     @Published var viewer = false
-    @Published var source = false
+    @Published var exportMessage: String?
+    @Published var exportError: String?
+    @Published var exporting = false
     @Published var revision: ArtifactRevision?
     @Published var error: String?
     @Published var loading = false
@@ -30,13 +32,17 @@ final class ArtifactViewState: ObservableObject {
 /// Previews are shown by default and removed when a lazy transcript row leaves the screen.
 struct ArtifactCard: View {
     let reference: ArtifactReference
+    @Environment(\.transcriptContentPrepared) private var contentPrepared
     @StateObject private var state = ArtifactViewState()
+    @StateObject private var render = ArtifactRenderState()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if state.preview, state.visible {
-                InlineArtifactLayout {
-                    ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true })
+                InlineArtifactLayout(contentSize: render.contentSize,
+                                     image: state.revision?.kind == .image || state.revision?.kind == .swiftui) {
+                    ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
+                                    state: state, render: render)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
@@ -50,14 +56,18 @@ struct ArtifactCard: View {
         }
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
+        .onChange(of: render.contentSize) { _, _ in contentPrepared?() }
         .sheet(isPresented: $state.viewer) { ArtifactViewer(reference: reference, latest: false) }
     }
 }
 
-/// Derive height from the proposed chat width without geometry feedback or extra view state.
+/// Start with a bounded viewport, then let measured content request more room.
 struct InlineArtifactLayout: Layout {
+    var contentSize: CGSize? = nil
+    var image = false
+
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        ArtifactViewerLayout.inlineSize(availableWidth: proposal.width ?? Theme.column)
+        ArtifactViewerLayout.inlineSize(availableWidth: proposal.width ?? Theme.column, contentSize: contentSize, image: image)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
@@ -72,25 +82,65 @@ struct ArtifactViewer: View {
     let reference: ArtifactReference
     let latest: Bool
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var state = ArtifactViewState()
+    @StateObject private var render = ArtifactRenderState()
 
     private var expandedSize: CGSize {
         ArtifactViewerLayout.size(available: NSApp.keyWindow?.screen?.visibleFrame.size
-            ?? NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900))
+            ?? NSScreen.main?.visibleFrame.size ?? CGSize(width: 1440, height: 900), contentSize: render.contentSize)
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(reference.title).font(.headline).lineLimit(1)
-                Text(latest ? "Latest revision" : "Revision \(reference.revision)").font(.caption).foregroundStyle(.secondary)
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            .padding(14)
+            ArtifactViewerHeader(reference: reference, latest: latest, state: state, render: render, close: { dismiss() })
             Divider()
-            ArtifactContent(reference: reference, latest: latest)
+            ArtifactContent(reference: reference, latest: latest, state: state, render: render)
         }
         .frame(width: expandedSize.width, height: expandedSize.height)
+    }
+}
+
+struct ArtifactViewerHeader: View {
+    let reference: ArtifactReference
+    let latest: Bool
+    @ObservedObject var state: ArtifactViewState
+    @ObservedObject var render: ArtifactRenderState
+    let close: () -> Void
+
+    var revisionText: String {
+        if let revision = state.revision { return "Revision \(revision.revision)" }
+        return latest ? "Latest revision" : "Revision \(reference.revision)"
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).padding(6) }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .help("Close artifact")
+                .accessibilityLabel("Close artifact")
+            VStack(alignment: .leading, spacing: 4) {
+                Text(state.revision?.title ?? reference.title).font(.headline).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(revisionText)
+                    if let revision = state.revision {
+                        Text("·")
+                        Text(revision.kind.rawValue.uppercased())
+                    }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+                if let error = state.exportError {
+                    Text(error).font(.caption).foregroundStyle(.red).lineLimit(2).textSelection(.enabled)
+                } else if let message = state.exportMessage {
+                    Text(message).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 12)
+            if let revision = state.revision {
+                ArtifactShareMenu(revision: revision, state: state, render: render)
+            }
+        }
+        .padding(14)
     }
 }
 
@@ -99,29 +149,11 @@ private struct ArtifactContent: View {
     let latest: Bool
     var inline = false
     var onOpen: (() -> Void)?
-    @StateObject private var state = ArtifactViewState()
+    @ObservedObject var state: ArtifactViewState
+    @ObservedObject var render: ArtifactRenderState
 
     var body: some View {
         VStack(spacing: 0) {
-            if !inline {
-                HStack {
-                    if let revision = state.revision {
-                        Text("\(revision.kind.rawValue.uppercased()) · r\(revision.revision)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if state.revision?.kind != .image {
-                        Picker("View", selection: $state.source) {
-                            Text("Preview").tag(false)
-                            Text("Source").tag(true)
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(width: 160)
-                    }
-                }
-                .padding(8)
-            }
             if state.loading {
                 ProgressView("Loading artifact…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = state.error {
@@ -131,32 +163,99 @@ private struct ArtifactContent: View {
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let revision = state.revision {
-                if state.source, revision.kind != .image {
-                    ScrollView {
-                        CodeBlock(language: revision.kind.sourceLanguage, text: revision.source)
-                    }
-                } else {
-                    ArtifactPreview(revision: revision).id("\(revision.id)-\(revision.revision)")
-                        .allowsHitTesting(!inline)
-                        .accessibilityHidden(inline)
-                        .overlay {
-                            if inline {
-                                EmbeddedPreviewButton(title: "Open \(reference.title)",
-                                    help: revision.kind == .react ? "Click to interact" : "Click to expand",
-                                    open: { onOpen?() })
-                            }
+                ArtifactPreview(revision: revision, state: render).id("\(revision.id)-\(revision.revision)")
+                    .allowsHitTesting(!inline)
+                    .accessibilityHidden(inline)
+                    .overlay {
+                        if inline {
+                            EmbeddedPreviewButton(title: "Open \(reference.title)",
+                                help: revision.kind == .react ? "Click to interact" : "Click to expand",
+                                open: { onOpen?() })
                         }
-                }
+                    }
             }
         }
-        .task { await state.load(reference, latest: latest) }
+        .task {
+            render.loading = true
+            render.error = nil
+            render.contentSize = nil
+            await state.load(reference, latest: latest)
+        }
         .background(Theme.background)
+    }
+}
+
+private struct ArtifactShareMenu: View {
+    let revision: ArtifactRevision
+    @ObservedObject var state: ArtifactViewState
+    @ObservedObject var render: ArtifactRenderState
+
+    var body: some View {
+        Menu {
+            Button("Copy file content") { performExport {
+                ArtifactExport.copy(revision.source)
+                return "Content copied"
+            } }
+            Button("Copy full path") { performExport {
+                ArtifactExport.copy(try ArtifactExport.materialize(revision).path)
+                return "Local file path copied"
+            } }
+            Button("Save file…") { performExport {
+                try ArtifactExport.save(ArtifactExport.file(for: revision)) ? "File saved" : nil
+            } }
+            Button("Reveal in Finder") { performExport {
+                NSWorkspace.shared.activateFileViewerSelecting([try ArtifactExport.materialize(revision)])
+                return nil
+            } }
+            Divider()
+            Button("Copy screenshot") { screenshot(revision, save: false) }
+                .disabled(render.loading || render.error != nil)
+                .help("Copy the visible preview as a PNG image")
+            Button("Export screenshot…") { screenshot(revision, save: true) }
+                .disabled(render.loading || render.error != nil)
+                .help("Save the visible preview as a PNG image")
+        } label: {
+            Label("Share", systemImage: "square.and.arrow.up")
+        }
+        .fixedSize()
+        .disabled(state.exporting)
+        .help("Copy content or a local file path, save the source file, or capture the visible preview")
+    }
+
+    private func performExport(_ operation: () throws -> String?) {
+        state.exportError = nil
+        state.exportMessage = nil
+        do { state.exportMessage = try operation() }
+        catch { state.exportError = error.localizedDescription }
+    }
+
+    private func screenshot(_ revision: ArtifactRevision, save: Bool) {
+        state.exporting = true
+        state.exportError = nil
+        state.exportMessage = nil
+        Task { @MainActor in
+            defer { state.exporting = false }
+            do {
+                let data = try await render.snapshotPNG()
+                if save {
+                    let stem = try ArtifactExport.file(for: revision).name
+                    let name = (stem as NSString).deletingPathExtension + "-screenshot.png"
+                    if try ArtifactExport.save(.init(name: name, data: data, type: .png)) {
+                        state.exportMessage = "Screenshot saved"
+                    }
+                } else {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setData(data, forType: .png)
+                    state.exportMessage = "Screenshot copied"
+                }
+            } catch { state.exportError = error.localizedDescription }
+        }
     }
 }
 
 private struct ArtifactPreview: View {
     let revision: ArtifactRevision
-    @StateObject private var state = ArtifactRenderState()
+    @ObservedObject var state: ArtifactRenderState
 
     var body: some View {
         ArtifactWebView(revision: revision, state: state)

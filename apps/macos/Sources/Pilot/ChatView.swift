@@ -161,7 +161,6 @@ struct ChatView: View {
                 .padding(.horizontal, 28)
                 .padding(.top, 24)
                 .padding(.bottom, bottomPadding)
-                .frame(maxWidth: ArtifactViewerLayout.inlineMaxWidth + 56)
                 .frame(maxWidth: .infinity)
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
@@ -281,9 +280,9 @@ struct RowView: View, Equatable {
 
     private var maximumWidth: CGFloat {
         switch row {
-        case .artifact: return ArtifactViewerLayout.inlineMaxWidth
+        case .artifact: return .infinity
         case let .tools(_, items) where items.contains(where: { $0.artifact != nil }):
-            return ArtifactViewerLayout.inlineMaxWidth
+            return .infinity
         default: return Theme.column
         }
     }

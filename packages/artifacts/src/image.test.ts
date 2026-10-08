@@ -18,7 +18,8 @@ test("image preparation fits the viewport, embeds bytes and preserves the sandbo
 	assert.deepEqual(prepared.libraries, []);
 	assert.ok(prepared.html.includes(`src="${source}"`));
 	assert.match(prepared.html, /object-fit:contain/);
-	assert.match(prepared.html, /height:100vh/);
+	assert.match(prepared.html, /width:auto;height:auto;max-width:100vw;max-height:100vh/);
+	assert.doesNotMatch(prepared.html, /width:100%;height:100vh/);
 	assert.match(prepared.html, /connect-src 'none'/);
 	assert.doesNotMatch(prepared.html, /pilot-artifact:\/\/library\//);
 	assert.throws(
