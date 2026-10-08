@@ -90,13 +90,10 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var repositoryToolbar: some ToolbarContent {
-        if model.isUnread(session) || (!session.isAsk &&
-            (session.branch != nil || !session.linkedPullRequests.isEmpty || session.pullRequestError != nil)) {
-            if #available(macOS 26.0, *) {
-                repositoryToolbarItem.sharedBackgroundVisibility(.hidden)
-            } else {
-                repositoryToolbarItem
-            }
+        if #available(macOS 26.0, *) {
+            repositoryToolbarItem.sharedBackgroundVisibility(.hidden)
+        } else {
+            repositoryToolbarItem
         }
     }
 
@@ -119,26 +116,35 @@ struct SessionDetail: View {
 struct SessionToolbarMetadata: View {
     let session: SessionSummary
 
+    var source: String? { session.isAsk ? session.sourceLabel : session.branch }
+
     var body: some View {
-        if !session.isAsk {
-            HStack(spacing: 8) {
-                if let branch = session.branch, !branch.isEmpty {
-                    HStack(spacing: 5) {
+        HStack(spacing: 8) {
+            SessionContextBadge(session: session)
+            if let source, !source.isEmpty {
+                HStack(spacing: 5) {
+                    if session.isAsk && session.sourceBranch == nil {
+                        Image(systemName: "folder")
+                            .frame(width: 14, height: 14)
+                            .accessibilityHidden(true)
+                    } else {
                         Image(nsImage: GitBranchGlyph.image)
                             .resizable()
                             .frame(width: 14, height: 14)
                             .accessibilityHidden(true)
-                        Text(branch)
-                            .font(.system(size: 11, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
                     }
-                    .foregroundStyle(Theme.mutedForeground)
-                    .frame(maxWidth: 260)
-                    .help("Branch: \(branch)")
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Branch \(branch)")
+                    Text(source)
+                        .font(.system(size: 11, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
+                .foregroundStyle(Theme.mutedForeground)
+                .frame(maxWidth: 200)
+                .help(session.isAsk ? session.workspaceHelp : "Branch: \(source)")
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(session.isAsk ? "Source \(source)" : "Branch \(source)")
+            }
+            if !session.isAsk {
                 PullRequestBadge(session: session)
             }
         }

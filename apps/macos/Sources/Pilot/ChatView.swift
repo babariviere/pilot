@@ -178,8 +178,6 @@ struct ChatView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
-                SessionContextBadge(session: session)
-                    .padding(.horizontal, 24).padding(.vertical, 6)
                 if session.isAsk {
                     Button("Start a Build chat with this context") {
                         model.buildWithContext(from: session, rows: transcript.rows)

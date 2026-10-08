@@ -1,23 +1,28 @@
 import PilotCore
 import SwiftUI
 
-/// Visible above both the live and archived composer, independent of transcript scrolling.
+/// Compact workspace context beside the toolbar's branch and PR metadata.
 struct SessionContextBadge: View {
     let session: SessionSummary
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: session.isAsk ? "questionmark.bubble" : "hammer")
-            Text(session.isAsk ? "Ask" : "Build").fontWeight(.semibold)
-            Text("· \(session.workspaceLabel) · \(session.sourceLabel)")
-            if let commit = session.sourceCommit {
-                Text(String(commit.prefix(8))).monospaced()
-            }
+        ViewThatFits(in: .horizontal) {
+            context(session.isAsk ? "Ask · Read-only" : session.workspaceLabel)
+            context(session.isAsk ? "Ask" : "Build")
         }
-        .font(.caption)
+        .font(.system(size: 11))
         .foregroundStyle(Theme.mutedForeground)
-        .lineLimit(2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .help(session.workspaceHelp)
+        .help("\(session.workspaceLabel)\n\(session.workspaceHelp)")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(session.isAsk ? "Ask" : "Build") · \(session.workspaceLabel)")
+    }
+
+    private func context(_ title: String) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: session.isAsk ? "questionmark.bubble" : "hammer")
+                .accessibilityHidden(true)
+            Text(title)
+        }
+        .fixedSize(horizontal: true, vertical: false)
     }
 }
