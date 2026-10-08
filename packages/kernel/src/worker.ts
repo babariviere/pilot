@@ -71,6 +71,7 @@ async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdo
 					void send({ type: "events", watchId: command.watchId, events });
 				},
 				command.includeTodos,
+				command.activityOnly,
 			);
 			break;
 		case "unwatch":

@@ -218,7 +218,7 @@ test("uncertain durable admission stays busy after an idle drain has settled", a
 	assert.deepEqual(sessions.prepareUpdate(), { ready: false });
 });
 
-test("a new subscription drain is busy even during a reentrant idle worker factory notification", async (t) => {
+test("a new execution drain is busy even during a reentrant idle worker factory notification", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
 	const created = await sessions.spawn({ cwd: f.source, message: "initial" });
@@ -228,7 +228,10 @@ test("a new subscription drain is busy even during a reentrant idle worker facto
 	const attempts: boolean[] = [];
 	sessions.onChange(() => attempts.push(sessions.prepareUpdate().ready));
 	const off = sessions.subscribe(created.id, () => {});
+	const sending = sessions.send(created.id, "resume with new work");
 	assert.deepEqual(sessions.prepareUpdate(), { ready: false });
+	await sending;
+	await sessions.stop(created.id);
 	await until(() => sessions.get(created.id)?.state === "idle");
 	await until(() => sessions.prepareUpdate().ready);
 	assert.ok(attempts.length > 0);
@@ -908,9 +911,13 @@ test("idle unwatched kernels without subprocesses park, and reopen only after re
 	const events: AgentEvent[][] = [];
 	sessions.subscribe(created.id, (batch) => events.push(batch));
 	await delay(50);
-	assert.equal(f.workers.length, 1, "the next kernel waits for the parked one to release its lease");
+	assert.equal(f.workers.length, 1, "viewing parked history never reopens the kernel");
+	const sending = sessions.send(created.id, "resume work");
+	await delay(50);
+	assert.equal(f.workers.length, 1, "explicit execution waits for the parked kernel to release its lease");
 	release.resolve();
-	await until(() => f.workers.length === 2 && sessions.get(created.id)?.state === "idle");
+	await sending;
+	await until(() => f.workers.length === 2 && sessions.get(created.id)?.state === "working");
 	await until(() => events.some((batch) => batch.some((event) => event.type === "snapshot")));
 	assert.equal((await f.stored(created.id)).failure, undefined);
 	assert.equal(sessions.get(created.id)?.error, undefined);

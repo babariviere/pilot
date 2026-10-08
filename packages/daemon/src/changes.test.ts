@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { collectChangeSummary, collectChanges } from "./changes.ts";
+import { collectChangeSummary, collectChanges, RepositoryChanges } from "./changes.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -258,3 +258,152 @@ for (const setting of ["diff.mnemonicPrefix", "diff.noprefix"]) {
 		}
 	});
 }
+
+test("repository cache coalesces both endpoints and revalidates external edits and commits after its short TTL", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-cache-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	t.mock.timers.enable({ apis: ["Date"], now: 0 });
+	git(root, "init", "--quiet", "-b", "main");
+	writeFileSync(join(root, "a.txt"), "base\n");
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "base");
+	const base = git(root, "rev-parse", "HEAD").trim();
+	const cache = new RepositoryChanges();
+	const summary = cache.summary(root);
+	const full = cache.changes(root);
+	assert.equal(cache.summary(root), summary);
+	assert.equal(cache.changes(root), full);
+	assert.equal((await summary).fileCount, 0);
+	assert.equal((await full).files.length, 0);
+	writeFileSync(join(root, "a.txt"), "edited\nmore\n");
+	writeFileSync(join(root, "outside.txt"), "external\n");
+	assert.equal((await cache.summary(root)).fileCount, 0);
+	t.mock.timers.tick(1000);
+	assert.equal((await cache.summary(root)).fileCount, 2);
+	assert.match((await cache.changes(root)).diff, /\+external/);
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "external commit");
+	t.mock.timers.tick(1000);
+	assert.equal((await cache.summary(root)).fileCount, 0, "HEAD is re-resolved rather than pinned by the cache");
+	assert.equal((await cache.summary(root, base)).fileCount, 2, "base is part of the cache key");
+	writeFileSync(join(root, "a.txt"), "session edit\n");
+	cache.invalidate(root);
+	assert.equal((await cache.summary(root)).fileCount, 1);
+	assert.match((await cache.changes(root)).diff, /\+session edit/);
+});
+
+test("bounds huge untracked patches during collection while retaining accurate stats for every file", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-huge-"));
+	const traceRoot = mkdtempSync(join(tmpdir(), "pilot-changes-trace-"));
+	t.after(() => {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(traceRoot, { recursive: true, force: true });
+	});
+	git(root, "init", "--quiet", "-b", "main");
+	git(root, "commit", "--quiet", "--allow-empty", "-m", "base");
+	// Beyond the old execFile maxBuffer. Counting patches used to silently report zero additions here.
+	writeFileSync(join(root, "a-huge.txt"), `${"a".repeat(34 * 1024 * 1024)}\nlast\n`);
+	writeFileSync(join(root, "z-later.txt"), "one\ntwo\nthree\n");
+	const tracePath = join(traceRoot, "git.jsonl");
+	const previousTrace = process.env.GIT_TRACE2_EVENT;
+	process.env.GIT_TRACE2_EVENT = tracePath;
+	let changes: Awaited<ReturnType<typeof collectChanges>>;
+	try {
+		changes = await collectChanges(root);
+	} finally {
+		if (previousTrace === undefined) delete process.env.GIT_TRACE2_EVENT;
+		else process.env.GIT_TRACE2_EVENT = previousTrace;
+	}
+	assert.equal(changes.truncated, true);
+	assert.ok(Buffer.byteLength(changes.diff) <= 1024 * 1024);
+	assert.deepEqual(
+		changes.files.map((file) => [file.path, file.additions, file.deletions]),
+		[
+			["a-huge.txt", 2, 0],
+			["z-later.txt", 3, 0],
+		],
+	);
+	const patchCommands = readFileSync(tracePath, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as { event: string; argv?: string[] })
+		.filter((event) => event.event === "start" && event.argv?.includes("--src-prefix=a/"));
+	assert.equal(patchCommands.length, 2, "only tracked and the first untracked patch are generated");
+	assert.deepEqual(await collectChangeSummary(root), {
+		base: changes.base,
+		branch: "main",
+		fileCount: 2,
+		additions: 5,
+		deletions: 0,
+	});
+});
+
+test("bounds tracked UTF-8 patches and keeps metadata for omitted untracked patches", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-huge-tracked-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	git(root, "init", "--quiet", "-b", "main");
+	writeFileSync(join(root, "a.txt"), "old\n");
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "base");
+	writeFileSync(join(root, "a.txt"), `${"é".repeat(1024 * 1024)}\n`);
+	writeFileSync(join(root, "new\n\tfile.txt"), "new\n");
+	const changes = await collectChanges(root);
+	assert.equal(changes.truncated, true);
+	assert.ok(Buffer.byteLength(changes.diff) <= 1024 * 1024);
+	assert.ok(!changes.diff.includes("\uFFFD"), "truncation must not split UTF-8 code points");
+	assert.deepEqual(
+		changes.files.map((file) => [file.path, file.additions, file.deletions]),
+		[
+			["a.txt", 1, 1],
+			["new\n\tfile.txt", 1, 0],
+		],
+	);
+});
+
+test("full changes preserve rename stats and unusual filenames", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-full-paths-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	git(root, "init", "--quiet", "-b", "main");
+	const oldPath = "17\t23\told\nname.txt";
+	const newPath = "7\t9\tnew\nname.txt";
+	writeFileSync(join(root, oldPath), "one\ntwo\nthree\nfour\nfive\nsix\n");
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "base");
+	renameSync(join(root, oldPath), join(root, newPath));
+	writeFileSync(join(root, newPath), "one\ntwo\nthree\nfour\nfive\nchanged\nextra\n");
+	git(root, "add", "-A");
+	const changes = await collectChanges(root);
+	assert.deepEqual(changes.files, [
+		{ path: newPath, previousPath: oldPath, status: "renamed", additions: 2, deletions: 1 },
+	]);
+});
+
+test("invalid UTF-8 in text patches cannot expand beyond the diff byte budget", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-invalid-utf8-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	git(root, "init", "--quiet", "-b", "main");
+	git(root, "commit", "--quiet", "--allow-empty", "-m", "base");
+	writeFileSync(join(root, "invalid.txt"), Buffer.alloc(1024 * 1024, 0xff));
+	const changes = await collectChanges(root);
+	assert.equal(changes.truncated, true);
+	assert.ok(Buffer.byteLength(changes.diff) <= 1024 * 1024);
+	assert.equal(changes.files[0]?.additions, 1);
+});
+
+test("truncation preserves complete early hunks and omits an incomplete trailing hunk", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-hunks-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	git(root, "init", "--quiet", "-b", "main");
+	const context = Array.from({ length: 100 }, (_, i) => `context ${i}\n`).join("");
+	writeFileSync(join(root, "a.txt"), `first\n${context}last\n`);
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "base");
+	writeFileSync(join(root, "a.txt"), `first edit\n${context}${"x".repeat(2 * 1024 * 1024)}\n`);
+	const changes = await collectChanges(root);
+	assert.equal(changes.truncated, true);
+	assert.match(changes.diff, /\+first edit\n/);
+	assert.equal(changes.diff.match(/^@@ /gm)?.length, 1);
+	assert.ok(changes.diff.endsWith("\n"));
+	assert.equal(changes.files[0]?.additions, 2);
+	assert.equal(changes.files[0]?.deletions, 2);
+});

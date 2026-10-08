@@ -22,6 +22,7 @@ final class PilotClient: ObservableObject {
     private var baseURL: URL?
     private let artifactSession: URLSession
     private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
+    private let summaryCache = AsyncReadCache<String, SessionChangeSummary>(ttl: 10)
     init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
         self.baseURL = baseURL
         self.artifactSession = artifactSession
@@ -176,6 +177,12 @@ final class PilotClient: ObservableObject {
     /// Sidebar metadata only, without computing or transferring full diffs.
     func changeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
         if let fixture = fixtureChangeSummaries[sessionId] { return fixture }
+        return try await summaryCache.value(for: sessionId) { [self] in
+            try await fetchChangeSummary(sessionId)
+        }
+    }
+
+    private func fetchChangeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
         guard let baseURL else { throw ClientError("pilotd is not connected") }
         let url = baseURL.appending(path: "api/sessions/\(sessionId)/changes/summary")
         let (data, response) = try await repositoryRequests.perform {
@@ -185,7 +192,9 @@ final class PilotClient: ObservableObject {
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
         }
-        return try JSONDecoder().decode(SessionChangeSummary.self, from: data)
+        return try await Task.detached(priority: .userInitiated) {
+            try JSONDecoder().decode(SessionChangeSummary.self, from: data)
+        }.value
     }
 
     /// The session's working copy against the point it branched from.
@@ -400,6 +409,7 @@ final class PilotClient: ObservableObject {
     }
 
     private func update(_ session: SessionSummary) {
+        if self.session(session.id)?.updatedAt != session.updatedAt { summaryCache.invalidate(session.id) }
         sessions.removeAll { $0.id == session.id }
         sessions.append(session)
         sessions.sort { $0.updatedAt > $1.updatedAt }
@@ -444,7 +454,11 @@ struct ClientError: LocalizedError {
 final class RepositoryRequestLimiter {
     private let limit: Int
     private var active = 0
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private struct Waiter {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+    private var waiting: [Waiter] = []
 
     init(limit: Int) {
         precondition(limit > 0)
@@ -452,14 +466,32 @@ final class RepositoryRequestLimiter {
     }
 
     func perform<T>(_ operation: () async throws -> T) async throws -> T {
-        if active < limit { active += 1 }
-        else { await withCheckedContinuation { waiting.append($0) } }
+        try await acquire()
         defer {
             if waiting.isEmpty { active -= 1 }
-            else { waiting.removeFirst().resume() }
+            else { waiting.removeFirst().continuation.resume() }
         }
         // A disappeared row may have been queued. Release its slot without starting a request.
         try Task.checkCancellation()
         return try await operation()
+    }
+
+    private func acquire() async throws {
+        try Task.checkCancellation()
+        if active < limit { active += 1; return }
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled { continuation.resume(throwing: CancellationError()) }
+                else { waiting.append(Waiter(id: id, continuation: continuation)) }
+            }
+        } onCancel: {
+            Task { @MainActor in self.cancel(id) }
+        }
+    }
+
+    private func cancel(_ id: UUID) {
+        guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
+        waiting.remove(at: index).continuation.resume(throwing: CancellationError())
     }
 }

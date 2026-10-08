@@ -16,13 +16,13 @@ final class SessionRepositoryModel: ObservableObject {
         do {
             let summary = try await client.changeSummary(session.id)
             try Task.checkCancellation()
-            self.summary = summary
-            error = nil
+            if self.summary != summary { self.summary = summary }
+            if error != nil { error = nil }
         } catch {
             guard !Task.isCancelled else { return }
             // Never present a failed lookup as zero changes or a stale count as current.
-            summary = nil
-            self.error = error.localizedDescription
+            if summary != nil { summary = nil }
+            if self.error != error.localizedDescription { self.error = error.localizedDescription }
         }
     }
 }

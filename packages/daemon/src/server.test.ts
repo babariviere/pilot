@@ -6,6 +6,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { AgentEvent, ServerMessage } from "@pilot/protocol";
+import { WebSocket } from "ws";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -103,6 +105,11 @@ test("changes summary GET returns only metadata and counts and preserves route g
 	writeFileSync(join(root, "untracked.txt"), "new\n");
 	const projects = new ProjectStore(root);
 	const sessions = new SessionManager(root, projects);
+	let updated!: Parameters<SessionManager["onChange"]>[0];
+	t.mock.method(sessions, "onChange", (listener: typeof updated) => {
+		updated = listener;
+		return () => {};
+	});
 	const originalChangeBase = sessions.changeBase.bind(sessions);
 	let preparing = false;
 	const changeBase = t.mock.method(sessions, "changeBase", (id: string) => {
@@ -146,6 +153,13 @@ test("changes summary GET returns only metadata and counts and preserves route g
 		await rejected.arrayBuffer();
 	}
 	assert.equal(changeBase.mock.callCount(), 2, "method, path and origin guards run before resolving the session");
+	writeFileSync(join(root, "untracked.txt"), "new\nexternal edit\n");
+	updated({ id: "session-1", title: "test", cwd: root, createdAt: 0, updatedAt: 1, state: "idle" });
+	const invalidated = await fetch(`${url}/summary`);
+	assert.equal(invalidated.status, 200);
+	assert.deepEqual(await invalidated.json(), { base, branch: "main", fileCount: 2, additions: 3, deletions: 1 });
+	const invalidatedFull = await fetch(url);
+	assert.match(((await invalidatedFull.json()) as { diff: string }).diff, /\+external edit/);
 	const missing = await fetch(`${url.replace("session-1", "missing")}/summary`);
 	assert.equal(missing.status, 404);
 	assert.match(((await missing.json()) as { error: string }).error, /Unknown session/);
@@ -153,6 +167,72 @@ test("changes summary GET returns only metadata and counts and preserves route g
 	const pending = await fetch(`${url}/summary`);
 	assert.equal(pending.status, 400);
 	assert.deepEqual(await pending.json(), { error: "Session workspace is still preparing" });
+});
+
+test("websocket overload closes with a reconnect instruction and resubscription starts with a fresh snapshot", {
+	timeout: 30_000,
+}, async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const snapshot: AgentEvent = {
+		type: "snapshot",
+		entries: [],
+		tools: [],
+		compactions: [],
+		inbox: [],
+		agent: {},
+		usage: { models: {}, tools: {} },
+	};
+	let deliver!: Parameters<SessionManager["subscribe"]>[1];
+	let unsubscribed = 0;
+	t.mock.method(sessions, "subscribe", (_id: string, listener: typeof deliver) => {
+		deliver = listener;
+		listener([snapshot]);
+		return () => {
+			unsubscribed++;
+		};
+	});
+	t.mock.method(sessions, "artifacts", async () => []);
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		new TerminalManager(),
+	);
+	const sockets: WebSocket[] = [];
+	t.after(async () => {
+		for (const socket of sockets) socket.terminate();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/ws`;
+	const subscribe = async () => {
+		const socket = new WebSocket(url);
+		sockets.push(socket);
+		const received = new Promise<ServerMessage>((resolve) => {
+			socket.on("message", (data) => {
+				const message = JSON.parse(String(data)) as ServerMessage;
+				if (message.type === "events") resolve(message);
+			});
+		});
+		await once(socket, "open");
+		socket.send(JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
+		assert.deepEqual(await received, { type: "events", sessionId: "session-1", events: [snapshot] });
+		return socket;
+	};
+	const first = await subscribe();
+	const closed = once(first, "close");
+	const buffered = t.mock.getter(WebSocket.prototype, "bufferedAmount", () => 128 * 1024 * 1024);
+	deliver([{ type: "queue_update", items: [] }]);
+	buffered.mock.restore();
+	const [code, reason] = await closed;
+	assert.equal(code, 1013);
+	assert.match(String(reason), /Reconnect.*snapshot/);
+	// The server close event releases the subscription before the next connection subscribes.
+	await subscribe();
+	assert.equal(unsubscribed, 1);
 });
 
 test("queued message PATCH forwards the message ID and content and reports stale edits", async (t) => {

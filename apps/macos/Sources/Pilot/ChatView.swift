@@ -15,11 +15,14 @@ final class SessionFeed: ObservableObject {
     private var processing: Task<Void, Never>?
     private var generation = UUID()
     private var processorRevision = 0
+    var onPresentationChanged: (() -> Void)?
+    var isSubscribed: Bool { token != nil }
+    var cachedByteCount: Int { presentation.cachedByteCount }
 
-    init(sessionId: String, client: PilotClient) {
+    init(sessionId: String, client: PilotClient, initialPresentation: TranscriptPresentation = TranscriptPresentation()) {
         self.sessionId = sessionId
         self.client = client
-        presentation = TranscriptPresentation()
+        presentation = initialPresentation
     }
 
     /// A static transcript, for snapshots and previews.
@@ -36,8 +39,17 @@ final class SessionFeed: ObservableObject {
         generation = UUID()
         processor = TranscriptProcessor()
         processorRevision = 0
-        loading = true
+        // Cached rows can paint immediately, but stale queue/status must not drive actions or review.
+        loading = presentation.rows.isEmpty
         hasSnapshot = false
+        var cached = presentation
+        cached.queuedMessages = []
+        cached.todos = []
+        cached.working = false
+        cached.streaming = false
+        cached.retry = nil
+        cached.error = nil
+        presentation = cached
         token = client.subscribe(sessionId) { [weak self] events in
             self?.enqueue(events)
         }
@@ -52,12 +64,16 @@ final class SessionFeed: ObservableObject {
             while let self, self.generation == generation, !self.pending.isEmpty {
                 let events = self.pending.flatMap { $0 }
                 self.pending.removeAll(keepingCapacity: true)
-                guard var presentation = try? await processor.apply(events) else { return }
+                guard var presentation = try? await processor.apply(events) else {
+                    if self.generation == generation { self.processing = nil }
+                    return
+                }
                 guard !Task.isCancelled, self.generation == generation else { return }
                 if presentation.revision != self.processorRevision {
                     self.processorRevision = presentation.revision
                     presentation.revision = self.presentation.revision + 1
                     self.presentation = presentation
+                    self.onPresentationChanged?()
                 }
                 if events.contains(where: { $0["type"]?.string == "snapshot" }) {
                     self.hasSnapshot = true
@@ -77,6 +93,9 @@ final class SessionFeed: ObservableObject {
         processing?.cancel()
         processing = nil
         pending.removeAll()
+        // The cache retains prepared rows, not the reducer's duplicate history and tool state.
+        processor = TranscriptProcessor()
+        onPresentationChanged?()
     }
 }
 
@@ -84,15 +103,17 @@ struct ChatView: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @StateObject private var feed: SessionFeed
-    @StateObject private var composer: ComposerState
+    @StateObject private var composerOwner: ChatComposerOwner
     @StateObject private var scroll = TranscriptScrollState()
     private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
         self.session = session
-        _feed = StateObject(wrappedValue: feed ?? SessionFeed(sessionId: session.id, client: AppModel.shared.client))
-        _composer = StateObject(wrappedValue: composer ?? ComposerState())
+        _feed = StateObject(wrappedValue: feed ?? AppModel.shared.feeds.feed(sessionId: session.id, client: AppModel.shared.client))
+        _composerOwner = StateObject(wrappedValue: ChatComposerOwner(composer ?? ComposerState()))
     }
+
+    private var composer: ComposerState { composerOwner.state }
 
     var body: some View {
         let transcript = feed.presentation
@@ -105,7 +126,7 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                     }
                     ForEach(rows) { row in
-                        RowView(row: row)
+                        RowView(row: row).equatable()
                     }
                     if transcript.working, !transcript.streaming || rows.last.map(isToolRow) == true {
                         WorkingIndicator(retry: transcript.retry)
@@ -128,6 +149,9 @@ struct ChatView: View {
                 .frame(maxWidth: .infinity)
                 .background(TranscriptScrollObserver(state: scroll, bottomPadding: bottomPadding))
             }
+            .environment(\.transcriptContentPrepared, {
+                scroll.contentPrepared { proxy.scrollTo("bottom", anchor: .bottom) }
+            })
             .onChange(of: transcript.revision) { _, _ in
                 guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
@@ -161,7 +185,7 @@ struct ChatView: View {
             }
         }
         .onAppear { feed.start() }
-        .onDisappear { feed.stop() }
+        .onDisappear { feed.stop(); scroll.cancelPreparedScroll() }
     }
 
     private func isToolRow(_ row: ChatRow) -> Bool {
@@ -189,7 +213,7 @@ struct ChatView: View {
     }
 }
 
-private struct RowView: View {
+private struct RowView: View, Equatable {
     let row: ChatRow
 
     var body: some View {

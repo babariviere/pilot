@@ -27,7 +27,7 @@ export type KernelCommand =
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
 	| { type: "abort"; requestId: string }
-	| { type: "watch"; watchId: string; includeTodos?: boolean }
+	| { type: "watch"; watchId: string; includeTodos?: boolean; activityOnly?: boolean }
 	| { type: "unwatch"; watchId: string }
 	| { type: "shutdown" };
 

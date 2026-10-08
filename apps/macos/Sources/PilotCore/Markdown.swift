@@ -24,7 +24,8 @@ public enum Markdown {
         var list: (ordered: Bool, start: Int, items: [String])?
         var quote: [String] = []
         var table: [String] = []
-        var code: (language: String?, fenceLength: Int, lines: [String])?
+        var code: (language: String?, fenceLength: Int)?
+        var codeLines: [String] = []
 
         func flush() {
             if !paragraph.isEmpty { blocks.append(.paragraph(paragraph.joined(separator: "\n"))) }
@@ -39,10 +40,10 @@ public enum Markdown {
 
         for rawLine in source.components(separatedBy: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if var current = code {
+            if let current = code {
                 let ticks = line.prefix { $0 == "`" }.count
                 if ticks >= current.fenceLength, line.dropFirst(ticks).isEmpty {
-                    let text = current.lines.joined(separator: "\n")
+                    let text = codeLines.joined(separator: "\n")
                     let token = current.language?.split(whereSeparator: { $0.isWhitespace }).first?.lowercased()
                     if let token, let kind = MarkdownDiagramKind(rawValue: token) {
                         blocks.append(.diagram(kind: kind, text: text))
@@ -50,9 +51,11 @@ public enum Markdown {
                         blocks.append(.code(language: current.language, text: text))
                     }
                     code = nil
+                    codeLines.removeAll(keepingCapacity: true)
                 } else {
-                    current.lines.append(rawLine)
-                    code = current
+                    // Keep lines separate from the fence metadata to avoid a COW array
+                    // copy on every append when unwrapping the optional fence.
+                    codeLines.append(rawLine)
                 }
                 continue
             }
@@ -60,7 +63,7 @@ public enum Markdown {
             if ticks >= 3, !line.dropFirst(ticks).contains("`") {
                 flush()
                 let language = line.dropFirst(ticks).trimmingCharacters(in: .whitespacesAndNewlines)
-                code = (language.isEmpty ? nil : language, ticks, [])
+                code = (language.isEmpty ? nil : language, ticks)
                 continue
             }
             if line.isEmpty {
@@ -108,7 +111,7 @@ public enum Markdown {
         if let current = code {
             // Unterminated fence, typically while streaming.
             flush()
-            blocks.append(.code(language: current.language, text: current.lines.joined(separator: "\n")))
+            blocks.append(.code(language: current.language, text: codeLines.joined(separator: "\n")))
         } else {
             flush()
         }

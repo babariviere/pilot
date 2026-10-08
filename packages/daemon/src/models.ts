@@ -1,19 +1,23 @@
 /** Models offered to clients: the user's pi model scope (`enabledModels`), else every authenticated model. */
 import { join } from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
-import {
-	getAgentDir,
-	ModelRuntime,
-	resolveModelScopeWithDiagnostics,
-	SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import type { ModelList, ModelOption } from "@pilot/protocol";
+import { readModelSettings } from "./model-settings.ts";
+import { TtlCache } from "./ttl-cache.ts";
 
 const TTL_MS = 60_000;
 
 export class ModelCatalog {
 	private runtime?: Promise<ModelRuntime>;
-	private readonly cache = new Map<string, { at: number; list: Promise<ModelList> }>();
+	private readonly cache = new TtlCache<ModelList>({
+		ttlMs: TTL_MS,
+		maxEntries: 64,
+		maxBytes: 4 * 1024 * 1024,
+		maxPending: 4,
+		busyMessage: "Model catalog is busy. Retry shortly.",
+		weight: (list) => Buffer.byteLength(JSON.stringify(list)),
+	});
 
 	private readonly agentDir: string;
 
@@ -36,12 +40,7 @@ export class ModelCatalog {
 
 	/** Scope and default follow pi's settings for `cwd` (global plus project settings). */
 	list(cwd: string): Promise<ModelList> {
-		const cached = this.cache.get(cwd);
-		if (cached && Date.now() - cached.at < TTL_MS) return cached.list;
-		const list = this.load(cwd);
-		this.cache.set(cwd, { at: Date.now(), list });
-		list.catch(() => this.cache.delete(cwd));
-		return list;
+		return this.cache.get(cwd, () => this.load(cwd));
 	}
 
 	private getRuntime(): Promise<ModelRuntime> {
@@ -54,7 +53,7 @@ export class ModelCatalog {
 	}
 
 	private async scoped(cwd: string, runtime: ModelRuntime, signal?: AbortSignal) {
-		const settings = SettingsManager.create(cwd, this.agentDir);
+		const settings = await readModelSettings(cwd, this.agentDir, signal);
 		const patterns = settings.getEnabledModels();
 		const models = patterns?.length
 			? (await resolveModelScopeWithDiagnostics(patterns, runtime, { signal })).scopedModels

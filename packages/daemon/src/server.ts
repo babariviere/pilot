@@ -3,8 +3,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { getLibrary, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
-	ClientMessage,
 	ChangeModelRequest,
+	ClientMessage,
 	EditQueuedMessageRequest,
 	ProjectRequest,
 	SendRequest,
@@ -12,7 +12,8 @@ import type {
 	SpawnRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
-import { collectChangeSummary, collectChanges } from "./changes.ts";
+import { boundedSender } from "./backpressure.ts";
+import { RepositoryChanges } from "./changes.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -91,6 +92,7 @@ export function createDaemonServer(
 	models: ModelCatalog,
 	terminals: TerminalManager,
 ): Server {
+	const repositoryChanges = new RepositoryChanges();
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
 		const url = new URL(req.url ?? "/", "http://localhost");
@@ -148,7 +150,7 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
 			const { cwd, base } = sessions.changeBase(parts[2]!);
-			return json(res, 200, await collectChanges(cwd, base));
+			return json(res, 200, await repositoryChanges.changes(cwd, base));
 		}
 		if (
 			parts[1] === "sessions" &&
@@ -158,7 +160,7 @@ export function createDaemonServer(
 			req.method === "GET"
 		) {
 			const { cwd, base } = sessions.changeBase(parts[2]!);
-			return json(res, 200, await collectChangeSummary(cwd, base));
+			return json(res, 200, await repositoryChanges.summary(cwd, base));
 		}
 		if (parts[1] === "sessions" && parts[3] === "artifacts" && req.method === "GET") {
 			if (parts.length === 4) return json(res, 200, await sessions.artifacts(parts[2]!));
@@ -242,29 +244,36 @@ export function createDaemonServer(
 		wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 	});
 
-	const clients = new Set<WebSocket>();
+	const clients = new Map<WebSocket, (data: string) => void>();
 	const artifactVersions = new Map<string, number>();
 	const send = (ws: WebSocket, message: ServerMessage) => {
-		if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+		if (ws.readyState === ws.OPEN) clients.get(ws)?.(JSON.stringify(message));
+	};
+	const broadcast = (message: ServerMessage) => {
+		if (clients.size === 0) return;
+		const data = JSON.stringify(message);
+		for (const send of clients.values()) send(data);
 	};
 	sessions.onChange((session) => {
-		for (const ws of clients) send(ws, { type: "session", session });
+		repositoryChanges.invalidate(session.cwd);
+		broadcast({ type: "session", session });
 	});
 	projects.onChange((list) => {
-		for (const ws of clients) send(ws, { type: "projects", projects: list });
+		broadcast({ type: "projects", projects: list });
 	});
 	sessions.onArtifactsChanged((sessionId, artifacts) => {
 		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
-		for (const ws of clients) send(ws, { type: "artifacts", sessionId, artifacts });
+		broadcast({ type: "artifacts", sessionId, artifacts });
 	});
 
 	wss.on("connection", (ws: WebSocket) => {
-		clients.add(ws);
+		clients.set(ws, boundedSender(ws));
 		const subscriptions = new Map<string, () => void>();
 		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
 		ws.on("message", (raw) => {
+			if (ws.readyState !== ws.OPEN) return;
 			let message: unknown;
 			try {
 				message = JSON.parse(String(raw));

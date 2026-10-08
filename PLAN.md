@@ -181,6 +181,33 @@ preparation and kernel startup complete. Interrupted preparation resumes after a
 startup failures remain visible in the session. Workspace tools and terminals are unavailable until
 the isolated working copy is ready.
 
+#### Chat responsiveness
+
+- Opening parked or archived history reads a committed, read-only durable snapshot. It does not
+  acquire the writer lease, initialize the native SDK or extensions, or resume agent execution.
+  A later execution request attaches existing viewers to a fresh live snapshot; generation checks
+  prevent a stale disk read from replacing live state. Preparing/recovering active sessions still
+  follow the execution startup path.
+- The native app retains a bounded LRU of prepared transcripts (8 conversations, approximately
+  16 MiB). Returning to a chat paints cached rows while resynchronizing. Cached queue/status never
+  authorizes actions or acknowledges an unread result before a fresh snapshot arrives.
+- Draft edits and editor-height updates are observed only by the editor and send controls.
+  Model/usage controls wrap through a single view tree, and unchanged usage labels/tooltips are cached.
+  Height measurements are coalesced and bounded by the editor's visible line cap.
+- Markdown/inline styling and syntax highlighting are prepared off the UI actor in bounded caches.
+  Fenced-code parsing and entry deduplication are linear; metadata-only/ignored batches reuse rows,
+  and streamed text reuses committed history. JSON trees decode directly without a second encode/parse.
+- Repository reads are short-lived, coalesced and bounded. Hidden changes tabs stop polling, cancelled
+  sidebar requests leave the admission queue promptly, and unchanged metadata is not republished.
+  Diff collection bounds subprocess output, rather than generating an unlimited patch before clipping.
+- Model-catalog settings use asynchronous file reads and SDK-compatible lock waits, without busy-spinning
+  the daemon. The SDK retains ownership of settings parsing, migrations and global/project merging.
+- Slow WebSocket clients are disconnected explicitly and resynchronize from snapshots, never silently
+  lose arbitrary deltas. Internal worker activity watches project only run/inbox state, not history.
+- Kernel workers and their inherited build subprocesses run below normal scheduling priority when
+  supported. macOS build/test helpers default to two Swift jobs (`PILOT_SWIFT_JOBS` overrides this;
+  explicit test `--jobs` also overrides it), so concurrent agents leave capacity for the UI.
+
 ### 6.2 GitHub: CI failures and review comments (M3)
 
 **Triggers**
