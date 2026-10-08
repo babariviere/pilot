@@ -15,6 +15,10 @@ public enum WorkspaceMode: String, Codable, Hashable, Sendable {
     case direct
 }
 
+public enum WorkspaceStorage: String, Codable, Sendable {
+    case shared
+}
+
 /// Mirrors packages/protocol. Keep both sides in sync.
 public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
@@ -25,15 +29,20 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let projectId: String?
     public let mode: ChatMode?
     public let workspace: WorkspaceMode?
+    /// Nil for legacy clones and direct checkouts.
+    public let workspaceStorage: WorkspaceStorage?
+    /// Epoch milliseconds when the working directory was reclaimed; restored from its pinned jj snapshot on resume.
+    public let workspaceReclaimedAt: Double?
+    public let workspaceCleanupError: String?
     public let sourceBranch: String?
     public let sourceCommit: String?
-    /// The session's own branch, when it runs in a private clone.
+    /// The session's own branch or task bookmark, when it runs in an isolated workspace.
     public let branch: String?
     public let createdAt: Double
     public let updatedAt: Double
     /// Latest user submission, epoch milliseconds. Stable across metadata/PR polling.
     public let lastUserMessageAt: Double?
-    /// Epoch milliseconds; nil means the chat is not archived. History and workspace are retained.
+    /// Epoch milliseconds; nil means the chat is not archived. History is retained with recoverable jj snapshots.
     public let archivedAt: Double?
     public let state: String
     public let model: String?
@@ -54,6 +63,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var isAsk: Bool { effectiveMode == .ask }
     public var workspaceLabel: String {
         if isAsk { return "Read-only · no private clone" }
+        if workspaceReclaimedAt != nil { return "Archived workspace (restored on resume)" }
+        if workspaceStorage == .shared { return "Shared jj workspace" }
         switch workspace {
         case .clone: return "Private clone"
         case .direct: return "Current checkout"
@@ -64,6 +75,22 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         if isAsk { return sourceBranch.map { "origin/\($0)" } ?? "Current checkout" }
         return branch ?? sourceBranch.map { "origin/\($0)" }
             ?? (workspace == .clone ? "Default base" : workspace == .direct ? "Current checkout" : "Source unavailable")
+    }
+    public var workspaceHelp: String {
+        if isAsk {
+            return "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No private clone is created.\(sourceCommit.map { "\nPinned source commit: \($0)" } ?? "")"
+        }
+        var help = "Build can make changes in this chat's workspace."
+        if workspaceStorage == .shared {
+            help += "\nThis working copy is isolated from your checkout, but repository history and bookmarks are shared with sibling sessions."
+        }
+        if workspaceReclaimedAt != nil {
+            help += "\nThe archived working directory was reclaimed. Resume restores it from its pinned jj snapshot before work continues."
+        }
+        if let workspaceCleanupError {
+            help += "\nWorkspace cleanup failed: \(workspaceCleanupError)"
+        }
+        return help
     }
     public var isArchived: Bool { archivedAt != nil }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
@@ -76,7 +103,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
         archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil,
         mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
-        lastUserMessageAt: Double? = nil
+        lastUserMessageAt: Double? = nil,
+        workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -84,6 +112,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.sessionPath = sessionPath
         self.mode = mode
         self.workspace = workspace
+        self.workspaceStorage = workspaceStorage
+        self.workspaceReclaimedAt = workspaceReclaimedAt
+        self.workspaceCleanupError = workspaceCleanupError
         self.sourceBranch = sourceBranch
         self.sourceCommit = sourceCommit
         self.projectId = projectId

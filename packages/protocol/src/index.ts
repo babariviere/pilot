@@ -74,8 +74,14 @@ export interface UpdatePreparation {
 export interface SessionSummary {
 	/** Omitted by older daemons, meaning Build. */
 	mode?: ChatMode;
-	/** Actual Build workspace, including detached private clones without a task branch. */
+	/** Actual Build workspace policy, including isolated workspaces without a task branch. */
 	workspace?: WorkspaceMode;
+	/** Shared jj repository storage. Omitted for legacy clones and direct checkouts. */
+	workspaceStorage?: "shared";
+	/** Epoch ms when the working directory was reclaimed. Its pinned jj snapshot can be restored on resume. */
+	workspaceReclaimedAt?: number;
+	/** Last safe-cleanup failure. History remains available and the workspace is not discarded unsafely. */
+	workspaceCleanupError?: string;
 	/** Exact origin branch selected for an Ask snapshot or resolved as a Build base, when known. */
 	sourceBranch?: string;
 	/** Commit resolved for the Ask source. */
@@ -86,13 +92,13 @@ export interface SessionSummary {
 	/** Session storage directory containing metadata and durable history, not the working directory. */
 	sessionPath?: string;
 	projectId?: string;
-	/** The session's own branch, when it runs in a private clone. */
+	/** The session's own branch or task bookmark, when it runs in an isolated workspace. */
 	branch?: string;
 	createdAt: number;
 	updatedAt: number;
 	/** Latest user submission, epoch milliseconds. Stable across metadata/PR polling. */
 	lastUserMessageAt?: number;
-	/** Epoch ms when archived. History and workspace are retained; restore before sending input. */
+	/** Epoch ms when archived. History is retained with recoverable jj snapshots; restore before sending input. */
 	archivedAt?: number;
 	state: SessionState;
 	outcome?: SessionOutcome;

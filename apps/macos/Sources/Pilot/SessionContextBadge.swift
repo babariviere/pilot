@@ -18,8 +18,6 @@ struct SessionContextBadge: View {
         .foregroundStyle(Theme.mutedForeground)
         .lineLimit(2)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .help(session.isAsk
-              ? "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No private clone is created.\(session.sourceCommit.map { "\nPinned source commit: \($0)" } ?? "")"
-              : "Build can make changes in this chat's workspace.")
+        .help(session.workspaceHelp)
     }
 }

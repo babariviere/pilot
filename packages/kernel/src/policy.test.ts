@@ -81,6 +81,79 @@ test("new Git branches and jj bookmarks require conventional task prefixes", () 
 	}
 });
 
+test("shared jj workspaces isolate checkout edits but not repository history or bookmarks", () => {
+	for (const requirePullRequest of [true, false]) {
+		const prompt = pilotPrompt({
+			workspace: {
+				source: "/src/app",
+				base: "exact-base-commit",
+				baseBranch: "trunk",
+				jj: true,
+				shared: { repository: "/pilot/repositories/app", name: "session-123" },
+			},
+			requirePullRequest,
+		});
+		assert.match(prompt, /shared jj workspace `session-123` in \/pilot\/repositories\/app/);
+		assert.match(prompt, /working-copy change starts on base `exact-base-commit` \(branch `trunk`\)/);
+		assert.match(prompt, /own checkout and its uncommitted changes are unaffected by your workspace edits/);
+		assert.match(prompt, /bookmarks and history are shared with sibling sessions/);
+		assert.match(prompt, /Do not rewrite other sessions' changes or task bookmarks/);
+		assert.match(prompt, /repository-wide `jj undo` or `jj op restore`/);
+		assert.match(prompt, /broad rebases, or `jj git push --all`/);
+		assert.match(prompt, /Restrict any rebase to this task's own changes/);
+		assert.doesNotMatch(
+			prompt,
+			/is a private clone|initially detached|The clone|git switch|nothing you do here touches it/,
+		);
+		if (requirePullRequest) {
+			assert.match(prompt, /Use task-specific bookmarks/);
+			assert.match(prompt, /Push only the chosen task bookmark with `jj git push --bookmark <name>`/);
+			assert.match(prompt, /New names must use `<type>\/<short-description>`/);
+			assert.match(prompt, /Never push the default branch/);
+		} else {
+			assert.match(prompt, /does not require a pull request/);
+			assert.match(prompt, /directly to the remote's default branch/);
+			assert.match(prompt, /Identify the remote's current default branch/);
+			assert.match(prompt, /Fetch and reconcile concurrent upstream changes before pushing/);
+			assert.match(prompt, /Never force-push or overwrite others' commits/);
+			assert.match(prompt, /jj bookmark track <default-branch>@origin/);
+			assert.match(prompt, /move only that default-branch bookmark to your own completed, verified change/);
+			assert.match(prompt, /jj git push --bookmark <default-branch>/);
+			assert.doesNotMatch(prompt, /gh pr create|Use task-specific bookmarks|Never push the default branch/);
+		}
+		assert.doesNotMatch(prompt, /explicitly requested|user explicitly requests/);
+	}
+});
+
+test("shared workspace optional base branch and existing task bookmark remain accurate", () => {
+	const prompt = pilotPrompt({
+		workspace: {
+			source: "/src/app",
+			base: "exact-base-commit",
+			branch: "existing-head",
+			jj: true,
+			shared: { repository: "/pilot/repositories/app", name: "session-123" },
+		},
+	});
+	assert.match(prompt, /starts on base `exact-base-commit`, with task bookmark `existing-head`/);
+	assert.match(prompt, /Keep an existing branch or bookmark name/);
+	assert.doesNotMatch(prompt, /undefined|no task bookmark yet|initially detached/);
+});
+
+test("Ask does not inherit shared jj mutation guidance", () => {
+	const prompt = pilotPrompt({
+		ask: { source: "/src/app" },
+		workspace: {
+			source: "/src/app",
+			base: "base",
+			jj: true,
+			shared: { repository: "/pilot/repositories/app", name: "session-123" },
+		},
+	});
+	assert.match(prompt, /Ask mode, read-only/);
+	assert.doesNotMatch(prompt, /shared jj workspace|jj bookmark|jj git push|working-copy change/);
+});
+
 test("existing Git and jj PR heads keep their names even without conventional prefixes", () => {
 	for (const jj of [false, true]) {
 		const prompt = pilotPrompt({

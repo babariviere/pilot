@@ -49,8 +49,20 @@ class Terminal {
 	private size = 0;
 	readonly listeners = new Set<TerminalListener>();
 	exitCode?: number;
+	private forceKill?: ReturnType<typeof setTimeout>;
+	private resolveExit?: () => void;
+	readonly exited = new Promise<void>((resolve) => {
+		this.resolveExit = resolve;
+	});
 
-	constructor(shell: ShellCommand, cwd: string, cols: number, rows: number, env: Record<string, string>) {
+	constructor(
+		shell: ShellCommand,
+		cwd: string,
+		cols: number,
+		rows: number,
+		env: Record<string, string>,
+		onExit: () => void,
+	) {
 		this.process = loadPty().spawn(shell.file, shell.args, {
 			name: "xterm-256color",
 			cols,
@@ -64,6 +76,9 @@ class Terminal {
 		});
 		this.process.onExit(({ exitCode }) => {
 			this.exitCode = exitCode;
+			clearTimeout(this.forceKill);
+			onExit();
+			this.resolveExit?.();
 			for (const listener of this.listeners) listener.exit(exitCode);
 		});
 	}
@@ -82,7 +97,23 @@ class Terminal {
 	}
 
 	kill(): void {
-		if (this.exitCode === undefined) this.process.kill("SIGHUP");
+		if (this.exitCode !== undefined || this.forceKill) return;
+		this.process.kill("SIGHUP");
+		// A shell may ignore SIGHUP. Keep it counted as live until its actual exit event.
+		this.forceKill = setTimeout(() => {
+			if (this.exitCode !== undefined) return;
+			try {
+				if (process.platform !== "win32") process.kill(-this.process.pid, "SIGKILL");
+				else this.process.kill("SIGKILL");
+			} catch {
+				try {
+					this.process.kill("SIGKILL");
+				} catch {
+					// Exit may already have happened while node-pty's exit notification is pending.
+				}
+			}
+		}, 1_000);
+		this.forceKill.unref();
 	}
 
 	private remember(data: string): void {
@@ -94,6 +125,8 @@ class Terminal {
 
 export class TerminalManager {
 	private readonly terminals = new Map<string, Terminal>();
+	/** Includes retired shells during close/restart, until node-pty confirms that they exited. */
+	private readonly processes = new Map<string, Set<Terminal>>();
 
 	private readonly shell: () => ShellCommand;
 
@@ -122,7 +155,18 @@ export class TerminalManager {
 			}
 		}
 		if (!terminal) {
-			terminal = new Terminal(this.shell(), cwd, cols, rows, { PILOT_SESSION_ID: sessionId });
+			const created = new Terminal(this.shell(), cwd, cols, rows, { PILOT_SESSION_ID: sessionId }, () => {
+				const processes = this.processes.get(sessionId);
+				processes?.delete(created);
+				if (!processes?.size) this.processes.delete(sessionId);
+			});
+			terminal = created;
+			let processes = this.processes.get(sessionId);
+			if (!processes) {
+				processes = new Set();
+				this.processes.set(sessionId, processes);
+			}
+			processes.add(terminal);
 			this.terminals.set(sessionId, terminal);
 		} else {
 			terminal.resize(cols, rows);
@@ -148,8 +192,15 @@ export class TerminalManager {
 		this.terminals.delete(sessionId);
 	}
 
-	shutdown(): void {
-		for (const terminal of this.terminals.values()) terminal.kill();
+	/** Detached shells can still write into their cwd, so they also block workspace reclamation. */
+	isRunning(sessionId: string): boolean {
+		return [...(this.processes.get(sessionId) ?? [])].some((terminal) => terminal.exitCode === undefined);
+	}
+
+	async shutdown(): Promise<void> {
+		const terminals = [...this.processes.values()].flatMap((processes) => [...processes]);
+		for (const terminal of terminals) terminal.kill();
 		this.terminals.clear();
+		await Promise.all(terminals.map((terminal) => terminal.exited));
 	}
 }

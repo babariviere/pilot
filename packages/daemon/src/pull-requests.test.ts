@@ -83,6 +83,29 @@ test("direct pushes to the workspace default branch do not discover unrelated PR
 	assert.deepEqual(result, { branch: "trunk" });
 });
 
+test("a shared workspace's pinned base branch preserves direct-delivery PR filtering", async () => {
+	const target = session();
+	target.workspace = { base: "a".repeat(40), baseBranch: "trunk", branch: "trunk" };
+	const result = await discoverPullRequest(target, async (file, args) => {
+		assert.equal(file, "git");
+		assert.deepEqual(args, ["branch", "--show-current"]);
+		return "trunk";
+	});
+	assert.deepEqual(result, { branch: "trunk" });
+});
+
+test("reclaimed or restoring workspaces never run repository or GitHub commands", async () => {
+	for (const hasBranch of [true, false]) {
+		const target = session();
+		target.workspaceRecovery = { phase: "reclaimed" };
+		if (!hasBranch) delete target.workspace!.branch;
+		const result = await discoverPullRequest(target, async () => {
+			throw new Error("A reclaimed cwd must not be accessed");
+		});
+		assert.deepEqual(result, hasBranch ? { branch } : {});
+	}
+});
+
 test("discovers all four authoritative states, terminal state takes precedence over isDraft", async () => {
 	for (const [state, isDraft, expected] of [
 		["OPEN", false, "open"],
