@@ -154,48 +154,96 @@ private struct ArtifactPreview: View {
     }
 }
 
-/// Session access lives in the navigation sidebar. It never eagerly starts a renderer.
-struct SessionArtifactsSection: View {
+/// The current chat's complete, live artifact index. Renderers only start when a row is opened.
+struct SessionArtifactsPane: View {
     let sessionId: String
     @ObservedObject var client: PilotClient
-    @StateObject private var state = ArtifactSidebarState()
+    @StateObject private var state = SessionArtifactsState()
+
+    private var artifacts: [ArtifactSummary] { client.artifacts[sessionId] ?? [] }
 
     var body: some View {
-        Section("Artifacts") {
-            if state.loading { ProgressView().controlSize(.small) }
-            if let error = state.error {
-                Text(error).font(.caption).foregroundStyle(.secondary)
-                Button("Retry") { Task { await load() } }
-            }
-            ForEach(client.artifacts[sessionId] ?? []) { artifact in
-                Button { state.selected = artifact.reference } label: {
-                    Label(artifact.title, systemImage: "cube.transparent").lineLimit(1)
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("\(artifacts.count) artifact\(artifacts.count == 1 ? "" : "s")")
+                    .font(.system(size: 12, weight: .medium))
+                Spacer()
+                if state.loading { ProgressView().controlSize(.mini) }
+                Button { Task { await load() } } label: {
+                    Image(systemName: "arrow.clockwise").font(.caption)
                 }
-                .buttonStyle(.plain)
-                .help("\(artifact.title), revision \(artifact.revision)")
+                .buttonStyle(.borderless)
+                .disabled(state.loading)
+                .help("Refresh artifacts")
+                .accessibilityLabel("Refresh artifacts")
             }
-            if !state.loading, state.error == nil, (client.artifacts[sessionId] ?? []).isEmpty {
-                Text("No artifacts yet").font(.caption).foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Rectangle().fill(Theme.border).frame(height: 1)
+            if let error = state.error {
+                VStack(spacing: 8) {
+                    Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                    Button("Retry") { Task { await load() } }.disabled(state.loading)
+                }
+                .padding()
+            }
+            if state.loading, artifacts.isEmpty {
+                ProgressView("Loading artifacts…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if artifacts.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "cube.transparent").font(.title2).foregroundStyle(Theme.faintForeground)
+                    Text(state.error == nil ? "No artifacts yet" : "Artifacts unavailable")
+                        .font(.callout).foregroundStyle(Theme.mutedForeground)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(artifacts) { artifact in
+                            Button { state.selected = artifact.reference } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: artifact.kind == .image ? "photo" : "cube.transparent")
+                                        .foregroundStyle(Theme.mutedForeground)
+                                    Text(artifact.title).font(.callout).lineLimit(1)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                    Text("\(artifact.kind.rawValue.uppercased()) · r\(artifact.revision)")
+                                        .font(.caption.monospaced()).foregroundStyle(Theme.mutedForeground)
+                                }
+                                .padding(12)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Open \(artifact.title), latest revision")
+                            Rectangle().fill(Theme.border).frame(height: 1)
+                        }
+                    }
+                }
             }
         }
+        .background(Theme.background)
         .task(id: sessionId) { await load() }
         .sheet(item: $state.selected) { reference in ArtifactViewer(reference: reference, latest: true) }
     }
 
     private func load() async {
-        state.loading = true
-        state.error = nil
-        do { _ = try await client.sessionArtifacts(sessionId) }
-        catch { if !Task.isCancelled { state.error = error.localizedDescription } }
-        if !Task.isCancelled { state.loading = false }
+        await state.load(sessionId: sessionId, client: client)
     }
 }
 
 @MainActor
-private final class ArtifactSidebarState: ObservableObject {
+final class SessionArtifactsState: ObservableObject {
     @Published var selected: ArtifactReference?
-    @Published var loading = false
-    @Published var error: String?
+    @Published private(set) var loading = false
+    @Published private(set) var error: String?
+
+    func load(sessionId: String, client: PilotClient) async {
+        guard !loading else { return }
+        loading = true
+        error = nil
+        defer { loading = false }
+        do { _ = try await client.sessionArtifacts(sessionId) }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+    }
 }
 
 struct ProjectArtifactsButton: View {

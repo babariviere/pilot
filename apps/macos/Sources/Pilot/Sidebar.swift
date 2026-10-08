@@ -64,9 +64,6 @@ struct SessionSidebar: View {
                     ForEach(unassigned) { SessionRow(session: $0).tag($0.id) }
                 }
             }
-            if let sessionId = model.selectedSessionId {
-                SessionArtifactsSection(sessionId: sessionId, client: client).id(sessionId)
-            }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)

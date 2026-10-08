@@ -54,7 +54,7 @@ struct MainWindow: View {
     }
 }
 
-/// Chat on the left, the inspector (changes, terminal) on the right.
+/// Chat on the left, the inspector (changes, terminal, artifacts) on the right.
 struct SessionDetail: View {
     let session: SessionSummary
     var feed: SessionFeed?
@@ -98,6 +98,7 @@ struct SessionDetail: View {
                 .help("Open \(session.cwd.abbreviatingHome) in Finder")
                 InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
                 InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+                InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
                 Button { model.debugSession(session) } label: {
                     Label("Debug session", systemImage: "ladybug")
                 }
@@ -129,10 +130,11 @@ struct InspectorToggle: View {
         }
         .buttonStyle(.plain)
         .help(help)
+        .accessibilityLabel(help)
     }
 }
 
-/// Right-hand pane with tabs. Both tabs stay mounted so the terminal keeps its surface.
+/// Right-hand pane with tabs. The terminal stays mounted once opened to keep its surface.
 struct Inspector: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
@@ -142,6 +144,7 @@ struct Inspector: View {
             HStack(spacing: 2) {
                 tab("Changes", .changes)
                 tab("Terminal", .terminal)
+                tab("Artifacts", .artifacts)
                 Spacer()
                 Button { model.inspectorVisible = false } label: {
                     Image(systemName: "sidebar.right").font(.system(size: 12))
@@ -158,11 +161,17 @@ struct Inspector: View {
                 ChangesPane(session: session)
                     .opacity(model.inspectorTab == .changes ? 1 : 0)
                     .allowsHitTesting(model.inspectorTab == .changes)
-                // Mounted once opened, so looking at changes never starts a shell.
+                    .accessibilityHidden(model.inspectorTab != .changes)
+                // Mounted once opened, so browsing other tabs never starts a shell.
                 if model.inspectorTab == .terminal || model.terminals.order.contains(session.id) {
                     TerminalPane(store: model.terminals, session: session)
                         .opacity(model.inspectorTab == .terminal ? 1 : 0)
                         .allowsHitTesting(model.inspectorTab == .terminal)
+                        .accessibilityHidden(model.inspectorTab != .terminal)
+                }
+                if model.inspectorTab == .artifacts {
+                    SessionArtifactsPane(sessionId: session.id, client: model.client)
+                        .id(session.id)
                 }
             }
         }

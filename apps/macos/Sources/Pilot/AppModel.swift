@@ -5,6 +5,7 @@ import PilotCore
 enum InspectorTab: Hashable {
     case changes
     case terminal
+    case artifacts
 }
 
 @MainActor
