@@ -27,7 +27,8 @@ test("runtime architecture check accepts arm64 and rejects x86_64", { skip: proc
 				encoding: "utf8",
 			});
 			assert.equal(compile.status, 0, compile.stderr);
-			const check = spawnSync("bash", [new URL("../check-runtime.sh", import.meta.url).pathname, dir], {
+			// Invoke exactly as the bundle and publisher do, including executable permissions.
+			const check = spawnSync(new URL("../check-runtime.sh", import.meta.url).pathname, [dir], {
 				encoding: "utf8",
 				env: { ...process.env, PATH: `${toolsDir}:${process.env.PATH}` },
 			});

@@ -101,5 +101,6 @@ test("draft retries apply current packaging helpers without changing tagged appl
 	assert.deepEqual(commands, [
 		"cp .pilot-release-tools/apps/macos/scripts/release_metadata.py apps/macos/scripts/release_metadata.py",
 		"cp .pilot-release-tools/apps/macos/scripts/publish-release.sh apps/macos/scripts/publish-release.sh",
+		"cp -p .pilot-release-tools/apps/macos/scripts/check-runtime.sh apps/macos/scripts/check-runtime.sh",
 	]);
 });
