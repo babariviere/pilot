@@ -54,6 +54,30 @@ enum Snapshot {
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
+        // Dense repository metadata must not push titles or timestamps out of narrow rows.
+        model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sidebarLayoutSessions)
+        model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sidebarLayoutSessions
+            .filter { $0.id != "layout-working" && $0.id != "layout-branch" }.map {
+                ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: 31,
+                                            additions: $0.id == "layout-large" ? 123456 : 802,
+                                            deletions: $0.id == "layout-large" ? 98765 : 143))
+            })
+        model.selectedSessionId = "layout-working"
+        for width in [230, 280, 400] {
+            await render(SessionSidebar(model: model, client: model.client),
+                         size: CGSize(width: width, height: 560),
+                         to: directory.appending(path: "sidebar-layout-\(width).png"))
+        }
+        if CommandLine.arguments.contains("--sidebar-layout-only") {
+            NSApp.terminate(nil)
+            return
+        }
+        model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions)
+        model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sessions.map {
+            ($0.id, SessionChangeSummary(base: "origin/main", branch: $0.branch, fileCount: $0.id == "s1" ? 2 : 0,
+                                        additions: $0.id == "s1" ? 13 : 0, deletions: $0.id == "s1" ? 1 : 0))
+        })
+
         model.selectedSessionId = nil
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sessions + [
             SessionSummary(id: "status-idle", title: "Idle, ready for a task", cwd: Fixtures.projects[0].path, projectId: "p1",
@@ -508,6 +532,24 @@ enum Fixtures {
     static let projects = [
         Project(id: "p1", name: "pilot", path: "\(home)/src/github.com/babariviere/pilot", model: "openai-codex/gpt-6.1-sol", createdAt: now),
         Project(id: "p2", name: "pi-extensions", path: "\(home)/src/github.com/babariviere/pi-extensions", createdAt: now),
+    ]
+
+    static let sidebarLayoutSessions = [
+        SessionSummary(id: "layout-working", title: "Add Remote Branch Support", cwd: projects[0].path, projectId: "p1",
+                       createdAt: now, updatedAt: now, state: "starting"),
+        SessionSummary(id: "layout-done", title: "Improve Thread Rendering and Alignment", cwd: projects[0].path, projectId: "p1",
+                       branch: "fix/improve-thread-rendering-and-alignment", createdAt: now, updatedAt: now - 14 * 3_600_000,
+                       state: "idle", outcome: .done,
+                       pullRequest: SessionPullRequest(number: 48, url: "https://github.com/babariviere/pilot/pull/48",
+                                                      title: "Improve thread rendering", state: .merged, checkedAt: now)),
+        SessionSummary(id: "layout-large", title: "Large change counts still fit", cwd: projects[0].path, projectId: "p1",
+                       branch: "fix/large-repository-change-counts", createdAt: now, updatedAt: now - 15 * 3_600_000,
+                       state: "idle", outcome: .done,
+                       pullRequest: SessionPullRequest(number: 12345, url: "https://github.com/babariviere/pilot/pull/12345",
+                                                      title: "Large change", state: .open, checkedAt: now)),
+        SessionSummary(id: "layout-branch", title: "Branch without repository summary", cwd: projects[0].path, projectId: "p1",
+                       branch: "fix/a-very-long-branch-name-without-pull-request-metadata", createdAt: now,
+                       updatedAt: now - 16 * 3_600_000, state: "starting"),
     ]
 
     static let sessions = [

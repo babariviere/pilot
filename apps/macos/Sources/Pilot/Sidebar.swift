@@ -207,8 +207,11 @@ private struct ProjectHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "folder").font(.system(size: 10))
-            Text(project.name).font(.system(size: 11, weight: .semibold))
+            Image(systemName: "folder").font(.system(size: 10)).frame(width: 14)
+            Text(project.name)
+                .font(.system(size: 11, weight: .semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
             if working > 0 {
                 Text("\(working)")
                     .font(.caption2.weight(.semibold))
@@ -216,14 +219,18 @@ private struct ProjectHeader: View {
                     .padding(.vertical, 1)
                     .background(Capsule().fill(Color.accentColor.opacity(0.18)))
                     .foregroundStyle(Color.accentColor)
+                    .fixedSize()
             }
-            Spacer()
+            Spacer(minLength: 0)
             ProjectArtifactsButton(project: project, client: client)
+                .frame(width: 16, height: 16)
             Button(action: onArchive) { Image(systemName: "archivebox") }
                 .buttonStyle(.borderless)
+                .frame(width: 16, height: 16)
                 .help("Browse archived chats in \(project.name)")
             Button(action: onNew) { Image(systemName: "plus") }
                 .buttonStyle(.borderless)
+                .frame(width: 16, height: 16)
                 .help("New session in \(project.name)")
             Button { isExpanded.toggle() } label: {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
@@ -283,23 +290,27 @@ struct SessionRow: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            SessionStatusIcon(status: session.status)
-            VStack(alignment: .leading, spacing: 3) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                SessionStatusIcon(status: session.status)
                 Text(session.title)
                     .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))
                     .lineLimit(1)
-                SessionRepositoryMetadata(session: session)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if model.isUnread(session) { UnreadBadge() }
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(SessionTimeFormatting.relative(session.updatedAt, now: context.date))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                        .fixedSize()
+                }
             }
-            Spacer(minLength: 4)
-            if model.isUnread(session) { UnreadBadge() }
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                Text(SessionTimeFormatting.relative(session.updatedAt, now: context.date))
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .monospacedDigit()
-            }
+            SessionRepositoryMetadata(session: session)
+                // Match the title's inset (14-point status column plus 8-point spacing).
+                .padding(.leading, 22)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
         .contextMenu {
