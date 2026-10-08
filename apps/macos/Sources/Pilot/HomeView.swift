@@ -4,6 +4,8 @@ import SwiftUI
 
 @MainActor
 final class NewSessionForm: ObservableObject {
+    let branches = BranchSelectorState()
+    private(set) var revision = UUID()
     @Published var model = ""
     @Published var message = ""
     @Published var attachments = ImageAttachments()
@@ -15,8 +17,12 @@ final class NewSessionForm: ObservableObject {
     @Published var editorHeight: CGFloat = 60
     @Published var models = ModelList(models: [])
 
+    /// Invalidate before the new-task view mounts, not just when it consumes the prefill.
+    func invalidatePendingSubmission() { revision = UUID() }
+
     func consumeDraft(from app: AppModel) {
         guard let message = app.draftMessage else { return }
+        revision = UUID()
         for image in attachments.items { attachments.remove(image.id) }
         attachments.error = nil
         self.message = message
@@ -25,6 +31,15 @@ final class NewSessionForm: ObservableObject {
         error = nil
         tab = .newTask
         app.draftMessage = nil
+    }
+
+    /// A spawn completing after a debug prefill must not erase or navigate away from the newer draft.
+    func completeSubmission(revision: UUID) -> Bool {
+        guard self.revision == revision else { return false }
+        self.revision = UUID()
+        message = ""
+        attachments = ImageAttachments()
+        return true
     }
 }
 
@@ -52,7 +67,7 @@ struct HomeView: View {
                         .shadow(color: .white, radius: 16)
                         .padding(.top, 196)
                         .padding(.bottom, 16)
-                    TaskComposer()
+                    TaskComposer(form: app.newSessionForm)
                         .frame(maxWidth: 640)
                     Dashboard()
                         .frame(maxWidth: 1180)
@@ -72,12 +87,14 @@ struct TaskComposer: View {
     @ObservedObject private var client = AppModel.shared.client
     @Environment(\.pilotFonts) private var fonts
     @AppStorage("lastProjectId") private var lastProjectId = ""
-    @StateObject private var form = NewSessionForm()
+    @StateObject private var form: NewSessionForm
     @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
 
-    @MainActor init(branches: BranchSelectorState? = nil) {
-        _branches = StateObject(wrappedValue: branches ?? BranchSelectorState())
+    @MainActor init(form: NewSessionForm? = nil, branches: BranchSelectorState? = nil) {
+        let form = form ?? NewSessionForm()
+        _form = StateObject(wrappedValue: form)
+        _branches = StateObject(wrappedValue: branches ?? form.branches)
     }
 
     private var project: Project? {
@@ -201,6 +218,7 @@ struct TaskComposer: View {
         guard canStart else { return }
         form.busy = true
         form.error = nil
+        let revision = form.revision
         let model = form.model.trimmingCharacters(in: .whitespaces)
         form.attachments.retainForHistory()
         let request = SpawnRequest(
@@ -214,12 +232,10 @@ struct TaskComposer: View {
             defer { form.busy = false }
             do {
                 let session = try await app.client.spawn(request)
-                if let id = project?.id { lastProjectId = id }
-                form.message = ""
-                form.attachments = ImageAttachments()
-                app.selectedSessionId = session.id
+                if let id = request.projectId { lastProjectId = id }
+                if form.completeSubmission(revision: revision) { app.selectedSessionId = session.id }
             } catch {
-                form.error = error.localizedDescription
+                if form.revision == revision { form.error = error.localizedDescription }
             }
         }
     }

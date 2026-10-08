@@ -22,7 +22,7 @@ final class PastedImage: Identifiable {
     }
 
     deinit {
-        // Dropping a view-owned draft cleans up staged images, never submitted ones.
+        // Dropping a draft cleans up staged images, never submitted ones.
         if !submitted { try? FileManager.default.removeItem(at: url) }
     }
 }

@@ -19,6 +19,9 @@ final class AppModel: ObservableObject {
     let terminals = TerminalStore()
     let notifier = Notifier()
     let attention = SessionAttention()
+    /// Drafts outlive their views, but are local to this app launch.
+    let newSessionForm = NewSessionForm()
+    private var chatComposers: [String: ComposerState] = [:]
     @Published private(set) var reviewRevision = 0
 
     @Published var selectedSessionId: String?
@@ -55,6 +58,13 @@ final class AppModel: ObservableObject {
         selectedSessionId.flatMap { client.session($0) }
     }
 
+    func composer(for sessionId: String) -> ComposerState {
+        if let composer = chatComposers[sessionId] { return composer }
+        let composer = ComposerState()
+        chatComposers[sessionId] = composer
+        return composer
+    }
+
     func start() {
         guard !started else { return }
         started = true
@@ -77,7 +87,9 @@ final class AppModel: ObservableObject {
 
     func newSession(in projectId: String?, message: String? = nil) {
         showingArchive = false
-        draftProjectId = projectId
+        // Returning Home without choosing a project must keep the retained task's destination.
+        if let projectId { draftProjectId = projectId }
+        if message != nil { newSessionForm.invalidatePendingSubmission() }
         draftMessage = message
         selectedSessionId = nil
     }
