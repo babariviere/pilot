@@ -20,6 +20,26 @@ import Testing
     }
 }
 
+@Test @MainActor func toolbarShowsEveryLinkedPullRequestOnOneLine() throws {
+    let current = SessionPullRequest(number: 74, url: "https://github.com/example/repo/pull/74", title: "Second",
+                                     state: .open, checkedAt: 1, branch: "fix/second")
+    let earlier = SessionPullRequest(number: 61, url: "https://github.com/example/repo/pull/61", title: "First",
+                                     state: .merged, checkedAt: 1, branch: "fix/first")
+    let session = SessionSummary(id: "multi", title: "Chat", cwd: "/repository",
+                                 branch: "fix/a-long-branch-name-that-must-truncate-before-badges-wrap",
+                                 createdAt: 1, updatedAt: 1, state: "idle",
+                                 pullRequest: current, pullRequests: [current, earlier])
+    let single = ImageRenderer(content: PullRequestBadge(session: SessionSummary(
+        id: "one", title: "Chat", cwd: "/repository", createdAt: 1, updatedAt: 1, state: "idle", pullRequest: current)))
+    let both = ImageRenderer(content: PullRequestBadge(session: session))
+    let singleWidth = try #require(single.cgImage).width
+    #expect(try #require(both.cgImage).width > singleWidth, "both PR badges are shown")
+    let renderer = ImageRenderer(content: SessionToolbarMetadata(session: session))
+    renderer.proposedSize = ProposedViewSize(width: 260, height: nil)
+    let image = try #require(renderer.cgImage)
+    #expect(image.height > 0 && image.height <= 22)
+}
+
 @Test @MainActor func toolbarBranchWithoutPullRequestAlsoTruncates() throws {
     let session = SessionSummary(id: "branch", title: "Chat", cwd: "/repository",
                                  branch: String(repeating: "long-branch-", count: 20),

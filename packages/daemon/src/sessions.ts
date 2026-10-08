@@ -32,7 +32,13 @@ import { ColdViewReader } from "./cold-view-reader.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
-import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
+import {
+	isTerminalPullRequest,
+	type PullRequestOptions,
+	type PullRequestResult,
+	PullRequestTracker,
+	sessionPullRequests,
+} from "./pull-requests.ts";
 import { discoverPullRequestProblems, type PullRequestProblems } from "./pull-request-health.ts";
 import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
 import { UpdateGate } from "./update-gate.ts";
@@ -150,7 +156,7 @@ interface SessionMeta extends OutcomeMeta {
 	failure?: string;
 	pullRequest?: SessionPullRequest;
 	pullRequestError?: string;
-	/** Observed GitHub merge time, retained for local delayed archiving without terminal PR polling. */
+	/** Observed GitHub merge time of the current PR, retained for local delayed archiving without terminal PR polling. */
 	pullRequestMergedAt?: number;
 	/** Only PRs actually opened by this agent are eligible for automatic work. */
 	agentPullRequests?: string[];
@@ -158,6 +164,10 @@ interface SessionMeta extends OutcomeMeta {
 	prFollowUp?: { attempts: number; nextAttemptAt: number; generation: number; requestId?: string };
 	/** Transport retries of a user submission must not replenish the automatic budget again. */
 	prFollowUpResetRequests?: string[];
+	/** PRs opened from branches the session used before its current one, newest first. */
+	previousPullRequests?: SessionPullRequest[];
+	/** Earlier branches without a known PR, still checked in case one is opened from them. */
+	previousBranches?: string[];
 }
 
 type EventListener = (events: AgentEvent[]) => void;
@@ -174,6 +184,11 @@ const emptySnapshot: AgentEvent = {
 
 const ID_PATTERN = /^[0-9a-f-]{36}$/;
 const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/** Any open or draft PR, on the current branch or an earlier one, keeps the workspace in use. */
+function hasActivePullRequest(meta: SessionMeta): boolean {
+	return sessionPullRequests(meta).some((pr) => pr.state === "open" || pr.state === "draft");
+}
 const WEEK_MS = 7 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
 const COLD_SNAPSHOT_TTL_MS = 5_000;
@@ -726,8 +741,7 @@ export class SessionManager {
 				!meta.workspace?.shared ||
 				meta.archivedAt === undefined ||
 				meta.archivedAt > staleBefore ||
-				meta.pullRequest?.state === "open" ||
-				meta.pullRequest?.state === "draft" ||
+				hasActivePullRequest(meta) ||
 				meta.workspaceRecovery?.phase === "reclaimed"
 			)
 				continue;
@@ -759,7 +773,7 @@ export class SessionManager {
 					if (meta.archivedAt === undefined)
 						throw new Conflict("Archive the session before reclaiming its workspace");
 					if (!meta.workspace?.shared) throw new Conflict("Only shared jj workspaces can be reclaimed");
-					if (meta.pullRequest?.state === "open" || meta.pullRequest?.state === "draft")
+					if (hasActivePullRequest(meta))
 						throw new Conflict("Workspaces with an open pull request cannot be reclaimed");
 					if (meta.workspaceRecovery?.phase === "reclaimed") return this.summary(meta);
 					this.assertWorkspaceQuiescent(meta);
@@ -832,8 +846,7 @@ export class SessionManager {
 			meta.initializing ||
 			meta.preparing ||
 			meta.pending?.length ||
-			meta.pullRequest?.state === "open" ||
-			meta.pullRequest?.state === "draft" ||
+			hasActivePullRequest(meta) ||
 			this.starting.has(meta.id) ||
 			this.sending.has(meta.id) ||
 			this.changingModels.has(meta.id) ||
@@ -994,11 +1007,8 @@ export class SessionManager {
 					return this.summary(meta);
 				if (
 					autoArchivedPullRequest &&
-					(meta.pullRequest?.url !== autoArchivedPullRequest ||
-						meta.pullRequest.state !== "merged" ||
-						meta.pullRequestError ||
-						meta.pullRequestMergedAt === undefined ||
-						Date.now() < meta.pullRequestMergedAt + DAY_MS)
+					(this.mergeArchiveTarget(meta)?.url !== autoArchivedPullRequest ||
+						Date.now() < this.mergeArchiveTarget(meta)!.mergedAt + DAY_MS)
 				)
 					return this.summary(meta);
 				if (!archived && meta.workspaceRecovery) {
@@ -2011,6 +2021,7 @@ export class SessionManager {
 			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
 			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),
 			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
+			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.failure || meta.inputError || worker?.error
 				? { error: meta.failure || meta.inputError || worker?.error }
@@ -2024,29 +2035,63 @@ export class SessionManager {
 		const previous = meta.pullRequest;
 		const previousError = meta.pullRequestError;
 		const previousMergedAt = meta.pullRequestMergedAt;
+		const previousOthers = meta.previousPullRequests;
+		const previousBranches = meta.previousBranches;
 		const next = result.pullRequest;
+
+		let current = previous;
+		let others = [...(previousOthers ?? [])];
+		let branches = [...(previousBranches ?? [])];
+		if (branchChanged) {
+			// A new branch starts a new PR. Keep the earlier one, or the bare branch until GitHub shows a PR.
+			if (previous)
+				others.unshift({
+					...previous,
+					...(!previous.branch && previousBranch ? { branch: previousBranch } : {}),
+					...(previous.mergedAt === undefined && previousMergedAt !== undefined
+						? { mergedAt: previousMergedAt }
+						: {}),
+				});
+			else if (previousBranch !== undefined) branches.push(previousBranch);
+			current = undefined;
+		}
+		if (next) current = next;
+		for (const pr of result.others ?? []) others = [pr, ...others.filter((other) => other.url !== pr.url)];
+		if (current) others = others.filter((other) => other.url !== current!.url);
+		others.sort((a, b) => b.number - a.number);
+		const linked = new Set([current?.branch, ...others.map((other) => other.branch)]);
+		const currentBranch = result.branch ?? previousBranch;
+		branches = [...new Set(branches)].filter((name) => name !== currentBranch && !linked.has(name));
+
+		const fingerprint = (prs: (SessionPullRequest | undefined)[], names: string[] | undefined) =>
+			JSON.stringify([
+				prs.map((pr) => pr && [pr.number, pr.url, pr.title, pr.state, pr.branch, pr.mergedAt]),
+				names ?? [],
+			]);
 		const changed =
 			branchChanged ||
 			previousError !== result.error ||
-			(next !== undefined &&
-				(previous?.number !== next.number ||
-					previous.url !== next.url ||
-					previous.title !== next.title ||
-					previous.state !== next.state));
+			fingerprint([previous, ...(previousOthers ?? [])], previousBranches) !==
+				fingerprint([current, ...others], branches);
 		if (branchChanged && meta.workspace) {
 			meta.workspace.branch = result.branch;
-			delete meta.pullRequest;
 			delete meta.pullRequestMergedAt;
 		}
+		if (current) meta.pullRequest = current;
+		else delete meta.pullRequest;
 		if (next) {
-			meta.pullRequest = next;
 			if (next.state === "merged" && result.mergedAt !== undefined) meta.pullRequestMergedAt = result.mergedAt;
 			else delete meta.pullRequestMergedAt;
 		}
+		if (others.length) meta.previousPullRequests = others;
+		else delete meta.previousPullRequests;
+		if (branches.length) meta.previousBranches = branches;
+		else delete meta.previousBranches;
 		if (result.error) meta.pullRequestError = result.error;
 		else delete meta.pullRequestError;
+		const fresh = next !== undefined || (result.others?.length ?? 0) > 0;
 		// PR freshness is not agent activity. Keep ordering and completion versions unchanged.
-		if (next || changed) {
+		if (fresh || changed) {
 			try {
 				await this.save(meta);
 			} catch (error) {
@@ -2058,6 +2103,10 @@ export class SessionManager {
 				}
 				if (previous) meta.pullRequest = previous;
 				else delete meta.pullRequest;
+				if (previousOthers) meta.previousPullRequests = previousOthers;
+				else delete meta.previousPullRequests;
+				if (previousBranches) meta.previousBranches = previousBranches;
+				else delete meta.previousBranches;
 				if (previousError !== undefined) meta.pullRequestError = previousError;
 				else delete meta.pullRequestError;
 				if (previousMergedAt !== undefined) meta.pullRequestMergedAt = previousMergedAt;
@@ -2065,7 +2114,7 @@ export class SessionManager {
 				throw error;
 			}
 		}
-		if (next || changed) this.emit(meta);
+		if (fresh || changed) this.emit(meta);
 		if (next && !result.error && this.canFollowUp(meta)) {
 			const generation = meta.prFollowUp?.generation ?? 0;
 			const problems = await discoverPullRequestProblems(meta, this.pullRequestRunner);
@@ -2074,21 +2123,40 @@ export class SessionManager {
 		await this.archiveMergedPullRequest(meta);
 	}
 
+	/**
+	 * The merge that can archive a session: its current PR is merged, every linked PR is settled, and the
+	 * latest known merge time decides the deadline. Persisted merge times avoid polling terminal PRs.
+	 */
+	private mergeArchiveTarget(meta: SessionMeta): { url: string; mergedAt: number } | undefined {
+		const pr = meta.pullRequest;
+		const mergedAt = meta.pullRequestMergedAt ?? pr?.mergedAt;
+		if (pr?.state !== "merged" || meta.pullRequestError || mergedAt === undefined || !Number.isFinite(mergedAt))
+			return undefined;
+		if (!sessionPullRequests(meta).every(isTerminalPullRequest)) return undefined;
+		let target = { url: pr.url, mergedAt };
+		for (const other of meta.previousPullRequests ?? [])
+			if (
+				other.state === "merged" &&
+				other.mergedAt !== undefined &&
+				Number.isFinite(other.mergedAt) &&
+				other.mergedAt > target.mergedAt
+			)
+				target = { url: other.url, mergedAt: other.mergedAt };
+		return target;
+	}
+
 	/** A known merge is terminal. Its persisted timestamp is enough for a local archive deadline. */
 	private async archiveMergedPullRequest(meta: SessionMeta): Promise<void> {
-		const pr = meta.pullRequest;
+		const target = this.mergeArchiveTarget(meta);
 		if (
-			pr?.state === "merged" &&
-			meta.pullRequestMergedAt !== undefined &&
-			Number.isFinite(meta.pullRequestMergedAt) &&
-			Date.now() >= meta.pullRequestMergedAt + DAY_MS &&
-			!meta.pullRequestError &&
+			target !== undefined &&
+			Date.now() >= target.mergedAt + DAY_MS &&
 			!this.closing &&
 			meta.archivedAt === undefined &&
-			meta.autoArchivedPullRequest !== pr.url
+			meta.autoArchivedPullRequest !== target.url
 		) {
 			try {
-				await this.setArchived(meta.id, true, pr.url);
+				await this.setArchived(meta.id, true, target.url);
 			} catch (error) {
 				if (!(error instanceof Conflict)) throw error;
 			}

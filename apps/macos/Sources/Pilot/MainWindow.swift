@@ -91,7 +91,7 @@ struct SessionDetail: View {
     @ToolbarContentBuilder
     private var repositoryToolbar: some ToolbarContent {
         if model.isUnread(session) || (!session.isAsk &&
-            (session.branch != nil || session.pullRequest != nil || session.pullRequestError != nil)) {
+            (session.branch != nil || !session.linkedPullRequests.isEmpty || session.pullRequestError != nil)) {
             if #available(macOS 26.0, *) {
                 repositoryToolbarItem.sharedBackgroundVisibility(.hidden)
             } else {

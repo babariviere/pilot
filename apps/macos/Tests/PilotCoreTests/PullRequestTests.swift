@@ -49,6 +49,33 @@ private func pr(_ state: PullRequestState = .open, url: String = "https://github
     #expect(session.pullRequest?.state == .merged)
 }
 
+@Test func sessionsLinkSeveralPullRequestsAndFallBackForOlderDaemons() throws {
+    let json = oldSessionJSON.dropLast() + """
+    , "pullRequest":{"number":8,"url":"https://github.com/example/repo/pull/8","title":"Second","state":"merged","branch":"fix/b","mergedAt":5,"checkedAt":1},
+    "pullRequests":[{"number":8,"url":"https://github.com/example/repo/pull/8","title":"Second","state":"merged","branch":"fix/b","mergedAt":5,"checkedAt":1},
+    {"number":7,"url":"https://github.com/example/repo/pull/7","title":"First","state":"open","branch":"fix/a","checkedAt":1}]}
+    """
+    let decoded = try JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
+    #expect(decoded.linkedPullRequests.map(\.number) == [8, 7])
+    #expect(decoded.pullRequest?.branch == "fix/b")
+    #expect(decoded.pullRequest?.mergedAt == 5)
+    #expect(!decoded.hasTerminalPullRequest, "an earlier open PR keeps the session active")
+    #expect(decoded.pullRequestHelpText?.contains("Merged #8: Second") == true)
+    #expect(decoded.pullRequestHelpText?.contains("Open #7: First") == true)
+    #expect(decoded.pullRequestHelpText?.contains("Branch: fix/a") == true)
+
+    let legacy = SessionSummary(id: "s", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2,
+                                state: "idle", pullRequest: pr(.merged))
+    #expect(legacy.linkedPullRequests == [pr(.merged)])
+    #expect(legacy.hasTerminalPullRequest)
+    let settled = SessionSummary(id: "s", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle",
+                                 pullRequest: pr(.merged), pullRequests: [pr(.merged), pr(.closed, url: "https://github.com/example/repo/pull/6")])
+    #expect(settled.hasTerminalPullRequest)
+    let newBranch = SessionSummary(id: "s", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle",
+                                   pullRequests: [pr(.merged)])
+    #expect(!newBranch.hasTerminalPullRequest, "a new branch without its PR yet is still active")
+}
+
 @Test func pullRequestBrowserURLsAllowEnterpriseButNotOtherSchemes() {
     for url in ["https://github.com/example/repo/pull/7", "https://github.acme.test/team/repo/pull/7",
                 "http://github.local/team/repo/pull/7", "HTTPS://github.acme.test/team/repo/pull/7"] {

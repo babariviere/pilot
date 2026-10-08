@@ -1,18 +1,23 @@
 import PilotCore
 import SwiftUI
 
-/// Browser link only. PR state never replaces outcome or unread indicators.
+/// Browser links only, one per PR the session opened. PR state never replaces outcome or unread indicators.
 struct PullRequestBadge: View {
     let session: SessionSummary
 
     var body: some View {
         Group {
-            if let pr = session.pullRequest {
-                if let url = pr.browserURL {
-                    Link(destination: url) { badge(pr) }
-                        .buttonStyle(.plain)
-                } else {
-                    badge(pr)
+            let prs = session.linkedPullRequests
+            if !prs.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(prs, id: \.url) { pr in
+                        if let url = pr.browserURL {
+                            Link(destination: url) { badge(pr) }
+                                .buttonStyle(.plain)
+                        } else {
+                            badge(pr)
+                        }
+                    }
                 }
             } else if session.pullRequestError != nil {
                 Image(systemName: "exclamationmark.triangle")
