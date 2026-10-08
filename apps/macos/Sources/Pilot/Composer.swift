@@ -4,8 +4,12 @@ import SwiftUI
 
 @MainActor
 final class ComposerDraftState: ObservableObject {
+    var onDraftChanged: (() -> Void)?
     @Published var draft = "" {
-        didSet { trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+        didSet {
+            trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+            onDraftChanged?()
+        }
     }
     @Published var height: CGFloat = 18
     private(set) var trimmed = ""
@@ -13,6 +17,9 @@ final class ComposerDraftState: ObservableObject {
 
 @MainActor
 final class ComposerState: ObservableObject {
+    var onDraftChanged: (() -> Void)? {
+        didSet { draftState.onDraftChanged = onDraftChanged }
+    }
     // Draft edits and measured height changes must not invalidate the static controls.
     // Keep the existing imperative API for send/restore callers.
     let draftState = ComposerDraftState()
@@ -20,13 +27,13 @@ final class ComposerState: ObservableObject {
         get { draftState.draft }
         set { draftState.draft = newValue }
     }
-    @Published var attachments = ImageAttachments()
+    @Published var attachments = ImageAttachments() { didSet { onDraftChanged?() } }
     @Published var error: String?
     var editorHeight: CGFloat {
         get { draftState.height }
         set { draftState.height = newValue }
     }
-    @Published var queueEditing = QueuedMessageEditing()
+    @Published var queueEditing = QueuedMessageEditing() { didSet { onDraftChanged?() } }
     @Published var savingQueueEdit = false
     @Published var removingQueuedMessage: Int?
     @Published private(set) var removedQueuedMessages: Set<Int> = []

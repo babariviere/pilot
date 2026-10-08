@@ -313,8 +313,11 @@ reports), producing a morning summary in the app and Slack.
   editor. Reject removal once a message has been consumed.
 - Keep unsent text, image attachments and queued-message edits per chat when navigating between
   chats, Home and archives or reopening the window. Keep the new-task form and its base-branch
-  selection too. Drafts stay in memory for the app launch, not across app restarts; navigation
-  never sends or clears them. Sending clears the submitted draft, and an explicit debug prefill
+  selection too. Save drafts atomically to a private local JSON file in
+  `~/Library/Application Support/Pilot/Drafts/drafts.json`, restoring text, attachments, queued edits
+  and new-task selections across app restarts. Missing images do not prevent text restoration;
+  unreadable or unsupported draft files are preserved and reported rather than overwritten.
+  Navigation never sends or clears drafts. Sending clears the submitted draft, and an explicit debug prefill
   replaces the new-task draft without being erased by an older pending spawn.
 - Inline diagrams: completed `svg` and `mermaid` Markdown fences render in chat; unclosed streaming
   fences remain code. Borderless previews fit the chat width and expand on click, with source/copy
@@ -340,8 +343,12 @@ reports), producing a morning summary in the app and Slack.
   above the text input. Save app-owned PNG copies in Application Support and include their absolute
   paths in the message for pi's read tool. Image-only messages are supported; sent files are retained
   for queued delivery and later reads, and failed sends keep the attachments available for retry.
-  Abandoned unsent drafts clean up their files; submission attempts retain files even if the response
-  is lost. Accept up to eight raster images per message, 32 MiB and 24 megapixels each.
+  Removing unsent attachments cleans up their files; persisted drafts retain their images across app
+  shutdown, and submission attempts retain files even if the response
+  is lost. Delete persisted images only after saving a snapshot without them. Write a `.submitted`
+  sidecar before sending images so a stale draft snapshot cannot later delete history's files;
+  an image-retention failure prevents submission. Accept up to eight raster images per message,
+  32 MiB and 24 megapixels each.
 - Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
   supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
   A subtle controls row below the message box combines model and thinking-level selectors with labeled

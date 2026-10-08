@@ -155,7 +155,7 @@ private func imageTestDirectory() -> URL {
     #expect(!state.canSend(changingModel: true))
     let saved = state.attachments
     let message = saved.message(text: state.trimmed)
-    state.attachments.retainForHistory()
+    try state.attachments.retainForHistory()
     state.attachments = ImageAttachments()
     #expect(!state.canSend(changingModel: false))
     #expect(FileManager.default.fileExists(atPath: saved.items[0].url.path))
@@ -186,7 +186,7 @@ private func imageTestDirectory() -> URL {
     var submitted: ImageAttachments? = ImageAttachments()
     #expect((submitted!.paste(from: board, directory: directory)) == true)
     let submittedURL = submitted!.items[0].url
-    submitted!.retainForHistory()
+    try submitted!.retainForHistory()
     submitted = nil
     #expect(FileManager.default.fileExists(atPath: submittedURL.path))
 }

@@ -5,12 +5,19 @@ import SwiftUI
 /// Scopes selection to one project and ignores late responses after switching projects or refreshing.
 @MainActor
 final class BranchSelectorState: ObservableObject {
-    @Published private(set) var scope: String?
+    var onSelectionChanged: (() -> Void)?
+    @Published private(set) var scope: String? { didSet { onSelectionChanged?() } }
     @Published private(set) var list = RemoteBranchList()
-    @Published private(set) var selected: String?
+    @Published private(set) var selected: String? { didSet { onSelectionChanged?() } }
     @Published private(set) var loading = false
     @Published private(set) var error: String?
     private var request = UUID()
+
+    /// Validate this saved selection against origin when the composer next loads its branch list.
+    func restoreSelection(scope: String?, branch: String?) {
+        self.scope = scope
+        selected = branch
+    }
 
     func selection(for scope: String?) -> String? {
         guard scope != nil, self.scope == scope else { return nil }

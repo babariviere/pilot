@@ -6,14 +6,15 @@ import SwiftUI
 final class NewSessionForm: ObservableObject {
     let branches = BranchSelectorState()
     private(set) var revision = UUID()
-    @Published var model = ""
-    @Published var message = ""
-    @Published var attachments = ImageAttachments()
+    var onDraftChanged: (() -> Void)?
+    @Published var model = "" { didSet { onDraftChanged?() } }
+    @Published var message = "" { didSet { onDraftChanged?() } }
+    @Published var attachments = ImageAttachments() { didSet { onDraftChanged?() } }
     /// A folder outside any project.
-    @Published var folder = ""
+    @Published var folder = "" { didSet { onDraftChanged?() } }
     @Published var error: String?
     @Published var busy = false
-    @Published var tab: ComposerTab = .newTask
+    @Published var tab: ComposerTab = .newTask { didSet { onDraftChanged?() } }
     @Published var editorHeight: CGFloat = 60
     @Published var models = ModelList(models: [])
 
@@ -67,7 +68,7 @@ struct HomeView: View {
                         .shadow(color: .white, radius: 16)
                         .padding(.top, 196)
                         .padding(.bottom, 16)
-                    TaskComposer(form: app.newSessionForm)
+                    TaskComposer(form: app.newSessionForm, client: app.client)
                         .frame(maxWidth: 640)
                     Dashboard()
                         .frame(maxWidth: 1180)
@@ -84,17 +85,18 @@ struct HomeView: View {
 /// "New task" composer with a "Running" tab, as on Berth's home.
 struct TaskComposer: View {
     @EnvironmentObject private var app: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var client: PilotClient
     @Environment(\.pilotFonts) private var fonts
     @AppStorage("lastProjectId") private var lastProjectId = ""
     @StateObject private var form: NewSessionForm
     @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
 
-    @MainActor init(form: NewSessionForm? = nil, branches: BranchSelectorState? = nil) {
+    @MainActor init(form: NewSessionForm? = nil, branches: BranchSelectorState? = nil, client: PilotClient? = nil) {
         let form = form ?? NewSessionForm()
         _form = StateObject(wrappedValue: form)
         _branches = StateObject(wrappedValue: branches ?? form.branches)
+        _client = ObservedObject(wrappedValue: client ?? AppModel.shared.client)
     }
 
     private var project: Project? {
@@ -123,7 +125,7 @@ struct TaskComposer: View {
         .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0xF5F5F5)))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
-        .task(id: branchScopeKey) { await loadBranches() }
+        .task(id: branchLoadKey) { await loadBranches() }
         .onAppear { form.consumeDraft(from: app) }
         .onChange(of: app.draftMessage) { _, _ in form.consumeDraft(from: app) }
     }
@@ -202,7 +204,11 @@ struct TaskComposer: View {
         return "\(project.id):\(project.path)"
     }
 
+    private var branchLoadKey: String { "\(client.hasProjectSnapshot):\(branchScopeKey ?? form.folder)" }
+
     private func loadBranches() async {
+        // An empty catalog during startup is not a change to the restored draft's destination.
+        guard client.hasProjectSnapshot || (app.draftProjectId == nil && !form.folder.isEmpty) else { return }
         let projectId = project?.id
         await branches.load(scope: branchScopeKey) {
             guard let projectId else { return RemoteBranchList() }
@@ -211,6 +217,10 @@ struct TaskComposer: View {
     }
 
     private func loadModels() async {
+        if form.folder.isEmpty, let project, app.draftProjectId != project.id {
+            // Remember the effective default project too, not just explicit picker selections.
+            app.draftProjectId = project.id
+        }
         form.models = (try? await client.models(projectId: project?.id, cwd: project == nil ? form.folder : nil)) ?? ModelList(models: [])
     }
 
@@ -220,7 +230,12 @@ struct TaskComposer: View {
         form.error = nil
         let revision = form.revision
         let model = form.model.trimmingCharacters(in: .whitespaces)
-        form.attachments.retainForHistory()
+        do { try form.attachments.retainForHistory() }
+        catch {
+            form.error = "Could not retain attached images: \(error.localizedDescription)"
+            form.busy = false
+            return
+        }
         let request = SpawnRequest(
             projectId: project?.id,
             cwd: project == nil ? form.folder : nil,

@@ -19,7 +19,7 @@ final class AppModel: ObservableObject {
     let terminals = TerminalStore()
     let notifier = Notifier()
     let attention = SessionAttention()
-    /// Drafts outlive their views, but are local to this app launch.
+    /// Drafts outlive their views and are saved locally by the production app.
     let newSessionForm = NewSessionForm()
     private var chatComposers: [String: ComposerState] = [:]
     @Published private(set) var reviewRevision = 0
@@ -29,9 +29,9 @@ final class AppModel: ObservableObject {
     @Published var inspectorTab: InspectorTab = .changes
     @Published var sidebarQuery = ""
     /// Project preselected in the new-session screen.
-    @Published var draftProjectId: String?
+    @Published var draftProjectId: String? { didSet { saveDrafts() } }
     /// One-shot prefill consumed by the new-session composer, never submitted automatically.
-    @Published var draftMessage: String?
+    @Published var draftMessage: String? { didSet { saveDrafts() } }
     @Published var collapsedProjects: Set<String> = []
     /// Sidebar-only grouping. Repository paths and daemon project records are unchanged.
     @Published var projectFolders: ProjectFolders {
@@ -48,10 +48,20 @@ final class AppModel: ObservableObject {
 
     private var started = false
     private let projectFolderDefaults: UserDefaults
+    private var draftStore: DraftStore?
+    private var restoringDrafts = true
+    private var draftSaveError: String?
+    private var persistedImages: [UUID: PastedImage] = [:]
 
-    init(projectFolderDefaults: UserDefaults = .standard) {
+    /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
+    init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil) {
         self.projectFolderDefaults = projectFolderDefaults
+        self.draftStore = draftStore
         projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
+        loadDrafts()
+        newSessionForm.onDraftChanged = { [weak self] in self?.saveDrafts() }
+        newSessionForm.branches.onSelectionChanged = { [weak self] in self?.saveDrafts() }
+        restoringDrafts = false
     }
 
     var selectedSession: SessionSummary? {
@@ -62,12 +72,84 @@ final class AppModel: ObservableObject {
         if let composer = chatComposers[sessionId] { return composer }
         let composer = ComposerState()
         chatComposers[sessionId] = composer
+        composer.onDraftChanged = { [weak self] in self?.saveDrafts() }
         return composer
+    }
+
+    private func restoreDrafts(_ drafts: StoredDrafts, from store: DraftStore) {
+        for (id, saved) in drafts.chats {
+            let composer = composer(for: id)
+            composer.draft = saved.text
+            composer.attachments = store.restoreAttachments(saved.attachments)
+            composer.queueEditing = saved.queueEditing
+        }
+        let task = drafts.newTask
+        newSessionForm.message = task.message
+        newSessionForm.attachments = store.restoreAttachments(task.attachments)
+        newSessionForm.folder = task.folder
+        newSessionForm.model = task.model
+        newSessionForm.tab = task.runningTab ? .running : .newTask
+        newSessionForm.branches.restoreSelection(scope: task.branchScope, branch: task.baseBranch)
+        draftProjectId = task.projectId
+        draftMessage = task.pendingMessage
+        persistedImages = currentDraftImages()
+    }
+
+    private func currentDraftImages() -> [UUID: PastedImage] {
+        let images = chatComposers.values.flatMap { $0.attachments.items } + newSessionForm.attachments.items
+        return images.reduce(into: [:]) { $0[$1.id] = $1 }
+    }
+
+    private func loadDrafts() {
+        guard let draftStore else { return }
+        restoringDrafts = true
+        defer { restoringDrafts = false }
+        do { restoreDrafts(try draftStore.load(), from: draftStore) }
+        catch { reportDraftError(error) }
+    }
+
+    private func saveDrafts() {
+        guard !restoringDrafts, let draftStore else { return }
+        var drafts = StoredDrafts()
+        for (id, composer) in chatComposers {
+            guard !composer.draft.isEmpty || !composer.attachments.items.isEmpty
+                || composer.queueEditing != QueuedMessageEditing() else { continue }
+            drafts.chats[id] = StoredChatDraft(text: composer.draft,
+                                              attachments: composer.attachments.items.map(StoredImage.init),
+                                              queueEditing: composer.queueEditing)
+        }
+        let form = newSessionForm
+        drafts.newTask = StoredTaskDraft(message: form.message, attachments: form.attachments.items.map(StoredImage.init),
+                                        folder: form.folder, model: form.model, projectId: draftProjectId,
+                                        pendingMessage: draftMessage, branchScope: form.branches.scope,
+                                        baseBranch: form.branches.selected, runningTab: form.tab == .running)
+        do {
+            try draftStore.save(drafts)
+            // Mark only after a successful write. Navigation and app teardown must not delete saved files.
+            let images = currentDraftImages()
+            for (id, image) in persistedImages where images[id] == nil {
+                image.discardPersistedDraft()
+            }
+            for image in images.values { image.retainForDraft() }
+            persistedImages = images
+            draftSaveError = nil
+        } catch { reportDraftError(error) }
+    }
+
+    private func reportDraftError(_ error: Error) {
+        let message = "Could not persist message drafts: \(error.localizedDescription) Your current drafts remain in memory."
+        if draftSaveError != message { sessionActionError = message }
+        draftSaveError = message
     }
 
     func start() {
         guard !started else { return }
         started = true
+        // Snapshot/test modes never start the live app, so they cannot overwrite real drafts.
+        if draftStore == nil {
+            draftStore = DraftStore()
+            loadDrafts()
+        }
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
         client.onSessionsChanged = { [weak self] sessions, snapshot in

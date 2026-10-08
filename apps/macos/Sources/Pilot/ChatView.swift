@@ -197,7 +197,11 @@ struct ChatView: View {
         guard !session.isArchived else { return }
         composer.error = nil
         let previous = composer.draft
-        composer.attachments.retainForHistory()
+        do { try composer.attachments.retainForHistory() }
+        catch {
+            composer.error = "Could not retain attached images: \(error.localizedDescription)"
+            return
+        }
         let previousAttachments = composer.attachments
         composer.draft = ""
         composer.attachments = ImageAttachments()
