@@ -40,6 +40,14 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     #expect(small.width < 800 && small.height < 600)
 }
 
+@Test func inlineArtifactPreviewsGrowWithChatWidthAndStayBounded() {
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760) == CGSize(width: 760, height: 570))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1200) == CGSize(width: 1200, height: 720))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800) == CGSize(width: 1200, height: 720))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 320) == CGSize(width: 320, height: 360))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 0) == CGSize(width: 0, height: 360))
+}
+
 @Test func toolArtifactChangesRemainVisibleWithCachedSummaries() {
     let original = ToolItem(id: "call", name: "artifact", arguments: .object(["action": .string("create")]), status: .done, output: "")
     var cached = original

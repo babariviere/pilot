@@ -35,9 +35,10 @@ struct ArtifactCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if state.preview, state.visible {
-                ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true })
-                    .frame(height: 240)
-                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                InlineArtifactLayout {
+                    ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true })
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
                 Button("Show \(reference.title)") { state.preview = true }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -50,6 +51,20 @@ struct ArtifactCard: View {
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
         .sheet(isPresented: $state.viewer) { ArtifactViewer(reference: reference, latest: false) }
+    }
+}
+
+/// Derive height from the proposed chat width without geometry feedback or extra view state.
+struct InlineArtifactLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        ArtifactViewerLayout.inlineSize(availableWidth: proposal.width ?? Theme.column)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for subview in subviews {
+            subview.place(at: bounds.origin, anchor: .topLeading,
+                          proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        }
     }
 }
 
