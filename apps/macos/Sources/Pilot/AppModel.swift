@@ -13,6 +13,7 @@ final class AppModel: ObservableObject {
 
     let daemon = DaemonController()
     let client = PilotClient()
+    let feeds = SessionFeedCache()
     let settings = AppSettings.shared
     let terminals = TerminalStore()
     let notifier = Notifier()

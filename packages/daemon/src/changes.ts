@@ -1,13 +1,121 @@
 /** What a session changed: its working copy against the point it branched from. */
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import type { ChangedFile, SessionChangeSummary, SessionChanges } from "@pilot/protocol";
+import { TtlCache } from "./ttl-cache.ts";
 import { workspaceBranch } from "./workspaces.ts";
 
 const exec = promisify(execFile);
 const MAX_DIFF = 1024 * 1024;
 // The client's unified-diff parser expects a/ and b/, regardless of the user's Git config.
-const PATCH_ARGS = ["diff", "--no-color", "--src-prefix=a/", "--dst-prefix=b/"];
+const PATCH_ARGS = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"];
+
+/** Only expose complete hunks from a clipped patch, never a partial line or incorrect hunk body. */
+function completePatchPrefix(diff: string): string {
+	let safeEnd = 0;
+	let oldLines = 0;
+	let newLines = 0;
+	let inHunk = false;
+	for (let offset = 0; offset < diff.length; ) {
+		const end = diff.indexOf("\n", offset);
+		if (end < 0) break;
+		const line = diff.slice(offset, end);
+		const header = /^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@/.exec(line);
+		if (header) {
+			oldLines = header[1] === undefined ? 1 : Number(header[1]);
+			newLines = header[2] === undefined ? 1 : Number(header[2]);
+			inHunk = true;
+		} else if (inHunk) {
+			if (line.startsWith(" ")) {
+				oldLines--;
+				newLines--;
+			} else if (line.startsWith("-")) oldLines--;
+			else if (line.startsWith("+")) newLines--;
+			else if (!line.startsWith("\\")) break;
+		} else if (line.startsWith("Binary files ") && line.endsWith(" differ")) {
+			safeEnd = end + 1;
+		} else if (offset === safeEnd && line.startsWith("\\ No newline at end of file")) {
+			safeEnd = end + 1;
+		}
+		if (inHunk && oldLines === 0 && newLines === 0) {
+			safeEnd = end + 1;
+			inHunk = false;
+		}
+		offset = end + 1;
+	}
+	return diff.slice(0, safeEnd);
+}
+
+/** Bound both retained output and Git's lifetime, not just the final concatenated string. */
+async function gitPatch(cwd: string, args: string[], maxBytes: number, allowExitOne = false) {
+	return new Promise<{ patch: Buffer; truncated: boolean }>((resolve, reject) => {
+		const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
+		const chunks: Buffer[] = [];
+		let size = 0;
+		let stderr = "";
+		let truncated = false;
+		let timedOut = false;
+		const timer = setTimeout(() => {
+			timedOut = true;
+			child.kill("SIGKILL");
+		}, 30_000);
+		child.stdout.on("data", (chunk: Buffer) => {
+			if (truncated) return;
+			const remaining = maxBytes - size;
+			if (chunk.length > remaining) {
+				chunks.push(chunk.subarray(0, remaining));
+				size += remaining;
+				truncated = true;
+				child.kill("SIGKILL");
+			} else {
+				chunks.push(chunk);
+				size += chunk.length;
+			}
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			if (stderr.length < 64 * 1024) stderr += chunk.toString("utf8").slice(0, 64 * 1024 - stderr.length);
+		});
+		child.on("error", (error) => {
+			clearTimeout(timer);
+			reject(error);
+		});
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (timedOut) reject(new Error("Git diff timed out"));
+			else if (truncated || code === 0 || (allowExitOne && code === 1))
+				resolve({ patch: Buffer.concat(chunks, size), truncated });
+			else reject(new Error(stderr.trim() || `Git diff exited ${code}`));
+		});
+	});
+}
+
+/** TTL revalidation intentionally runs Git again, so external editors, commits and refs remain visible. */
+export class RepositoryChanges {
+	private readonly cache = new TtlCache<SessionChanges | SessionChangeSummary>({
+		ttlMs: 1000,
+		maxEntries: 128,
+		maxBytes: 16 * 1024 * 1024,
+		maxPending: 16,
+		busyMessage: "Repository changes are busy. Retry shortly.",
+		weight: (value) => Buffer.byteLength(JSON.stringify(value)),
+	});
+
+	changes(cwd: string, base = "HEAD"): Promise<SessionChanges> {
+		return this.cache.get(JSON.stringify([cwd, base, "full"]), () =>
+			collectChanges(cwd, base),
+		) as Promise<SessionChanges>;
+	}
+
+	summary(cwd: string, base = "HEAD"): Promise<SessionChangeSummary> {
+		return this.cache.get(JSON.stringify([cwd, base, "summary"]), () =>
+			collectChangeSummary(cwd, base),
+		) as Promise<SessionChangeSummary>;
+	}
+
+	invalidate(cwd: string): void {
+		this.cache.invalidate((key) => (JSON.parse(key) as string[])[0] === cwd);
+	}
+}
 
 async function git(cwd: string, args: string[], allowExitOne = false): Promise<string> {
 	try {
@@ -66,6 +174,24 @@ function numstat(output: string): Map<string, { additions: number; deletions: nu
 	return files;
 }
 
+async function lineStats(cwd: string, mergeBase: string, untracked: string[]) {
+	const stats = numstat(
+		await git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "-M", mergeBase, "--"]),
+	);
+	for (const path of untracked) {
+		const untrackedStats = numstat(
+			await git(
+				cwd,
+				["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "--no-index", "--", "/dev/null", path],
+				true,
+			),
+		);
+		// Recreated untracked paths replace staged deletions. Errors must not become fabricated zero counts.
+		stats.set(path, [...untrackedStats.values()][0] ?? { additions: 0, deletions: 0 });
+	}
+	return stats;
+}
+
 /** Count changed paths and lines without generating patches. Renames count once. */
 export async function collectChangeSummary(cwd: string, base = "HEAD"): Promise<SessionChangeSummary> {
 	const { mergeBase, ...metadata } = await changeBase(cwd, base);
@@ -73,14 +199,7 @@ export async function collectChangeSummary(cwd: string, base = "HEAD"): Promise<
 	const untracked = await git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
 	// NUL records preserve tabs, newlines and quoted/non-ASCII filenames. A rename emits only its destination.
 	const paths = new Set([...tracked.split("\0"), ...untracked.split("\0")].filter(Boolean));
-	const stats = numstat(await git(cwd, ["diff", "--numstat", "-z", "-M", mergeBase, "--"]));
-	for (const path of untracked.split("\0").filter(Boolean)) {
-		const untrackedStats = numstat(
-			await git(cwd, ["diff", "--numstat", "-z", "--no-index", "--", "/dev/null", path], true),
-		);
-		// Like collectChanges, a recreated untracked path replaces its staged deletion rather than counting twice.
-		stats.set(path, [...untrackedStats.values()][0] ?? { additions: 0, deletions: 0 });
-	}
+	const stats = await lineStats(cwd, mergeBase, untracked.split("\0").filter(Boolean));
 	let additions = 0;
 	let deletions = 0;
 	for (const stat of stats.values()) {
@@ -98,42 +217,58 @@ export async function collectChanges(cwd: string, base = "HEAD"): Promise<Sessio
 	const { mergeBase, ...metadata } = await changeBase(cwd, base);
 
 	const files = new Map<string, ChangedFile>();
-	for (const line of (await git(cwd, ["diff", "--name-status", "-M", mergeBase])).split("\n")) {
-		const [code, ...paths] = line.split("\t");
-		if (!code || paths.length === 0) continue;
-		const path = paths.at(-1)!;
+	const records = (await git(cwd, ["diff", "--name-status", "-z", "-M", mergeBase, "--"])).split("\0");
+	for (let i = 0; i < records.length; ) {
+		const code = records[i++];
+		if (!code) continue;
+		const previousPath = records[i++];
+		const path = code[0] === "R" ? records[i++] : previousPath;
+		if (!path) continue;
 		files.set(path, {
 			path,
 			status: STATUS[code[0]!] ?? "modified",
 			additions: 0,
 			deletions: 0,
-			...(code[0] === "R" ? { previousPath: paths[0] } : {}),
+			...(code[0] === "R" ? { previousPath } : {}),
 		});
 	}
-	for (const line of (await git(cwd, ["diff", "--numstat", "-M", mergeBase])).split("\n")) {
-		const [added, deleted, ...rest] = line.split("\t");
-		const path = rest.at(-1);
-		const file = path
-			? files.get(path.includes(" => ") ? path.replace(/.*=> /, "").replace(/}$/, "") : path)
-			: undefined;
-		if (!file) continue;
-		file.additions = Number(added) || 0;
-		file.deletions = Number(deleted) || 0;
+	const untracked = (await git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+	const stats = await lineStats(cwd, mergeBase, untracked);
+	for (const path of untracked) {
+		files.set(path, { path, status: "untracked", additions: 0, deletions: 0 });
+	}
+	for (const [path, stat] of stats) {
+		const file = files.get(path);
+		if (file) Object.assign(file, stat);
 	}
 
-	let diff = await git(cwd, [...PATCH_ARGS, "-M", mergeBase]);
-	const untracked = (await git(cwd, ["ls-files", "--others", "--exclude-standard"])).split("\n").filter(Boolean);
+	const tracked = await gitPatch(cwd, [...PATCH_ARGS, "-M", mergeBase, "--"], MAX_DIFF);
+	const patches = [tracked.patch];
+	let size = tracked.patch.length;
+	let truncated = tracked.truncated;
 	for (const path of untracked) {
-		const patch = await git(cwd, [...PATCH_ARGS, "--no-index", "--", "/dev/null", path], true).catch(() => "");
-		const additions = patch.split("\n").filter((line) => line.startsWith("+") && !line.startsWith("+++")).length;
-		files.set(path, { path, status: "untracked", additions, deletions: 0 });
-		diff += patch;
+		// All file statistics are already complete, even when later patches are omitted.
+		if (truncated || size === MAX_DIFF) {
+			truncated = true;
+			break;
+		}
+		const result = await gitPatch(cwd, [...PATCH_ARGS, "--no-index", "--", "/dev/null", path], MAX_DIFF - size, true);
+		patches.push(result.patch);
+		size += result.patch.length;
+		truncated = result.truncated;
 	}
-	const truncated = diff.length > MAX_DIFF;
+	// Ignore a partial final UTF-8 code point instead of expanding it into a replacement character.
+	let diff = new TextDecoder("utf-8").decode(Buffer.concat(patches, size), { stream: truncated });
+	// Invalid UTF-8 text can expand into replacement characters. Keep the wire representation bounded too.
+	if (Buffer.byteLength(diff) > MAX_DIFF) {
+		diff = new TextDecoder("utf-8").decode(Buffer.from(diff).subarray(0, MAX_DIFF), { stream: true });
+		truncated = true;
+	}
+	if (truncated) diff = completePatchPrefix(diff);
 	return {
 		...metadata,
 		files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)),
-		diff: truncated ? diff.slice(0, MAX_DIFF) : diff,
+		diff,
 		truncated,
 	};
 }

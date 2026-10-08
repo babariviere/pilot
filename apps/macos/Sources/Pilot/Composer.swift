@@ -3,11 +3,29 @@ import PilotCore
 import SwiftUI
 
 @MainActor
+final class ComposerDraftState: ObservableObject {
+    @Published var draft = "" {
+        didSet { trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    }
+    @Published var height: CGFloat = 18
+    private(set) var trimmed = ""
+}
+
+@MainActor
 final class ComposerState: ObservableObject {
-    @Published var draft = ""
+    // Draft edits and measured height changes must not invalidate the static controls.
+    // Keep the existing imperative API for send/restore callers.
+    let draftState = ComposerDraftState()
+    var draft: String {
+        get { draftState.draft }
+        set { draftState.draft = newValue }
+    }
     @Published var attachments = ImageAttachments()
     @Published var error: String?
-    @Published var editorHeight: CGFloat = 18
+    var editorHeight: CGFloat {
+        get { draftState.height }
+        set { draftState.height = newValue }
+    }
     @Published var queueEditing = QueuedMessageEditing()
     @Published var savingQueueEdit = false
     @Published var removingQueuedMessage: Int?
@@ -18,7 +36,7 @@ final class ComposerState: ObservableObject {
     @Published var queueFocus = UUID()
     @Published var composerFocus = UUID()
 
-    var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
+    var trimmed: String { draftState.trimmed }
     var mutatingQueue: Bool { savingQueueEdit || removingQueuedMessage != nil }
 
     /// HTTP can acknowledge removal before the queue stream catches up (or while it reconnects).
@@ -88,7 +106,6 @@ struct Composer: View {
     let onRemoveQueuedMessage: (Int) async throws -> Void
     var session: SessionSummary? = nil
     @StateObject private var modelPicker = ChatModelPickerState()
-    @Environment(\.pilotFonts) private var fonts
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
 
@@ -127,24 +144,14 @@ struct Composer: View {
     private var editor: some View {
         VStack(alignment: .leading, spacing: 10) {
             ImageAttachmentPreviews(attachments: $state.attachments)
-            ZStack(alignment: .topLeading) {
-                if state.draft.isEmpty {
-                    Text(working ? "Steer the agent…" : "Reply to Pilot…")
-                        .font(fonts.body)
-                        .foregroundStyle(Theme.faintForeground)
-                        .allowsHitTesting(false)
-                }
-                ChatTextEditor(
-                    text: $state.draft, height: $state.editorHeight, font: fonts.nsBody,
-                    focusToken: state.composerFocus,
-                    onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
-                    onCancel: cancelQueueEditAction,
-                    onPasteImages: { state.attachments.paste(from: $0) },
-                    completionDirectory: completionDirectory
-                ) { flags in
-                    send(flags.contains(.option) ? .followUp : .steer)
-                }
-                .frame(height: state.editorHeight)
+            ComposerDraftEditor(
+                state: state.draftState, working: working, focusToken: state.composerFocus,
+                onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
+                onCancel: cancelQueueEditAction,
+                onPasteImages: { state.attachments.paste(from: $0) },
+                completionDirectory: completionDirectory
+            ) { flags in
+                send(flags.contains(.option) ? .followUp : .steer)
             }
             HStack(spacing: 10) {
                 KeyHints(working: working)
@@ -159,30 +166,15 @@ struct Composer: View {
     private var controls: some View {
         HStack(alignment: .top, spacing: 10) {
             if let session {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 16) {
-                        modelControls(session)
-                        UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
-                    }
-                    VStack(alignment: .leading, spacing: 8) {
-                        modelControls(session)
-                        UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
-                    }
+                ResponsiveControlsLayout(horizontalSpacing: 16, verticalSpacing: 8) {
+                    modelControls(session)
+                    UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
                 }
                 .padding(.top, 5)
             }
             Spacer(minLength: 8)
-            HStack(spacing: 8) {
-                if working {
-                    Button(action: onStop) { Image(systemName: "stop.fill") }
-                        .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive))
-                        .help("Stop the current run")
-                }
-                Button { send(.steer) } label: { Image(systemName: "arrow.up") }
-                    .buttonStyle(CircleIconButtonStyle())
-                    .disabled(!state.canSend(changingModel: modelPicker.changing))
-                    .help(working ? "Steer (↩)" : "Send (↩)")
-            }
+            ComposerSendButtons(state: state, draft: state.draftState, modelPicker: modelPicker,
+                                working: working, onStop: onStop, onSend: { send(.steer) })
         }
         .padding(.horizontal, 10)
     }
@@ -221,6 +213,57 @@ struct Composer: View {
                 state.queueEditError = error.localizedDescription
             }
             state.savingQueueEdit = false
+        }
+    }
+}
+
+private struct ComposerDraftEditor: View {
+    @ObservedObject var state: ComposerDraftState
+    let working: Bool
+    let focusToken: UUID
+    let onNavigateQueue: (QueueNavigationDirection) -> Bool
+    let onCancel: (() -> Void)?
+    let onPasteImages: (NSPasteboard) -> Bool
+    let completionDirectory: String
+    let onSubmit: (NSEvent.ModifierFlags) -> Void
+    @Environment(\.pilotFonts) private var fonts
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if state.draft.isEmpty {
+                Text(working ? "Steer the agent…" : "Reply to Pilot…")
+                    .font(fonts.body)
+                    .foregroundStyle(Theme.faintForeground)
+                    .allowsHitTesting(false)
+            }
+            ChatTextEditor(text: $state.draft, height: $state.height, font: fonts.nsBody,
+                           focusToken: focusToken, onNavigateQueue: onNavigateQueue, onCancel: onCancel,
+                           onPasteImages: onPasteImages, completionDirectory: completionDirectory,
+                           onSubmit: onSubmit)
+                .frame(height: state.height)
+        }
+    }
+}
+
+private struct ComposerSendButtons: View {
+    @ObservedObject var state: ComposerState
+    @ObservedObject var draft: ComposerDraftState
+    @ObservedObject var modelPicker: ChatModelPickerState
+    let working: Bool
+    let onStop: () -> Void
+    let onSend: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            if working {
+                Button(action: onStop) { Image(systemName: "stop.fill") }
+                    .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive))
+                    .help("Stop the current run")
+            }
+            Button(action: onSend) { Image(systemName: "arrow.up") }
+                .buttonStyle(CircleIconButtonStyle())
+                .disabled(!state.canSend(changingModel: modelPicker.changing))
+                .help(working ? "Steer (↩)" : "Send (↩)")
         }
     }
 }

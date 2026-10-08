@@ -5,6 +5,23 @@ import SwiftUI
 @MainActor
 final class TranscriptScrollState: ObservableObject {
     @Published var follow = TranscriptScrollFollow()
+    private var renderedScroll: Task<Void, Never>?
+
+    /// Several visible Markdown/code rows can finish together. Scroll once, after publication/layout.
+    func contentPrepared(_ action: @escaping () -> Void) {
+        guard renderedScroll == nil else { return }
+        renderedScroll = Task { @MainActor in
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            if follow.shouldScrollToBottom { action() }
+            renderedScroll = nil
+        }
+    }
+
+    func cancelPreparedScroll() {
+        renderedScroll?.cancel()
+        renderedScroll = nil
+    }
 }
 
 /// Observe native user scrolling, rather than content geometry, which also changes

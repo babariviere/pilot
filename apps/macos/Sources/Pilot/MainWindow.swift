@@ -156,7 +156,7 @@ struct Inspector: View {
             .background(Theme.sidebar)
             Rectangle().fill(Theme.border).frame(height: 1)
             ZStack {
-                ChangesPane(session: session)
+                ChangesPane(session: session, isVisible: model.inspectorTab == .changes)
                     .opacity(model.inspectorTab == .changes ? 1 : 0)
                     .allowsHitTesting(model.inspectorTab == .changes)
                 // Mounted once opened, so looking at changes never starts a shell.

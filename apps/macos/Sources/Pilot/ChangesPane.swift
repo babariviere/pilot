@@ -14,15 +14,18 @@ final class ChangesModel: ObservableObject {
     init(sessionId: String) { self.sessionId = sessionId }
 
     func load() async {
+        guard !Task.isCancelled else { return }
         guard !loading else { return }
         loading = true
         defer { loading = false }
         do {
             let changes = try await AppModel.shared.client.changes(sessionId)
+            try Task.checkCancellation()
             if changes != self.changes {
                 let diffs = await Task.detached(priority: .userInitiated) {
                     Dictionary(Diff.parseUnified(changes.diff).map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
                 }.value
+                try Task.checkCancellation()
                 let firstLoad = self.changes == nil
                 self.changes = changes
                 self.diffs = diffs
@@ -31,8 +34,9 @@ final class ChangesModel: ObservableObject {
                     expanded = Set(changes.files.map(\.path))
                 }
             }
-            error = nil
+            if error != nil { error = nil }
         } catch {
+            guard !Task.isCancelled else { return }
             self.error = error.localizedDescription
         }
     }
@@ -41,12 +45,11 @@ final class ChangesModel: ObservableObject {
 /// What the session changed in its working copy: committed and uncommitted, since it branched.
 struct ChangesPane: View {
     let session: SessionSummary
+    var isVisible = true
     @StateObject private var model: ChangesModel
-    /// Refresh while the pane is visible: cheap git commands, and the agent may be editing.
-    private let timer = Timer.publish(every: 4, on: .main, in: .common).autoconnect()
-
-    init(session: SessionSummary) {
+    init(session: SessionSummary, isVisible: Bool = true) {
         self.session = session
+        self.isVisible = isVisible
         _model = StateObject(wrappedValue: ChangesModel(sessionId: session.id))
     }
 
@@ -57,11 +60,14 @@ struct ChangesPane: View {
             content
         }
         .background(Theme.background)
-        .onAppear { if session.state != "starting" { Task { await model.load() } } }
-        .onChange(of: session.state) { _, state in
-            if state != "starting" { Task { await model.load() } }
+        .task(id: ChangesPollingKey(visible: isVisible, state: session.state)) {
+            guard isVisible, session.state != "starting" else { return }
+            while !Task.isCancelled {
+                await model.load()
+                do { try await Task.sleep(for: .seconds(4)) }
+                catch { return }
+            }
         }
-        .onReceive(timer) { _ in if session.state != "starting" { Task { await model.load() } } }
     }
 
     private var header: some View {
@@ -127,6 +133,11 @@ struct ChangesPane: View {
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+}
+
+private struct ChangesPollingKey: Equatable {
+    let visible: Bool
+    let state: String
 }
 
 private struct FileRow: View {

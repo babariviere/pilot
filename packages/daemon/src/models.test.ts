@@ -3,7 +3,8 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { ServiceUnavailable } from "./errors.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
 
 type Model = Parameters<ModelRuntime["completeSimple"]>[0];
@@ -102,6 +103,7 @@ test("empty scope and failed or empty completions leave title unset", async () =
 });
 
 test("title generation follows project model scope, ignores its thinking suffix and never falls outside it", async (t) => {
+	t.mock.method(SettingsManager, "create", () => assert.fail("catalog settings reads must not spin synchronously"));
 	const root = await mkdtemp(join(tmpdir(), "pilot-title-models-"));
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "project");
@@ -130,6 +132,73 @@ test("title generation follows project model scope, ignores its thinking suffix 
 	await writeFile(join(cwd, ".pi", "settings.json"), JSON.stringify({ enabledModels: ["missing/*"] }));
 	assert.equal(await catalog.generateTitle(cwd, "task"), undefined);
 	assert.equal(calls.length, 1);
+});
+
+test("model catalog coalesces loads, revalidates settings on expiry and retries failed results", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-cache-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+	let calls = 0;
+	let failed = false;
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				getAvailable: async () => {
+					calls++;
+					if (failed) throw new Error("models failed");
+					return [cheap];
+				},
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root);
+	const first = catalog.list(root);
+	assert.equal(catalog.list(root), first);
+	await first;
+	assert.equal(calls, 1);
+	await writeFile(join(root, "settings.json"), JSON.stringify({ defaultProvider: "test", defaultModel: "small" }));
+	assert.equal((await catalog.list(root)).defaultModel, undefined);
+	t.mock.timers.tick(60_000);
+	assert.equal((await catalog.list(root)).defaultModel, "test/small");
+	assert.equal(calls, 2);
+	failed = true;
+	t.mock.timers.tick(60_000);
+	await assert.rejects(catalog.list(root), /models failed/);
+	failed = false;
+	assert.equal((await catalog.list(root)).models[0]?.id, "test/small");
+});
+
+test("model catalog bounds pending loads and cached directories", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-cache-bounds-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	let calls = 0;
+	let finish!: () => void;
+	const stalled = new Promise<void>((resolve) => {
+		finish = resolve;
+	});
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				getAvailable: async () => {
+					calls++;
+					await stalled;
+					return [cheap];
+				},
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root);
+	const pending = Array.from({ length: 4 }, (_, i) => catalog.list(join(root, String(i))));
+	await assert.rejects(catalog.list(join(root, "busy")), ServiceUnavailable);
+	assert.equal(catalog.list(join(root, "0")), pending[0]);
+	finish();
+	await Promise.all(pending);
+	for (let i = 4; i < 65; i++) await catalog.list(join(root, String(i)));
+	assert.equal(calls, 65);
+	await catalog.list(join(root, "1"));
+	assert.equal(calls, 66, "the oldest untouched directory must have been evicted");
 });
 
 test("model catalog offers only levels supported by each model, including mapped extended levels", async (t) => {

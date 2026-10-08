@@ -3,11 +3,38 @@ import SwiftUI
 
 @MainActor
 final class ChatModelPickerState: ObservableObject {
-    @Published var models = ModelList(models: [])
+    @Published var models = ModelList(models: []) {
+        didSet { rebuildPresentation() }
+    }
     @Published var changing = false
     @Published var error: String?
 
     private let changeModel: (String, ChangeModelRequest) async throws -> Void
+    private(set) var providers: [String] = []
+    private(set) var modelsByProvider: [String: [ModelOption]] = [:]
+    private var namesByID: [String: String] = [:]
+    private var levelsByID: [String: [String]] = [:]
+    private var fallbackNames: [String: String] = [:]
+
+    private func rebuildPresentation() {
+        modelsByProvider = Dictionary(grouping: models.models, by: \.provider)
+        providers = modelsByProvider.keys.sorted()
+        namesByID = [:]
+        levelsByID = [:]
+        for model in models.models where namesByID[model.id] == nil {
+            namesByID[model.id] = model.name
+            levelsByID[model.id] = model.thinkingLevels
+        }
+        fallbackNames = [:]
+    }
+
+    func displayName(for model: String?) -> String {
+        guard let model, !model.isEmpty else { return "Model" }
+        if let name = namesByID[model] ?? fallbackNames[model] { return name }
+        let name = model.split(separator: "/").last.map(String.init) ?? model
+        fallbackNames[model] = name
+        return name
+    }
 
     init(changeModel: @escaping (String, ChangeModelRequest) async throws -> Void = { id, request in
         try await AppModel.shared.client.changeModel(id, model: request.model, thinking: request.thinking)
@@ -20,7 +47,7 @@ final class ChatModelPickerState: ObservableObject {
     }
 
     func thinkingLevels(for session: SessionSummary) -> [String] {
-        models.models.first { $0.id == session.model }?.thinkingLevels ?? []
+        session.model.flatMap { levelsByID[$0] } ?? []
     }
 
     @discardableResult
@@ -68,15 +95,9 @@ struct ChatModelControls: View {
     @ObservedObject var state: ChatModelPickerState
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                ChatModelPicker(session: session, working: working, state: state)
-                ChatThinkingPicker(session: session, working: working, state: state)
-            }
-            VStack(alignment: .leading, spacing: 8) {
-                ChatModelPicker(session: session, working: working, state: state)
-                ChatThinkingPicker(session: session, working: working, state: state)
-            }
+        ResponsiveControlsLayout(horizontalSpacing: 12, verticalSpacing: 8) {
+            ChatModelPicker(session: session, working: working, state: state)
+            ChatThinkingPicker(session: session, working: working, state: state)
         }
     }
 }
@@ -89,9 +110,9 @@ struct ChatModelPicker: View {
 
     var body: some View {
         Menu {
-            ForEach(providers, id: \.self) { provider in
+            ForEach(state.providers, id: \.self) { provider in
                 Section(provider) {
-                    ForEach(state.models.models.filter { $0.provider == provider }) { option in
+                    ForEach(state.modelsByProvider[provider] ?? []) { option in
                         Button { state.selectModel(option.id, session: session, working: working) } label: {
                             if session.model == option.id {
                                 Label(option.name, systemImage: "checkmark")
@@ -109,7 +130,7 @@ struct ChatModelPicker: View {
         } label: {
             HStack(spacing: 5) {
                 Image(systemName: "cpu")
-                Text(state.models.displayName(for: session.model))
+                Text(state.displayName(for: session.model))
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .frame(maxWidth: 200, alignment: .leading)
@@ -127,8 +148,6 @@ struct ChatModelPicker: View {
         .fixedSize(horizontal: true, vertical: false)
         .disabled(!state.canChange(session: session, working: working))
         .help(working || session.isWorking ? "Model can be changed when idle with no queued messages" : "Change the model for this chat")
-        .accessibilityLabel("Model: \(state.models.displayName(for: session.model))")
+        .accessibilityLabel("Model: \(state.displayName(for: session.model))")
     }
-
-    private var providers: [String] { Array(Set(state.models.models.map(\.provider))).sorted() }
 }

@@ -59,6 +59,9 @@ struct ChatTextEditor: NSViewRepresentable {
             onCancel()
             return true
         }
+        textView.onLayoutWidthChange = { [weak coordinator = context.coordinator] textView in
+            coordinator?.recalculate(textView, contentChanged: false)
+        }
         scroll.documentView = textView
 
         if focusOnAppear {
@@ -90,13 +93,34 @@ struct ChatTextEditor: NSViewRepresentable {
             textView.font = font
             changed = true
         }
-        if changed { context.coordinator.recalculate(textView) }
+        context.coordinator.recalculate(textView, contentChanged: changed)
+    }
+
+    static func dismantleNSView(_ scroll: NSScrollView, coordinator: Coordinator) {
+        coordinator.cancelMeasurement()
+        guard let textView = scroll.documentView as? SubmitTextView else { return }
+        textView.onLayoutWidthChange = nil
+        textView.delegate = nil
+        textView.dismissPathPicker()
     }
 
     @MainActor
     final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: ChatTextEditor
         var lastFocusToken: UUID?
+        private weak var pendingTextView: NSTextView?
+        private var measurementScheduled = false
+        private var cancelled = false
+        private var revision = 0
+        private var lastMeasurement: MeasurementKey?
+
+        private struct MeasurementKey: Equatable {
+            let revision: Int
+            let width: CGFloat
+            let font: NSFont
+            let minLines: Int
+            let maxLines: Int
+        }
 
         init(parent: ChatTextEditor) { self.parent = parent }
 
@@ -106,21 +130,59 @@ struct ChatTextEditor: NSViewRepresentable {
             recalculate(textView)
         }
 
-        func recalculate(_ textView: NSTextView) {
-            guard let layout = textView.layoutManager, let container = textView.textContainer else { return }
-            layout.ensureLayout(for: container)
-            let line = layout.defaultLineHeight(for: parent.font)
-            let used = layout.usedRect(for: container).height
-            let height = min(max(used, line * CGFloat(parent.minLines)), line * CGFloat(parent.maxLines)).rounded(.up)
-            if abs(parent.height - height) > 0.5 {
-                let binding = parent.$height
-                DispatchQueue.main.async { binding.wrappedValue = height }
+        /// Coalesce editing, representable updates, and resize notifications into one
+        /// bounded measurement on the next main turn. Always use the latest parent/binding.
+        func recalculate(_ textView: NSTextView, contentChanged: Bool = true) {
+            guard !cancelled else { return }
+            if contentChanged { revision += 1 }
+            pendingTextView = textView
+            guard !measurementScheduled else { return }
+            measurementScheduled = true
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.cancelled else { return }
+                self.measurementScheduled = false
+                guard let textView = self.pendingTextView else { return }
+                self.pendingTextView = nil
+                self.measure(textView)
             }
+        }
+
+        func cancelMeasurement() {
+            cancelled = true
+            pendingTextView = nil
+        }
+
+        private func measure(_ textView: NSTextView) {
+            guard let layout = textView.layoutManager, let container = textView.textContainer,
+                  container.size.width.isFinite, container.size.width > 0 else { return }
+            let key = MeasurementKey(revision: revision, width: container.size.width, font: parent.font,
+                                     minLines: parent.minLines, maxLines: parent.maxLines)
+            guard key != lastMeasurement else { return }
+            lastMeasurement = key
+            let line = layout.defaultLineHeight(for: parent.font)
+            let minimum = line * CGFloat(max(1, parent.minLines))
+            let maximum = line * CGFloat(max(parent.minLines, parent.maxLines, 1))
+            // Do not lay out an entire pasted document just to discover that it exceeds
+            // the height cap. AppKit remains responsible for layout while scrolling.
+            layout.ensureLayout(forBoundingRect: CGRect(x: 0, y: 0, width: container.size.width,
+                                                        height: maximum + line), in: container)
+            let used = max(layout.usedRect(for: container).height,
+                           layout.extraLineFragmentTextContainer === container ? layout.extraLineFragmentRect.maxY : 0)
+            let height = min(max(used, minimum), maximum).rounded(.up)
+            if abs(parent.height - height) > 0.5 { parent.height = height }
         }
     }
 }
 
 final class SubmitTextView: NSTextView {
+    var onLayoutWidthChange: ((NSTextView) -> Void)?
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = frame.width != newSize.width
+        super.setFrameSize(newSize)
+        if widthChanged { onLayoutWidthChange?(self) }
+    }
+
     var onSubmit: ((NSEvent.ModifierFlags) -> Void)?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Bool)?

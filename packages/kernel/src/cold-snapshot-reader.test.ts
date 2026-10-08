@@ -1,0 +1,180 @@
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { test } from "node:test";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
+import {
+	createRegistry,
+	createSession,
+	type CompactionResult,
+	Harness,
+	InboxDoc,
+	LiveDoc,
+	type SubmissionId,
+	type TaskId,
+	UsageDoc,
+	watchEvents,
+} from "@earendil-works/pi-durable";
+import { AttentionDoc } from "./attention.ts";
+import { readSessionSnapshot } from "./snapshot.ts";
+import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
+
+test("cold snapshot matches durable active view under a writer lease, without running pending tools", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-reader-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const durable = join(dir, "durable");
+	const owned = await openSessionStorage(durable);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		const kept = await root.commit(async (tx) => {
+			tx.appendEntry(root.id, { kind: "old", data: { text: "not retained" } });
+			return (await tx.appendEntry(root.id, { kind: "kept", data: { text: "retained" } })).id;
+		}, context);
+		await root.commit(async (tx) => {
+			tx.appendEntry(root.id, { kind: "pi.compaction", head: kept, data: { summary: "summary" } });
+			tx.appendEntry(root.id, { kind: "pilot.artifact", data: { artifact: { id: "artifact" } } });
+			const live = await tx.doc(LiveDoc, root.id);
+			live.run = { taskId: 900 as TaskId, inputs: [901 as SubmissionId] };
+			live.generation = {
+				attempt: 2,
+				message: JSON.parse(JSON.stringify(fauxAssistantMessage("partial"))),
+				retry: { at: 123, error: "offline" },
+			};
+			live.tools = [
+				{
+					callId: "call",
+					name: "unsafe",
+					taskId: 902 as TaskId,
+					status: "running",
+					output: "persisted output",
+					droppedBytes: 3,
+					details: { child: "id" },
+				},
+			];
+			live.compactions = [
+				{
+					taskId: 903 as TaskId<CompactionResult>,
+					reason: "manual",
+					attempt: 1,
+					blocking: false,
+					retry: { at: 456, error: "retry" },
+				},
+			];
+			const inbox = await tx.doc(InboxDoc, root.id);
+			inbox.items = [
+				{ id: 904 as SubmissionId, mode: "steer", content: "steer" },
+				{ id: 905 as SubmissionId, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
+				{ id: 906 as SubmissionId, mode: "write", entry: { kind: "notice" } },
+			];
+			(await tx.doc(UsageDoc, root.id)).models["missing/offline"] = fauxAssistantMessage("usage").usage;
+			(await tx.doc(AttentionDoc, root.id)).completion = {
+				input: 899,
+				entry: kept,
+				outcome: "needs_input",
+				outcomeAt: 50,
+				outcomeReason: "approval",
+			};
+		}, context);
+		// Exercise durable delta materialization as well as document checkpoints.
+		await root.commit(async (tx) => {
+			(await tx.doc(LiveDoc, root.id)).tools![0]!.output += " delta";
+		}, context);
+		const stream = await watchEvents(harness, root.id, context);
+		const expected = structuredClone(stream.snapshot);
+		await stream.stop();
+		await assert.rejects(openSessionStorage(durable), StorageBusy);
+		const view = await readSessionSnapshot(durable, dir);
+		assert.deepEqual(view.events[0], expected);
+		assert.equal(view.completion, undefined, "a running session must not publish an old completion");
+		assert.deepEqual(view.events[1], {
+			type: "queue_update",
+			items: [
+				{ id: 904, mode: "steer", content: "steer" },
+				{ id: 905, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
+			],
+		});
+		const reader = await openSessionReader(durable);
+		assert.ok(reader);
+		await assert.rejects(reader.commit([], context), /read-only/);
+		const readonlySession = createSession(reader);
+		await root.commit(async (tx) => {
+			(await tx.doc(LiveDoc, root.id)).tools![0]!.output = "newer writer commit";
+		}, context);
+		assert.equal(
+			(await readonlySession.snapshot(LiveDoc, root.id, context))?.tools?.[0]?.output,
+			"persisted output delta",
+			"the whole view stays on one committed SQLite revision",
+		);
+		await readonlySession.close(context);
+		await root.commit(async (tx) => {
+			const live = await tx.doc(LiveDoc, root.id);
+			delete live.run;
+			delete live.generation;
+			delete live.tools;
+		}, context);
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, { kind: "pi.reset", head: "self" });
+			await tx.appendEntry(root.id, { kind: "after-reset", data: { text: "fresh" } });
+		}, context);
+		const resetStream = await watchEvents(harness, root.id, context);
+		const resetView = await readSessionSnapshot(durable, dir);
+		assert.deepEqual(resetView.events[0], resetStream.snapshot);
+		assert.deepEqual(
+			resetStream.snapshot.entries.map((entry) => entry.kind),
+			["pi.reset", "after-reset"],
+		);
+		await resetStream.stop();
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+	try {
+		const before = await readFile(join(durable, "harness.sqlite"));
+		const view = await readSessionSnapshot(durable, dir);
+		assert.deepEqual(view.completion, { outcome: "needs_input", outcomeAt: 50, outcomeReason: "approval" });
+		assert.deepEqual(await readSessionSnapshot(durable, dir), view, "restart reads keep the completion version");
+		assert.deepEqual(await readFile(join(durable, "harness.sqlite")), before, "no durable write or WAL checkpoint");
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});
+
+test("cold reader rejects unsupported schemas instead of migrating or creating a writer lease", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-schema-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const owned = await openSessionStorage(dir);
+	await owned.storage.close(context);
+	owned.release();
+	const file = join(dir, "harness.sqlite");
+	const db = new DatabaseSync(file);
+	db.exec("UPDATE durable_schema SET version = version + 1");
+	db.close();
+	const before = await readFile(file);
+	await assert.rejects(openSessionReader(dir), /Unsupported durable snapshot schema/);
+	assert.deepEqual(await readFile(file), before);
+});
+
+test("cold snapshot of an unopened session creates no storage and reads TODO files without extension loading", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-unopened-"));
+	try {
+		await mkdir(join(dir, ".pi", "todos"), { recursive: true });
+		await writeFile(
+			join(dir, ".pi", "todos", "aabbccdd.md"),
+			'{"title":"Check","status":"open","created_at":"today"}\nNotes',
+		);
+		const view = await readSessionSnapshot(join(dir, "durable"), dir);
+		assert.equal(view.events[0]?.type, "snapshot");
+		assert.deepEqual(view.events[2], {
+			type: "todos_update",
+			items: [{ id: "TODO-aabbccdd", title: "Check", status: "open", createdAt: "today" }],
+		});
+		assert.deepEqual(await readdir(dir), [".pi"]);
+	} finally {
+		await rm(dir, { recursive: true, force: true });
+	}
+});

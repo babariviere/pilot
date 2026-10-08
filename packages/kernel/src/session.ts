@@ -25,6 +25,7 @@ import {
 import { ArtifactStore } from "@pilot/artifacts";
 import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
 import { createArtifactTools } from "./artifact-tools.ts";
+import { watchActivity } from "./activity.ts";
 import { reconcileCompletion, withAttention } from "./attention.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
@@ -66,10 +67,7 @@ export interface KernelSessionHooks {
 }
 
 export class KernelSession {
-	readonly #watches = new Map<
-		string,
-		{ events: AgentEventStream; queue: DocumentWatch<InboxState>; stopTodos: () => void }
-	>();
+	readonly #watches = new Map<string, () => Promise<void>>();
 	#working = false;
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
@@ -341,8 +339,20 @@ export class KernelSession {
 		await this.conversation.abort(context, { background: true });
 	}
 
-	async watch(watchId: string, listener: (events: AgentEvent[]) => void, includeTodos = true): Promise<void> {
+	async watch(
+		watchId: string,
+		listener: (events: AgentEvent[]) => void,
+		includeTodos = true,
+		activityOnly = false,
+	): Promise<void> {
 		if (this.#watches.has(watchId)) return;
+		if (activityOnly) {
+			const stream = await watchActivity(this.harness, this.conversation.id, context);
+			listener([stream.snapshot]);
+			this.#watches.set(watchId, () => stream.stop());
+			stream.start(async (events) => listener([...events]));
+			return;
+		}
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
 		let queue: DocumentWatch<InboxState>;
 		try {
@@ -353,18 +363,18 @@ export class KernelSession {
 		}
 		listener([stream.snapshot, queueUpdate(queue.value)]);
 		const stopTodos = includeTodos ? this.todos.subscribe((event) => listener([event])) : () => {};
-		this.#watches.set(watchId, { events: stream, queue, stopTodos });
+		this.#watches.set(watchId, async () => {
+			stopTodos();
+			await Promise.all([stream.stop(), queue.stop()]);
+		});
 		stream.start(async (events) => listener([...events]));
 		queue.start(async (inbox) => listener([queueUpdate(inbox)]));
 	}
 
 	async unwatch(watchId: string): Promise<void> {
-		const stream = this.#watches.get(watchId);
+		const stop = this.#watches.get(watchId);
 		this.#watches.delete(watchId);
-		if (stream) {
-			stream.stopTodos();
-			await Promise.all([stream.events.stop(), stream.queue.stop()]);
-		}
+		await stop?.();
 	}
 
 	/** Pause: pending work stays durable and resumes on the next open. */

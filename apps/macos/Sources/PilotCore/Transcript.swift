@@ -100,18 +100,48 @@ public struct QueuedMessage: Identifiable, Equatable, Sendable {
 
 /// Folds pi-durable agent events into a renderable transcript.
 public struct Transcript: Equatable, Sendable {
-    public var entries: [Entry] = []
+    private var storedEntries: [Entry] = []
+    private var entryIDs: Set<Int> = []
+    public var entries: [Entry] {
+        get { storedEntries }
+        set {
+            guard storedEntries != newValue else { return }
+            storedEntries = newValue
+            entryIDs = Set(newValue.map(\.id))
+            invalidateCommittedRows()
+        }
+    }
+    // Rendering generations are deliberately excluded from value equality.
+    var rowRevision: UInt64 = 0
+    var committedRowRevision: UInt64 = 0
     /// In-flight assistant message, until its entry is committed.
-    public var streaming: ChatMessage?
-    public var tools: [String: LiveTool] = [:]
+    public var streaming: ChatMessage? {
+        didSet { if streaming != oldValue { rowRevision &+= 1 } }
+    }
+    public var tools: [String: LiveTool] = [:] {
+        didSet { if tools != oldValue { invalidateCommittedRows() } }
+    }
     public var working = false
     public var queuedMessages: [QueuedMessage] = []
     public var todos: [SessionTodo] = []
     public var queued: Int { queuedMessages.count }
     public var retry: String?
-    public var error: String?
+    public var error: String? {
+        didSet { if error != oldValue { rowRevision &+= 1 } }
+    }
 
     public init() {}
+
+    public static func == (lhs: Transcript, rhs: Transcript) -> Bool {
+        lhs.entries == rhs.entries && lhs.streaming == rhs.streaming && lhs.tools == rhs.tools
+            && lhs.working == rhs.working && lhs.queuedMessages == rhs.queuedMessages
+            && lhs.todos == rhs.todos && lhs.retry == rhs.retry && lhs.error == rhs.error
+    }
+
+    private mutating func invalidateCommittedRows() {
+        committedRowRevision &+= 1
+        rowRevision &+= 1
+    }
 
     /// Steering joins the current run before follow-ups. Keep FIFO order within each delivery mode.
     public var queuedMessagesInDeliveryOrder: [QueuedMessage] {
@@ -140,6 +170,8 @@ public struct Transcript: Equatable, Sendable {
             // must not erase them; reconnects deliver a fresh queue_update after the snapshot.
             let queue = queuedMessages
             let savedTodos = todos
+            let savedRowRevision = rowRevision
+            let savedCommittedRevision = committedRowRevision
             self = Transcript()
             queuedMessages = queue
             todos = savedTodos
@@ -156,6 +188,10 @@ public struct Transcript: Equatable, Sendable {
             }
             working = event["run"].map { !$0.isNull } ?? false
             retry = event["generation"]?["retry"]?["error"]?.string
+            // A replacement always invalidates rendering context, including result and
+            // artifact lookups. Never reuse a previous snapshot's generation numbers.
+            rowRevision = savedRowRevision &+ 1
+            committedRowRevision = savedCommittedRevision &+ 1
         case "run_start":
             working = true
             error = nil
@@ -209,9 +245,11 @@ public struct Transcript: Equatable, Sendable {
     }
 
     private mutating func add(_ entry: Entry) {
-        guard !entries.contains(where: { $0.id == entry.id }) else { return }
-        entries.append(entry)
-        if let last = entries.dropLast().last, last.id > entry.id { entries.sort { $0.id < $1.id } }
+        guard entryIDs.insert(entry.id).inserted else { return }
+        let outOfOrder = storedEntries.last.map { $0.id > entry.id } ?? false
+        storedEntries.append(entry)
+        if outOfOrder { storedEntries.sort { $0.id < $1.id } }
+        invalidateCommittedRows()
     }
 
     private static func apply(_ change: JSONValue, to message: inout ChatMessage) {

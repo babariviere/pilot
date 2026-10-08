@@ -6,35 +6,42 @@ import SwiftUI
 /// from `AttributedString`.
 struct MarkdownView: View {
     let text: String
+    @StateObject private var state = MarkdownRenderState()
+    @Environment(\.transcriptContentPrepared) private var contentPrepared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(Markdown.parse(text).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(state.blocks.enumerated()), id: \.offset) { _, block in
                 BlockView(block: block)
             }
         }
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .task(id: text) {
+            guard state.source != text else { return }
+            do {
+                let blocks = try await MarkdownRenderer.shared.prepare(text)
+                try Task.checkCancellation()
+                state.source = text
+                state.blocks = blocks
+                contentPrepared?()
+            } catch { /* A newer streamed value or disappeared row cancelled preparation. */ }
+        }
     }
-}
-
-private func inline(_ text: String) -> AttributedString {
-    let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-    return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
 }
 
 private struct BlockView: View {
     @Environment(\.pilotFonts) private var fonts
-    let block: MarkdownBlock
+    let block: PreparedMarkdownBlock
 
     var body: some View {
-        switch block {
+        switch block.block {
         case let .heading(level, text):
-            Text(inline(text))
+            Text(block.inline ?? AttributedString(text))
                 .font(fonts.chat(fonts.chatSize + (level == 1 ? 6 : level == 2 ? 3 : 1), weight: .semibold))
                 .padding(.top, 4)
         case let .paragraph(text):
-            Text(inline(text)).font(fonts.body).lineSpacing(3)
+            Text(block.inline ?? AttributedString(text)).font(fonts.body).lineSpacing(3)
         case let .list(ordered, start, items):
             VStack(alignment: .leading, spacing: 5) {
                 ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -43,18 +50,18 @@ private struct BlockView: View {
                             .font(fonts.body.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 14, alignment: .trailing)
-                        Text(inline(item)).font(fonts.body).lineSpacing(3)
+                        Text(block.items[index]).font(fonts.body).lineSpacing(3)
                     }
                 }
             }
         case let .code(language, text):
-            CodeBlock(language: language, text: text)
+            CodeBlock(language: language, text: text, prepared: block.code)
         case let .diagram(kind, text):
             InlineDiagramBlock(kind: kind, text: text).id(kind.rawValue + ":" + text)
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(.tertiary).frame(width: 3)
-                Text(inline(text)).font(fonts.body).foregroundStyle(.secondary)
+                Text(block.inline ?? AttributedString(text)).font(fonts.body).foregroundStyle(.secondary)
             }
         case let .table(rows):
             Text(rows.joined(separator: "\n"))
@@ -72,19 +79,9 @@ struct CodeBlock: View {
     @Environment(\.pilotFonts) private var fonts
     let language: String?
     let text: String
-    private let highlightedText: AttributedString
-
-    init(language: String?, text: String) {
-        self.language = language
-        self.text = text
-        var highlighted = AttributedString()
-        for token in CodeSyntax.tokens(text, language: language) {
-            var part = AttributedString(token.text)
-            part.foregroundColor = Theme.syntaxColor(token.kind)
-            highlighted.append(part)
-        }
-        highlightedText = highlighted
-    }
+    var prepared: AttributedString? = nil
+    @StateObject private var state = MarkdownRenderState()
+    @Environment(\.transcriptContentPrepared) private var contentPrepared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -97,7 +94,7 @@ struct CodeBlock: View {
             .padding(.vertical, 5)
             .background(Theme.subtleFill)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(highlightedText)
+                Text(prepared ?? state.highlighted ?? AttributedString(text))
                     .font(fonts.mono)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: true, vertical: false)
@@ -107,7 +104,21 @@ struct CodeBlock: View {
         .background(Theme.codeBackground)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline))
+        .task(id: CodeRenderKey(text: text, language: language)) {
+            guard prepared == nil else { return }
+            do {
+                let highlighted = try await MarkdownRenderer.shared.prepareCode(text, language: language)
+                try Task.checkCancellation()
+                state.highlighted = highlighted
+                contentPrepared?()
+            } catch { /* Cancelled by a newer source or collapsed tool row. */ }
+        }
     }
+}
+
+private struct CodeRenderKey: Equatable {
+    let text: String
+    let language: String?
 }
 
 struct CopyButton: View {

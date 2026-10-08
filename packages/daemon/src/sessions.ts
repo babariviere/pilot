@@ -5,7 +5,13 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
-import { type KernelCommand, type KernelPacket, type WorkspaceContext, workerEntry } from "@pilot/kernel";
+import {
+	type KernelCommand,
+	type KernelPacket,
+	type PersistedSessionView,
+	type WorkspaceContext,
+	workerEntry,
+} from "@pilot/kernel";
 import type {
 	AgentEvent,
 	ArtifactRevision,
@@ -20,6 +26,7 @@ import type {
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { ColdViewReader } from "./cold-view-reader.ts";
 import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { type PullRequestOptions, type PullRequestResult, PullRequestTracker } from "./pull-requests.ts";
@@ -64,6 +71,8 @@ export interface SessionManagerOptions {
 }
 
 export interface SessionFactories {
+	/** Read-only persisted view, independent of the worker/SDK factory. */
+	snapshot?: (directory: string, cwd: string) => Promise<PersistedSessionView>;
 	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
 	workspace?: typeof createWorkspace;
 	worker?: (
@@ -120,6 +129,9 @@ const ID_PATTERN = /^[0-9a-f-]{36}$/;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const WEEK_MS = 7 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
+const COLD_SNAPSHOT_TTL_MS = 5_000;
+const COLD_SNAPSHOT_MAX_ENTRIES = 16;
+const COLD_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 
 function titleFrom(message: string): string {
 	const line = message.trim().split("\n")[0] ?? "";
@@ -281,7 +293,7 @@ class Worker implements SessionWorker {
 		this.activityWatchId = randomUUID();
 		this.activity.reset();
 		if (previous) this.send({ type: "unwatch", watchId: previous });
-		this.send({ type: "watch", watchId: this.activityWatchId, includeTodos: false });
+		this.send({ type: "watch", watchId: this.activityWatchId, includeTodos: false, activityOnly: true });
 	}
 
 	send(command: KernelCommand): void {
@@ -367,6 +379,16 @@ export class SessionManager {
 	/** Workers being closed for inactivity. A new worker for the session waits for the storage lease. */
 	private readonly parking = new Map<string, Promise<void>>();
 	private readonly parked = new WeakSet<SessionWorker>();
+	/** Invalidated whenever a new worker starts. Also supplements persisted reads after parking. */
+	private readonly coldSnapshots = new Map<
+		string,
+		{ promise: Promise<PersistedSessionView>; expiresAt: number; bytes: number }
+	>();
+	private readonly coldReads = new Set<Promise<PersistedSessionView>>();
+	/** Deduplicate queued reads even when the bounded settled-view cache evicts their entries. */
+	private readonly coldLoading = new Map<string, Promise<PersistedSessionView>>();
+	private readonly coldReader = new ColdViewReader();
+	private readonly workerGenerations = new Map<string, number>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
 
 	private readonly home: string;
@@ -487,6 +509,8 @@ export class SessionManager {
 				if (this.parking.get(id) === closing) this.parking.delete(id);
 			});
 			this.parking.set(id, closing);
+			// The reader uses its own committed SQLite transaction, not the writer lease.
+			void this.coldSnapshot(meta).catch(() => undefined);
 			this.emit(meta);
 		}
 	}
@@ -982,13 +1006,13 @@ export class SessionManager {
 		}
 	}
 
-	/** Attach a live event stream. The first batch is always a snapshot. */
+	/** View parked history without waking the kernel; attach live if work starts later. */
 	subscribe(id: string, listener: EventListener): () => void {
 		const meta = this.require(id);
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const worker = this.workers.get(id);
-		// Reject reopening before registering a listener or emitting a snapshot. Existing live
-		// subscriptions and terminal failed-session snapshots do not start new work.
+		// Preserve the update lease guard before registering a new cold subscription. Existing
+		// live subscriptions and terminal failed-session snapshots do not start new work.
 		if (!worker && !meta.failure) this.updateGate.assertOpen();
 		const watchId = randomUUID();
 		let watchers = this.watchers.get(id);
@@ -1000,23 +1024,119 @@ export class SessionManager {
 		this.lastUse.set(id, Date.now());
 		if (meta.failure || (meta.preparing && meta.cancelled)) listener([emptySnapshot]);
 		if (worker) worker.send({ type: "watch", watchId });
-		else if (!meta.failure)
+		else if (
+			!meta.failure &&
+			meta.archivedAt === undefined &&
+			!(meta.preparing && meta.cancelled) &&
+			(meta.preparing || meta.initializing || meta.pending?.length || meta.working)
+		)
 			void this.start(id)
 				.then(
 					() => {
 						// Demand can arrive while a crashed worker's old drain is still settling.
-						if (!this.closing && !meta.failure && !this.workers.has(id) && watchers.has(watchId))
+						if (
+							!this.closing &&
+							!meta.failure &&
+							meta.archivedAt === undefined &&
+							!(meta.preparing && meta.cancelled) &&
+							(meta.preparing || meta.initializing || meta.pending?.length || meta.working) &&
+							!this.workers.has(id) &&
+							watchers.has(watchId)
+						)
 							void this.start(id);
 					},
 					() => undefined,
 				)
 				.catch(() => undefined);
+		else if (!meta.failure && !(meta.preparing && meta.cancelled)) {
+			const generation = this.workerGenerations.get(id);
+			void this.coldSnapshot(meta)
+				.then((view) => {
+					// An unsubscribe or a live worker attachment wins over an in-flight disk read,
+					// even if that worker has already exited again. Never replace fresh live state.
+					if (
+						this.closing ||
+						meta.failure ||
+						(meta.preparing && meta.cancelled) ||
+						watchers.get(watchId) !== listener ||
+						this.workers.has(id) ||
+						this.workerGenerations.get(id) !== generation
+					)
+						return;
+					listener(structuredClone(view.events));
+					// Recover a committed attention version without treating viewing as activity,
+					// writing durable state, or fabricating a new completion timestamp.
+					if (view.completion && applyActivity(meta, false, view.completion)) this.emit(meta);
+				})
+				.catch((error: unknown) => {
+					if (!this.closing) console.warn(`pilotd: could not read session ${id}: ${error}`);
+					if (
+						!this.closing &&
+						watchers.get(watchId) === listener &&
+						!this.workers.has(id) &&
+						this.workerGenerations.get(id) === generation
+					)
+						listener([emptySnapshot]);
+				});
+		}
 		return () => {
 			watchers.delete(watchId);
 			// The inactivity clock starts when the last viewer leaves.
 			this.lastUse.set(id, Date.now());
 			this.workers.get(id)?.send({ type: "unwatch", watchId });
 		};
+	}
+
+	private coldSnapshot(meta: SessionMeta): Promise<PersistedSessionView> {
+		this.pruneColdSnapshots();
+		const existing = this.coldSnapshots.get(meta.id);
+		if (existing) {
+			this.coldSnapshots.delete(meta.id);
+			this.coldSnapshots.set(meta.id, existing);
+			return existing.promise;
+		}
+		const loading = this.coldLoading.get(meta.id);
+		if (loading) return loading;
+		const snapshot = this.factories.snapshot
+			? this.factories.snapshot(join(this.dir(meta.id), "durable"), meta.cwd)
+			: this.coldReader.read(join(this.dir(meta.id), "durable"), meta.cwd);
+		const entry = { promise: snapshot, expiresAt: Number.POSITIVE_INFINITY, bytes: 0 };
+		this.coldSnapshots.set(meta.id, entry);
+		this.coldLoading.set(meta.id, snapshot);
+		this.coldReads.add(snapshot);
+		this.pruneColdSnapshots();
+		void snapshot
+			.then(
+				(view) => {
+					if (this.coldSnapshots.get(meta.id) !== entry) return;
+					entry.expiresAt = Date.now() + COLD_SNAPSHOT_TTL_MS;
+					// Production readers compute size off-thread. Only injected test readers need this fallback.
+					entry.bytes = (view as { bytes?: number }).bytes ?? Buffer.byteLength(JSON.stringify(view));
+					this.pruneColdSnapshots();
+				},
+				() => {
+					if (this.coldSnapshots.get(meta.id) === entry) this.coldSnapshots.delete(meta.id);
+				},
+			)
+			.finally(() => {
+				this.coldReads.delete(snapshot);
+				if (this.coldLoading.get(meta.id) === snapshot) this.coldLoading.delete(meta.id);
+			});
+		return snapshot;
+	}
+
+	private pruneColdSnapshots(): void {
+		const now = Date.now();
+		let bytes = 0;
+		for (const [id, entry] of this.coldSnapshots) {
+			if (entry.expiresAt <= now || entry.bytes > COLD_SNAPSHOT_MAX_BYTES) this.coldSnapshots.delete(id);
+			else bytes += entry.bytes;
+		}
+		for (const [id, entry] of this.coldSnapshots) {
+			if (this.coldSnapshots.size <= COLD_SNAPSHOT_MAX_ENTRIES && bytes <= COLD_SNAPSHOT_MAX_BYTES) break;
+			this.coldSnapshots.delete(id);
+			bytes -= entry.bytes;
+		}
 	}
 
 	async shutdown(): Promise<void> {
@@ -1031,6 +1151,8 @@ export class SessionManager {
 		await this.dissociation;
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled([...this.parking.values()]);
+		await this.coldReader.close();
+		await Promise.allSettled([...this.coldReads]);
 		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
@@ -1146,6 +1268,9 @@ export class SessionManager {
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
+		this.coldSnapshots.delete(id);
+		this.coldLoading.delete(id);
+		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
 		const createWorker =
 			this.factories.worker ?? ((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit, this.pool));
 		const worker = createWorker(
@@ -1227,6 +1352,7 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "events") {
+			if (this.workers.get(meta.id) !== worker) return;
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}

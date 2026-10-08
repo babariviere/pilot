@@ -3,6 +3,8 @@
  * compile cache must be enabled before the kernel's large module graph is imported.
  */
 import { enableCompileCache } from "node:module";
+import { lowerWorkerPriority } from "./worker-priority.ts";
 
 enableCompileCache();
+lowerWorkerPriority();
 await import("./worker.ts");

@@ -57,8 +57,25 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
 
 extension Transcript {
     public var rows: [ChatRow] {
-        let results = results
-        let published = Set(entries.compactMap(\.artifact).map { "\($0.sessionId)/\($0.id)/\($0.revision)" })
+        renderRows(entries: entries, streaming: streaming, error: error, context: rowContext)
+    }
+
+    struct RowContext {
+        let results: [String: ChatMessage]
+        let published: Set<String>
+    }
+
+    var rowContext: RowContext {
+        RowContext(results: results, published: Set(entries.compactMap(\.artifact).map {
+            "\($0.sessionId)/\($0.id)/\($0.revision)"
+        }))
+    }
+
+    // Separating committed history from the streaming suffix lets the processor reuse
+    // history on every text delta. Both paths use the same identity/grouping rules.
+    func renderRows(entries: [Entry], streaming: ChatMessage?, error: String?, context: RowContext) -> [ChatRow] {
+        let results = context.results
+        let published = context.published
         var rows: [ChatRow] = []
         var toolGroupId: String?
         var toolGroup: [ToolItem] = []
