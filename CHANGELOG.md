@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.5.0](https://github.com/babariviere/pilot/compare/v1.4.0...v1.5.0) (2026-10-08)
+
+
+### Features
+
+* **daemon:** follow up on agent-created PR problems ([cb48e04](https://github.com/babariviere/pilot/commit/cb48e04c7aba9084b40d1092e3da228fe5c237e6))
+* link multiple pull requests to a session ([6cf0d9d](https://github.com/babariviere/pilot/commit/6cf0d9dbfd2ceb21d423300161a125b5848daaca))
+* show and control subagents in the app ([7c4b77a](https://github.com/babariviere/pilot/commit/7c4b77a6ceb101a8a83ddbbfb67d5831b2ea02ce))
+* **workspaces:** share jj storage and reclaim archived checkouts ([5bc67fe](https://github.com/babariviere/pilot/commit/5bc67fe0c8a16a402d71b144846d28448d5f463a))
+
+
+### Bug Fixes
+
+* **daemon:** stop polling merged and closed PRs ([6686f4f](https://github.com/babariviere/pilot/commit/6686f4f89f57464f32ed883eb8a509cd0e18ce2c))
+* **macos:** give inline artifacts more room ([8f1d723](https://github.com/babariviere/pilot/commit/8f1d723afdf33d1fb0189a2b333faf057d6e0019))
+* **macos:** move workspace context into the session toolbar ([bed2739](https://github.com/babariviere/pilot/commit/bed27393c0a4b6a50bf31f4bf12bb5a81977bfbe))
+* **macos:** separate branch context from session toolbar actions ([cd158b6](https://github.com/babariviere/pilot/commit/cd158b60c03e520ead23ef1ecb5166ee363b47f1))
+* **macos:** simplify transcript byte-count type checking ([cca963a](https://github.com/babariviere/pilot/commit/cca963aec6bf36f18348a5345a4baef5ef0445c5))
+* **macos:** stabilize menu-bar updates to mitigate recursion ([e011eb7](https://github.com/babariviere/pilot/commit/e011eb7a8c6250b2f38db18df4558fa2b8d49559))
+
+
+### Performance Improvements
+
+* stream subagent transcripts instead of polling ([59a516d](https://github.com/babariviere/pilot/commit/59a516d647ed8a9843b77ed8ec8b8f4571ae2e0d))
+
 ## [1.4.0](https://github.com/babariviere/pilot/compare/v1.3.0...v1.4.0) (2026-10-08)
 
 
