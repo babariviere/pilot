@@ -30,6 +30,8 @@ import {
 	createToolSearchExtension,
 	DefaultResourceLoader,
 	type ExtensionFactory,
+	type McpTransportFactory,
+	type McpExtensionOptions,
 	getAgentDir,
 	ProjectTrustStore,
 	resolveCliModel,
@@ -58,6 +60,7 @@ import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 import { contextUsage, UsageTracker } from "./usage.ts";
+import { InfrastructureChildren, inspectChildren } from "./activity.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 export interface NativeAdapterOptions {
@@ -167,6 +170,28 @@ function nativeSessionManager(cwd: string, options: NativeAdapterOptions): Sessi
 	return manager;
 }
 
+/** Public SDK injection point, retaining the pinned SDK's configuration and auth semantics. */
+export function createTrackedMcpExtension(
+	infrastructure: InfrastructureChildren,
+	options: McpExtensionOptions = {},
+): ExtensionFactory {
+	return async (pi) => {
+		// SDK 1.0.4 exposes transport injection but not its default factory at the package root.
+		const runtime = (await import(
+			new URL("./extensions/mcp/runtime.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
+		)) as { createDefaultTransport: McpTransportFactory };
+		const createTransport = options.createTransport ?? runtime.createDefaultTransport;
+		return createMcpExtension({
+			...options,
+			createTransport: (entry, cwd, auth) => {
+				const transport = createTransport(entry, cwd, auth);
+				if ("command" in entry.config) infrastructure.track(transport);
+				return transport;
+			},
+		})(pi);
+	};
+}
+
 export class NativeAdapter {
 	readonly models: Models;
 	/** Republish this extension when native tools change (MCP startup or tool_search). */
@@ -184,8 +209,15 @@ export class NativeAdapter {
 
 	readonly session: AgentSession;
 	readonly usage: UsageTracker;
+	readonly infrastructure: InfrastructureChildren;
 
-	private constructor(session: AgentSession, usage: UsageTracker, ask = false) {
+	private constructor(
+		session: AgentSession,
+		usage: UsageTracker,
+		ask = false,
+		infrastructure = new InfrastructureChildren(),
+	) {
+		this.infrastructure = infrastructure;
 		this.session = session;
 		this.usage = usage;
 		this.#ask = ask;
@@ -253,6 +285,8 @@ export class NativeAdapter {
 		let renderPrompt: (() => string) | undefined;
 		const usage = new UsageTracker(options.onUsageChanged);
 		let stopUsage: (() => void) | undefined;
+		const infrastructure = new InfrastructureChildren();
+		const mcp = createTrackedMcpExtension(infrastructure);
 		const capture: ExtensionFactory = (pi) => {
 			if (options.ask) {
 				// Covers nested codemode execution too, not just model declarations.
@@ -296,7 +330,7 @@ export class NativeAdapter {
 						extensionFactories: [
 							{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
 							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
-							{ name: "mcp", builtin: true, replaceable: true, factory: createMcpExtension() },
+							{ name: "mcp", builtin: true, replaceable: true, factory: mcp },
 							...(options.loaderOptions?.extensionFactories ?? []),
 							capture,
 						],
@@ -330,7 +364,7 @@ export class NativeAdapter {
 					customTools: sessionConfig.customTools ?? [],
 				})
 			: (await createAgentSession(sessionConfig)).session;
-		const adapter = new NativeAdapter(session, usage, !!options.ask);
+		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure);
 		adapter.#renderPrompt = () => renderPrompt?.() ?? session.systemPrompt;
 		const noGeneration = async (): Promise<never> => {
 			throw new Error("Only durable Harness may run the worker model loop");
@@ -372,6 +406,10 @@ export class NativeAdapter {
 		const model = this.session.model;
 		if (!model) throw new Error("Native worker has no configured model");
 		return { provider: model.provider, modelId: model.id };
+	}
+
+	hasChildren(): Promise<boolean> {
+		return inspectChildren(this.infrastructure);
 	}
 	get thinkingLevel() {
 		return this.session.thinkingLevel;
@@ -416,7 +454,7 @@ export class NativeAdapter {
 	private assertOpen(): void {
 		if (this.#closed) throw new Error("Native adapter is closed");
 	}
-	private async sync(context: TaskContext): Promise<Message[]> {
+	private async sync(context: TaskContext): Promise<readonly Message[]> {
 		this.assertOpen();
 		if (!this.#harness || !this.#conversationId) throw new Error("Native adapter must bindHarness before execution");
 		const conversation = await this.#harness.conversation(this.#conversationId, context);
@@ -453,7 +491,8 @@ export class NativeAdapter {
 			this.session.setActiveToolsByName([...this.session.getActiveToolNames(), ...restored]);
 			this.refreshTools();
 		}
-		return structuredClone([...view.messages]);
+		// Borrow the committed view. Most callers need only the isolated native mirror above.
+		return view.messages;
 	}
 	private async persistCustomEntries(before: Set<string>, context: TaskContext, prompt?: NativePrompt): Promise<void> {
 		const entries = this.session.sessionManager
@@ -471,7 +510,7 @@ export class NativeAdapter {
 			}, context);
 	}
 	private async preparePrompt(context: TaskContext): Promise<string> {
-		const messages = await this.sync(context);
+		const messages = structuredClone([...(await this.sync(context))]);
 		const cached = (await this.#harness!.snapshot(NativeState, this.#conversationId!, context))?.prompt;
 		if (cached?.key === this.#inputKey) {
 			this.#forcedPrompt = cached.forced;

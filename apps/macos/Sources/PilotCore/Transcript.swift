@@ -118,9 +118,16 @@ public struct Transcript: Equatable, Sendable {
     public var streaming: ChatMessage? {
         didSet { if streaming != oldValue { rowRevision &+= 1 } }
     }
-    public var tools: [String: LiveTool] = [:] {
-        didSet { if tools != oldValue { invalidateCommittedRows() } }
+    private var storedTools: [String: LiveTool] = [:]
+    public var tools: [String: LiveTool] {
+        get { storedTools }
+        set {
+            guard storedTools != newValue else { return }
+            storedTools = newValue
+            invalidateCommittedRows()
+        }
     }
+    private var changedToolIDs: Set<String> = []
     public var working = false
     public var queuedMessages: [QueuedMessage] = []
     public var todos: [SessionTodo] = []
@@ -141,6 +148,20 @@ public struct Transcript: Equatable, Sendable {
     private mutating func invalidateCommittedRows() {
         committedRowRevision &+= 1
         rowRevision &+= 1
+    }
+
+    /// Event updates compare only the changed tool, not the entire historical tool dictionary.
+    private mutating func setTool(_ tool: LiveTool) {
+        guard storedTools[tool.callId] != tool else { return }
+        storedTools[tool.callId] = tool
+        changedToolIDs.insert(tool.callId)
+        rowRevision &+= 1
+    }
+
+    mutating func takeChangedToolIDs() -> Set<String> {
+        let ids = changedToolIDs
+        changedToolIDs.removeAll(keepingCapacity: true)
+        return ids
     }
 
     /// Steering joins the current run before follow-ups. Keep FIFO order within each delivery mode.
@@ -179,7 +200,7 @@ public struct Transcript: Equatable, Sendable {
             if let message = event["generation"]?["message"], !message.isNull { streaming = ChatMessage(json: message) }
             for tool in event["tools"]?.array ?? [] {
                 guard let id = tool["callId"]?.string else { continue }
-                tools[id] = LiveTool(
+                storedTools[id] = LiveTool(
                     callId: id,
                     name: tool["name"]?.string ?? "tool",
                     output: tool["output"]?.string ?? "",
@@ -215,19 +236,23 @@ public struct Transcript: Equatable, Sendable {
             if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
         case "tool_execution_start":
             guard let id = event["toolCallId"]?.string else { return }
-            tools[id] = LiveTool(callId: id, name: event["toolName"]?.string ?? "tool", output: "", status: "running")
+            setTool(LiveTool(callId: id, name: event["toolName"]?.string ?? "tool", output: "", status: "running"))
         case "tool_execution_update":
-            guard let id = event["toolCallId"]?.string, var tool = tools[id], let output = event["output"] else { return }
+            guard let id = event["toolCallId"]?.string, var tool = storedTools[id], let output = event["output"] else { return }
             if let set = output["set"]?.string {
                 tool.output = set
             } else {
-                let trim = min(output["trimStart"]?.int ?? 0, tool.output.count)
-                tool.output = String(tool.output.dropFirst(trim)) + (output["append"]?.string ?? "")
+                let trim = max(0, output["trimStart"]?.int ?? 0)
+                if trim > 0 { tool.output = String(tool.output.dropFirst(trim)) }
+                tool.output += output["append"]?.string ?? ""
             }
-            tools[id] = tool
+            setTool(tool)
         case "tool_execution_end":
             guard let id = event["toolCallId"]?.string else { return }
-            tools[id]?.status = "done"
+            if var tool = storedTools[id] {
+                tool.status = "done"
+                setTool(tool)
+            }
             if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
         case "queue_update":
             queuedMessages = (event["items"]?.array ?? []).compactMap(QueuedMessage.init(json:))

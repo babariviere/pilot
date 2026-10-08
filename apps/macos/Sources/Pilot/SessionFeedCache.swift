@@ -60,29 +60,3 @@ final class ChatComposerOwner: ObservableObject {
     let state: ComposerState
     init(_ state: ComposerState) { self.state = state }
 }
-
-extension TranscriptPresentation {
-    var cachedByteCount: Int {
-        rows.reduce(0) { total, row in
-            switch row {
-            case let .user(_, text), let .text(_, text), let .thinking(_, text, _),
-                 let .error(_, text), let .notice(_, text):
-                return total + text.utf8.count + 128
-            case let .tools(_, items):
-                return total + items.reduce(0) { $0 + $1.output.utf8.count + $1.arguments.cachedByteCount + 512 }
-            case .artifact: return total + 512
-            }
-        }
-    }
-}
-
-private extension JSONValue {
-    var cachedByteCount: Int {
-        switch self {
-        case let .string(value): return value.utf8.count + 32
-        case let .array(values): return values.reduce(32) { $0 + $1.cachedByteCount }
-        case let .object(values): return values.reduce(32) { $0 + $1.key.utf8.count + $1.value.cachedByteCount + 32 }
-        default: return 16
-        }
-    }
-}

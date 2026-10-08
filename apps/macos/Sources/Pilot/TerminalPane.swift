@@ -5,8 +5,9 @@ import PilotCore
 import SwiftUI
 
 /// One libghostty terminal per session, rendering a shell that pilotd owns. The shell outlives the
-/// app: reopening Pilot reattaches and replays its scrollback. Surfaces stay mounted while hidden so
-/// switching sessions is instant. When a shell exits, its slot turns into a placeholder in place, so the
+/// app: reopening Pilot reattaches and replays its scrollback. A small LRU of inactive surfaces stays
+/// mounted for fast switching. Eviction loses local selection/scroll position and libghostty history,
+/// not the daemon shell or its replay buffer. When a shell exits, its slot becomes a placeholder, so the
 /// split view never loses its pane.
 @MainActor
 final class TerminalStore: ObservableObject {
@@ -18,6 +19,7 @@ final class TerminalStore: ObservableObject {
     private(set) var memories: [String: InMemoryTerminalSession] = [:]
     private var settings: AppSettings?
     private var subscriptions: Set<AnyCancellable> = []
+    private var retention = TerminalSurfaceRetention()
 
     private static let ghosttyConfig = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: ".config/ghostty/config").path
@@ -51,8 +53,46 @@ final class TerminalStore: ObservableObject {
 
     /// Attaches to the session's shell unless attached or exited (restart is explicit).
     func ensure(_ session: SessionSummary) {
+        if states[session.id] != nil {
+            retention.touch(session.id)
+            return
+        }
         guard session.state != "starting", states[session.id] == nil, !exited.contains(session.id) else { return }
         start(session, restart: false)
+    }
+
+    /// Only the displayed surface is protected. A hidden tab/window has no active surface.
+    func select(_ session: SessionSummary, isVisible: Bool, paneID: UUID) {
+        retention.select(session.id, isVisible: isVisible, paneID: paneID)
+        ensure(session)
+        synchronizeSurfaceVisibility()
+        evictInactiveSurfaces()
+    }
+
+    func paneDidDisappear(sessionId: String, paneID: UUID) {
+        guard retention.hide(sessionId: sessionId, paneID: paneID) else { return }
+        states[sessionId]?.isSurfaceVisible = false
+        evictInactiveSurfaces()
+    }
+
+    /// Cached states are shared by outgoing/incoming SessionDetail trees. Ignore all late leaf
+    /// callbacks from the old owner, and callbacks capturing a surface replaced by restart.
+    func surfaceVisibilityChanged(_ id: String, state: TerminalViewState, paneID: UUID) {
+        guard retention.ownsSurfaceCallbacks(paneID: paneID), states[id] === state else { return }
+        state.isSurfaceVisible = id == retention.visibleSessionId
+    }
+
+    func surfaceDidDisappear(_ id: String, state: TerminalViewState, paneID: UUID) {
+        guard retention.ownsSurfaceCallbacks(paneID: paneID), states[id] === state else { return }
+        state.isSurfaceVisible = false
+    }
+
+    private func synchronizeSurfaceVisibility() {
+        for (id, state) in states { state.isSurfaceVisible = id == retention.visibleSessionId }
+    }
+
+    private func evictInactiveSurfaces() {
+        for id in retention.evictions() { remove(id) }
     }
 
     func restart(_ session: SessionSummary) {
@@ -76,6 +116,7 @@ final class TerminalStore: ObservableObject {
             suppressesPixelOnlyResizes: true
         )
         let state = TerminalViewState(controller: controller)
+        state.isSurfaceVisible = id == retention.visibleSessionId
         state.configuration = TerminalSurfaceOptions(backend: .inMemory(memory))
         state.onClose = { [weak self, weak state] _ in
             // Reported from a libghostty callback; change the view tree on the next turn.
@@ -87,6 +128,7 @@ final class TerminalStore: ObservableObject {
         states[id] = state
         memories[id] = memory
         order.append(id)
+        retention.touch(id)
         client.attachTerminal(
             id,
             cols: 80,
@@ -96,14 +138,18 @@ final class TerminalStore: ObservableObject {
                 cols: 80,
                 rows: 24,
                 onData: { memory.receive($0) },
-                onExit: { [weak self] code in
+                onExit: { [weak self, weak state] code in
                     memory.finish(exitCode: UInt32(clamping: max(0, code)), runtimeMilliseconds: 0)
-                    DispatchQueue.main.async { self?.shellExited(id) }
+                    DispatchQueue.main.async {
+                        guard let self, let state, self.states[id] === state else { return }
+                        self.shellExited(id)
+                    }
                 },
                 // Reset before the daemon replays scrollback, so reconnects do not duplicate output.
                 onReplay: { memory.receive("\u{1B}c") }
             )
         )
+        evictInactiveSurfaces()
     }
 
     private func shellExited(_ id: String) {
@@ -123,12 +169,60 @@ final class TerminalStore: ObservableObject {
         states[id] = nil
         memories[id] = nil
         order.removeAll { $0 == id }
+        retention.remove(id)
+    }
+}
+
+/// Metadata only, so the bounded LRU policy can be tested without creating libghostty surfaces.
+struct TerminalSurfaceRetention {
+    let inactiveLimit: Int
+    var visibleSessionId: String?
+    private var paneID: UUID?
+    private(set) var recency: [String] = []
+
+    init(inactiveLimit: Int = 5) { self.inactiveLimit = max(0, inactiveLimit) }
+
+    mutating func select(_ id: String, isVisible: Bool, paneID: UUID) {
+        self.paneID = paneID
+        visibleSessionId = isVisible ? id : nil
+    }
+
+    /// A superseded SwiftUI tree cannot unprotect the new pane's visible surface.
+    mutating func hide(sessionId: String, paneID: UUID) -> Bool {
+        guard self.paneID == paneID else { return false }
+        if visibleSessionId != nil, !clearVisible(ifMatching: sessionId) { return false }
+        self.paneID = nil
+        return true
+    }
+
+    func ownsSurfaceCallbacks(paneID: UUID) -> Bool { self.paneID == paneID }
+
+    mutating func clearVisible(ifMatching sessionId: String) -> Bool {
+        guard visibleSessionId == sessionId else { return false }
+        visibleSessionId = nil
+        return true
+    }
+
+    mutating func touch(_ id: String) {
+        recency.removeAll { $0 == id }
+        recency.append(id)
+    }
+
+    mutating func remove(_ id: String) {
+        recency.removeAll { $0 == id }
+    }
+
+    func evictions() -> [String] {
+        let inactive = recency.filter { $0 != visibleSessionId }
+        return Array(inactive.prefix(max(0, inactive.count - inactiveLimit)))
     }
 }
 
 struct TerminalPane: View {
+    @StateObject private var lifetime = TerminalPaneLifetime()
     @ObservedObject var store: TerminalStore
     let session: SessionSummary
+    var isVisible = true
 
     var body: some View {
         VStack(spacing: 0) {
@@ -163,9 +257,10 @@ struct TerminalPane: View {
                         TerminalSurfaceView(context: state)
                             .opacity(id == session.id ? 1 : 0)
                             .allowsHitTesting(id == session.id)
-                            .onChange(of: session.id, initial: true) { _, current in
-                                state.isSurfaceVisible = current == id
+                            .onChange(of: Self.surfaceIsVisible(id, selected: session.id, paneVisible: isVisible), initial: true) { _, _ in
+                                store.surfaceVisibilityChanged(id, state: state, paneID: lifetime.id)
                             }
+                            .onDisappear { store.surfaceDidDisappear(id, state: state, paneID: lifetime.id) }
                     }
                 }
                 if store.exited.contains(session.id) {
@@ -178,10 +273,20 @@ struct TerminalPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .onAppear { store.ensure(session) }
-        .onChange(of: session.id) { _, _ in store.ensure(session) }
-        .onChange(of: session.state) { _, _ in store.ensure(session) }
+        .onAppear { store.select(session, isVisible: isVisible, paneID: lifetime.id) }
+        .onChange(of: session.id) { _, _ in store.select(session, isVisible: isVisible, paneID: lifetime.id) }
+        .onChange(of: session.state) { _, _ in store.select(session, isVisible: isVisible, paneID: lifetime.id) }
+        .onChange(of: isVisible) { _, visible in store.select(session, isVisible: visible, paneID: lifetime.id) }
+        .onDisappear { store.paneDidDisappear(sessionId: session.id, paneID: lifetime.id) }
     }
+
+    static func surfaceIsVisible(_ id: String, selected: String, paneVisible: Bool) -> Bool {
+        paneVisible && id == selected
+    }
+}
+
+private final class TerminalPaneLifetime: ObservableObject {
+    let id = UUID()
 }
 
 private struct ExitedPlaceholder: View {

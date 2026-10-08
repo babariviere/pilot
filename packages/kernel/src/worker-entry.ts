@@ -7,4 +7,5 @@ import { lowerWorkerPriority } from "./worker-priority.ts";
 
 enableCompileCache();
 lowerWorkerPriority();
-await import("./worker.ts");
+const { runKernelWorker } = await import("./worker.ts");
+runKernelWorker();

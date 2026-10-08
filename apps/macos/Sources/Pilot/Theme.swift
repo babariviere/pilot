@@ -137,10 +137,10 @@ struct SessionStatusIcon: View {
         Group {
             if let symbolName = status.symbolName {
                 Image(systemName: symbolName)
+            } else if reduceMotion {
+                Image(nsImage: BrailleProgress.images[0])
             } else {
-                TimelineView(.animation(minimumInterval: BrailleProgress.interval, paused: reduceMotion)) { context in
-                    Image(nsImage: BrailleProgress.images[reduceMotion ? 0 : BrailleProgress.frameIndex(at: context.date)])
-                }
+                ClockedBrailleImage()
             }
         }
             .font(.system(size: 12, weight: .semibold))
@@ -155,6 +155,28 @@ struct SessionStatusIcon: View {
             .help(status.rawValue)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Agent status: \(status.rawValue)")
+    }
+}
+
+private struct ClockedBrailleImage: View {
+    @ObservedObject private var clock = BrailleProgressClock.shared
+    @StateObject private var lifetime = BrailleClockLifetime()
+
+    var body: some View {
+        Image(nsImage: BrailleProgress.images[clock.frameIndex])
+            .onAppear { lifetime.start() }
+            .onDisappear { lifetime.stop() }
+    }
+}
+
+@MainActor
+private final class BrailleClockLifetime: ObservableObject {
+    private let id = UUID()
+    func start() { BrailleProgressClock.shared.subscribe(id) }
+    func stop() { BrailleProgressClock.shared.unsubscribe(id) }
+    deinit {
+        let id = id
+        Task { @MainActor in BrailleProgressClock.shared.unsubscribe(id) }
     }
 }
 

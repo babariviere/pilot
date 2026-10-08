@@ -57,7 +57,8 @@ final class AppModel: ObservableObject {
     private var draftStore: DraftStore?
     private var restoringDrafts = true
     private var draftSaveError: String?
-    private var persistedImages: [UUID: PastedImage] = [:]
+    private let draftImages = DraftImageRetention()
+    private var draftSaveRevision = 0
 
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil) {
@@ -104,7 +105,7 @@ final class AppModel: ObservableObject {
         draftBaseBranch = task.pendingMessage == nil ? nil : task.pendingBaseBranch
         draftCwd = task.pendingCwd
         draftWorkspace = task.pendingWorkspace
-        persistedImages = currentDraftImages()
+        draftImages.restore(currentDraftImages())
     }
 
     private func currentDraftImages() -> [UUID: PastedImage] {
@@ -122,6 +123,12 @@ final class AppModel: ObservableObject {
 
     private func saveDrafts() {
         guard !restoringDrafts, let draftStore else { return }
+        draftSaveRevision += 1
+        let revision = draftSaveRevision
+        let images = currentDraftImages()
+        // Reserve files before a debounced/in-flight snapshot can reference them. Removing an
+        // attachment must not delete a file still needed by that snapshot or the last durable one.
+        draftImages.reserve(images, revision: revision)
         var drafts = StoredDrafts()
         for (id, composer) in chatComposers {
             guard !composer.draft.isEmpty || !composer.attachments.items.isEmpty
@@ -139,17 +146,20 @@ final class AppModel: ObservableObject {
                                         pendingBaseBranch: draftMessage == nil ? form.pendingBaseBranch : draftBaseBranch,
                                         pendingCwd: draftCwd, pendingWorkspace: draftWorkspace)
         do {
-            try draftStore.save(drafts)
-            // Mark only after a successful write. Navigation and app teardown must not delete saved files.
-            let images = currentDraftImages()
-            for (id, image) in persistedImages where images[id] == nil {
-                image.discardPersistedDraft()
+            try draftStore.scheduleSave(drafts) { [weak self, draftImages] result in
+                switch result {
+                case .success:
+                    draftImages.didSave(images, revision: revision)
+                    if self?.draftSaveRevision == revision { self?.draftSaveError = nil }
+                case .failure(let error): self?.reportDraftError(error)
+                }
             }
-            for image in images.values { image.retainForDraft() }
-            persistedImages = images
-            draftSaveError = nil
         } catch { reportDraftError(error) }
     }
+
+    /// Window close, app deactivation and quit flush the latest snapshot, including image removals.
+    /// Tests that reopen a store immediately must use the same durability boundary.
+    func flushDrafts() { draftStore?.flush() }
 
     private func reportDraftError(_ error: Error) {
         let message = "Could not persist message drafts: \(error.localizedDescription) Your current drafts remain in memory."
@@ -352,5 +362,39 @@ final class AppModel: ObservableObject {
         } else {
             openWindowAction?()
         }
+    }
+}
+
+/// Used only on the main actor. Completions retain this owner even if the AppModel goes away
+/// while a write is in flight. Never delete files until the newest snapshot succeeds; failures
+/// keep the last durable snapshot readable and current attachments usable in memory.
+private final class DraftImageRetention {
+    private var images: [UUID: PastedImage] = [:]
+    private var persisted: Set<UUID> = []
+    private var latestRevision = 0
+
+    func restore(_ restored: [UUID: PastedImage]) {
+        images = restored
+        persisted = Set(restored.keys)
+    }
+
+    func reserve(_ current: [UUID: PastedImage], revision: Int) {
+        latestRevision = revision
+        for (id, image) in current {
+            image.retainForDraft()
+            images[id] = image
+        }
+    }
+
+    func didSave(_ saved: [UUID: PastedImage], revision: Int) {
+        persisted = Set(saved.keys)
+        guard revision == latestRevision else { return }
+        for (id, image) in images where saved[id] == nil { image.discardPersistedDraft() }
+        images = saved
+    }
+
+    deinit {
+        // Unsaved reservations are not durable drafts. Submitted history markers still win.
+        for (id, image) in images where !persisted.contains(id) { image.discardPersistedDraft() }
     }
 }

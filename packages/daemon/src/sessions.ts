@@ -1,5 +1,5 @@
 /** Session registry and kernel worker supervision. */
-import { type ChildProcess, execFile, fork } from "node:child_process";
+import { type ChildProcess, fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -58,6 +58,18 @@ export class CommandRejected extends Error {
 	}
 }
 
+/** Transport loss/deadline expiry is uncertain admission, never an explicit durable rejection. */
+export class WorkerUnavailable extends Error {}
+
+export interface WorkerOptions {
+	/** Bound native extension/package startup. Defaults to two minutes. */
+	startupTimeoutMs?: number;
+	/** Admission acknowledgement, not model/tool execution. Defaults to one minute. */
+	commandTimeoutMs?: number;
+	/** Injectable IPC process for deterministic supervision tests. */
+	child?: ChildProcess;
+}
+
 /** Injectable daemon boundaries for deterministic startup tests. */
 export interface SessionWorker {
 	readonly ready: Promise<void>;
@@ -76,6 +88,8 @@ export interface SessionWorker {
 export interface SessionManagerOptions {
 	/** Close idle, unwatched kernels after this long. Their sessions reopen on demand. Defaults to 10 minutes. */
 	idleParkMs?: number;
+	startupTimeoutMs?: number;
+	commandTimeoutMs?: number;
 }
 
 export interface SessionFactories {
@@ -207,7 +221,7 @@ class WorkerPool {
 	}
 }
 
-class Worker implements SessionWorker {
+export class Worker implements SessionWorker {
 	private exited = false;
 	private initialized = false;
 	readonly child: ChildProcess;
@@ -216,7 +230,18 @@ class Worker implements SessionWorker {
 	error?: string;
 	/** Ephemeral. Never persist provider quota windows as current after a daemon restart. */
 	usage?: SessionUsage;
-	private readonly pending = new Map<string, { resolve(): void; reject(error: Error): void }>();
+	private readonly pending = new Map<
+		string,
+		{ resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+	>();
+	private startupTimer?: ReturnType<typeof setTimeout>;
+	private killTimer?: ReturnType<typeof setTimeout>;
+	private unavailable?: WorkerUnavailable;
+	private failReady!: (error: Error) => void;
+	private readonly commandTimeoutMs: number;
+	private children = true;
+	private checkingChildren?: Promise<boolean>;
+	private closing?: Promise<void>;
 	private readonly activity = new WorkerActivity();
 	private activityWatchId?: string;
 
@@ -229,6 +254,10 @@ class Worker implements SessionWorker {
 		);
 	}
 
+	get transportUnavailable(): boolean {
+		return this.unavailable !== undefined;
+	}
+
 	private readonly onPacket: (packet: KernelPacket) => void;
 
 	constructor(
@@ -236,9 +265,11 @@ class Worker implements SessionWorker {
 		onPacket: (packet: KernelPacket) => void,
 		onExit: (worker: SessionWorker, code: number | null, signal?: NodeJS.Signals | null) => void,
 		pool?: WorkerPool,
+		options: WorkerOptions = {},
 	) {
 		this.onPacket = onPacket;
-		this.child = pool?.take() ?? forkWorker();
+		this.child = options.child ?? pool?.take() ?? forkWorker();
+		this.commandTimeoutMs = options.commandTimeoutMs ?? 60_000;
 		let markReady!: () => void;
 		let markFailed!: (error: Error) => void;
 		this.ready = new Promise<void>((resolve, reject) => {
@@ -246,13 +277,21 @@ class Worker implements SessionWorker {
 			markFailed = reject;
 		});
 		this.ready.catch(() => undefined);
+		this.failReady = markFailed;
+		this.startupTimer = setTimeout(
+			() => this.failTransport(new WorkerUnavailable("Kernel startup timed out")),
+			options.startupTimeoutMs ?? 120_000,
+		);
+		this.startupTimer.unref();
 		this.child.on("message", (message) => {
+			if (this.unavailable || this.exited) return;
 			const packet = message as KernelPacket;
 			if (packet.type === "events" && packet.watchId === this.activityWatchId) {
 				this.activity.observe(packet.events);
 				return;
 			}
 			if (packet.type === "ready") {
+				clearTimeout(this.startupTimer);
 				this.usage = packet.usage;
 				this.initialized = true;
 				this.state = packet.working ? "working" : "idle";
@@ -264,6 +303,9 @@ class Worker implements SessionWorker {
 			} else if (packet.type === "modelChanged") {
 				this.usage = packet.usage;
 				this.settle(packet.requestId);
+			} else if (packet.type === "children") {
+				this.children = packet.hasChildren !== false;
+				this.settle(packet.requestId);
 			} else if (packet.type === "accepted" || packet.type === "aborted") {
 				// IPC acceptance can precede working=true. A fresh committed snapshot is the idle barrier,
 				// including idempotent retries which produce no new run/inbox events.
@@ -272,6 +314,7 @@ class Worker implements SessionWorker {
 			} else if (packet.type === "error") {
 				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message, packet.code));
 				else if (!this.initialized) {
+					clearTimeout(this.startupTimer);
 					markFailed(new Error(packet.message));
 					this.state = "failed";
 				}
@@ -281,17 +324,17 @@ class Worker implements SessionWorker {
 			this.onPacket(packet);
 		});
 		this.child.on("error", (error) => {
-			this.error = error.message;
-			this.state = "failed";
-			if (!this.initialized) {
-				markFailed(error);
-			}
-			for (const id of [...this.pending.keys()]) this.settle(id, error);
-			this.onPacket({ type: "error", message: error.message });
+			this.failTransport(new WorkerUnavailable(error.message, { cause: error }));
 		});
+		this.child.on("disconnect", () => this.failTransport(new WorkerUnavailable("Kernel IPC disconnected")));
 		this.child.on("exit", (code, signal) => {
 			this.exited = true;
-			const error = new Error(signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
+			clearTimeout(this.startupTimer);
+			clearTimeout(this.killTimer);
+			this.killTimer = undefined;
+			const error =
+				this.unavailable ??
+				new Error(signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
 			markFailed(error);
 			for (const id of [...this.pending.keys()]) this.settle(id, error);
 			onExit(this, code, signal);
@@ -309,47 +352,92 @@ class Worker implements SessionWorker {
 	}
 
 	send(command: KernelCommand): void {
-		if (this.child.connected) this.child.send(command);
+		if (this.unavailable || this.exited) return;
+		if (!this.child.connected) {
+			queueMicrotask(() => this.failTransport(new WorkerUnavailable("Kernel IPC disconnected")));
+			return;
+		}
+		try {
+			this.child.send(command, (error: Error | null) => {
+				if (error) queueMicrotask(() => this.failTransport(new WorkerUnavailable(error.message, { cause: error })));
+			});
+		} catch (error) {
+			queueMicrotask(() => this.failTransport(new WorkerUnavailable("Kernel IPC send failed", { cause: error })));
+		}
 	}
 
 	hasChildren(): Promise<boolean> {
-		const pid = this.child.pid;
-		if (!pid || this.exited) return Promise.resolve(false);
-		return new Promise((resolve) => {
-			// pgrep exits 1 when nothing matches. Any other failure is treated as "has children": never park blindly.
-			execFile("pgrep", ["-P", String(pid)], (error) => resolve(!error || (error as { code?: unknown }).code !== 1));
-		});
+		// The kernel owns exact MCP transport identities. Unknown children still protect jobs/subagents.
+		this.checkingChildren ??= this.request({ type: "inspectChildren", requestId: randomUUID() })
+			.then(
+				() => this.children,
+				() => true,
+			)
+			.finally(() => {
+				this.checkingChildren = undefined;
+			});
+		return this.checkingChildren;
 	}
 
 	/** Send a command and wait for its accepted/aborted/error acknowledgement. */
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void> {
-		if (!this.child.connected) return Promise.reject(new Error("Kernel is disconnected"));
+		if (this.unavailable) return Promise.reject(this.unavailable);
+		if (!this.child.connected) return Promise.reject(new WorkerUnavailable("Kernel is disconnected"));
 		return new Promise((resolve, reject) => {
-			this.pending.set(command.requestId, { resolve, reject });
+			const timer = setTimeout(
+				() => {
+					const error = new WorkerUnavailable(`Kernel ${command.type} acknowledgement timed out`);
+					if (command.type === "inspectChildren") this.settle(command.requestId, error);
+					else this.failTransport(error);
+				},
+				command.type === "inspectChildren" ? Math.min(this.commandTimeoutMs, 10_000) : this.commandTimeoutMs,
+			);
+			timer.unref();
+			this.pending.set(command.requestId, { resolve, reject, timer });
 			this.send(command);
 		});
 	}
 
 	close(): Promise<void> {
-		return new Promise((resolve) => {
+		this.closing ??= new Promise((resolve) => {
 			if (this.exited || this.child.exitCode !== null) return resolve();
-			const timer = setTimeout(() => {
-				this.child.kill("SIGKILL");
-				resolve();
-			}, 8_000);
-			timer.unref();
+			this.armKillDeadline();
 			this.child.once("exit", () => {
-				clearTimeout(timer);
 				resolve();
 			});
 			this.send({ type: "shutdown" });
 		});
+		return this.closing;
+	}
+
+	private armKillDeadline(): void {
+		if (this.killTimer || this.exited) return;
+		this.killTimer = setTimeout(() => {
+			if (!this.exited) this.child.kill("SIGKILL");
+			// Still await confirmed exit before another worker may acquire the storage lease.
+		}, 8_000);
+		this.killTimer.unref();
+	}
+
+	private failTransport(error: WorkerUnavailable): void {
+		if (this.unavailable || this.exited) return;
+		this.unavailable = error;
+		this.error = error.message;
+		this.state = "failed";
+		clearTimeout(this.startupTimer);
+		this.failReady(error);
+		for (const id of [...this.pending.keys()]) this.settle(id, error);
+		this.armKillDeadline();
+		this.onPacket({ type: "error", message: error.message });
+		// Give SDK shutdown/process-exit hooks a chance to reap detached MCP transport groups.
+		if (!this.exited) this.child.kill("SIGTERM");
 	}
 
 	private settle(requestId: string, error?: Error): void {
 		const waiter = this.pending.get(requestId);
 		if (!waiter) return;
 		this.pending.delete(requestId);
+		clearTimeout(waiter.timer);
 		if (error) waiter.reject(error);
 		else waiter.resolve();
 	}
@@ -386,7 +474,8 @@ export class SessionManager {
 	private readonly pullRequests: PullRequestTracker;
 	private readonly pool?: WorkerPool;
 	private readonly idleParkMs: number;
-	/** Last packet, subscription or command per live worker. */
+	private readonly workerOptions: WorkerOptions;
+	/** Last non-telemetry packet, subscription or command per live worker. */
 	private readonly lastUse = new Map<string, number>();
 	/** Workers being closed for inactivity. A new worker for the session waits for the storage lease. */
 	private readonly parking = new Map<string, Promise<void>>();
@@ -399,6 +488,8 @@ export class SessionManager {
 	private readonly coldReads = new Set<Promise<PersistedSessionView>>();
 	/** Deduplicate queued reads even when the bounded settled-view cache evicts their entries. */
 	private readonly coldLoading = new Map<string, Promise<PersistedSessionView>>();
+	/** Viewers sharing a read, including flights evicted from the bounded snapshot cache. */
+	private readonly coldConsumers = new Map<Promise<PersistedSessionView>, number>();
 	private readonly coldReader = new ColdViewReader();
 	private readonly workerGenerations = new Map<string, number>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
@@ -417,6 +508,7 @@ export class SessionManager {
 		options: SessionManagerOptions = {},
 	) {
 		this.idleParkMs = options.idleParkMs ?? 10 * 60_000;
+		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		if (!factories.worker) this.pool = new WorkerPool();
 		this.home = home;
 		this.projects = projects;
@@ -521,8 +613,6 @@ export class SessionManager {
 				if (this.parking.get(id) === closing) this.parking.delete(id);
 			});
 			this.parking.set(id, closing);
-			// The reader uses its own committed SQLite transaction, not the writer lease.
-			void this.coldSnapshot(meta).catch(() => undefined);
 			this.emit(meta);
 		}
 	}
@@ -1113,6 +1203,23 @@ export class SessionManager {
 			this.watchers.set(id, watchers);
 		}
 		watchers.set(watchId, listener);
+		let coldRead: Promise<PersistedSessionView> | undefined;
+		const releaseColdRead = (cancel: boolean) => {
+			if (!coldRead) return;
+			const read = coldRead;
+			coldRead = undefined;
+			const remaining = (this.coldConsumers.get(read) ?? 1) - 1;
+			if (remaining > 0) this.coldConsumers.set(read, remaining);
+			else {
+				this.coldConsumers.delete(read);
+				if (cancel && this.coldReader.cancel(read)) {
+					// Remove immediately so a same-turn resubscription starts fresh. Old promise
+					// settlement must not evict a newer flight. Active reads remain cacheable.
+					if (this.coldLoading.get(id) === read) this.coldLoading.delete(id);
+					if (this.coldSnapshots.get(id)?.promise === read) this.coldSnapshots.delete(id);
+				}
+			}
+		};
 		this.lastUse.set(id, Date.now());
 		if (meta.failure || (meta.preparing && meta.cancelled)) listener([emptySnapshot]);
 		if (worker) worker.send({ type: "watch", watchId });
@@ -1142,7 +1249,9 @@ export class SessionManager {
 				.catch(() => undefined);
 		else if (!meta.failure && !(meta.preparing && meta.cancelled)) {
 			const generation = this.workerGenerations.get(id);
-			void this.coldSnapshot(meta)
+			coldRead = this.coldSnapshot(meta);
+			this.coldConsumers.set(coldRead, (this.coldConsumers.get(coldRead) ?? 0) + 1);
+			void coldRead
 				.then((view) => {
 					// An unsubscribe or a live worker attachment wins over an in-flight disk read,
 					// even if that worker has already exited again. Never replace fresh live state.
@@ -1161,6 +1270,7 @@ export class SessionManager {
 					if (view.completion && applyActivity(meta, false, view.completion)) this.emit(meta);
 				})
 				.catch((error: unknown) => {
+					if (error instanceof Error && error.name === "AbortError") return;
 					if (!this.closing) console.warn(`pilotd: could not read session ${id}: ${error}`);
 					if (
 						!this.closing &&
@@ -1169,10 +1279,12 @@ export class SessionManager {
 						this.workerGenerations.get(id) === generation
 					)
 						listener([emptySnapshot]);
-				});
+				})
+				.finally(() => releaseColdRead(false));
 		}
 		return () => {
 			watchers.delete(watchId);
+			releaseColdRead(true);
 			// The inactivity clock starts when the last viewer leaves.
 			this.lastUse.set(id, Date.now());
 			this.workers.get(id)?.send({ type: "unwatch", watchId });
@@ -1358,6 +1470,14 @@ export class SessionManager {
 				}
 			} catch (error) {
 				if (this.closing) return;
+				if (error instanceof WorkerUnavailable) {
+					// Startup may have committed state before its acknowledgement was lost. Keep stable IDs.
+					meta.inputError = error.message;
+					delete meta.initializing;
+					await this.save(meta);
+					this.emit(meta);
+					return;
+				}
 				meta.failure = error instanceof Error ? error.message : String(error);
 				const now = Date.now();
 				applyFailure(meta, meta.failure, now);
@@ -1388,7 +1508,8 @@ export class SessionManager {
 		this.coldLoading.delete(id);
 		this.workerGenerations.set(id, (this.workerGenerations.get(id) ?? 0) + 1);
 		const createWorker =
-			this.factories.worker ?? ((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit, this.pool));
+			this.factories.worker ??
+			((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit, this.pool, this.workerOptions));
 		const worker = createWorker(
 			{
 				sessionId: id,
@@ -1454,7 +1575,31 @@ export class SessionManager {
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
-		if (this.workers.get(meta.id) === worker) this.lastUse.set(meta.id, Date.now());
+		if (
+			packet.type === "error" &&
+			!packet.requestId &&
+			worker instanceof Worker &&
+			worker.transportUnavailable &&
+			this.workers.get(meta.id) === worker
+		) {
+			// A timed-out writer must exit before a demand can reopen its storage. This is recovery,
+			// not intentional parking: preserve the visible failure outcome and uncertain durable IDs.
+			this.workers.delete(meta.id);
+			this.lastUse.delete(meta.id);
+			const closing = worker.close().finally(() => {
+				if (this.parking.get(meta.id) === closing) this.parking.delete(meta.id);
+			});
+			this.parking.set(meta.id, closing);
+			meta.inputError = packet.message;
+		}
+		// Display-only background refreshes must not keep an unwatched idle kernel resident.
+		if (
+			packet.type !== "usage" &&
+			packet.type !== "artifacts.changed" &&
+			packet.type !== "children" &&
+			this.workers.get(meta.id) === worker
+		)
+			this.lastUse.set(meta.id, Date.now());
 		if (packet.type === "artifacts.changed") {
 			const next = (this.artifactNotifications.get(meta.id) ?? Promise.resolve())
 				.then(async () => {

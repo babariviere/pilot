@@ -4,12 +4,13 @@ import SwiftUI
 /// Consecutive tool calls, as one compact card with a row per call.
 struct ToolGroupView: View {
     let items: [ToolItem]
+    var expansions: TranscriptToolExpansions? = nil
 
     var body: some View {
         LazyVStack(spacing: 0) {
             ForEach(items) { item in
                 if item.id != items.first?.id { Divider().opacity(0.5) }
-                ToolRowView(item: item)
+                ToolRowView(item: item, expansion: expansions?.state(for: item.id))
             }
         }
         .background(RoundedRectangle(cornerRadius: 10).fill(Theme.subtleFill))
@@ -22,10 +23,29 @@ final class ExpansionState: ObservableObject {
     @Published var expanded = false
 }
 
+/// Chat-scoped ownership keeps expansion alive when a group moves between the live tail and
+/// committed history. Individual rows still observe only their own expansion changes.
+@MainActor
+final class TranscriptToolExpansions: ObservableObject {
+    private var states: [String: ExpansionState] = [:]
+
+    func state(for callID: String) -> ExpansionState {
+        if let state = states[callID] { return state }
+        let state = ExpansionState()
+        states[callID] = state
+        return state
+    }
+}
+
 struct ToolRowView: View {
     @Environment(\.pilotFonts) private var fonts
     let item: ToolItem
     @StateObject private var expansion = ExpansionState()
+
+    init(item: ToolItem, expansion: ExpansionState? = nil) {
+        self.item = item
+        _expansion = StateObject(wrappedValue: expansion ?? ExpansionState())
+    }
 
     var body: some View {
         let summary = item.summary
