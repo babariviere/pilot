@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.0](https://github.com/babariviere/pilot/compare/v1.1.0...v1.2.0) (2026-10-08)
+
+
+### Features
+
+* **artifacts:** add standalone SwiftUI previews ([d29b713](https://github.com/babariviere/pilot/commit/d29b7138bcd284c16972481b536f7bf2e62f04cb))
+* **artifacts:** proactively explain with optional diagram previews ([9c0a7cc](https://github.com/babariviere/pilot/commit/9c0a7cc478a3f1bac0727f2b95489b07cfe017dd))
+* **macos:** embed chat artifacts without card framing ([2861343](https://github.com/babariviere/pilot/commit/2861343904655170f96699a41c882456c1bf9600))
+* **macos:** list chat artifacts in the right inspector ([9e451d7](https://github.com/babariviere/pilot/commit/9e451d7d1d839190571a536af18c1e827c7a0880))
+* **sessions:** add a remote base branch selector ([3dbc9fe](https://github.com/babariviere/pilot/commit/3dbc9fed46e12744c1ee74be45207e6ae20b595f))
+
+
+### Bug Fixes
+
+* **macos:** prevent sidebar row clipping and align metadata ([3ba7b43](https://github.com/babariviere/pilot/commit/3ba7b430df6c23150dd644370d5d0677e802503a))
+* **macos:** remove chat toolbar status indicator ([a8873b4](https://github.com/babariviere/pilot/commit/a8873b4c25406538288279a87031977b00c5d26d))
+
+
+### Performance Improvements
+
+* **chat:** improve typing and session-switch responsiveness ([76ce8cd](https://github.com/babariviere/pilot/commit/76ce8cdbc88f9fd5cbf36233098055b939bb2816))
+
 ## [1.1.0](https://github.com/babariviere/pilot/compare/v1.0.1...v1.1.0) (2026-10-08)
 
 
