@@ -132,10 +132,15 @@ public struct SubagentNotification: Equatable, Sendable {
     }
 }
 
-/// Read-only transcript of one subagent, from GET /api/sessions/:id/subagents/:name/transcript.
-public struct SubagentTranscriptResponse: Decodable, Sendable {
+/// One subagent of one session, as a stream subscription key.
+public struct SubagentKey: Hashable, Sendable {
+    public let sessionId: String
     public let name: String
-    public let events: [JSONValue]
+
+    public init(sessionId: String, name: String) {
+        self.sessionId = sessionId
+        self.name = name
+    }
 }
 
 public struct SubagentMessageRequest: Encodable, Sendable {

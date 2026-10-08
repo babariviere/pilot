@@ -32,6 +32,7 @@ final class PilotClient: ObservableObject {
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
     private var listeners: [String: [UUID: ([JSONValue]) -> Void]] = [:]
+    private var subagentListeners: [SubagentKey: [UUID: SubagentListener]] = [:]
     private var terminals: [String: TerminalAttachment] = [:]
 
     /// One app-side terminal attached to a daemon-owned shell.
@@ -92,15 +93,36 @@ final class PilotClient: ObservableObject {
     /// Static transcripts for snapshots and previews, keyed by subagent name.
     var fixtureSubagentTranscripts: [String: [JSONValue]]?
 
-    /// Read-only snapshot of a subagent's own conversation. Never wakes a parked session.
-    func subagentTranscript(_ sessionId: String, name: String) async throws -> [JSONValue] {
-        if let fixtureSubagentTranscripts { return fixtureSubagentTranscripts[name] ?? [] }
-        let response: SubagentTranscriptResponse = try await get(
-            subagentURL(sessionId, name: name, action: "transcript"),
-            feature: "subagent transcripts"
-        )
-        guard response.name == name else { throw ClientError("Invalid subagent transcript") }
-        return response.events
+    /// Receives a subagent transcript stream: a snapshot (or empty list) replaces it, appended entries extend it.
+    struct SubagentListener {
+        let events: ([JSONValue]) -> Void
+        let error: (String) -> Void
+    }
+
+    /// Live, read-only transcript of a subagent. One daemon subscription per subagent, however many views.
+    /// Never wakes a parked session. The first batch after (re)subscribing is always a full replacement.
+    func subscribeSubagent(_ key: SubagentKey, _ listener: SubagentListener) -> UUID {
+        let token = UUID()
+        let first = subagentListeners[key]?.isEmpty ?? true
+        subagentListeners[key, default: [:]][token] = listener
+        if let fixtureSubagentTranscripts {
+            let events = fixtureSubagentTranscripts[key.name] ?? []
+            Task { @MainActor in self.subagentListeners[key]?[token]?.events(events) }
+        } else if first {
+            postSubagent("subagent.subscribe", key)
+        }
+        return token
+    }
+
+    func unsubscribeSubagent(_ key: SubagentKey, token: UUID) {
+        subagentListeners[key]?[token] = nil
+        guard subagentListeners[key]?.isEmpty ?? false else { return }
+        subagentListeners[key] = nil
+        if fixtureSubagentTranscripts == nil { postSubagent("subagent.unsubscribe", key) }
+    }
+
+    private func postSubagent(_ type: String, _ key: SubagentKey) {
+        post(["type": .string(type), "sessionId": .string(key.sessionId), "name": .string(key.name)])
     }
 
     /// Steers current work by default; `followUp` queues after it.
@@ -304,7 +326,7 @@ final class PilotClient: ObservableObject {
         return url
     }
 
-    private func get<Response: Decodable & Sendable>(_ url: URL, feature: String = "artifacts") async throws -> Response {
+    private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
         let (data, response) = try await artifactSession.data(from: url)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
@@ -312,7 +334,7 @@ final class PilotClient: ObservableObject {
             // Older running daemons can serve chats but have no artifact routes. Do not
             // restart them automatically: that would interrupt active agents.
             if status == 404, error == "Not found" {
-                throw ClientError("This pilotd does not support \(feature). Once agents are idle, restart pilotd from the Pilot menu to load the current runtime.")
+                throw ClientError("This pilotd does not support artifacts. Once agents are idle, restart pilotd from the Pilot menu to load the current runtime.")
             }
             throw ClientError(error ?? "HTTP \(status)")
         }
@@ -445,6 +467,7 @@ final class PilotClient: ObservableObject {
                         self.retry = 0
                         // The daemon sends a fresh snapshot per subscription, so reconnects resync.
                         for id in self.listeners.keys { self.post(["type": .string("subscribe"), "sessionId": .string(id)]) }
+                        for key in self.subagentListeners.keys { self.postSubagent("subagent.subscribe", key) }
                         for id in self.terminals.keys { self.sendAttach(id, restart: false) }
                     }
                     if let decoded { self.handle(decoded) }
@@ -477,7 +500,8 @@ final class PilotClient: ObservableObject {
         onSessionsChanged?([session], false)
     }
 
-    private func handle(_ message: ServerUpdate) {
+    /// Internal, not private, so tests can deliver decoded updates without a socket.
+    func handle(_ message: ServerUpdate) {
         switch message {
         case let .projects(list):
             projects = list
@@ -492,6 +516,10 @@ final class PilotClient: ObservableObject {
             update(session)
         case let .events(id, events):
             for listener in listeners[id]?.values ?? [:].values { listener(events) }
+        case let .subagentEvents(id, name, events):
+            for listener in subagentListeners[SubagentKey(sessionId: id, name: name)]?.values ?? [:].values {
+                listener.events(events)
+            }
         case let .artifacts(update):
             artifactVersions[update.sessionId, default: 0] += 1
             artifacts[update.sessionId] = update.artifacts
@@ -499,9 +527,12 @@ final class PilotClient: ObservableObject {
             terminals[id]?.onData(data)
         case let .terminalExit(id, code):
             terminals[id]?.onExit(code)
-        case .error:
-            // These also include terminal-command failures, not agent transcript events.
-            break
+        case let .error(id, name, message):
+            // Others include terminal-command failures, not agent transcript events.
+            guard let id, let name else { break }
+            for listener in subagentListeners[SubagentKey(sessionId: id, name: name)]?.values ?? [:].values {
+                listener.error(message)
+            }
         }
     }
 }

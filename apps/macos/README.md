@@ -53,8 +53,9 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   Stop, and Open transcript. The inspector's Agents tab (person icon in the toolbar, with a green dot for
   unread answers) lists every subagent and shows the selected one's full, read-only transcript. Its
   message box steers the current work (Steer), queues a follow-up (Queue) or resumes an idle subagent
-  (Send). Answers delivered to the chat appear as compact cards with an Open link. Transcripts refresh
-  every 1.5 seconds while a subagent works and once when it answers; reading never wakes a parked chat.
+  (Send). Answers delivered to the chat appear as compact cards with an Open link. Transcripts stream
+  over the WebSocket: a snapshot, then only new entries. The popover and the tab share one stream per
+  subagent, kept for 5 seconds after the last view closes. Reading never wakes a parked chat.
 - **Artifacts.** Structured artifact tool results show a pinned-revision card with an opt-in inline
   preview and expanded viewer. Durable publication entries also show artifacts published inside
   codemode without duplicating direct tool cards. The right-hand inspector's Artifacts tab lists all

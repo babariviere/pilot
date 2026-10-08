@@ -25,6 +25,7 @@ import {
 	type SessionWorker,
 } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import type { SubagentWatchUpdate } from "./subagent-watches.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
@@ -1156,11 +1157,26 @@ test("worker usage updates reach summaries and are dropped when the worker exits
 
 test("subagent reports reach summaries without private paths, survive parking, and route reads and commands", async (t) => {
 	const f = await fixture(t);
-	const reads: Array<[string, string]> = [];
+	const reads: Array<[string, string, number | undefined]> = [];
+	const watches: Array<{
+		directory: string;
+		conversationId: string;
+		update: (update: SubagentWatchUpdate) => void;
+		stopped: boolean;
+	}> = [];
 	const sessions = await f.manager({
-		subagentSnapshot: async (directory, conversationId) => {
-			reads.push([directory, conversationId]);
-			return [snapshot];
+		subagentRead: async (directory, conversationId, after) => {
+			reads.push([directory, conversationId, after]);
+			return after === undefined
+				? { full: true, events: [snapshot], cursor: 3 }
+				: { full: false, events: [], cursor: after };
+		},
+		subagentWatch: (directory, conversationId, update) => {
+			const watch = { directory, conversationId, update, stopped: false };
+			watches.push(watch);
+			return () => {
+				watch.stopped = true;
+			};
 		},
 	});
 	const created = await sessions.spawn({ cwd: f.source, message: "work" });
@@ -1197,11 +1213,57 @@ test("subagent reports reach summaries without private paths, survive parking, a
 	f.workers[0]!.reportSubagents([review, pending, outside, retired]);
 	assert.equal(changes.length, count, "unchanged reports are not republished");
 
-	assert.deepEqual(await sessions.subagentTranscript(created.id, "review"), { name: "review", events: [snapshot] });
-	assert.deepEqual(reads, [[review.storage, "8"]]);
-	assert.deepEqual(await sessions.subagentTranscript(created.id, "pending"), { name: "pending", events: [] });
+	const full = await sessions.subagentTranscript(created.id, "review");
+	assert.deepEqual(full.transcript, { name: "review", full: true, events: [snapshot], cursor: 3 });
+	assert.match(full.signature!, /^8\/full\//);
+	assert.deepEqual(await sessions.subagentTranscript(created.id, "review", { ifNoneMatch: full.signature }), {
+		signature: full.signature,
+		unchanged: true,
+	});
+	const delta = await sessions.subagentTranscript(created.id, "review", { after: 3 });
+	assert.deepEqual(delta.transcript, { name: "review", full: false, events: [], cursor: 3 });
+	assert.deepEqual(reads, [
+		[review.storage, "8", undefined],
+		[review.storage, "8", 3],
+	]);
+	assert.deepEqual((await sessions.subagentTranscript(created.id, "pending")).transcript, {
+		name: "pending",
+		full: true,
+		events: [],
+	});
 	await assert.rejects(sessions.subagentTranscript(created.id, "outside"), /outside the session/);
 	await assert.rejects(sessions.subagentTranscript(created.id, "missing"), /No subagent named missing/);
+
+	// Live transcripts wait for a child's storage, share one watcher, and stop with the last viewer.
+	const received: Array<{ name: string; events?: AgentEvent[]; error?: string }> = [];
+	const viewer = (name: string) => ({
+		events: (events: AgentEvent[]) => received.push({ name, events }),
+		error: (error: string) => received.push({ name, error }),
+	});
+	const offPending = sessions.watchSubagent(created.id, "pending", viewer("pending"));
+	assert.deepEqual(received, [{ name: "pending", events: [] }]);
+	assert.equal(watches.length, 0, "no watcher before the child has storage");
+	const offReview = sessions.watchSubagent(created.id, "review", viewer("review"));
+	const offReviewAgain = sessions.watchSubagent(created.id, "review", viewer("review-2"));
+	assert.equal(watches.length, 1, "viewers of one subagent share a watcher");
+	assert.deepEqual([watches[0]!.directory, watches[0]!.conversationId], [review.storage, "8"]);
+	watches[0]!.update({ full: true, events: [snapshot] });
+	assert.deepEqual(
+		received.slice(1).map((item) => item.name),
+		["review", "review-2"],
+	);
+	sessions.watchSubagent(created.id, "outside", viewer("outside"))();
+	assert.match((received.at(-1) as { error?: string }).error ?? "", /outside the session/);
+	assert.throws(() => sessions.watchSubagent(created.id, "missing", viewer("missing")), /No subagent named/);
+	f.workers[0]!.reportSubagents([review, { ...pending, conversationId: "9" }, outside, retired]);
+	assert.equal(watches.length, 2, "a waiting viewer attaches once the child reports its conversation");
+	assert.deepEqual([watches[1]!.directory, watches[1]!.conversationId], [pending.storage, "9"]);
+	offPending();
+	offReview();
+	assert.equal(watches[0]!.stopped, false);
+	offReviewAgain();
+	assert.equal(watches[0]!.stopped, true);
+	assert.equal(watches[1]!.stopped, true);
 
 	await sessions.subagentCommand(created.id, "review", { action: "send", message: "focus", requestId: "r1" });
 	await sessions.subagentCommand(created.id, "review", { action: "send", message: "then", mode: "followUp" });
@@ -1230,7 +1292,7 @@ test("subagent reports reach summaries without private paths, survive parking, a
 		async () =>
 			((await f.stored(created.id)) as { subagents?: KernelSubagent[] }).subagents?.[0]?.storage === review.storage,
 	);
-	assert.deepEqual(await sessions.subagentTranscript(created.id, "review"), { name: "review", events: [snapshot] });
+	assert.equal((await sessions.subagentTranscript(created.id, "review")).transcript?.full, true);
 	assert.equal(f.workers.length, 1, "reading a transcript never reopens the kernel");
 });
 

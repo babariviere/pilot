@@ -18,6 +18,7 @@ final class AppModel: ObservableObject {
     let daemon = DaemonController()
     let client = PilotClient()
     let feeds = SessionFeedCache()
+    let subagentFeeds = SubagentFeeds()
     let settings = AppSettings.shared
     let terminals = TerminalStore()
     let notifier = Notifier()
@@ -347,6 +348,11 @@ final class AppModel: ObservableObject {
 
     func isUnread(_ subagent: SessionSubagent, in sessionId: String) -> Bool {
         subagentReads.isUnread(subagent, in: sessionId)
+    }
+
+    /// The shared live transcript of one subagent.
+    func subagentFeed(_ sessionId: String, _ name: String) -> SubagentFeed {
+        subagentFeeds.feed(SubagentKey(sessionId: sessionId, name: name), client: client)
     }
 
     func unreadSubagents(in session: SessionSummary) -> Int {

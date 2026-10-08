@@ -6,10 +6,12 @@ public enum ServerUpdate: Sendable {
     case sessions([SessionSummary])
     case session(SessionSummary)
     case events(sessionId: String, events: [JSONValue])
+    /// A subagent transcript batch: a snapshot (or empty list) replaces it, entry_appended events extend it.
+    case subagentEvents(sessionId: String, name: String, events: [JSONValue])
     case artifacts(ArtifactListMessage)
     case terminalData(sessionId: String, data: String)
     case terminalExit(sessionId: String, code: Int)
-    case error(sessionId: String?, message: String)
+    case error(sessionId: String?, name: String?, message: String)
 
     public static func decode(_ data: Data) throws -> ServerUpdate? {
         let json = try JSONValue.decode(data)
@@ -28,6 +30,10 @@ public enum ServerUpdate: Sendable {
         case "events":
             guard let id = json["sessionId"]?.string, let events = json["events"]?.array else { return nil }
             return .events(sessionId: id, events: events)
+        case "subagent.events":
+            guard let id = json["sessionId"]?.string, let name = json["name"]?.string,
+                  let events = json["events"]?.array else { return nil }
+            return .subagentEvents(sessionId: id, name: name, events: events)
         case "artifacts":
             guard let update = ArtifactListMessage.parse(json) else { return nil }
             return .artifacts(update)
@@ -38,7 +44,10 @@ public enum ServerUpdate: Sendable {
             guard let id = json["sessionId"]?.string else { return nil }
             return .terminalExit(sessionId: id, code: json["code"]?.int ?? 0)
         case "error":
-            return .error(sessionId: json["sessionId"]?.string, message: json["message"]?.string ?? "Unknown error")
+            return .error(
+                sessionId: json["sessionId"]?.string, name: json["name"]?.string,
+                message: json["message"]?.string ?? "Unknown error"
+            )
         default:
             return nil
         }

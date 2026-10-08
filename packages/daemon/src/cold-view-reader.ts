@@ -1,6 +1,6 @@
 /** Keep SQLite scans and snapshot construction off the daemon's WebSocket event loop. */
 import { Worker } from "node:worker_threads";
-import { type PersistedSessionView, snapshotWorkerEntry } from "@pilot/kernel";
+import { type PersistedSessionView, type SubagentTranscriptRead, snapshotWorkerEntry } from "@pilot/kernel";
 import { ServiceUnavailable } from "./errors.ts";
 
 const MAX_QUEUED_READS = 32;
@@ -14,6 +14,7 @@ type Job = {
 	unlisten?(): void;
 	/** Read a pi-extensions subagent conversation from `runs.sqlite` instead of the session. */
 	subagentConversation?: string;
+	after?: number;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -59,22 +60,23 @@ export class ColdViewReader {
 		return true;
 	}
 
-	/** Read-only transcript of a subagent conversation; `events` holds one snapshot, or none before it started. */
-	readSubagent(directory: string, conversationId: string): Promise<SizedSessionView> {
+	/** One-shot read of a subagent conversation, optionally only entries after `after`. */
+	readSubagent(directory: string, conversationId: string, after?: number): Promise<SubagentTranscriptRead> {
 		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
 		if (this.waiting.length >= MAX_QUEUED_READS)
 			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
-		return new Promise((resolve, reject) => {
+		return new Promise<SizedSessionView>((resolve, reject) => {
 			this.waiting.push({
 				directory,
 				cwd: directory,
 				includeTodos: false,
 				subagentConversation: conversationId,
+				...(after === undefined ? {} : { after }),
 				resolve,
 				reject,
 			});
 			this.drain();
-		});
+		}).then(({ bytes: _bytes, ...view }) => view as unknown as SubagentTranscriptRead);
 	}
 
 	private drain(): void {
@@ -89,6 +91,7 @@ export class ColdViewReader {
 						cwd: job.cwd,
 						includeTodos: job.includeTodos,
 						...(job.subagentConversation === undefined ? {} : { subagentConversation: job.subagentConversation }),
+						...(job.after === undefined ? {} : { after: job.after }),
 					},
 					execArgv: [],
 				});

@@ -424,10 +424,27 @@ test("subagent routes decode names, validate bodies and forward transcript, mess
 	const projects = new ProjectStore("/tmp/pilot-server-test-unused");
 	const sessions = new SessionManager("/tmp/pilot-server-test-unused", projects);
 	const terminals = new TerminalManager();
-	const transcript = t.mock.method(sessions, "subagentTranscript", async (_id: string, name: string) => ({
-		name,
-		events: [],
-	}));
+	const transcript = t.mock.method(
+		sessions,
+		"subagentTranscript",
+		async (_id: string, name: string, options: { after?: number; ifNoneMatch?: string } = {}) =>
+			options.ifNoneMatch === "8/full/1:2"
+				? { signature: "8/full/1:2", unchanged: true }
+				: { signature: "8/full/1:2", transcript: { name, full: true, events: [] } },
+	);
+	let watched: { events(events: AgentEvent[]): void; error(message: string): void } | undefined;
+	let unwatched = 0;
+	const watch = t.mock.method(
+		sessions,
+		"watchSubagent",
+		(_id: string, name: string, listener: { events(events: AgentEvent[]): void; error(message: string): void }) => {
+			if (name === "missing") throw new Error("No subagent named missing");
+			watched = listener;
+			return () => {
+				unwatched++;
+			};
+		},
+	);
 	const command = t.mock.method(sessions, "subagentCommand", async () => {});
 	const server = createDaemonServer(
 		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
@@ -446,8 +463,52 @@ test("subagent routes decode names, validate bodies and forward transcript, mess
 	const name = encodeURIComponent("code review/1");
 	const read = await fetch(`${base}/${name}/transcript`);
 	assert.equal(read.status, 200);
-	assert.deepEqual(await read.json(), { name: "code review/1", events: [] });
-	assert.deepEqual(transcript.mock.calls[0]?.arguments, ["session-1", "code review/1"]);
+	assert.equal(read.headers.get("etag"), '"8/full/1:2"');
+	assert.deepEqual(await read.json(), { name: "code review/1", full: true, events: [] });
+	assert.deepEqual(transcript.mock.calls[0]?.arguments, ["session-1", "code review/1", {}]);
+	const cached = await fetch(`${base}/${name}/transcript?after=12`, { headers: { "if-none-match": '"8/full/1:2"' } });
+	assert.equal(cached.status, 304);
+	await cached.arrayBuffer();
+	assert.deepEqual(transcript.mock.calls[1]?.arguments, [
+		"session-1",
+		"code review/1",
+		{ after: 12, ifNoneMatch: "8/full/1:2" },
+	]);
+	const badCursor = await fetch(`${base}/${name}/transcript?after=-1`);
+	assert.equal(badCursor.status, 400);
+	await badCursor.arrayBuffer();
+
+	// Live transcripts stream over the WebSocket and stop with the subscription or the socket.
+	const socket = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/ws`);
+	const messages: ServerMessage[] = [];
+	socket.on("message", (data) => messages.push(JSON.parse(String(data)) as ServerMessage));
+	await once(socket, "open");
+	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "code review/1" }));
+	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "missing" }));
+	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "" }));
+	const waitFor = async (check: () => boolean) => {
+		for (let n = 0; n < 100 && !check(); n++) await new Promise((resolve) => setTimeout(resolve, 10));
+		assert.ok(check(), JSON.stringify(messages));
+	};
+	await waitFor(() => watched !== undefined && messages.filter((message) => message.type === "error").length === 2);
+	watched!.events([{ type: "entry_appended", entry: { id: 4 } } as unknown as AgentEvent]);
+	await waitFor(() => messages.some((message) => message.type === "subagent.events"));
+	assert.deepEqual(
+		messages.find((message) => message.type === "subagent.events"),
+		{
+			type: "subagent.events",
+			sessionId: "session-1",
+			name: "code review/1",
+			events: [{ type: "entry_appended", entry: { id: 4 } }],
+		},
+	);
+	assert.ok(messages.some((message) => message.type === "error" && message.name === "missing"));
+	socket.send(JSON.stringify({ type: "subagent.unsubscribe", sessionId: "session-1", name: "code review/1" }));
+	await waitFor(() => unwatched === 1);
+	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "code review/1" }));
+	await waitFor(() => watch.mock.callCount() === 3);
+	socket.close();
+	await waitFor(() => unwatched === 2);
 	const post = (path: string, body: unknown) =>
 		fetch(`${base}/${path}`, {
 			method: "POST",
