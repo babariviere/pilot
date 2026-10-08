@@ -1,3 +1,4 @@
+// biome-ignore-all lint/complexity/useLiteralKeys: Exercise the poller's private sweep without real timer waits.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
@@ -401,6 +402,104 @@ test("polls immediately then at bounded delay without overlapping sweeps, and st
 	} finally {
 		first.resolve();
 		await tracker.stop();
+	}
+});
+
+test("merged and closed PRs never poll at startup or later, while active and undiscovered PRs still poll", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const states = ["merged", "closed", "open", "draft", undefined] as const;
+	const targets = states.map(
+		(state, index): PullRequestSession => ({
+			...session(),
+			id: `session-${index}`,
+			cwd: `/${state ?? "undiscovered"}`,
+			...(state
+				? {
+						pullRequest: {
+							number: 1,
+							url: "https://github.com/octo/repo/pull/1",
+							title: "PR",
+							state,
+							checkedAt: 0,
+						},
+					}
+				: {}),
+		}),
+	);
+	const calls: string[] = [];
+	const tracker = new PullRequestTracker(
+		() => targets,
+		async (target, result) => {
+			if (result.pullRequest) target.pullRequest = result.pullRequest;
+		},
+		{
+			intervalMs: 10,
+			runner: async (file, _args, cwd) => {
+				if (file === "git") return "";
+				calls.push(cwd);
+				return JSON.stringify([candidate({ isDraft: cwd === "/draft" })]);
+			},
+		},
+	);
+	try {
+		tracker.start();
+		await tracker["polling"];
+		assert.deepEqual(calls, ["/open", "/draft", "/undiscovered"]);
+		for (let sweep = 0; sweep < 3; sweep++) {
+			now += 24 * 60 * 60_000;
+			t.mock.timers.tick(10);
+			await tracker["polling"];
+		}
+		assert.equal(calls.length, 12);
+		assert.ok(!calls.includes("/merged") && !calls.includes("/closed"));
+	} finally {
+		await tracker.stop();
+	}
+});
+
+test("a newly closed or merged PR stops subsequent sweeps, but explicit refresh can discover a reopened or new PR", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	for (const state of ["MERGED", "CLOSED"] as const) {
+		const target = session();
+		let remoteState: string = state;
+		let calls = 0;
+		const tracker = new PullRequestTracker(
+			() => [target],
+			async (current, result) => {
+				if (result.pullRequest) current.pullRequest = result.pullRequest;
+			},
+			{
+				intervalMs: 10,
+				runner: async (file, args) => {
+					if (file === "git") return "";
+					calls++;
+					return args.includes("--state=open") && remoteState !== "OPEN"
+						? "[]"
+						: JSON.stringify([candidate({ state: remoteState })]);
+				},
+			},
+		);
+		try {
+			tracker.start();
+			await tracker["polling"];
+			assert.equal(calls, 2, "initial discovery checks open then historical PRs");
+			for (let sweep = 0; sweep < 3; sweep++) {
+				t.mock.timers.tick(10);
+				await tracker["polling"];
+			}
+			assert.equal(calls, 2, "terminal discovery stops periodic GitHub requests");
+			remoteState = "OPEN";
+			await tracker.refresh(target);
+			assert.equal(calls, 3, "agent-idle refresh is still permitted");
+			assert.equal(target.pullRequest?.state, "open");
+			t.mock.timers.tick(10);
+			await tracker["polling"];
+			assert.equal(calls, 4, "active polling resumes for the discovered open PR");
+		} finally {
+			await tracker.stop();
+		}
 	}
 });
 

@@ -272,6 +272,11 @@ agent investigates flaky/infra failures instead of blindly rerunning CI, triages
 in-scope fixes, and reports blocked or declined work in Pilot. No GitHub comments, replies, reviews,
 merges, or closing actions are permitted.
 
+Merged and closed PRs stop all periodic GitHub polling, including after daemon restarts. Explicit
+agent-idle refreshes remain available to discover reopened PRs or a new PR in the same session. The
+observed merge timestamp is persisted, so the local archive sweep can enforce the 24-hour deadline
+without polling terminal PRs again.
+
 **Triggers**
 
 - `check_suite` / `workflow_run` concluded `failure` on a PR in an allowlisted repository.
@@ -376,9 +381,10 @@ reports), producing a morning summary in the app and Slack.
   with at most four sidebar requests in flight;
   failed lookups omit the count rather than showing zero, and long branches truncate with a full-name tooltip.
   The daemon discovers PRs by the exact workspace branch and
-  repository, checks GitHub at startup, after settled work and about once a minute while idle,
-  and persists the last successful status. Failed lookups retain the cache but label it as last
-  known, never as a fresh merge result. Direct/shared-folder sessions are not auto-linked.
+  repository, polls active PR status at startup and about once a minute until merged or closed,
+  and explicitly refreshes after settled work. It persists the last successful status. Failed lookups
+  retain the cache but label it as last known, never as a fresh merge result. Direct/shared-folder
+  sessions are not auto-linked.
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
   user messages above the composer until consumed, restoring them on reconnect. Display steering before
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
@@ -404,10 +410,11 @@ reports), producing a morning summary in the app and Slack.
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
   The daemon checks once a minute to automatically archive chats after one week without activity,
   skipping running chats and pending admissions. Restoration grants another week, including across
-  daemon restarts, without changing chat ordering. Fresh GitHub merge checks automatically archive
-  inactive linked chats no earlier than 24 hours after GitHub's merge timestamp. Failed lookups and
-  closed, unmerged PRs never trigger merge-based archiving. Restoring a merge-archived chat keeps it
-  active for that PR, including after daemon restarts (the one-week inactivity rule still applies).
+  daemon restarts, without changing chat ordering. Observed GitHub merges automatically archive
+  inactive linked chats no earlier than 24 hours after GitHub's merge timestamp. The observed merge
+  time persists and the local archive sweep enforces that deadline without polling merged PRs again.
+  Failed lookups and closed, unmerged PRs never trigger merge-based archiving. Restoring a merge-archived
+  chat keeps it active for that PR, including after daemon restarts (the one-week inactivity rule still applies).
 - The compact session header keeps title and project/model on the left. Branch and linked PR metadata
   sit immediately left of the top-right inspector toggles, outside their shared button background;
   branch labels use the three-node Git glyph and truncate in the middle with a full-name tooltip.

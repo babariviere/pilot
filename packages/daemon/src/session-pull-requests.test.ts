@@ -247,16 +247,23 @@ test("fourth-argument factories remain compatible: preparation immediately disco
 test("agent branch changes persist for the UI, clear the prior PR, and survive deleted refs", async () => {
 	let chosen = branch;
 	let hasPr = true;
+	let state = "OPEN";
+	const mergedAt = Date.now();
 	await fixture(
 		{
 			runner: async (_file, args) => {
 				const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
-				return JSON.stringify(hasPr ? [{ ...candidate(), headRefName: head }] : []);
+				return JSON.stringify(
+					hasPr ? [{ ...candidate(state), headRefName: head, mergedAt: new Date(mergedAt).toISOString() }] : [],
+				);
 			},
 		},
 		async (manager, meta, home, changes) => {
 			await manager["pullRequests"]["polling"];
 			const initial = lifecycle(manager, meta);
+			state = "MERGED";
+			await manager["pullRequests"].refresh(meta);
+			assert.equal((await saved(home, meta.id)).pullRequestMergedAt, mergedAt);
 			chosen = "fix-branch-discovery";
 			hasPr = false;
 			await manager["pullRequests"].refresh(meta);
@@ -264,8 +271,11 @@ test("agent branch changes persist for the UI, clear the prior PR, and survive d
 			assert.equal(changes.at(-1)?.branch, chosen);
 			assert.equal(manager.get(meta.id)?.pullRequest, undefined);
 			assert.equal(manager.get(meta.id)?.pullRequestError, undefined);
+			assert.equal(meta.pullRequestMergedAt, undefined);
+			assert.equal((await saved(home, meta.id)).pullRequestMergedAt, undefined);
 			assert.equal((await saved(home, meta.id)).workspace?.branch, chosen);
 			hasPr = true;
+			state = "OPEN";
 			await manager["pullRequests"].refresh(meta);
 			assert.equal(manager.get(meta.id)?.pullRequest?.state, "open");
 			chosen = "";
@@ -298,6 +308,9 @@ test("draft/open/merged/closed PR changes persist and broadcast independently of
 			await manager["pullRequests"].refresh(meta);
 			assert.equal(changes.at(-1)?.pullRequest?.state, expected);
 			assert.equal((await saved(home, meta.id)).pullRequest?.state, expected);
+			const mergedAt = expected === "merged" ? Date.parse(candidate().mergedAt) : undefined;
+			assert.equal(meta.pullRequestMergedAt, mergedAt);
+			assert.equal((await saved(home, meta.id)).pullRequestMergedAt, mergedAt);
 			assert.deepEqual(lifecycle(manager, meta), initial);
 		}
 		assert.equal(changes.length, 5, "merge also broadcasts the committed archive timestamp");
@@ -343,15 +356,15 @@ test("failed and empty lookups retain last known badge and stale timestamp, dedu
 	);
 });
 
-test("merge archives only after 24 hours from GitHub's merge time, including across daemon restarts", async (t) => {
+test("persisted merge archives locally at its 24-hour deadline without polling, including across daemon restarts", async (t) => {
 	const day = 86_400_000;
 	const mergedAt = Date.now();
 	let now = mergedAt;
-	let offline = false;
+	let calls = 0;
 	t.mock.method(Date, "now", () => now);
 	const runner: Runner = async (file, args) => {
+		calls++;
 		if (file === "git" && args[0] === "branch") return "";
-		if (offline) throw new Error("offline");
 		return args.includes("--state=open")
 			? "[]"
 			: JSON.stringify([{ ...candidate("MERGED"), mergedAt: new Date(mergedAt).toISOString() }]);
@@ -359,25 +372,33 @@ test("merge archives only after 24 hours from GitHub's merge time, including acr
 	await fixture({ runner }, async (manager, meta, home) => {
 		await manager["pullRequests"]["polling"];
 		assert.equal(meta.pullRequest?.state, "merged");
+		assert.equal(meta.pullRequestMergedAt, mergedAt);
+		assert.equal((await saved(home, meta.id)).pullRequestMergedAt, mergedAt);
 		assert.equal(meta.archivedAt, undefined, "freshly merged chats remain active");
+		// Keep weekly inactivity archiving out of this merge-deadline test.
+		meta.updatedAt = now;
+		await manager["save"](meta);
+		const discovered = calls;
 		now = mergedAt + day - 1;
-		await manager["pullRequests"].refresh(meta);
+		await manager["archiveInactiveSessions"]();
 		assert.equal(meta.archivedAt, undefined, "not eligible one millisecond before the boundary");
+		assert.equal(calls, discovered, "archive maintenance must not query GitHub");
 		await manager.shutdown();
 		const reopened = new SessionManager(home, new ProjectStore(home), undefined, {}, { runner });
 		try {
 			await reopened.load();
 			await reopened["pullRequests"]["polling"];
 			const live = reopened["metas"].get(meta.id)!;
+			assert.equal(live.pullRequestMergedAt, mergedAt, "restart retains GitHub's merge time");
+			assert.equal(calls, discovered, "terminal startup cache must not run git or gh");
+			await reopened["archiveInactiveSessions"]();
 			assert.equal(live.archivedAt, undefined);
 			now = mergedAt + day;
-			offline = true;
-			await reopened["pullRequests"].refresh(live);
-			assert.equal(live.archivedAt, undefined, "cached merges cannot archive during failed lookups");
-			offline = false;
-			await reopened["pullRequests"].refresh(live);
+			await reopened["archiveInactiveSessions"]();
 			assert.equal(live.archivedAt, now, "restart does not reset the delay");
+			assert.equal((await saved(home, meta.id)).archivedAt, now);
 			assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, cached.url);
+			assert.equal(calls, discovered, "the deadline archives from local metadata only");
 		} finally {
 			await reopened.shutdown();
 		}
@@ -386,10 +407,13 @@ test("merge archives only after 24 hours from GitHub's merge time, including acr
 
 test("fresh merge archives durably, retains files, and restoration survives checks and restart", async () => {
 	let number = 10;
-	const runner: Runner = async (_file, args) =>
-		args.includes("--state=open")
+	let calls = 0;
+	const runner: Runner = async (_file, args) => {
+		calls++;
+		return args.includes("--state=open")
 			? "[]"
 			: JSON.stringify([{ ...candidate("MERGED"), number, url: `https://github.com/octo/repo/pull/${number}` }]);
+	};
 	await fixture({ runner }, async (manager, meta, home, changes) => {
 		await writeFile(join(meta.cwd, "work.txt"), "retained workspace");
 		await mkdir(join(home, "sessions", meta.id, "durable"));
@@ -410,8 +434,14 @@ test("fresh merge archives durably, retains files, and restoration survives chec
 		await manager["pullRequests"].refresh(meta);
 		assert.equal(manager.get(meta.id)?.archivedAt, archivedAt, "repeated checks retain the archive timestamp");
 		await manager.restore(meta.id);
-		await manager["pullRequests"].refresh(meta);
+		const localCalls = calls;
+		await manager["archiveInactiveSessions"]();
 		assert.equal(manager.get(meta.id)?.archivedAt, undefined);
+		assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, cached.url);
+		assert.equal(calls, localCalls, "restoration is protected from local merge maintenance");
+		await manager["pullRequests"].refresh(meta);
+		assert.equal(manager.get(meta.id)?.archivedAt, undefined, "explicit refresh also respects restoration");
+		const restoredCalls = calls;
 		await manager.shutdown();
 		const reopened = new SessionManager(
 			home,
@@ -426,7 +456,9 @@ test("fresh merge archives durably, retains files, and restoration survives chec
 		try {
 			await reopened.load();
 			await reopened["pullRequests"]["polling"];
+			await reopened["archiveInactiveSessions"]();
 			assert.equal(reopened.get(meta.id)?.archivedAt, undefined, "restoration survives a daemon restart");
+			assert.equal(calls, restoredCalls, "restored terminal PRs do not resume polling");
 			number = 11;
 			await reopened["pullRequests"].refresh(reopened["metas"].get(meta.id)!);
 			assert.ok(reopened.get(meta.id)?.archivedAt, "a different merged PR can archive the chat again");
@@ -448,6 +480,7 @@ test("draft, open, closed and failed lookups of a cached merge never auto-archiv
 			},
 			async (manager, meta, home) => {
 				await manager["pullRequests"]["polling"];
+				await manager["pullRequests"].refresh(meta);
 				assert.equal(manager.get(meta.id)?.archivedAt, undefined, state);
 				assert.equal((await saved(home, meta.id)).archivedAt, undefined, state);
 			},
@@ -456,12 +489,54 @@ test("draft, open, closed and failed lookups of a cached merge never auto-archiv
 	}
 });
 
+test("local merge maintenance cannot archive closed, undated, or error-cached PRs", async () => {
+	const now = Date.now();
+	const oldMerge = now - 86_400_000;
+	for (const scenario of ["closed", "undated", "error"] as const) {
+		let calls = 0;
+		await fixture(
+			{
+				runner: async () => {
+					calls++;
+					throw new Error("must not query GitHub");
+				},
+			},
+			async (manager, meta, home) => {
+				await manager["pullRequests"]["polling"];
+				meta.updatedAt = now;
+				if (scenario !== "undated") meta.pullRequestMergedAt = oldMerge;
+				if (scenario === "error") meta.pullRequestError = "Pull request lookup failed: offline";
+				await manager["save"](meta);
+				await manager["archiveInactiveSessions"]();
+				assert.equal(meta.archivedAt, undefined, scenario);
+				assert.equal(meta.autoArchivedPullRequest, undefined, scenario);
+				const persisted = await saved(home, meta.id);
+				assert.equal(persisted.archivedAt, undefined, scenario);
+				assert.equal(persisted.autoArchivedPullRequest, undefined, scenario);
+				assert.equal(persisted.pullRequestMergedAt, scenario === "undated" ? undefined : oldMerge);
+				assert.equal(persisted.pullRequestError, meta.pullRequestError);
+				assert.equal(calls, 0, `${scenario} must stay entirely local`);
+			},
+			{ ...cached, state: scenario === "closed" ? "closed" : "merged", checkedAt: oldMerge },
+			() => {
+				calls++;
+				return "";
+			},
+		);
+	}
+});
+
 test("merge archiving defers all busy states and retries after the chat becomes inactive", async () => {
 	let merged = false;
-	const runner: Runner = async (_file, args) =>
-		merged && args.includes("--state=open") ? "[]" : JSON.stringify([candidate(merged ? "MERGED" : "OPEN")]);
-	await fixture({ runner }, async (manager, meta) => {
+	let calls = 0;
+	const runner: Runner = async (_file, args) => {
+		calls++;
+		return merged && args.includes("--state=open") ? "[]" : JSON.stringify([candidate(merged ? "MERGED" : "OPEN")]);
+	};
+	await fixture({ runner }, async (manager, meta, home) => {
 		await manager["pullRequests"]["polling"];
+		meta.updatedAt = Date.now();
+		await manager["save"](meta);
 		const worker: Worker & { busy: boolean } = {
 			ready: Promise.resolve(),
 			state: "idle",
@@ -485,17 +560,80 @@ test("merge archiving defers all busy states and retries after the chat becomes 
 			[() => (worker.busy = true), () => (worker.busy = false)],
 			[() => manager["sending"].set(meta.id, 1), () => manager["sending"].delete(meta.id)],
 		];
+		let discovered: number | undefined;
 		for (const [start, stop] of busyStates) {
 			start();
-			await manager["pullRequests"].refresh(meta);
+			if (discovered === undefined) {
+				await manager["pullRequests"].refresh(meta);
+				discovered = calls;
+			}
+			await manager["archiveInactiveSessions"]();
 			assert.equal(meta.pullRequest?.state, "merged");
+			assert.equal(meta.pullRequestMergedAt, Date.parse(candidate().mergedAt));
 			assert.equal(meta.archivedAt, undefined);
 			assert.equal(meta.autoArchivedPullRequest, undefined);
+			assert.equal(calls, discovered, "busy archive retries do not requery GitHub");
 			stop();
 		}
-		await manager["pullRequests"].refresh(meta);
+		await manager["archiveInactiveSessions"]();
 		assert.ok(meta.archivedAt);
+		assert.equal(calls, discovered, "an inactive chat archives from its persisted merge time");
+		assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, cached.url);
 	});
+});
+
+test("queued local merge archive rechecks a lookup error arriving behind a restore transition", async (t) => {
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	let calls = 0;
+	await fixture(
+		{
+			runner: async () => {
+				calls++;
+				throw new Error("must not query GitHub");
+			},
+		},
+		async (manager, meta, home, changes) => {
+			await manager["pullRequests"]["polling"];
+			meta.updatedAt = now;
+			meta.pullRequestMergedAt = meta.updatedAt - 86_400_000;
+			await manager["save"](meta);
+			let release!: () => void;
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			// Hold a restore transition even if the sweep visits the unrelated fixture session first.
+			manager["archiveTransitions"].set(meta.id, {
+				archived: false,
+				promise: gate.then(() => manager.get(meta.id)!),
+			});
+			const restoring = manager.restore(meta.id);
+			const sweeping = manager["archiveInactiveSessions"]();
+			try {
+				await until(() => manager["archiveTransitions"].get(meta.id)?.archived === true);
+				meta.pullRequestError = "Pull request lookup failed: offline";
+				await manager["save"](meta);
+				release();
+				await restoring;
+				await sweeping;
+				assert.equal(meta.archivedAt, undefined, "the queued archive must reject a newly stale merge cache");
+				assert.equal(meta.autoArchivedPullRequest, undefined);
+				const persisted = await saved(home, meta.id);
+				assert.equal(persisted.archivedAt, undefined);
+				assert.equal(persisted.autoArchivedPullRequest, undefined);
+				assert.equal(persisted.pullRequestError, meta.pullRequestError);
+				assert.ok(
+					changes.filter((summary) => summary.id === meta.id).every((summary) => summary.archivedAt === undefined),
+				);
+				assert.equal(calls, 0);
+			} finally {
+				release();
+				await restoring;
+				await sweeping;
+			}
+		},
+		{ ...cached, state: "merged" },
+	);
 });
 
 test("failed automatic archive writes leave the merge retryable and publish no archive", async () => {
@@ -513,6 +651,8 @@ test("failed automatic archive writes leave the merge retryable and publish no a
 			merged = true;
 			await manager["pullRequests"].refresh(meta);
 			assert.equal(meta.pullRequest?.state, "merged");
+			assert.equal(meta.pullRequestMergedAt, Date.parse(candidate().mergedAt));
+			assert.equal((await saved(home, meta.id)).pullRequestMergedAt, meta.pullRequestMergedAt);
 			assert.equal(meta.archivedAt, undefined);
 			assert.equal(meta.autoArchivedPullRequest, undefined);
 			assert.equal((await saved(home, meta.id)).autoArchivedPullRequest, undefined);
@@ -593,6 +733,60 @@ test("successful empty lookup without a cache clears discovery errors and cannot
 	);
 });
 
+test("failed PR cache writes roll back merge timestamp additions, replacements and clears until a successful retry", async () => {
+	const firstMerge = Date.now();
+	let remoteState = "OPEN";
+	let mergedAt = firstMerge;
+	let chosen = branch;
+	let hasPr = true;
+	await fixture(
+		{
+			runner: async () =>
+				JSON.stringify(hasPr ? [{ ...candidate(remoteState), mergedAt: new Date(mergedAt).toISOString() }] : []),
+		},
+		async (manager, meta, home, changes) => {
+			await manager["pullRequests"]["polling"];
+			const initial = lifecycle(manager, meta);
+			const save = manager["save"].bind(manager);
+			for (const transition of ["merge", "new-merge-time", "open", "merge", "branch"] as const) {
+				const previous = structuredClone(meta.pullRequest);
+				const previousMergedAt = meta.pullRequestMergedAt;
+				const previousBranch = meta.workspace!.branch;
+				const published = changes.length;
+				remoteState = transition === "open" ? "OPEN" : "MERGED";
+				if (transition === "new-merge-time") mergedAt++;
+				if (transition === "branch") {
+					chosen = "another-branch";
+					hasPr = false;
+				}
+				manager["save"] = async () => {
+					throw new Error("disk full");
+				};
+				try {
+					await manager["pullRequests"].refresh(meta);
+					assert.deepEqual(meta.pullRequest, previous, transition);
+					assert.equal(meta.pullRequestMergedAt, previousMergedAt, transition);
+					assert.equal(meta.workspace!.branch, previousBranch, transition);
+					assert.equal((await saved(home, meta.id)).pullRequestMergedAt, previousMergedAt, transition);
+					assert.equal(changes.length, published, "uncommitted merge metadata must not broadcast");
+					assert.deepEqual(lifecycle(manager, meta), initial);
+				} finally {
+					manager["save"] = save;
+				}
+				await manager["pullRequests"].refresh(meta);
+				const expected = transition === "open" || transition === "branch" ? undefined : mergedAt;
+				assert.equal(meta.pullRequestMergedAt, expected, transition);
+				assert.equal((await saved(home, meta.id)).pullRequestMergedAt, expected, transition);
+				assert.equal(meta.archivedAt, undefined, "recent merges are persisted without archiving");
+				assert.equal(changes.length, published + 1);
+				assert.deepEqual(lifecycle(manager, meta), initial);
+			}
+		},
+		undefined,
+		() => chosen,
+	);
+});
+
 test("failed PR cache write rolls back only PR fields, so the identical lookup error retries and publishes after recovery", async () => {
 	let offline = false;
 	await fixture(
@@ -660,7 +854,7 @@ test("failed PR cache write rolls back only PR fields, so the identical lookup e
 	);
 });
 
-test("restart exposes persisted badge/error immediately and immediately rechecks parked sessions", async () => {
+test("restart exposes persisted badge/error immediately and rechecks nonterminal parked sessions", async () => {
 	await fixture(
 		{
 			runner: async () => {
@@ -710,6 +904,64 @@ test("restart exposes persisted badge/error immediately and immediately rechecks
 	);
 });
 
+test("merged and closed caches keep their badge/error on restart without polling, but explicit refresh recovers", async () => {
+	for (const state of ["merged", "closed"] as const) {
+		const terminal = { ...cached, state };
+		let calls = 0;
+		await fixture(
+			{
+				runner: async () => {
+					calls++;
+					throw new Error("offline");
+				},
+			},
+			async (manager, meta, home) => {
+				await manager["pullRequests"]["polling"];
+				assert.equal(calls, 0, `${state} must not poll on startup`);
+				await manager["pullRequests"].refresh(meta);
+				assert.match(meta.pullRequestError ?? "", /offline/);
+				await manager.shutdown();
+				calls = 0;
+				const reopened = new SessionManager(
+					home,
+					new ProjectStore(home),
+					undefined,
+					{},
+					{
+						intervalMs: 10,
+						runner: async (file, args) => {
+							calls++;
+							if (file === "git" && args[0] === "branch") return "";
+							return JSON.stringify([candidate()]);
+						},
+					},
+				);
+				try {
+					await reopened.load();
+					assert.deepEqual(reopened.get(meta.id)?.pullRequest, terminal);
+					assert.match(reopened.get(meta.id)?.pullRequestError ?? "", /offline/);
+					assert.equal(reopened["workers"].size, 0);
+					await reopened["pullRequests"]["polling"];
+					await delay(30);
+					assert.equal(calls, 0, `${state} must not run git or gh on any scheduled sweep`);
+					assert.deepEqual(reopened.get(meta.id)?.pullRequest, terminal);
+					assert.match(reopened.get(meta.id)?.pullRequestError ?? "", /offline/);
+					await reopened["pullRequests"].refresh(reopened["metas"].get(meta.id)!);
+					assert.ok(calls > 0, "explicit refresh still queries GitHub");
+					assert.equal(reopened.get(meta.id)?.pullRequest?.state, "open");
+					assert.equal(reopened.get(meta.id)?.pullRequestError, undefined);
+					assert.equal((await saved(home, meta.id)).pullRequestError, undefined);
+					assert.equal(reopened.get(meta.id)?.outcomeAt, 10);
+					assert.equal(reopened.get(meta.id)?.updatedAt, 2);
+				} finally {
+					await reopened.shutdown();
+				}
+			},
+			terminal,
+		);
+	}
+});
+
 test("settled kernel activity refreshes immediately, overlapping triggers dedupe, completion replay does not recheck", async () => {
 	let calls = 0;
 	await fixture(
@@ -754,12 +1006,15 @@ test("settled kernel activity refreshes immediately, overlapping triggers dedupe
 test("daemon polls even with no watchers/workers, and shutdown drains and persists an active lookup", async () => {
 	let state = "OPEN";
 	let calls = 0;
+	const mergedAt = new Date().toISOString();
 	await fixture(
 		{
 			intervalMs: 10,
 			runner: async (_file, args) => {
 				calls++;
-				return args.includes("--state=open") && state !== "OPEN" ? "[]" : JSON.stringify([candidate(state)]);
+				return args.includes("--state=open") && state !== "OPEN"
+					? "[]"
+					: JSON.stringify([{ ...candidate(state), mergedAt }]);
 			},
 		},
 		async (manager, meta) => {
@@ -770,6 +1025,11 @@ test("daemon polls even with no watchers/workers, and shutdown drains and persis
 			assert.equal(manager["watchers"].size, 0);
 			assert.equal(manager["workers"].size, 0);
 			assert.deepEqual(lifecycle(manager, meta), initial);
+			await manager["pullRequests"]["polling"];
+			assert.equal(meta.archivedAt, undefined, "a recent merge remains unarchived when polling stops");
+			const terminalCalls = calls;
+			await delay(30);
+			assert.equal(calls, terminalCalls, "observing a terminal PR stops future background lookups");
 			await manager.shutdown();
 			const stopped = calls;
 			await delay(30);

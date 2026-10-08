@@ -55,6 +55,10 @@ limit. Agents investigate flaky CI rather than blindly retrying it and report bl
 in Pilot, never in GitHub comments or reviews. Ask and direct-workspace chats are not monitored for
 automatic PR work.
 
+Merged and closed PRs are no longer polled. When an agent later becomes idle, an explicit refresh can
+discover a reopened or new PR. Merged chats still archive after 24 hours using the saved merge time,
+without another GitHub request.
+
 See [PLAN.md](PLAN.md) for the spec and milestones (GitHub, Slack and Linear triggers, human-in-the-loop
 specs, hosting).
 

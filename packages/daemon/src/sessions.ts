@@ -150,6 +150,8 @@ interface SessionMeta extends OutcomeMeta {
 	failure?: string;
 	pullRequest?: SessionPullRequest;
 	pullRequestError?: string;
+	/** Observed GitHub merge time, retained for local delayed archiving without terminal PR polling. */
+	pullRequestMergedAt?: number;
 	/** Only PRs actually opened by this agent are eligible for automatic work. */
 	agentPullRequests?: string[];
 	/** One persisted budget shared by all PR problems, reset only by user input. */
@@ -694,6 +696,12 @@ export class SessionManager {
 		const staleBefore = Date.now() - WEEK_MS;
 		for (const meta of this.metas.values()) {
 			if (this.closing) break;
+			try {
+				await this.archiveMergedPullRequest(meta);
+			} catch (error) {
+				if (!(error instanceof Conflict))
+					console.warn(`pilotd: could not archive merged PR session ${meta.id}: ${error}`);
+			}
 			if (meta.archivedAt !== undefined || Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore) continue;
 			try {
 				await this.setArchived(meta.id, true, undefined, staleBefore);
@@ -983,6 +991,15 @@ export class SessionManager {
 				if (staleBefore !== undefined && Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore)
 					return this.summary(meta);
 				if (autoArchivedPullRequest && meta.autoArchivedPullRequest === autoArchivedPullRequest)
+					return this.summary(meta);
+				if (
+					autoArchivedPullRequest &&
+					(meta.pullRequest?.url !== autoArchivedPullRequest ||
+						meta.pullRequest.state !== "merged" ||
+						meta.pullRequestError ||
+						meta.pullRequestMergedAt === undefined ||
+						Date.now() < meta.pullRequestMergedAt + DAY_MS)
+				)
 					return this.summary(meta);
 				if (!archived && meta.workspaceRecovery) {
 					try {
@@ -2006,6 +2023,7 @@ export class SessionManager {
 		const branchChanged = result.branch !== undefined && previousBranch !== result.branch;
 		const previous = meta.pullRequest;
 		const previousError = meta.pullRequestError;
+		const previousMergedAt = meta.pullRequestMergedAt;
 		const next = result.pullRequest;
 		const changed =
 			branchChanged ||
@@ -2018,8 +2036,13 @@ export class SessionManager {
 		if (branchChanged && meta.workspace) {
 			meta.workspace.branch = result.branch;
 			delete meta.pullRequest;
+			delete meta.pullRequestMergedAt;
 		}
-		if (next) meta.pullRequest = next;
+		if (next) {
+			meta.pullRequest = next;
+			if (next.state === "merged" && result.mergedAt !== undefined) meta.pullRequestMergedAt = result.mergedAt;
+			else delete meta.pullRequestMergedAt;
+		}
 		if (result.error) meta.pullRequestError = result.error;
 		else delete meta.pullRequestError;
 		// PR freshness is not agent activity. Keep ordering and completion versions unchanged.
@@ -2037,6 +2060,8 @@ export class SessionManager {
 				else delete meta.pullRequest;
 				if (previousError !== undefined) meta.pullRequestError = previousError;
 				else delete meta.pullRequestError;
+				if (previousMergedAt !== undefined) meta.pullRequestMergedAt = previousMergedAt;
+				else delete meta.pullRequestMergedAt;
 				throw error;
 			}
 		}
@@ -2046,18 +2071,24 @@ export class SessionManager {
 			const problems = await discoverPullRequestProblems(meta, this.pullRequestRunner);
 			await this.followUpPullRequest(meta, next.url, generation, problems);
 		}
-		// Only a fresh merge result can archive a chat. Busy chats retry on the next lookup.
+		await this.archiveMergedPullRequest(meta);
+	}
+
+	/** A known merge is terminal. Its persisted timestamp is enough for a local archive deadline. */
+	private async archiveMergedPullRequest(meta: SessionMeta): Promise<void> {
+		const pr = meta.pullRequest;
 		if (
-			next?.state === "merged" &&
-			result.mergedAt !== undefined &&
-			Date.now() >= result.mergedAt + DAY_MS &&
-			!result.error &&
+			pr?.state === "merged" &&
+			meta.pullRequestMergedAt !== undefined &&
+			Number.isFinite(meta.pullRequestMergedAt) &&
+			Date.now() >= meta.pullRequestMergedAt + DAY_MS &&
+			!meta.pullRequestError &&
 			!this.closing &&
 			meta.archivedAt === undefined &&
-			meta.autoArchivedPullRequest !== next.url
+			meta.autoArchivedPullRequest !== pr.url
 		) {
 			try {
-				await this.setArchived(meta.id, true, next.url);
+				await this.setArchived(meta.id, true, pr.url);
 			} catch (error) {
 				if (!(error instanceof Conflict)) throw error;
 			}
