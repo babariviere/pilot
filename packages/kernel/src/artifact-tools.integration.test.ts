@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
+	getSystemMessageText,
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxToolCall,
@@ -109,6 +110,11 @@ for (const mode of ["on", "only"] as const) {
 			sessionOptions: { ...f.options.sessionOptions, customTools: tools },
 		});
 		f.cleanup.push(() => adapter.close());
+		assert.doesNotMatch(
+			adapter.session.systemPrompt,
+			/proactively publish a diagram/,
+			"ordinary Pi tools do not inject Pilot-only behavior",
+		);
 		for (const tool of tools) {
 			assert.ok(adapter.session.getCallableToolNames().includes(tool.name), tool.name);
 			const durable = adapter.extension.tools?.find((candidate) => candidate.name === tool.name);
@@ -235,6 +241,68 @@ test("KernelSession registers tools with the session directory and project ident
 	assert.equal(notifications, 2);
 	assert.equal(f.faux.state.callCount, 0);
 });
+
+for (const mode of ["on", "only"] as const) {
+	for (const available of [true, false]) {
+		test(`Pilot diagram system guidance follows artifact availability (${mode}, ${available})`, {
+			timeout: 45_000,
+		}, async (t) => {
+			const f = await fixture(t, mode);
+			const open = NativeAdapter.open;
+			let adapter: NativeAdapter | undefined;
+			t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+				adapter = await open.call(NativeAdapter, {
+					...options,
+					...f.options,
+					sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+				});
+				if (!available) {
+					adapter.session.setActiveToolsByName(
+						adapter.session.getActiveToolNames().filter((name) => name !== "artifact"),
+					);
+					adapter.refreshTools();
+				}
+				return adapter;
+			});
+			const session = await KernelSession.open(
+				{
+					sessionId: "diagram-guidance",
+					cwd: f.root,
+					storageDir: join(f.root, "storage"),
+				},
+				{ onWorking: () => {} },
+			);
+			f.cleanup.push(() => session.close());
+			assert.ok(adapter);
+			assert.equal(adapter.session.getCallableToolNames().includes("artifact"), available);
+			if (mode === "only")
+				assert.ok(
+					!adapter.extension.tools?.some((tool) => tool.name === "artifact"),
+					"guidance must not rely on direct declarations",
+				);
+			let prompt: string | undefined;
+			f.faux.setResponses([
+				(transcript) => {
+					prompt = transcript.messages
+						.filter((message) => message.role === "system")
+						.map(getSystemMessageText)
+						.join("\n");
+					return fauxAssistantMessage("Explained.");
+				},
+			]);
+			await session.submit("explain", "Explain the architecture", "followUp");
+			await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+			assert.equal(f.faux.state.callCount, 1);
+			assert.ok(prompt);
+			if (available) {
+				assert.match(prompt, /proactively publish a diagram with the artifact tool/);
+				assert.match(prompt, /Artifact preview is optional verification/);
+			} else {
+				assert.doesNotMatch(prompt, /proactively publish a diagram|Artifact preview is optional verification/);
+			}
+		});
+	}
+}
 
 test("busy codemode publications and attention survive native tool refresh and reopen", {
 	timeout: 20_000,

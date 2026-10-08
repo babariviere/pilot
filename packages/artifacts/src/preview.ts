@@ -1,4 +1,5 @@
 /** Optional agent-side verification, isolated from the daemon and the user's browser profile. */
+import { existsSync } from "node:fs";
 import { type Browser, chromium } from "playwright";
 import type { ArtifactWrite } from "@pilot/protocol";
 import { ARTIFACT_RUNTIME_GUARD, getLibrary, isArtifactLibrary, prepareArtifact } from "./render.ts";
@@ -7,6 +8,11 @@ export interface ArtifactPreview {
 	screenshot: { mimeType: "image/png"; data: string; width: number; height: number };
 	consoleMessages: Array<{ level: string; text: string }>;
 	contentHeight: number;
+}
+
+/** Probe only the installed browser, without launching it or triggering a download. */
+export function isArtifactPreviewAvailable(): boolean {
+	return existsSync(chromium.executablePath());
 }
 
 export async function previewArtifact(
@@ -38,6 +44,7 @@ export async function previewArtifact(
 	let browser: Browser;
 	try {
 		browser = await chromium.launch({
+			executablePath: chromium.executablePath(),
 			headless: true,
 			chromiumSandbox: true,
 			timeout: 15_000,
@@ -45,7 +52,7 @@ export async function previewArtifact(
 		});
 	} catch (error) {
 		throw new Error(
-			`Artifact preview browser could not start. Install it with npm run artifacts:browser. ${error instanceof Error ? error.message : error}`,
+			`Artifact preview browser could not start. Preview is optional; publish without it. ${error instanceof Error ? error.message : error}`,
 		);
 	}
 	let timer: ReturnType<typeof setTimeout> | undefined;

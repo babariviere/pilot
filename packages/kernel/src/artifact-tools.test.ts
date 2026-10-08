@@ -3,6 +3,7 @@ import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { isArtifactPreviewAvailable } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 
@@ -171,7 +172,7 @@ test("actions reject missing required fields and unknown actions before side eff
 });
 
 test("artifact schema requires a valid action and retains field constraints", () => {
-	const [tool] = fixture().tools;
+	const [tool] = fixture({ preview: async () => assert.fail("schema validation must not render") }).tools;
 	assert.ok(tool);
 	const invalidArguments: Record<string, JsonValue>[] = [
 		{},
@@ -195,6 +196,52 @@ test("create forwards only document fields, without action or unrelated controls
 	const f = fixture();
 	await f.call("create", { ...write, id: "ignored", revision: 1, expectedRevision: 1, width: 800 });
 	assert.deepEqual(f.calls, [{ method: "create", args: [write] }]);
+});
+
+test("unavailable preview is neither advertised nor callable, while publishing still works", async () => {
+	const f = fixture({ preview: false });
+	const [tool] = f.tools;
+	assert.ok(tool);
+	assert.doesNotMatch(tool.description, /preview|Chromium|install chromium/);
+	assert.doesNotMatch(tool.promptSnippet!, /preview/);
+	assert.doesNotMatch(JSON.stringify(tool.parameters), /preview|width|height/);
+	assert.doesNotMatch(JSON.stringify(tool.outputSchema), /screenshot|consoleMessages|contentHeight/);
+	assert.throws(
+		() =>
+			validateToolArguments(tool, {
+				type: "toolCall",
+				id: "unavailable",
+				name: "artifact",
+				arguments: { action: "preview", ...write },
+			}),
+		/Validation failed/,
+	);
+	await assert.rejects(f.call("preview", write), /unavailable; publish without preview/);
+	assert.deepEqual(f.calls, []);
+	await f.call("create", write);
+	await f.call("update", { id: "artifact-1", ...write });
+	assert.equal(f.notifications, 2);
+});
+
+test("default preview advertisement follows the installed browser probe", () => {
+	const [tool] = fixture().tools;
+	assert.equal(tool!.description.includes("- preview:"), isArtifactPreviewAvailable());
+});
+
+test("available preview is explicitly optional and never suggests installing a browser", () => {
+	const [tool] = fixture({ preview: async () => assert.fail("description must not render") }).tools;
+	assert.match(tool!.description, /Preview is not required before publishing/);
+	assert.match(tool!.description, /If it fails, publish without preview/);
+	assert.doesNotMatch(
+		tool!.description,
+		/Use artifact\(\{action:"preview".*before publishing|npm run artifacts:browser|npx playwright install/,
+	);
+	validateToolArguments(tool!, {
+		type: "toolCall",
+		id: "available",
+		name: "artifact",
+		arguments: { action: "preview", ...write },
+	});
 });
 
 test("image actions forward embedded sources and do not expose image bytes in publication results", async () => {
