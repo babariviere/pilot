@@ -94,7 +94,7 @@ export function missionPrompt(mission: MissionContext): string {
 	return lines.join("\n");
 }
 
-/** Why a tool call would post on GitHub, or undefined. Scans every string argument, including codemode scripts. */
+/** Why executable text would post on GitHub, or undefined. Includes nested calls in codemode scripts. */
 export function githubPosting(arguments_: unknown): string | undefined {
 	const text = strings(arguments_).join("\n");
 	for (const { pattern, what } of POSTING) if (pattern.test(text)) return what;
@@ -111,6 +111,17 @@ function strings(value: unknown): string[] {
 	if (Array.isArray(value)) return value.flatMap(strings);
 	if (value && typeof value === "object") return Object.values(value).flatMap(strings);
 	return [];
+}
+
+/** Select execution-bearing fields, not metadata or content-only tool arguments. */
+function commandArguments(name: string, args: Record<string, unknown>): unknown {
+	// Conservatively scan script source to retain coverage of nested tool calls.
+	if (name === "codemode") return args.code;
+	if (name === "jobs") return args.action === "start" ? args.command : undefined;
+	// Native shells and common shell-tool names (including namespaced MCP tools).
+	if (/(?:^|__)(?:bash|powershell|shell|sh|exec|execute_command|run_command|terminal)$/.test(name))
+		return args.command ?? args.cmd ?? args.script;
+	return undefined;
 }
 
 export function pilotPrompt(context: PilotContext, artifactsAvailable = false): string {
@@ -208,12 +219,14 @@ export function withPilotPolicy(
 			...(extension.hooks ?? []),
 			hook(ToolTask, {
 				beforeTool: (call) => {
-					const posting = githubPosting(call.arguments);
+					const commands = commandArguments(call.name, call.arguments);
+					// Direct GitHub write tools are forbidden regardless of their arguments.
+					const posting = githubPosting([call.name, commands]);
 					if (posting)
 						return {
 							block: `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`,
 						};
-					const leak = missionLeak(call.arguments, mission());
+					const leak = missionLeak(commands, mission());
 					return leak
 						? {
 								block: `Pilot policy: commit messages, branch or bookmark names and pull requests must not mention internal mission coordination (found ${leak}). Describe the change itself and retry; external tracker IDs such as Linear issues are fine.`,
