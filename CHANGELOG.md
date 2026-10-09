@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/babariviere/pilot/compare/v1.6.2...v1.7.0) (2026-10-09)
+
+
+### Features
+
+* add missions to share a brief, tasks and artifacts across chats ([52b3aae](https://github.com/babariviere/pilot/commit/52b3aae30145eb605f216ef01ba7b38946453db0))
+
 ## [1.6.2](https://github.com/babariviere/pilot/compare/v1.6.1...v1.6.2) (2026-10-09)
 
 
