@@ -117,6 +117,11 @@ export interface SessionSummary {
 	 * Omitted when there are none, or by older daemons (use pullRequest).
 	 */
 	pullRequests?: SessionPullRequest[];
+	/**
+	 * Every branch or bookmark the session created or used, the current one first. Pair with pullRequests by
+	 * branch. Shared jj workspaces only list bookmarks created from their own workspace. Omitted when none.
+	 */
+	branches?: string[];
 	/** A lookup failed; pull requests, if present, are the last known status, not a fresh result. */
 	pullRequestError?: string;
 	/** Resolved "provider/modelId", once the kernel has started. */

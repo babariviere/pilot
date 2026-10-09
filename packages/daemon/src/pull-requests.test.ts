@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+	createdBookmarks,
 	discoverLinkedPullRequest,
 	discoverPullRequest,
 	githubRepository,
 	type PullRequestSession,
 	PullRequestTracker,
+	sessionBranches,
 } from "./pull-requests.ts";
 import type { Runner } from "./workspaces.ts";
 
@@ -590,18 +592,73 @@ test("polling continues while an earlier branch's PR is open, and stops once eve
 	assert.equal(calls, 0);
 });
 
-test("shared workspaces never attribute repository-wide bookmarks to the session", async () => {
+test("shared workspaces only attribute bookmarks created from their own jj workspace", async () => {
 	const target = session();
-	target.workspace = { ...target.workspace!, shared: { repository: "/repo", name: "w" } };
+	target.workspace = { ...target.workspace!, shared: { name: "w" } };
+	const shows: string[] = [];
 	const result = await discoverPullRequest(target, async (file, args) => {
 		if (file === "git") {
 			assert.deepEqual(args, ["branch", "--show-current"]);
 			return branch;
 		}
-		return JSON.stringify([candidate()]);
+		if (file === "jj" && args[1] === "log")
+			return ['op-c\t"w@"', 'op-sibling\t"other@"', 'op-b\t"w"', "op-root\tnull"].join("\n");
+		if (file === "jj") {
+			const id = args.at(-1)!;
+			shows.push(id);
+			return {
+				"op-c": `\nChanged local bookmarks:\n${branch}:\n+ abc 123 ${branch} | x\n- (absent)\n`,
+				"op-b": "\nChanged local bookmarks:\nfix/stacked:\n+ abc 456 fix/stacked | y\n- (absent)\n",
+			}[id]!;
+		}
+		const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
+		return JSON.stringify(head === "fix/stacked" ? [candidate({ number: 2, headRefName: head })] : [candidate()]);
 	});
+	assert.deepEqual(shows, ["op-c", "op-b"], "sibling workspaces' operations are never read");
 	assert.equal(result.pullRequest?.number, 1);
-	assert.equal(result.others, undefined);
+	assert.deepEqual(
+		result.others?.map((pr) => [pr.number, pr.branch]),
+		[[2, "fix/stacked"]],
+	);
+	assert.deepEqual(result.branches, ["fix/stacked"]);
+});
+
+test("reads created local bookmarks from an operation diff, ignoring moves and remote bookmarks", () => {
+	const diff = [
+		"",
+		"Changed commits:",
+		"+ abc 123 feat/a | x",
+		"",
+		"Changed local bookmarks:",
+		"feat/a:",
+		"+ abc 123 feat/a | x",
+		"- (absent)",
+		"feat/moved:",
+		"+ abc 123 feat/moved | x",
+		"- def 456 feat/moved | y",
+		"",
+		"Changed remote bookmarks:",
+		"feat/remote@origin:",
+		"+ tracked abc 123 feat/remote | x",
+		"- untracked (absent)",
+	].join("\n");
+	assert.deepEqual(createdBookmarks(diff), ["feat/a"]);
+});
+
+test("lists the current branch first, then PR heads and branches without a PR", () => {
+	const target = session();
+	target.previousPullRequests = [
+		{
+			number: 2,
+			url: "https://github.com/octo/repo/pull/2",
+			title: "x",
+			state: "open",
+			branch: "fix/b",
+			checkedAt: 1,
+		},
+	];
+	target.previousBranches = ["fix/c", branch];
+	assert.deepEqual(sessionBranches(target), [branch, "fix/b", "fix/c"]);
 });
 
 test("tracker deduplicates overlapping per-session requests and executes sessions serially", async () => {

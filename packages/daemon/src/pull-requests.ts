@@ -15,7 +15,7 @@ export interface PullRequestSession {
 	cwd: string;
 	archivedAt?: number;
 	workspaceRecovery?: unknown;
-	workspace?: { branch?: string; upstream?: string; base?: string; baseBranch?: string; shared?: unknown };
+	workspace?: { branch?: string; upstream?: string; base?: string; baseBranch?: string; shared?: { name: string } };
 	pullRequest?: SessionPullRequest;
 	/** PRs from branches the session used before its current one, newest first. */
 	previousPullRequests?: SessionPullRequest[];
@@ -31,6 +31,8 @@ export interface PullRequestResult {
 	mergedAt?: number;
 	/** Fresh results for the session's other branches. Branches without a result keep their cache. */
 	others?: SessionPullRequest[];
+	/** Other branches the session created locally (private clone branches or shared-workspace bookmarks). */
+	branches?: string[];
 	error?: string;
 }
 
@@ -47,6 +49,16 @@ export function isTerminalPullRequest(pr: SessionPullRequest | undefined): boole
 /** Current branch PR first, then earlier branches' PRs. */
 export function sessionPullRequests(session: PullRequestSession): SessionPullRequest[] {
 	return [...(session.pullRequest ? [session.pullRequest] : []), ...(session.previousPullRequests ?? [])];
+}
+
+/** Every branch the session created or used: the current one first, then PR heads, then branches without a PR. */
+export function sessionBranches(session: PullRequestSession): string[] {
+	const names = [
+		session.workspace?.branch ?? session.pullRequest?.branch,
+		...sessionPullRequests(session).map((pr) => pr.branch),
+		...(session.previousBranches ?? []),
+	];
+	return [...new Set(names.filter((name): name is string => !!name))];
 }
 
 interface Repository {
@@ -211,13 +223,78 @@ function toSessionPullRequest(pr: Candidate): SessionPullRequest {
 	};
 }
 
+/** Operations are immutable, so each bookmark operation's created names are read once. */
+const createdByOperation = new Map<string, string[]>();
+
+/** Local bookmarks an `op show` diff created (absent before the operation), in output order. */
+export function createdBookmarks(opDiff: string): string[] {
+	const names: string[] = [];
+	let local = false;
+	let current: string | undefined;
+	for (const line of opDiff.split("\n")) {
+		if (/^Changed .*:$/.test(line)) {
+			local = line === "Changed local bookmarks:";
+			current = undefined;
+		} else if (local && /^[^\s+-][^\s]*:$/.test(line)) current = line.slice(0, -1);
+		else if (local && current && line.trim() === "- (absent)") {
+			names.push(current);
+			current = undefined;
+		}
+	}
+	return names;
+}
+
+/**
+ * Bookmarks the session's own jj workspace created, newest first. The shared repository's operation log
+ * records each operation's workspace, so sibling sessions' bookmarks are never attributed to this one.
+ */
+export async function workspaceBookmarks(cwd: string, workspace: string, runner: Runner = run): Promise<string[]> {
+	const output = await runner(
+		"jj",
+		[
+			"op",
+			"log",
+			"--ignore-working-copy",
+			"--no-graph",
+			"-T",
+			'if(self.description().contains("bookmark"), self.id() ++ "\\t" ++ json(self.workspace_name()) ++ "\\n")',
+		],
+		cwd,
+		10_000,
+	);
+	const names: string[] = [];
+	for (const line of output.split("\n")) {
+		const [id, raw] = line.split("\t");
+		if (!id || !raw) continue;
+		let name: unknown;
+		try {
+			name = JSON.parse(raw);
+		} catch {
+			continue;
+		}
+		// jj renders workspace names with a trailing "@".
+		if (name !== workspace && name !== `${workspace}@`) continue;
+		let created = createdByOperation.get(id);
+		if (!created) {
+			created = createdBookmarks(
+				await runner("jj", ["op", "show", "--ignore-working-copy", "--no-graph", "-T", "", id], cwd, 10_000),
+			);
+			if (createdByOperation.size > 4096) createdByOperation.clear();
+			createdByOperation.set(id, created);
+		}
+		names.push(...created);
+	}
+	return [...new Set(names)];
+}
+
 /**
  * Local branches of a private clone are the agent's own, so a session that opened several PRs in one
- * run is still discovered. Shared jj repositories hold sibling sessions' bookmarks, so they rely only
- * on branches the session was observed using.
+ * run is still discovered. Shared jj repositories hold sibling sessions' bookmarks, so only bookmarks
+ * created from the session's own workspace count.
  */
 async function localBranches(session: PullRequestSession, runner: Runner): Promise<string[]> {
-	if (session.workspace?.shared) return [];
+	const shared = session.workspace?.shared;
+	if (shared) return workspaceBookmarks(session.cwd, shared.name, runner);
 	const output = await runner("git", ["branch", "--format=%(refname:short)"], session.cwd, 10_000);
 	return output
 		.split("\n")
@@ -297,11 +374,14 @@ export async function discoverPullRequest(
 	// The session's other branches: earlier PR heads, earlier observed branches and private local branches.
 	try {
 		const cached = new Map((session.previousPullRequests ?? []).map((pr) => [pr.branch, pr]));
+		// Direct delivery to the default branch does not open PRs from other local branches.
+		const local = branch !== undefined && isBase(branch) ? [] : await localBranches(session, runner);
+		const created = local.filter((name) => name !== branch && validBranch(name) && !isBase(name));
+		if (created.length) result.branches = created;
 		const names = new Set<string>([
 			...(session.previousPullRequests ?? []).flatMap((pr) => (pr.branch ? [pr.branch] : [])),
 			...(session.previousBranches ?? []),
-			// Direct delivery to the default branch does not open PRs from other local branches.
-			...(branch !== undefined && isBase(branch) ? [] : await localBranches(session, runner)),
+			...created,
 		]);
 		const others: SessionPullRequest[] = [];
 		for (const name of names) {

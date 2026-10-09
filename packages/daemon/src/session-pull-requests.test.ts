@@ -54,7 +54,7 @@ async function fixture(
 	options: PullRequestOptions,
 	run: (manager: SessionManager, meta: Meta, home: string, changes: SessionSummary[]) => Promise<void>,
 	initialPullRequest?: SessionPullRequest,
-	currentBranch: () => string = () => "",
+	currentBranch: (args: string[]) => string = () => "",
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-prs-"));
 	const id = randomUUID();
@@ -87,7 +87,7 @@ async function fixture(
 		{
 			...options,
 			runner: async (file, args, ...rest) =>
-				file === "git" && args[0] === "branch" ? currentBranch() : options.runner!(file, args, ...rest),
+				file === "git" && args[0] === "branch" ? currentBranch(args) : options.runner!(file, args, ...rest),
 		},
 	);
 	const changes: SessionSummary[] = [];
@@ -286,6 +286,32 @@ test("agent branch changes persist for the UI, clear the prior PR, and survive d
 		},
 		cached,
 		() => chosen,
+	);
+});
+
+test("summaries list every session branch, including local branches without a PR", async () => {
+	await fixture(
+		{
+			runner: async (_file, args) => {
+				const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
+				if (head !== "fix-split") return "[]";
+				return JSON.stringify([
+					{ ...candidate(), number: 12, url: "https://github.com/octo/repo/pull/12", headRefName: head },
+				]);
+			},
+		},
+		async (manager, meta, home) => {
+			await manager["pullRequests"]["polling"];
+			const summary = manager.get(meta.id)!;
+			assert.deepEqual(summary.branches, [branch, "fix-split", "fix-unpublished"]);
+			assert.deepEqual(
+				summary.pullRequests?.map((pr) => [pr.number, pr.branch]),
+				[[12, "fix-split"]],
+			);
+			assert.deepEqual((await saved(home, meta.id)).previousBranches, ["fix-unpublished"]);
+		},
+		undefined,
+		(args) => (args[1] === "--show-current" ? branch : `main\n${branch}\nfix-split\nfix-unpublished`),
 	);
 });
 

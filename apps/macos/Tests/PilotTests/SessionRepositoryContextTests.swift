@@ -13,6 +13,28 @@ import Testing
     }
 }
 
+@Test @MainActor func changesRepositoryContextListsEveryBranchWithItsPullRequest() throws {
+    let prs = [8, 7].map { number in
+        SessionPullRequest(number: number, url: "https://github.com/example/repo/pull/\(number)", title: "Change",
+                           state: .draft, checkedAt: 1, branch: "feat/branch-\(number)")
+    }
+    let single = SessionSummary(id: "one", title: "Chat", cwd: "/repository", branch: "feat/branch-8",
+                                createdAt: 1, updatedAt: 1, state: "idle", pullRequest: prs[0], pullRequests: [prs[0]],
+                                workspaceStorage: .shared, branches: ["feat/branch-8"])
+    let many = SessionSummary(id: "many", title: "Chat", cwd: "/repository", branch: "feat/branch-8",
+                              createdAt: 1, updatedAt: 1, state: "idle", pullRequest: prs[0], pullRequests: prs,
+                              workspaceStorage: .shared, branches: ["feat/branch-8", "feat/branch-7", "feat/unpublished"])
+    func height(_ session: SessionSummary) throws -> Int {
+        let renderer = ImageRenderer(content: ChangesRepositoryContext(session: session))
+        renderer.proposedSize = ProposedViewSize(width: 316, height: nil)
+        let image = try #require(renderer.cgImage)
+        #expect(image.width <= 317)
+        return image.height
+    }
+    #expect(try height(many) > height(single), "each branch gets its own row")
+}
+
+
 @Test @MainActor func askSubtitleShowsPinnedSourceInsteadOfWorkingBranch() throws {
     for sourceBranch in [nil, "main"] as [String?] {
         let session = SessionSummary(id: "ask", title: "Question", cwd: "/repository", branch: "wrong-branch",
