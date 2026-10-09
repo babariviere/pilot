@@ -38,12 +38,12 @@ including diagrams, graphs and animations. Revisions persist with their originat
 Chat cards open the revision published there; the session sidebar opens the latest. Expanded previews
 fill most of the screen. Previews run offline in an isolated
 WebKit view, with bundled React, Mermaid, ECharts and Motion (D3 and Three.js are opt-in).
-The `artifact` tool (actions: `create`, `update`, `get`, `list`, `preview`)
-documents the available libraries and authoring examples. For agent-side screenshots and runtime
-diagnostics, install the optional preview browser once with `npm run artifacts:browser`.
-In codemode-only sessions, its size-limited tool list may omit `artifact` even though it is callable.
-Run `text(await describeTool("artifact"))` in codemode for the schema and authoring instructions,
-then use `tools.artifact(...)`. A missing preview renderer does not prevent HTML, React or image publication.
+The `artifact` tool (actions: `create`, `update`, `get`, `list`, `preview`) has a compact description and
+an `artifacts` namespace that remains visible in codemode even when its full declaration does not fit.
+Pilot supplies the bundled `pilot-artifacts` skill for detailed libraries, examples and authoring rules,
+loaded only when needed, including in Ask. Use `describeTool("artifact")` for an omitted schema.
+For agent-side screenshots and runtime diagnostics, install the optional preview browser once with
+`npm run artifacts:browser`. A missing preview renderer does not prevent HTML, React or image publication.
 
 The chat footer shows the session's context-window estimate. With pi-extensions' `usage` extension
 enabled, it also shows Claude or Codex subscription windows. Hover for reset times and snapshot freshness.

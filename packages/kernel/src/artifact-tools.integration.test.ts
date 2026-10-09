@@ -18,6 +18,7 @@ import type { SubmissionDraft } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
 import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
 import { createArtifactTools } from "./artifact-tools.ts";
+import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 
@@ -47,7 +48,7 @@ async function fixture(t: TestContext, mode: "on" | "only" = "on", inlineBudget?
 		cwd: root,
 		agentDir: join(root, "agent"),
 		projectTrusted: false,
-		settingsManager: SettingsManager.inMemory({ defaultTools: ["codemode"] }),
+		settingsManager: SettingsManager.inMemory({ defaultTools: ["read", "codemode"] }),
 		sessionOptions: { modelRuntime, model: faux.getModel() },
 		loaderOptions: {
 			cwd: root,
@@ -124,8 +125,15 @@ for (const mode of ["on", "only"] as const) {
 				assert.equal(durable?.executionMode, "sequential");
 			}
 		}
+		assert.match(adapter.session.systemPrompt, /<name>pilot-artifacts<\/name>/);
+		assert.ok(adapter.session.systemPrompt.includes(ARTIFACT_SKILL_PATH));
+		assert.doesNotMatch(adapter.session.systemPrompt, /echarts\.init|mermaid\.initialize|@StateObject/);
 		const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode");
 		assert.ok(codemode);
+		if (mode === "only") {
+			assert.match(codemode.description, /## artifacts/);
+			assert.match(codemode.description, /### `artifact`/, "compact schema fits the default inline budget");
+		}
 		adapter.session.agent.state.messages.push(
 			fauxAssistantMessage(
 				{
@@ -142,6 +150,8 @@ for (const mode of ["on", "only"] as const) {
 			{
 				code: `
 const registered = ALL_TOOLS.filter(t => t.name === "artifact").map(t => t.name).sort();
+const skill = await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}});
+text({loadedSkill:skill.includes("name: pilot-artifacts")});
 const created = await tools.artifact({action:"create",title:"Demo",kind:"html",source:"<h1>Demo</h1>"});
 const got = await tools.artifact({action:"get",id:created.artifact.id});
 const listed = await tools.artifact({action:"list"});
@@ -160,6 +170,7 @@ text({consoleMessages:preview.consoleMessages,contentHeight:preview.contentHeigh
 			.map((block) => block.text)
 			.join("\n");
 		assert.ok(text.includes('"registered":["artifact"]'), text);
+		assert.ok(text.includes('"loadedSkill":true'), text);
 		assert.ok(text.includes('"source":"<h1>Demo</h1>"'), text);
 		assert.ok(text.includes('"revision":2'), text);
 		assert.ok(text.includes("Rendered offline"), text);
@@ -169,6 +180,40 @@ text({consoleMessages:preview.consoleMessages,contentHeight:preview.contentHeigh
 		assert.equal(f.faux.state.callCount, 0, "tool calls do not invoke the native model loop");
 	});
 }
+
+test("bundled authoring skill extends configured skills and survives resource reload", async (t) => {
+	const f = await fixture(t, "only");
+	const userSkill = join(f.root, "user-skill.md");
+	await writeFile(userSkill, "---\nname: user-skill\ndescription: A configured user skill\n---\nUser-only body.");
+	const tools = createArtifactTools({
+		preview: false,
+		store: {
+			list: async () => [],
+			get: async () => assert.fail("only checking registration"),
+			create: async () => assert.fail("only checking registration"),
+			update: async () => assert.fail("only checking registration"),
+		},
+	});
+	const adapter = await NativeAdapter.open({
+		...f.options,
+		loaderOptions: { ...f.options.loaderOptions!, additionalSkillPaths: [userSkill] },
+		sessionOptions: { ...f.options.sessionOptions, customTools: tools },
+	});
+	f.cleanup.push(() => adapter.close());
+	const checkSkills = () => {
+		const loaded = adapter.session.resourceLoader.getSkills();
+		assert.deepEqual(loaded.diagnostics, []);
+		assert.deepEqual(loaded.skills.map((skill) => skill.name).sort(), ["pilot-artifacts", "user-skill"]);
+		assert.equal(loaded.skills.find((skill) => skill.name === "pilot-artifacts")?.filePath, ARTIFACT_SKILL_PATH);
+		assert.equal(
+			adapter.session.getAllTools().find((tool) => tool.name === "artifact")?.namespace?.name,
+			"artifacts",
+		);
+	};
+	checkSkills();
+	await adapter.session.reload();
+	checkSkills();
+});
 
 test("KernelSession registers tools with the session directory and project identity, then notifies committed publication", {
 	timeout: 15_000,
@@ -294,145 +339,178 @@ for (const mode of ["on", "only"] as const) {
 			assert.equal(f.faux.state.callCount, 1);
 			assert.ok(prompt);
 			if (available) {
-				assert.ok(prompt.includes('text(await describeTool("artifact"))'));
 				assert.match(prompt, /proactively publish a diagram with the artifact tool/);
 				assert.match(prompt, /Artifact preview is optional verification/);
 			} else {
-				assert.doesNotMatch(
-					prompt,
-					/artifact tool is available|describeTool\("artifact"\)|proactively publish a diagram|Artifact preview is optional verification/,
-				);
+				assert.doesNotMatch(prompt, /proactively publish a diagram|Artifact preview is optional verification/);
 			}
 		});
 	}
 }
 
-test("budget-omitted artifacts can be discovered and published when pending codemode work resumes after restart", {
-	timeout: 20_000,
-}, async (t) => {
-	// A zero inline budget deterministically reproduces the omitted declaration, regardless
-	// of how many user extension/MCP tools compete for the normal 3000-token budget.
-	const f = await fixture(t, "only", 0);
-	const open = NativeAdapter.open;
-	const refreshUsage = NativeAdapter.prototype.refreshUsage;
-	const usageRefreshes: Promise<void>[] = [];
-	t.mock.method(
-		NativeAdapter.prototype,
-		"refreshUsage",
-		function (this: NativeAdapter, ...args: Parameters<typeof refreshUsage>) {
-			const refresh = refreshUsage.apply(this, args);
-			usageRefreshes.push(refresh);
-			return refresh;
-		},
-	);
-	let adapter: NativeAdapter | undefined;
-	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
-		adapter = await open.call(NativeAdapter, {
-			...options,
-			...f.options,
-			sessionId: options.sessionId,
-			sessionFile: options.sessionFile,
-			sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
-		});
-		return adapter;
-	});
-	const spec = { sessionId: "restart-artifacts", cwd: f.root, storageDir: join(f.root, "storage") };
-	const store = new ArtifactStore(f.root, { sessionId: spec.sessionId });
-	const session = await KernelSession.open(spec, { onWorking: () => {} });
-	f.cleanup.push(() => session.close());
-	f.faux.setResponses([
-		fauxAssistantMessage(
-			fauxToolCall("codemode", {
-				code: 'text(await tools.artifact({action:"create",title:"Before restart",kind:"html",source:"<h1>Before</h1>"}));',
-			}),
-			{ stopReason: "toolUse" },
-		),
-		fauxAssistantMessage("Published before restart."),
-	]);
-	await session.submit("before", "Create an artifact", "followUp");
-	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	const [before] = await store.list();
-	assert.ok(before);
-	const oldAdapter = adapter;
-	let enterRequest!: () => void;
-	const requestEntered = new Promise<void>((resolve) => {
-		enterRequest = resolve;
-	});
-	// Stop during a model request, leaving its prepared prompt and pending generation
-	// durable for KernelSession.open's harness.resume(). No new submission on reopen.
-	f.faux.setResponses([
-		async (_transcript, options) => {
-			enterRequest();
-			assert.ok(options?.signal);
-			await new Promise<void>((resolve) =>
-				options.signal!.addEventListener("abort", () => resolve(), { once: true }),
-			);
-			return fauxAssistantMessage("Interrupted request");
-		},
-	]);
-	await session.submit("after", "Show the artifact after restarting", "followUp");
-	await requestEntered;
-	await Promise.all(usageRefreshes);
-	await session.close();
-	f.faux.setResponses([
-		(transcript) => {
-			assert.ok(adapter);
-			assert.notEqual(adapter, oldAdapter);
-			assert.ok(adapter.session.getCallableToolNames().includes("artifact"));
-			assert.ok(!adapter.extension.tools?.some((tool) => tool.name === "artifact"));
-			const codemode = adapter.extension.tools?.find((tool) => tool.name === "codemode");
-			assert.ok(codemode);
-			assert.doesNotMatch(codemode.description, /### `artifact`/);
-			const prompt = transcript.messages
-				.filter((m) => m.role === "system")
-				.map(getSystemMessageText)
-				.join("\n");
-			assert.match(prompt, /artifact tool is available in this session/);
-			assert.ok(prompt.includes('text(await describeTool("artifact"))'));
-			return fauxAssistantMessage(fauxToolCall("codemode", { code: 'text(await describeTool("artifact"));' }), {
-				stopReason: "toolUse",
+for (const skillWasAdvertised of [true, false]) {
+	test(`budget-omitted artifacts remain discoverable after restart (skill advertised before: ${skillWasAdvertised})`, {
+		timeout: 20_000,
+	}, async (t) => {
+		// A zero inline budget deterministically reproduces the omitted declaration, regardless
+		// of how many user extension/MCP tools compete for the normal 3000-token budget.
+		const f = await fixture(t, "only", 0);
+		// Also cover a cached pre-upgrade native prompt that never advertised the new skill.
+		let advertiseSkill = skillWasAdvertised;
+		f.options.loaderOptions = {
+			...f.options.loaderOptions!,
+			skillsOverride: (loaded) => (advertiseSkill ? loaded : { ...loaded, skills: [] }),
+		};
+		const open = NativeAdapter.open;
+		const refreshUsage = NativeAdapter.prototype.refreshUsage;
+		const usageRefreshes: Promise<void>[] = [];
+		t.mock.method(
+			NativeAdapter.prototype,
+			"refreshUsage",
+			function (this: NativeAdapter, ...args: Parameters<typeof refreshUsage>) {
+				const refresh = refreshUsage.apply(this, args);
+				usageRefreshes.push(refresh);
+				return refresh;
+			},
+		);
+		let adapter: NativeAdapter | undefined;
+		t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+			adapter = await open.call(NativeAdapter, {
+				...options,
+				...f.options,
+				sessionId: options.sessionId,
+				sessionFile: options.sessionFile,
+				sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
 			});
-		},
-		(transcript) => {
-			const result = transcript.messages.findLast((m) => m.role === "toolResult");
-			assert.ok(result?.role === "toolResult" && !result.isError);
-			const description = result.content
-				.filter((b) => b.type === "text")
-				.map((b) => b.text)
-				.join("\n");
-			assert.match(description, /artifact\(args:/);
-			assert.match(description, /self-contained Swift defining struct ArtifactView/);
-			return fauxAssistantMessage(
+			return adapter;
+		});
+		const spec = { sessionId: "restart-artifacts", cwd: f.root, storageDir: join(f.root, "storage") };
+		const store = new ArtifactStore(f.root, { sessionId: spec.sessionId });
+		const session = await KernelSession.open(spec, { onWorking: () => {} });
+		f.cleanup.push(() => session.close());
+		f.faux.setResponses([
+			fauxAssistantMessage(
 				fauxToolCall("codemode", {
-					code: `
+					code: 'text(await tools.artifact({action:"create",title:"Before restart",kind:"html",source:"<h1>Before</h1>"}));',
+				}),
+				{ stopReason: "toolUse" },
+			),
+			fauxAssistantMessage("Published before restart."),
+		]);
+		await session.submit("before", "Create an artifact", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		const [before] = await store.list();
+		assert.ok(before);
+		const oldAdapter = adapter;
+		let enterRequest!: () => void;
+		const requestEntered = new Promise<void>((resolve) => {
+			enterRequest = resolve;
+		});
+		// Stop during a model request, leaving its prepared prompt and pending generation
+		// durable for KernelSession.open's harness.resume(). No new submission on reopen.
+		f.faux.setResponses([
+			async (_transcript, options) => {
+				enterRequest();
+				assert.ok(options?.signal);
+				await new Promise<void>((resolve) =>
+					options.signal!.addEventListener("abort", () => resolve(), { once: true }),
+				);
+				return fauxAssistantMessage("Interrupted request");
+			},
+		]);
+		await session.submit("after", "Show the artifact after restarting", "followUp");
+		await requestEntered;
+		await Promise.all(usageRefreshes);
+		await session.close();
+		advertiseSkill = true;
+		f.faux.setResponses([
+			(transcript) => {
+				assert.ok(adapter);
+				assert.notEqual(adapter, oldAdapter);
+				assert.ok(adapter.session.getCallableToolNames().includes("artifact"));
+				assert.ok(!adapter.extension.tools?.some((tool) => tool.name === "artifact"));
+				const codemode = adapter.extension.tools?.find((tool) => tool.name === "codemode");
+				assert.ok(codemode);
+				assert.doesNotMatch(codemode.description, /### `artifact`/);
+				assert.match(codemode.description, /## artifacts \(tools not listed\)/);
+				assert.match(codemode.description, /tools\.artifact/);
+				assert.match(codemode.description, /pilot-artifacts skill/);
+				const prompt = transcript.messages
+					.filter((m) => m.role === "system")
+					.map(getSystemMessageText)
+					.join("\n");
+				if (skillWasAdvertised) {
+					assert.match(prompt, /<name>pilot-artifacts<\/name>/);
+					assert.ok(prompt.includes(ARTIFACT_SKILL_PATH));
+				} else {
+					assert.doesNotMatch(prompt, /<name>pilot-artifacts<\/name>/);
+				}
+				assert.equal(
+					adapter.session.resourceLoader.getSkills().skills.find((skill) => skill.name === "pilot-artifacts")
+						?.filePath,
+					ARTIFACT_SKILL_PATH,
+				);
+				assert.doesNotMatch(prompt, /echarts\.init|mermaid\.initialize|@StateObject/);
+				return fauxAssistantMessage(
+					fauxToolCall("codemode", {
+						code: `
+text(await describeNamespace("artifacts"));
+text(await describeTool("artifact"));
+text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
+`,
+					}),
+					{
+						stopReason: "toolUse",
+					},
+				);
+			},
+			(transcript) => {
+				const result = transcript.messages.findLast((m) => m.role === "toolResult");
+				assert.ok(result?.role === "toolResult" && !result.isError);
+				const description = result.content
+					.filter((b) => b.type === "text")
+					.map((b) => b.text)
+					.join("\n");
+				assert.match(description, /artifact\(args:/);
+				assert.ok(
+					description.includes(ARTIFACT_SKILL_PATH),
+					"namespace instructions locate the skill even with an older cached prompt",
+				);
+				assert.match(description, /ArtifactView/);
+				assert.match(description, /@StateObject/);
+				assert.match(description, /mermaid\.initialize/);
+				return fauxAssistantMessage(
+					fauxToolCall("codemode", {
+						code: `
 const existing = await tools.artifact({action:"get",id:${JSON.stringify(before.id)}});
 text(await tools.artifact({action:"update",id:existing.artifact.id,expectedRevision:existing.artifact.revision,title:"After restart",kind:"html",source:"<h1>After</h1>"}));
 text(await tools.artifact({action:"create",title:"New after restart",kind:"html",source:"<h1>New</h1>"}));
 `,
-				}),
-				{ stopReason: "toolUse" },
-			);
-		},
-		fauxAssistantMessage("Published after restart."),
-	]);
-	const restored = await KernelSession.open(spec, { onWorking: () => {} });
-	f.cleanup.push(() => restored.close());
-	await restored.conversation.waitForIdle(BACKGROUND_CONTEXT);
-	assert.equal(f.faux.state.callCount, 6, "reopen retries the interrupted request without a new user message");
-	const artifacts = await store.list();
-	assert.equal(artifacts.length, 2);
-	assert.equal(artifacts.find((artifact) => artifact.id === before.id)?.revision, 2);
-	assert.equal((await store.get(before.id)).source, "<h1>After</h1>");
-	const view = await restored.conversation.context(BACKGROUND_CONTEXT);
-	const results = view.messages.filter((m) => m.role === "toolResult");
-	assert.equal(results.length, 3);
-	assert.ok(
-		results.every((result) => !result.isError),
-		JSON.stringify(results),
-	);
-	assert.equal(view.entries.filter((entry) => entry.kind === "pilot.artifact").length, 3);
-	await Promise.all(usageRefreshes);
-});
+					}),
+					{ stopReason: "toolUse" },
+				);
+			},
+			fauxAssistantMessage("Published after restart."),
+		]);
+		const restored = await KernelSession.open(spec, { onWorking: () => {} });
+		f.cleanup.push(() => restored.close());
+		await restored.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.equal(f.faux.state.callCount, 6, "reopen retries the interrupted request without a new user message");
+		const artifacts = await store.list();
+		assert.equal(artifacts.length, 2);
+		assert.equal(artifacts.find((artifact) => artifact.id === before.id)?.revision, 2);
+		assert.equal((await store.get(before.id)).source, "<h1>After</h1>");
+		const view = await restored.conversation.context(BACKGROUND_CONTEXT);
+		const results = view.messages.filter((m) => m.role === "toolResult");
+		assert.equal(results.length, 3);
+		assert.ok(
+			results.every((result) => !result.isError),
+			JSON.stringify(results),
+		);
+		assert.equal(view.entries.filter((entry) => entry.kind === "pilot.artifact").length, 3);
+		await Promise.all(usageRefreshes);
+	});
+}
 
 test("busy codemode publications and automatic completion survive native tool refresh and reopen", {
 	timeout: 20_000,

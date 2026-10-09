@@ -1,13 +1,14 @@
 /** Host-owned Ask tools. No model-supplied command, executable, revision or Git pathspec is accepted. */
 import { execFile } from "node:child_process";
 import { constants } from "node:fs";
-import { lstat, open, opendir, realpath } from "node:fs/promises";
+import { lstat, open, opendir, readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { Type } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AskContext } from "./policy.ts";
+import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 
 const run = promisify(execFile);
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -232,7 +233,10 @@ function glob(pattern: string): (path: string) => boolean {
 	};
 }
 
-export async function createAskTools(ask: AskContext): Promise<ToolDefinition[]> {
+export async function createAskTools(
+	ask: AskContext,
+	options: { artifactSkill?: boolean } = {},
+): Promise<ToolDefinition[]> {
 	const reader = new SourceReader(ask);
 	if (ask.commit && (await reader.git(["cat-file", "-t", ask.commit])).toString().trim() !== "commit")
 		throw new Error("Ask snapshot must pin a commit object");
@@ -246,7 +250,7 @@ export async function createAskTools(ask: AskContext): Promise<ToolDefinition[]>
 			annotations: readOnlyAnnotations,
 			label: "read",
 			description:
-				"Read source text or images, or a Pilot pasted UUID.png attachment. Source paths are rooted and symlinks are denied. Maximum file size 16 MiB, text output 50 KiB / 2000 lines. Use offset and limit to page text.",
+				"Read source text or images, a Pilot pasted UUID.png attachment, or the exact bundled pilot-artifacts skill path when enabled. Source paths are rooted and symlinks are denied. Maximum file size 16 MiB, text output 50 KiB / 2000 lines. Use offset and limit to page text.",
 			parameters: Type.Object({
 				path: Type.String({ maxLength: 4096 }),
 				offset: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -262,9 +266,14 @@ export async function createAskTools(ask: AskContext): Promise<ToolDefinition[]>
 				}),
 			]),
 			async execute(id, args, signal, onUpdate, ctx) {
+				signal?.throwIfAborted();
 				let bytes: Buffer;
 				const absolute = resolve(reader.root, args.path);
-				if (
+				if (options.artifactSkill && args.path === ARTIFACT_SKILL_PATH) {
+					// Exact host-owned document only. Never grant access to its parent directory,
+					// siblings, aliases, or model-supplied skill paths (including pinned-tree Ask).
+					bytes = await readFile(ARTIFACT_SKILL_PATH, { signal });
+				} else if (
 					isAbsolute(args.path) &&
 					contained(ASK_ATTACHMENTS, absolute) &&
 					UUID_PNG.test(basename(absolute)) &&

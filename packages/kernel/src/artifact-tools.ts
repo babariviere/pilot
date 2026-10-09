@@ -4,13 +4,13 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	type ArtifactStore,
-	artifactLibraries,
 	isArtifactPreviewAvailable,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
 	previewArtifact,
 } from "@pilot/artifacts";
 import type { ArtifactReference, ArtifactRevision, ArtifactSummary, ArtifactWrite } from "@pilot/protocol";
+import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const library = StringEnum(["react", "react-dom", "mermaid", "echarts", "motion", "d3", "three"] as const);
@@ -50,22 +50,6 @@ const diagnosticsProperties = {
 	consoleMessages: Type.Array(Type.Object({ level: Type.String(), text: Type.String() })),
 	contentHeight: Type.Number(),
 };
-
-const fileImageAuthoring = `Image: kind:"image", source is a local PNG, JPEG, GIF or WebP path (relative to the session working directory or absolute) or a base64 data:image/... URL. Maximum decoded image size is 16 MiB; libraries are not supported. The tool embeds the bytes durably, so the original file need not remain. No remote URLs. In codemode: await tools.artifact({action:"create",title:"Generated image",kind:"image",source:"/tmp/generated.png"}). Do not print image base64; get returns the saved data URL.`;
-const inlineImageAuthoring = `Image: kind:"image" accepts only inline base64 data:image/... URLs containing PNG, JPEG, GIF or WebP bytes in Ask. Local file paths and remote URLs are not allowed. Maximum decoded image size is 16 MiB; libraries are not supported. In codemode, pass an existing inline data URL: await tools.artifact({action:"create",title:"Image",kind:"image",source:dataUrl}). Do not print image base64; get returns the saved data URL.`;
-const authoring = (
-	ask = false,
-) => `HTML and React source must be self-contained and at most 512 KiB UTF-8. Runs offline in a sandbox: no CDN, remote scripts, fetch, network assets, Node APIs, native bridge or arbitrary npm imports. Tailwind is not available: use plain CSS inline or in <style> tags, not external stylesheets or assumed utility classes.
-SwiftUI: kind:"swiftui", source is self-contained Swift defining struct ArtifactView: View with a zero-argument initializer. SwiftUI, AppKit and Foundation imports are provided. No project imports, package dependencies, @main or #Preview. Avoid @State (Command Line Tools lack its macro plugin); use @StateObject if needed. Maximum source is 512 KiB UTF-8; libraries are not supported. Requires macOS 14+ and installed Swift Command Line Tools (xcode-select --install), with no browser installation. Compiles and renders in a disposable sandbox with no network or workspace/credential access. Static screenshot only, not an interactive app or validation of actual project views. Offscreen ImageRenderer does not capture embedded AppKit/WebKit views; use SwiftUI layout primitives and inspect screenshots for unsupported controls. create/update save editable Swift source and an embedded 800x600 PNG. Compiler diagnostics are reported on failure. Cold SDK compilation can take minutes; do not set short codemode deadlines. SwiftUI example: {title:"Native card",kind:"swiftui",source:'struct ArtifactView: View { var body: some View { VStack(alignment: .leading) { Text("Preview").font(.title); Text("Native SwiftUI layout") }.padding(24) } }'}.
-${ask ? inlineImageAuthoring : fileImageAuthoring}
-Pilot supplies a light palette and system font. Use CSS variables --pilot-background, --pilot-foreground, --pilot-muted, --pilot-muted-foreground, --pilot-border, --pilot-primary and --pilot-radius for consistent styling; your styles may override them.
-HTML: use inline CSS or <style> tags and ordinary inline <script> tags. Select libraries to get globals echarts, mermaid, motion, d3, THREE (three). Do not import packages in HTML scripts.
-HTML example: {title:"Chart",kind:"html",libraries:["echarts"],source:'<div id="chart" style="height:320px"></div><script>echarts.init(document.getElementById("chart")).setOption({xAxis:{type:"category",data:["A","B"]},yAxis:{},series:[{type:"bar",data:[2,5]}]});</script>'}.
-Mermaid example: libraries:["mermaid"], source:'<pre class="mermaid">graph TD; A-->B</pre><script>mermaid.initialize({startOnLoad:true});</script>'. Motion uses motion.animate(), D3 uses d3.select(), Three uses new THREE.Scene().
-React: source is a JSX/TSX module with a default-export component. Allowed imports only: react, react-dom (including react-dom/client), mermaid, echarts, motion (including motion/react), and optional d3 or three. React and ReactDOM mounting are provided; do not mount the component yourself.
-React example: {title:"Counter",kind:"react",source:'import {useState} from "react"; export default function App(){const [n,setN]=useState(0);return <button onClick={()=>setN(n+1)}>Count: {n}</button>}'}.
-Available pinned offline libraries: ${JSON.stringify(artifactLibraries)}.
-Update an existing artifact instead of creating duplicates; get its current editable source first and pass expectedRevision to avoid overwriting a newer revision.`;
 
 export interface ArtifactToolOptions {
 	store: Pick<ArtifactStore, "create" | "update" | "get" | "list">;
@@ -109,7 +93,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			: (options.preview ?? (isArtifactPreviewAvailable() ? previewArtifact : undefined));
 	const actions = ["create", "update", "get", "list", ...(preview ? ["preview" as const] : [])] as const;
 	const previewDescription = preview
-		? '- preview: optionally render a draft to a PNG screenshot, consoleMessages and contentHeight without saving or publishing. Optional width/height set the viewport. HTML/React/image need installed Chromium; SwiftUI needs the installed macOS Swift toolchain, independently of Chromium. Preview is not required before publishing. If it fails, publish without preview; do not request a browser installation. SwiftUI publication also renders the source, so fix native compiler/render errors before publishing. In codemode: const r = await tools.artifact({action:"preview",...write}); image({type:"image",...r.screenshot}); text({consoleMessages:r.consoleMessages,contentHeight:r.contentHeight}); Do not print screenshot base64 as text.\n'
+		? "- preview: optionally render a draft without saving; returns screenshot and diagnostics. Preview is not required before publishing. If it fails, publish without preview.\n"
 		: "";
 	const published = async (value: ArtifactRevision) => {
 		const artifact = {
@@ -136,13 +120,21 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		defineTool({
 			name: "artifact",
 			label: "Artifact",
-			description: `Publish and inspect session-local offline artifacts.
-Actions:
-- create: publish a new artifact with title, kind, source and optional libraries. Returns a compact pinned reference, not compiled HTML.
-- update: publish a revision by id with the complete replacement title, kind, source and libraries, not a patch. Optional expectedRevision rejects stale updates. Returns a compact pinned reference.
-- get: read editable source and metadata by id, optionally at a historical revision. Omitting revision reads the latest. Never returns compiled HTML. Use before updating and pass its revision as expectedRevision.
-- list: list current session artifact summaries without source or compiled HTML.
-${previewDescription}${authoring(options.ask)}`,
+			namespace: {
+				name: "artifacts",
+				description:
+					"Publish and inspect HTML, React, images and SwiftUI with tools.artifact. Read the pilot-artifacts skill before authoring.",
+				instructions: `Read the bundled pilot-artifacts skill at ${ARTIFACT_SKILL_PATH} before authoring.`,
+			},
+			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before authoring.
+- create: publish title, kind, source and optional libraries; returns a compact pinned reference.
+- update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
+- get: read editable source and metadata by id, optionally at a historical revision; omitting revision reads latest.
+- list: list current session summaries without source.
+${previewDescription}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
+${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
+SwiftUI requires the macOS Swift toolchain and renders a static screenshot, not project views. Publication does not require the Pilot app to be running.
+Get the current source before updating, and pass its revision as expectedRevision.`,
 			promptSnippet: "Publish and inspect offline HTML, React, image or native SwiftUI artifacts",
 			executionMode: "sequential",
 			annotations: { openWorldHint: false, destructiveHint: false },

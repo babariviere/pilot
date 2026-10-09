@@ -58,6 +58,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionUsage } from "@pilot/protocol";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
+import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
@@ -288,6 +289,10 @@ export class NativeAdapter {
 
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
 		const cwd = options.cwd;
+		const hasArtifacts = options.ask
+			? !!options.askArtifacts
+			: !!options.sessionOptions?.customTools?.some((tool) => tool.name === "artifact");
+		const artifactSkillPaths = hasArtifacts ? [ARTIFACT_SKILL_PATH] : [];
 		const agentDir = options.agentDir ?? getAgentDir();
 		const originalSettings = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 		const settingsManager = options.ask ? askSettings(originalSettings) : originalSettings;
@@ -333,6 +338,8 @@ export class NativeAdapter {
 						settingsManager,
 						noExtensions: true,
 						noSkills: true,
+						// Only Pilot's bundled authoring skill, never user/project skills in Ask.
+						additionalSkillPaths: artifactSkillPaths,
 						noPromptTemplates: true,
 						noThemes: true,
 						noContextFiles: true,
@@ -347,6 +354,7 @@ export class NativeAdapter {
 						cwd,
 						agentDir,
 						settingsManager,
+						additionalSkillPaths: [...artifactSkillPaths, ...(options.loaderOptions?.additionalSkillPaths ?? [])],
 						extensionFactories: [
 							{ name: "codemode", builtin: true, replaceable: true, factory: createCodemodeExtension() },
 							{ name: "tool-search", builtin: true, replaceable: true, factory: createToolSearchExtension() },
@@ -367,7 +375,7 @@ export class NativeAdapter {
 				? {
 						tools: ASK_TOOL_NAMES,
 						customTools: [
-							...(await createAskTools(options.ask)),
+							...(await createAskTools(options.ask, { artifactSkill: hasArtifacts })),
 							...(options.askArtifacts ? createArtifactTools({ ...options.askArtifacts, ask: true }) : []),
 						],
 					}
