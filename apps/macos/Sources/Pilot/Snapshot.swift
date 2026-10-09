@@ -579,6 +579,14 @@ enum Snapshot {
             size: CGSize(width: 1100, height: 760),
             to: directory.appending(path: "subagents-strip.png")
         )
+        // Leave transcript content under the fixed footer to catch transparent inset regressions.
+        await render(
+            ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.subagentParentTranscript))
+                .background(Theme.background),
+            size: CGSize(width: 1100, height: 420),
+            to: directory.appending(path: "subagents-scrolled.png"),
+            scrollTranscriptUp: true
+        )
         for subagent in subagents.prefix(3) {
             await render(
                 SubagentPopover(session: session, subagent: subagent, dismiss: {})
@@ -690,7 +698,7 @@ enum Snapshot {
     }
 
     private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false,
-                                       scrollEditorToEnd: Bool = false) async {
+                                       scrollEditorToEnd: Bool = false, scrollTranscriptUp: Bool = false) async {
         let root = view
             .environmentObject(AppModel.shared)
             .environment(\.pilotFonts, AppSettings.shared.fonts)
@@ -707,6 +715,21 @@ enum Snapshot {
         for _ in 0 ..< 8 {
             hosting.layoutSubtreeIfNeeded()
             try? await Task.sleep(for: .milliseconds(100))
+        }
+        if scrollTranscriptUp {
+            func findTranscript(_ view: NSView) -> NSScrollView? {
+                if let observer = view as? ScrollObserverView { return observer.enclosingScrollView }
+                return view.subviews.lazy.compactMap { findTranscript($0) }.first
+            }
+            guard let scroll = findTranscript(hosting), let document = scroll.documentView else {
+                fatalError("Scrollable transcript missing from footer regression snapshot")
+            }
+            let bottom = max(0, document.bounds.height - scroll.contentView.bounds.height + scroll.contentInsets.bottom)
+            precondition(bottom > 0, "Footer regression snapshot needs an overflowing transcript")
+            let offset = min(120, bottom)
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: document.isFlipped ? bottom - offset : offset))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try? await Task.sleep(for: .milliseconds(300))
         }
         var previewEditor: SubmitTextView?
         if completionPreview || scrollEditorToEnd {
