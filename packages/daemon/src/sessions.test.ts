@@ -1826,9 +1826,14 @@ test("request errors do not complete active work or prevent restart resumption",
 			resumed.push(id);
 			return fakeWorker();
 		};
-		await reopened.load();
-		assert.deepEqual(resumed, [meta.id]);
-		assert.equal(reopened.get(meta.id)?.outcome, undefined);
+		try {
+			await reopened.load();
+			assert.deepEqual(resumed, [meta.id]);
+			assert.equal(reopened.get(meta.id)?.outcome, undefined);
+		} finally {
+			// Drain its metadata writes before the fixture removes the directory.
+			await reopened.shutdown();
+		}
 	});
 });
 

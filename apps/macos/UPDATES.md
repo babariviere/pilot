@@ -50,7 +50,9 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    Release Please without publishing unless it creates a stable release.
 
 The workflow is `.github/workflows/macos-release.yml`. It selects an arm64 macOS runner with Xcode
-26.2 (Swift 6.2), runs TypeScript and Swift checks, builds the app, stages a production runtime, and
+26.2 (Swift 6.2). Verification runs as three parallel jobs (`node` for TypeScript and packaging tests,
+`swift-test` for Swift tests, `app-bundle` for the signed app smoke test); releasing waits for all three.
+The release job then builds the app, stages a production runtime, and
 publishes only the signed `Pilot-arm64.zip` and `appcast.xml` in a GitHub Release. Release Please creates
 only a draft, so incomplete uploads are not offered to the app. The tagged application source is built
 and tested even if `main` has advanced. After its tests, the workflow overlays the current release

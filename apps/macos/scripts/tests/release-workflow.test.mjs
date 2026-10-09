@@ -7,7 +7,7 @@ test("verification and tagged release tests install checksum-verified jj before 
 	assert.match(workflow, /JJ_VERSION: 0\.46\.0/);
 	assert.match(workflow, /JJ_SHA256: [a-f0-9]{64}/);
 	const installations = [];
-	for (const name of ["verify", "release"]) {
+	for (const name of ["node", "release"]) {
 		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
 		const start = job.indexOf("- name: Install Jujutsu");
 		const end = job.indexOf("\n      -", start);
@@ -28,8 +28,9 @@ test("release job publishes only newly created stable releases or explicit draft
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } };
+	const verification = ["node", "swift-test", "app-bundle"];
 	const needs = {
-		verify: { result: "success" },
+		...Object.fromEntries(verification.map((name) => [name, { result: "success" }])),
 		"release-please": { result: "success", outputs: { release_created: "false" } },
 	};
 	// GitHub permits hyphenated identifiers; JavaScript requires bracket notation.
@@ -38,7 +39,7 @@ test("release job publishes only newly created stable releases or explicit draft
 		"needs",
 		"inputs",
 		"always",
-		`return ${condition.replaceAll("needs.release-please", 'needs["release-please"]')}`,
+		`return ${condition.replace(/needs\.([a-z-]+)/g, 'needs["$1"]')}`,
 	);
 	assert.equal(
 		evaluate(github, needs, { release_tag: "" }, () => true),
@@ -70,12 +71,17 @@ test("release job publishes only newly created stable releases or explicit draft
 		evaluate(github, needs, { release_tag: "" }, () => true),
 		false,
 	);
-	needs.verify.result = "failure";
-	assert.equal(
-		evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
-		false,
-	);
-	needs.verify.result = "success";
+	for (const name of verification) {
+		needs[name].result = "failure";
+		assert.equal(
+			evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
+			false,
+			`${name} must gate the release`,
+		);
+		needs[name].result = "success";
+	}
+	assert.match(workflow, /\n  release-please:\n    needs: \[node, swift-test, app-bundle\]\n/);
+	assert.match(workflow, /\n  release:\n    needs: \[node, swift-test, app-bundle, release-please\]\n/);
 	github.ref = "refs/heads/other";
 	assert.equal(
 		evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
