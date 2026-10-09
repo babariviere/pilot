@@ -63,9 +63,7 @@ struct MissionInspectorPane: View {
                                 Text("#\(task.number)").font(.caption.monospacedDigit()).foregroundStyle(Theme.faintForeground)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(task.title)
-                                    if let body = task.body, !body.isEmpty {
-                                        Text(body).font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(4)
-                                    }
+                                    MissionTaskDescription(task: task, collapsedLineLimit: 4)
                                 }
                                 Spacer()
                             }

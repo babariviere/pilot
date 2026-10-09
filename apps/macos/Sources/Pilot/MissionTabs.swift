@@ -455,9 +455,7 @@ struct MissionTaskRow: View {
                 TextField("Title", text: $title.title)
                     .textFieldStyle(.plain)
                     .onSubmit(saveTitle)
-                if let body = task.body, !body.isEmpty {
-                    Text(body).font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(2)
-                }
+                MissionTaskDescription(task: task)
                 ForEach(client.missionDetails[mission.id]?.resources.filter { $0.taskId == task.id } ?? []) { item in
                     ResourceRow(resource: item, missionId: mission.id, compact: true)
                 }
