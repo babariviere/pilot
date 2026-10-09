@@ -112,14 +112,15 @@ public extension Collection where Element == Mission {
 }
 
 public enum MissionMembers {
-    /// A mission's chats: the coordinator first, then the session list order.
+    /// A mission's chats: the coordinator before pins, PR state and activity, then the session list order.
+    /// Only orders the supplied members, so filtered or archived chats are not reintroduced.
     public static func members(of mission: Mission, in sessions: [SessionSummary]) -> [SessionSummary] {
-        let members = sessions.filter { $0.missionId == mission.id }.sorted(by: SessionSummary.listPrecedes)
-        guard let coordinator = mission.coordinatorSessionId,
-              let index = members.firstIndex(where: { $0.id == coordinator }) else { return members }
-        var ordered = members
-        ordered.insert(ordered.remove(at: index), at: 0)
-        return ordered
+        sessions.filter { $0.missionId == mission.id }.sorted { lhs, rhs in
+            let lhsCoordinates = lhs.id == mission.coordinatorSessionId
+            let rhsCoordinates = rhs.id == mission.coordinatorSessionId
+            if lhsCoordinates != rhsCoordinates { return lhsCoordinates }
+            return SessionSummary.listPrecedes(lhs, rhs)
+        }
     }
 }
 

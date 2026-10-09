@@ -673,11 +673,7 @@ private struct MissionChatRow: View {
                     Text(session.title).lineLimit(1)
                     if model.isUnread(session) { UnreadBadge() }
                     if coordinator {
-                        Label("Coordinator", systemImage: "star.fill")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Capsule().fill(Theme.warning.opacity(0.15)))
-                            .foregroundStyle(Theme.warning)
+                        MissionCoordinatorIndicator(showsLabel: true)
                     }
                     if session.isArchived {
                         Text("Archived").font(.caption2).foregroundStyle(Theme.faintForeground)

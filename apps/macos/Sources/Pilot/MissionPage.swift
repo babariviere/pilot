@@ -91,8 +91,11 @@ private struct MissionHeader: View {
                     Text("·")
                     if let coordinator = mission.coordinatorSessionId {
                         Button { model.selectedSessionId = coordinator } label: {
-                            Text("Coordinated by \(client.session(coordinator)?.title ?? "a chat")")
-                                .lineLimit(1)
+                            HStack(spacing: 4) {
+                                MissionCoordinatorIndicator()
+                                Text("Coordinated by \(client.session(coordinator)?.title ?? "a chat")")
+                                    .lineLimit(1)
+                            }
                         }
                         .buttonStyle(.plain)
                         .help("Open the coordinator chat")

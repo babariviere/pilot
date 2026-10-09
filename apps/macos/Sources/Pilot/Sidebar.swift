@@ -207,7 +207,8 @@ struct SessionSidebar: View {
             .selectionDisabled(true)
         if isExpanded.wrappedValue {
             ForEach(members) { session in
-                SessionRow(session: session, showsMission: false)
+                SessionRow(session: session, showsMission: false,
+                           isCoordinator: mission.coordinatorSessionId == session.id)
                     .padding(.leading, 20)
                     .tag(session.id)
             }
@@ -386,6 +387,7 @@ struct SessionRow: View {
     let session: SessionSummary
     /// Off under the mission's own sidebar entry, where the mark would repeat.
     var showsMission = true
+    var isCoordinator = false
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -397,6 +399,7 @@ struct SessionRow: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isUnread(session) { UnreadBadge() }
+                if isCoordinator { MissionCoordinatorIndicator() }
                 if showsMission, session.missionId != nil {
                     Image(systemName: "scope")
                         .font(.system(size: 10))

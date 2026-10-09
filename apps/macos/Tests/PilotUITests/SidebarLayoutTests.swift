@@ -64,10 +64,14 @@ private func sidebarMeasuredSizes<V: View>(_ view: V, width: CGFloat) -> [CGSize
         for indent in [0.0, 20.0] {
             // Native list row insets, plus the extra inset for projects in folders.
             let rowWidth = sidebarWidth - 32 - indent
-            let rows = sidebarMeasuredSizes(SessionRow(session: session).environmentObject(model), width: rowWidth)
-            #expect(!rows.isEmpty)
-            #expect(rows.allSatisfy { $0.width <= rowWidth + 0.5 })
-            #expect(rows.allSatisfy { $0.height < 60 })
+            for isCoordinator in [false, true] {
+                let rows = sidebarMeasuredSizes(
+                    SessionRow(session: session, showsMission: !isCoordinator, isCoordinator: isCoordinator)
+                        .environmentObject(model), width: rowWidth)
+                #expect(!rows.isEmpty)
+                #expect(rows.allSatisfy { $0.width <= rowWidth + 0.5 })
+                #expect(rows.allSatisfy { $0.height < 60 })
+            }
             let metadataWidth = rowWidth - 22 // Status column and spacing.
             let metadata = sidebarMeasuredSizes(
                 SessionRepositoryMetadataContent(session: session, summary: summary, branch: session.branch, error: nil),

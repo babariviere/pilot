@@ -116,10 +116,11 @@ private func json(_ value: some Encodable) throws -> [String: Any] {
 }
 
 private func session(_ id: String, mission: String? = "m1", outcome: SessionOutcome? = .done, state: String = "idle",
-                     archived: Bool = false, activity: Double = 1) -> SessionSummary {
+                     archived: Bool = false, activity: Double = 1, pinned: Bool = false,
+                     pullRequest: SessionPullRequest? = nil) -> SessionSummary {
     SessionSummary(id: id, title: id, cwd: "/tmp", projectId: "p1", createdAt: activity, updatedAt: activity, state: state,
-                   outcome: outcome, outcomeAt: outcome == nil ? nil : activity, archivedAt: archived ? 1 : nil,
-                   missionId: mission)
+                   outcome: outcome, outcomeAt: outcome == nil ? nil : activity, pullRequest: pullRequest,
+                   archivedAt: archived ? 1 : nil, pinned: pinned, missionId: mission)
 }
 
 private func comment(_ id: String, author: String?, target: String? = nil, resolved: Bool = false) throws -> MissionComment {
@@ -195,12 +196,43 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     #expect(reordered.map(\.id) == ["a", "c", "b"])
 }
 
-@Test func missionMembersListTheCoordinatorFirst() {
+@Test func missionMembersListTheCoordinatorBeforePinsPRStateAndActivity() {
     let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", coordinatorSessionId: "old",
                           createdAt: 1, updatedAt: 1)
-    let sessions = [session("new", activity: 3), session("old", activity: 1), session("mid", activity: 2),
-                    session("elsewhere", mission: nil)]
-    #expect(MissionMembers.members(of: mission, in: sessions).map(\.id) == ["old", "new", "mid"])
+    let merged = SessionPullRequest(number: 1, url: "https://github.com/example/repo/pull/1",
+                                   title: "Merged", state: .merged, checkedAt: 1)
+    let sessions = [session("new", activity: 3), session("old", activity: 1, pullRequest: merged), session("mid", activity: 2),
+                    session("pin-old", activity: 1, pinned: true), session("pin-new", activity: 4, pinned: true),
+                    session("elsewhere", mission: "m2", activity: 9, pinned: true)]
+    #expect(MissionMembers.members(of: mission, in: sessions).map(\.id) == ["old", "pin-new", "pin-old", "new", "mid"])
+    #expect(MissionMembers.members(of: mission, in: Array(sessions.reversed())).map(\.id) == ["old", "pin-new", "pin-old", "new", "mid"])
+    #expect(MissionMembers.members(of: mission, in: [sessions[1]]).map(\.id) == ["old"])
+}
+
+@Test func missionMembersWithoutAnAvailableCoordinatorUseSessionOrder() {
+    let sessions = [session("a", activity: 2), session("b", activity: 2), session("pin", activity: 1, pinned: true),
+                    session("other", mission: "m2"), session("solo", mission: nil)]
+    for coordinator in [nil, "missing", "other", "solo"] as [String?] {
+        let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", coordinatorSessionId: coordinator,
+                              createdAt: 1, updatedAt: 1)
+        #expect(MissionMembers.members(of: mission, in: sessions).map(\.id) == ["pin", "a", "b"])
+        #expect(MissionMembers.members(of: mission, in: []).isEmpty)
+    }
+}
+
+@Test func missionMembersRespectFiltersAndCoordinatorChanges() {
+    let sessions = [session("archived", archived: true), session("new", activity: 3),
+                    session("pin", activity: 2, pinned: true)]
+    let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", coordinatorSessionId: "archived",
+                          createdAt: 1, updatedAt: 1)
+    #expect(MissionMembers.members(of: mission, in: sessions).map(\.id) == ["archived", "pin", "new"])
+    #expect(MissionMembers.members(of: mission, in: sessions.filter { !$0.isArchived }).map(\.id) == ["pin", "new"])
+    let reassigned = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", coordinatorSessionId: "new",
+                             createdAt: 1, updatedAt: 1)
+    #expect(MissionMembers.members(of: reassigned, in: sessions).map(\.id) == ["new", "pin", "archived"])
+}
+
+@Test func missionsListNewestFirst() {
     let missions = [Mission(id: "x", projectId: "p", title: "x", goal: "", createdAt: 1, updatedAt: 1),
                     Mission(id: "y", projectId: "p", title: "y", goal: "", createdAt: 2, updatedAt: 2)]
     #expect(missions.sidebarOrder.map(\.id) == ["y", "x"])
