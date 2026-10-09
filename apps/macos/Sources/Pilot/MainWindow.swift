@@ -76,9 +76,7 @@ struct SessionDetail: View {
         .navigationSubtitle(subtitle)
         .toolbar {
             contextToolbar
-            ToolbarItem(placement: .primaryAction) {
-                SessionInspectorActions(session: session)
-            }
+            SessionInspectorActions(session: session)
             if #available(macOS 26.0, *) {
                 ToolbarSpacer(.fixed, placement: .primaryAction)
             }
@@ -128,26 +126,36 @@ enum SessionHeaderContext {
     }
 }
 
-struct SessionInspectorActions: View {
+struct SessionInspectorActions: ToolbarContent {
+    let session: SessionSummary
+
+    var body: some ToolbarContent {
+        ToolbarItemGroup(placement: .primaryAction) {
+            SessionInspectorControls(session: session)
+        }
+    }
+}
+
+/// No custom container: the toolbar owns control spacing, backgrounds and selection.
+struct SessionInspectorControls: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 8) {
-            if !session.isAsk {
-                InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
-                InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
-                if !(session.subagents ?? []).isEmpty {
-                    InspectorToggle(tab: .agents, icon: "person.2", help: "Subagents")
-                        .overlay(alignment: .topTrailing) {
-                            if model.unreadSubagents(in: session) > 0 {
-                                Circle().fill(Theme.success).frame(width: 6, height: 6).offset(x: -3, y: 3)
-                            }
+        if !session.isAsk {
+            InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
+            InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+            if !(session.subagents ?? []).isEmpty {
+                InspectorToggle(tab: .agents, icon: "person.2", help: "Subagents")
+                    .overlay(alignment: .topTrailing) {
+                        if model.unreadSubagents(in: session) > 0 {
+                            Circle().fill(Theme.success).frame(width: 6, height: 6).offset(x: -3, y: 3)
                         }
-                }
+                    }
             }
-            InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
         }
+        InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
     }
 }
 
@@ -184,17 +192,25 @@ struct InspectorToggle: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let active = model.inspectorVisible && model.inspectorTab == tab
-        Button { model.toggleInspector(tab) } label: {
+        Toggle(isOn: Self.selection(for: tab, in: model)) {
             Image(systemName: icon)
-                .foregroundStyle(active ? Theme.foreground : Theme.mutedForeground)
-                .frame(width: 36, height: 36)
-                .background(RoundedRectangle(cornerRadius: 6).fill(active ? Theme.selected : .clear))
-                .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .toggleStyle(.button)
         .help(help)
         .accessibilityLabel(help)
+    }
+
+    @MainActor
+    static func selection(for tab: InspectorTab, in model: AppModel) -> Binding<Bool> {
+        Binding(
+            get: { model.inspectorVisible && model.inspectorTab == tab },
+            set: { selected in
+                // Ignore redundant writes; selecting another tab must keep the pane open.
+                if selected != (model.inspectorVisible && model.inspectorTab == tab) {
+                    model.toggleInspector(tab)
+                }
+            }
+        )
     }
 }
 

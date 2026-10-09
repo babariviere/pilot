@@ -132,6 +132,7 @@ swift run Pilot              # unbundled dev run (no notifications)
                              # also sidebar-folders.png, sidebar-folders-collapsed.png and sidebar-folders-search.png
                              # add --sidebar-folders-only to stop after the folder previews
                              # add --session-ordering-only for completion ages and closed/merged PR ordering
+                             # add --inspector-toggles-only for native toolbar selection in light and dark appearances
 PILOT_PORT=… PILOT_TEST_SESSION=<id> .build/debug/Pilot --terminal-exit-test /tmp/out
                              # against a running pilotd: type, reattach/replay, exit, restart
 # Run from the repository root, after building:

@@ -123,7 +123,8 @@ enum Snapshot {
         }
 
         // Capture the real SwiftUI window toolbar, including native shared backgrounds.
-        if CommandLine.arguments.contains("--session-toolbar-only") {
+        let inspectorTogglesOnly = CommandLine.arguments.contains("--inspector-toggles-only")
+        if CommandLine.arguments.contains("--session-toolbar-only") || inspectorTogglesOnly {
             model.client.fixtureChanges = SessionChanges(base: Fixtures.changes.base,
                 branch: "refactor/remove-agent-status-reporting", files: Fixtures.changes.files, diff: Fixtures.changes.diff)
             let session = SessionSummary(
@@ -131,7 +132,8 @@ enum Snapshot {
                 projectId: "p1", branch: "refactor/remove-agent-status-reporting", createdAt: Fixtures.now,
                 updatedAt: Fixtures.now, state: "idle", model: "openai-codex/gpt-6.1-sol",
                 pullRequest: SessionPullRequest(number: 61, url: "https://github.com/babariviere/pilot/pull/61",
-                                               title: "Remove agent status reporting", state: .merged, checkedAt: Fixtures.now))
+                                               title: "Remove agent status reporting", state: .merged, checkedAt: Fixtures.now),
+                subagents: inspectorTogglesOnly ? Fixtures.subagentSession.subagents : nil)
             model.client.loadFixture(projects: Fixtures.projects, sessions: [session])
             model.selectedSessionId = session.id
             model.inspectorVisible = true
@@ -146,6 +148,24 @@ enum Snapshot {
             window.setFrameOrigin(NSPoint(x: 100, y: 100))
             window.makeKeyAndOrderFront(nil)
             for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            if inspectorTogglesOnly {
+                NSApp.activate(ignoringOtherApps: true)
+                for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                    NSApp.appearance = NSAppearance(named: appearance)
+                    for tab in [InspectorTab.changes, .terminal, .agents, .artifacts] {
+                        model.inspectorTab = tab
+                        model.inspectorVisible = true
+                        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+                        snapshot(frame, to: directory.appending(path: "inspector-\(tab)-\(appearance.rawValue).png"))
+                    }
+                    model.inspectorVisible = false
+                    for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+                    snapshot(frame, to: directory.appending(path: "inspector-closed-\(appearance.rawValue).png"))
+                }
+                print("snapshots written to \(directory.path)")
+                NSApp.terminate(nil)
+                return
+            }
             snapshot(frame, to: directory.appending(path: "session-toolbar.png"))
             window.setContentSize(CGSize(width: 860, height: 600))
             for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
@@ -781,7 +801,7 @@ enum Snapshot {
                             if let session {
                                 if AppModel.shared.isUnread(session) { UnreadBadge() }
                                 if session.isAsk { SessionContextBadge(session: session) }
-                                SessionInspectorActions(session: session)
+                                SessionInspectorControls(session: session)
                                 SessionMoreActions(session: session)
                             }
                         }

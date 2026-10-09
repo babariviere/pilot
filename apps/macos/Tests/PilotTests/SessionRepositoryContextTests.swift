@@ -28,14 +28,24 @@ import Testing
     }
 }
 
-@Test @MainActor func inspectorToolbarButtonsHaveRoomToBreathe() throws {
-    let session = SessionSummary(id: "actions", title: "Chat", cwd: "/repository",
-                                 createdAt: 1, updatedAt: 1, state: "idle")
-    let renderer = ImageRenderer(content: SessionInspectorActions(session: session)
-        .environmentObject(AppModel.shared))
-    let image = try #require(renderer.cgImage)
-    #expect(image.width == 3 * 36 + 2 * 8)
-    #expect(image.height == 36)
+@Test @MainActor func inspectorToolbarControlsRespectSessionAvailability() throws {
+    func render(_ session: SessionSummary) throws -> CGImage {
+        let renderer = ImageRenderer(content: HStack {
+            SessionInspectorControls(session: session)
+        }.environmentObject(AppModel.shared))
+        return try #require(renderer.cgImage)
+    }
+    let build = SessionSummary(id: "actions", title: "Chat", cwd: "/repository",
+                               createdAt: 1, updatedAt: 1, state: "idle")
+    let ask = SessionSummary(id: "ask-actions", title: "Ask", cwd: "/repository",
+                             createdAt: 1, updatedAt: 1, state: "idle", mode: .ask)
+    let askImage = try render(ask)
+    let buildImage = try render(build)
+    let agentsImage = try render(Fixtures.subagentSession)
+    // The system controls sizing; only the available controls change the width.
+    #expect(askImage.width > 0 && askImage.height > 0)
+    #expect(buildImage.width > askImage.width)
+    #expect(agentsImage.width > buildImage.width)
 }
 
 @Test @MainActor func changesRepositoryContextWrapsFullBranchAtNarrowWidths() throws {
