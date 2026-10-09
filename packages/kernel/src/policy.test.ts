@@ -91,6 +91,21 @@ test("allows reading, pushing and opening pull requests", () => {
 	assert.equal(githubPosting({ command: "gh run view 42 --log-failed" }), undefined);
 });
 
+test("blocks stack merging and branch-rewriting commands, including in codemode", () => {
+	for (const subcommand of ["merge", "submit", "push", "sync", "rebase", "modify", "unstack"]) {
+		const command = `gh stack ${subcommand} 12`;
+		assert.ok(githubPosting({ command }), command);
+		assert.ok(githubPosting({ code: `await tools.bash({ command: ${JSON.stringify(command)} })` }), command);
+	}
+});
+
+test("allows linking, viewing and checking out stacks", () => {
+	for (const command of ["gh stack link 12 13", "gh stack view 12 --json", "gh stack checkout 12"]) {
+		assert.equal(githubPosting({ command }), undefined, command);
+		assert.equal(githubPosting({ code: `await tools.bash({ command: ${JSON.stringify(command)} })` }), undefined);
+	}
+});
+
 test("prompt describes the workspace and delivery", () => {
 	const prompt = pilotPrompt({
 		workspace: { source: "/src/app", base: "origin/main", upstream: "git@x:o/r", jj: true },
