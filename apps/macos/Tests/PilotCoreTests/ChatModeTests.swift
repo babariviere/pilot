@@ -34,7 +34,7 @@ import Testing
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(ask)) == ask)
     #expect(ask.isArchived && ask.isAsk)
     #expect(ask.sourceLabel == "origin/origin/literal")
-    #expect(ask.workspaceLabel == "Read-only · no private clone")
+    #expect(ask.workspaceLabel == "Read-only · no isolated workspace")
 }
 
 @Test func detachedBuildCloneHasAccurateWorkspaceBadge() throws {

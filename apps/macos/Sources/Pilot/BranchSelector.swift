@@ -123,8 +123,8 @@ struct BranchMenu: View {
         .menuIndicator(.hidden)
         .fixedSize(horizontal: false, vertical: true)
         .help(state.error ?? (mode == .ask
-            ? "Read-only source: \(selected.map { "origin/\($0) branch snapshot" } ?? "current checkout"). No private clone."
-            : "Base branch: \(selected.map { "origin/\($0)" } ?? "remote default"). Starts a new private workspace."))
+            ? "Read-only source: \(selected.map { "origin/\($0) branch snapshot" } ?? "current checkout"). No isolated workspace."
+            : "Base branch: \(selected.map { "origin/\($0)" } ?? "remote default"). Starts a new isolated workspace."))
         .accessibilityLabel(mode == .ask ? "Read-only source" : "Base branch")
         .accessibilityValue(selected ?? (mode == .ask ? "Current checkout" : list.defaultBranch ?? "Remote default"))
     }

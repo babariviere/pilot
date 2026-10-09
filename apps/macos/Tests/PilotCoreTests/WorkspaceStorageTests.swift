@@ -58,8 +58,8 @@ private let workspaceSessionJSON = #"{"id":"s","title":"Chat","cwd":"/workspace"
     #expect(direct.workspaceLabel == "Current checkout")
     let ask = SessionSummary(id: "a", title: "Chat", cwd: "/workspace", createdAt: 1, updatedAt: 2,
                              state: "parked", mode: .ask)
-    #expect(ask.workspaceLabel == "Read-only · no private clone")
-    #expect(ask.workspaceHelp == "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No private clone is created.")
+    #expect(ask.workspaceLabel == "Read-only · no isolated workspace")
+    #expect(ask.workspaceHelp == "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No isolated workspace is created.")
 }
 
 @Test func workspaceHelpKeepsAskPinnedCommitAndSurfacesCleanupWithoutChangingLabel() {
