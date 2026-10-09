@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
 	createdBookmarks,
@@ -6,7 +9,9 @@ import {
 	discoverPullRequest as discover,
 	githubRepository,
 	type PullRequestSession,
+	repositoryState,
 	sessionBranches,
+	workspaceBookmarks,
 } from "./pull-requests.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import type { Runner } from "./workspaces.ts";
@@ -395,6 +400,8 @@ test("discovers PRs from the session's other branches, skipping settled ones and
 	const heads: string[] = [];
 	const result = await discoverPullRequest(target, async (file, args) => {
 		if (file === "git") return args[1] === "--show-current" ? branch : `main\n${branch}\nfix/split-off\nfix/settled`;
+		// The earlier branch's PR is still open, so it is looked up by number, not searched by head.
+		if (args[1] === "view") return JSON.stringify(candidate({ number: Number(args[2]), headRefName: "fix/earlier" }));
 		const head = args.find((arg) => arg.startsWith("--head="))!.slice("--head=".length);
 		heads.push(head);
 		const number = { [branch]: 1, "fix/earlier": 2, "fix/split-off": 4 }[head];
@@ -486,4 +493,63 @@ test("lists the current branch first, then PR heads and branches without a PR", 
 	];
 	target.previousBranches = ["fix/c", branch];
 	assert.deepEqual(sessionBranches(target), [branch, "fix/b", "fix/c"]);
+});
+
+test("the shared operation log is read incrementally after the first scan, and fully again if rewritten", async () => {
+	const cwd = "/incremental/clone";
+	const created = (name: string) => `\nChanged local bookmarks:\n${name}:\n+ abc 123 ${name} | x\n- (absent)\n`;
+	let log = ['op-2\t"w@"\tb', 'op-1\t"other@"\tb', 'op-0\t"w@"\t-'];
+	const shows: Record<string, string> = {
+		"op-2": created("feat/a"),
+		"op-3": created("feat/b"),
+		"op-9": created("feat/c"),
+	};
+	const limits: (number | undefined)[] = [];
+	const shown: string[] = [];
+	const runner: Runner = async (_file, args) => {
+		if (args[1] === "show") {
+			shown.push(args.at(-1)!);
+			return shows[args.at(-1)!]!;
+		}
+		const index = args.indexOf("--limit");
+		const limit = index < 0 ? undefined : Number(args[index + 1]);
+		limits.push(limit);
+		return log.slice(0, limit).join("\n");
+	};
+	assert.deepEqual(await workspaceBookmarks(cwd, "w", runner), ["feat/a"]);
+	assert.deepEqual(shown, ["op-2"], "sibling and non-bookmark operations are never shown");
+	log = ['op-3\t"w@"\tb', ...log];
+	assert.deepEqual(await workspaceBookmarks(cwd, "w", runner), ["feat/b", "feat/a"]);
+	assert.deepEqual(limits, [undefined, 32], "only the newest operations are read");
+	log = ['op-9\t"w@"\tb'];
+	assert.deepEqual(await workspaceBookmarks(cwd, "w", runner), ["feat/c"], "a rewritten log is rescanned");
+	assert.deepEqual(limits, [undefined, 32, 32]);
+});
+
+test("repository fingerprints change with jj operations and git refs, without running processes", async () => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-repo-state-"));
+	try {
+		const jj = join(root, "jj");
+		const repo = join(root, "shared", ".jj", "repo");
+		await mkdir(join(repo, "op_heads", "heads"), { recursive: true });
+		await mkdir(join(jj, ".jj"), { recursive: true });
+		await writeFile(join(jj, ".jj", "repo"), "../../shared/.jj/repo");
+		await writeFile(join(repo, "op_heads", "heads", "aaa"), "");
+		assert.equal(await repositoryState(jj), "jj:aaa");
+		await rm(join(repo, "op_heads", "heads", "aaa"));
+		await writeFile(join(repo, "op_heads", "heads", "bbb"), "");
+		assert.equal(await repositoryState(jj), "jj:bbb");
+
+		const git = join(root, "git");
+		await mkdir(join(git, ".git", "refs", "heads", "feat"), { recursive: true });
+		await writeFile(join(git, ".git", "HEAD"), "ref: refs/heads/main\n");
+		const before = await repositoryState(git);
+		assert.ok(before?.startsWith("git:"));
+		assert.equal(await repositoryState(git), before);
+		await writeFile(join(git, ".git", "refs", "heads", "feat", "x"), "abc\n");
+		assert.notEqual(await repositoryState(git), before);
+		assert.equal(await repositoryState(join(root, "missing")), undefined);
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });

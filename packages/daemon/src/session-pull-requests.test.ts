@@ -1053,9 +1053,10 @@ test("settled kernel activity refreshes immediately, overlapping triggers dedupe
 	let calls = 0;
 	await fixture(
 		{
-			runner: async () => {
+			// The first lookup finds the PR by head, later ones by its number.
+			runner: async (_file, args) => {
 				calls++;
-				return JSON.stringify([candidate()]);
+				return JSON.stringify(args[1] === "view" ? candidate() : [candidate()]);
 			},
 		},
 		async (manager, meta) => {
@@ -1086,6 +1087,41 @@ test("settled kernel activity refreshes immediately, overlapping triggers dedupe
 			manager["onPacket"](meta, worker, packet);
 			await delay(5);
 			assert.equal(calls, 2, "replayed completion must not cause another lookup");
+		},
+	);
+});
+
+test("branch and push hints from the live kernel recheck PRs immediately, stale workers are ignored", async () => {
+	let calls = 0;
+	await fixture(
+		{
+			runner: async (_file, args) => {
+				calls++;
+				return JSON.stringify(args[1] === "view" ? candidate() : [candidate()]);
+			},
+		},
+		async (manager, meta) => {
+			await manager["pullRequests"].settled();
+			assert.equal(calls, 1);
+			const worker: Worker = {
+				ready: Promise.resolve(),
+				state: "working",
+				send: () => {},
+				request: async () => {},
+				close: async () => {},
+			};
+			manager["onPacket"](meta, worker, { type: "refs.changed" });
+			await manager["pullRequests"].settled();
+			assert.equal(calls, 1, "a replaced worker's hint is ignored");
+			manager["workers"].set(meta.id, worker);
+			try {
+				for (let i = 0; i < 5; i++) manager["onPacket"](meta, worker, { type: "refs.changed" });
+				await until(() => calls > 1);
+				await manager["pullRequests"].settled();
+				assert.equal(calls, 2, "repeated hints coalesce into one check");
+			} finally {
+				manager["workers"].delete(meta.id);
+			}
 		},
 	);
 });

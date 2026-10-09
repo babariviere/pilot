@@ -409,6 +409,14 @@ with pending checks every 30 seconds, other open PRs every 2 minutes, sessions w
 while recently active, then every 5 or 30 minutes, settled PRs never. Failures back off exponentially up
 to 30 minutes, and a nearly exhausted GraphQL budget pauses the host until its reset.
 
+Local inspection (git/jj) is skipped while a process-free fingerprint of the repository (jj operation
+heads, or git HEAD and local branch refs) and the session's inputs are unchanged. Shared-workspace bookmark
+discovery reads only operations newer than the last one seen. Heads with a known open PR are looked up by PR
+number; only when that PR settles or moves is the head searched again. The kernel also sends a
+`refs.changed` hint when the agent runs a branch, bookmark, push or `gh pr` command, so a new or pushed
+branch is checked right away. The hint only triggers a read-only check; PR ownership still comes only
+from recognized `gh pr create` results.
+
 **Triggers**
 
 - `check_suite` / `workflow_run` concluded `failure` on a PR in an allowlisted repository.

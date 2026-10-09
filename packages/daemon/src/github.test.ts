@@ -85,6 +85,50 @@ test("discovery chunks heads, prefers open PRs and reads the aggregate check sta
 	assert.equal(result.heads.get("feat/24")?.state, "MERGED", "same-named fork PRs are ignored");
 });
 
+test("known open PRs are read by number, and a settled or moved one falls back to a head search", async () => {
+	const requests: Map<string, string>[] = [];
+	const runner: Runner = async (_file, args) => {
+		const vars = variables(args);
+		requests.push(vars);
+		const repository: Record<string, unknown> = {};
+		for (const [key, value] of vars) {
+			if (/^n\d+$/.test(key)) {
+				const number = Number(value);
+				repository[key] =
+					number === 1
+						? pr(1, "feat/open")
+						: number === 2
+							? pr(2, "feat/merged", { state: "MERGED", mergedAt: "2026-01-02T00:00:00Z" })
+							: pr(3, "someone-else");
+			} else if (/^h\d+$/.test(key)) {
+				const index = key.slice(1);
+				repository[`o${index}`] = { nodes: value === "feat/merged" ? [pr(9, value)] : [] };
+				repository[`a${index}`] = { nodes: [] };
+			}
+		}
+		return respond(repository);
+	};
+	const known = new Map([
+		["feat/open", 1],
+		["feat/merged", 2],
+		["feat/moved", 3],
+	]);
+	const result = await lookupPullRequests(repo, { heads: [...known.keys()], known }, "/clone", runner);
+	assert.equal(result.heads.get("feat/open")?.number, 1);
+	assert.equal(result.heads.get("feat/merged")?.number, 9, "a reopened or newer PR on the head is found");
+	assert.equal(result.heads.get("feat/moved"), undefined);
+	assert.equal(requests.length, 2);
+	assert.deepEqual(
+		[...requests[0]!.keys()].filter((key) => /^[hn]\d+$/.test(key)),
+		["n0", "n1", "n2"],
+		"no head search while the known PR is open",
+	);
+	assert.deepEqual(
+		[...requests[1]!].filter(([key]) => /^h\d+$/.test(key)).map(([, value]) => value),
+		["feat/merged", "feat/moved"],
+	);
+});
+
 test("one unreadable linked PR is isolated, while head lookup failures fail the request", async () => {
 	let calls = 0;
 	const runner: Runner = async (_file, args) => {
