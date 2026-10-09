@@ -67,6 +67,10 @@ type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Validate new-chat admission and resolve the mission's project. */
+	spawnProject(missionId: string): string;
+	/** Join after metadata is saved, but before starting the worker. */
+	joinSpawn(sessionId: string, missionId: string): void;
 	/** The chat's mission, and whether it is still active. */
 	membership(sessionId: string): { missionId: string; active: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
@@ -1334,7 +1338,18 @@ export class SessionManager {
 		if (request.workspace !== undefined && request.workspace !== "clone" && request.workspace !== "direct")
 			throw new Error("workspace must be clone or direct");
 		const mode = request.mode ?? "build";
-		const project = request.projectId ? this.projects.require(request.projectId) : undefined;
+		let projectId = request.projectId;
+		if (request.missionId !== undefined) {
+			if (typeof request.missionId !== "string" || !request.missionId.trim())
+				throw new Error("missionId must be a non-empty string");
+			if (!this.missions) throw new NotFound(`Unknown mission: ${request.missionId}`);
+			const missionProject = this.missions.spawnProject(request.missionId);
+			if (projectId !== undefined && projectId !== missionProject)
+				throw new Conflict("A chat can only join a mission of its own project");
+			if (request.cwd !== undefined) throw new Error("missionId does not allow a cwd override");
+			projectId = missionProject;
+		}
+		const project = projectId ? this.projects.require(projectId) : undefined;
 		if (request.workspace !== undefined && (mode === "ask" || !project || request.cwd !== undefined))
 			throw new Error("workspace override requires a Build project without a cwd override");
 		const direct = (request.workspace ?? project?.workspace) === "direct";
@@ -1391,6 +1406,16 @@ export class SessionManager {
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
 		await this.save(meta);
+		if (request.missionId !== undefined) {
+			try {
+				this.missions!.joinSpawn(id, request.missionId);
+			} catch (error) {
+				// The mission may have closed or been deleted while metadata was being saved.
+				this.metas.delete(id);
+				await rm(this.dir(id), { recursive: true, force: true });
+				throw error;
+			}
+		}
 		const summary = this.summary(meta);
 		this.emit(meta);
 		void this.start(id, true);

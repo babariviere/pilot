@@ -590,7 +590,6 @@ struct MissionChatsTab: View {
             case .all: true
             }
         }
-        let candidates = client.activeSessions.filter { $0.projectId == mission.projectId && $0.missionId == nil }
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -599,20 +598,19 @@ struct MissionChatsTab: View {
                     }
                     .pickerStyle(.segmented).labelsHidden().fixedSize()
                     Spacer()
-                    Menu {
-                        ForEach(candidates) { session in
-                            Button(session.title) {
-                                model.missionAction { [client, id = mission.id] in
-                                    try await client.joinMission(session.id, JoinMissionRequest(missionId: id))
-                                }
-                            }
-                        }
-                        if candidates.isEmpty { Text("No other chats in this project") }
-                    } label: {
-                        Label("Add chat", systemImage: "plus")
+                    Button { model.newSession(in: mission) } label: {
+                        Label("New chat", systemImage: "plus")
                     }
-                    .fixedSize()
-                    .help("Add a chat from this project to the mission")
+                    .buttonStyle(.borderedProminent)
+                    .disabled(mission.status != .active)
+                    .help("Open a new chat in this mission, with no task attached")
+                    Menu {
+                        Menu("Add existing chat…") { MissionExistingChatItems(mission: mission) }
+                    } label: {
+                        Image(systemName: "ellipsis")
+                    }
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .help("More chat actions")
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     if members.isEmpty {

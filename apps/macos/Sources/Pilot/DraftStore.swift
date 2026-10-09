@@ -33,6 +33,7 @@ struct StoredTaskDraft: Codable {
     var pendingBaseBranch: String? = nil
     var pendingCwd: String? = nil
     var pendingWorkspace: WorkspaceMode? = nil
+    var mission: Mission? = nil
 }
 
 struct StoredImage: Codable {

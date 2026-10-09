@@ -309,9 +309,11 @@ public struct RemoteBranchList: Codable, Equatable, Sendable {
     }
 }
 
-/// Needs a projectId, a cwd, or both (cwd overrides the project's path).
+/// Needs a missionId, projectId or cwd (cwd overrides a non-mission project's path).
 /// POST returns a durable `starting` session while its workspace and kernel initialize.
 public struct SpawnRequest: Codable, Sendable {
+    /// Join before the first turn, using the mission's project with no cwd override.
+    public var missionId: String?
     public var projectId: String?
     public var cwd: String?
     public var message: String
@@ -325,8 +327,10 @@ public struct SpawnRequest: Codable, Sendable {
 
     public init(
         projectId: String? = nil, cwd: String? = nil, message: String, title: String? = nil, model: String? = nil,
-        thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil
+        thinking: String? = nil, baseBranch: String? = nil, mode: ChatMode? = nil, workspace: WorkspaceMode? = nil,
+        missionId: String? = nil
     ) {
+        self.missionId = missionId
         self.projectId = projectId
         self.cwd = cwd
         self.message = message

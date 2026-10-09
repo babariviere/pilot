@@ -127,6 +127,7 @@ final class AppModel: ObservableObject {
         newSessionForm.mode = task.mode ?? .build
         newSessionForm.workspace = task.workspace
         newSessionForm.pendingBaseBranch = task.pendingBaseBranch
+        newSessionForm.mission = task.mission
         newSessionForm.branches.restoreSelection(scope: task.branchScope, branch: task.baseBranch, mode: task.mode ?? .build)
         draftProjectId = task.projectId
         draftMessage = task.pendingMessage
@@ -172,7 +173,7 @@ final class AppModel: ObservableObject {
                                         baseBranch: form.branches.selected, runningTab: form.tab == .running,
                                         mode: form.mode, workspace: form.workspace,
                                         pendingBaseBranch: draftMessage == nil ? form.pendingBaseBranch : draftBaseBranch,
-                                        pendingCwd: draftCwd, pendingWorkspace: draftWorkspace)
+                                        pendingCwd: draftCwd, pendingWorkspace: draftWorkspace, mission: form.mission)
         do {
             try draftStore.scheduleSave(drafts) { [weak self, draftImages] result in
                 switch result {
@@ -222,6 +223,7 @@ final class AppModel: ObservableObject {
 
     func newSession(in projectId: String?, message: String? = nil) {
         showingArchive = false
+        if projectId != nil || message != nil { newSessionForm.mission = nil }
         let fresh = message != nil || !newSessionForm.hasUnsubmittedDraft
         if let projectId, draftProjectId != projectId {
             newSessionForm.chooseBaseBranch(nil)
@@ -240,6 +242,14 @@ final class AppModel: ObservableObject {
         }
         selectedSessionId = nil
         selectedMissionId = nil
+    }
+
+    /// Open a dedicated, empty composer. The chat joins on spawn, without claiming a task.
+    func newSession(in mission: Mission) {
+        guard mission.status == .active else { return }
+        newSession(in: mission.projectId, message: "")
+        newSessionForm.consumeDraft(from: self)
+        newSessionForm.mission = mission
     }
 
     /// An explicit new Build draft. The original Ask session and its history are never changed.
