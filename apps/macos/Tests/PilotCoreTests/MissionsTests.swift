@@ -2,6 +2,14 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func taskResourcesDecodeAndWritesCarryTaskId() throws {
+    let resource = try JSONDecoder().decode(MissionResource.self, from: Data(#"{"id":"r","taskId":"t","url":"https://github.com/o/r/pull/42","kind":"github.pr","externalId":"o/r#42","createdAt":1}"#.utf8))
+    #expect(resource.taskId == "t")
+    #expect(resource.badgeTitle == "PR #42")
+    let encoded = try JSONEncoder().encode(MissionResourceWrite(url: resource.url, taskId: "t"))
+    #expect(String(decoding: encoded, as: UTF8.self).contains(#""taskId":"t""#))
+}
+
 @Test func missionDetailDecodesAndToleratesNewerValues() throws {
     let detail = try JSONDecoder().decode(MissionDetail.self, from: Data(#"""
     {

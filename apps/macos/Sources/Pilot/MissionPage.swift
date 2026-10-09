@@ -322,7 +322,7 @@ struct MissionOverviewTab: View {
                     }
                 }
                 MissionSection("Resources") {
-                    ForEach(detail.resources) { item in
+                    ForEach(detail.resources.filter { $0.taskId == nil }) { item in
                         ResourceRow(resource: item, missionId: mission.id)
                         MissionRowDivider()
                     }
@@ -487,16 +487,20 @@ struct MissionEventRow: View {
     }
 }
 
-private struct ResourceRow: View {
+struct ResourceRow: View {
     let resource: MissionResource
     let missionId: String
+    var compact = false
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: resource.kind.symbol).foregroundStyle(Theme.mutedForeground).frame(width: 16)
             if let url = URL(string: resource.url) {
-                Link(resource.displayTitle, destination: url).lineLimit(1).help(resource.url)
+                let pr = client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
+                Link(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle, destination: url)
+                    .lineLimit(1).help(resource.url)
             } else {
                 Text(resource.displayTitle).lineLimit(1)
             }

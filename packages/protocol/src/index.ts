@@ -412,6 +412,8 @@ export interface MissionArtifactLink {
 
 /** External link. Kind and external ID are parsed by pilotd when saved. */
 export interface MissionResource {
+	/** Omitted for mission-level links. */
+	taskId?: string;
 	id: string;
 	url: string;
 	title?: string;
@@ -423,6 +425,8 @@ export interface MissionResource {
 }
 
 export interface MissionResourceWrite {
+	/** Task ID or display number. */
+	taskId?: string;
 	url: string;
 	title?: string;
 }

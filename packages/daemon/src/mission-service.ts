@@ -76,6 +76,14 @@ export class MissionService {
 			},
 			context: (sessionId) => this.context(sessionId),
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
+			pullRequestCreated: (sessionId, url) => {
+				const id = store.missionOf(sessionId);
+				if (!id) return;
+				for (const task of store.tasks(id)) {
+					if (task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
+						store.addResource(id, { url, taskId: task.id }, { sessionId });
+				}
+			},
 		});
 		store.onMembershipChange((sessionId) => {
 			const context = this.context(sessionId);
@@ -235,6 +243,7 @@ export class MissionService {
 							number: task.number,
 							title: task.title,
 							status: task.status,
+							resources: detail.resources.filter((resource) => resource.taskId === task.id),
 							...(task.sessionId ? { owner: who(task.sessionId) } : {}),
 							...(task.milestone ? { milestone: task.milestone } : {}),
 							...(task.dependsOn?.length
@@ -252,6 +261,7 @@ export class MissionService {
 							...(comment.targetSessionId ? { to: who(comment.targetSessionId) } : {}),
 						})),
 					resources: detail.resources.map((resource) => ({
+						...(resource.taskId ? { taskId: resource.taskId } : {}),
 						url: resource.url,
 						kind: resource.kind,
 						...(resource.title ? { title: resource.title } : {}),
@@ -301,6 +311,7 @@ export class MissionService {
 				return {
 					tasks: this.store.tasks(missionId).map((task) => ({
 						...task,
+						resources: this.store.detail(missionId).resources.filter((resource) => resource.taskId === task.id),
 						...(task.sessionId ? { sessionId: undefined, owner: who(task.sessionId) } : {}),
 					})),
 				};
@@ -348,7 +359,11 @@ export class MissionService {
 			case "link":
 				return this.store.addResource(
 					missionId,
-					{ url: str("url") as string, ...(str("title") ? { title: str("title") } : {}) },
+					{
+						url: str("url") as string,
+						...(str("title") ? { title: str("title") } : {}),
+						...(args.taskId !== undefined ? { taskId: args.taskId as string } : {}),
+					},
 					actor,
 				);
 			case "log":

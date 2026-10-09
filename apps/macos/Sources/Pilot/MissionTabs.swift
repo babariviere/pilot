@@ -437,6 +437,7 @@ struct MissionTaskRow: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
+    @StateObject private var resource = MissionInput()
 
     init(task: MissionTask, mission: Mission, siblings: [MissionTask]) {
         self.task = task
@@ -457,6 +458,19 @@ struct MissionTaskRow: View {
                 if let body = task.body, !body.isEmpty {
                     Text(body).font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(2)
                 }
+                ForEach(client.missionDetails[mission.id]?.resources.filter { $0.taskId == task.id } ?? []) { item in
+                    ResourceRow(resource: item, missionId: mission.id, compact: true)
+                }
+                Button("Add link…") { resource.editingId = task.id }
+                    .buttonStyle(.link).font(.caption)
+                    .popover(isPresented: Binding(get: { resource.editingId != nil }, set: { if !$0 { resource.editingId = nil } })) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Link to task #\(task.number)").font(.headline)
+                            TextField("URL", text: $resource.text).textFieldStyle(.roundedBorder).onSubmit(addResource)
+                            TextField("Title (optional)", text: $resource.secondary).textFieldStyle(.roundedBorder).onSubmit(addResource)
+                            Button("Add", action: addResource).disabled(resource.busy || URL(string: resource.text)?.scheme == nil)
+                        }.padding(14).frame(width: 340)
+                    }
             }
             Spacer(minLength: 8)
             owner
@@ -506,6 +520,20 @@ struct MissionTaskRow: View {
         .foregroundStyle(Theme.mutedForeground)
         .help(task.sessionId.map { "Assigned to “\(client.session($0)?.title ?? "a chat")”. Click to reassign." }
               ?? "Assign this task to a mission chat")
+    }
+
+    private func addResource() {
+        let url = resource.trimmed(resource.text)
+        guard !resource.busy, URL(string: url)?.scheme != nil else { return }
+        let value = resource.trimmed(resource.secondary)
+        resource.busy = true
+        model.missionAction { [client, resource, id = mission.id, taskId = task.id] in
+            defer { resource.busy = false }
+            try await client.addMissionResource(id, MissionResourceWrite(url: url, title: value.isEmpty ? nil : value, taskId: taskId))
+            resource.text = ""
+            resource.secondary = ""
+            resource.editingId = nil
+        }
     }
 
     private func saveTitle() {

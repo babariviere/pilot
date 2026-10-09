@@ -242,6 +242,9 @@ the brief into the repository is an explicit user action.
   and rejects a task owned by another chat.
 - **Artifacts**: links to artifacts that stay owned by their session, optionally pinned to a revision.
 - **Resources**: external links (Linear project or issue, GitHub issue or PR, Slack thread, any URL).
+  Links optionally belong to a task, appear on its row and in agent task views, and can be added or
+  removed there. Deleting a task keeps its links at mission level. A chat's newly opened PR is linked
+  to its unfinished claimed tasks automatically.
   The kind and external ID are parsed when saved so later automation needs no migration.
 - **Activity**: append-only events: handoffs, status updates (optional health), claims, task changes,
   brief revisions, decisions, links and membership changes.

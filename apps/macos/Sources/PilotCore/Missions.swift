@@ -260,6 +260,7 @@ public struct MissionArtifactLink: Codable, Identifiable, Equatable, Hashable, S
 
 public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
+    public let taskId: String?
     public let url: String
     public let title: String?
     public let kind: MissionResourceKind
@@ -268,15 +269,22 @@ public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Senda
     public let createdAt: Double
 
     public var displayTitle: String { title ?? externalId ?? url }
+
+    public var badgeTitle: String {
+        if kind == .githubPullRequest, let number = externalId?.split(separator: "#").last { return "PR #\(number)" }
+        return externalId ?? displayTitle
+    }
 }
 
 public struct MissionResourceWrite: Codable, Sendable {
     public let url: String
     public let title: String?
+    public let taskId: String?
 
-    public init(url: String, title: String? = nil) {
+    public init(url: String, title: String? = nil, taskId: String? = nil) {
         self.url = url
         self.title = title
+        self.taskId = taskId
     }
 }
 

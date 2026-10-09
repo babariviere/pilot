@@ -40,7 +40,7 @@ Actions:
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin).
-- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title.
+- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number).
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
 		executionMode: "sequential",
@@ -67,6 +67,7 @@ Actions:
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 			url: Type.Optional(Type.String({ maxLength: 2048 })),
+			taskId: Type.Optional(Type.String({ maxLength: 128, description: "Task ID or number for link." })),
 			kind: Type.Optional(StringEnum(["update", "handoff"] as const)),
 			health: Type.Optional(StringEnum(["on_track", "at_risk", "off_track"] as const)),
 		}),

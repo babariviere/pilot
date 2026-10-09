@@ -85,6 +85,25 @@ async function fixture(t: TestContext) {
 	return { home, projects, project, other, sessions, store, service, workers, spawn };
 }
 
+test("tool task links resolve numbers, appear with tasks, and auto-link each owning task", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	f.service.join(chat.id, { missionId: id, taskId: "1" });
+	f.store.claimTask(id, "2", chat.id);
+	const url = "https://github.com/octo/repo/pull/42";
+	const linked = (await f.service.call(chat.id, "link", { url, taskId: "#1" })) as { taskId: string };
+	assert.equal(linked.taskId, f.store.resolveTask(id, "1").id);
+	const view = (await f.service.call(chat.id, "tasks", {})) as { tasks: { resources: unknown[] }[] };
+	assert.equal(view.tasks[0]!.resources.length, 1);
+	const get = (await f.service.call(chat.id, "get", {})) as { tasks: { resources: unknown[] }[] };
+	assert.equal(get.tasks[0]!.resources.length, 1);
+	f.sessions["missions"]?.pullRequestCreated?.(chat.id, url);
+	assert.equal(f.store.detail(id).resources.length, 2);
+	assert.ok(f.store.detail(id).resources.every((resource) => resource.taskId));
+	await assert.rejects(f.service.call(chat.id, "link", { url, taskId: "missing" }), /Unknown task/);
+});
+
 test("Make a mission joins the chat as coordinator and asks it to draft", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();
@@ -321,9 +340,14 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	assert.equal(((await patched.json()) as { status: string }).status, "blocked");
 	const resource = await api(`/missions/${id}/resources`, {
 		method: "POST",
-		body: JSON.stringify({ url: "https://github.com/o/r/pull/3" }),
+		body: JSON.stringify({ url: "https://github.com/o/r/pull/3", taskId }),
 	});
-	assert.equal(((await resource.json()) as { kind: string }).kind, "github.pr");
+	const resourceBody = (await resource.json()) as { kind: string; taskId: string; id: string };
+	assert.equal(resourceBody.kind, "github.pr");
+	assert.equal(resourceBody.taskId, taskId);
+	const unlinked = await api(`/missions/${id}/resources/${resourceBody.id}`, { method: "DELETE" });
+	assert.equal(unlinked.status, 200);
+	await unlinked.arrayBuffer();
 	const decision = await api(`/missions/${id}/decisions`, { method: "POST", body: JSON.stringify({ text: "D" }) });
 	assert.equal(decision.status, 201);
 	await decision.arrayBuffer();
