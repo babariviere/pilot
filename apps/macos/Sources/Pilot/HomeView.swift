@@ -177,7 +177,7 @@ struct TaskComposer: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 130)
                 .disabled(form.busy)
-                .help("Build can make changes. Ask is read-only and creates no private clone.")
+                .help("Build can make changes. Ask is read-only and creates no isolated workspace.")
             }
             .padding(.horizontal, 12)
             .padding(.top, 9)
@@ -250,11 +250,11 @@ struct TaskComposer: View {
                 ModelMenu(model: $form.model, projectDefault: project?.model, list: form.models)
                 if form.mode == .build, let project {
                     Menu {
-                        Button("Project default (\(project.usesPrivateClones ? "Private clone" : "Current checkout"))") { form.workspace = nil }
-                        Button("Private clone") { form.workspace = .clone }
+                        Button("Project default (\(project.usesPrivateClones ? "Isolated workspace" : "Current checkout"))") { form.workspace = nil }
+                        Button("Isolated workspace") { form.workspace = .clone }
                         Button("Current checkout") { form.workspace = .direct }
                     } label: {
-                        ChipLabel(title: form.effectiveWorkspace(for: project) == .clone ? "Private clone" : "Checkout", icon: "square.on.square")
+                        ChipLabel(title: form.effectiveWorkspace(for: project) == .clone ? "Isolated workspace" : "Checkout", icon: "square.on.square")
                     }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                     .disabled(form.busy)
@@ -273,8 +273,8 @@ struct TaskComposer: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
             Text(form.mode == .ask
-                 ? "Ask · read-only · no private clone · \(branches.selection(for: branchScopeKey).map { "origin/\($0) snapshot" } ?? "current checkout")"
-                 : "Build · \(form.effectiveWorkspace(for: project) == .clone ? "private clone" : "current checkout") · \(branches.selection(for: branchScopeKey).map { "origin/\($0)" } ?? (form.effectiveWorkspace(for: project) == .clone ? "default base" : "local files"))")
+                 ? "Ask · read-only · no isolated workspace · \(branches.selection(for: branchScopeKey).map { "origin/\($0) snapshot" } ?? "current checkout")"
+                 : "Build · \(form.effectiveWorkspace(for: project) == .clone ? "isolated workspace" : "current checkout") · \(branches.selection(for: branchScopeKey).map { "origin/\($0)" } ?? (form.effectiveWorkspace(for: project) == .clone ? "default base" : "local files"))")
                 .font(.caption).foregroundStyle(Theme.mutedForeground)
                 .padding(.horizontal, 12).padding(.bottom, 8)
         }

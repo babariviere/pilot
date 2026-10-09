@@ -38,7 +38,7 @@ struct SessionRepositoryMetadata: View {
             Label("Ask · \(session.sourceLabel)", systemImage: "questionmark.bubble")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground).lineLimit(1)
-                .help("Read-only · no private clone" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))
+                .help("Read-only · no isolated workspace" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))
         } else {
             SessionRepositoryMetadataContent(session: session, summary: model.summary,
                                              branch: model.branch(for: session), error: model.error)

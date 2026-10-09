@@ -274,8 +274,8 @@ private struct ProjectSettings: View {
                         TextField("Name", text: $editor.name)
                         LabeledContent("Folder") { Text(project.path.abbreviatingHome).textSelection(.enabled) }
                         TextField("Default model", text: $editor.model, prompt: Text("pi default"))
-                        Toggle("Run each session in a private clone", isOn: $editor.privateClones)
-                        Text("Sessions get their own clone, so they never touch your checkout. Turn off to run in the folder itself.")
+                        Toggle("Run each session in an isolated workspace", isOn: $editor.privateClones)
+                        Text("Sessions get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         Toggle("Require PR", isOn: $editor.requirePullRequest)

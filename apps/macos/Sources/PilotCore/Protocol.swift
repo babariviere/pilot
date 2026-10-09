@@ -70,7 +70,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }
     public var workspaceLabel: String {
-        if isAsk { return "Read-only · no private clone" }
+        if isAsk { return "Read-only · no isolated workspace" }
         if workspaceReclaimedAt != nil { return "Archived workspace (restored on resume)" }
         if workspaceStorage == .shared { return "Shared jj workspace" }
         switch workspace {
@@ -86,7 +86,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var workspaceHelp: String {
         if isAsk {
-            return "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No private clone is created.\(sourceCommit.map { "\nPinned source commit: \($0)" } ?? "")"
+            return "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No isolated workspace is created.\(sourceCommit.map { "\nPinned source commit: \($0)" } ?? "")"
         }
         var help = "Build can make changes in this chat's workspace."
         if workspaceStorage == .shared {
