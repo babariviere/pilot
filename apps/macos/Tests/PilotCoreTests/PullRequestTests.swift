@@ -8,6 +8,32 @@ private func pr(_ state: PullRequestState = .open, url: String = "https://github
     SessionPullRequest(number: 7, url: url, title: "Add PR indicators", state: state, checkedAt: 1_781_524_800_000)
 }
 
+@Test func branchLinksPairEveryBranchWithItsPullRequest() throws {
+    func linked(_ number: Int, _ branch: String?) -> SessionPullRequest {
+        SessionPullRequest(number: number, url: "https://github.com/example/repo/pull/\(number)", title: "Change",
+                           state: .draft, checkedAt: 1, branch: branch)
+    }
+    let json = #"{"id":"s","title":"Task","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"idle","branch":"feat/a","branches":["feat/a","feat/b","feat/c"]}"#
+    let decoded = try JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
+    #expect(decoded.branches == ["feat/a", "feat/b", "feat/c"])
+
+    let session = SessionSummary(id: "s", title: "Task", cwd: "/tmp", branch: "feat/a", createdAt: 1, updatedAt: 2,
+                                 state: "idle", pullRequest: linked(2, "feat/a"),
+                                 pullRequests: [linked(2, "feat/a"), linked(1, "feat/b"), linked(9, "feat/gone")],
+                                 branches: ["feat/a", "feat/b", "feat/c"])
+    #expect(session.branchLinks().map(\.name) == ["feat/a", "feat/b", "feat/c", "feat/gone"])
+    #expect(session.branchLinks().map { $0.pullRequest?.number } == [2, 1, nil, 9])
+    #expect(session.branchLinks(current: "feat/c").first?.name == "feat/c", "the loaded branch comes first")
+
+    // Older daemons: no branch list and a current PR without a head branch.
+    let legacy = SessionSummary(id: "s", title: "Task", cwd: "/tmp", branch: "feat/a", createdAt: 1, updatedAt: 2,
+                                state: "idle", pullRequest: linked(3, nil), pullRequests: [linked(3, nil), linked(4, nil)])
+    #expect(legacy.branchLinks().map(\.name) == ["feat/a", nil])
+    #expect(legacy.branchLinks().map { $0.pullRequest?.number } == [3, 4])
+    #expect(SessionSummary(id: "s", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle").branchLinks().isEmpty)
+}
+
+
 @Test func pullRequestWireFieldsAreOptional() throws {
     let old = try JSONDecoder().decode(SessionSummary.self, from: Data(oldSessionJSON.utf8))
     #expect(old.pullRequest == nil)

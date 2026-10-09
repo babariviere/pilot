@@ -32,20 +32,32 @@ struct PullRequestBadge: View {
 
     private var links: some View {
         ForEach(session.linkedPullRequests, id: \.url) { pr in
-            if let url = pr.browserURL {
-                Link(destination: url) { badge(pr) }
-                    .buttonStyle(.plain)
-            } else {
-                badge(pr)
-            }
+            PullRequestLink(pullRequest: pr, presentation: presentation, stale: session.pullRequestIsStale)
+        }
+    }
+}
+
+/// One PR as a browser link, or plain text when its URL is unsafe to open.
+struct PullRequestLink: View {
+    let pullRequest: SessionPullRequest
+    var presentation: PullRequestBadge.Presentation = .badge
+    var stale = false
+
+    var body: some View {
+        if let url = pullRequest.browserURL {
+            Link(destination: url) { badge }
+                .buttonStyle(.plain)
+        } else {
+            badge
         }
     }
 
-    private func badge(_ pr: SessionPullRequest) -> some View {
-        HStack(spacing: 4) {
+    private var badge: some View {
+        let pr = pullRequest
+        return HStack(spacing: 4) {
             if presentation == .badge { pr.state.icon }
             Text(presentation == .details ? "\(pr.state.compactLabel) PR #\(pr.number)" : "#\(pr.number)")
-            if session.pullRequestIsStale || pr.browserURL == nil {
+            if stale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
             }
             if presentation == .details, pr.browserURL != nil {
@@ -56,7 +68,7 @@ struct PullRequestBadge: View {
         .padding(.vertical, 2)
         .foregroundStyle(pr.state.color)
         .fixedSize()
-        .accessibilityLabel("Pull request \(pr.number), \(session.pullRequestIsStale ? "last known " : "")\(pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
+        .accessibilityLabel("Pull request \(pr.number), \(stale ? "last known " : "")\(pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
     }
 }
 

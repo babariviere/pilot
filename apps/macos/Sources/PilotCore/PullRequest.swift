@@ -69,6 +69,41 @@ extension SessionSummary {
         return pullRequest.map { [$0] } ?? []
     }
 
+    /// Every session branch paired with its PR, the current branch first. PRs without a known head branch
+    /// (older daemons) attach to the current branch when it has none, otherwise they follow without a name.
+    public func branchLinks(current: String? = nil) -> [SessionBranchLink] {
+        let current = current ?? branch
+        let prs = linkedPullRequests
+        var names: [String] = []
+        for name in [current] + (branches ?? []).map(Optional.some) + prs.map(\.branch) {
+            if let name, !name.isEmpty, !names.contains(name) { names.append(name) }
+        }
+        var unclaimed = prs
+        var links = names.map { name -> SessionBranchLink in
+            let index = unclaimed.firstIndex { $0.branch == name }
+                ?? (name == current ? unclaimed.firstIndex { $0.branch == nil && $0.url == pullRequest?.url } : nil)
+            return SessionBranchLink(name: name, pullRequest: index.map { unclaimed.remove(at: $0) })
+        }
+        links += unclaimed.map { SessionBranchLink(name: nil, pullRequest: $0) }
+        return links
+    }
+}
+
+/// A session branch and the PR opened from it, if any. A nil name is a PR whose head branch is unknown.
+public struct SessionBranchLink: Equatable, Hashable, Sendable, Identifiable {
+    public let name: String?
+    public let pullRequest: SessionPullRequest?
+
+    public init(name: String?, pullRequest: SessionPullRequest?) {
+        self.name = name
+        self.pullRequest = pullRequest
+    }
+
+    public var id: String { name.map { "branch:\($0)" } ?? "pr:\(pullRequest?.url ?? "")" }
+}
+
+extension SessionSummary {
+
     public var pullRequestIsStale: Bool { pullRequestError != nil }
 
     public var pullRequestHelpText: String? {

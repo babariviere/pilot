@@ -46,6 +46,7 @@ import {
 	type PullRequestResult,
 	PullRequestTracker,
 	sessionPullRequests,
+	sessionBranches,
 } from "./pull-requests.ts";
 import { discoverPullRequestProblems, type PullRequestProblems } from "./pull-request-health.ts";
 import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
@@ -2356,6 +2357,7 @@ export class SessionManager {
 			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),
 			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
 			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
+			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.failure || meta.inputError || worker?.error
 				? { error: meta.failure || meta.inputError || worker?.error }
@@ -2375,7 +2377,7 @@ export class SessionManager {
 
 		let current = previous;
 		let others = [...(previousOthers ?? [])];
-		let branches = [...(previousBranches ?? [])];
+		let branches = [...(previousBranches ?? []), ...(result.branches ?? [])];
 		if (branchChanged) {
 			// A new branch starts a new PR. Keep the earlier one, or the bare branch until GitHub shows a PR.
 			if (previous)

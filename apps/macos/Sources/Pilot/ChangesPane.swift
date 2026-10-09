@@ -150,23 +150,53 @@ struct ChangesRepositoryContext: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let branch, !branch.isEmpty {
-                Text(branch)
-                    .font(.system(size: 11, design: .monospaced))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .help("Branch: \(branch)")
-                    .accessibilityLabel("Branch \(branch)")
+            ForEach(session.branchLinks(current: branch)) { link in
+                BranchLinkRow(link: link, current: link.name != nil && link.name == branch,
+                              stale: session.pullRequestIsStale)
             }
             Text(session.workspaceLabel)
                 .font(.system(size: 11))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
                 .help(session.workspaceHelp)
-            PullRequestBadge(session: session, presentation: .details)
+            if session.linkedPullRequests.isEmpty {
+                // Lookup failures without a cached PR.
+                PullRequestBadge(session: session, presentation: .details)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
+    }
+}
+
+/// A session branch with the PR opened from it. Long names wrap so the full branch stays readable.
+private struct BranchLinkRow: View {
+    let link: SessionBranchLink
+    let current: Bool
+    let stale: Bool
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let name = link.name {
+                Text(name)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(current ? Theme.foreground : Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                    .help(current ? "Current branch: \(name)" : "Branch: \(name)")
+                    .accessibilityLabel(current ? "Current branch \(name)" : "Branch \(name)")
+            } else {
+                Text("Unknown branch")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.faintForeground)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if let pr = link.pullRequest {
+                PullRequestLink(pullRequest: pr, presentation: .details, stale: stale)
+                    .help("\(stale ? "Last known: " : "")\(pr.label): \(pr.title)\n\(pr.url)")
+            }
+        }
     }
 }
 
