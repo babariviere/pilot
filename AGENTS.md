@@ -27,6 +27,37 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
   limitation when showing a prototype. If the tool or renderer is unavailable, explain why and
   provide another visual check rather than claiming a preview was verified.
 
+## Performance
+
+- Every change must consider GUI responsiveness and daemon CPU, memory, I/O and event-loop impact.
+  Treat smooth scrolling, typing and navigation as requirements, not optional polish.
+- Keep blocking I/O and expensive computation off the UI main thread and daemon event loop.
+  Bound concurrency, queues and retained data; avoid repeated work and unnecessary view updates.
+- Prefer event-driven updates over polling. Coalesce high-frequency updates where appropriate,
+  and cancel obsolete work and release timers, subscriptions and resources when no longer needed.
+- For changes affecting hot paths, verify with representative large sessions and streaming activity.
+  Use relevant benchmarks or profiling, compare before and after, and report any unverified risks.
+
+## UI consistency and simplicity
+
+- Keep the UI clean, calm and focused. Prioritize primary actions and use progressive disclosure
+  for secondary controls and details instead of overloading screens.
+- Follow existing layouts, interaction patterns, terminology and visual hierarchy. Avoid introducing
+  one-off styles or duplicate controls for the same action.
+- Check changed UI at realistic window sizes and with long content, including loading, empty,
+  error and disabled states. Preserve keyboard access, readable contrast and reduced-motion support.
+
+## Design system
+
+- Treat `apps/macos/Sources/Pilot/Theme.swift` and shared UI components as the foundation of the
+  design system. Reuse them rather than adding screen-specific styling.
+- Keep colors, typography, spacing, sizing, corner radii and motion consistent through shared
+  semantic tokens. Add missing reusable tokens or components centrally instead of scattering literals.
+- Define reusable components with consistent interaction and accessibility behavior. Document new
+  patterns and their intended use alongside the shared implementation so future changes follow them.
+- Evolve the design system incrementally as part of relevant UI work; do not introduce a parallel
+  styling system or broad unrelated redesign.
+
 ## Formatting and tests
 
 - Biome: tabs, width 120. `npm run fmt` / `npm run fmt:check`.
