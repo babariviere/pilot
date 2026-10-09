@@ -656,7 +656,9 @@ reports), producing a morning summary in the app and Slack.
   fsynced, unreadable entries are skipped when listing, image bytes are stored once, and revisions
   record their library versions.
 - Missions (§5.7): a Missions sidebar section above Projects lists active missions with a Needs you
-  count and their chats; mission chats also stay under their project with a mission chip. The mission
+  count and their chats. Each mission's coordinator chat comes first, ahead of pins, PR state and activity,
+  with a gold star and tooltip shared with the Chats tab and mission header. Mission chats also stay
+  under their project with a mission chip. The mission
   page has Overview (progress, tasks, Needs you, recent activity, resources), Brief (editor, revisions,
   decisions, comments), Tasks (grouped by status or milestone, reorder, Start chat), Chats (including
   archived), Artifacts and Activity tabs. The chat inspector gains a Mission tab with the chat's task,

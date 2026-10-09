@@ -216,14 +216,14 @@ enum Snapshot {
         if CommandLine.arguments.contains("--missions-only") {
             let now = Fixtures.now
             func member(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,
-                        ago: Double) -> SessionSummary {
+                        ago: Double, pinned: Bool = false) -> SessionSummary {
                 SessionSummary(id: id, title: title, cwd: Fixtures.projects[0].path, projectId: "p1",
                                branch: "feat/\(id)", createdAt: now - ago, updatedAt: now - ago, state: state,
-                               outcome: outcome, outcomeAt: outcome == nil ? nil : now - ago, missionId: "m1")
+                               outcome: outcome, outcomeAt: outcome == nil ? nil : now - ago, pinned: pinned, missionId: "m1")
             }
             let sessions = [
                 member("coord", "Plan API v2 migration", ago: 3_600_000),
-                member("auth", "Port auth endpoints", state: "working", ago: 60_000),
+                member("auth", "Port auth endpoints", state: "working", ago: 60_000, pinned: true),
                 member("pagination", "Cursor pagination", outcome: .done, ago: 900_000),
                 member("errors", "Error envelope", outcome: .failed, ago: 1_800_000),
                 SessionSummary(id: "solo", title: "Fix flaky CI cache", cwd: Fixtures.projects[0].path, projectId: "p1",
