@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.2](https://github.com/babariviere/pilot/compare/v1.6.1...v1.6.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **artifacts:** center Mermaid diagrams in previews ([9c09870](https://github.com/babariviere/pilot/commit/9c098701a6aedf10be16e0b2674fda64ea2300fd))
+* **daemon:** preserve outcomes when parking idle sessions ([1db5f26](https://github.com/babariviere/pilot/commit/1db5f2640b0b2b47c6246eb9e13605f19f643183))
+* **kernel:** bundle artifact authoring skill and namespace ([44762a0](https://github.com/babariviere/pilot/commit/44762a02e2d19f0e0be3a15bd78e68351196ee91))
+* **kernel:** keep artifact discovery visible after resume ([efbbc27](https://github.com/babariviere/pilot/commit/efbbc270d7ce9a6b4519ce8248aa8ad883090592))
+* **macos:** keep the subagent footer readable while scrolling ([6e76854](https://github.com/babariviere/pilot/commit/6e768549c1670fc148c9955d5a610c93654b2185))
+* **macos:** use native inspector toolbar toggles ([62daf3b](https://github.com/babariviere/pilot/commit/62daf3babc6e7f6f123d0703adebf6c0cdc853cf))
+
 ## [1.6.1](https://github.com/babariviere/pilot/compare/v1.6.0...v1.6.1) (2026-10-09)
 
 
