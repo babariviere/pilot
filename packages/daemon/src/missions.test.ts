@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
+import type { SessionPullRequest } from "@pilot/protocol";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
 test("task links are scoped, validated and preserved when a task is deleted", () => {
@@ -27,6 +32,133 @@ test("task links are scoped, validated and preserved when a task is deleted", ()
 function store() {
 	return new MissionStore(":memory:");
 }
+
+const pr = (number: number, state: SessionPullRequest["state"]): SessionPullRequest => ({
+	number,
+	state,
+	url: `https://github.com/octo/repo/pull/${number}`,
+	title: "PR",
+	checkedAt: Date.now(),
+});
+
+test("linked PRs enter review and finish only with a merge and no open or unknown links", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
+		const task = missions.resolveTask(id, "1");
+		for (const number of [1, 2, 3]) missions.addResource(id, { taskId: task.id, url: pr(number, "open").url });
+		missions.addResource(id, { taskId: task.id, url: "https://linear.app/a/issue/ENG-1" });
+		missions.updatePullRequest(pr(1, "open"));
+		assert.equal(missions.task(id, task.id).status, "in_review");
+		const events = missions.detail(id).events.length;
+		missions.updatePullRequest(pr(1, "open"));
+		assert.equal(missions.detail(id).events.length, events, "repeated polling is idempotent");
+		missions.updatePullRequest(pr(1, "merged"));
+		assert.equal(missions.task(id, task.id).status, "in_review", "unknown links prevent done");
+		missions.updatePullRequest(pr(2, "closed"));
+		missions.updatePullRequest(pr(3, "draft"));
+		assert.equal(missions.task(id, task.id).status, "in_review", "drafts count as open");
+		missions.updatePullRequest(pr(3, "merged"));
+		assert.equal(missions.task(id, task.id).status, "done");
+		assert.ok(missions.task(id, task.id).completedAt);
+		assert.ok(
+			missions
+				.detail(id)
+				.events.some((event) => event.taskId === task.id && /after linked pull request merge/.test(event.text)),
+		);
+		missions.updatePullRequest(pr(3, "open"));
+		assert.equal(missions.task(id, task.id).status, "done", "a new or reopened PR never reopens a closed task");
+	} finally {
+		missions.close();
+	}
+});
+
+test("closed-unmerged and mission-level links do not finish tasks; removing the last open link does", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({
+			projectId: "p",
+			title: "M",
+			tasks: [{ title: "A" }, { title: "B" }],
+		});
+		missions.updateTask(id, missions.resolveTask(id, "2").id, { status: "dropped" });
+		const task = missions.resolveTask(id, "1");
+		missions.addResource(id, { url: pr(1, "merged").url });
+		missions.updatePullRequest(pr(1, "merged"));
+		assert.equal(missions.task(id, task.id).status, "todo");
+		missions.addResource(id, { url: pr(2, "closed").url, taskId: task.id });
+		missions.updatePullRequest(pr(2, "closed"));
+		assert.equal(missions.task(id, task.id).status, "todo");
+		const open = missions.addResource(id, { url: pr(3, "open").url, taskId: task.id });
+		missions.updatePullRequest(pr(3, "open"));
+		missions.addResource(id, { url: pr(1, "merged").url, taskId: task.id });
+		assert.equal(missions.task(id, task.id).status, "in_review");
+		missions.removeResource(id, open.id);
+		assert.equal(missions.task(id, task.id).status, "done");
+		missions.addResource(id, { url: pr(3, "open").url, taskId: "2" });
+		missions.updatePullRequest(pr(3, "open"));
+		assert.equal(missions.resolveTask(id, "2").status, "dropped");
+	} finally {
+		missions.close();
+	}
+});
+
+test("manual backward moves survive restarts and ignore fresh open PRs and merges", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-task-pr-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		for (const number of [1, 2]) {
+			missions.addResource(id, { taskId: String(number), url: pr(number, "open").url });
+			missions.updatePullRequest(pr(number, "open"));
+		}
+		missions.updateTask(id, missions.resolveTask(id, "1").id, { status: "in_progress" });
+		missions.updatePullRequest(pr(2, "merged"));
+		missions.updateTask(id, missions.resolveTask(id, "2").id, { status: "in_review" });
+		missions.close();
+		missions = new MissionStore(file);
+		missions.updatePullRequest(pr(1, "open"));
+		missions.updatePullRequest(pr(1, "merged"));
+		missions.updatePullRequest(pr(2, "merged"));
+		missions.addResource(id, { taskId: "1", url: pr(3, "open").url });
+		missions.updatePullRequest(pr(3, "open"));
+		assert.equal(missions.resolveTask(id, "1").status, "in_progress");
+		assert.equal(missions.resolveTask(id, "2").status, "in_review");
+		assert.equal(
+			missions.detail(id).resources.find((resource) => resource.url === pr(1, "merged").url)?.pullRequest?.state,
+			"merged",
+		);
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("older databases gain link and PR tracking columns without losing resources", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-task-migration-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
+		missions.addResource(id, { url: pr(1, "open").url });
+		missions.close();
+		const legacy = new DatabaseSync(file);
+		legacy.exec(
+			"ALTER TABLE resources DROP COLUMN task_id; ALTER TABLE resources DROP COLUMN pull_request; ALTER TABLE tasks DROP COLUMN pr_sync_disabled;",
+		);
+		legacy.close();
+		missions = new MissionStore(file);
+		assert.equal(missions.detail(id).resources.length, 1);
+		assert.equal(missions.detail(id).resources[0]!.taskId, undefined);
+		missions.addResource(id, { taskId: "1", url: pr(1, "open").url });
+		missions.updatePullRequest(pr(1, "merged"));
+		assert.equal(missions.resolveTask(id, "1").status, "done");
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("creates missions with an initial brief, tasks and activity", () => {
 	const missions = store();

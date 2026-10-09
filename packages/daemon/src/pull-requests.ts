@@ -106,7 +106,7 @@ interface Candidate {
 	mergedAt: string | null;
 }
 
-function select(output: string, branch: string, repo: Repository): Candidate | undefined {
+function select(output: string, branch: string | undefined, repo: Repository): Candidate | undefined {
 	const rows: unknown = JSON.parse(output);
 	if (!Array.isArray(rows)) throw new Error("Invalid GitHub pull request response");
 	const matching: Candidate[] = [];
@@ -130,7 +130,7 @@ function select(output: string, branch: string, repo: Repository): Candidate | u
 			throw new Error("Invalid GitHub pull request response");
 		// Same-named fork branches are not this private clone's branch. Deleted head branches
 		// remain identifiable by headRefName and isCrossRepository, without any local ref lookup.
-		if (pr.headRefName !== branch || pr.isCrossRepository) continue;
+		if (branch !== undefined && (pr.headRefName !== branch || pr.isCrossRepository)) continue;
 		const url = new URL(pr.url);
 		if (
 			url.protocol !== "https:" ||
@@ -151,6 +151,48 @@ function select(output: string, branch: string, repo: Repository): Candidate | u
 }
 
 const fields = "number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt,mergedAt";
+
+export interface LinkedPullRequest {
+	url: string;
+	cwd: string;
+	pullRequest?: SessionPullRequest;
+}
+
+/** Number-based lookup for hand-linked PRs, including fork heads unrelated to any chat branch. */
+export async function discoverLinkedPullRequest(
+	target: LinkedPullRequest,
+	runner: Runner = run,
+): Promise<SessionPullRequest> {
+	const url = new URL(target.url);
+	const match = /^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)$/.exec(url.pathname);
+	if (
+		url.protocol !== "https:" ||
+		url.hostname !== "github.com" ||
+		url.username ||
+		url.password ||
+		url.search ||
+		url.hash ||
+		!match
+	)
+		throw new Error("Invalid linked GitHub pull request URL");
+	const repo = githubRepository(`https://${url.hostname}/${match[1]}/${match[2]}`);
+	const number = Number(match[3]);
+	if (!Number.isSafeInteger(number)) throw new Error("Invalid linked pull request number");
+	const output = await runner(
+		"gh",
+		["pr", "view", String(number), `--repo=${repo.identity}`, `--json=${fields}`],
+		target.cwd,
+		10_000,
+	);
+	const pr = select(JSON.stringify([JSON.parse(output)]), undefined, repo);
+	if (!pr || pr.number !== number) throw new Error("Invalid linked pull request response");
+	return toSessionPullRequest(pr);
+}
+
+export interface LinkedPullRequestTracking {
+	targets(): Iterable<LinkedPullRequest>;
+	apply(pr: SessionPullRequest): void;
+}
 
 function validBranch(name: string): boolean {
 	return !!name && !name.startsWith("-") && !/[\s\x00-\x1f\x7f:~^?*[\\]/.test(name);
@@ -288,15 +330,18 @@ export class PullRequestTracker {
 	private readonly sessions: () => Iterable<PullRequestSession>;
 	private readonly apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>;
 	private readonly options: PullRequestOptions;
+	private readonly linked?: LinkedPullRequestTracking;
 
 	constructor(
 		sessions: () => Iterable<PullRequestSession>,
 		apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>,
 		options: PullRequestOptions = {},
+		linked?: LinkedPullRequestTracking,
 	) {
 		this.sessions = sessions;
 		this.apply = apply;
 		this.options = options;
+		this.linked = linked;
 	}
 
 	start(): void {
@@ -307,19 +352,32 @@ export class PullRequestTracker {
 
 	refresh(session: PullRequestSession): Promise<void> {
 		if (this.stopped || !session.workspace) return Promise.resolve();
-		const existing = this.pending.get(session.id);
+		return this.enqueue(session.id, async () => {
+			await this.apply(session, await discoverPullRequest(session, this.options.runner));
+		});
+	}
+
+	refreshLinked(target: LinkedPullRequest): Promise<void> {
+		if (this.stopped || !this.linked || isTerminalPullRequest(target.pullRequest)) return Promise.resolve();
+		return this.enqueue(`linked:${target.url}`, async () => {
+			this.linked!.apply(await discoverLinkedPullRequest(target, this.options.runner));
+		});
+	}
+
+	private enqueue(key: string, work: () => Promise<void>): Promise<void> {
+		const existing = this.pending.get(key);
 		if (existing) return existing;
 		const next = this.tail
 			.then(async () => {
 				if (this.stopped) return;
-				await this.apply(session, await discoverPullRequest(session, this.options.runner));
+				await work();
 			})
 			.catch((error: unknown) => {
 				// A metadata I/O failure must not kill polling or become an agent failure.
-				console.warn(`pilotd: could not cache pull request for ${session.id}: ${error}`);
+				console.warn(`pilotd: could not cache pull request for ${key}: ${error}`);
 			})
-			.finally(() => this.pending.delete(session.id));
-		this.pending.set(session.id, next);
+			.finally(() => this.pending.delete(key));
+		this.pending.set(key, next);
 		this.tail = next;
 		return next;
 	}
@@ -343,6 +401,14 @@ export class PullRequestTracker {
 			for (const session of [...this.sessions()]) {
 				if (this.stopped) break;
 				if (this.due(session)) await this.refresh(session);
+			}
+			const seen = new Set<string>();
+			for (const target of this.linked?.targets() ?? []) {
+				if (this.stopped) break;
+				if (isTerminalPullRequest(target.pullRequest)) continue;
+				if (seen.has(target.url)) continue;
+				seen.add(target.url);
+				await this.refreshLinked(target);
 			}
 		})().finally(() => {
 			if (!this.stopped) {

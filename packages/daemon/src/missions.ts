@@ -24,6 +24,7 @@ import type {
 	MissionTask,
 	MissionTaskStatus,
 	MissionTaskWrite,
+	SessionPullRequest,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
@@ -208,6 +209,10 @@ export class MissionStore {
 		this.db.exec(SCHEMA);
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "task_id"))
 			this.db.exec("ALTER TABLE resources ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL");
+		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "pull_request"))
+			this.db.exec("ALTER TABLE resources ADD COLUMN pull_request TEXT");
+		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
+			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
 	}
 
 	close(): void {
@@ -417,6 +422,8 @@ export class MissionStore {
 				id,
 			);
 			for (const [kind, note] of notes) this.event(id, kind, note, actor, { at: now });
+			if (next.status === "active" && mission.status !== "active")
+				for (const task of this.tasks(id)) this.reconcileTaskPullRequests(id, task.id);
 		});
 		// Status and coordinator changes alter every member's context.
 		this.changed(id, this.members(id));
@@ -586,6 +593,11 @@ export class MissionStore {
 		const status = fields.status ?? before.status;
 		const now = Date.now();
 		this.transaction(() => {
+			// A user moving work back opts out permanently, across restarts and new links.
+			const rank = (state: MissionTaskStatus) =>
+				state === "todo" ? 0 : state === "in_review" ? 2 : state === "done" || state === "dropped" ? 3 : 1;
+			if (!actor.sessionId && rank(status) < rank(before.status))
+				this.run("UPDATE tasks SET pr_sync_disabled = 1 WHERE id = ?", before.id);
 			this.run(
 				"UPDATE tasks SET title = ?, body = ?, status = ?, sort = ?, milestone = ?, depends_on = ?, session_id = ?, updated_at = ?, completed_at = ? WHERE id = ?",
 				title,
@@ -830,6 +842,15 @@ export class MissionStore {
 				taskId ?? null,
 			);
 			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, { at: now, taskId });
+			const cached = this.one(
+				"SELECT pull_request FROM resources WHERE url = ? COLLATE NOCASE AND pull_request IS NOT NULL LIMIT 1",
+				resource.url,
+			);
+			if (cached) {
+				this.run("UPDATE resources SET pull_request = ? WHERE id = ?", cached.pull_request!, resource.id);
+				resource.pullRequest = JSON.parse(str(cached.pull_request!)) as SessionPullRequest;
+				if (taskId) this.reconcileTaskPullRequests(id, taskId);
+			}
 		});
 		this.changed(id);
 		return resource;
@@ -844,8 +865,74 @@ export class MissionStore {
 			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
 				taskId: resource.taskId,
 			});
+			if (resource.taskId) this.reconcileTaskPullRequests(id, resource.taskId);
 		});
 		this.changed(id);
+	}
+
+	/** Persist a fresh result for all copies of this URL and reconcile affected tasks together. */
+	updatePullRequest(pr: SessionPullRequest): void {
+		const rows = this.all(
+			"SELECT DISTINCT mission_id FROM resources WHERE kind = 'github.pr' AND url = ? COLLATE NOCASE",
+			pr.url,
+		);
+		for (const row of rows) {
+			const id = str(row.mission_id!);
+			this.transaction(() => {
+				this.run(
+					"UPDATE resources SET pull_request = ? WHERE mission_id = ? AND url = ? COLLATE NOCASE",
+					JSON.stringify(pr),
+					id,
+					pr.url,
+				);
+				for (const task of this.all(
+					"SELECT DISTINCT task_id FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS NOT NULL",
+					id,
+					pr.url,
+				))
+					this.reconcileTaskPullRequests(id, str(task.task_id!));
+			});
+			this.changed(id);
+		}
+	}
+
+	private reconcileTaskPullRequests(id: string, taskId: string): void {
+		if (this.require(id).status !== "active") return;
+		const task = this.task(id, taskId);
+		if (
+			task.status === "done" ||
+			task.status === "dropped" ||
+			this.one("SELECT pr_sync_disabled FROM tasks WHERE id = ?", taskId)?.pr_sync_disabled
+		)
+			return;
+		const prs = this.all(
+			"SELECT * FROM resources WHERE mission_id = ? AND task_id = ? AND kind = 'github.pr'",
+			id,
+			taskId,
+		).map((row) => resourceFrom(row).pullRequest);
+		const open = prs.some((pr) => pr?.state === "open" || pr?.state === "draft");
+		// Unknown links block completion. Closed-unmerged links contribute nothing.
+		const done =
+			prs.length > 0 &&
+			prs.every((pr) => pr && pr.state !== "open" && pr.state !== "draft") &&
+			prs.some((pr) => pr?.state === "merged");
+		const status = done ? "done" : open ? "in_review" : undefined;
+		if (!status || task.status === status) return;
+		const now = Date.now();
+		this.run(
+			"UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
+			status,
+			now,
+			done ? now : null,
+			taskId,
+		);
+		this.event(
+			id,
+			"task",
+			`Task #${task.number} ${statusLabel(status)} after linked pull request ${done ? "merge" : "opened"}: ${task.title}`,
+			{},
+			{ taskId, at: now },
+		);
 	}
 
 	linkArtifact(
@@ -1075,6 +1162,7 @@ function artifactFrom(row: Row): MissionArtifactLink {
 function resourceFrom(row: Row): MissionResource {
 	return {
 		id: str(row.id!),
+		...(row.pull_request ? { pullRequest: JSON.parse(str(row.pull_request)) as SessionPullRequest } : {}),
 		...(row.task_id ? { taskId: str(row.task_id) } : {}),
 		url: str(row.url!),
 		...(row.title ? { title: str(row.title) } : {}),

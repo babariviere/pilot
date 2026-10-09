@@ -2,7 +2,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { discoverPullRequest, githubRepository, type PullRequestSession, PullRequestTracker } from "./pull-requests.ts";
+import {
+	discoverLinkedPullRequest,
+	discoverPullRequest,
+	githubRepository,
+	type PullRequestSession,
+	PullRequestTracker,
+} from "./pull-requests.ts";
 import type { Runner } from "./workspaces.ts";
 
 const branch = "fix-pr-tracking";
@@ -44,10 +50,173 @@ function gate() {
 	return { promise, resolve };
 }
 
+test("hand-linked fork PR lookup uses an explicit repository and validates identity and state", async () => {
+	const target = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
+	const runner: Runner = async (file, args, cwd) => {
+		assert.equal(file, "gh");
+		assert.deepEqual(args.slice(0, 4), ["pr", "view", "42", "--repo=github.com/octo/repo"]);
+		assert.equal(cwd, target.cwd);
+		return JSON.stringify(candidate({ number: 42, isCrossRepository: true, state: "MERGED", isDraft: true }));
+	};
+	const pr = await discoverLinkedPullRequest(target, runner);
+	assert.equal(pr.state, "merged");
+	assert.ok(pr.mergedAt);
+	await assert.rejects(
+		discoverLinkedPullRequest(target, async () => JSON.stringify(candidate({ number: 41 }))),
+		/Invalid linked/,
+	);
+	await assert.rejects(
+		discoverLinkedPullRequest(target, async () =>
+			JSON.stringify(candidate({ number: 42, url: "https://github.com/other/repo/pull/42" })),
+		),
+		/Invalid GitHub/,
+	);
+	await assert.rejects(
+		discoverLinkedPullRequest(target, async () =>
+			JSON.stringify(candidate({ number: 42, state: "MERGED", mergedAt: null })),
+		),
+		/Invalid GitHub/,
+	);
+	await assert.rejects(
+		discoverLinkedPullRequest({ ...target, url: "https://evil.test/octo/repo/pull/42" }, runner),
+		/Invalid linked/,
+	);
+});
+
+test("linked PRs share the serial queue, dedupe URLs, skip terminal caches, and drain on shutdown", async () => {
+	const release = gate();
+	let calls = 0;
+	let active = 0;
+	let maxActive = 0;
+	const results: string[] = [];
+	const first = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
+	const second = { ...first, url: "https://github.com/octo/repo/pull/43" };
+	const tracker = new PullRequestTracker(
+		() => [],
+		async () => {},
+		{
+			runner: async (_file, args) => {
+				calls++;
+				maxActive = Math.max(maxActive, ++active);
+				await release.promise;
+				active--;
+				return JSON.stringify(candidate({ number: Number(args[2]) }));
+			},
+		},
+		{
+			targets: () => [first, first, second],
+			apply: (pr) => {
+				results.push(pr.url);
+			},
+		},
+	);
+	const one = tracker.refreshLinked(first);
+	assert.equal(tracker.refreshLinked(first), one);
+	const two = tracker.refreshLinked(second);
+	await until(() => calls === 1);
+	release.resolve();
+	await Promise.all([one, two]);
+	assert.equal(calls, 2);
+	assert.equal(maxActive, 1);
+	await tracker.refreshLinked({
+		...first,
+		pullRequest: { number: 42, url: first.url, title: "PR", state: "merged", checkedAt: 1 },
+	});
+	assert.equal(calls, 2);
+	await tracker.stop();
+	await tracker.refreshLinked(first);
+	assert.equal(calls, 2);
+	assert.deepEqual(results, [first.url, second.url]);
+});
+
 async function until(predicate: () => boolean) {
 	for (let i = 0; i < 200 && !predicate(); i++) await delay(5);
 	assert.ok(predicate(), "condition did not settle");
 }
+
+test("linked polling deduplicates across tasks and retries failed checks without inventing results", async () => {
+	const first = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
+	let calls = 0;
+	let state: "OPEN" | "MERGED" = "OPEN";
+	let failure = true;
+	const tracker = new PullRequestTracker(
+		() => [],
+		async () => {},
+		{
+			intervalMs: 60_000,
+			runner: async () => {
+				calls++;
+				if (failure) throw new Error("offline");
+				return JSON.stringify(candidate({ number: 42, state }));
+			},
+		},
+		{
+			targets: () => [first, first],
+			apply: (pr) => {
+				Object.assign(first, { pullRequest: pr });
+			},
+		},
+	);
+	try {
+		tracker.start();
+		await tracker["polling"];
+		assert.equal(calls, 1);
+		assert.equal("pullRequest" in first, false);
+		failure = false;
+		clearTimeout(tracker["timer"]);
+		tracker["poll"]();
+		await tracker["polling"];
+		assert.equal(calls, 2);
+		state = "MERGED";
+		clearTimeout(tracker["timer"]);
+		tracker["poll"]();
+		await tracker["polling"];
+		assert.equal(calls, 3);
+		clearTimeout(tracker["timer"]);
+		tracker["poll"]();
+		await tracker["polling"];
+		assert.equal(calls, 3, "terminal linked PRs do not poll again");
+	} finally {
+		await tracker.stop();
+	}
+});
+
+test("shutdown persists an in-flight linked result and skips queued linked requests", async () => {
+	const release = gate();
+	let calls = 0;
+	let applied = 0;
+	const target = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
+	const tracker = new PullRequestTracker(
+		() => [],
+		async () => {},
+		{
+			runner: async () => {
+				calls++;
+				await release.promise;
+				return JSON.stringify(candidate({ number: 42 }));
+			},
+		},
+		{
+			targets: () => [],
+			apply: () => {
+				applied++;
+			},
+		},
+	);
+	const active = tracker.refreshLinked(target);
+	const queued = tracker.refreshLinked({ ...target, url: "https://github.com/octo/repo/pull/43" });
+	await until(() => calls === 1);
+	let stopped = false;
+	const stopping = tracker.stop().then(() => {
+		stopped = true;
+	});
+	await delay(2);
+	assert.equal(stopped, false);
+	release.resolve();
+	await Promise.all([active, queued, stopping]);
+	assert.equal(calls, 1);
+	assert.equal(applied, 1);
+});
 
 test("normalizes HTTPS, SSH and enterprise origins, rejecting local paths and option-like identities", () => {
 	for (const remote of [
