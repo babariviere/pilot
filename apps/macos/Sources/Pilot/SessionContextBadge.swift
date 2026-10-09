@@ -1,7 +1,7 @@
 import PilotCore
 import SwiftUI
 
-/// Compact workspace context beside the toolbar's branch and PR metadata.
+/// Compact mode context, kept visible for Ask sessions without a Changes pane.
 struct SessionContextBadge: View {
     let session: SessionSummary
 

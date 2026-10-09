@@ -124,6 +124,8 @@ enum Snapshot {
 
         // Capture the real SwiftUI window toolbar, including native shared backgrounds.
         if CommandLine.arguments.contains("--session-toolbar-only") {
+            model.client.fixtureChanges = SessionChanges(base: Fixtures.changes.base,
+                branch: "refactor/remove-agent-status-reporting", files: Fixtures.changes.files, diff: Fixtures.changes.diff)
             let session = SessionSummary(
                 id: "toolbar", title: "Remove agent status reporting", cwd: Fixtures.projects[0].path,
                 projectId: "p1", branch: "refactor/remove-agent-status-reporting", createdAt: Fixtures.now,
@@ -167,6 +169,9 @@ enum Snapshot {
             window.setContentSize(CGSize(width: 860, height: 600))
             for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
             snapshot(frame, to: directory.appending(path: "session-toolbar-multiple-prs-narrow.png"))
+            model.inspectorVisible = false
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            snapshot(frame, to: directory.appending(path: "session-subtitle-inspector-closed.png"))
             print("snapshots written to \(directory.path)")
             NSApp.terminate(nil)
             return
@@ -765,13 +770,17 @@ enum Snapshot {
                     HStack(spacing: 8) {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(title).font(.system(size: 13, weight: .semibold))
-                            if let subtitle { Text(subtitle).font(.system(size: 11)).foregroundStyle(Theme.mutedForeground) }
+                            if let subtitle {
+                                Text(session.map { SessionHeaderContext.subtitle(for: $0, place: "pilot") } ?? subtitle)
+                                    .font(.system(size: 11)).foregroundStyle(Theme.mutedForeground)
+                                    .lineLimit(1).truncationMode(.middle)
+                            }
                         }
                         Spacer()
                         if subtitle != nil {
                             if let session {
                                 if AppModel.shared.isUnread(session) { UnreadBadge() }
-                                SessionToolbarMetadata(session: session)
+                                if session.isAsk { SessionContextBadge(session: session) }
                                 SessionInspectorActions(session: session)
                                 SessionMoreActions(session: session)
                             }
