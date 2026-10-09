@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.11.1](https://github.com/babariviere/pilot/compare/v1.11.0...v1.11.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **macos:** anchor transcript scroll when artifacts resize ([c3fecbe](https://github.com/babariviere/pilot/commit/c3fecbe90bc8bcebc83f1b6113297fdaae75dd71))
+
 ## [1.11.0](https://github.com/babariviere/pilot/compare/v1.10.2...v1.11.0) (2026-10-09)
 
 
