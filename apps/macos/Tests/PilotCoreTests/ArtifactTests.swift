@@ -99,13 +99,24 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
             == ArtifactViewerLayout.inlineSize(availableWidth: 760))
 }
 
-@Test func inlineImageGrowthUsesAspectRatioWithoutEnlargingTheImage() {
+@Test func inlineImagesHugTheirAspectFittedSizeWithoutEnlarging() {
+    // Tall images shrink to the height ceiling and the card narrows to match, leaving no empty bands.
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 800, height: 1600), image: true)
-            == CGSize(width: 760, height: 1520))
+            == CGSize(width: 360, height: 720))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: 2000, height: 6000), image: true)
+            == CGSize(width: 240, height: 720))
+    // Wide images are bounded by the chat width.
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 800, contentSize: CGSize(width: 1600, height: 1000), image: true)
+            == CGSize(width: 800, height: 500))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 1600, height: 1000), image: true)
-            == CGSize(width: 1600, height: 1000))
+            == CGSize(width: 1152, height: 720))
+    // Small images keep their natural size, with a clickable minimum.
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 200, height: 100), image: true)
-            == CGSize(width: 1200, height: 720))
+            == CGSize(width: 200, height: 100))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1800, contentSize: CGSize(width: 16, height: 16), image: true)
+            == CGSize(width: 48, height: 48))
+    // Before measurement, images use the default placeholder box.
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, image: true) == ArtifactViewerLayout.inlineSize(availableWidth: 760))
 }
 
 @Test func contentMeasurementsIgnoreViewportFeedbackButAcceptRealContentChanges() {
