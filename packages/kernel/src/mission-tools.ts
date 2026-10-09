@@ -18,6 +18,9 @@ export const MISSION_ACTIONS = [
 	"attach",
 	"link",
 	"log",
+	"start",
+	"send",
+	"status",
 ] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
@@ -41,14 +44,20 @@ Actions:
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin).
 - link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number).
-- log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).`,
+- log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).
+- start (coordinator only): start a new chat for an unclaimed task (id or number, optional message). Start chats only when the user asks.
+- send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
+- status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
 		executionMode: "sequential",
 		annotations: { openWorldHint: false, destructiveHint: false },
 		parameters: Type.Object({
 			action: StringEnum(MISSION_ACTIONS),
 			id: Type.Optional(
-				Type.String({ maxLength: 128, description: "Task ID or number (task, claim), or comment ID (resolve)." }),
+				Type.String({
+					maxLength: 128,
+					description: "Task ID or number (task, claim, start), or comment ID (resolve).",
+				}),
 			),
 			markdown: Type.Optional(Type.String({ maxLength: 262144, description: "Complete replacement brief." })),
 			expectedRevision: Type.Optional(Type.Integer({ minimum: 0, description: "Brief revision you edited." })),
@@ -63,7 +72,12 @@ Actions:
 			anchor: Type.Optional(
 				Type.String({ maxLength: 8000, description: "Quoted brief excerpt a comment refers to." }),
 			),
-			targetSessionId: Type.Optional(Type.String({ maxLength: 128 })),
+			targetSessionId: Type.Optional(
+				Type.String({ maxLength: 128, description: "Member chat for comment or send." }),
+			),
+			message: Type.Optional(
+				Type.String({ maxLength: 8000, description: "Opening instructions (start) or message to send (send)." }),
+			),
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 			url: Type.Optional(Type.String({ maxLength: 2048 })),

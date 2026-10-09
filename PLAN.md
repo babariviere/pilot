@@ -287,14 +287,18 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 | `attach`, `link` | Link an artifact; link an external resource |
 | `log` | Post a handoff or status update |
 | `update` | Change the mission title or goal |
-| `start`, `send`, `status` | Coordinator only (phase 2): start a chat for a task, message a member chat, summarise member states |
+| `start`, `send`, `status` | Coordinator only: start a chat for an unclaimed task (`id`, optional `message`), send a follow-up to a member (`targetSessionId`, `message`), summarise all member states (including archived chats) |
 
 The tool is registered for every Build and Ask chat but declared to the model only while the chat is a
 member, so other chats pay no prompt cost. pilotd pushes membership and context changes to a live
 kernel, which applies them from the next model request; tool calls travel over the worker's IPC channel
-and pilotd checks membership on every call. Mission chats receive a compact mission header in Pilot's
-prompt section (goal, coordinator, own open tasks, decisions and how to use the tool), not the whole
-brief. The header only changes when those fields change, preserving prompt caching.
+and pilotd checks membership on every call and the current coordinator role for these three actions.
+`start` reuses Start chat and requires an active mission. `send` queues a follow-up if the member is busy
+and requires restoring an archived chat first. `status` reads summaries without waking workers,
+including lifecycle state, latest outcome, archive status and assigned tasks. Mission chats receive a
+compact mission header in Pilot's prompt section (goal, coordinator, own open tasks, decisions and how
+to use the tool), not the whole brief. The header only changes when those fields change, preserving
+prompt caching.
 
 **New chat.** The Chats tab and sidebar mission group open the new-chat composer with the mission
 preselected and its project locked, without attaching a task. `SpawnRequest.missionId` validates an

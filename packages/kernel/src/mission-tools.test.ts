@@ -31,6 +31,34 @@ test("the mission tool forwards actions with only the supplied arguments", async
 	);
 });
 
+test("the mission tool declares and forwards coordinator actions", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return { ok: true };
+	});
+	const schema = tool.parameters as { properties: { action: { enum: string[] }; message: unknown } };
+	assert.deepEqual(schema.properties.action.enum.slice(-3), ["start", "send", "status"]);
+	assert.ok(schema.properties.message);
+	for (const params of [
+		{ action: "start", id: "#3", message: "Focus on tests" },
+		{ action: "send", targetSessionId: "member", message: "Please clarify" },
+		{ action: "status" },
+	])
+		await tool.execute("call", params as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [
+		["start", { id: "#3", message: "Focus on tests" }],
+		["send", { targetSessionId: "member", message: "Please clarify" }],
+		["status", {}],
+	]);
+	await assert.rejects(
+		createMissionTool(async () => {
+			throw new Error("Only the mission coordinator can use status");
+		}).execute("call", { action: "status" } as never, undefined, undefined, {} as never),
+		/Only the mission coordinator/,
+	);
+});
+
 test("mission tool declarations follow membership without re-registering", { timeout: 15_000 }, async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-mission-tool-"));
 	t.mock.method(globalThis, "fetch", () => assert.fail("mission tool integration must stay offline"));
