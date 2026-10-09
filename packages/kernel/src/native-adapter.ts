@@ -84,6 +84,8 @@ export interface NativeAdapterOptions {
 	askArtifacts?: ArtifactToolOptions;
 	/** Additional host-owned tools for Ask sessions, allowed by ASK_TOOL_NAMES. */
 	askTools?: ToolDefinition[];
+	/** Host tools registered through the native extension API, so their declarations can change live. */
+	hostTools?: ToolDefinition[];
 	/** Working directory for tools, context files and project configuration. */
 	cwd: string;
 	/** "provider/modelId", optionally with ":thinking". Defaults to pi's configured default. */
@@ -227,6 +229,7 @@ export class NativeAdapter {
 	#inputKey = "";
 	#extensionInputs: ExtensionInput[] = [];
 	#onExtensionInput?: (input: ExtensionInput) => void;
+	#registerHostTool!: (tool: ToolDefinition) => void;
 	readonly #ask: boolean;
 
 	readonly session: AgentSession;
@@ -309,11 +312,18 @@ export class NativeAdapter {
 			retry: { enabled: false },
 		});
 		let renderPrompt: (() => string) | undefined;
+		let registerHostTool: ((tool: ToolDefinition) => void) | undefined;
+		const hostTools = new Map((options.hostTools ?? []).map((tool) => [tool.name, tool]));
 		const usage = new UsageTracker(options.onUsageChanged);
 		let stopUsage: (() => void) | undefined;
 		const infrastructure = new InfrastructureChildren();
 		const mcp = createTrackedMcpExtension(infrastructure);
 		const capture: ExtensionFactory = (pi) => {
+			registerHostTool = (tool) => {
+				hostTools.set(tool.name, tool);
+				pi.registerTool(tool);
+			};
+			for (const tool of hostTools.values()) pi.registerTool(tool);
 			if (options.ask) {
 				// Covers nested codemode execution too, not just model declarations.
 				pi.on("tool_call", (event) => {
@@ -398,6 +408,8 @@ export class NativeAdapter {
 				})
 			: (await createAgentSession(sessionConfig)).session;
 		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure);
+		// SDK reload replaces the extension API. Keep the latest definitions and registration handle.
+		adapter.#registerHostTool = (tool) => registerHostTool!(tool);
 		adapter.#renderPrompt = () => renderPrompt?.() ?? session.systemPrompt;
 		const noGeneration = async (): Promise<never> => {
 			throw new Error("Only durable Harness may run the worker model loop");
@@ -635,6 +647,13 @@ export class NativeAdapter {
 		} finally {
 			this.session.clearQueue();
 		}
+	}
+
+	/** Register or replace a host tool through the SDK, refreshing direct and codemode declarations. */
+	registerHostTool(tool: ToolDefinition): void {
+		this.assertOpen();
+		this.#registerHostTool(tool);
+		this.refreshTools();
 	}
 
 	/** Declare or withdraw a registered tool from the next request. Returns whether the tool is now active. */

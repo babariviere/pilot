@@ -5,7 +5,7 @@ import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil
 
 export const MISSION_TOOL = "mission";
 
-export const MISSION_ACTIONS = [
+const MEMBER_ACTIONS = [
 	"get",
 	"brief",
 	"update",
@@ -18,10 +18,8 @@ export const MISSION_ACTIONS = [
 	"attach",
 	"link",
 	"log",
-	"start",
-	"send",
-	"status",
 ] as const;
+export const MISSION_ACTIONS = [...MEMBER_ACTIONS, "start", "send", "status"] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
 /** Sends one call to pilotd and resolves with its JSON result. */
@@ -29,7 +27,7 @@ export type MissionCall = (action: MissionAction, args: Record<string, JsonValue
 
 const taskStatus = StringEnum(["todo", "in_progress", "blocked", "in_review", "done", "dropped"] as const);
 
-export function createMissionTool(call: MissionCall): ToolDefinition {
+export function createMissionTool(call: MissionCall, coordinator = false): ToolDefinition {
 	return defineTool({
 		name: MISSION_TOOL,
 		label: "Mission",
@@ -44,19 +42,25 @@ Actions:
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin).
 - link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number).
-- log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).
+- log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
+			coordinator
+				? `
 - start (coordinator only): start a new chat for an unclaimed task (id or number, optional message). Start chats only when the user asks.
 - send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
-- status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`,
+- status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`
+				: ""
+		}`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
 		executionMode: "sequential",
 		annotations: { openWorldHint: false, destructiveHint: false },
 		parameters: Type.Object({
-			action: StringEnum(MISSION_ACTIONS),
+			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
 			id: Type.Optional(
 				Type.String({
 					maxLength: 128,
-					description: "Task ID or number (task, claim, start), or comment ID (resolve).",
+					description: coordinator
+						? "Task ID or number (task, claim, start), or comment ID (resolve)."
+						: "Task ID or number (task, claim), or comment ID (resolve).",
 				}),
 			),
 			markdown: Type.Optional(Type.String({ maxLength: 262144, description: "Complete replacement brief." })),
@@ -73,11 +77,21 @@ Actions:
 				Type.String({ maxLength: 8000, description: "Quoted brief excerpt a comment refers to." }),
 			),
 			targetSessionId: Type.Optional(
-				Type.String({ maxLength: 128, description: "Member chat for comment or send." }),
+				Type.String({
+					maxLength: 128,
+					description: coordinator ? "Member chat for comment or send." : "Member chat for comment.",
+				}),
 			),
-			message: Type.Optional(
-				Type.String({ maxLength: 8000, description: "Opening instructions (start) or message to send (send)." }),
-			),
+			...(coordinator
+				? {
+						message: Type.Optional(
+							Type.String({
+								maxLength: 8000,
+								description: "Opening instructions (start) or message to send (send).",
+							}),
+						),
+					}
+				: {}),
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 			url: Type.Optional(Type.String({ maxLength: 2048 })),
