@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.8.0](https://github.com/babariviere/pilot/compare/v1.7.1...v1.8.0) (2026-10-09)
+
+
+### Features
+
+* **changes:** list every session branch with its pull request ([354e42e](https://github.com/babariviere/pilot/commit/354e42e14f3a96c2bdcd2ff71aad5866ab4ca18b))
+* **chat:** open dedicated chats with locked project context ([7bc88c8](https://github.com/babariviere/pilot/commit/7bc88c833456c6eae4786c4d8832572559a40144))
+* **macos:** redesign the Changes pane branch list ([1d9d8ed](https://github.com/babariviere/pilot/commit/1d9d8ed9561b944e5bded2e96ac7cae8aa092002))
+* **tasks:** attach resource links and newly opened pull requests ([a452f55](https://github.com/babariviere/pilot/commit/a452f5596b345d435ffe43258cab3015f0d35ffd))
+* **tasks:** follow linked pull request review and merge states ([0bd7076](https://github.com/babariviere/pilot/commit/0bd7076f2cabc6b92226ae01a5620ff0ff02a340))
+* **ui:** allow expanding task descriptions ([7772446](https://github.com/babariviere/pilot/commit/777244687fc6f43eb52ec79851e7a61be0148b54))
+
+
+### Bug Fixes
+
+* **macos:** label build workspaces as isolated workspaces ([6f02036](https://github.com/babariviere/pilot/commit/6f02036879d576299cf6fa85a14738426bf63427))
+
+
+### Performance Improvements
+
+* **artifacts:** speed up rendering and harden storage ([a07f8d7](https://github.com/babariviere/pilot/commit/a07f8d7451e15106549462007fb0ef1d512e60fe))
+
 ## [1.7.1](https://github.com/babariviere/pilot/compare/v1.7.0...v1.7.1) (2026-10-09)
 
 
