@@ -1,19 +1,26 @@
-/** Read-only GitHub discovery for private session branches, independent of a client or kernel. */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+/** Read-only PR discovery for session branches, independent of a client or kernel. */
 import type { SessionPullRequest } from "@pilot/protocol";
+import {
+	type Candidate,
+	type ChecksState,
+	githubRepository,
+	linkedPullRequest,
+	lookupPullRequests,
+	type RateLimits,
+	type Repository,
+	run,
+	toSessionPullRequest,
+} from "./github.ts";
 import { type Runner, workspaceBranch } from "./workspaces.ts";
 
-const exec = promisify(execFile);
-const run: Runner = async (file, args, cwd, timeoutMs) => {
-	const { stdout } = await exec(file, args, { cwd, timeout: timeoutMs, maxBuffer: 1024 * 1024 });
-	return stdout.trim();
-};
+export { githubRepository } from "./github.ts";
 
 export interface PullRequestSession {
 	id: string;
 	cwd: string;
 	archivedAt?: number;
+	/** Last agent or user activity. Older sessions without a PR are checked less often. */
+	updatedAt?: number;
 	workspaceRecovery?: unknown;
 	workspace?: { branch?: string; upstream?: string; base?: string; baseBranch?: string; shared?: { name: string } };
 	pullRequest?: SessionPullRequest;
@@ -38,8 +45,13 @@ export interface PullRequestResult {
 
 export interface PullRequestOptions {
 	runner?: Runner;
-	/** Delay between completed sweeps, not an overlapping interval. Defaults to one minute. */
+	/**
+	 * Base polling cadence. Open PRs with pending checks poll at half of it, other open PRs at twice it,
+	 * and sessions without a PR back off with inactivity. Defaults to one minute.
+	 */
 	intervalMs?: number;
+	/** Concurrent sync jobs, and so concurrent git, jj and gh processes. Defaults to 3. */
+	concurrency?: number;
 }
 
 export function isTerminalPullRequest(pr: SessionPullRequest | undefined): boolean {
@@ -61,144 +73,10 @@ export function sessionBranches(session: PullRequestSession): string[] {
 	return [...new Set(names.filter((name): name is string => !!name))];
 }
 
-interface Repository {
-	host: string;
-	owner: string;
-	name: string;
-	identity: string;
-}
-
-/** Never let gh infer a repository from its environment or a shared checkout. */
-export function githubRepository(remote: string): Repository {
-	let host: string;
-	let path: string;
-	const scp = /^(?:git@)?([a-zA-Z0-9.-]+):([^\s]+)$/.exec(remote);
-	if (scp && !remote.includes("://")) {
-		host = scp[1]!;
-		path = scp[2]!;
-	} else {
-		let url: URL;
-		try {
-			url = new URL(remote);
-		} catch {
-			throw new Error("Workspace origin is not a GitHub repository URL");
-		}
-		if (!["https:", "http:", "ssh:"].includes(url.protocol) || url.search || url.hash)
-			throw new Error("Workspace origin is not a GitHub repository URL");
-		host = url.hostname;
-		path = url.pathname.replace(/^\//, "");
-	}
-	const parts = path
-		.replace(/\/$/, "")
-		.replace(/\.git$/, "")
-		.split("/");
-	const owner = parts[0] ?? "";
-	const name = parts[1] ?? "";
-	if (
-		parts.length !== 2 ||
-		!/^[a-zA-Z0-9][a-zA-Z0-9.-]*$/.test(host) ||
-		!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(owner) ||
-		!/^[a-zA-Z0-9_][a-zA-Z0-9_.-]*$/.test(name) ||
-		name === "." ||
-		name === ".."
-	)
-		throw new Error("Workspace origin is not a GitHub repository URL");
-	return { host, owner, name, identity: `${host}/${owner}/${name}` };
-}
-
-interface Candidate {
-	number: number;
-	url: string;
-	title: string;
-	state: "OPEN" | "MERGED" | "CLOSED";
-	isDraft: boolean;
-	headRefName: string;
-	isCrossRepository: boolean;
-	createdAt: string;
-	mergedAt: string | null;
-}
-
-function select(output: string, branch: string | undefined, repo: Repository): Candidate | undefined {
-	const rows: unknown = JSON.parse(output);
-	if (!Array.isArray(rows)) throw new Error("Invalid GitHub pull request response");
-	const matching: Candidate[] = [];
-	for (const row of rows) {
-		const pr = row as Candidate | null;
-		if (
-			!pr ||
-			typeof pr !== "object" ||
-			!Number.isSafeInteger(pr.number) ||
-			pr.number <= 0 ||
-			typeof pr.url !== "string" ||
-			typeof pr.title !== "string" ||
-			!["OPEN", "MERGED", "CLOSED"].includes(pr.state) ||
-			typeof pr.isDraft !== "boolean" ||
-			typeof pr.headRefName !== "string" ||
-			typeof pr.isCrossRepository !== "boolean" ||
-			typeof pr.createdAt !== "string" ||
-			!Number.isFinite(Date.parse(pr.createdAt)) ||
-			(pr.state === "MERGED" && (typeof pr.mergedAt !== "string" || !Number.isFinite(Date.parse(pr.mergedAt))))
-		)
-			throw new Error("Invalid GitHub pull request response");
-		// Same-named fork branches are not this private clone's branch. Deleted head branches
-		// remain identifiable by headRefName and isCrossRepository, without any local ref lookup.
-		if (branch !== undefined && (pr.headRefName !== branch || pr.isCrossRepository)) continue;
-		const url = new URL(pr.url);
-		if (
-			url.protocol !== "https:" ||
-			url.username ||
-			url.password ||
-			url.hostname.toLowerCase() !== repo.host.toLowerCase() ||
-			url.pathname.toLowerCase() !== `/${repo.owner}/${repo.name}/pull/${pr.number}`.toLowerCase()
-		)
-			throw new Error("Invalid GitHub pull request URL");
-		matching.push(pr);
-	}
-	return matching.sort(
-		(a, b) =>
-			Number(b.state === "OPEN") - Number(a.state === "OPEN") ||
-			Date.parse(b.createdAt) - Date.parse(a.createdAt) ||
-			b.number - a.number,
-	)[0];
-}
-
-const fields = "number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt,mergedAt";
-
 export interface LinkedPullRequest {
 	url: string;
 	cwd: string;
 	pullRequest?: SessionPullRequest;
-}
-
-/** Number-based lookup for hand-linked PRs, including fork heads unrelated to any chat branch. */
-export async function discoverLinkedPullRequest(
-	target: LinkedPullRequest,
-	runner: Runner = run,
-): Promise<SessionPullRequest> {
-	const url = new URL(target.url);
-	const match = /^\/([^/]+)\/([^/]+)\/pull\/([1-9]\d*)$/.exec(url.pathname);
-	if (
-		url.protocol !== "https:" ||
-		url.hostname !== "github.com" ||
-		url.username ||
-		url.password ||
-		url.search ||
-		url.hash ||
-		!match
-	)
-		throw new Error("Invalid linked GitHub pull request URL");
-	const repo = githubRepository(`https://${url.hostname}/${match[1]}/${match[2]}`);
-	const number = Number(match[3]);
-	if (!Number.isSafeInteger(number)) throw new Error("Invalid linked pull request number");
-	const output = await runner(
-		"gh",
-		["pr", "view", String(number), `--repo=${repo.identity}`, `--json=${fields}`],
-		target.cwd,
-		10_000,
-	);
-	const pr = select(JSON.stringify([JSON.parse(output)]), undefined, repo);
-	if (!pr || pr.number !== number) throw new Error("Invalid linked pull request response");
-	return toSessionPullRequest(pr);
 }
 
 export interface LinkedPullRequestTracking {
@@ -206,21 +84,20 @@ export interface LinkedPullRequestTracking {
 	apply(pr: SessionPullRequest): void;
 }
 
-function validBranch(name: string): boolean {
-	return !!name && !name.startsWith("-") && !/[\s\x00-\x1f\x7f:~^?*[\\]/.test(name);
+/** Number-based lookup for one hand-linked PR, including fork heads unrelated to any chat branch. */
+export async function discoverLinkedPullRequest(
+	target: LinkedPullRequest,
+	runner: Runner = run,
+): Promise<SessionPullRequest> {
+	const { repo, number } = linkedPullRequest(target.url);
+	const batch = await lookupPullRequests(repo, { numbers: [number] }, target.cwd, runner);
+	const error = batch.numberErrors.get(number);
+	if (error) throw error;
+	return toSessionPullRequest(batch.numbers.get(number)!);
 }
 
-function toSessionPullRequest(pr: Candidate): SessionPullRequest {
-	return {
-		number: pr.number,
-		url: pr.url,
-		title: pr.title,
-		// A merged/closed PR can still carry isDraft=true. GitHub's terminal state wins.
-		state: pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : pr.isDraft ? "draft" : "open",
-		branch: pr.headRefName,
-		...(pr.state === "MERGED" ? { mergedAt: Date.parse(pr.mergedAt!) } : {}),
-		checkedAt: Date.now(),
-	};
+function validBranch(name: string): boolean {
+	return !!name && !name.startsWith("-") && !/[\s\x00-\x1f\x7f:~^?*[\\]/.test(name);
 }
 
 /** Operations are immutable, so each bookmark operation's created names are read once. */
@@ -302,199 +179,163 @@ async function localBranches(session: PullRequestSession, runner: Runner): Promi
 		.filter(Boolean);
 }
 
-export async function discoverPullRequest(
+function failure(error: unknown): string {
+	return `Pull request lookup failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512);
+}
+
+/**
+ * The local half of discovery: which heads to ask GitHub about. Runs only git/jj, never gh, so a sync
+ * round can batch every session's heads of one repository into a single GitHub request.
+ */
+export interface WorkspaceInspection {
+	/** Final result when GitHub is not needed or local inspection failed. */
+	result?: PullRequestResult;
+	repo?: Repository;
+	branch?: string;
+	/** The current branch, when it is a PR head (not the base branch). */
+	current?: string;
+	/** Other non-terminal heads to check. */
+	others: string[];
+	/** Other branches the session created locally. */
+	created: string[];
+	/** Local branch listing failed. The current branch is still checked. */
+	error?: string;
+}
+
+export async function inspectWorkspace(
 	session: PullRequestSession,
 	runner: Runner = run,
-): Promise<PullRequestResult> {
-	if (!session.workspace) return {};
-	if (session.workspaceRecovery) return session.workspace.branch ? { branch: session.workspace.branch } : {};
+): Promise<WorkspaceInspection> {
+	const none = (result: PullRequestResult): WorkspaceInspection => ({ result, others: [], created: [] });
+	if (!session.workspace) return none({});
+	if (session.workspaceRecovery) return none(session.workspace.branch ? { branch: session.workspace.branch } : {});
 	const workspace = session.workspace;
-	let branch = session.workspace.branch;
-	let repo: Repository | undefined;
-	const repository = async () => {
-		repo ??= githubRepository(
-			(workspace.upstream ?? (await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000))).trim(),
-		);
-		return repo;
-	};
-	const list = async (head: string, state: string) => {
-		const target = await repository();
-		return select(
-			await runner(
-				"gh",
-				[
-					"pr",
-					"list",
-					`--head=${head}`,
-					`--repo=${target.identity}`,
-					`--state=${state}`,
-					"--limit=100",
-					`--json=${fields}`,
-				],
-				session.cwd,
-				10_000,
-			),
-			head,
-			target,
-		);
-	};
-	// Query active PRs separately so even a long historical list cannot hide an open PR.
-	const lookup = async (head: string) => (await list(head, "open")) ?? (await list(head, "all"));
-	const failure = (error: unknown) =>
-		`Pull request lookup failed: ${error instanceof Error ? error.message : String(error)}`.slice(0, 512);
+	let branch = workspace.branch;
 	// Direct delivery on the default branch is not a session PR. Avoid matching unrelated
 	// historical PRs (and potentially auto-archiving the session based on their merge time).
 	const isBase = (name: string) => workspace.base === `origin/${name}` || workspace.baseBranch === name;
-
-	const result: PullRequestResult = {};
 	try {
-		const validateBranch = (name: string) => {
-			if (!validBranch(name)) throw new Error("Invalid workspace branch for pull request discovery");
+		const validate = (name: string | undefined) => {
+			if (name !== undefined && !validBranch(name))
+				throw new Error("Invalid workspace branch for pull request discovery");
 		};
-		if (branch !== undefined) validateBranch(branch);
+		validate(branch);
 		// Keep the recorded name if a merged/deleted branch no longer has a local ref.
 		branch = (await workspaceBranch(session.cwd, branch, runner)) ?? branch;
-		if (branch !== undefined) {
-			validateBranch(branch);
-			result.branch = branch;
-			if (!isBase(branch)) {
-				const pr = await lookup(branch);
-				if (pr) {
-					result.pullRequest = toSessionPullRequest(pr);
-					if (result.pullRequest.mergedAt !== undefined) result.mergedAt = result.pullRequest.mergedAt;
-				} else if (session.pullRequest && workspace.branch === branch) {
-					result.error = "No matching pull request found; keeping last known status";
-				}
-			}
-		}
+		validate(branch);
 	} catch (error) {
-		return { ...(branch ? { branch } : {}), error: failure(error) };
+		return none({ ...(branch ? { branch } : {}), error: failure(error) });
 	}
-
+	const inspection: WorkspaceInspection = {
+		...(branch !== undefined ? { branch } : {}),
+		...(branch !== undefined && !isBase(branch) ? { current: branch } : {}),
+		others: [],
+		created: [],
+	};
 	// The session's other branches: earlier PR heads, earlier observed branches and private local branches.
 	try {
 		const cached = new Map((session.previousPullRequests ?? []).map((pr) => [pr.branch, pr]));
 		// Direct delivery to the default branch does not open PRs from other local branches.
 		const local = branch !== undefined && isBase(branch) ? [] : await localBranches(session, runner);
-		const created = local.filter((name) => name !== branch && validBranch(name) && !isBase(name));
-		if (created.length) result.branches = created;
+		inspection.created = local.filter((name) => name !== branch && validBranch(name) && !isBase(name));
 		const names = new Set<string>([
 			...(session.previousPullRequests ?? []).flatMap((pr) => (pr.branch ? [pr.branch] : [])),
 			...(session.previousBranches ?? []),
-			...created,
+			...inspection.created,
 		]);
-		const others: SessionPullRequest[] = [];
 		for (const name of names) {
 			if (name === branch || !validBranch(name) || isBase(name)) continue;
 			// Merged and closed PRs never poll again, like the current branch's.
 			if (isTerminalPullRequest(cached.get(name))) continue;
-			const pr = await lookup(name);
-			if (pr) others.push(toSessionPullRequest(pr));
+			inspection.others.push(name);
 		}
-		if (others.length) result.others = others;
 	} catch (error) {
-		result.error = failure(error);
+		inspection.error = failure(error);
 	}
+	if (inspection.current === undefined && !inspection.others.length) {
+		inspection.result = {
+			...(branch !== undefined ? { branch } : {}),
+			...(inspection.created.length ? { branches: inspection.created } : {}),
+			...(inspection.error ? { error: inspection.error } : {}),
+		};
+		return inspection;
+	}
+	try {
+		inspection.repo = githubRepository(
+			(workspace.upstream ?? (await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000))).trim(),
+		);
+	} catch (error) {
+		inspection.result = { ...(branch ? { branch } : {}), error: failure(error) };
+	}
+	return inspection;
+}
+
+/** Heads GitHub must answer for an inspection that still needs a lookup. */
+export function inspectionHeads(inspection: WorkspaceInspection): string[] {
+	if (inspection.result) return [];
+	return [...(inspection.current !== undefined ? [inspection.current] : []), ...inspection.others];
+}
+
+/** Combine a local inspection with GitHub's answers, or its lookup failure. */
+export function resolvePullRequests(
+	session: PullRequestSession,
+	inspection: WorkspaceInspection,
+	found: ReadonlyMap<string, Candidate | undefined> | Error,
+	now = Date.now(),
+): PullRequestResult {
+	if (inspection.result) return inspection.result;
+	const { branch } = inspection;
+	if (found instanceof Error) return { ...(branch ? { branch } : {}), error: failure(found) };
+	const result: PullRequestResult = branch !== undefined ? { branch } : {};
+	if (inspection.current !== undefined) {
+		const pr = found.get(inspection.current);
+		if (pr) {
+			result.pullRequest = toSessionPullRequest(pr, now);
+			if (result.pullRequest.mergedAt !== undefined) result.mergedAt = result.pullRequest.mergedAt;
+		} else if (session.pullRequest && session.workspace?.branch === branch) {
+			result.error = "No matching pull request found; keeping last known status";
+		}
+	}
+	if (inspection.created.length) result.branches = inspection.created;
+	const others = inspection.others.flatMap((name) => {
+		const pr = found.get(name);
+		return pr ? [toSessionPullRequest(pr, now)] : [];
+	});
+	if (others.length) result.others = others;
+	if (inspection.error) result.error = inspection.error;
 	return result;
 }
 
-/** Globally serial commands, per-session deduplication, and a drainable daemon-owned poll loop. */
-export class PullRequestTracker {
-	private readonly pending = new Map<string, Promise<void>>();
-	private tail = Promise.resolve();
-	private timer?: ReturnType<typeof setTimeout>;
-	private polling?: Promise<void>;
-	private stopped = false;
-	private started = false;
-
-	private readonly sessions: () => Iterable<PullRequestSession>;
-	private readonly apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>;
-	private readonly options: PullRequestOptions;
-	private readonly linked?: LinkedPullRequestTracking;
-
-	constructor(
-		sessions: () => Iterable<PullRequestSession>,
-		apply: (session: PullRequestSession, result: PullRequestResult) => Promise<void>,
-		options: PullRequestOptions = {},
-		linked?: LinkedPullRequestTracking,
-	) {
-		this.sessions = sessions;
-		this.apply = apply;
-		this.options = options;
-		this.linked = linked;
+/** Aggregate check state of the inspection's open PRs: pending wins, then failing. */
+export function checksState(
+	inspection: WorkspaceInspection,
+	found: ReadonlyMap<string, Candidate | undefined>,
+): ChecksState | undefined {
+	let state: ChecksState | undefined;
+	for (const head of inspectionHeads(inspection)) {
+		const pr = found.get(head);
+		if (pr?.state !== "OPEN" || !pr.checks) continue;
+		if (pr.checks === "pending") return "pending";
+		if (pr.checks === "failing" || !state) state = pr.checks;
 	}
+	return state;
+}
 
-	start(): void {
-		if (this.started || this.stopped) return;
-		this.started = true;
-		this.poll();
+/** One-off discovery of a single session: local inspection, then one batched GitHub request. */
+export async function discoverPullRequest(
+	session: PullRequestSession,
+	runner: Runner = run,
+	limits?: RateLimits,
+): Promise<PullRequestResult> {
+	const inspection = await inspectWorkspace(session, runner);
+	if (inspection.result) return inspection.result;
+	let found: ReadonlyMap<string, Candidate | undefined> | Error;
+	try {
+		found = (
+			await lookupPullRequests(inspection.repo!, { heads: inspectionHeads(inspection) }, session.cwd, runner, limits)
+		).heads;
+	} catch (error) {
+		found = error instanceof Error ? error : new Error(String(error));
 	}
-
-	refresh(session: PullRequestSession): Promise<void> {
-		if (this.stopped || !session.workspace) return Promise.resolve();
-		return this.enqueue(session.id, async () => {
-			await this.apply(session, await discoverPullRequest(session, this.options.runner));
-		});
-	}
-
-	refreshLinked(target: LinkedPullRequest): Promise<void> {
-		if (this.stopped || !this.linked || isTerminalPullRequest(target.pullRequest)) return Promise.resolve();
-		return this.enqueue(`linked:${target.url}`, async () => {
-			this.linked!.apply(await discoverLinkedPullRequest(target, this.options.runner));
-		});
-	}
-
-	private enqueue(key: string, work: () => Promise<void>): Promise<void> {
-		const existing = this.pending.get(key);
-		if (existing) return existing;
-		const next = this.tail
-			.then(async () => {
-				if (this.stopped) return;
-				await work();
-			})
-			.catch((error: unknown) => {
-				// A metadata I/O failure must not kill polling or become an agent failure.
-				console.warn(`pilotd: could not cache pull request for ${key}: ${error}`);
-			})
-			.finally(() => this.pending.delete(key));
-		this.pending.set(key, next);
-		this.tail = next;
-		return next;
-	}
-
-	async stop(): Promise<void> {
-		this.stopped = true;
-		clearTimeout(this.timer);
-		await this.polling;
-		await this.tail;
-	}
-
-	/** Terminal PRs never poll again. Explicit agent-activity refreshes may discover a new PR. */
-	private due(session: PullRequestSession): boolean {
-		if (session.archivedAt !== undefined) return false;
-		if (!session.pullRequest) return true;
-		return sessionPullRequests(session).some((pr) => !isTerminalPullRequest(pr));
-	}
-
-	private poll(): void {
-		this.polling = (async () => {
-			for (const session of [...this.sessions()]) {
-				if (this.stopped) break;
-				if (this.due(session)) await this.refresh(session);
-			}
-			const seen = new Set<string>();
-			for (const target of this.linked?.targets() ?? []) {
-				if (this.stopped) break;
-				if (isTerminalPullRequest(target.pullRequest)) continue;
-				if (seen.has(target.url)) continue;
-				seen.add(target.url);
-				await this.refreshLinked(target);
-			}
-		})().finally(() => {
-			if (!this.stopped) {
-				this.timer = setTimeout(() => this.poll(), this.options.intervalMs ?? 60_000);
-				this.timer.unref();
-			}
-		});
-	}
+	return resolvePullRequests(session, inspection, found);
 }

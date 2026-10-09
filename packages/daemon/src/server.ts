@@ -85,7 +85,19 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 }
 
 type MissionClientMessage = Extract<ClientMessage, { missionId: string }>;
-type SessionClientMessage = Exclude<ClientMessage, MissionClientMessage>;
+type FocusClientMessage = Extract<ClientMessage, { type: "focus" }>;
+type SessionClientMessage = Exclude<ClientMessage, MissionClientMessage | FocusClientMessage>;
+
+function isFocusClientMessage(value: unknown): value is FocusClientMessage {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const message = value as Record<string, unknown>;
+	return (
+		message.type === "focus" &&
+		Array.isArray(message.sessionIds) &&
+		message.sessionIds.length <= 50 &&
+		message.sessionIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 128)
+	);
+}
 
 function isMissionClientMessage(value: unknown): value is MissionClientMessage {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -452,6 +464,7 @@ export function createDaemonServer(
 				subscribers.add(ws);
 				return pushMission(missionId, [ws]);
 			}
+			if (isFocusClientMessage(message)) return sessions.focusPullRequests(message.sessionIds);
 			if (!isClientMessage(message)) return send(ws, { type: "error", message: "Invalid client message" });
 			const { sessionId } = message;
 			if (message.type.startsWith("terminal.")) {
@@ -466,6 +479,8 @@ export function createDaemonServer(
 						send(ws, { type: "events", sessionId, events }),
 					);
 					subscriptions.set(sessionId, unsubscribe);
+					// An opened chat should show a fresh PR badge.
+					sessions.focusPullRequests([sessionId]);
 					const version = artifactVersions.get(sessionId);
 					void sessions.artifacts(sessionId).then(
 						(artifacts) => {
