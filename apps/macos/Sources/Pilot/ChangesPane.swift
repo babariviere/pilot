@@ -153,14 +153,7 @@ struct ChangesRepositoryContext: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if !links.isEmpty {
-                    Text("BRANCHES")
-                        .font(.pilot(.small, weight: .semibold))
-                        .tracking(0.5)
-                        .foregroundStyle(Theme.mutedForeground)
-                    Text(String(links.count))
-                        .font(.pilot(.small, weight: .medium))
-                        .monospacedDigit()
-                        .foregroundStyle(Theme.faintForeground)
+                    SectionLabel(title: "Branches", count: links.count)
                     Spacer(minLength: 8)
                 }
                 Label(session.workspaceLabel, systemImage: workspaceIcon)

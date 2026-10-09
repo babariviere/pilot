@@ -27,6 +27,9 @@ final class UsageFooterState: ObservableObject {
         var subscriptionHelp = ""
         var availability: String?
         var hasError = false
+        /// No snapshot has arrived for a subscription model. Shown as a single info symbol whose
+        /// help explains why, rather than a "Usage unavailable" label in every such chat.
+        var missingSnapshot = false
     }
 
     /// One snapshot per input change, not per layout probe, hover, or popover update.
@@ -46,7 +49,8 @@ final class UsageFooterState: ObservableObject {
         }
         display.hasSubscription = usage.subscription?.hasDisplayData == true || fallback != nil
         display.subscriptionHelp = usage.subscription?.helpText ?? fallback?.unavailableHelpText ?? ""
-        display.availability = usage.subscription?.availabilityLabel ?? (fallback == nil ? nil : "Usage unavailable")
+        display.availability = usage.subscription?.availabilityLabel
+        display.missingSnapshot = usage.subscription == nil && fallback != nil
         display.hasError = usage.subscription?.error != nil
         key = next
         cached = display
@@ -115,6 +119,10 @@ struct UsageFooter: View {
             }
             .fixedSize()
             .foregroundStyle(display.hasError ? Theme.warning : Theme.mutedForeground)
+        } else if display.missingSnapshot {
+            Image(systemName: "info.circle")
+                .foregroundStyle(Theme.faintForeground)
+                .fixedSize()
         }
     }
 }

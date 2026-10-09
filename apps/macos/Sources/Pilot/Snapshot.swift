@@ -448,7 +448,7 @@ enum Snapshot {
                      to: directory.appending(path: "session-debug-draft.png"), scrollEditorToEnd: true)
         model.selectedSessionId = session.id
         await render(
-            Frame(title: session.title, subtitle: "pilot · \(session.model ?? "")") {
+            Frame(title: session.title, subtitle: "pilot", session: session) {
                 ChatView(session: session, feed: feed)
             },
             size: size,
@@ -557,7 +557,7 @@ enum Snapshot {
         for session in Fixtures.sessions where session.outcome == .done {
             model.selectedSessionId = session.id
             await render(
-                Frame(title: session.title, subtitle: "pilot · \(session.model ?? "default model")", status: session.status) {
+                Frame(title: session.title, subtitle: "pilot", status: session.status, session: session) {
                     ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.settledTranscript(text: session.id == "s5" ? Fixtures.questionText : Fixtures.completionText)))
                 },
                 size: size,
@@ -891,7 +891,8 @@ enum Snapshot {
                                 if AppModel.shared.isUnread(session) { UnreadBadge() }
                                 if session.isAsk { SessionContextBadge(session: session) }
                                 SessionInspectorControls(session: session)
-                                SessionMoreActions(session: session)
+                                // Outside a real toolbar, a menu takes all offered width.
+                                SessionMoreActions(session: session).fixedSize()
                             }
                         }
                     }

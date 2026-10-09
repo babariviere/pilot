@@ -8,7 +8,9 @@ struct ChatThinkingPicker: View {
     @ObservedObject var state: ChatModelPickerState
 
     private var levels: [String] { state.thinkingLevels(for: session) }
-    private var levelLabel: String { session.thinking.map(label) ?? "Unknown" }
+    /// Without a reported level there is nothing to show or choose, so the picker hides.
+    private var hidden: Bool { session.thinking == nil && levels.isEmpty }
+    private var levelLabel: String { session.thinking.map(label) ?? "Thinking" }
 
     private func label(_ level: String) -> String { level == "xhigh" ? "XHigh" : level.capitalized }
 
@@ -20,6 +22,10 @@ struct ChatThinkingPicker: View {
     }
 
     var body: some View {
+        if !hidden { picker }
+    }
+
+    private var picker: some View {
         Menu {
             ForEach(levels, id: \.self) { level in
                 Button { state.selectThinking(level, session: session, working: working) } label: {
@@ -32,15 +38,9 @@ struct ChatThinkingPicker: View {
             }
             if levels.isEmpty { Text("No thinking levels reported") }
         } label: {
-            HStack(spacing: 5) {
-                Text(levelLabel)
-                Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.mutedForeground)
+            ChipLabel(title: levelLabel, icon: "brain")
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .chipMenuStyle()
         .fixedSize(horizontal: true, vertical: false)
         .disabled(levels.count < 2 || !state.canChange(session: session, working: working))
         .help(helpText)

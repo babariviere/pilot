@@ -41,12 +41,12 @@ import Testing
     let clone = SessionSummary(id: "c", title: "Build", cwd: "/tmp/private", createdAt: 1, updatedAt: 2,
                                state: "idle", mode: .build, workspace: .clone)
     #expect(clone.branch == nil)
-    #expect(clone.workspaceLabel == "Private clone")
+    #expect(clone.workspaceLabel == "Isolated workspace")
     #expect(clone.sourceLabel == "Default base")
     #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(clone)).workspace == .clone)
     let explicit = SessionSummary(id: "e", title: "Build", cwd: "/tmp/private", createdAt: 1, updatedAt: 2,
                                   state: "idle", mode: .build, sourceBranch: "feat/billing", workspace: .clone)
     #expect(explicit.branch == nil)
-    #expect(explicit.workspaceLabel == "Private clone")
+    #expect(explicit.workspaceLabel == "Isolated workspace")
     #expect(explicit.sourceLabel == "origin/feat/billing")
 }

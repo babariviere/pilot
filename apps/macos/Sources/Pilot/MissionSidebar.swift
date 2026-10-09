@@ -25,20 +25,11 @@ struct MissionSidebarRow: View {
                         .lineLimit(1)
                     Spacer(minLength: 0)
                     if working > 0 {
-                        Text("\(working)")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
-                            .foregroundStyle(Color.accentColor)
+                        CountBadge(count: working)
                             .help("\(working) working")
                     }
                     if needsYou > 0 {
-                        Text("\(needsYou)")
-                            .font(.caption2.weight(.bold))
-                            .monospacedDigit()
-                            .padding(.horizontal, 5).padding(.vertical, 1)
-                            .background(Capsule().fill(Theme.warning))
-                            .foregroundStyle(.white)
+                        CountBadge(count: needsYou, style: .attention)
                             .help("\(needsYou) item\(needsYou == 1 ? "" : "s") need you")
                             .accessibilityLabel("\(needsYou) need you")
                     }

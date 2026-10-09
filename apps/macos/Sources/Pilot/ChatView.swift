@@ -148,8 +148,7 @@ struct ChatView: View {
                         RowView(row: row, toolExpansions: toolExpansions,
                             messageExpansions: messageExpansions).equatable()
                     }
-                    if transcript.working, !transcript.streaming ||
-                        (transcript.liveRows.last ?? transcript.historyRows.last).map(isToolRow) == true {
+                    if showsWorkingIndicator(transcript) {
                         WorkingIndicator(retry: transcript.retry)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
@@ -190,13 +189,23 @@ struct ChatView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if session.isAsk {
-                    Button("Start a Build chat with this context") {
-                        model.buildWithContext(from: session, rows: transcript.rows)
+                    // Matches the other rows above the composer, such as the queued-messages header.
+                    HStack {
+                        Button {
+                            model.buildWithContext(from: session, rows: transcript.rows)
+                        } label: {
+                            Label("Start a Build chat with this context", systemImage: "hammer")
+                        }
+                        .buttonStyle(.link)
+                        .font(.pilot(.caption))
+                        .disabled(!feed.hasSnapshot || transcript.streaming)
+                        .help("Prepare a separate Build draft with this discussion. This Ask chat stays read-only.")
+                        Spacer()
                     }
-                    .buttonStyle(.bordered).controlSize(.small)
-                    .disabled(!feed.hasSnapshot || transcript.streaming)
-                    .help("Prepare a separate Build draft with this discussion. This Ask chat stays read-only.")
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: Theme.column)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 2)
                 }
                 if !session.isAsk && !transcript.todos.isEmpty {
                     TodosPanel(todos: transcript.todos, sessionId: session.id)
@@ -241,6 +250,16 @@ struct ChatView: View {
     private func isToolRow(_ row: ChatRow) -> Bool {
         if case .tools = row { return true }
         return false
+    }
+
+    /// A running tool row already shows its own spinner, so the transcript needs no second
+    /// "Working…" line under it. Retries always show, since they explain the wait.
+    private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
+        guard transcript.working else { return false }
+        if transcript.retry != nil { return true }
+        let last = transcript.liveRows.last ?? transcript.historyRows.last
+        if let last, case let .tools(_, items) = last, items.last?.status == .running { return false }
+        return !transcript.streaming || last.map(isToolRow) == true
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {
