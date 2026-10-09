@@ -78,6 +78,69 @@ private final class FlippedScrollDocument: NSView {
     override var isFlipped: Bool { true }
 }
 
+@Test @MainActor func transcriptOpeningWaitsForNativeGeometryAndFollowsLaterHeightChanges() async throws {
+    for flipped in [true, false] {
+        let window = testWindow()
+        defer { window.close() }
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+        let document = flipped ? FlippedScrollDocument() : NSView()
+        document.frame = NSRect(x: 0, y: 0, width: 600, height: 1600)
+        scroll.documentView = document
+        scroll.contentInsets.bottom = 100
+        let state = TranscriptScrollState()
+        let observer = ScrollObserverView(frame: document.bounds)
+        observer.state = state
+        observer.bottomPadding = 8
+        document.addSubview(observer)
+        window.contentView = scroll
+        scroll.layoutSubtreeIfNeeded()
+
+        func remaining() -> CGFloat {
+            let visible = scroll.contentView.bounds
+            let distance = flipped ? document.bounds.maxY - visible.maxY : visible.minY - document.bounds.minY
+            return max(0, distance + scroll.contentInsets.bottom - observer.bottomPadding)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(remaining() <= 2)
+        // Cached history, Markdown preparation, and streamed output change native geometry
+        // after onAppear/onChange have already issued their SwiftUI scroll requests.
+        document.setFrameSize(NSSize(width: 600, height: 2400))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(remaining() <= 2)
+        scroll.setFrameSize(NSSize(width: 450, height: 300))
+        scroll.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(remaining() <= 2)
+
+        state.follow.pauseFollowing()
+        let position = flipped ? CGFloat(500) : CGFloat(1000)
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: position))
+        let before = scroll.contentView.bounds.origin
+        document.setFrameSize(NSSize(width: 450, height: 2800))
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(scroll.contentView.bounds.origin == before)
+        #expect(!state.follow.shouldScrollToBottom)
+    }
+}
+
+@Test @MainActor func transcriptPendingLayoutScrollDoesNotOutliveItsView() async throws {
+    let window = testWindow()
+    defer { window.close() }
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    let document = FlippedScrollDocument(frame: NSRect(x: 0, y: 0, width: 600, height: 1600))
+    scroll.documentView = document
+    let observer = ScrollObserverView(frame: document.bounds)
+    let state = TranscriptScrollState()
+    observer.state = state
+    document.addSubview(observer)
+    window.contentView = scroll
+    document.setFrameSize(NSSize(width: 600, height: 2000))
+    observer.stopObserving()
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 100))
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(scroll.contentView.bounds.minY == 100)
+}
+
 @Test @MainActor func nativeUserScrollingPausesFollowButLayoutChangesDoNot() {
     let window = testWindow()
     defer { window.close() }

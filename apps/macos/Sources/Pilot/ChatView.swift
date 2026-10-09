@@ -130,7 +130,10 @@ struct ChatView: View {
         let transcript = feed.presentation
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 16) {
+                // History already owns a lazy stack. Making its container lazy as well
+                // treats the entire history as one estimated row, which can put the
+                // bottom marker beyond every realized message on opening or resizing.
+                VStack(alignment: .leading, spacing: 16) {
                     if feed.loading, session.state != "failed" {
                         ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
                             .frame(maxWidth: .infinity)

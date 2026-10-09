@@ -10,6 +10,10 @@ import SwiftUI
 enum Snapshot {
     static func runIfRequested() -> Bool {
         let arguments = CommandLine.arguments
+        if let index = arguments.firstIndex(of: "--transcript-opening-check"), index + 1 < arguments.count {
+            Task { await TranscriptOpeningCheck.run(directory: URL(filePath: arguments[index + 1])) }
+            return true
+        }
         if arguments.contains("--performance-check") {
             Task { await PerformanceCheck.run() }
             return true
