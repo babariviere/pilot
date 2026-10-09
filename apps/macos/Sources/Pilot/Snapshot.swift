@@ -99,9 +99,9 @@ enum Snapshot {
             let response = "## Investigation\n\n" + String(repeating: "The menu update repeated recursively.\n", count: 40)
             for width in [400.0, 760.0] {
                 renderMessageFixture(VStack(alignment: .leading, spacing: 20) {
-                    Text("Long messages, folded by default").font(.headline)
+                    Text("Long user messages fold, agent replies stay in full").font(.headline)
                     UserMessage(text: report)
-                    CollapsibleMessage(text: response) { MarkdownView(text: response) }
+                    MarkdownView(text: response)
                     Divider()
                     Text("The rest of the conversation stays in view.").font(.body)
                     Spacer()

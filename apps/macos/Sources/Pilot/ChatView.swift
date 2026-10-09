@@ -330,13 +330,9 @@ struct RowView: View, Equatable {
             } else {
                 UserMessage(text: text, expansion: messageExpansions?.state(for: id))
             }
-        case let .text(id, text):
-            if let expansion = messageExpansions?.state(for: id) {
-                CollapsibleMessage(text: text, expansion: expansion) { MarkdownView(text: text) }
-                    .id(ObjectIdentifier(expansion))
-            } else {
-                CollapsibleMessage(text: text) { MarkdownView(text: text) }
-            }
+        case let .text(_, text):
+            // Agent replies are always shown in full. Only user bubbles fold.
+            MarkdownView(text: text)
         case let .thinking(_, text, streaming):
             ThinkingRow(text: text, streaming: streaming)
         case let .tools(_, items):

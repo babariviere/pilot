@@ -6,13 +6,25 @@ import SwiftUI
 /// from `AttributedString`.
 struct MarkdownView: View {
     let text: String
-    @StateObject private var state = MarkdownRenderState()
+    @StateObject private var state: MarkdownRenderState
     @Environment(\.transcriptContentPrepared) private var contentPrepared
+    @Environment(\.pilotFonts) private var fonts
+
+    init(text: String) {
+        self.text = text
+        _state = StateObject(wrappedValue: MarkdownRenderState(markdown: text))
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(state.blocks.enumerated()), id: \.offset) { _, block in
-                BlockView(block: block)
+            if state.source == nil {
+                // Not prepared yet: plain text keeps the row near its final height, so the
+                // lazy transcript does not jump when the formatted blocks arrive.
+                Text(text).font(fonts.body).lineSpacing(3)
+            } else {
+                ForEach(Array(state.blocks.enumerated()), id: \.offset) { _, block in
+                    BlockView(block: block)
+                }
             }
         }
         .textSelection(.enabled)
@@ -22,6 +34,7 @@ struct MarkdownView: View {
             do {
                 let blocks = try await MarkdownRenderer.shared.prepare(text)
                 try Task.checkCancellation()
+                PreparedMarkdownCache.shared.store(blocks, for: text, replacing: state.source)
                 state.source = text
                 state.blocks = blocks
                 contentPrepared?()
