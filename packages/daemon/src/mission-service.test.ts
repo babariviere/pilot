@@ -417,6 +417,35 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
 });
 
+test("a rejected task claim does not move a chat or release its previous work", async (t) => {
+	const f = await fixture(t);
+	const owner = await f.spawn();
+	const candidate = await f.spawn();
+	const previous = await f.service.create({
+		projectId: f.project.id,
+		title: "Previous",
+		fromSessionId: candidate.id,
+		draft: false,
+		tasks: [{ title: "Existing work" }],
+	});
+	f.service.join(candidate.id, { missionId: previous.mission.id, taskId: "1" });
+	const target = await f.service.create({
+		projectId: f.project.id,
+		title: "Target",
+		tasks: [{ title: "Claimed work" }],
+	});
+	f.service.join(owner.id, { missionId: target.mission.id, taskId: "1" });
+	const events = f.store.events(previous.mission.id);
+	assert.throws(() => f.service.join(candidate.id, { missionId: target.mission.id, taskId: "1" }), /already claimed/);
+	assert.equal(f.store.missionOf(candidate.id), previous.mission.id);
+	assert.equal(f.store.require(previous.mission.id).coordinatorSessionId, candidate.id);
+	assert.equal(f.store.tasks(previous.mission.id)[0]?.sessionId, candidate.id);
+	assert.deepEqual(f.store.events(previous.mission.id), events);
+	assert.deepEqual(f.store.members(target.mission.id), [owner.id]);
+	// Repeating an existing owner's join remains idempotent.
+	f.service.join(owner.id, { missionId: target.mission.id, taskId: "1" });
+});
+
 test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const f = await fixture(t);
 	const terminals = new TerminalManager();

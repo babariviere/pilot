@@ -181,7 +181,13 @@ export class MissionService {
 	join(sessionId: string, request: JoinMissionRequest): SessionSummary {
 		if (!request || typeof request.missionId !== "string") throw new Error("missionId is required");
 		this.assertSameProject(sessionId, request.missionId);
-		if (request.taskId !== undefined) this.store.resolveTask(request.missionId, request.taskId);
+		if (request.taskId !== undefined) {
+			const task = this.store.resolveTask(request.missionId, request.taskId);
+			// Joining can detach previous work. Reject stale task picks before any membership changes.
+			// There is no await between this check and claimTask, so another claim cannot interleave.
+			if (task.sessionId && task.sessionId !== sessionId)
+				throw new Conflict(`Task #${task.number} is already claimed by another chat`);
+		}
 		this.store.join(sessionId, request.missionId);
 		if (request.taskId !== undefined) this.store.claimTask(request.missionId, request.taskId, sessionId, {});
 		return this.session(sessionId);
