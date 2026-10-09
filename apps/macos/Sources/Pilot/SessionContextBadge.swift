@@ -10,7 +10,7 @@ struct SessionContextBadge: View {
             context(session.isAsk ? "Ask · Read-only" : session.workspaceLabel)
             context(session.isAsk ? "Ask" : "Build")
         }
-        .font(.system(size: 11))
+        .font(.pilot(.caption))
         .foregroundStyle(Theme.mutedForeground)
         .help("\(session.workspaceLabel)\n\(session.workspaceHelp)")
         .accessibilityElement(children: .ignore)

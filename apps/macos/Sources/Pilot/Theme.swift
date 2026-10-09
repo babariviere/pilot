@@ -141,12 +141,18 @@ struct CircleIconButtonStyle: ButtonStyle {
     }
 }
 
-/// Small rounded chip used for pickers in composers.
+/// Small rounded chip used for pickers in composers. Pair it with chipMenuStyle().
+///
+/// Every composer picker (project, branch, model, thinking, workspace) uses this label, so they
+/// read as the same kind of control: a muted fill, a leading symbol and a trailing chevron.
 struct ChipLabel: View {
     let title: String
     var icon: String? = nil
     var dot: Color?
     var templateImage: NSImage?
+    /// Long titles, such as model names, truncate in the middle beyond this width.
+    var maxTitleWidth: CGFloat? = nil
+    var loading = false
 
     var body: some View {
         HStack(spacing: 5) {
@@ -155,16 +161,75 @@ struct ChipLabel: View {
             } else if let templateImage {
                 Image(nsImage: templateImage).resizable().frame(width: 12, height: 12)
             } else if let icon {
-                Image(systemName: icon).font(.system(size: 11))
+                Image(systemName: icon).font(.pilot(.caption))
             }
-            Text(title).lineLimit(1)
-            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8, weight: .semibold)).opacity(0.6)
+            Text(title)
+                .foregroundStyle(Theme.foreground)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: maxTitleWidth, alignment: .leading)
+            if loading {
+                ProgressView().controlSize(.mini)
+            } else {
+                Image(systemName: "chevron.up.chevron.down").font(.pilot(.glyph, weight: .semibold)).opacity(0.6)
+            }
         }
-        .font(.system(size: 12))
+        .font(.pilot(.label))
         .foregroundStyle(Theme.mutedForeground)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+    }
+}
+
+extension View {
+    /// Menu style for menus labelled with ChipLabel.
+    ///
+    /// The borderless button menu style turns a SwiftUI label into an AppKit pop-up title with at most
+    /// one image, which drops the chip's fill and chevron (or shows only the chevron). A plain
+    /// button-style menu renders the label as written.
+    func chipMenuStyle() -> some View {
+        menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+    }
+}
+
+/// Small count next to a title, such as a section, card or project header.
+///
+/// - neutral: how many items a group holds or how many are working.
+/// - attention: items that need the user, such as mission questions.
+struct CountBadge: View {
+    enum Style { case neutral, attention }
+
+    let count: Int
+    var style: Style = .neutral
+
+    var body: some View {
+        Text("\(count)")
+            .font(.pilot(.small, weight: .semibold))
+            .monospacedDigit()
+            .foregroundStyle(style == .attention ? Color.white : Theme.mutedForeground)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(style == .attention ? Theme.warning : Theme.muted))
+            .fixedSize()
+    }
+}
+
+/// Title-case header for a group of rows in panes and cards, with an optional symbol and count.
+/// Use it instead of uppercase labels so section headers read the same across the app.
+struct SectionLabel: View {
+    let title: String
+    var icon: String? = nil
+    var count: Int? = nil
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon { Image(systemName: icon).font(.pilot(.caption)) }
+            Text(title).font(.pilot(.label, weight: .medium))
+            if let count, count > 0 { CountBadge(count: count) }
+        }
+        .foregroundStyle(Theme.mutedForeground)
     }
 }
 

@@ -51,7 +51,7 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
   project's directory) grouped by provider, plus the project's or pi's default (`GET /api/models`).
   Chats have a separate Thinking selector offering only the selected model's supported levels.
   Model and thinking changes require an idle chat with no queued messages; both persist across reopening.
-  Thinking is disabled when the model has only one level or no reported levels.
+  Thinking is disabled when the model has only one level, and hidden when no level is reported.
 - **Subagents.** When a chat starts pi-extensions subagents, chips above the composer show each one's
   state: working, new answer, failed or idle. Click a chip for its task, latest tool calls and text,
   Stop, and Open transcript. The inspector's Agents tab (person icon in the toolbar, with a green dot for

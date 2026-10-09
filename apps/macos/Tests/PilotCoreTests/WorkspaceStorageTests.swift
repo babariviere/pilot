@@ -51,7 +51,8 @@ private let workspaceSessionJSON = #"{"id":"s","title":"Chat","cwd":"/workspace"
     #expect(reclaimed.workspaceLabel == "Archived workspace (restored on resume)")
     let clone = SessionSummary(id: "c", title: "Chat", cwd: "/workspace", createdAt: 1, updatedAt: 2,
                                state: "parked", archivedAt: 3, workspace: .clone)
-    #expect(clone.workspaceLabel == "Private clone")
+    // Matches the composer's workspace choice, so one setting has one name.
+    #expect(clone.workspaceLabel == "Isolated workspace")
     #expect(clone.workspaceHelp == "Build can make changes in this chat's workspace.")
     let direct = SessionSummary(id: "d", title: "Chat", cwd: "/workspace", createdAt: 1, updatedAt: 2,
                                 state: "parked", workspace: .direct)

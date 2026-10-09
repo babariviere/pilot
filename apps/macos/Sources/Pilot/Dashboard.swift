@@ -23,19 +23,7 @@ struct DashboardCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 6) {
-                Image(systemName: icon).font(.pilot(.caption))
-                Text(title).font(.pilot(.label, weight: .medium))
-                if let count, count > 0 {
-                    Text("\(count)")
-                        .font(.pilot(.small, weight: .semibold))
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Theme.muted))
-                }
-                Spacer()
-            }
-            .foregroundStyle(Theme.mutedForeground)
+            SectionLabel(title: title, icon: icon, count: count)
             content
         }
         .padding(14)
@@ -70,7 +58,7 @@ private struct WorkingNowCard: View {
                                     .foregroundStyle(Theme.mutedForeground)
                             }
                             Text("\(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome) · \(session.model ?? "default model")")
-                                .font(.pilot(.caption, design: .monospaced))
+                                .font(.pilot(.caption))
                                 .foregroundStyle(Theme.faintForeground)
                                 .lineLimit(1)
                                 .padding(.leading, 22)
@@ -149,7 +137,7 @@ private struct RecentCard: View {
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(session.title).font(.pilot(.body)).lineLimit(1)
                                 Text(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
-                                    .font(.pilot(.caption, design: .monospaced))
+                                    .font(.pilot(.caption))
                                     .foregroundStyle(Theme.faintForeground)
                                     .lineLimit(1)
                             }

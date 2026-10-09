@@ -64,11 +64,15 @@ struct SessionRepositoryMetadataContent: View {
     let branch: String?
     let error: String?
 
+    /// A clean workspace adds no information to the row, so "0 files +0 −0" is omitted.
+    /// The hover help still reports the clean summary.
+    private var changes: SessionChangeSummary? { summary.flatMap { $0.fileCount > 0 ? $0 : nil } }
+
     var body: some View {
         ViewThatFits(in: .horizontal) {
             metadata(showBranch: true, showLineStats: true)
                 .fixedSize(horizontal: true, vertical: false)
-            if summary != nil {
+            if changes != nil {
                 metadata(showBranch: false, showLineStats: true)
                     .fixedSize(horizontal: true, vertical: false)
                 metadata(showBranch: false, showLineStats: false)
@@ -77,8 +81,8 @@ struct SessionRepositoryMetadataContent: View {
             HStack(spacing: 6) {
                 PullRequestBadge(session: session)
                 if session.linkedPullRequests.isEmpty && session.pullRequestError == nil {
-                    if let summary {
-                        Text(summary.fileCountLabel).monospacedDigit()
+                    if let changes {
+                        Text(changes.fileCountLabel).monospacedDigit()
                     } else if let branch, !branch.isEmpty {
                         Text(branch).truncationMode(.middle)
                     }
@@ -95,7 +99,7 @@ struct SessionRepositoryMetadataContent: View {
     private func metadata(showBranch: Bool, showLineStats: Bool) -> some View {
         HStack(spacing: 6) {
             PullRequestBadge(session: session)
-            if let summary {
+            if let summary = changes {
                 Text(summary.fileCountLabel)
                     .monospacedDigit()
                     .fixedSize()
@@ -110,7 +114,7 @@ struct SessionRepositoryMetadataContent: View {
                 }
             }
             if showBranch, let branch, !branch.isEmpty {
-                if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil || summary != nil {
+                if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil || changes != nil {
                     Text("·").accessibilityHidden(true)
                 }
                 Text(branch)

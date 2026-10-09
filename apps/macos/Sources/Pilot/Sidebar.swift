@@ -305,13 +305,8 @@ private struct ProjectHeader: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if working > 0 {
-                        Text("\(working)")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
-                            .foregroundStyle(Color.accentColor)
-                            .fixedSize()
+                        CountBadge(count: working)
+                            .help("\(working) working")
                     }
                     Spacer(minLength: 0)
                 }

@@ -76,9 +76,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         if workspaceReclaimedAt != nil { return "Archived workspace (restored on resume)" }
         if workspaceStorage == .shared { return "Shared jj workspace" }
         switch workspace {
-        case .clone: return "Private clone"
+        case .clone: return "Isolated workspace"
         case .direct: return "Current checkout"
-        case nil: return branch == nil ? "Build workspace" : "Private clone"
+        case nil: return branch == nil ? "Build workspace" : "Isolated workspace"
         }
     }
     public var sourceLabel: String {

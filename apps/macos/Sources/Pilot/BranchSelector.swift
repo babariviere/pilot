@@ -116,12 +116,11 @@ struct BranchMenu: View {
             Divider()
             Button("Refresh branches", action: refresh).disabled(state.loading)
         } label: {
-            ChipLabel(title: selected ?? (mode == .ask ? "Current checkout" : list.defaultBranch ?? "Default branch"), templateImage: GitBranchGlyph.image)
-                .frame(maxWidth: 170)
+            ChipLabel(title: selected ?? (mode == .ask ? "Current checkout" : list.defaultBranch ?? "Default branch"),
+                      templateImage: GitBranchGlyph.image, maxTitleWidth: 150)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize(horizontal: false, vertical: true)
+        .chipMenuStyle()
+        .fixedSize()
         .help(state.error ?? (mode == .ask
             ? "Read-only source: \(selected.map { "origin/\($0) branch snapshot" } ?? "current checkout"). No isolated workspace."
             : "Base branch: \(selected.map { "origin/\($0)" } ?? "remote default"). Starts a new isolated workspace."))

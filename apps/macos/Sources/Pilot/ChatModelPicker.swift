@@ -128,23 +128,9 @@ struct ChatModelPicker: View {
                 Button("Reload models") { Task { await state.loadModels(cwd: session.cwd) } }
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "cpu")
-                Text(state.displayName(for: session.model))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 200, alignment: .leading)
-                if state.changing {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .medium))
-                }
-            }
-            .font(.system(size: 11))
-            .foregroundStyle(Theme.mutedForeground)
+            ChipLabel(title: state.displayName(for: session.model), icon: "cpu", maxTitleWidth: 200, loading: state.changing)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .chipMenuStyle()
         .fixedSize(horizontal: true, vertical: false)
         .disabled(!state.canChange(session: session, working: working))
         .help(working || session.isWorking ? "Model can be changed when idle with no queued messages" : "Change the model for this chat")

@@ -286,7 +286,7 @@ struct TaskComposer: View {
                     } label: {
                         ChipLabel(title: form.effectiveWorkspace(for: project) == .clone ? "Isolated workspace" : "Checkout", icon: "square.on.square")
                     }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                    .chipMenuStyle().fixedSize()
                     .disabled(form.busy)
                     .help("Build workspace for this chat only. Defaults to the project's settings.")
                 }
@@ -302,11 +302,6 @@ struct TaskComposer: View {
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 8)
-            Text(form.mode == .ask
-                 ? "Ask · read-only · no isolated workspace · \(branches.selection(for: branchScopeKey).map { "origin/\($0) snapshot" } ?? "current checkout")"
-                 : "Build · \(form.effectiveWorkspace(for: project) == .clone ? "isolated workspace" : "current checkout") · \(branches.selection(for: branchScopeKey).map { "origin/\($0)" } ?? (form.effectiveWorkspace(for: project) == .clone ? "default base" : "local files"))")
-                .font(.caption).foregroundStyle(Theme.mutedForeground)
-                .padding(.horizontal, 12).padding(.bottom, 8)
         }
     }
 
@@ -468,8 +463,7 @@ struct ProjectMenu: View {
                 icon: "folder"
             )
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .chipMenuStyle()
         .fixedSize()
     }
 }
@@ -502,10 +496,9 @@ struct ModelMenu: View {
                 }
             }
         } label: {
-            ChipLabel(title: displayName(model.isEmpty ? fallback ?? "Default model" : model), icon: "cpu", dot: Theme.warning)
+            ChipLabel(title: displayName(model.isEmpty ? fallback ?? "Default model" : model), icon: "cpu", maxTitleWidth: 200)
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .chipMenuStyle()
         .fixedSize()
         .help("Models from your pi scope (enabledModels)")
     }
