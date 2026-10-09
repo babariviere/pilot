@@ -650,7 +650,12 @@ export type ClientMessage =
 	| { type: "subagent.unsubscribe"; sessionId: string; name: string }
 	/** Receive `mission` details for one mission: the current detail first, then after every change. */
 	| { type: "mission.subscribe"; missionId: string }
-	| { type: "mission.unsubscribe"; missionId: string };
+	| { type: "mission.unsubscribe"; missionId: string }
+	/**
+	 * The client is in the foreground showing these sessions (at most 50). The daemon rechecks their
+	 * pull requests soon unless they were checked recently. Subscribing to a session implies the same.
+	 */
+	| { type: "focus"; sessionIds: string[] };
 
 /** Daemon to client, over /api/ws. */
 export type ServerMessage =

@@ -16,6 +16,7 @@ import { createDaemonServer } from "./server.ts";
 import { applyActivity } from "./session-outcomes.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { legacyGitHub } from "./testing/legacy-github.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
 type Command = Parameters<SessionWorker["request"]>[0];
@@ -104,11 +105,11 @@ async function fixture() {
 					throw new Error("Archive tests must not launch a kernel");
 				},
 			},
-			{ runner: async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]") },
+			{ runner: legacyGitHub(async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]")) },
 		);
 		managers.push(sessions);
 		await sessions.load();
-		await sessions["pullRequests"]["polling"];
+		await sessions["pullRequests"].settled();
 		return sessions;
 	};
 	const cleanup = async () => {

@@ -8,8 +8,11 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand } from "@pilot/kernel";
 import type { SessionPullRequest } from "@pilot/protocol";
+import { githubRepository } from "./github.ts";
 import { ProjectStore } from "./projects.ts";
+import type { PullRequestResult } from "./pull-requests.ts";
 import { CommandRejected, SessionManager, type SessionWorker, WorkerUnavailable } from "./sessions.ts";
+import { legacyGitHub } from "./testing/legacy-github.ts";
 import type { Runner } from "./workspaces.ts";
 
 type Meta = Parameters<SessionManager["save"]>[0];
@@ -205,12 +208,12 @@ async function setup(cooldownMs?: number) {
 					return worker;
 				},
 			},
-			{ runner, intervalMs: 60 * 60_000 },
+			{ runner: legacyGitHub(runner), intervalMs: 60 * 60_000 },
 			{ prFollowUpCooldownMs: cooldownMs },
 		);
 	let manager = makeManager();
 	await manager.load();
-	await manager["pullRequests"]["polling"];
+	await manager["pullRequests"].settled();
 	// Ownership is deliberately absent on load, so each test controls the first eligible sweep.
 	manager["metas"].get(id)!.agentPullRequests = [url];
 	return {
@@ -225,11 +228,24 @@ async function setup(cooldownMs?: number) {
 			return manager["metas"].get(id)!;
 		},
 		worker: () => manager["ensureWorker"](id) as SessionWorker & { busy: boolean | undefined },
-		refresh: () => manager["pullRequests"].refresh(manager["metas"].get(id)!),
-		saved: async (): Promise<Meta> => JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8")),
-		settle: async () => {
-			await manager["pullRequests"]["polling"];
+		// Follow-up delivery runs detached from the PR sync. Wait for it too.
+		refresh: async () => {
 			await manager["pullRequests"].refresh(manager["metas"].get(id)!);
+			await Promise.allSettled(manager["starting"].values());
+		},
+		saved: async (): Promise<Meta> => JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8")),
+		/** Apply a hand-made discovery result through the sync's health lookup, as one sync job would. */
+		apply: async (result: PullRequestResult) => {
+			const meta = manager["metas"].get(id)!;
+			await manager["pullRequests"]["applyResults"]([
+				{ key: id, session: meta, result, repo: githubRepository(meta.workspace!.upstream!) },
+			]);
+			await Promise.allSettled(manager["starting"].values());
+		},
+		settle: async () => {
+			await manager["pullRequests"].settled();
+			await manager["pullRequests"].refresh(manager["metas"].get(id)!);
+			await Promise.allSettled(manager["starting"].values());
 			await Promise.all(manager["saving"].values());
 		},
 		working: (working: boolean) => {
@@ -242,7 +258,7 @@ async function setup(cooldownMs?: number) {
 			await manager.shutdown();
 			manager = makeManager();
 			await manager.load();
-			await manager["pullRequests"]["polling"];
+			await manager["pullRequests"].settled();
 			await Promise.all(manager["starting"].values());
 		},
 	};
@@ -370,7 +386,7 @@ test("current and earlier problems share one prompt, while healthy or unfreshed 
 			JSON.stringify({ state: "OPEN", headRefName: prs[1]!.branch, statusCheckRollup: [], mergeable: "MERGEABLE" }),
 		);
 		f.controls.reviews = false;
-		await f.manager["applyPullRequest"](f.meta, { pullRequest: f.meta.pullRequest, others: prs.slice(0, 2) });
+		await f.apply({ pullRequest: f.meta.pullRequest, others: prs.slice(0, 2) });
 		assert.equal(f.inputs.length, 1);
 		for (const target of [url, prs[0]!.url]) assert.ok(f.inputs[0]!.content.includes(target));
 		for (const pr of prs.slice(1)) assert.ok(!f.inputs[0]!.content.includes(pr.url));
@@ -432,7 +448,7 @@ test("an earlier-only fresh result is eligible without a fresh current PR", asyn
 		const pr = stackPr(11);
 		f.controls.others = [pr];
 		f.meta.agentPullRequests = [pr.url];
-		await f.manager["applyPullRequest"](f.meta, { others: [pr] });
+		await f.apply({ others: [pr] });
 		assert.equal(f.inputs.length, 1);
 		assert.ok(f.inputs[0]!.content.includes(pr.url));
 		assert.deepEqual(f.controls.healthNumbers, [11]);

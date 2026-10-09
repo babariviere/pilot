@@ -1,16 +1,15 @@
-/** Read-only PR health discovery. Lookup failures must not masquerade as a healthy PR. */
+/**
+ * Paginated single-PR health lookup. The sync uses batched GraphQL (see github.ts) and falls back to this
+ * only for PRs with more than one page of checks or review threads. Lookup failures must not masquerade as
+ * a healthy PR.
+ */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { SessionPullRequest } from "@pilot/protocol";
-import { githubRepository } from "./pull-requests.ts";
+import { failedChecks, githubRepository, type PullRequestProblems } from "./github.ts";
 import type { Runner } from "./workspaces.ts";
 
-export interface PullRequestProblems {
-	failedChecks: string[];
-	/** Unresolved, current review threads with at least one comment, not individual comments. */
-	reviewComments: number;
-	mergeConflicts: boolean;
-}
+export type { PullRequestProblems } from "./github.ts";
 
 const maxOutputBytes = 1024 * 1024;
 const commandTimeoutMs = 10_000;
@@ -45,37 +44,6 @@ function text(value: unknown): string {
 
 function parse(output: string): Record<string, unknown> {
 	return object(JSON.parse(output));
-}
-
-const failedConclusions = new Set(["FAILURE", "TIMED_OUT", "STARTUP_FAILURE", "ACTION_REQUIRED"]);
-const conclusions = new Set([...failedConclusions, "SUCCESS", "NEUTRAL", "CANCELLED", "SKIPPED", "STALE"]);
-const checkStatuses = new Set(["COMPLETED", "IN_PROGRESS", "QUEUED", "REQUESTED", "WAITING", "PENDING"]);
-const contextStates = new Set(["ERROR", "EXPECTED", "FAILURE", "PENDING", "SUCCESS"]);
-
-function failedChecks(rollup: unknown): string[] {
-	// GitHub represents a PR without any checks as either null or an empty list.
-	if (rollup === null) return [];
-	if (!Array.isArray(rollup)) invalid();
-	const failed = new Set<string>();
-	for (const item of rollup) {
-		const check = object(item);
-		if (check.__typename === "CheckRun") {
-			const name = text(check.name);
-			if (!checkStatuses.has(text(check.status))) invalid();
-			// gh serializes a nullable GraphQL conclusion as an empty Go string while pending.
-			if (check.conclusion !== null && check.conclusion !== "" && !conclusions.has(text(check.conclusion)))
-				invalid();
-			if (check.status === "COMPLETED") {
-				if (check.conclusion === null || check.conclusion === "") invalid();
-				if (failedConclusions.has(check.conclusion as string)) failed.add(name);
-			}
-		} else if (check.__typename === "StatusContext") {
-			const name = text(check.context);
-			if (!contextStates.has(text(check.state))) invalid();
-			if (check.state === "FAILURE" || check.state === "ERROR") failed.add(name);
-		} else invalid();
-	}
-	return [...failed];
 }
 
 // Only existence/count metadata is needed. Never fetch comment bodies or perform mutations.

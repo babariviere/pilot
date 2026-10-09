@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import PilotCore
 
@@ -35,7 +36,14 @@ final class PilotClient: ObservableObject {
     init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
         self.baseURL = baseURL
         self.artifactSession = artifactSession
+        // Returning to the app refreshes the PR state of open chats. The daemon skips recently checked ones.
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.postFocus() }
+        }
     }
+    private var activationObserver: NSObjectProtocol?
     private var task: URLSessionWebSocketTask?
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
@@ -638,6 +646,13 @@ final class PilotClient: ObservableObject {
             listeners[sessionId] = nil
             post(["type": .string("unsubscribe"), "sessionId": .string(sessionId)])
         }
+    }
+
+    /// Ask the daemon to recheck pull requests of the chats currently open in the app.
+    private func postFocus() {
+        let ids = listeners.keys.prefix(50).map(JSONValue.string)
+        guard !ids.isEmpty else { return }
+        post(["type": .string("focus"), "sessionIds": .array(ids)])
     }
 
     // MARK: Terminals (daemon-owned PTYs)

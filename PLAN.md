@@ -396,6 +396,19 @@ agent-idle refreshes remain available to discover reopened PRs or a new PR in th
 observed merge timestamp is persisted, so the local archive sweep can enforce the 24-hour deadline
 without polling terminal PRs again.
 
+**PR sync architecture.** One daemon-owned scheduler (`PullRequestSync`) owns all GitHub PR state:
+session discovery, mission-linked PRs and health for follow-ups. Every session and linked PR has a due
+time. Events (an agent turn settling, a PR created by the agent, a client opening a chat or returning to
+the foreground with the `focus` message) mark entries urgent so they run next instead of waiting behind a
+sweep. A small fixed pool (3 jobs) runs batches: the most urgent entry plus other entries of the same
+repository due soon. A batch inspects workspaces locally (git/jj), sends one GraphQL request per
+repository for every head and linked PR number, and one more for the health of PRs eligible for a
+follow-up. Results apply serially per session. An entry never runs twice at once. Follow-up delivery runs
+detached, so starting a parked kernel never delays other sessions' PR checks. The cadence adapts: open PRs
+with pending checks every 30 seconds, other open PRs every 2 minutes, sessions without a PR every minute
+while recently active, then every 5 or 30 minutes, settled PRs never. Failures back off exponentially up
+to 30 minutes, and a nearly exhausted GraphQL budget pauses the host until its reset.
+
 **Triggers**
 
 - `check_suite` / `workflow_run` concluded `failure` on a PR in an allowlisted repository.
@@ -503,8 +516,8 @@ reports), producing a morning summary in the app and Slack.
   with at most four sidebar requests in flight;
   failed lookups omit the count rather than showing zero, and long branches truncate with a full-name tooltip.
   The daemon discovers PRs by the exact workspace branch and
-  repository, polls active PR status at startup and about once a minute until merged or closed,
-  and explicitly refreshes after settled work. It persists the last successful status. Failed lookups
+  repository, polls active PR status at startup and on an adaptive cadence until merged or closed (§6.2),
+  and refreshes immediately after settled work, PR creation and when a chat is opened. It persists the last successful status. Failed lookups
   retain the cache but label it as last known, never as a fresh merge result. Direct/shared-folder
   sessions are not auto-linked.
   A session can open several PRs: switching branches keeps earlier PRs linked, and private clones

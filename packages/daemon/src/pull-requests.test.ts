@@ -1,17 +1,20 @@
-// biome-ignore-all lint/complexity/useLiteralKeys: Exercise the poller's private sweep without real timer waits.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import {
 	createdBookmarks,
-	discoverLinkedPullRequest,
-	discoverPullRequest,
+	discoverLinkedPullRequest as discoverLinked,
+	discoverPullRequest as discover,
 	githubRepository,
 	type PullRequestSession,
-	PullRequestTracker,
 	sessionBranches,
 } from "./pull-requests.ts";
+import { legacyGitHub } from "./testing/legacy-github.ts";
 import type { Runner } from "./workspaces.ts";
+
+// Describe GitHub per head or PR number, as gh pr list/view would, while running the real batched queries.
+const discoverPullRequest = (target: PullRequestSession, runner: Runner) => discover(target, legacyGitHub(runner));
+const discoverLinkedPullRequest = (target: Parameters<typeof discoverLinked>[0], runner: Runner) =>
+	discoverLinked(target, legacyGitHub(runner));
 
 const branch = "fix-pr-tracking";
 const session = (): PullRequestSession => ({
@@ -44,14 +47,6 @@ const listing =
 		return JSON.stringify(args.includes("--state=open") ? rows.filter((row) => row.state === "OPEN") : rows);
 	};
 
-function gate() {
-	let resolve!: () => void;
-	const promise = new Promise<void>((done) => {
-		resolve = done;
-	});
-	return { promise, resolve };
-}
-
 test("hand-linked fork PR lookup uses an explicit repository and validates identity and state", async () => {
 	const target = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
 	const runner: Runner = async (file, args, cwd) => {
@@ -83,141 +78,6 @@ test("hand-linked fork PR lookup uses an explicit repository and validates ident
 		discoverLinkedPullRequest({ ...target, url: "https://evil.test/octo/repo/pull/42" }, runner),
 		/Invalid linked/,
 	);
-});
-
-test("linked PRs share the serial queue, dedupe URLs, skip terminal caches, and drain on shutdown", async () => {
-	const release = gate();
-	let calls = 0;
-	let active = 0;
-	let maxActive = 0;
-	const results: string[] = [];
-	const first = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
-	const second = { ...first, url: "https://github.com/octo/repo/pull/43" };
-	const tracker = new PullRequestTracker(
-		() => [],
-		async () => {},
-		{
-			runner: async (_file, args) => {
-				calls++;
-				maxActive = Math.max(maxActive, ++active);
-				await release.promise;
-				active--;
-				return JSON.stringify(candidate({ number: Number(args[2]) }));
-			},
-		},
-		{
-			targets: () => [first, first, second],
-			apply: (pr) => {
-				results.push(pr.url);
-			},
-		},
-	);
-	const one = tracker.refreshLinked(first);
-	assert.equal(tracker.refreshLinked(first), one);
-	const two = tracker.refreshLinked(second);
-	await until(() => calls === 1);
-	release.resolve();
-	await Promise.all([one, two]);
-	assert.equal(calls, 2);
-	assert.equal(maxActive, 1);
-	await tracker.refreshLinked({
-		...first,
-		pullRequest: { number: 42, url: first.url, title: "PR", state: "merged", checkedAt: 1 },
-	});
-	assert.equal(calls, 2);
-	await tracker.stop();
-	await tracker.refreshLinked(first);
-	assert.equal(calls, 2);
-	assert.deepEqual(results, [first.url, second.url]);
-});
-
-async function until(predicate: () => boolean) {
-	for (let i = 0; i < 200 && !predicate(); i++) await delay(5);
-	assert.ok(predicate(), "condition did not settle");
-}
-
-test("linked polling deduplicates across tasks and retries failed checks without inventing results", async () => {
-	const first = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
-	let calls = 0;
-	let state: "OPEN" | "MERGED" = "OPEN";
-	let failure = true;
-	const tracker = new PullRequestTracker(
-		() => [],
-		async () => {},
-		{
-			intervalMs: 60_000,
-			runner: async () => {
-				calls++;
-				if (failure) throw new Error("offline");
-				return JSON.stringify(candidate({ number: 42, state }));
-			},
-		},
-		{
-			targets: () => [first, first],
-			apply: (pr) => {
-				Object.assign(first, { pullRequest: pr });
-			},
-		},
-	);
-	try {
-		tracker.start();
-		await tracker["polling"];
-		assert.equal(calls, 1);
-		assert.equal("pullRequest" in first, false);
-		failure = false;
-		clearTimeout(tracker["timer"]);
-		tracker["poll"]();
-		await tracker["polling"];
-		assert.equal(calls, 2);
-		state = "MERGED";
-		clearTimeout(tracker["timer"]);
-		tracker["poll"]();
-		await tracker["polling"];
-		assert.equal(calls, 3);
-		clearTimeout(tracker["timer"]);
-		tracker["poll"]();
-		await tracker["polling"];
-		assert.equal(calls, 3, "terminal linked PRs do not poll again");
-	} finally {
-		await tracker.stop();
-	}
-});
-
-test("shutdown persists an in-flight linked result and skips queued linked requests", async () => {
-	const release = gate();
-	let calls = 0;
-	let applied = 0;
-	const target = { url: "https://github.com/octo/repo/pull/42", cwd: "/project" };
-	const tracker = new PullRequestTracker(
-		() => [],
-		async () => {},
-		{
-			runner: async () => {
-				calls++;
-				await release.promise;
-				return JSON.stringify(candidate({ number: 42 }));
-			},
-		},
-		{
-			targets: () => [],
-			apply: () => {
-				applied++;
-			},
-		},
-	);
-	const active = tracker.refreshLinked(target);
-	const queued = tracker.refreshLinked({ ...target, url: "https://github.com/octo/repo/pull/43" });
-	await until(() => calls === 1);
-	let stopped = false;
-	const stopping = tracker.stop().then(() => {
-		stopped = true;
-	});
-	await delay(2);
-	assert.equal(stopped, false);
-	release.resolve();
-	await Promise.all([active, queued, stopping]);
-	assert.equal(calls, 1);
-	assert.equal(applied, 1);
 });
 
 test("normalizes HTTPS, SSH and enterprise origins, rejecting local paths and option-like identities", () => {
@@ -296,32 +156,42 @@ test("discovers all four authoritative states, terminal state takes precedence o
 	}
 });
 
-test("uses recorded upstream, agent-chosen branch and repo flags with timeouts", async () => {
+test("one GraphQL request carries the agent-chosen branch as a variable, with the recorded upstream and a timeout", async () => {
 	const calls: { file: string; args: string[]; cwd: string; timeout?: number }[] = [];
 	const target = session();
 	target.workspace!.branch = "fix/a;$(whoami)";
-	const result = await discoverPullRequest(target, async (file, args, cwd, timeout) => {
+	target.previousBranches = ["fix/b"];
+	const result = await discover(target, async (file, args, cwd, timeout) => {
 		if (file === "git" && args[0] === "branch") return "";
 		calls.push({ file, args, cwd, timeout });
 		assert.equal(file, "gh", "recorded upstream avoids a potentially changed origin");
-		return JSON.stringify([candidate({ headRefName: target.workspace!.branch })]);
+		const nodes = (head: string) => [candidate({ headRefName: head, number: head === "fix/b" ? 2 : 1 })];
+		return JSON.stringify({
+			data: {
+				rateLimit: { remaining: 4_000, resetAt: "2100-01-01T00:00:00Z" },
+				repository: {
+					o0: { nodes: nodes(target.workspace!.branch!) },
+					a0: { nodes: [] },
+					o1: { nodes: nodes("fix/b") },
+					a1: { nodes: [] },
+				},
+			},
+		});
 	});
 	assert.equal(result.pullRequest?.state, "open");
-	assert.equal(calls.length, 1);
-	assert.deepEqual(calls[0], {
-		file: "gh",
-		cwd: "/private/clone",
-		timeout: 10_000,
-		args: [
-			"pr",
-			"list",
-			"--head=fix/a;$(whoami)",
-			"--repo=github.com/octo/repo",
-			"--state=open",
-			"--limit=100",
-			"--json=number,url,title,state,isDraft,headRefName,isCrossRepository,createdAt,mergedAt",
-		],
-	});
+	assert.deepEqual(
+		result.others?.map((pr) => pr.number),
+		[2],
+	);
+	assert.equal(calls.length, 1, "all heads share one request");
+	const [call] = calls;
+	assert.equal(call!.cwd, "/private/clone");
+	assert.equal(call!.timeout, 20_000);
+	assert.deepEqual(call!.args.slice(0, 3), ["api", "graphql", "--hostname=github.com"]);
+	const values = call!.args.filter((_, i) => call!.args[i - 1] === "-f" || call!.args[i - 1] === "-F");
+	assert.ok(values[0]!.startsWith("query=query PilotPullRequests("));
+	assert.ok(!values[0]!.includes("whoami"), "branch names never become query text");
+	assert.deepEqual(values.slice(1), ["owner=octo", "name=repo", "h0=fix/a;$(whoami)", "h1=fix/b"]);
 });
 
 test("only legacy private workspaces read origin, direct sessions never run git or gh", async () => {
@@ -332,7 +202,7 @@ test("only legacy private workspaces read origin, direct sessions never run git 
 		if (file === "git" && args[0] === "branch") return "";
 		calls++;
 		assert.equal(cwd, target.cwd);
-		assert.equal(timeout, 10_000);
+		assert.equal(timeout, file === "git" ? 10_000 : 20_000);
 		if (file === "git") {
 			assert.deepEqual(args, ["remote", "get-url", "origin"]);
 			return "https://github.com/octo/repo.git";
@@ -549,49 +419,6 @@ test("discovers PRs from the session's other branches, skipping settled ones and
 	);
 });
 
-test("polling continues while an earlier branch's PR is open, and stops once every PR settles", async () => {
-	const merged = {
-		number: 2,
-		url: "https://github.com/octo/repo/pull/2",
-		title: "Current",
-		state: "merged",
-		checkedAt: 1,
-	} as const;
-	const earlier = {
-		number: 1,
-		url: "https://github.com/octo/repo/pull/1",
-		title: "Earlier",
-		state: "open",
-		branch: "fix/earlier",
-		checkedAt: 1,
-	} as const;
-	const target = {
-		...session(),
-		pullRequest: { ...merged },
-		previousPullRequests: [{ ...earlier }] as PullRequestSession["previousPullRequests"],
-	};
-	let calls = 0;
-	const tracker = new PullRequestTracker(
-		() => [target],
-		async () => {},
-		{
-			intervalMs: 60_000,
-			runner: async (file) => {
-				if (file === "gh") calls++;
-				return file === "gh" ? "[]" : "";
-			},
-		},
-	);
-	try {
-		assert.equal(tracker["due"](target), true);
-		target.previousPullRequests = [{ ...earlier, state: "closed" }];
-		assert.equal(tracker["due"](target), false);
-	} finally {
-		await tracker.stop();
-	}
-	assert.equal(calls, 0);
-});
-
 test("shared workspaces only attribute bookmarks created from their own jj workspace", async () => {
 	const target = session();
 	target.workspace = { ...target.workspace!, shared: { name: "w" } };
@@ -659,215 +486,4 @@ test("lists the current branch first, then PR heads and branches without a PR", 
 	];
 	target.previousBranches = ["fix/c", branch];
 	assert.deepEqual(sessionBranches(target), [branch, "fix/b", "fix/c"]);
-});
-
-test("tracker deduplicates overlapping per-session requests and executes sessions serially", async () => {
-	const first = gate();
-	let active = 0;
-	let maxActive = 0;
-	const called: string[] = [];
-	const applied: string[] = [];
-	const tracker = new PullRequestTracker(
-		() => [],
-		async (target) => {
-			applied.push(target.id);
-		},
-		{
-			runner: async (_file, _args, cwd) => {
-				if (_file === "git" && _args[0] === "branch") return "";
-				active++;
-				maxActive = Math.max(maxActive, active);
-				called.push(cwd);
-				if (called.length === 1) await first.promise;
-				active--;
-				return JSON.stringify([candidate()]);
-			},
-		},
-	);
-	try {
-		const target = session();
-		const a = tracker.refresh(target);
-		assert.equal(tracker.refresh(target), a);
-		const b = tracker.refresh({ ...session(), id: "second", cwd: "/second" });
-		await until(() => called.length === 1);
-		assert.equal(called.length, 1);
-		first.resolve();
-		await Promise.all([a, b]);
-		assert.equal(maxActive, 1);
-		assert.deepEqual(called, ["/private/clone", "/second"]);
-		assert.deepEqual(applied, ["session", "second"]);
-	} finally {
-		first.resolve();
-		await tracker.stop();
-	}
-});
-
-test("polls immediately then at bounded delay without overlapping sweeps, and stops its timer", async () => {
-	const first = gate();
-	let calls = 0;
-	const tracker = new PullRequestTracker(
-		() => [session(), { id: "direct", cwd: "/shared" }],
-		async () => {},
-		{
-			intervalMs: 10,
-			runner: async (file, args) => {
-				if (file === "git" && args[0] === "branch") return "";
-				calls++;
-				if (calls === 1) await first.promise;
-				return JSON.stringify([candidate()]);
-			},
-		},
-	);
-	try {
-		tracker.start();
-		tracker.start();
-		await until(() => calls === 1);
-		await delay(30);
-		assert.equal(calls, 1, "long commands must not overlap polling");
-		first.resolve();
-		await until(() => calls >= 2);
-		await tracker.stop();
-		const stoppedCalls = calls;
-		await delay(30);
-		assert.equal(calls, stoppedCalls);
-		await tracker.refresh(session());
-		assert.equal(calls, stoppedCalls);
-	} finally {
-		first.resolve();
-		await tracker.stop();
-	}
-});
-
-test("merged and closed PRs never poll at startup or later, while active and undiscovered PRs still poll", async (t) => {
-	t.mock.timers.enable({ apis: ["setTimeout"] });
-	let now = Date.now();
-	t.mock.method(Date, "now", () => now);
-	const states = ["merged", "closed", "open", "draft", undefined] as const;
-	const targets = states.map(
-		(state, index): PullRequestSession => ({
-			...session(),
-			id: `session-${index}`,
-			cwd: `/${state ?? "undiscovered"}`,
-			...(state
-				? {
-						pullRequest: {
-							number: 1,
-							url: "https://github.com/octo/repo/pull/1",
-							title: "PR",
-							state,
-							checkedAt: 0,
-						},
-					}
-				: {}),
-		}),
-	);
-	const calls: string[] = [];
-	const tracker = new PullRequestTracker(
-		() => targets,
-		async (target, result) => {
-			if (result.pullRequest) target.pullRequest = result.pullRequest;
-		},
-		{
-			intervalMs: 10,
-			runner: async (file, _args, cwd) => {
-				if (file === "git") return "";
-				calls.push(cwd);
-				return JSON.stringify([candidate({ isDraft: cwd === "/draft" })]);
-			},
-		},
-	);
-	try {
-		tracker.start();
-		await tracker["polling"];
-		assert.deepEqual(calls, ["/open", "/draft", "/undiscovered"]);
-		for (let sweep = 0; sweep < 3; sweep++) {
-			now += 24 * 60 * 60_000;
-			t.mock.timers.tick(10);
-			await tracker["polling"];
-		}
-		assert.equal(calls.length, 12);
-		assert.ok(!calls.includes("/merged") && !calls.includes("/closed"));
-	} finally {
-		await tracker.stop();
-	}
-});
-
-test("a newly closed or merged PR stops subsequent sweeps, but explicit refresh can discover a reopened or new PR", async (t) => {
-	t.mock.timers.enable({ apis: ["setTimeout"] });
-	for (const state of ["MERGED", "CLOSED"] as const) {
-		const target = session();
-		let remoteState: string = state;
-		let calls = 0;
-		const tracker = new PullRequestTracker(
-			() => [target],
-			async (current, result) => {
-				if (result.pullRequest) current.pullRequest = result.pullRequest;
-			},
-			{
-				intervalMs: 10,
-				runner: async (file, args) => {
-					if (file === "git") return "";
-					calls++;
-					return args.includes("--state=open") && remoteState !== "OPEN"
-						? "[]"
-						: JSON.stringify([candidate({ state: remoteState })]);
-				},
-			},
-		);
-		try {
-			tracker.start();
-			await tracker["polling"];
-			assert.equal(calls, 2, "initial discovery checks open then historical PRs");
-			for (let sweep = 0; sweep < 3; sweep++) {
-				t.mock.timers.tick(10);
-				await tracker["polling"];
-			}
-			assert.equal(calls, 2, "terminal discovery stops periodic GitHub requests");
-			remoteState = "OPEN";
-			await tracker.refresh(target);
-			assert.equal(calls, 3, "agent-idle refresh is still permitted");
-			assert.equal(target.pullRequest?.state, "open");
-			t.mock.timers.tick(10);
-			await tracker["polling"];
-			assert.equal(calls, 4, "active polling resumes for the discovered open PR");
-		} finally {
-			await tracker.stop();
-		}
-	}
-});
-
-test("shutdown drains the in-flight lookup and cache update but skips queued sessions", async () => {
-	const lookup = gate();
-	const cache = gate();
-	let calls = 0;
-	let applied = false;
-	const tracker = new PullRequestTracker(
-		() => [],
-		async () => {
-			applied = true;
-			await cache.promise;
-		},
-		{
-			runner: async (file, args) => {
-				if (file === "git" && args[0] === "branch") return "";
-				calls++;
-				await lookup.promise;
-				return JSON.stringify([candidate()]);
-			},
-		},
-	);
-	const active = tracker.refresh(session());
-	const queued = tracker.refresh({ ...session(), id: "second" });
-	await until(() => calls === 1);
-	let stopped = false;
-	const stopping = tracker.stop().then(() => {
-		stopped = true;
-	});
-	lookup.resolve();
-	await until(() => applied);
-	assert.equal(stopped, false, "must drain the metadata callback as well as gh");
-	cache.resolve();
-	await Promise.all([active, queued, stopping]);
-	assert.equal(calls, 1);
-	assert.equal(stopped, true);
 });

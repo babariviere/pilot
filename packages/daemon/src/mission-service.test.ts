@@ -17,6 +17,7 @@ import type { PullRequestOptions } from "./pull-requests.ts";
 import { createDaemonServer } from "./server.ts";
 import { type SessionWorker, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { legacyGitHub } from "./testing/legacy-github.ts";
 
 class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
@@ -81,7 +82,7 @@ async function fixture(
 				return worker;
 			},
 		},
-		pullRequests,
+		{ ...pullRequests, ...(pullRequests.runner ? { runner: legacyGitHub(pullRequests.runner) } : {}) },
 	);
 	const store = new MissionStore(":memory:");
 	const service = new MissionService(store, sessions, projects);

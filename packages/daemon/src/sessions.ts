@@ -44,11 +44,11 @@ import {
 	type LinkedPullRequest,
 	type PullRequestOptions,
 	type PullRequestResult,
-	PullRequestTracker,
 	sessionPullRequests,
 	sessionBranches,
 } from "./pull-requests.ts";
-import { discoverPullRequestProblems, type PullRequestProblems } from "./pull-request-health.ts";
+import type { PullRequestProblems } from "./github.ts";
+import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
 import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
@@ -218,6 +218,19 @@ const emptySnapshot: AgentEvent = {
 
 const ID_PATTERN = /^[0-9a-f-]{36}$/;
 const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/** Follow-up state captured before a PR health lookup. A different state afterwards makes the lookup stale. */
+interface FollowUpContext {
+	generation: number;
+	/** Branch the follow-up targets: the freshly discovered one. */
+	branch?: string;
+	/** Recorded branch and PR states when health was planned. Any change during the lookup makes it stale. */
+	recorded: string;
+}
+
+function followUpState(meta: SessionMeta): string {
+	return JSON.stringify([meta.workspace?.branch, sessionPullRequests(meta).map((pr) => [pr.url, pr.state])]);
+}
 
 /** Any open or draft PR, on the current branch or an earlier one, keeps the workspace in use. */
 function hasActivePullRequest(meta: SessionMeta): boolean {
@@ -570,11 +583,10 @@ export class SessionManager {
 	private closing = false;
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
-	private readonly pullRequests: PullRequestTracker;
+	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
 	private readonly pool?: WorkerPool;
 	private readonly idleParkMs: number;
 	private readonly prFollowUpCooldownMs: number;
-	private readonly pullRequestRunner: PullRequestOptions["runner"];
 	private readonly workerOptions: WorkerOptions;
 	private readonly workspaceRetentionMs: number;
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
@@ -619,7 +631,6 @@ export class SessionManager {
 	) {
 		this.idleParkMs = options.idleParkMs ?? 10 * 60_000;
 		this.prFollowUpCooldownMs = options.prFollowUpCooldownMs ?? 5 * 60_000;
-		this.pullRequestRunner = pullRequests.runner;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? 30 * DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
@@ -630,14 +641,18 @@ export class SessionManager {
 		this.factories = factories;
 		this.modelCatalog = new ModelCatalog(agentDir);
 		this.titleCatalog = new ModelCatalog(agentDir);
-		this.pullRequests = new PullRequestTracker(
-			() => this.metas.values(),
-			(session, result) => this.applyPullRequest(this.require(session.id), result),
-			pullRequests,
+		this.pullRequests = new PullRequestSync<SessionMeta, FollowUpContext>(
 			{
-				targets: () => this.missions?.linkedPullRequests?.() ?? [],
-				apply: (pr) => this.missions?.pullRequestUpdated?.(pr),
+				sessions: () => this.metas.values(),
+				session: (id) => this.metas.get(id),
+				apply: (session, result, health) => this.applyPullRequest(this.require(session.id), result, health),
+				health: (session, result) => this.followUpHealthPlan(session, result),
+				linked: {
+					targets: () => this.missions?.linkedPullRequests?.() ?? [],
+					apply: (pr) => this.missions?.pullRequestUpdated?.(pr),
+				},
 			},
+			pullRequests,
 		);
 	}
 
@@ -998,6 +1013,11 @@ export class SessionManager {
 	refreshMissionPullRequests(): void {
 		for (const target of this.missions?.linkedPullRequests?.() ?? [])
 			if (!target.pullRequest) void this.pullRequests.refreshLinked(target);
+	}
+
+	/** Clients are showing these sessions: recheck their PRs soon unless they are fresh. */
+	focusPullRequests(ids: Iterable<string>): void {
+		this.pullRequests.focus(ids);
 	}
 
 	/** Membership or mission context changed: republish the summary and update a live kernel's context. */
@@ -2269,6 +2289,8 @@ export class SessionManager {
 				void this.save(meta).catch((error: unknown) =>
 					console.warn(`pilotd: could not save PR ownership: ${error}`),
 				);
+				// Show the new PR now rather than when the turn ends.
+				void this.pullRequests.refresh(meta);
 			}
 			return;
 		}
@@ -2365,7 +2387,36 @@ export class SessionManager {
 		};
 	}
 
-	private async applyPullRequest(meta: SessionMeta, result: PullRequestResult): Promise<void> {
+	/** Fresh, owned, open PRs whose problems could trigger a follow-up now. Health is looked up only for these. */
+	private followUpHealthPlan(
+		meta: SessionMeta,
+		result: PullRequestResult,
+	): { prs: SessionPullRequest[]; context: FollowUpContext; branch?: string } | undefined {
+		const fresh = [result.pullRequest, ...(result.others ?? [])].filter(
+			(pr): pr is SessionPullRequest => pr !== undefined,
+		);
+		if (!this.canFollowUp(meta, [...fresh, ...sessionPullRequests(meta)])) return undefined;
+		const branch = result.branch ?? meta.workspace?.branch;
+		const current = result.pullRequest?.url ?? meta.pullRequest?.url;
+		// Only fresh, owned heads qualify. The current branch may already be terminal while
+		// earlier stack heads are still open. Query each PR against its own head, not the workspace's.
+		const prs = fresh.filter((pr) => this.ownsOpenPullRequest(meta, pr) && (pr.branch || pr.url === current));
+		return prs.length
+			? {
+					prs,
+					context: { generation: meta.prFollowUp?.generation ?? 0, branch, recorded: followUpState(meta) },
+					...(branch ? { branch } : {}),
+				}
+			: undefined;
+	}
+
+	private async applyPullRequest(
+		meta: SessionMeta,
+		result: PullRequestResult,
+		health?: { context: FollowUpContext; checks: HealthCheck[] },
+	): Promise<void> {
+		// Only discovery changes the branch and PRs, and it never overlaps itself. Anything else is a stale lookup.
+		const healthFresh = health !== undefined && health.context.recorded === followUpState(meta);
 		const previousBranch = meta.workspace?.branch;
 		const branchChanged = result.branch !== undefined && previousBranch !== result.branch;
 		const previous = meta.pullRequest;
@@ -2467,35 +2518,9 @@ export class SessionManager {
 			);
 		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
 		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
-		if (!result.error && this.canFollowUp(meta)) {
-			const generation = meta.prFollowUp?.generation ?? 0;
-			const branch = meta.workspace?.branch;
-			const issues: { pr: SessionPullRequest; problems: PullRequestProblems }[] = [];
-			// Only fresh, owned heads qualify. The current branch may already be terminal while
-			// earlier stack heads are still open. Query each PR against its own head, not the workspace's.
-			for (const pr of [next, ...(result.others ?? [])]) {
-				if (!pr || !this.ownsOpenPullRequest(meta, pr) || (!pr.branch && pr.url !== meta.pullRequest?.url))
-					continue;
-				if (
-					!this.canFollowUp(meta) ||
-					meta.workspace?.branch !== branch ||
-					(meta.prFollowUp?.generation ?? 0) !== generation
-				)
-					break;
-				try {
-					const problems = await discoverPullRequestProblems(
-						{ cwd: meta.cwd, workspace: { ...meta.workspace, branch: pr.branch ?? branch }, pullRequest: pr },
-						this.pullRequestRunner,
-					);
-					if (problems.failedChecks.length || problems.reviewComments || problems.mergeConflicts)
-						issues.push({ pr, problems });
-				} catch (error) {
-					// A failed health lookup must not hide fresh actionable evidence from another head.
-					console.warn(`pilotd: could not check pull request health for ${pr.url}: ${error}`);
-				}
-			}
-			await this.followUpPullRequests(meta, branch, generation, issues);
-		}
+		// Health was looked up by the sync before this result was applied. Stale lookups are dropped here.
+		if (!result.error && healthFresh && health.checks.length)
+			await this.followUpPullRequests(meta, health.context.branch, health.context.generation, health.checks);
 		await this.archiveMergedPullRequest(meta);
 	}
 
@@ -2540,7 +2565,8 @@ export class SessionManager {
 		}
 	}
 
-	private canFollowUp(meta: SessionMeta): boolean {
+	/** `prs` defaults to the session's known PRs; health planning passes fresh ones not yet applied. */
+	private canFollowUp(meta: SessionMeta, prs = sessionPullRequests(meta)): boolean {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
@@ -2562,7 +2588,7 @@ export class SessionManager {
 				!this.changingModels.has(meta.id) &&
 				!this.archiveTransitions.has(meta.id) &&
 				(!worker || (worker.state === "idle" && worker.busy === false)) &&
-				sessionPullRequests(meta).some((pr) => this.ownsOpenPullRequest(meta, pr)) &&
+				prs.some((pr) => this.ownsOpenPullRequest(meta, pr)) &&
 				(meta.prFollowUp?.attempts ?? 0) < 3 &&
 				Date.now() >= (meta.prFollowUp?.nextAttemptAt ?? 0),
 		);
@@ -2616,6 +2642,12 @@ export class SessionManager {
 			"Follow the session's delivery policy, verify fixes, and update only the affected PR branches as appropriate. Never comment, review, reply, merge, or close on GitHub.",
 		].join("\n");
 		this.sending.set(meta.id, (this.sending.get(meta.id) ?? 0) + 1);
+		const release = () => {
+			const count = (this.sending.get(meta.id) ?? 1) - 1;
+			if (count) this.sending.set(meta.id, count);
+			else this.sending.delete(meta.id);
+			end();
+		};
 		try {
 			meta.prFollowUp = {
 				attempts: attempt,
@@ -2633,13 +2665,15 @@ export class SessionManager {
 				throw error;
 			}
 			this.emit(meta);
-			await this.start(meta.id, true);
-		} finally {
-			const count = (this.sending.get(meta.id) ?? 1) - 1;
-			if (count) this.sending.set(meta.id, count);
-			else this.sending.delete(meta.id);
-			end();
+		} catch (error) {
+			release();
+			throw error;
 		}
+		// The follow-up is durable now. Delivery may wait for a parked kernel to start, which must not hold
+		// up the PR sync of other sessions.
+		void this.start(meta.id, true)
+			.catch((error: unknown) => console.warn(`pilotd: could not deliver PR follow-up for ${meta.id}: ${error}`))
+			.finally(release);
 	}
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
