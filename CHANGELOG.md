@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/babariviere/pilot/compare/v1.9.0...v1.10.0) (2026-10-09)
+
+
+### Features
+
+* **macos:** reveal message timestamps on click ([6bd8e3d](https://github.com/babariviere/pilot/commit/6bd8e3db905bfa3efcd8d7545b4caf9d52847982))
+
 ## [1.9.0](https://github.com/babariviere/pilot/compare/v1.8.0...v1.9.0) (2026-10-09)
 
 
