@@ -245,6 +245,11 @@ the brief into the repository is an explicit user action.
   Links optionally belong to a task, appear on its row and in agent task views, and can be added or
   removed there. Deleting a task keeps its links at mission level. A chat's newly opened PR is linked
   to its unfinished claimed tasks automatically.
+  Task-linked GitHub PRs use the daemon's existing serial PR tracker, including links added by hand
+  and PRs unrelated to the owning chat. An open or draft PR moves a task to in_review. It becomes
+  done when every linked PR has a known terminal state and at least one merged; closed-unmerged
+  PRs are ignored. Automatic transitions are recorded in activity. Closed tasks never reopen, and
+  moving a task backward by hand permanently disables automatic PR status changes for that task.
   The kind and external ID are parsed when saved so later automation needs no migration.
 - **Activity**: append-only events: handoffs, status updates (optional health), claims, task changes,
   brief revisions, decisions, links and membership changes.

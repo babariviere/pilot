@@ -13,6 +13,7 @@ import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
+import type { PullRequestOptions } from "./pull-requests.ts";
 import { createDaemonServer } from "./server.ts";
 import { type SessionWorker, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
@@ -48,7 +49,14 @@ async function until<T>(check: () => T | undefined | false): Promise<T> {
 	}
 }
 
-async function fixture(t: TestContext) {
+async function fixture(
+	t: TestContext,
+	pullRequests: PullRequestOptions = {
+		runner: async () => {
+			throw new Error("GitHub unavailable in fixture");
+		},
+	},
+) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
 	const projectDir = join(home, "project");
 	const otherDir = join(home, "other");
@@ -59,15 +67,21 @@ async function fixture(t: TestContext) {
 	const project = await projects.create({ path: projectDir, workspace: "direct" });
 	const other = await projects.create({ path: otherDir, workspace: "direct" });
 	const workers = new Map<string, FakeWorker>();
-	const sessions = new SessionManager(join(home, "data"), projects, undefined, {
-		title: async () => undefined,
-		worker: (spec, onPacket) => {
-			const worker = new FakeWorker(spec, onPacket);
-			workers.set(spec.sessionId, worker);
-			queueMicrotask(() => onPacket({ type: "ready", model: "test/model", working: false, usage: {} }));
-			return worker;
+	const sessions = new SessionManager(
+		join(home, "data"),
+		projects,
+		undefined,
+		{
+			title: async () => undefined,
+			worker: (spec, onPacket) => {
+				const worker = new FakeWorker(spec, onPacket);
+				workers.set(spec.sessionId, worker);
+				queueMicrotask(() => onPacket({ type: "ready", model: "test/model", working: false, usage: {} }));
+				return worker;
+			},
 		},
-	});
+		pullRequests,
+	);
 	const store = new MissionStore(":memory:");
 	const service = new MissionService(store, sessions, projects);
 	await sessions.load();
@@ -84,6 +98,143 @@ async function fixture(t: TestContext) {
 	};
 	return { home, projects, project, other, sessions, store, service, workers, spawn };
 }
+
+test("hand-linked PRs poll without a worker, finish after all settle, and respect a racing manual reset", async (t) => {
+	const states = new Map([
+		[1, "OPEN"],
+		[2, "OPEN"],
+		[3, "OPEN"],
+	]);
+	const f = await fixture(t, {
+		runner: async (_file, args) => {
+			const number = Number(args[2]);
+			return JSON.stringify({
+				number,
+				url: `https://github.com/octo/repo/pull/${number}`,
+				title: "PR",
+				state: states.get(number),
+				isDraft: false,
+				headRefName: "external",
+				isCrossRepository: true,
+				createdAt: "2026-01-01T00:00:00Z",
+				mergedAt: states.get(number) === "MERGED" ? "2026-01-02T00:00:00Z" : null,
+			});
+		},
+	});
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	for (const number of [1, 2])
+		f.store.addResource(id, { taskId: "1", url: `https://github.com/octo/repo/pull/${number}` });
+	f.store.addResource(id, { taskId: "2", url: "https://github.com/octo/repo/pull/3" });
+	await until(
+		() => f.store.resolveTask(id, "1").status === "in_review" && f.store.resolveTask(id, "2").status === "in_review",
+	);
+	assert.equal(f.workers.size, 0, "tracking never starts a worker");
+	states.set(1, "MERGED");
+	const refresh = async () => {
+		for (const target of f.sessions["missions"]!.linkedPullRequests!())
+			await f.sessions["pullRequests"].refreshLinked(target);
+	};
+	await refresh();
+	assert.equal(f.store.resolveTask(id, "1").status, "in_review");
+	f.store.updateTask(id, f.store.resolveTask(id, "2").id, { status: "in_progress" });
+	states.set(2, "CLOSED");
+	states.set(3, "MERGED");
+	await refresh();
+	assert.equal(f.store.resolveTask(id, "1").status, "done");
+	assert.equal(f.store.resolveTask(id, "2").status, "in_progress");
+	assert.equal(
+		f.store.detail(id).resources.find((resource) => resource.url.endsWith("/3"))?.pullRequest?.state,
+		"merged",
+	);
+});
+
+test("a user reset during an in-flight linked PR lookup wins over its merge result", async (t) => {
+	let release!: () => void;
+	const waiting = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let started = false;
+	const f = await fixture(t, {
+		runner: async () => {
+			started = true;
+			await waiting;
+			return JSON.stringify({
+				number: 1,
+				url: "https://github.com/octo/repo/pull/1",
+				title: "PR",
+				state: "MERGED",
+				isDraft: false,
+				headRefName: "external",
+				isCrossRepository: false,
+				createdAt: "2026-01-01T00:00:00Z",
+				mergedAt: "2026-01-02T00:00:00Z",
+			});
+		},
+	});
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }] });
+	f.store.addResource(id, { taskId: "1", url: "https://github.com/octo/repo/pull/1" });
+	f.store.updatePullRequest({
+		number: 1,
+		url: "https://github.com/octo/repo/pull/1",
+		title: "PR",
+		state: "open",
+		checkedAt: 1,
+	});
+	await until(() => started);
+	f.store.updateTask(id, f.store.resolveTask(id, "1").id, { status: "todo" });
+	release();
+	await until(() => f.store.detail(id).resources[0]?.pullRequest?.state === "merged");
+	assert.equal(f.store.resolveTask(id, "1").status, "todo");
+});
+
+test("fresh owning-chat discovery links and reconciles PR state through sessions", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }] });
+	f.service.join(chat.id, { missionId: id, taskId: "1" });
+	const meta = f.sessions["require"](chat.id);
+	const pullRequest = {
+		number: 42,
+		url: "https://github.com/octo/repo/pull/42",
+		title: "PR",
+		state: "open" as const,
+		checkedAt: 1,
+	};
+	await f.sessions["applyPullRequest"](meta, { pullRequest });
+	assert.equal(f.store.resolveTask(id, "1").status, "in_review");
+	assert.equal(f.store.detail(id).resources[0]?.pullRequest?.state, "open");
+	await f.sessions["applyPullRequest"](meta, {
+		pullRequest: { ...pullRequest, state: "merged", mergedAt: Date.now() },
+		mergedAt: Date.now(),
+	});
+	assert.equal(f.store.resolveTask(id, "1").status, "done");
+});
+
+test("discovery of several heads links every PR before completing a task", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }] });
+	f.service.join(chat.id, { missionId: id, taskId: "1" });
+	const pullRequest = {
+		number: 42,
+		url: "https://github.com/octo/repo/pull/42",
+		title: "PR",
+		state: "merged" as const,
+		checkedAt: 1,
+		mergedAt: Date.now(),
+	};
+	const other = { ...pullRequest, number: 43, url: "https://github.com/octo/repo/pull/43", state: "open" as const };
+	// Even a terminal cache copied from a mission-level resource cannot hide the other open head.
+	f.store.addResource(id, { url: pullRequest.url });
+	f.store.updatePullRequest(pullRequest);
+	await f.sessions["applyPullRequest"](f.sessions["require"](chat.id), {
+		pullRequest,
+		mergedAt: pullRequest.mergedAt,
+		others: [other],
+	});
+	assert.equal(f.store.resolveTask(id, "1").status, "in_review");
+	assert.equal(f.store.detail(id).resources.filter((resource) => resource.taskId).length, 2);
+});
 
 test("tool task links resolve numbers, appear with tasks, and auto-link each owning task", async (t) => {
 	const f = await fixture(t);

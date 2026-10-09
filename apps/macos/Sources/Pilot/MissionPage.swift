@@ -498,7 +498,7 @@ struct ResourceRow: View {
         HStack(spacing: 8) {
             Image(systemName: resource.kind.symbol).foregroundStyle(Theme.mutedForeground).frame(width: 16)
             if let url = URL(string: resource.url) {
-                let pr = client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
+                let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
                 Link(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle, destination: url)
                     .lineLimit(1).help(resource.url)
             } else {

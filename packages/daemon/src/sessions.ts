@@ -41,6 +41,7 @@ import { ModelCatalog } from "./models.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import {
 	isTerminalPullRequest,
+	type LinkedPullRequest,
 	type PullRequestOptions,
 	type PullRequestResult,
 	PullRequestTracker,
@@ -76,6 +77,9 @@ export interface SessionMissionBridge {
 	context(sessionId: string): MissionContext | undefined;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
 	pullRequestCreated?(sessionId: string, url: string): void;
+	pullRequestsDiscovered?(sessionId: string, urls: string[]): void;
+	linkedPullRequests?(): Iterable<LinkedPullRequest>;
+	pullRequestUpdated?(pr: SessionPullRequest): void;
 }
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
@@ -629,6 +633,10 @@ export class SessionManager {
 			() => this.metas.values(),
 			(session, result) => this.applyPullRequest(this.require(session.id), result),
 			pullRequests,
+			{
+				targets: () => this.missions?.linkedPullRequests?.() ?? [],
+				apply: (pr) => this.missions?.pullRequestUpdated?.(pr),
+			},
 		);
 	}
 
@@ -982,6 +990,13 @@ export class SessionManager {
 
 	setMissionBridge(bridge: SessionMissionBridge): void {
 		this.missions = bridge;
+		this.refreshMissionPullRequests();
+	}
+
+	/** Newly linked URLs need no owning worker, or even an owning chat. */
+	refreshMissionPullRequests(): void {
+		for (const target of this.missions?.linkedPullRequests?.() ?? [])
+			if (!target.pullRequest) void this.pullRequests.refreshLinked(target);
 	}
 
 	/** Membership or mission context changed: republish the summary and update a live kernel's context. */
@@ -2434,14 +2449,22 @@ export class SessionManager {
 			}
 		}
 		if (fresh || changed) this.emit(meta);
-		for (const pr of [next, ...(result.others ?? [])]) {
-			if (
-				pr &&
-				(pr.state === "open" || pr.state === "draft") &&
-				![previous, ...(previousOthers ?? [])].some((old) => old?.url === pr.url)
+		const discovered = [next, ...(result.others ?? [])]
+			.filter(
+				(pr): pr is SessionPullRequest =>
+					!!pr &&
+					pr.state !== "closed" &&
+					![previous, ...(previousOthers ?? [])].some((old) => old?.url === pr.url),
 			)
-				this.missions?.pullRequestCreated?.(meta.id, pr.url);
-		}
+			.sort((a, b) => Number(a.state === "merged") - Number(b.state === "merged"));
+		// Link open heads first, and all fresh heads before applying any merge result.
+		if (this.missions?.pullRequestsDiscovered)
+			this.missions.pullRequestsDiscovered(
+				meta.id,
+				discovered.map((pr) => pr.url),
+			);
+		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
+		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
 		if (next && !result.error && this.canFollowUp(meta)) {
 			const generation = meta.prFollowUp?.generation ?? 0;
 			const problems = await discoverPullRequestProblems(meta, this.pullRequestRunner);

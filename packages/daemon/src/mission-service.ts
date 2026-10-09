@@ -76,14 +76,21 @@ export class MissionService {
 			},
 			context: (sessionId) => this.context(sessionId),
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
-			pullRequestCreated: (sessionId, url) => {
-				const id = store.missionOf(sessionId);
-				if (!id) return;
-				for (const task of store.tasks(id)) {
-					if (task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
-						store.addResource(id, { url, taskId: task.id }, { sessionId });
-				}
-			},
+			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
+			pullRequestsDiscovered: (sessionId, urls) => this.linkPullRequests(sessionId, urls),
+			linkedPullRequests: () =>
+				store
+					.list()
+					.filter((mission) => mission.status === "active")
+					.flatMap((mission) => {
+						const project = projects.get(mission.projectId);
+						if (!project) return [];
+						return store
+							.detail(mission.id)
+							.resources.filter((resource) => resource.taskId && resource.kind === "github.pr")
+							.map((resource) => ({ url: resource.url, cwd: project.path, pullRequest: resource.pullRequest }));
+					}),
+			pullRequestUpdated: (pr) => store.updatePullRequest(pr),
 		});
 		store.onMembershipChange((sessionId) => {
 			const context = this.context(sessionId);
@@ -92,6 +99,7 @@ export class MissionService {
 		});
 		store.onChange((missionId) => {
 			if (!store.get(missionId)) return;
+			sessions.refreshMissionPullRequests();
 			for (const sessionId of store.members(missionId)) {
 				const context = this.context(sessionId);
 				const key = JSON.stringify(context ?? null);
@@ -122,6 +130,16 @@ export class MissionService {
 				.map((task) => ({ number: task.number, title: task.title, status: task.status })),
 			decisions: detail.decisions.map((decision) => decision.text),
 		};
+	}
+
+	private linkPullRequests(sessionId: string, urls: string[]): void {
+		const id = this.store.missionOf(sessionId);
+		if (!id) return;
+		const tasks = this.store
+			.tasks(id)
+			.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped");
+		for (const task of tasks)
+			for (const url of urls) this.store.addResource(id, { url, taskId: task.id }, { sessionId });
 	}
 
 	private session(id: string): SessionSummary {
@@ -266,6 +284,7 @@ export class MissionService {
 						kind: resource.kind,
 						...(resource.title ? { title: resource.title } : {}),
 						...(resource.externalId ? { externalId: resource.externalId } : {}),
+						...(resource.pullRequest ? { pullRequest: resource.pullRequest } : {}),
 					})),
 					artifacts: detail.artifacts.map((artifact) => ({
 						title: artifact.title,

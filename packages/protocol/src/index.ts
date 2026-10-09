@@ -412,6 +412,8 @@ export interface MissionArtifactLink {
 
 /** External link. Kind and external ID are parsed by pilotd when saved. */
 export interface MissionResource {
+	/** Last known GitHub PR state, refreshed by daemon tracking. */
+	pullRequest?: SessionPullRequest;
 	/** Omitted for mission-level links. */
 	taskId?: string;
 	id: string;
