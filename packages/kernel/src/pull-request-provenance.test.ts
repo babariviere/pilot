@@ -13,6 +13,8 @@ test("PR creation requires the actual gh command, never text in an unrelated too
 		"git push -u origin fix/pr && gh pr create --fill",
 		"jj git push --bookmark fix/pr && gh pr create --fill",
 		"npm test && git push && gh pr create --fill",
+		"jj commit -m 'feat: schema'; jj bookmark set feat/schema -r @-; jj git push --bookmark feat/schema; gh pr create --draft",
+		"jj git push --bookmark feat/schema\ngh pr create --draft",
 	])
 		assert.ok(createsPullRequest(command), command);
 	for (const command of [
@@ -28,6 +30,10 @@ test("PR creation requires the actual gh command, never text in an unrelated too
 		"&& gh pr create",
 		"git push && && gh pr create",
 		"git push && gh pr create &&",
+		"git push; ; gh pr create",
+		"git push\nexit 0\ngh pr create",
+		`if true; then echo ${url}; exit 0; fi; gh pr create`,
+		`{ echo ${url}; exit 0; }; gh pr create`,
 		"exec echo https://github.com/owner/repo/pull/12 && gh pr create",
 		"exit 0 && gh pr create",
 		"return 0 && gh pr create",
@@ -55,6 +61,14 @@ test("PR results require success and one bare HTTPS pull URL from that matching 
 	assert.equal(createdPullRequest(result), url);
 	for (const command of ["git push && gh pr create", "jj git push --bookmark fix/pr && gh pr create"])
 		assert.equal(createdPullRequest({ ...result, input: { command } }), url);
+	assert.equal(
+		createdPullRequest({
+			...result,
+			input: { command: "jj commit -m 'feat: schema'; jj git push --bookmark feat/schema; gh pr create --draft" },
+			structuredContent: { exit_code: 0, output: `Working copy now at: empty\n${url}\n` },
+		}),
+		url,
+	);
 	assert.equal(createdPullRequest({ ...result, structuredContent: { exit_code: 0, output: `${url}\n` } }), url);
 	assert.equal(createdPullRequest({ ...result, isError: true }), undefined);
 	assert.equal(createdPullRequest({ ...result, structuredContent: { exit_code: 1, output: url } }), undefined);
