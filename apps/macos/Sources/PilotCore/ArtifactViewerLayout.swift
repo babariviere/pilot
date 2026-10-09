@@ -4,17 +4,28 @@ import Foundation
 public enum ArtifactViewerLayout {
     public static let inlineDefaultMaxWidth: CGFloat = 1200
     public static let inlineMaxHeight: CGFloat = 1600
+    /// Images are scaled to fit, so a tall screenshot stays readable at a glance instead of
+    /// filling several screens. The full-size image remains available in the viewer.
+    public static let inlineImageMaxHeight: CGFloat = 720
+    /// Keeps tiny images large enough to click without letterboxing typical ones.
+    public static let inlineImageMinSide: CGFloat = 48
 
     /// A 4:3 fallback that can grow for content, bounded by chat width and a tall-preview ceiling.
+    /// Measured images instead hug their aspect-fitted size, so the card has no empty bands.
     public static func inlineSize(availableWidth: CGFloat, contentSize: CGSize? = nil, image: Bool = false) -> CGSize {
         let available = availableWidth.isFinite ? max(0, availableWidth) : inlineDefaultMaxWidth
         let content = contentSize.flatMap { size in
             size.width.isFinite && size.height.isFinite && size.width > 0 && size.height > 0 ? size : nil
         }
+        if image, let content {
+            // Shrink proportionally into the chat width and height ceiling, never enlarge.
+            let scale = min(1, available / content.width, inlineImageMaxHeight / content.height)
+            return CGSize(width: min(available, max(inlineImageMinSide, (content.width * scale).rounded())),
+                          height: max(inlineImageMinSide, (content.height * scale).rounded()))
+        }
         let width = min(available, max(inlineDefaultMaxWidth, content?.width ?? 0))
         let defaultHeight = min(720, max(360, width * 0.75))
-        let contentHeight = content.map { image ? $0.height * min(1, width / $0.width) : $0.height } ?? 0
-        return CGSize(width: width, height: min(inlineMaxHeight, max(defaultHeight, contentHeight)))
+        return CGSize(width: width, height: min(inlineMaxHeight, max(defaultHeight, content?.height ?? 0)))
     }
 
     public static func size(available: CGSize, contentSize: CGSize? = nil) -> CGSize {
