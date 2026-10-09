@@ -218,6 +218,8 @@ struct ChatView: View {
                     )
                 }
             }
+            // The transcript scrolls behind this inset, including the gaps around its controls.
+            .background(Theme.background)
         }
         .onAppear {
             feed.onEventsApplied = { [messageExpansions] in messageExpansions.applyMessageEvents($0) }
