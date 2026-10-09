@@ -180,7 +180,12 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 	}
 	if (url.hostname === "github.com" && parts.length >= 4 && /^\d+$/.test(parts[3]!)) {
 		const id = `${parts[0]}/${parts[1]}#${parts[3]}`;
-		if (parts[2] === "pull") return { url: href, kind: "github.pr", externalId: id };
+		if (parts[2] === "pull")
+			return {
+				url: `https://github.com/${parts[0]}/${parts[1]}/pull/${Number(parts[3])}`,
+				kind: "github.pr",
+				externalId: id,
+			};
 		if (parts[2] === "issues") return { url: href, kind: "github.issue", externalId: id };
 	}
 	if (url.hostname.endsWith(".slack.com") && parts[0] === "archives" && parts[1] && /^p\d{16}$/.test(parts[2] ?? "")) {
@@ -201,6 +206,8 @@ export class MissionStore {
 		this.db = new DatabaseSync(file);
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 		this.db.exec(SCHEMA);
+		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "task_id"))
+			this.db.exec("ALTER TABLE resources ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL");
 	}
 
 	close(): void {
@@ -790,11 +797,18 @@ export class MissionStore {
 		const raw = text(write.url, "url", MAX_URL)!;
 		const parsed = parseResourceUrl(raw);
 		const title = text(write.title, "title", MAX_TITLE, { optional: true, empty: true }) || undefined;
-		const existing = this.one("SELECT * FROM resources WHERE mission_id = ? AND url = ?", id, parsed.url);
+		const taskId = write.taskId === undefined ? undefined : this.resolveTask(id, write.taskId).id;
+		const existing = this.one(
+			"SELECT * FROM resources WHERE mission_id = ? AND url = ? AND task_id IS ?",
+			id,
+			parsed.url,
+			taskId ?? null,
+		);
 		if (existing) return resourceFrom(existing);
 		const now = Date.now();
 		const resource: MissionResource = {
 			id: randomUUID(),
+			...(taskId ? { taskId } : {}),
 			url: parsed.url,
 			...(title ? { title } : {}),
 			kind: parsed.kind,
@@ -804,7 +818,7 @@ export class MissionStore {
 		};
 		this.transaction(() => {
 			this.run(
-				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				resource.id,
 				id,
 				resource.url,
@@ -813,8 +827,9 @@ export class MissionStore {
 				resource.externalId ?? null,
 				actor.sessionId ?? null,
 				now,
+				taskId ?? null,
 			);
-			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, { at: now });
+			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, { at: now, taskId });
 		});
 		this.changed(id);
 		return resource;
@@ -826,7 +841,9 @@ export class MissionStore {
 		const resource = resourceFrom(row);
 		this.transaction(() => {
 			this.run("DELETE FROM resources WHERE id = ?", resourceId);
-			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor);
+			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
+				taskId: resource.taskId,
+			});
 		});
 		this.changed(id);
 	}
@@ -1058,6 +1075,7 @@ function artifactFrom(row: Row): MissionArtifactLink {
 function resourceFrom(row: Row): MissionResource {
 	return {
 		id: str(row.id!),
+		...(row.task_id ? { taskId: str(row.task_id) } : {}),
 		url: str(row.url!),
 		...(row.title ? { title: str(row.title) } : {}),
 		kind: str(row.kind!) as MissionResourceKind,

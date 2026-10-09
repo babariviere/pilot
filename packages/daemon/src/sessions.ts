@@ -75,6 +75,7 @@ export interface SessionMissionBridge {
 	membership(sessionId: string): { missionId: string; active: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
+	pullRequestCreated?(sessionId: string, url: string): void;
 }
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
@@ -2248,6 +2249,7 @@ export class SessionManager {
 			meta.agentPullRequests ??= [];
 			if (!meta.agentPullRequests.includes(packet.url)) {
 				meta.agentPullRequests.push(packet.url);
+				this.missions?.pullRequestCreated?.(meta.id, packet.url);
 				void this.save(meta).catch((error: unknown) =>
 					console.warn(`pilotd: could not save PR ownership: ${error}`),
 				);
@@ -2432,6 +2434,14 @@ export class SessionManager {
 			}
 		}
 		if (fresh || changed) this.emit(meta);
+		for (const pr of [next, ...(result.others ?? [])]) {
+			if (
+				pr &&
+				(pr.state === "open" || pr.state === "draft") &&
+				![previous, ...(previousOthers ?? [])].some((old) => old?.url === pr.url)
+			)
+				this.missions?.pullRequestCreated?.(meta.id, pr.url);
+		}
 		if (next && !result.error && this.canFollowUp(meta)) {
 			const generation = meta.prFollowUp?.generation ?? 0;
 			const problems = await discoverPullRequestProblems(meta, this.pullRequestRunner);

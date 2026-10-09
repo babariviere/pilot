@@ -2,6 +2,28 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
+test("task links are scoped, validated and preserved when a task is deleted", () => {
+	const missions = new MissionStore(":memory:");
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		const url = "https://github.com/octo/repo/pull/1";
+		const task = missions.resolveTask(id, "#1");
+		const linked = missions.addResource(id, { url, taskId: "#1" });
+		assert.equal(linked.taskId, task.id);
+		assert.equal(missions.addResource(id, { url: `${url}/files?x=1#fragment`, taskId: task.id }).id, linked.id);
+		assert.equal(missions.addResource(id, { url, taskId: task.id }).id, linked.id);
+		assert.notEqual(missions.addResource(id, { url, taskId: "2" }).id, linked.id);
+		assert.notEqual(missions.addResource(id, { url }).id, linked.id);
+		assert.throws(() => missions.addResource(id, { url, taskId: "unknown" }), /Unknown task/);
+		missions.removeTask(id, task.id);
+		assert.equal(missions.detail(id).resources.find((item) => item.id === linked.id)?.taskId, undefined);
+		missions.removeResource(id, linked.id);
+		assert.equal(missions.detail(id).resources.length, 2);
+	} finally {
+		missions.close();
+	}
+});
+
 function store() {
 	return new MissionStore(":memory:");
 }
