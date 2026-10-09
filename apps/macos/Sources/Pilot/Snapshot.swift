@@ -14,6 +14,10 @@ enum Snapshot {
             Task { await TranscriptOpeningCheck.run(directory: URL(filePath: arguments[index + 1])) }
             return true
         }
+        if arguments.contains("--artifact-scroll-check") {
+            Task { await ArtifactScrollCheck.run() }
+            return true
+        }
         if arguments.contains("--performance-check") {
             Task { await PerformanceCheck.run() }
             return true

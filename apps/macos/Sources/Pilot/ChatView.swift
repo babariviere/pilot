@@ -305,6 +305,8 @@ struct TranscriptHistoryRows: View, Equatable {
         LazyVStack(alignment: .leading, spacing: 16) {
             ForEach(rows) { row in
                 RowView(row: row, toolExpansions: toolExpansions, messageExpansions: messageExpansions).equatable()
+                    // Row geometry for scroll anchoring; see ScrollObserverView.
+                    .background(TranscriptRowAnchor(id: row.id))
             }
         }
     }
