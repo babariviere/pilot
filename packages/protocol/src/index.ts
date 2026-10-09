@@ -540,9 +540,11 @@ export interface ModelList {
 	defaultModel?: string;
 }
 
-/** POST /api/sessions. Needs a projectId, a cwd, or both (cwd overrides the project's path). */
+/** POST /api/sessions. Needs a missionId, projectId or cwd (cwd overrides a non-mission project's path). */
 /** Returns a durable `starting` session before workspace preparation and kernel startup finish. */
 export interface SpawnRequest {
+	/** Join an active mission before the first turn. Uses its project; cwd overrides are not allowed. */
+	missionId?: string;
 	/** Omitted means Build. */
 	mode?: ChatMode;
 	/** Per-chat Build override. Omitted uses project settings; cwd-only cannot request a clone. */

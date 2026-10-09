@@ -20,11 +20,13 @@ final class NewSessionForm: ObservableObject {
     @Published var mode: ChatMode = .build { didSet { onDraftChanged?() } }
     @Published var workspace: WorkspaceMode? { didSet { onDraftChanged?() } }
     @Published var pendingBaseBranch: String? { didSet { onDraftChanged?() } }
+    @Published var mission: Mission? { didSet { onDraftChanged?() } }
     private var draftRevision = 0
 
-    var hasUnsubmittedDraft: Bool { !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || busy }
+    var hasUnsubmittedDraft: Bool { !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || mission != nil || busy }
 
     func resetChatContext() {
+        mission = nil
         mode = .build
         workspace = nil
         pendingBaseBranch = nil
@@ -65,7 +67,8 @@ final class NewSessionForm: ObservableObject {
             branches.selection(for: scope) == branch && branches.list.branches.contains(branch)
                 && branches.error == nil && !branches.loading
         } ?? true
-        return !busy && (project != nil || !folder.isEmpty) && sourceReady
+        let destinationReady = mission.map { project?.id == $0.projectId } ?? (project != nil || !folder.isEmpty)
+        return !busy && destinationReady && sourceReady
             && (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.items.isEmpty)
     }
 
@@ -103,6 +106,22 @@ final class NewSessionForm: ObservableObject {
         attachments = ImageAttachments()
         resetChatContext()
         return true
+    }
+
+    func spawnRequest(in project: Project?, branches: BranchSelectorState? = nil) -> SpawnRequest {
+        let branches = branches ?? self.branches
+        let scope = BranchSelectorState.scope(project: project, mode: mode, workspace: workspace)
+        let model = model.trimmingCharacters(in: .whitespaces)
+        return SpawnRequest(
+            projectId: mission?.projectId ?? project?.id,
+            cwd: mission == nil && project == nil ? folder : nil,
+            message: attachments.message(text: message),
+            model: model.isEmpty ? nil : model,
+            baseBranch: branches.selection(for: scope),
+            mode: mode,
+            workspace: mode == .build && project != nil ? workspace : nil,
+            missionId: mission?.id
+        )
     }
 }
 
@@ -162,7 +181,8 @@ struct TaskComposer: View {
     }
 
     private var project: Project? {
-        client.project(app.draftProjectId) ?? (form.folder.isEmpty ? client.project(lastProjectId) ?? client.projects.first : nil)
+        if let mission = form.mission { return client.project(mission.projectId) }
+        return client.project(app.draftProjectId) ?? (form.folder.isEmpty ? client.project(lastProjectId) ?? client.projects.first : nil)
     }
 
     var body: some View {
@@ -224,6 +244,14 @@ struct TaskComposer: View {
                 .card(radius: 10)
                 .padding(.horizontal, 4)
             HStack(spacing: 6) {
+                if let mission = form.mission {
+                    Label(mission.title, systemImage: "scope")
+                        .font(.system(size: 12)).lineLimit(1)
+                        .foregroundStyle(Theme.mutedForeground)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
+                        .help("This new chat will join the mission, with no task attached.")
+                }
                 ProjectMenu(selected: project, folder: form.folder, projects: client.projects) { choice in
                     switch choice {
                     case let .project(id):
@@ -241,6 +269,8 @@ struct TaskComposer: View {
                         app.addProject()
                     }
                 }
+                .disabled(form.busy || form.mission != nil)
+                .help(form.mission != nil ? "The project is locked to this mission." : "Choose a project")
                 if let scope = branchScopeKey {
                     BranchMenu(state: branches, scope: scope, mode: form.mode, onSelect: form.chooseBaseBranch) {
                         Task { await loadBranches() }
@@ -331,22 +361,13 @@ struct TaskComposer: View {
         form.busy = true
         form.error = nil
         let revision = form.revision
-        let model = form.model.trimmingCharacters(in: .whitespaces)
         do { try form.attachments.retainForHistory() }
         catch {
             form.error = "Could not retain attached images: \(error.localizedDescription)"
             form.busy = false
             return
         }
-        let request = SpawnRequest(
-            projectId: project?.id,
-            cwd: project == nil ? form.folder : nil,
-            message: form.attachments.message(text: form.message),
-            model: model.isEmpty ? nil : model,
-            baseBranch: branches.selection(for: branchScopeKey),
-            mode: form.mode,
-            workspace: form.mode == .build && project != nil ? form.workspace : nil
-        )
+        let request = form.spawnRequest(in: project, branches: branches)
         Task {
             defer { form.busy = false }
             do {

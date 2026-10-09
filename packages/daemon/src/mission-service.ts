@@ -59,6 +59,17 @@ export class MissionService {
 		this.sessions = sessions;
 		this.projects = projects;
 		sessions.setMissionBridge({
+			spawnProject: (missionId) => {
+				const mission = store.require(missionId);
+				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				return mission.projectId;
+			},
+			joinSpawn: (sessionId, missionId) => {
+				const mission = store.require(missionId);
+				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				this.assertSameProject(sessionId, missionId);
+				store.join(sessionId, missionId);
+			},
 			membership: (sessionId) => {
 				const missionId = store.missionOf(sessionId);
 				return missionId ? { missionId, active: store.get(missionId)?.status === "active" } : undefined;

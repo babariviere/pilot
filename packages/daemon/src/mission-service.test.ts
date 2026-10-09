@@ -173,6 +173,63 @@ test("agent calls run against the chat's mission and update its context", async 
 	);
 });
 
+test("spawn joins a mission before the first input, uses its project and leaves tasks unclaimed", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "API v2",
+		goal: "Redesign",
+		tasks: [{ title: "Auth" }],
+	});
+	f.store.addDecision(mission.id, "IDs are opaque");
+	for (const mode of ["build", "ask"] as const) {
+		const session = await f.sessions.spawn({ missionId: mission.id, message: "Tackle tasks 1 to 5", mode });
+		assert.equal(session.projectId, f.project.id);
+		assert.equal(session.missionId, mission.id);
+		assert.equal(session.cwd, f.project.path);
+		const worker = await until(() => f.workers.get(session.id));
+		await until(() => worker.requests.find((command) => command.type === "input"));
+		assert.equal(worker.spec.mission?.id, mission.id);
+		assert.equal(worker.spec.mission?.goal, "Redesign");
+		assert.deepEqual(worker.spec.mission?.decisions, ["IDs are opaque"]);
+		assert.deepEqual(worker.spec.mission?.tasks, []);
+		assert.equal(f.store.tasks(mission.id)[0]?.sessionId, undefined);
+	}
+});
+
+test("spawn rejects unknown, inactive and incompatible missions without creating a chat", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	await assert.rejects(f.sessions.spawn({ missionId: "unknown", message: "hello" }), /Unknown mission/);
+	await assert.rejects(f.sessions.spawn({ missionId: "", message: "hello" }), /non-empty string/);
+	await assert.rejects(
+		f.sessions.spawn({ missionId: mission.id, projectId: f.other.id, message: "hello" }),
+		/own project/,
+	);
+	await assert.rejects(
+		f.sessions.spawn({ missionId: mission.id, cwd: f.project.path, message: "hello" }),
+		/cwd override/,
+	);
+	for (const status of ["archived", "done"] as const) {
+		f.store.update(mission.id, { status });
+		await assert.rejects(f.sessions.spawn({ missionId: mission.id, message: "hello" }), /Reopen the mission/);
+	}
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(f.store.members(mission.id), []);
+});
+
+test("spawn rechecks mission admission after async preparation and never starts a rejected chat", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	const spawn = f.sessions.spawn({ missionId: mission.id, message: "hello" });
+	f.store.update(mission.id, { status: "done" });
+	await assert.rejects(spawn, /Reopen the mission/);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(f.store.members(mission.id), []);
+});
+
 test("Start chat spawns a member chat that owns the task; leaving releases it", async (t) => {
 	const f = await fixture(t);
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
@@ -288,6 +345,32 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 		sessionsInMission.map((session) => session.id),
 		[chat.id],
 	);
+	const spawned = await api("/sessions", {
+		method: "POST",
+		body: JSON.stringify({ missionId: id, message: "Tackle the open tasks" }),
+	});
+	assert.equal(spawned.status, 201);
+	const dedicated = (await spawned.json()) as SessionSummary;
+	assert.equal(dedicated.projectId, f.project.id);
+	assert.equal(dedicated.missionId, id);
+	const dedicatedWorker = await until(() => f.workers.get(dedicated.id));
+	assert.equal(dedicatedWorker.spec.mission?.id, id);
+	assert.deepEqual(dedicatedWorker.spec.mission?.tasks, []);
+	const unknownSpawn = await api("/sessions", {
+		method: "POST",
+		body: JSON.stringify({ missionId: "nope", message: "hello" }),
+	});
+	assert.equal(unknownSpawn.status, 404);
+	await unknownSpawn.arrayBuffer();
+	for (const status of ["done", "archived"] as const) {
+		f.store.update(id, { status });
+		const inactiveSpawn = await api("/sessions", {
+			method: "POST",
+			body: JSON.stringify({ missionId: id, message: "hello" }),
+		});
+		assert.equal(inactiveSpawn.status, 409);
+		await inactiveSpawn.arrayBuffer();
+	}
 	const missing = await api("/missions/nope");
 	assert.equal(missing.status, 404);
 	await missing.arrayBuffer();

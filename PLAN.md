@@ -288,6 +288,12 @@ and pilotd checks membership on every call. Mission chats receive a compact miss
 prompt section (goal, coordinator, own open tasks, decisions and how to use the tool), not the whole
 brief. The header only changes when those fields change, preserving prompt caching.
 
+**New chat.** The Chats tab and sidebar mission group open the new-chat composer with the mission
+preselected and its project locked, without attaching a task. `SpawnRequest.missionId` validates an
+active mission, resolves its project and joins before kernel startup, so the header and tool are present
+on the first turn. Unknown, done or archived missions, other projects and cwd overrides are rejected.
+“Add existing chat…” remains a secondary menu action.
+
 **No mission references in deliverables.** Missions are internal coordination. The mission header
 forbids mentioning the mission, its tasks, coordinator or Pilot in commit messages, bookmarks, PR
 titles and bodies; external tracker references such as Linear issue IDs remain allowed so trackers can
