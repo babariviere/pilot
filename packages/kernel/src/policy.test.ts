@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { githubPosting, type MissionContext, missionLeak, missionPrompt, pilotPrompt } from "./policy.ts";
+import type { ToolHooks } from "@earendil-works/pi-durable";
+import {
+	githubPosting,
+	type MissionContext,
+	missionLeak,
+	missionPrompt,
+	pilotPrompt,
+	withPilotPolicy,
+} from "./policy.ts";
 
 const mission: MissionContext = {
 	id: "m1",
@@ -104,6 +112,74 @@ test("allows linking, viewing and checking out stacks", () => {
 		assert.equal(githubPosting({ command }), undefined, command);
 		assert.equal(githubPosting({ code: `await tools.bash({ command: ${JSON.stringify(command)} })` }), undefined);
 	}
+});
+
+const policy = withPilotPolicy(
+	{ name: "test" },
+	{},
+	() => false,
+	() => mission,
+);
+const beforeTool = (policy.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
+function checkTool(name: string, args: Parameters<ToolHooks["beforeTool"]>[0]["arguments"]) {
+	return beforeTool(
+		{ type: "toolCall", id: "policy-test", name, arguments: args },
+		undefined as never,
+		undefined as never,
+	);
+}
+
+test("content-only calls may mention forbidden commands and internal deliverable names", async () => {
+	for (const content of ["gh pr merge 12; gh stack push", 'gh pr create --title "API v2 redesign"']) {
+		for (const [name, args] of [
+			["mission", { action: "brief", markdown: content }],
+			["mission", { action: "task", title: content, body: content }],
+			["artifact", { action: "create", title: content, source: content }],
+			["write", { path: "README.md", content }],
+			["edit", { path: "README.md", oldText: content, newText: content }],
+			["applyPatch", { patch: content }],
+			["todo", { action: "append", body: content }],
+			["read", { path: content }],
+		] as const) {
+			assert.equal(await checkTool(name, args), undefined, name);
+		}
+	}
+});
+
+test("shell, codemode and job starts still block posting and leaking deliverable names", async () => {
+	for (const command of [
+		"gh pr merge 12 --squash",
+		"gh stack merge 12",
+		"gh stack push",
+		'gh pr create --title "API v2 redesign"',
+	]) {
+		for (const [name, args] of [
+			["bash", { command }],
+			["powershell", { command }],
+			["codemode", { code: `await tools.bash({ command: ${JSON.stringify(command)} })` }],
+			["codemode", { code: `await tools.jobs({ action: "start", command: ${JSON.stringify(command)} })` }],
+			["jobs", { action: "start", command }],
+			["shell", { command }],
+			["mcp__ssh__execute_command", { command }],
+		] as const) {
+			assert.ok((await checkTool(name, args))?.block, `${name}: ${command}`);
+		}
+	}
+});
+
+test("only executable fields are checked in command tools", async () => {
+	const mention = 'gh pr merge 12; gh pr create --title "API v2 redesign"';
+	for (const action of ["status", "logs", "wait", "stop"]) {
+		assert.equal(await checkTool("jobs", { action, command: mention, name: mention }), undefined, action);
+	}
+	assert.equal(await checkTool("jobs", { action: "start", command: "npm test", name: mention }), undefined);
+	assert.equal(await checkTool("bash", { command: "npm test", cwd: mention }), undefined);
+	assert.equal(await checkTool("codemode", { code: "text(1)", description: mention }), undefined);
+});
+
+test("direct GitHub write tools remain blocked, while read tools may mention commands", async () => {
+	assert.ok((await checkTool("mcp__github__add_issue_comment", { body: "Update" }))?.block);
+	assert.equal(await checkTool("mcp__github__search_issues", { query: "gh pr merge" }), undefined);
 });
 
 test("prompt describes the workspace and delivery", () => {
