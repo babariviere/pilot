@@ -14,7 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
-import { queueUpdate } from "./queue.ts";
+import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
 
@@ -67,7 +67,7 @@ async function conversationView(
 			agent: agent ?? {},
 			usage: usage ?? { models: {}, tools: {} },
 		};
-		const events = [snapshot, queueUpdate(inbox ?? null)];
+		const events = [snapshot, await queueUpdateForDisplay(inbox ?? null, (id) => storage.submission(id, context))];
 		if (!live?.run && attention?.completion) {
 			const { outcome, outcomeAt, outcomeReason } = normalizeCompletion(attention.completion);
 			return {

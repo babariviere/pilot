@@ -5,6 +5,7 @@ import {
 	InboxDoc,
 	type InboxState,
 	type Session,
+	type SubmissionId,
 } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
 
@@ -15,6 +16,21 @@ export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEven
 			item.mode === "write" ? [] : [{ id: item.id, mode: item.mode, content: item.content }],
 		),
 	};
+}
+
+/** Job notifications still reach the agent, but are not user-editable composer drafts. */
+export async function queueUpdateForDisplay(
+	inbox: Readonly<InboxState> | null,
+	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+): Promise<QueueUpdateEvent> {
+	const event = queueUpdate(inbox);
+	const visible = await Promise.all(
+		event.items.map(async (item) => {
+			const submission = await readSubmission(item.id as SubmissionId);
+			return !submission?.requestId?.startsWith("native:jobs.result:");
+		}),
+	);
+	return { ...event, items: event.items.filter((_, index) => visible[index]) };
 }
 
 /** Withdraw one pending input atomically with consumption, without aborting the active run. */

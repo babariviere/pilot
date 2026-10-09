@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, InboxDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
-import { editQueuedMessage, queueUpdate, watchQueue } from "./queue.ts";
+import { editQueuedMessage, queueUpdate, queueUpdateForDisplay, watchQueue } from "./queue.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -71,6 +71,49 @@ test("queue watch sends durable contents initially, on changes, and after reatta
 
 test("a retired inbox clears the displayed queue", () => {
 	assert.deepEqual(queueUpdate(null), { type: "queue_update", items: [] });
+});
+
+test("display queue hides only job notifications, without changing durable input or matching user text", async () => {
+	const storage = new MemoryStorage();
+	const session = createSession(storage);
+	try {
+		const conversation = await session.commit(async (tx) => {
+			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			const inbox = await tx.doc(InboxDoc, conversation.id);
+			for (const [requestId, mode, content] of [
+				["user:1", "followUp", "Background job tests finished. Output: logs"],
+				["native:jobs.result:abc", "followUp", "Job result"],
+				["native:subagent.result:def", "followUp", "Subagent result"],
+				["native:user:ghi", "steer", "User steering"],
+				["native:jobs.result:jkl", "steer", "Job steering"],
+			] as const) {
+				const input = await tx.createSubmission({
+					conversationId: conversation.id,
+					requestId,
+					type: "input",
+					status: "queued",
+				});
+				inbox.items.push({ id: input.id, mode, content });
+			}
+			return conversation;
+		}, context);
+		const readSubmission = (id: Parameters<typeof storage.submission>[0]) => storage.submission(id, context);
+		const watch = await watchQueue(session, conversation.id, context);
+		const original = structuredClone(watch.value);
+		const displayed = await queueUpdateForDisplay(watch.value, readSubmission);
+		assert.deepEqual(
+			displayed.items.map((item) => item.content),
+			["Background job tests finished. Output: logs", "Subagent result", "User steering"],
+		);
+		assert.deepEqual(watch.value, original, "filtering never withdraws or edits input");
+		await watch.stop();
+		const reattached = await watchQueue(session, conversation.id, context);
+		assert.deepEqual(await queueUpdateForDisplay(reattached.value, readSubmission), displayed);
+		await reattached.stop();
+		assert.deepEqual(await queueUpdateForDisplay(null, readSubmission), { type: "queue_update", items: [] });
+	} finally {
+		await session.close(context);
+	}
 });
 
 test("editing queued messages preserves IDs, delivery modes, order, and broadcasts committed content", async () => {
