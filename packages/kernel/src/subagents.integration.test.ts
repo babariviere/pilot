@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { InboxDoc } from "@earendil-works/pi-durable";
+import type { QueueUpdateEvent } from "@pilot/protocol";
 import {
 	fauxAssistantMessage,
 	fauxProvider,
@@ -208,4 +210,72 @@ test("the bridge rejects commands before the extension reports and when the exte
 	await assert.rejects(bridge.command({ action: "stop", name: "other" }), /nope/);
 	bridge.detach();
 	await assert.rejects(bridge.command({ action: "stop", name: "other" }), /not loaded/);
+});
+
+test("live composer queue hides jobs initially, on updates and after reconnect without withdrawing them", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t, []);
+	const openAdapter = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+	);
+	const session = await KernelSession.open(
+		{ sessionId: "offline-job-queue", cwd: f.root, storageDir: join(f.root, "storage") },
+		{ onWorking: () => {} },
+	);
+	f.cleanup.push(() => session.close());
+	const enqueue = (requestId: string, content: string) =>
+		session.conversation.commit(async (tx) => {
+			const input = await tx.createSubmission({
+				conversationId: session.conversation.id,
+				requestId,
+				type: "input",
+				status: "queued",
+			});
+			(await tx.doc(InboxDoc, session.conversation.id)).items.push({ id: input.id, mode: "followUp", content });
+			return input.id;
+		}, context);
+	const job = await enqueue("native:jobs.result:first", "Background job tests done");
+	await enqueue("user:first", "User follow-up");
+	const frames: QueueUpdateEvent[] = [];
+	let updated!: () => void;
+	const update = new Promise<void>((resolve) => {
+		updated = resolve;
+	});
+	await session.watch(
+		"queue",
+		(events) => {
+			for (const event of events) {
+				if (event.type !== "queue_update") continue;
+				frames.push(event);
+				if (event.items.length === 2) updated();
+			}
+		},
+		false,
+	);
+	assert.deepEqual(
+		frames.at(-1)?.items.map((item) => item.content),
+		["User follow-up"],
+	);
+	await enqueue("native:jobs.result:second", "Another job done");
+	await enqueue("user:second", "Another follow-up");
+	await update;
+	assert.deepEqual(
+		frames.at(-1)?.items.map((item) => item.content),
+		["User follow-up", "Another follow-up"],
+	);
+	await session.unwatch("queue");
+	const beforeReconnect = frames.at(-1);
+	await session.watch(
+		"queue",
+		(events) => {
+			for (const event of events) if (event.type === "queue_update") frames.push(event);
+		},
+		false,
+	);
+	assert.deepEqual(frames.at(-1), beforeReconnect);
+	const receipt = await session.harness.submission(job, context);
+	assert.equal((await receipt?.status(context))?.status, "queued", "hidden notification is still admitted");
+	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))?.items.length, 4);
 });

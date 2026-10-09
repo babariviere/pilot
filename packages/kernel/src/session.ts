@@ -32,7 +32,7 @@ import { NativeAdapter } from "./native-adapter.ts";
 import { withPilotPolicy } from "./policy.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
-import { editQueuedMessage, queueUpdate, removeQueuedMessage, watchQueue } from "./queue.ts";
+import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
 import { type SubagentCommand, SubagentBridge } from "./subagents.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
@@ -434,6 +434,11 @@ export class KernelSession {
 			return;
 		}
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
+		const displayQueue = (inbox: Readonly<InboxState> | null) =>
+			queueUpdateForDisplay(inbox, async (id) => {
+				const submission = await this.harness.submission(id, context);
+				return submission?.status(context);
+			});
 		let queue: DocumentWatch<InboxState>;
 		try {
 			queue = await watchQueue(this.harness, this.conversation.id, context);
@@ -442,7 +447,7 @@ export class KernelSession {
 			throw error;
 		}
 		try {
-			await listener([stream.snapshot, queueUpdate(queue.value)]);
+			await listener([stream.snapshot, await displayQueue(queue.value)]);
 			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
 			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
 		} catch (error) {
@@ -465,7 +470,7 @@ export class KernelSession {
 			await listener([...events]);
 		});
 		queue.start(async (inbox) => {
-			await listener([queueUpdate(inbox)]);
+			await listener([await displayQueue(inbox)]);
 		});
 	}
 

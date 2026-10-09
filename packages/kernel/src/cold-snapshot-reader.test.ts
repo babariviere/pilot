@@ -74,6 +74,13 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 				{ id: 905 as SubmissionId, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
 				{ id: 906 as SubmissionId, mode: "write", entry: { kind: "notice" } },
 			];
+			const job = await tx.createSubmission({
+				conversationId: root.id,
+				requestId: "native:jobs.result:abc",
+				type: "input",
+				status: "queued",
+			});
+			inbox.items.push({ id: job.id, mode: "followUp", content: "Background job tests done" });
 			(await tx.doc(UsageDoc, root.id)).models["missing/offline"] = fauxAssistantMessage("usage").usage;
 			(await tx.doc(AttentionDoc, root.id)).completion = {
 				input: 899,
