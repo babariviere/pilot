@@ -436,9 +436,9 @@ export class KernelSession {
 	}
 
 	/** Edit in place only if the input is still queued when the commit runs. */
-	async editQueuedMessage(submissionId: number, content: string): Promise<void> {
+	async editQueuedMessage(submissionId: number, content: string, mode?: DeliveryMode): Promise<void> {
 		const prepared = await this.adapter.prepareInput(content);
-		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context);
+		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context, mode);
 	}
 
 	/** Withdraw one queued input without stopping the active run. */

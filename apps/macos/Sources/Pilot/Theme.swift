@@ -313,3 +313,86 @@ struct UnreadBadge: View {
             .help("Unread result. Open this chat or mark it as reviewed.")
     }
 }
+
+// MARK: - Motion
+
+extension Theme {
+    /// Shared animation timing. Pass the Reduce Motion environment value: movement then becomes a
+    /// short crossfade instead.
+    ///
+    /// - quick: hover feedback and small disclosure toggles.
+    /// - standard: items entering, leaving or reflowing a list, such as queued messages.
+    enum Motion {
+        static let quick = Animation.easeOut(duration: 0.15)
+
+        static func standard(reduceMotion: Bool) -> Animation {
+            reduceMotion ? .easeInOut(duration: 0.15) : .snappy(duration: 0.28, extraBounce: 0.04)
+        }
+
+        /// List rows that slide up into place and fade out when removed.
+        static func insertion(reduceMotion: Bool) -> AnyTransition {
+            reduceMotion
+                ? .opacity
+                : .asymmetric(
+                    insertion: .move(edge: .bottom).combined(with: .opacity),
+                    removal: .scale(scale: 0.97, anchor: .top).combined(with: .opacity)
+                )
+        }
+    }
+}
+
+/// Pointer hover for views that need it, as a holder object because SwiftUI's State macro is unavailable.
+@MainActor
+final class HoverState: ObservableObject {
+    @Published var isHovered = false
+}
+
+/// Keyboard shortcut hint: a key cap followed by a short action, such as "⌥↩ follow up".
+struct KeyHint: View {
+    let key: String
+    let label: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(key)
+                .font(.pilot(.small, weight: .medium))
+                .padding(.horizontal, 4)
+                .padding(.vertical, 1)
+                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.muted))
+            Text(label)
+        }
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.faintForeground)
+        .fixedSize()
+    }
+}
+
+/// Borderless icon button for secondary row actions: muted, with a soft fill under the pointer and an
+/// optional tint (for example destructive) that only appears on hover. Always add an accessibility label.
+struct QuietIconButtonStyle: ButtonStyle {
+    var hoverTint: Color = Theme.foreground
+
+    func makeBody(configuration: Configuration) -> some View {
+        QuietIconButton(configuration: configuration, hoverTint: hoverTint)
+    }
+
+    private struct QuietIconButton: View {
+        let configuration: ButtonStyleConfiguration
+        let hoverTint: Color
+        @Environment(\.isEnabled) private var isEnabled
+        @StateObject private var hover = HoverState()
+
+        var body: some View {
+            let active = hover.isHovered && isEnabled
+            configuration.label
+                .font(.pilot(.caption, weight: .semibold))
+                .foregroundStyle(active ? hoverTint : Theme.mutedForeground)
+                .frame(width: 20, height: 20)
+                .background(RoundedRectangle(cornerRadius: 5).fill(active ? Theme.selected : .clear))
+                .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
+                .contentShape(RoundedRectangle(cornerRadius: 5))
+                .onHover { hover.isHovered = $0 }
+                .animation(Theme.Motion.quick, value: hover.isHovered)
+        }
+    }
+}

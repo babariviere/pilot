@@ -333,7 +333,9 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "PATCH") {
 			const body = await readJson<EditQueuedMessageRequest>(req);
-			await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message);
+			if (body?.mode !== undefined && body.mode !== "steer" && body.mode !== "followUp")
+				throw new HttpError(400, "mode must be steer or followUp");
+			await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message, body.mode);
 			return json(res, 200, { ok: true });
 		}
 		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "DELETE") {

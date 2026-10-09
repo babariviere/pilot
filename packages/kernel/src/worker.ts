@@ -195,7 +195,7 @@ export function runKernelWorker(): void {
 				await send({ type: "aborted", requestId: command.requestId });
 				break;
 			case "editQueuedMessage":
-				await session.editQueuedMessage(command.submissionId, command.content);
+				await session.editQueuedMessage(command.submissionId, command.content, command.mode);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
 			case "changeModel":

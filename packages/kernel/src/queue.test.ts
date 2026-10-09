@@ -171,6 +171,21 @@ test("editing queued messages preserves IDs, delivery modes, order, and broadcas
 			queueUpdate(restored.value),
 		);
 		await Promise.all([watch.stop(), restored.stop()]);
+
+		await editQueuedMessage(session, conversation.id, first.id, "Now steering", context, "steer");
+		await editQueuedMessage(session, conversation.id, second.id, "Now a follow-up", context, "followUp");
+		assert.deepEqual(
+			queueUpdate((await session.snapshot(InboxDoc, conversation.id, context)) ?? null).items,
+			[
+				{ id: first.id, mode: "steer", content: "Now steering" },
+				{ id: second.id, mode: "followUp", content: "Now a follow-up" },
+			],
+			"a mode change keeps queue position",
+		);
+		await assert.rejects(
+			editQueuedMessage(session, conversation.id, first.id, "Bad", context, "write" as "steer"),
+			/mode must be steer or followUp/,
+		);
 	} finally {
 		await session.close(context);
 	}

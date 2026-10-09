@@ -101,34 +101,42 @@ final class ComposerState: ObservableObject {
 
 /// Floating message box at the bottom of a chat.
 /// Return steers the current run (or starts one), Option-Return queues a follow-up,
-/// Shift-Return adds a line.
+/// Shift-Return adds a line. Queued messages sit at the top of the same tray; editing one uses the
+/// same keys, so Return saves it as steering and Option-Return as a follow-up.
 struct Composer: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var state: ComposerState
     let working: Bool
     let queuedMessages: [QueuedMessage]
     let completionDirectory: String?
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
-    let onEditQueuedMessage: (Int, String) async throws -> Void
+    let onEditQueuedMessage: (Int, String, DeliveryMode) async throws -> Void
     let onRemoveQueuedMessage: (Int) async throws -> Void
     var session: SessionSummary? = nil
     @StateObject private var modelPicker = ChatModelPickerState()
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
 
+    private var showsQueue: Bool {
+        !remainingQueuedMessages.isEmpty || state.queueEditing.selected != nil || state.queueRemovalError != nil
+    }
+
     var body: some View {
         VStack(spacing: 8) {
-            if !remainingQueuedMessages.isEmpty || state.queueEditing.selected != nil || state.queueRemovalError != nil {
-                QueuedMessagesView(state: state, messages: remainingQueuedMessages, completionDirectory: completionDirectory,
-                                   onSave: saveQueueEdit, onRemove: { id in
-                                       Task { await state.removeQueuedMessage(id, perform: onRemoveQueuedMessage) }
-                                   })
-            }
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
+                if showsQueue {
+                    QueuedMessagesStrip(state: state, messages: remainingQueuedMessages, completionDirectory: completionDirectory,
+                                        onSave: saveQueueEdit, onRemove: { id in
+                                            Task { await state.removeQueuedMessage(id, perform: onRemoveQueuedMessage) }
+                                        })
+                        .transition(.opacity)
+                }
                 editor
                 controls
             }
+            .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsQueue)
             .background(
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Theme.tray)
@@ -170,7 +178,7 @@ struct Composer: View {
                 send(flags.contains(.option) ? .followUp : .steer)
             }
             HStack(spacing: 10) {
-                KeyHints(working: working)
+                KeyHints(working: working, queued: !remainingQueuedMessages.isEmpty)
                 Spacer()
             }
         }
@@ -212,7 +220,7 @@ struct Composer: View {
         return { state.cancelQueueEdit() }
     }
 
-    private func saveQueueEdit() {
+    private func saveQueueEdit(_ mode: DeliveryMode) {
         guard let selected = state.queueEditing.selected, !state.mutatingQueue else { return }
         let text = state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -224,7 +232,7 @@ struct Composer: View {
         state.queueEditError = nil
         Task {
             do {
-                try await onEditQueuedMessage(selected.id, text)
+                try await onEditQueuedMessage(selected.id, text, mode)
                 state.queueEditing.finish()
                 state.composerFocus = UUID()
             } catch {
@@ -286,153 +294,16 @@ private struct ComposerSendButtons: View {
     }
 }
 
-private struct QueuedMessagesView: View {
-    @Environment(\.pilotFonts) private var fonts
-    @ObservedObject var state: ComposerState
-    let messages: [QueuedMessage]
-    let completionDirectory: String?
-    let onSave: () -> Void
-    let onRemove: (Int) -> Void
-
-    private var displayedMessages: [QueuedMessage] {
-        if let selected = state.queueEditing.selected, !messages.contains(where: { $0.id == selected.id }) {
-            return messages + [selected]
-        }
-        return messages
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Label("\(messages.count) queued", systemImage: "tray.full")
-                Spacer()
-                Text("⌥↑ / ⌥↓ to edit")
-            }
-            .font(.caption)
-            .foregroundStyle(Theme.mutedForeground)
-            if let error = state.queueRemovalError {
-                HStack {
-                    Text(error).font(.caption).foregroundStyle(Theme.destructive).textSelection(.enabled)
-                    Spacer()
-                    Button { state.queueRemovalError = nil } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.plain)
-                        .help("Dismiss removal error")
-                        .accessibilityLabel("Dismiss removal error")
-                }
-            }
-            ScrollViewReader { proxy in
-                if state.queueEditing.selected != nil {
-                    // One editor subtree: ViewThatFits must not create two competing NSTextViews.
-                    ScrollView { rows }
-                        .frame(height: editingHeight)
-                        .onAppear {
-                            if let id = state.queueEditing.selected?.id { proxy.scrollTo(id, anchor: .center) }
-                        }
-                        .onChange(of: state.queueEditing.selected?.id) { _, id in
-                            if let id { proxy.scrollTo(id, anchor: .center) }
-                        }
-                        .onChange(of: state.queueEditorHeight) { _, _ in
-                            if let id = state.queueEditing.selected?.id { proxy.scrollTo(id, anchor: .center) }
-                        }
-                } else {
-                    ViewThatFits(in: .vertical) {
-                        rows
-                        ScrollView { rows }.frame(height: 180)
-                    }
-                    .frame(maxHeight: 180)
-                    .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card(radius: 12)
-    }
-
-    private var editingHeight: CGFloat {
-        let unavailable = !messages.contains { $0.id == state.queueEditing.selected?.id }
-        let errorHeight: CGFloat = state.queueEditError != nil || unavailable ? 32 : 0
-        return min(state.queueEditorHeight + 72 + CGFloat(displayedMessages.count - 1) * 48 + errorHeight, 260)
-    }
-
-    private var rows: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(displayedMessages) { message in
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack {
-                        Text(message.mode == .followUp ? "Follow-up" : "Steering")
-                            .font(.caption)
-                            .foregroundStyle(Theme.mutedForeground)
-                        Spacer()
-                        if state.queueEditing.selected?.id == message.id {
-                            Text("Editing").font(.caption).foregroundStyle(Theme.mutedForeground)
-                        } else {
-                            if state.queueEditing.hasUnsavedEdit(message) {
-                                Text("Unsaved edit").font(.caption).foregroundStyle(Theme.mutedForeground)
-                            }
-                            Button { state.selectQueuedMessage(message) } label: {
-                                Label("Edit", systemImage: "pencil").font(.caption)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Theme.mutedForeground)
-                            .disabled(state.mutatingQueue)
-                            .help("Edit this queued message")
-                        }
-                        if state.removingQueuedMessage == message.id {
-                            ProgressView().controlSize(.small)
-                        }
-                        Button { onRemove(message.id) } label: {
-                            Label("Remove", systemImage: "trash").font(.caption)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(Theme.destructive)
-                        .disabled(state.mutatingQueue || !messages.contains(where: { $0.id == message.id }))
-                        .help("Remove this queued message")
-                    }
-                    if state.queueEditing.selected?.id == message.id {
-                        QueuedMessageEditor(
-                            state: state,
-                            available: messages.contains(where: { $0.id == message.id }),
-                            completionDirectory: completionDirectory,
-                            onSave: onSave,
-                            onRemove: { onRemove(message.id) },
-                            onNavigate: { state.navigateQueue($0, messages: messages) }
-                        )
-                    } else {
-                        Text(message.text)
-                            .font(fonts.body)
-                            .textSelection(.enabled)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .id(message.id)
-            }
-        }
-    }
-}
-
 private struct KeyHints: View {
     let working: Bool
+    var queued = false
 
     var body: some View {
         HStack(spacing: 10) {
-            hint("↩", working ? "steer" : "send")
-            if working { hint("⌥↩", "follow up") }
-            hint("⇧↩", "new line")
-        }
-        .font(.system(size: 11))
-        .foregroundStyle(Theme.faintForeground)
-    }
-
-    private func hint(_ key: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(key)
-                .font(.system(size: 10, weight: .medium))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.muted))
-            Text(label)
+            KeyHint(key: "↩", label: working ? "steer" : "send")
+            if working { KeyHint(key: "⌥↩", label: "follow up") }
+            KeyHint(key: "⇧↩", label: "new line")
+            if queued { KeyHint(key: "⌥↑↓", label: "edit queue") }
         }
     }
 }

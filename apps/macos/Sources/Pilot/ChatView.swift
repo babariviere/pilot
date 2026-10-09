@@ -223,8 +223,10 @@ struct ChatView: View {
                         completionDirectory: session.isAsk ? nil : session.cwd,
                         onSend: send,
                         onStop: { model.stopSession(session.id) },
-                        onEditQueuedMessage: { id, text in
-                            try await AppModel.shared.client.editQueuedMessage(session.id, submissionId: id, message: text)
+                        onEditQueuedMessage: { id, text, mode in
+                            try await AppModel.shared.client.editQueuedMessage(
+                                session.id, submissionId: id, message: text, mode: mode
+                            )
                         },
                         onRemoveQueuedMessage: { id in
                             try await AppModel.shared.client.removeQueuedMessage(session.id, submissionId: id)

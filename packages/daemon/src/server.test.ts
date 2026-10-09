@@ -309,12 +309,19 @@ test("queued message PATCH forwards the message ID and content and reports stale
 	const response = await fetch(url, request);
 	assert.equal(response.status, 200);
 	assert.deepEqual(await response.json(), { ok: true });
-	assert.deepEqual(edit.mock.calls[0]?.arguments, ["session-1", 42, "Edited\nDetails"]);
+	assert.deepEqual(edit.mock.calls[0]?.arguments, ["session-1", 42, "Edited\nDetails", undefined]);
+	const withMode = await fetch(url, { ...request, body: JSON.stringify({ message: "Now steer", mode: "steer" }) });
+	assert.equal(withMode.status, 200);
+	await withMode.arrayBuffer();
+	assert.deepEqual(edit.mock.calls[1]?.arguments, ["session-1", 42, "Now steer", "steer"]);
+	const badMode = await fetch(url, { ...request, body: JSON.stringify({ message: "x", mode: "write" }) });
+	assert.equal(badMode.status, 400);
+	await badMode.arrayBuffer();
 	stale = true;
 	const rejected = await fetch(url, request);
 	assert.equal(rejected.status, 400);
 	assert.deepEqual(await rejected.json(), { error: "Message is no longer queued. Your edit has not been sent." });
-	assert.equal(edit.mock.callCount(), 2, "a stale edit must not fall back to sending a new message");
+	assert.equal(edit.mock.callCount(), 3, "a stale edit must not fall back to sending a new message");
 	const wrongMethod = await fetch(url, { ...request, method: "POST" });
 	assert.equal(wrongMethod.status, 404);
 	await wrongMethod.arrayBuffer();
@@ -327,7 +334,7 @@ test("queued message PATCH forwards the message ID and content and reports stale
 	const browser = await fetch(url, { ...request, headers: { ...request.headers, origin: "https://example.com" } });
 	assert.equal(browser.status, 403);
 	await browser.arrayBuffer();
-	assert.equal(edit.mock.callCount(), 2);
+	assert.equal(edit.mock.callCount(), 3);
 });
 
 test("prepare uses the origin-protected route and paused admissions return HTTP 503", async () => {

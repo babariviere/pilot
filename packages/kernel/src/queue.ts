@@ -59,21 +59,27 @@ export async function watchQueue(observer: DocumentObserver, conversationId: Con
 	return watch;
 }
 
-/** Replace pending content on the mutation line, never withdraw/resubmit or change history. */
+/**
+ * Replace pending content, and optionally the delivery mode, on the mutation line. Never withdraw/resubmit or change
+ * history. Boundaries read each item's mode when they run, so a changed mode applies from the next boundary.
+ */
 export async function editQueuedMessage(
 	session: Pick<Session, "commit">,
 	conversationId: ConversationId,
 	submissionId: number,
 	content: string,
 	context: Context,
+	mode?: "steer" | "followUp",
 ): Promise<void> {
 	if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 	if (typeof content !== "string" || !content.trim()) throw new Error("message is required");
+	if (mode !== undefined && mode !== "steer" && mode !== "followUp") throw new Error("mode must be steer or followUp");
 	await session.commit(async (tx) => {
 		// Admission, consumption, and withdrawal all mutate this conversation's inbox on the same line.
 		const inbox = await tx.doc(InboxDoc, conversationId);
 		const item = inbox.items.find((item) => item.id === submissionId);
 		if (!item || item.mode === "write") throw new Error("Message is no longer queued. Your edit has not been sent.");
 		item.content = content;
+		if (mode !== undefined) item.mode = mode;
 	}, context);
 }

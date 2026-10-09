@@ -35,7 +35,7 @@ export interface KernelSpec {
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
 	| { type: "input"; requestId: string; content: string; mode: DeliveryMode; onlyIfIdle?: boolean }
-	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string }
+	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string; mode?: DeliveryMode }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
 	| { type: "abort"; requestId: string }

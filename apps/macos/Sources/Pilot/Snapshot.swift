@@ -517,7 +517,7 @@ enum Snapshot {
                 Composer(
                     state: ComposerState(), working: true, queuedMessages: [],
                     completionDirectory: session.cwd,
-                    onSend: { _, _ in }, onStop: {}, onEditQueuedMessage: { _, _ in },
+                    onSend: { _, _ in }, onStop: {}, onEditQueuedMessage: { _, _, _ in },
                     onRemoveQueuedMessage: { _ in },
                     session: session
                 )

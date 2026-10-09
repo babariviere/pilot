@@ -534,10 +534,12 @@ reports), producing a morning summary in the app and Slack.
   the current branch's first. Polling continues while any linked PR is open, and merge archiving waits
   until every linked PR is merged or closed.
 - Chat: markdown, diffs for edits and patches, tool cards, steer and follow-up, stop. Show all queued
-  user messages above the composer until consumed, restoring them on reconnect. Background job
+  user messages as compact one-line rows at the top of the composer tray until consumed, restoring
+  them on reconnect. Background job
   completion notifications still reach the agent but do not appear in the composer queue. Display steering before
   follow-ups, preserving FIFO order within each mode. Edit queued messages inline, using Alt+Up/Alt+Down
-  to navigate, Enter to save, and Escape to cancel. Preserve drafts while navigating and reject edits
+  to navigate, Enter to save as steering, Option-Enter to save as a follow-up, and Escape to cancel.
+  Saving keeps the message's queue position. Preserve drafts while navigating and reject edits
   after consumption without resubmitting. Remove individual queued messages before delivery without
   stopping the active run; Command-Delete removes the selected row only from its focused inline
   editor. Reject removal once a message has been consumed.
