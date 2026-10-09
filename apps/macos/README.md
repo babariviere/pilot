@@ -143,6 +143,8 @@ apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
                              # also inline SVG/Mermaid, invalid/hostile source, responsive heights, PNGs
                              # optional PILOT_ARTIFACT_TEST_MERMAID=/absolute/path/to/bundled-mermaid.js
                              # optional PILOT_ARTIFACT_TEST_REACT=/absolute/path/to/prepared-react.html
+                             # React fixtures also need PILOT_ARTIFACT_TEST_LIBRARIES (default
+                             # packages/artifacts/dist/libraries, from npm run artifacts:libraries)
                              # React fixture: "Native React 7", button increments to "Native React 8";
                              # Motion #native-react-counter reaches opacity 1 after 300ms, or optionally
                              # sets window.nativeMotionDone=false then true on animation completion

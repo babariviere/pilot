@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { artifactLibraries, getLibrary, isArtifactLibrary, prepareArtifact, validateArtifact } from "./render.ts";
+import {
+	artifactLibraries,
+	getLibrary,
+	getLibraryAsset,
+	isArtifactLibrary,
+	libraryBuildKey,
+	prepareArtifact,
+	validateArtifact,
+} from "./render.ts";
 
 test("Mermaid SVGs receive an overridable centered default without centering other SVGs", async () => {
 	const source = '<style>.mermaid > svg{margin-inline:0}</style><pre class="mermaid">graph TD; A-->B</pre>';
@@ -65,4 +73,30 @@ test("documents are validated and React DOM uses the shared React runtime", asyn
 		assert.ok(isArtifactLibrary(name));
 		assert.ok((await getLibrary(name)).length > 100);
 	}
+});
+
+test("React artifacts share the cached React runtime instead of embedding a copy", async () => {
+	const prepared = await prepareArtifact({
+		title: "Small",
+		kind: "react",
+		source:
+			'import {motion} from "motion/react"; export default function A(){return <motion.div><>{"hi"}</></motion.div>}',
+		libraries: ["mermaid"],
+	});
+	assert.deepEqual(prepared.libraries, ["react", "react-dom", "mermaid"]);
+	assert.ok(prepared.html.indexOf('library/react"') < prepared.html.indexOf("library/react-dom"));
+	const plain = await prepareArtifact({
+		title: "Tiny",
+		kind: "react",
+		source: "export default function A(){return null}",
+	});
+	assert.ok(Buffer.byteLength(plain.html) < 16 * 1024, `React artifact is ${Buffer.byteLength(plain.html)} bytes`);
+});
+
+test("library assets carry a stable validator and prefer a matching prebuilt bundle", async () => {
+	const first = await getLibraryAsset("react");
+	const second = await getLibraryAsset("react");
+	assert.equal(first.etag, second.etag);
+	assert.match(first.etag, /^"react-[0-9a-f]{32}"$/);
+	assert.match(libraryBuildKey("mermaid"), /^mermaid@[\d.]+\+esbuild@[\d.]+$/);
 });

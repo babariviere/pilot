@@ -1,5 +1,5 @@
 import AppKit
-import PilotCore
+@testable import PilotCore
 import SwiftUI
 import Testing
 @testable import Pilot
@@ -53,3 +53,22 @@ import Testing
     #expect(ArtifactInlineCache.contentSize(for: reference) == CGSize(width: 700, height: 540))
 }
 
+@Test @MainActor func pinnedArtifactRevisionCacheIsBoundedByBytes() {
+    let large = String(repeating: "x", count: 20 * 1024 * 1024)
+    func revision(_ id: String) -> (ArtifactReference, ArtifactRevision) {
+        let reference = ArtifactReference(id: id, sessionId: "s", title: "Image", revision: 1)
+        return (reference, ArtifactRevision(id: id, sessionId: "s", projectId: nil, title: "Image", kind: .image, revision: 1,
+                                            createdAt: 0, updatedAt: 0, source: large, html: "", libraries: []))
+    }
+    let entries = (0..<5).map { _ in revision(UUID().uuidString) }
+    for (reference, value) in entries { ArtifactInlineCache.store(value, for: reference) }
+    #expect(ArtifactInlineCache.retainedBytes <= ArtifactInlineCache.byteLimit)
+    #expect(ArtifactInlineCache.revision(for: entries[0].0) == nil)
+    #expect(ArtifactInlineCache.revision(for: entries[4].0) != nil)
+    let oversized = revision(UUID().uuidString)
+    ArtifactInlineCache.store(ArtifactRevision(id: oversized.1.id, sessionId: "s", projectId: nil, title: "Huge", kind: .image,
+                                               revision: 1, createdAt: 0, updatedAt: 0,
+                                               source: String(repeating: "y", count: ArtifactInlineCache.byteLimit + 1),
+                                               html: "", libraries: []), for: oversized.0)
+    #expect(ArtifactInlineCache.revision(for: oversized.0) == nil)
+}

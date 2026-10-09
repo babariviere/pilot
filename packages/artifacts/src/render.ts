@@ -1,8 +1,10 @@
 /** A deliberately small offline browser runtime. Generated code never installs packages. */
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { build, type Plugin } from "esbuild";
+import { build, type Plugin, version as esbuildVersion } from "esbuild";
 import type { ArtifactLibrary, ArtifactWrite } from "@pilot/protocol";
 import { MAX_IMAGE_SOURCE_BYTES, validateImageSource } from "./image.ts";
 import { previewSwiftUI } from "./swiftui.ts";
@@ -26,6 +28,11 @@ export const artifactLibraries: Record<ArtifactLibrary, { version: string; descr
 
 export function isArtifactLibrary(value: unknown): value is ArtifactLibrary {
 	return typeof value === "string" && Object.hasOwn(artifactLibraries, value);
+}
+
+/** The versions a revision was prepared against, recorded so later library upgrades are detectable. */
+export function libraryVersions(libraries: ArtifactLibrary[]): Partial<Record<ArtifactLibrary, string>> {
+	return Object.fromEntries(libraries.map((name) => [name, artifactLibraries[name].version]));
 }
 
 export const MAX_SOURCE_BYTES = 512 * 1024;
@@ -57,53 +64,109 @@ export function validateArtifact(write: ArtifactWrite): ArtifactWrite & { librar
 	return { ...write, title: write.title.trim(), libraries };
 }
 
-const libraryBuilds = new Map<ArtifactLibrary, Promise<string>>();
+export interface LibraryAsset {
+	source: string;
+	/** Strong validator for HTTP caching: changes whenever the bundle bytes change. */
+	etag: string;
+}
 
-/** Libraries are built only when requested. D3 and Three are opt-in, not injected by default. */
-export function getLibrary(name: ArtifactLibrary): Promise<string> {
+/** Release bundles ship prebuilt libraries here (see scripts/build-libraries.ts); development builds lazily. */
+export const PREBUILT_LIBRARY_DIRECTORY = join(resolveDir, "..", "dist", "libraries");
+
+/** Identifies a prebuilt bundle: a different library or esbuild version must not reuse it. */
+export function libraryBuildKey(name: ArtifactLibrary): string {
+	return `${name}@${artifactLibraries[name].version}+esbuild@${esbuildVersion}`;
+}
+
+/** Bundle one library as a classic script that installs its global. Used at runtime and at packaging time. */
+export async function buildLibrary(name: ArtifactLibrary): Promise<string> {
+	if (!isArtifactLibrary(name)) throw new Error("Unknown artifact library");
+	const source =
+		name === "react-dom"
+			? 'import * as dom from "react-dom"; import * as client from "react-dom/client"; globalThis.ReactDOM = {...dom, ...client};'
+			: name === "mermaid"
+				? 'import mermaid from "mermaid"; globalThis.mermaid = mermaid;'
+				: `import * as library from ${JSON.stringify(name)}; globalThis.${artifactLibraries[name].global} = library;`;
+	const result = await build({
+		stdin: { contents: source, resolveDir },
+		bundle: true,
+		write: false,
+		platform: "browser",
+		format: "iife",
+		target: "safari17",
+		minify: true,
+		define: { "process.env.NODE_ENV": '"production"' },
+		plugins: name === "react-dom" ? [sharedReactGlobals(/^react$/)] : [],
+		logLevel: "silent",
+	});
+	return result.outputFiles[0]!.text;
+}
+
+async function readPrebuiltLibrary(name: ArtifactLibrary): Promise<string | undefined> {
+	try {
+		const manifest = JSON.parse(await readFile(join(PREBUILT_LIBRARY_DIRECTORY, "manifest.json"), "utf8")) as Record<
+			string,
+			{ key?: string; sha256?: string }
+		>;
+		const entry = manifest[name];
+		if (entry?.key !== libraryBuildKey(name)) return undefined;
+		const source = await readFile(join(PREBUILT_LIBRARY_DIRECTORY, `${name}.js`), "utf8");
+		// A truncated or edited file falls back to a fresh build instead of serving broken JavaScript.
+		if (createHash("sha256").update(source).digest("hex") !== entry.sha256) return undefined;
+		return source;
+	} catch {
+		return undefined;
+	}
+}
+
+const libraryBuilds = new Map<ArtifactLibrary, Promise<LibraryAsset>>();
+
+/** Libraries load from the prebuilt bundle when present, else build once per process. D3 and Three are opt-in. */
+export function getLibraryAsset(name: ArtifactLibrary): Promise<LibraryAsset> {
 	if (!isArtifactLibrary(name)) return Promise.reject(new Error("Unknown artifact library"));
 	let pending = libraryBuilds.get(name);
 	if (!pending) {
-		const source =
-			name === "react-dom"
-				? 'import * as dom from "react-dom"; import * as client from "react-dom/client"; globalThis.ReactDOM = {...dom, ...client};'
-				: name === "mermaid"
-					? 'import mermaid from "mermaid"; globalThis.mermaid = mermaid;'
-					: `import * as library from ${JSON.stringify(name)}; globalThis.${artifactLibraries[name].global} = library;`;
-		pending = build({
-			stdin: { contents: source, resolveDir },
-			bundle: true,
-			write: false,
-			platform: "browser",
-			format: "iife",
-			target: "safari17",
-			minify: true,
-			define: { "process.env.NODE_ENV": '"production"' },
-			plugins:
-				name === "react-dom"
-					? [
-							{
-								name: "shared-react-global",
-								setup(builder) {
-									builder.onResolve({ filter: /^react$/ }, () => ({
-										path: "react",
-										namespace: "global-react",
-									}));
-									builder.onLoad({ filter: /.*/, namespace: "global-react" }, () => ({
-										contents: "module.exports = globalThis.React;",
-										loader: "js",
-									}));
-								},
-							},
-						]
-					: [],
-			logLevel: "silent",
-		}).then((result) => result.outputFiles[0]!.text);
+		pending = (async () => {
+			const source = (await readPrebuiltLibrary(name)) ?? (await buildLibrary(name));
+			const digest = createHash("sha256").update(source).digest("hex").slice(0, 32);
+			return { source, etag: `"${name}-${digest}"` };
+		})();
 		libraryBuilds.set(name, pending);
 		pending.catch(() => libraryBuilds.delete(name));
 	}
 	return pending;
 }
+
+export async function getLibrary(name: ArtifactLibrary): Promise<string> {
+	return (await getLibraryAsset(name)).source;
+}
+
+/** React artifacts share the separately cached React and ReactDOM library scripts instead of embedding
+ * a private copy of React in every revision. The JSX runtime is a thin createElement adapter. */
+const reactGlobals: Record<string, string> = {
+	react: "module.exports = globalThis.React;",
+	"react-dom": "module.exports = globalThis.ReactDOM;",
+	"react-dom/client": "module.exports = globalThis.ReactDOM;",
+	"react/jsx-runtime":
+		"const R = globalThis.React; const jsx = (type, props, key) => R.createElement(type, key === undefined ? props : { ...props, key }); module.exports = { Fragment: R.Fragment, jsx, jsxs: jsx, jsxDEV: jsx };",
+	"react/jsx-dev-runtime":
+		"const R = globalThis.React; const jsx = (type, props, key) => R.createElement(type, key === undefined ? props : { ...props, key }); module.exports = { Fragment: R.Fragment, jsx, jsxs: jsx, jsxDEV: jsx };",
+};
+
+function sharedReactGlobals(filter: RegExp): Plugin {
+	return {
+		name: "shared-react-global",
+		setup(builder) {
+			builder.onResolve({ filter }, (args) => ({ path: args.path, namespace: "global-react" }));
+			builder.onLoad({ filter: /.*/, namespace: "global-react" }, (args) => ({
+				contents: reactGlobals[args.path]!,
+				loader: "js",
+			}));
+		},
+	};
+}
+
+const reactGlobalImports = /^(react|react-dom|react-dom\/client|react\/jsx-runtime|react\/jsx-dev-runtime)$/;
 
 // Imports in the agent's source are restricted; installed libraries may resolve their own dependencies.
 const allowedImports = new Set([
@@ -150,7 +213,8 @@ async function compileReact(source: string): Promise<string> {
 			resolveDir,
 			loader: "tsx",
 		},
-		plugins: [plugin],
+		// Registered first, so React imports from the artifact and from bundled packages (motion/react) share globals.
+		plugins: [sharedReactGlobals(reactGlobalImports), plugin],
 		bundle: true,
 		write: false,
 		platform: "browser",
@@ -188,6 +252,13 @@ export async function prepareArtifact(
 ): Promise<{ html: string; libraries: ArtifactLibrary[] }> {
 	const write = validateArtifact(input);
 	options.signal?.throwIfAborted();
+	// React artifacts load the shared React runtime as library scripts, in dependency order.
+	if (write.kind === "react")
+		write.libraries = [
+			"react",
+			"react-dom",
+			...write.libraries.filter((name) => name !== "react" && name !== "react-dom"),
+		];
 	let imageSource = write.kind === "image" ? write.source : undefined;
 	if (write.kind === "swiftui") {
 		const preview = await previewSwiftUI(write.source, options);

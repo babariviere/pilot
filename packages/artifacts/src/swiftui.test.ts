@@ -125,14 +125,20 @@ test("SwiftUI cancellation kills compiler children and removes its disposable di
 }, async () => {
 	const before = new Set(await readdir(tmpdir()));
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), 1000);
+	// Unique source avoids the in-memory result cache. A warm compile takes about a second, so abort early.
+	const fresh = { ...document, source: source.replace("Native preview", `Cancelled ${Date.now()}`) };
+	const timer = setTimeout(() => controller.abort(), 400);
 	try {
-		await assert.rejects(previewArtifact(document, { signal: controller.signal }), /abort/i);
+		await assert.rejects(previewArtifact(fresh, { signal: controller.signal }), /abort/i);
 		const after = await readdir(tmpdir());
 		assert.deepEqual(
 			after.filter((name) => name.startsWith("pilot-swiftui-") && !before.has(name)),
 			[],
 		);
+		// The cancelled compile released its slot lock, so the next compile can use the warm slot.
+		const started = Date.now();
+		await previewArtifact({ ...fresh, source: fresh.source.replace("Cancelled", "Recovered") });
+		assert.ok(Date.now() - started < 60_000);
 	} finally {
 		clearTimeout(timer);
 	}

@@ -1,14 +1,31 @@
 /** Compile untrusted, standalone SwiftUI in a disposable macOS sandbox. */
 import { execFile, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { constants, existsSync } from "node:fs";
-import { mkdtemp, open, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ArtifactPreview } from "./preview.ts";
 
 const MAX_OUTPUT = 32 * 1024;
 // A cold Swift SDK module cache can take minutes on a busy machine.
 const TIMEOUT = 300_000;
+
+/** Trusted, prebuilt SDK module caches live outside every sandbox. Untrusted compiles get an APFS clone,
+ * so they start warm but can never modify the shared copy. Swift's explicit module cache is only valid at
+ * the path where it was built, so compiles run in a few fixed, locked slot directories rather than random
+ * temporary ones. */
+function cacheRoot(): string {
+	return process.env.PILOT_SWIFTUI_CACHE ?? join(homedir(), "Library", "Caches", "Pilot", "swiftui");
+}
+
+/** Concurrent compiles across all session workers. More previews at once fall back to a cold compile. */
+const SLOTS = 2;
+
+/** Bump when compiler flags or the warm-up program change in a way that invalidates cached modules. */
+const CACHE_FORMAT = 1;
+const WARMUP_SOURCE =
+	'struct ArtifactView: View { var body: some View { VStack { Text("Pilot"); Image(systemName: "star") }.padding() } }';
 
 /** Check the selected installed toolchain without launching Swift or an installer. */
 export function isSwiftUIPreviewAvailable(): boolean {
@@ -129,6 +146,154 @@ async function run(
 	});
 }
 
+interface Toolchain {
+	compiler: string;
+	sdk: string;
+	/** Toolchain root, readable inside the compile sandbox. */
+	root: string;
+	/** Identifies compatible module caches and rendered results. */
+	key: string;
+}
+
+function compileArguments(directory: string, toolchain: Toolchain): string[] {
+	// Pass policies directly, not as files a compiler macro could overwrite.
+	return [
+		"-p",
+		profile(directory, toolchain.root, toolchain.sdk, true),
+		toolchain.compiler,
+		"-sdk",
+		toolchain.sdk,
+		"-swift-version",
+		"5",
+		"-explicit-module-build",
+		"-j",
+		"2",
+		"-parse-as-library",
+		"-module-cache-path",
+		join(directory, "cache"),
+		join(directory, "Artifact.swift"),
+		join(directory, "Renderer.swift"),
+		"-o",
+		join(directory, "preview"),
+	];
+}
+
+async function writeSources(directory: string, source: string): Promise<void> {
+	const helper = await readFile(new URL("./swiftui-renderer.swift", import.meta.url), "utf8");
+	await writeFile(join(directory, "Artifact.swift"), `import SwiftUI\nimport AppKit\nimport Foundation\n${source}`, {
+		mode: 0o600,
+	});
+	await writeFile(join(directory, "Renderer.swift"), helper, { mode: 0o600 });
+}
+
+/** APFS clonefile copies are nearly free and private to the sandbox. Without APFS, compile cold. */
+function cloneModuleCache(source: string, destination: string): Promise<boolean> {
+	return new Promise((resolve) =>
+		execFile("/bin/cp", ["-c", "-R", source, destination], { timeout: 60_000 }, (error) => resolve(!error)),
+	);
+}
+
+function isRunning(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** An exclusive lock directory, shared by every Pilot process. Locks left by dead processes are reclaimed. */
+async function lock(path: string): Promise<boolean> {
+	for (let attempt = 0; attempt < 2; attempt++) {
+		try {
+			await mkdir(path, { mode: 0o700 });
+			await writeFile(join(path, "pid"), String(process.pid), { mode: 0o600 });
+			return true;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			const owner = Number(await readFile(join(path, "pid"), "utf8").catch(() => ""));
+			// A lock without a pid may be mid-creation; only a recorded dead owner is stale.
+			if (!Number.isSafeInteger(owner) || owner <= 0 || isRunning(owner)) return false;
+			await rm(path, { recursive: true, force: true });
+		}
+	}
+	return false;
+}
+
+interface Workspace {
+	directory: string;
+	release(): Promise<void>;
+}
+
+async function emptyDirectory(path: string): Promise<string> {
+	await rm(path, { recursive: true, force: true });
+	await mkdir(path, { recursive: true, mode: 0o700 });
+	return realpath(path);
+}
+
+/** Lock a slot and give it a private clone of the slot's warm module cache, building that cache first from
+ * trusted source (in the same sandbox) if needed. Returns undefined when every slot is busy. */
+async function acquireWarmSlot(toolchain: Toolchain): Promise<Workspace | undefined> {
+	const base = join(cacheRoot(), toolchain.key);
+	await mkdir(base, { recursive: true, mode: 0o700 });
+	for (let index = 0; index < SLOTS; index++) {
+		const lockPath = join(base, `slot-${index}.lock`);
+		if (!(await lock(lockPath))) continue;
+		const slot = join(base, `slot-${index}`);
+		const release = async () => {
+			await rm(slot, { recursive: true, force: true });
+			await rm(lockPath, { recursive: true, force: true });
+		};
+		try {
+			const modules = join(base, `slot-${index}.modules`);
+			if (!(await stat(modules).catch(() => undefined))?.isDirectory()) {
+				const directory = await emptyDirectory(slot);
+				try {
+					await writeSources(directory, WARMUP_SOURCE);
+					await run("/usr/bin/sandbox-exec", compileArguments(directory, toolchain), {
+						directory,
+						timeout: TIMEOUT,
+					});
+					await rename(join(directory, "cache"), modules);
+				} catch (error) {
+					// Without a warm cache this compile is simply cold; a later preview tries again.
+					console.warn(`pilot: SwiftUI module cache warm-up failed; compiling cold. ${error}`);
+				}
+			}
+			const directory = await emptyDirectory(slot);
+			if ((await stat(modules).catch(() => undefined))?.isDirectory())
+				await cloneModuleCache(modules, join(directory, "cache"));
+			return { directory, release };
+		} catch (error) {
+			await release();
+			throw error;
+		}
+	}
+	return undefined;
+}
+
+async function temporaryWorkspace(): Promise<Workspace> {
+	const directory = await realpath(await mkdtemp(join(tmpdir(), "pilot-swiftui-")));
+	return { directory, release: () => rm(directory, { recursive: true, force: true }) };
+}
+
+// Preview then publish usually renders identical source twice. Results are pure PNG data.
+const RESULT_CACHE_LIMIT = 8;
+const results = new Map<string, ArtifactPreview>();
+
+function copyPreview(value: ArtifactPreview): ArtifactPreview {
+	return {
+		screenshot: { ...value.screenshot },
+		consoleMessages: value.consoleMessages.map((message) => ({ ...message })),
+		contentHeight: value.contentHeight,
+	};
+}
+
+/** Test hook: forget rendered results, so integration tests exercise the compiler. */
+export function clearSwiftUIResultCache(): void {
+	results.clear();
+}
+
 export async function previewSwiftUI(
 	source: string,
 	options: { width?: number; height?: number; signal?: AbortSignal } = {},
@@ -146,7 +311,9 @@ export async function previewSwiftUI(
 		height > 1600
 	)
 		throw new Error("Preview width must be 240-1600 and height 200-1600 pixels");
-	const directory = await realpath(await mkdtemp(join(tmpdir(), "pilot-swiftui-")));
+	// Toolchain lookups run before a slot is chosen, in a scratch directory.
+	let workspace = await temporaryWorkspace();
+	let directory = workspace.directory;
 	const deadline = Date.now() + TIMEOUT;
 	const execute = (command: string, args: string[], timeout = TIMEOUT) =>
 		run(command, args, {
@@ -166,39 +333,43 @@ export async function previewSwiftUI(
 				`SwiftUI artifacts require Swift Command Line Tools (xcode-select --install). ${error instanceof Error ? error.message : error}`,
 			);
 		}
-		const toolchain = dirname(dirname(await realpath(compiler)));
+		const root = dirname(dirname(await realpath(compiler)));
 		const helper = await readFile(new URL("./swiftui-renderer.swift", import.meta.url), "utf8");
-		await writeFile(
-			join(directory, "Artifact.swift"),
-			`import SwiftUI\nimport AppKit\nimport Foundation\n${source}`,
-			{ mode: 0o600 },
-		);
-		await writeFile(join(directory, "Renderer.swift"), helper, { mode: 0o600 });
-		// Pass policies directly, not as files a compiler macro could overwrite.
-		const compiled = await execute("/usr/bin/sandbox-exec", [
-			"-p",
-			profile(directory, toolchain, sdk, true),
-			compiler,
-			"-sdk",
-			sdk,
-			"-swift-version",
-			"5",
-			"-explicit-module-build",
-			"-j",
-			"2",
-			"-parse-as-library",
-			"-module-cache-path",
-			join(directory, "cache"),
-			join(directory, "Artifact.swift"),
-			join(directory, "Renderer.swift"),
-			"-o",
-			join(directory, "preview"),
-		]);
+		const version = (await execute(compiler, ["--version"]).catch(() => ({ stdout: "" }))).stdout;
+		const sdkVersion = (
+			await execute("/usr/bin/xcrun", ["--sdk", "macosx", "--show-sdk-build-version"]).catch(() => ({ stdout: "" }))
+		).stdout;
+		const key = createHash("sha256")
+			.update(JSON.stringify([CACHE_FORMAT, compiler, root, sdk, version, sdkVersion, helper]))
+			.digest("hex")
+			.slice(0, 32);
+		const toolchain: Toolchain = { compiler, sdk, root, key };
+		const resultKey = createHash("sha256")
+			.update(JSON.stringify([key, width, height, source]))
+			.digest("hex");
+		const cached = results.get(resultKey);
+		if (cached) {
+			results.delete(resultKey);
+			results.set(resultKey, cached);
+			return copyPreview(cached);
+		}
+		const slot = await acquireWarmSlot(toolchain).catch((error: unknown) => {
+			console.warn(`pilot: SwiftUI compile slot unavailable; compiling cold. ${error}`);
+			return undefined;
+		});
+		if (slot) {
+			await workspace.release();
+			workspace = slot;
+			directory = slot.directory;
+		}
+		options.signal?.throwIfAborted();
+		await writeSources(directory, source);
+		const compiled = await execute("/usr/bin/sandbox-exec", compileArguments(directory, toolchain));
 		const rendered = await execute(
 			"/usr/bin/sandbox-exec",
 			[
 				"-p",
-				profile(directory, toolchain, sdk, false),
+				profile(directory, toolchain.root, toolchain.sdk, false),
 				join(directory, "preview"),
 				String(width),
 				String(height),
@@ -252,12 +423,15 @@ export async function previewSwiftUI(
 		]
 			.slice(0, 100)
 			.map((message) => ({ ...message, text: message.text.slice(0, 2000) }));
-		return {
+		const preview: ArtifactPreview = {
 			screenshot: { mimeType: "image/png", data: png.toString("base64"), width, height },
 			consoleMessages,
 			contentHeight: height,
 		};
+		results.set(resultKey, copyPreview(preview));
+		while (results.size > RESULT_CACHE_LIMIT) results.delete(results.keys().next().value!);
+		return preview;
 	} finally {
-		await rm(directory, { recursive: true, force: true });
+		await workspace.release();
 	}
 }

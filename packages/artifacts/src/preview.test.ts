@@ -2,13 +2,14 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { createSocket } from "node:dgram";
 import { createServer } from "node:http";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { chromium } from "playwright";
-import { isArtifactPreviewAvailable, previewArtifact } from "./preview.ts";
+import { closePreviewBrowser, isArtifactPreviewAvailable, previewArtifact } from "./preview.ts";
 import { prepareArtifact } from "./render.ts";
 import { isSwiftUIPreviewAvailable } from "./swiftui.ts";
 
 const browserInstalled = existsSync(chromium.executablePath());
+after(() => closePreviewBrowser());
 
 test("native preview remains available without Chromium", { skip: !isSwiftUIPreviewAvailable() }, (t) => {
 	t.mock.method(chromium, "executablePath", () => "/nonexistent/pilot-artifact-chromium");
@@ -61,6 +62,30 @@ test("preview validates dimensions and respects cancellation", async () => {
 	const source = { title: "test", kind: "html" as const, source: "hello" };
 	await assert.rejects(previewArtifact(source, { width: 1 }), /width/);
 	await assert.rejects(previewArtifact(source, { signal: AbortSignal.abort() }), /abort/i);
+});
+
+test("previews reuse a warm browser with isolated contexts and recover after timeouts", {
+	skip: !browserInstalled,
+}, async () => {
+	const store = { title: "Storage", kind: "html" as const };
+	const first = await previewArtifact({
+		...store,
+		source: "<script>console.log('cookie', document.cookie); document.cookie='leak=1';</script>",
+	});
+	const started = Date.now();
+	const second = await previewArtifact({
+		...store,
+		source: "<script>console.log('cookie', document.cookie);</script>",
+	});
+	assert.ok(Date.now() - started < 5000);
+	for (const result of [first, second])
+		assert.ok(result.consoleMessages.some((message) => message.text === "cookie "));
+	await assert.rejects(
+		previewArtifact({ ...store, source: "<script>while(true){}</script>" }, { timeoutMs: 1000 }),
+		/timed out/,
+	);
+	const recovered = await previewArtifact({ ...store, source: "<script>console.log('again')</script>" });
+	assert.ok(recovered.consoleMessages.some((message) => message.text === "again"));
 });
 
 test("preview renders animations and graphs offline and captures runtime diagnostics", {

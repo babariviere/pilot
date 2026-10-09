@@ -249,6 +249,8 @@ export interface ArtifactRevision extends ArtifactSummary {
 	source: string;
 	html: string;
 	libraries: ArtifactLibrary[];
+	/** Library versions the revision was prepared with. Absent on revisions saved before versions were recorded. */
+	libraryVersions?: Partial<Record<ArtifactLibrary, string>>;
 }
 
 export interface ArtifactWrite {

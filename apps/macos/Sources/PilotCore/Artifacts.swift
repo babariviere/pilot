@@ -45,6 +45,8 @@ public struct ArtifactRevision: Codable, Identifiable, Equatable, Sendable {
     public let source: String
     public let html: String
     public let libraries: [ArtifactLibrary]
+    /// Library versions used when the revision was prepared. Absent on older revisions.
+    public var libraryVersions: [String: String]? = nil
 }
 
 public struct ArtifactReference: Codable, Identifiable, Equatable, Hashable, Sendable {

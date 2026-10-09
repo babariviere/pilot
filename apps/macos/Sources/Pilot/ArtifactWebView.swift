@@ -94,23 +94,22 @@ struct ArtifactWebView: NSViewRepresentable {
         var measurementTask: Task<Void, Never>?
         private var measurement = ArtifactContentMeasurement()
         private var initialNavigation = true
+        private var document: String?
+        private var restartedRenderer = false
 
         init(state: ArtifactRenderState) { self.state = state }
 
         func install(in view: WKWebView, document: String) {
-            WKContentRuleListStore.default().compileContentRuleList(
-                forIdentifier: "pilot-artifact-deny-network-v1", encodedContentRuleList: ArtifactSandboxPolicy.contentRules
-            ) { [weak self, weak view] rule, error in
-                Task { @MainActor in
-                    guard let self, self.active, let view else { return }
-                    guard let rule, error == nil else {
-                        self.state.loading = false
-                        self.state.error = "Cannot install artifact sandbox: \(error?.localizedDescription ?? "unknown error")"
-                        return
-                    }
-                    view.configuration.userContentController.add(rule)
-                    view.loadHTMLString(document, baseURL: nil)
+            self.document = document
+            ArtifactContentRules.load { [weak self, weak view] rule, error in
+                guard let self, self.active, let view else { return }
+                guard let rule else {
+                    self.state.loading = false
+                    self.state.error = "Cannot install artifact sandbox: \(error ?? "unknown error")"
+                    return
                 }
+                view.configuration.userContentController.add(rule)
+                view.loadHTMLString(document, baseURL: nil)
             }
         }
 
@@ -141,6 +140,11 @@ struct ArtifactWebView: NSViewRepresentable {
             guard let measurementKind else { return }
             measurementTask?.cancel()
             measurementTask = Task { [weak self, weak view] in
+                // Poll quickly while content settles, then slowly once it has been stable for a few
+                // seconds. Asynchronous changes are still picked up, at a fraction of the JS calls.
+                var previous: [Double]?
+                var previousViewport: CGSize?
+                var stableReads = 0
                 while !Task.isCancelled {
                     guard let self, self.active, let view else { return }
                     do {
@@ -174,6 +178,9 @@ struct ArtifactWebView: NSViewRepresentable {
                         """, arguments: ["image": intrinsic, "swiftui": measurementKind == .swiftui],
                             in: nil, contentWorld: .defaultClient) as? [Double]
                         guard self.active, !Task.isCancelled else { return }
+                        if result == previous, view.bounds.size == previousViewport { stableReads += 1 } else { stableReads = 0 }
+                        previous = result
+                        previousViewport = view.bounds.size
                         if let result, result.count == 2,
                            let size = self.measurement.record(content: CGSize(width: result[0], height: result[1]),
                                                               viewport: view.bounds.size, intrinsicImage: intrinsic),
@@ -183,13 +190,25 @@ struct ArtifactWebView: NSViewRepresentable {
                     } catch {
                         // Measurement is best-effort and must not replace a working preview with an error.
                     }
-                    do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+                    do { try await Task.sleep(for: .milliseconds(stableReads >= 6 ? 2000 : 500)) } catch { return }
                 }
             }
         }
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            // WebKit can reclaim a background renderer under memory pressure. Reload the same isolated
+            // document once; a page that keeps crashing its renderer shows the error instead of looping.
+            if active, !restartedRenderer, let document {
+                restartedRenderer = true
+                measurementTask?.cancel()
+                measurement = ArtifactContentMeasurement()
+                initialNavigation = true
+                state.error = nil
+                state.loading = true
+                webView.loadHTMLString(document, baseURL: nil)
+                return
+            }
             state.loading = false
             state.error = "Artifact renderer stopped. Close and reopen the preview to retry."
         }
@@ -215,6 +234,84 @@ struct ArtifactWebView: NSViewRepresentable {
     }
 }
 
+/// One compiled content blocker shared by every artifact view, instead of a compile per view.
+@MainActor
+enum ArtifactContentRules {
+    private static var rule: WKContentRuleList?
+    private static var waiters: [(WKContentRuleList?, String?) -> Void] = []
+
+    static func load(_ completion: @escaping (WKContentRuleList?, String?) -> Void) {
+        if let rule { return completion(rule, nil) }
+        waiters.append(completion)
+        guard waiters.count == 1 else { return }
+        WKContentRuleListStore.default().compileContentRuleList(
+            forIdentifier: "pilot-artifact-deny-network-v1", encodedContentRuleList: ArtifactSandboxPolicy.contentRules
+        ) { rule, error in
+            let message = error?.localizedDescription
+            Task { @MainActor in
+                // A failure is not cached, so the next view retries the compile.
+                if let rule, message == nil { Self.rule = rule }
+                let pending = waiters
+                waiters = []
+                for waiter in pending { waiter(message == nil ? rule : nil, message) }
+            }
+        }
+    }
+}
+
+/// Library bundles are megabytes (Mermaid is about 5 MB) and identical for every view. Keep one copy per
+/// daemon endpoint, revalidate it with the daemon's ETag, and coalesce concurrent loads. If pilotd is
+/// briefly unreachable (for example while restarting), an already-loaded bundle remains usable.
+@MainActor
+final class ArtifactLibraryCache {
+    static let shared = ArtifactLibraryCache()
+    static let maxBytes = 12 * 1024 * 1024
+    /// Rows scrolling in and out reuse a recently validated bundle without another request.
+    private static let freshness: TimeInterval = 30
+
+    private struct Entry {
+        let data: Data
+        let etag: String?
+        let validated: Date
+    }
+
+    private var entries: [URL: Entry] = [:]
+    private var inflight: [URL: Task<Data, Error>] = [:]
+    private let redirects = RejectArtifactRedirects()
+    private lazy var session = URLSession(configuration: .ephemeral, delegate: redirects, delegateQueue: nil)
+
+    func data(for endpoint: URL) async throws -> Data {
+        if let entry = entries[endpoint], Date().timeIntervalSince(entry.validated) < Self.freshness { return entry.data }
+        if let task = inflight[endpoint] { return try await task.value }
+        let cached = entries[endpoint]
+        let session = session
+        let task = Task<Data, Error> { @MainActor in
+            defer { self.inflight[endpoint] = nil }
+            var request = URLRequest(url: endpoint)
+            request.timeoutInterval = 20
+            if let etag = cached?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, response.url == endpoint else {
+                    throw ClientError("Artifact library unavailable")
+                }
+                if http.statusCode == 304, let cached {
+                    self.entries[endpoint] = Entry(data: cached.data, etag: cached.etag, validated: Date())
+                    return cached.data
+                }
+                guard http.statusCode == 200, data.count <= Self.maxBytes else { throw ClientError("Artifact library unavailable") }
+                self.entries[endpoint] = Entry(data: data, etag: http.value(forHTTPHeaderField: "ETag"), validated: Date())
+                return data
+            } catch {
+                if let cached { return cached.data }
+                throw error
+            }
+        }
+        inflight[endpoint] = task
+        return try await task.value
+    }
+}
+
 /// This is a read-only resource provider, not an RPC channel. Only canonical GETs for
 /// a declared, fixed library can cause a native HTTP request. Redirects are forbidden.
 @MainActor
@@ -223,8 +320,6 @@ final class ArtifactLibraryHandler: NSObject, WKURLSchemeHandler {
     private let libraries: Set<ArtifactLibrary>
     private let client: PilotClient
     private var pending: [ObjectIdentifier: Task<Void, Never>] = [:]
-    private let redirects = RejectArtifactRedirects()
-    private lazy var session = URLSession(configuration: .ephemeral, delegate: redirects, delegateQueue: nil)
 
     init(libraries: Set<ArtifactLibrary>, client: PilotClient) {
         self.libraries = libraries
@@ -242,12 +337,8 @@ final class ArtifactLibraryHandler: NSObject, WKURLSchemeHandler {
             guard let self else { return }
             do {
                 let endpoint = try self.client.artifactLibraryURL(library)
-                var request = URLRequest(url: endpoint)
-                request.timeoutInterval = 20
-                let (data, response) = try await self.session.data(for: request)
+                let data = try await ArtifactLibraryCache.shared.data(for: endpoint)
                 guard !Task.isCancelled, self.pending[key] != nil else { return }
-                guard (response as? HTTPURLResponse)?.statusCode == 200, response.url == endpoint,
-                      data.count <= 12 * 1024 * 1024 else { throw ClientError("Artifact library unavailable") }
                 urlSchemeTask.didReceive(URLResponse(url: url, mimeType: "application/javascript", expectedContentLength: data.count,
                                                     textEncodingName: "utf-8"))
                 urlSchemeTask.didReceive(data)
@@ -269,7 +360,6 @@ final class ArtifactLibraryHandler: NSObject, WKURLSchemeHandler {
     func dispose() {
         for task in pending.values { task.cancel() }
         pending.removeAll()
-        session.invalidateAndCancel()
     }
 }
 

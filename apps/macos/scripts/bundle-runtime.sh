@@ -36,6 +36,8 @@ writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
 JS
 )
 (cd "$stage/runtime"; npm ci --omit=dev --no-audit --no-fund)
+# Ship minified artifact libraries, so first previews never wait for esbuild inside pilotd.
+(cd "$stage/runtime"; node packages/artifacts/scripts/build-libraries.ts)
 python3 "$here/scripts/release_metadata.py" prepare-runtime "$stage/runtime"
 python3 "$here/scripts/release_metadata.py" symlinks "$stage/runtime"
 # Copy links, not their targets. npm's @pilot/* links must stay relative to runtime/packages.

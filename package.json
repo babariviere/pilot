@@ -22,6 +22,7 @@
 		"start": "npm run start -w @pilot/daemon",
 		"app:macos": "apps/macos/scripts/bundle.sh",
 		"artifacts:browser": "playwright install chromium",
+		"artifacts:libraries": "node packages/artifacts/scripts/build-libraries.ts",
 		"typecheck": "tsgo -p tsconfig.json",
 		"test": "node --import tsx --test 'packages/*/src/**/*.test.ts'",
 		"bench:workspace": "node scripts/bench/workspace.ts",

@@ -391,6 +391,12 @@ test("library assets are JavaScript for native requests only", async (t) => {
 	assert.equal(response.status, 200);
 	assert.equal(response.headers.get("content-type"), "text/javascript");
 	assert.equal(await response.text(), await getLibrary("react"));
+	const etag = response.headers.get("etag");
+	assert.ok(etag);
+	assert.equal(response.headers.get("cache-control"), "no-cache");
+	const revalidated = await fetch(path, { headers: { "if-none-match": etag } });
+	assert.equal(revalidated.status, 304);
+	assert.equal(await revalidated.text(), "");
 	assert.equal((await fetch(`${base}/api/artifact-libraries/unknown`)).status, 404);
 	for (const origin of ["null", "https://example.org", base]) {
 		assert.equal((await fetch(path, { headers: { origin } })).status, 403);

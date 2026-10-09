@@ -1,6 +1,6 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { getLibrary, isArtifactLibrary } from "@pilot/artifacts";
+import { getLibraryAsset, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
 	ChangeModelRequest,
@@ -152,8 +152,14 @@ export function createDaemonServer(
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {
 			const name = parts[2]!;
 			if (!isArtifactLibrary(name)) throw new HttpError(404, "Unknown artifact library");
-			const source = await getLibrary(name as ArtifactLibrary);
-			res.writeHead(200, { "content-type": "text/javascript", "x-content-type-options": "nosniff" });
+			const { source, etag } = await getLibraryAsset(name as ArtifactLibrary);
+			// Clients keep the bundle and revalidate it cheaply; a daemon upgrade changes the validator.
+			const headers = { etag, "cache-control": "no-cache", "x-content-type-options": "nosniff" };
+			if (req.headers["if-none-match"] === etag) {
+				res.writeHead(304, headers);
+				return res.end();
+			}
+			res.writeHead(200, { ...headers, "content-type": "text/javascript" });
 			return res.end(source);
 		}
 		if (parts[1] === "models" && parts.length === 2 && req.method === "GET") {
