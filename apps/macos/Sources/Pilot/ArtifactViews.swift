@@ -21,10 +21,38 @@ final class ArtifactViewState: ObservableObject {
             let revision = try await AppModel.shared.client.artifact(reference, latest: latest)
             try Task.checkCancellation()
             self.revision = revision
+            if !latest { ArtifactInlineCache.store(revision, for: reference) }
         } catch {
             if !Task.isCancelled { self.error = error.localizedDescription }
         }
         if !Task.isCancelled { loading = false }
+    }
+}
+
+/// Lazy transcript rows lose their state when scrolled away. Remember pinned revisions and
+/// measured sizes so a recreated card keeps its height instead of reloading from a placeholder.
+@MainActor
+enum ArtifactInlineCache {
+    private static var revisions: [ArtifactReference: ArtifactRevision] = [:]
+    private static var revisionOrder: [ArtifactReference] = []
+    private static var sizes: [ArtifactReference: CGSize] = [:]
+    private static let revisionLimit = 32
+    private static let sizeLimit = 512
+
+    static func revision(for reference: ArtifactReference) -> ArtifactRevision? { revisions[reference] }
+
+    static func store(_ revision: ArtifactRevision, for reference: ArtifactReference) {
+        if revisions.updateValue(revision, forKey: reference) != nil { revisionOrder.removeAll { $0 == reference } }
+        revisionOrder.append(reference)
+        while revisionOrder.count > revisionLimit { revisions[revisionOrder.removeFirst()] = nil }
+    }
+
+    static func contentSize(for reference: ArtifactReference) -> CGSize? { sizes[reference] }
+
+    static func storeContentSize(_ size: CGSize?, for reference: ArtifactReference) {
+        guard let size else { return }
+        if sizes.count >= sizeLimit, sizes[reference] == nil { sizes.removeAll(keepingCapacity: true) }
+        sizes[reference] = size
     }
 }
 
@@ -33,16 +61,36 @@ final class ArtifactViewState: ObservableObject {
 struct ArtifactCard: View {
     let reference: ArtifactReference
     @Environment(\.transcriptContentPrepared) private var contentPrepared
-    @StateObject private var state = ArtifactViewState()
-    @StateObject private var render = ArtifactRenderState()
+    @StateObject private var state: ArtifactViewState
+    @StateObject private var render: ArtifactRenderState
+
+    init(reference: ArtifactReference) {
+        self.reference = reference
+        _state = StateObject(wrappedValue: {
+            let state = ArtifactViewState()
+            state.revision = ArtifactInlineCache.revision(for: reference)
+            return state
+        }())
+        _render = StateObject(wrappedValue: {
+            let render = ArtifactRenderState()
+            render.contentSize = ArtifactInlineCache.contentSize(for: reference)
+            return render
+        }())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if state.preview, state.visible {
+            if state.preview {
+                // Reserve the measured size while offscreen, so the web view coming and going
+                // never changes the row height under the user's scroll position.
                 InlineArtifactLayout(contentSize: render.contentSize,
                                      image: state.revision?.kind == .image || state.revision?.kind == .swiftui) {
-                    ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
-                                    state: state, render: render)
+                    if state.visible {
+                        ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
+                                        state: state, render: render)
+                    } else {
+                        Theme.background
+                    }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
@@ -56,7 +104,10 @@ struct ArtifactCard: View {
         }
         .onAppear { state.visible = true }
         .onDisappear { state.visible = false }
-        .onChange(of: render.contentSize) { _, _ in contentPrepared?() }
+        .onChange(of: render.contentSize) { _, size in
+            ArtifactInlineCache.storeContentSize(size, for: reference)
+            contentPrepared?()
+        }
         .sheet(isPresented: $state.viewer) { ArtifactViewer(reference: reference, latest: false) }
     }
 }
@@ -178,7 +229,9 @@ private struct ArtifactContent: View {
         .task {
             render.loading = true
             render.error = nil
-            render.contentSize = nil
+            // A pinned revision already loaded by this card (or its cache) is immutable.
+            if !latest, state.revision != nil, state.error == nil { return }
+            render.contentSize = inline ? ArtifactInlineCache.contentSize(for: reference) : nil
             await state.load(reference, latest: latest)
         }
         .background(Theme.background)

@@ -23,7 +23,8 @@ struct InlineDiagramBlock: View {
             } else if state.visible {
                 InlineDiagramPreview(kind: kind, text: text, onOpen: { state.viewer = true })
             } else {
-                Color.clear.frame(height: 180)
+                // Reserve the last measured height so rows do not jump as they scroll back in.
+                Color.clear.frame(height: InlineDiagramLayout.cachedHeight(kind: kind, source: text) ?? 180)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -44,11 +45,29 @@ struct InlineDiagramBlock: View {
 @MainActor
 final class InlineDiagramLayout: ObservableObject {
     @Published var height: CGFloat = 180
+    private let key: String?
+    private static var heights: [String: CGFloat] = [:]
+    private static let limit = 512
+
+    init(kind: MarkdownDiagramKind? = nil, source: String? = nil) {
+        key = kind.flatMap { kind in source.map { Self.key(kind: kind, source: $0) } }
+        if let key, let height = Self.heights[key] { self.height = height }
+    }
+
+    static func cachedHeight(kind: MarkdownDiagramKind, source: String) -> CGFloat? {
+        heights[key(kind: kind, source: source)]
+    }
+
+    private static func key(kind: MarkdownDiagramKind, source: String) -> String { kind.rawValue + ":" + source }
 
     func update(_ value: Double) {
         guard value.isFinite else { return }
         let height = min(480, max(60, ceil(value)))
         if abs(self.height - height) > 1 { self.height = height }
+        if let key {
+            if Self.heights.count >= Self.limit, Self.heights[key] == nil { Self.heights.removeAll(keepingCapacity: true) }
+            Self.heights[key] = self.height
+        }
     }
 }
 
@@ -87,7 +106,16 @@ private struct InlineDiagramPreview: View {
     var expanded = false
     var onOpen: (() -> Void)?
     @StateObject private var render = ArtifactRenderState()
-    @StateObject private var layout = InlineDiagramLayout()
+    @StateObject private var layout: InlineDiagramLayout
+
+    init(kind: MarkdownDiagramKind, text: String, expanded: Bool = false, onOpen: (() -> Void)? = nil) {
+        self.kind = kind
+        self.text = text
+        self.expanded = expanded
+        self.onOpen = onOpen
+        // The expanded viewer has a different width, so only inline previews share measurements.
+        _layout = StateObject(wrappedValue: expanded ? InlineDiagramLayout() : InlineDiagramLayout(kind: kind, source: text))
+    }
 
     var body: some View {
         if let error = render.error {

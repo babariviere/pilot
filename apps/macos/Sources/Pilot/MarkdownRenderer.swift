@@ -106,6 +106,64 @@ final class MarkdownRenderState: ObservableObject {
     @Published var blocks: [PreparedMarkdownBlock] = []
     @Published var highlighted: AttributedString?
     var source: String?
+
+    init() {}
+
+    /// Lazy transcript rows are rebuilt whenever they scroll back into view. Seeding from the
+    /// main-actor cache gives them their final height on the first frame instead of 0 points.
+    init(markdown text: String) {
+        if let blocks = PreparedMarkdownCache.shared.blocks(for: text) {
+            self.blocks = blocks
+            source = text
+        }
+    }
+}
+
+/// Synchronous, bounded mirror of prepared Markdown for views being recreated on the main actor.
+@MainActor
+final class PreparedMarkdownCache {
+    static let shared = PreparedMarkdownCache()
+    private struct Entry {
+        let blocks: [PreparedMarkdownBlock]
+        let cost: Int
+        var order: Int
+    }
+    private var entries: [String: Entry] = [:]
+    private var bytes = 0
+    private var order = 0
+    private let byteLimit: Int
+    private let countLimit: Int
+
+    init(byteLimit: Int = 32 * 1024 * 1024, countLimit: Int = 512) {
+        self.byteLimit = max(0, byteLimit)
+        self.countLimit = max(1, countLimit)
+    }
+
+    var count: Int { entries.count }
+
+    func blocks(for text: String) -> [PreparedMarkdownBlock]? {
+        guard var entry = entries[text] else { return nil }
+        order += 1
+        entry.order = order
+        entries[text] = entry
+        return entry.blocks
+    }
+
+    /// A streaming view replaces its previous prefix, so token updates do not evict history.
+    func store(_ blocks: [PreparedMarkdownBlock], for text: String, replacing previous: String? = nil) {
+        if let previous, previous != text, let old = entries.removeValue(forKey: previous) { bytes -= old.cost }
+        let cost = text.utf8.count * 8 + blocks.count * 256
+        guard cost <= byteLimit else { return }
+        order += 1
+        if let previous = entries[text] { bytes -= previous.cost }
+        entries[text] = Entry(blocks: blocks, cost: cost, order: order)
+        bytes += cost
+        while entries.count > countLimit || bytes > byteLimit {
+            guard let oldest = entries.min(by: { $0.value.order < $1.value.order }) else { break }
+            bytes -= oldest.value.cost
+            entries[oldest.key] = nil
+        }
+    }
 }
 
 private struct TranscriptContentPreparedKey: EnvironmentKey {
