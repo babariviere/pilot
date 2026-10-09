@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.1](https://github.com/babariviere/pilot/compare/v1.6.0...v1.6.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **macos:** keep transcript rows stable while scrolling ([1e6c48b](https://github.com/babariviere/pilot/commit/1e6c48b3f896d4c91517bf5fd0818459e3a0cf3e))
+* **macos:** move repository context into Changes ([9737453](https://github.com/babariviere/pilot/commit/97374533a4b026a13ddd6beb400045243a556b62))
+* **macos:** put composer controls on an opaque tray ([3261fd0](https://github.com/babariviere/pilot/commit/3261fd0abfb43dcd68dcc1d9195d9d2740222137))
+* **macos:** simplify session toolbar and space its buttons ([ebbc2a1](https://github.com/babariviere/pilot/commit/ebbc2a16136664f8058a05d21ecee87bd9e52450))
+* **queue:** hide background job notifications from composer ([8f18c67](https://github.com/babariviere/pilot/commit/8f18c67533fb8486731a061235c8095dc18c10e7))
+* **terminal:** Focus the shell when opening the terminal ([66d411f](https://github.com/babariviere/pilot/commit/66d411f09ebf4ccdd434941280e6237dc16e24b6))
+
 ## [1.6.0](https://github.com/babariviere/pilot/compare/v1.5.0...v1.6.0) (2026-10-08)
 
 
