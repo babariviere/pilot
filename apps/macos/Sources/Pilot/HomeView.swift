@@ -191,7 +191,7 @@ struct TaskComposer: View {
             }
         }
         // Opaque, so the sky's dissolving dots never show through.
-        .background(RoundedRectangle(cornerRadius: 14).fill(Color(hex: 0xF5F5F5)))
+        .background(RoundedRectangle(cornerRadius: 14).fill(Theme.tray))
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
