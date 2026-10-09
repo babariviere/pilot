@@ -125,6 +125,7 @@ enum ArtifactRenderTest {
             try await renderImageDefaults(directory: directory, client: client)
             try await renderViewerHeader(directory: directory)
             try await renderContentGrowth(directory: directory, client: client)
+            try await renderMermaidLayout(directory: directory, client: client)
             if let reactPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_REACT"] {
                 try await renderReact(htmlURL: URL(filePath: reactPath), directory: directory, client: client, server: server)
             }
@@ -133,6 +134,63 @@ enum ArtifactRenderTest {
             print("artifact-render-test failed: \(error)")
             exit(1)
         }
+    }
+
+    private static func renderMermaidLayout(directory: URL, client: PilotClient) async throws {
+        // A saved document without the new runtime CSS, matching the reported padded <pre> layout.
+        let html = """
+        <style>body{font:14px system-ui;margin:0;padding:24px}h2{font-size:20px;margin:0 0 12px}
+        .mermaid{background:#fafafa;padding:16px;border-radius:12px}svg{max-width:100%}</style>
+        <script src="pilot-artifact://library/mermaid"></script>
+        <h2>Short catalog, detailed guidance on demand</h2>
+        <pre class="mermaid">
+        flowchart TD
+          A[Kernel opens or resumes a session] --> B[Registers artifact with compact description]
+          B --> C[artifacts namespace stays visible even at zero budget]
+          C --> D[describeTool: full callable schema]
+          C --> E[pilot-artifacts skill: load only when authoring]
+          F[Older cached prompt lacks new skill listing] --> G[describeNamespace: bundled skill location]
+          G --> E
+          E --> H[tools.artifact: create or update]
+          D --> H
+          H --> I[Saved in session; app displays it when opened]
+        </pre>
+        <script>mermaid.initialize({startOnLoad:false,theme:'neutral',securityLevel:'strict'});
+        mermaid.run().then(()=>window.diagramReady=true);</script>
+        """
+        let data = Data("""
+        {"id":"centered","sessionId":"test","title":"Centered Mermaid","kind":"html","revision":1,
+         "createdAt":1,"updatedAt":1,"source":\(jsString(html)),"html":\(jsString(html)),"libraries":["mermaid"]}
+        """.utf8)
+        let revision = try JSONDecoder().decode(ArtifactRevision.self, from: data)
+        let state = ArtifactRenderState()
+        let coordinator = ArtifactWebView.Coordinator(state: state)
+        let view = ArtifactWebView.makeSandboxView(coordinator: coordinator,
+            libraries: ArtifactLibraryHandler(libraries: [.mermaid], client: client))
+        view.frame = CGRect(x: 0, y: 0, width: 1296, height: 1100)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        window.orderFront(nil)
+        defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator); window.close() }
+        coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision))
+        try await waitJS(view, label: "Saved Mermaid") { "window.diagramReady === true" }
+        for width in [1296, 320] {
+            view.setFrameSize(CGSize(width: width, height: 1100))
+            let centered = try await view.evaluateJavaScript("""
+            (()=>{const p=document.querySelector('.mermaid').getBoundingClientRect();
+              const s=document.querySelector('.mermaid > svg').getBoundingClientRect();
+              return s.width>0 && Math.abs((s.left+s.right-p.left-p.right)/2)<1;})()
+            """) as? Bool
+            guard centered == true else { throw ClientError("Saved Mermaid not centered at \(width)") }
+            try await state.snapshotPNG().write(to: directory.appending(path: "artifact-mermaid-centered-\(width).png"))
+        }
+        let overridden = try await view.evaluateJavaScript("""
+        (()=>{const style=document.createElement('style');style.textContent='.mermaid > svg{margin-inline:0}';
+          document.head.appendChild(style);return getComputedStyle(document.querySelector('.mermaid > svg')).marginLeft==='0px';})()
+        """) as? Bool
+        guard overridden == true else { throw ClientError("Mermaid author override lost") }
+        print("artifact-render-test passed: saved Mermaid centered at wide/narrow widths, author override")
     }
 
     private static func renderContentGrowth(directory: URL, client: PilotClient) async throws {

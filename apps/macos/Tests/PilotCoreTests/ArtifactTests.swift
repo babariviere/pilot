@@ -67,12 +67,16 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     #expect(!document.contains(revision.source))
 }
 
-@Test func nativeHTMLAndReactPreviewsKeepTheirOriginalSizing() {
+@Test func nativeHTMLAndReactPreviewsCenterMermaidWithoutChangingOtherSizing() {
     for kind in [ArtifactKind.html, .react] {
         let revision = ArtifactRevision(id: "a", sessionId: "s", projectId: nil, title: "UI", kind: kind,
                                         revision: 1, createdAt: 1, updatedAt: 1, source: "source",
                                         html: "<style>img{width:100%}</style><img><div id='artifact-root'></div>", libraries: [])
-        #expect(ArtifactPreviewDocument.document(revision) == ArtifactSandboxPolicy.document(revision.html))
+        let document = ArtifactPreviewDocument.document(revision)
+        #expect(document.contains(":where(.mermaid) > svg{display:block;margin-inline:auto}"))
+        #expect(document.range(of: "pilot-artifact-diagram-layout")!.lowerBound < document.range(of: revision.html)!.lowerBound)
+        #expect(document.contains(revision.html))
+        #expect(!document.contains("!important"))
     }
 }
 

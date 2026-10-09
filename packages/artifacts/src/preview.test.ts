@@ -119,6 +119,36 @@ test("React interactions and Mermaid diagrams render in the preview", { skip: !b
 	assert.ok(!mermaid.consoleMessages.some((message) => message.level === "error"));
 });
 
+test("Mermaid centers in padded pre/div containers at narrow and wide widths, with author overrides", {
+	skip: !browserInstalled,
+}, async () => {
+	for (const width of [320, 1296]) {
+		const result = await previewArtifact(
+			{
+				title: "Centered diagrams",
+				kind: "html",
+				libraries: ["mermaid"],
+				source: `<style>.mermaid{padding:16px;background:#fafafa}.custom > svg{margin-inline:0}</style>
+<pre class="mermaid">graph TD; A-->B</pre><div class="mermaid">graph TD; C-->D</div>
+<div class="mermaid custom">graph TD; E-->F</div><svg id="other" width="20" height="20"></svg>
+<script>mermaid.initialize({startOnLoad:false});mermaid.run().then(()=>{
+  for(const host of document.querySelectorAll('.mermaid')){
+    const svg=host.querySelector('svg'), box=svg.getBoundingClientRect(), parent=host.getBoundingClientRect();
+    console.log(host.classList.contains('custom') ? 'override '+getComputedStyle(svg).marginLeft : 'center '+Math.abs((box.left+box.right-parent.left-parent.right)/2));
+  }
+  console.log('other '+getComputedStyle(document.getElementById('other')).display);
+});</script>`,
+			},
+			{ width, height: 900 },
+		);
+		const centered = result.consoleMessages.filter((message) => message.text.startsWith("center "));
+		assert.equal(centered.length, 2, JSON.stringify(result.consoleMessages));
+		for (const message of centered) assert.ok(Number(message.text.slice(7)) < 1, message.text);
+		assert.ok(result.consoleMessages.some((message) => message.text === "override 0px"));
+		assert.ok(result.consoleMessages.some((message) => message.text === "other inline"));
+	}
+});
+
 test("HTML ReactDOM shares React hooks, and optional libraries and animations run locally", {
 	skip: !browserInstalled,
 }, async () => {

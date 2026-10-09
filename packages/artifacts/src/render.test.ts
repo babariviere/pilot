@@ -2,6 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { artifactLibraries, getLibrary, isArtifactLibrary, prepareArtifact, validateArtifact } from "./render.ts";
 
+test("Mermaid SVGs receive an overridable centered default without centering other SVGs", async () => {
+	const source = '<style>.mermaid > svg{margin-inline:0}</style><pre class="mermaid">graph TD; A-->B</pre>';
+	const { html } = await prepareArtifact({ title: "Diagram", kind: "html", source, libraries: ["mermaid"] });
+	const rule = ":where(.mermaid) > svg {display:block;margin-inline:auto;}";
+	assert.ok(html.includes(rule));
+	assert.ok(html.indexOf(rule) < html.indexOf(source));
+});
+
 test("HTML receives its policy before agent content and only requested offline libraries", async () => {
 	const { html, libraries } = await prepareArtifact({
 		title: "chart",
