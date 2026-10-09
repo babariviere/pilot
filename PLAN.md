@@ -513,8 +513,10 @@ reports), producing a morning summary in the app and Slack.
   The preview action is exposed only when Chromium or the native Swift toolchain is installed at session startup, and is never
   required before publishing. Pilot-only system guidance encourages useful explanatory diagrams,
   preferring simple Mermaid, only while the artifact tool is available (including through codemode).
-  This guidance explicitly names `tools.artifact(...)` and `describeTool("artifact")` so a budget-omitted
-  codemode declaration is not mistaken for an unavailable tool or an unavailable preview renderer.
+  The compact tool lives in an `artifacts` namespace, whose summary remains visible even when codemode's
+  description budget omits the full schema. Detailed authoring rules and examples live in the bundled
+  `pilot-artifacts` skill, advertised on session open/reopen and read on demand. Ask loads only this host
+  skill (not user/project skills); its reader permits the exact bundled document, never sibling files.
   SwiftUI artifacts define `ArtifactView` and compile/render in disposable macOS `sandbox-exec`
   processes using the installed Swift Command Line Tools. Source remains editable; publication embeds
   an 800x600 PNG for offline viewing without recompilation. Draft previews support custom dimensions

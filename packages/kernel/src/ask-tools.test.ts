@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, open, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { createAskTools } from "./ask-tools.ts";
+import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import type { AskContext } from "./policy.ts";
 
 const git = promisify(execFile);
@@ -25,8 +26,8 @@ async function fixture(t: TestContext) {
 	return { root, source };
 }
 
-async function calls(ask: AskContext) {
-	const tools = await createAskTools(ask);
+async function calls(ask: AskContext, artifactSkill = false) {
+	const tools = await createAskTools(ask, { artifactSkill });
 	for (const tool of tools) {
 		assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
 		assert.equal(tool.annotations?.destructiveHint, false, tool.name);
@@ -108,6 +109,23 @@ for (const snapshot of [false, true]) {
 				/cancelled/,
 			);
 		if (snapshot) await assert.rejects(call("read", { path: "untracked" }), /not found in pinned tree/);
+		await assert.rejects(call("read", { path: ARTIFACT_SKILL_PATH }), /Ask paths must stay inside the source/);
+		const hostRead = await calls(ask, true);
+		const skill = text(await hostRead("read", { path: ARTIFACT_SKILL_PATH }));
+		assert.match(skill, /name: pilot-artifacts/);
+		assert.match(skill, /Ask image sources must be inline base64/);
+		assert.equal(
+			text(await hostRead("read", { path: ARTIFACT_SKILL_PATH, limit: 1 })),
+			"---\n[More lines available; use offset=2.]",
+		);
+		for (const path of [
+			dirname(ARTIFACT_SKILL_PATH),
+			join(dirname(ARTIFACT_SKILL_PATH), "other.md"),
+			`${dirname(ARTIFACT_SKILL_PATH)}/../pilot-artifacts/SKILL.md`,
+			`${ARTIFACT_SKILL_PATH}/other`,
+		])
+			await assert.rejects(hostRead("read", { path }), /Ask/);
+		await assert.rejects(hostRead("read", { path: ARTIFACT_SKILL_PATH }, controller.signal), /cancelled/);
 	});
 }
 

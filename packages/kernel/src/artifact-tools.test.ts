@@ -6,6 +6,7 @@ import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-co
 import { isArtifactPreviewAvailable } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
+import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 
 const write: ArtifactWrite = { title: "Chart", kind: "html", source: "<h1>Editable</h1>", libraries: ["echarts"] };
 const revision: ArtifactRevision = {
@@ -61,7 +62,7 @@ function execute(tool: ToolDefinition, args: unknown, signal?: AbortSignal) {
 	return tool.execute("call-1", args, signal, undefined, { cwd: process.cwd() } as ExtensionToolContext);
 }
 
-test("artifact tools declare structured output, sequential execution and authoring guidance", () => {
+test("artifact tools declare structured output, sequential execution and a compact namespaced skill pointer", () => {
 	const f = fixture();
 	assert.deepEqual(
 		f.tools.map((tool) => tool.name),
@@ -73,31 +74,15 @@ test("artifact tools declare structured output, sequential execution and authori
 		assert.notEqual(tool.exposure, "model-only");
 		assert.equal(tool.annotations?.openWorldHint, false);
 		assert.notEqual(tool.annotations?.readOnlyHint, true, "the combined tool can publish");
-	}
-	for (const name of ["artifact"]) {
-		const description = f.tools.find((tool) => tool.name === name)!.description;
-		for (const example of [
-			"512 KiB",
-			"default-export",
-			"echarts.init",
-			"mermaid.initialize",
-			"motion.animate",
-			"d3.select",
-			"THREE.Scene",
-			"arbitrary npm imports",
-			"Tailwind is not available",
-			"native bridge",
-			"<style> tags",
-			"--pilot-background",
-			"--pilot-foreground",
-			"--pilot-muted",
-			"--pilot-muted-foreground",
-			"--pilot-border",
-			"--pilot-primary",
-			"--pilot-radius",
-			"your styles may override them",
-		])
-			assert.ok(description.includes(example), `${name}: ${example}`);
+		assert.equal(tool.namespace?.name, "artifacts");
+		assert.match(tool.namespace!.description!, /tools\.artifact/);
+		assert.match(tool.namespace!.description!, /pilot-artifacts skill/);
+		assert.ok(tool.namespace!.instructions!.includes(ARTIFACT_SKILL_PATH));
+		assert.match(tool.description, /pilot-artifacts skill before authoring/);
+		assert.ok(tool.description.length < 1600, `description bloated to ${tool.description.length} characters`);
+		assert.match(tool.description, /512 KiB|16 MiB/);
+		assert.match(tool.description, /expectedRevision/);
+		assert.doesNotMatch(tool.description, /echarts\.init|mermaid\.initialize|motion\.animate|@StateObject/);
 	}
 });
 
@@ -428,14 +413,8 @@ test("SwiftUI actions accept native source, forward cancellation and reject brow
 		{ method: "create", args: [native, signal] },
 		{ method: "update", args: ["artifact-1", native, 3, signal] },
 	]);
-	for (const guidance of [
-		"ArtifactView",
-		"Command Line Tools",
-		"Static screenshot",
-		"@StateObject",
-		"no browser installation",
-	])
-		assert.ok(tool.description.includes(guidance));
+	assert.match(tool.description, /SwiftUI requires the macOS Swift toolchain/);
+	assert.match(tool.description, /static screenshot, not project views/);
 });
 
 test("preview forwards viewport and abort signal, returns image content and structured screenshot", async () => {
