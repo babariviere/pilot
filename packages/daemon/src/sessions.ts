@@ -301,6 +301,7 @@ export class Worker implements SessionWorker {
 	private children = true;
 	private checkingChildren?: Promise<boolean>;
 	private closing?: Promise<void>;
+	private shutdownRequested = false;
 	private readonly activity = new WorkerActivity();
 	private activityWatchId?: string;
 
@@ -465,6 +466,8 @@ export class Worker implements SessionWorker {
 	}
 
 	close(): Promise<void> {
+		// Set before sending: disconnect or a send failure can arrive synchronously.
+		this.shutdownRequested = true;
 		this.closing ??= new Promise((resolve) => {
 			if (this.exited || this.child.exitCode !== null) return resolve();
 			this.armKillDeadline();
@@ -486,7 +489,9 @@ export class Worker implements SessionWorker {
 	}
 
 	private failTransport(error: WorkerUnavailable): void {
-		if (this.unavailable || this.exited) return;
+		// Expected IPC teardown must not turn an intentional close into a session failure.
+		// The close deadline still waits for confirmed exit and escalates if necessary.
+		if (this.unavailable || this.exited || this.shutdownRequested) return;
 		this.unavailable = error;
 		this.error = error.message;
 		this.state = "failed";
@@ -2125,6 +2130,9 @@ export class SessionManager {
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		// Parking already detached this worker. Cleanup errors and late packets belong
+		// to its shutdown, not the session's completed work or a replacement worker.
+		if (this.parked.has(worker)) return;
 		if (
 			packet.type === "error" &&
 			!packet.requestId &&

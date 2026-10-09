@@ -52,10 +52,11 @@ class IpcProcess extends EventEmitter {
 
 function supervisedWorker(t: TestContext, commandTimeoutMs = 1_000) {
 	const child = new IpcProcess();
+	const packets: KernelPacket[] = [];
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const worker = new KernelWorker(
 		{ sessionId: "supervision", cwd: "/unused", storageDir: "/unused" },
-		() => {},
+		(packet) => packets.push(packet),
 		() => {},
 		undefined,
 		{ child: child as unknown as ChildProcess, startupTimeoutMs: 1_000, commandTimeoutMs },
@@ -67,8 +68,48 @@ function supervisedWorker(t: TestContext, commandTimeoutMs = 1_000) {
 		assert.ok(watch?.type === "watch");
 		child.emit("message", { type: "events", watchId: watch.watchId, events: [snapshot] });
 	};
-	return { child, worker, ready };
+	return { child, worker, ready, packets };
 }
+
+test("unexpected disconnect still fails an idle worker", async (t) => {
+	const { child, worker, ready, packets } = supervisedWorker(t);
+	ready();
+	child.connected = false;
+	child.emit("disconnect");
+	assert.equal(worker.state, "failed");
+	assert.equal(worker.transportUnavailable, true);
+	assert.deepEqual(packets.at(-1), { type: "error", message: "Kernel IPC disconnected" });
+	assert.deepEqual(child.killed, ["SIGTERM"]);
+});
+
+test("intentional close ignores disconnect but waits for confirmed exit", async (t) => {
+	const { child, worker, ready, packets } = supervisedWorker(t);
+	ready();
+	const send = child.send.bind(child);
+	child.send = (command, callback) => {
+		if (command.type === "shutdown") {
+			child.connected = false;
+			child.emit("disconnect");
+			callback?.(new Error("IPC channel closed"));
+			return true;
+		}
+		return send(command, callback);
+	};
+	let closed = false;
+	const closing = worker.close().then(() => {
+		closed = true;
+	});
+	await Promise.resolve();
+	assert.equal(closed, false);
+	assert.equal(worker.state, "idle");
+	assert.equal(worker.error, undefined);
+	assert.equal(worker.transportUnavailable, false);
+	assert.ok(packets.every((packet) => packet.type !== "error"));
+	assert.deepEqual(child.killed, []);
+	t.mock.timers.tick(8_000);
+	await closing;
+	assert.deepEqual(child.killed, ["SIGKILL"], "close retains its shutdown deadline");
+});
 
 test("startup deadline terminates a hung worker and rejects readiness as uncertain transport", async (t) => {
 	const { child, worker } = supervisedWorker(t);
@@ -1687,6 +1728,62 @@ test("ready and working completions survive restart parked, replay does not chan
 		assert.equal(changes.at(-1)?.outcome, "stopped");
 	});
 });
+
+for (const shutdownError of [false, true]) {
+	test(`parking a real worker preserves completion through disconnect (shutdown error: ${shutdownError})`, async () => {
+		await outcomeFixture(async (manager, meta, home) => {
+			const child = new IpcProcess();
+			const worker = new KernelWorker(
+				{ sessionId: meta.id, cwd: home, storageDir: home },
+				(packet) => manager["onPacket"](meta, worker, packet),
+				(exited, code, signal) => manager["onExit"](meta, exited, code, signal),
+				undefined,
+				{ child: child as unknown as ChildProcess },
+			);
+			manager["workers"].set(meta.id, worker);
+			child.emit("message", {
+				type: "ready",
+				model: "test/model",
+				working: false,
+				usage: {},
+				completion: { outcome: "done", outcomeAt: 42 },
+			});
+			const watch = child.sent.findLast((command) => command.type === "watch");
+			assert.ok(watch?.type === "watch");
+			child.emit("message", { type: "events", watchId: watch.watchId, events: [snapshot] });
+			worker.hasChildren = async () => false;
+			manager["lastUse"].set(meta.id, 0);
+			const changes: SessionSummary[] = [];
+			manager.onChange((summary) => changes.push(summary));
+			await manager["parkIdleWorkers"]();
+			assert.equal(child.sent.at(-1)?.type, "shutdown");
+			if (shutdownError) child.emit("message", { type: "error", message: "Shutdown failed: cleanup" });
+			child.connected = false;
+			child.emit("disconnect");
+			child.emit("exit", shutdownError ? 1 : 0, null);
+			await manager["unparked"](meta.id);
+			await flush(manager);
+			assert.deepEqual(child.killed, []);
+			assert.ok(changes.length > 0);
+			for (const summary of changes) {
+				assert.equal(summary.state, "parked");
+				assert.equal(summary.outcome, "done");
+				assert.equal(summary.outcomeAt, 42);
+				assert.equal(summary.error, undefined);
+			}
+			const reopened = new SessionManager(home, new ProjectStore(home));
+			try {
+				await reopened.load();
+				assert.equal(reopened.get(meta.id)?.outcome, "done");
+				assert.equal(reopened.get(meta.id)?.outcomeAt, 42);
+				assert.equal(reopened.get(meta.id)?.state, "parked");
+				assert.equal(reopened.get(meta.id)?.error, undefined);
+			} finally {
+				await reopened.shutdown();
+			}
+		});
+	});
+}
 
 test("errors and fatal exits persist failures, keeping the original error when its worker exits", async () => {
 	await outcomeFixture(async (manager, meta, home) => {
