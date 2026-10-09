@@ -44,6 +44,11 @@ export interface AskContext {
 const POSTING: Array<{ pattern: RegExp; what: string }> = [
 	{ pattern: /\bgh\s+(?:pr|issue)\s+(?:comment|review)\b/, what: "comment or review" },
 	{ pattern: /\bgh\s+pr\s+(?:merge|close)\b/, what: "merge or close a pull request" },
+	{ pattern: /\bgh\s+stack\s+merge\b/, what: "merge a pull request stack" },
+	{
+		pattern: /\bgh\s+stack\s+(?:submit|push|sync|rebase|modify|unstack)\b/,
+		what: "push or rewrite branches through gh stack",
+	},
 	{ pattern: /\bgh\s+issue\s+(?:close|create)\b/, what: "create or close an issue" },
 	{ pattern: /\bmcp__github\w*__\w*(?:comment|review|merge)\w*/i, what: "comment, review or merge" },
 ];
