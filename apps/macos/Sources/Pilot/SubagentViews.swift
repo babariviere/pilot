@@ -190,7 +190,7 @@ struct SubagentsStrip: View {
         if !subagents.isEmpty {
             HStack(spacing: 6) {
                 Image(systemName: "person.2")
-                    .font(.system(size: 11))
+                    .font(.pilot(.caption))
                     .foregroundStyle(Theme.mutedForeground)
                     .help("Subagents")
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -200,7 +200,7 @@ struct SubagentsStrip: View {
                     .padding(.vertical, 1)
                 }
                 Text(summary(subagents))
-                    .font(.system(size: 11))
+                    .font(.pilot(.caption))
                     .foregroundStyle(Theme.faintForeground)
                     .lineLimit(1)
                     .fixedSize()
@@ -221,7 +221,7 @@ struct SubagentsStrip: View {
             HStack(spacing: 5) {
                 SubagentStatusGlyph(state: display)
                 Text(subagent.name)
-                    .font(.system(size: 11, weight: shown ? .semibold : .regular))
+                    .font(.pilot(.caption, weight: shown ? .semibold : .regular))
                     .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
             }
@@ -275,32 +275,32 @@ struct SubagentPopover: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 SubagentStatusGlyph(state: display)
-                Text(subagent.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                Text(display.label).font(.system(size: 11, weight: .medium)).foregroundStyle(display.color)
+                Text(subagent.name).font(.pilot(.body, weight: .semibold)).lineLimit(1)
+                Text(display.label).font(.pilot(.caption, weight: .medium)).foregroundStyle(display.color)
                 Spacer(minLength: 12)
                 if subagent.isWorking {
                     Text(Date(timeIntervalSince1970: subagent.createdAt / 1000), style: .relative)
-                        .font(.system(size: 11).monospacedDigit())
+                        .font(.pilot(.caption).monospacedDigit())
                         .foregroundStyle(Theme.faintForeground)
                 }
             }
             Text(subagent.task)
-                .font(.system(size: 12))
+                .font(.pilot(.label))
                 .foregroundStyle(Theme.mutedForeground)
                 .lineLimit(3)
                 .textSelection(.enabled)
             if let error = subagent.error {
-                Text(error).font(.system(size: 11)).foregroundStyle(Theme.destructive).lineLimit(3)
+                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).lineLimit(3)
             }
             Divider()
             VStack(alignment: .leading, spacing: 6) {
                 if feed.loading {
                     ProgressView().controlSize(.small).frame(maxWidth: .infinity)
                 } else if let error = feed.error {
-                    Text(error).font(.system(size: 11)).foregroundStyle(Theme.destructive)
+                    Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
                 } else if activity.isEmpty {
                     Text(subagent.isWorking ? "Starting…" : "No activity yet")
-                        .font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
+                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
                 } else {
                     ForEach(activity) { row in SubagentActivityLine(row: row) }
                 }
@@ -347,19 +347,19 @@ private struct SubagentActivityLine: View {
             ForEach(items.suffix(3)) { item in
                 let summary = item.summary
                 HStack(spacing: 6) {
-                    Image(systemName: summary.icon).font(.system(size: 10)).frame(width: 12)
-                    Text(summary.title).font(.system(size: 11, weight: .medium))
+                    Image(systemName: summary.icon).font(.pilot(.small)).frame(width: 12)
+                    Text(summary.title).font(.pilot(.caption, weight: .medium))
                     if let detail = summary.detail {
-                        Text(detail).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.faintForeground)
+                        Text(detail).font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
                     }
                 }
                 .foregroundStyle(item.status == .error ? Theme.destructive : Theme.mutedForeground)
                 .lineLimit(1)
             }
         case let .text(_, text, _):
-            Text(Self.inline(text)).font(.system(size: 12)).foregroundStyle(Theme.foreground).lineLimit(3)
+            Text(Self.inline(text)).font(.pilot(.label)).foregroundStyle(Theme.foreground).lineLimit(3)
         case let .error(_, text):
-            Text(text).font(.system(size: 11)).foregroundStyle(Theme.destructive).lineLimit(2)
+            Text(text).font(.pilot(.caption)).foregroundStyle(Theme.destructive).lineLimit(2)
         default:
             EmptyView()
         }
@@ -383,10 +383,10 @@ struct SubagentsPane: View {
         let subagents = session.subagents ?? []
         if subagents.isEmpty {
             VStack(spacing: 8) {
-                Image(systemName: "person.2").font(.system(size: 22)).foregroundStyle(Theme.faintForeground)
-                Text("No subagents").font(.system(size: 13, weight: .medium))
+                Image(systemName: "person.2").font(.pilot(.title)).foregroundStyle(Theme.faintForeground)
+                Text("No subagents").font(.pilot(.body, weight: .medium))
                 Text("Subagents this chat starts appear here, with their transcripts.")
-                    .font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                    .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                     .multilineTextAlignment(.center)
             }
             .padding(24)
@@ -416,12 +416,12 @@ struct SubagentsPane: View {
                 HStack(spacing: 6) {
                     SubagentStatusGlyph(state: display)
                     Text(subagent.name)
-                        .font(.system(size: 12, weight: display == .newAnswer ? .semibold : .medium))
+                        .font(.pilot(.label, weight: display == .newAnswer ? .semibold : .medium))
                         .foregroundStyle(Theme.foreground)
                         .lineLimit(1)
                 }
                 Text(subagent.task)
-                    .font(.system(size: 11))
+                    .font(.pilot(.caption))
                     .foregroundStyle(Theme.faintForeground)
                     .lineLimit(1)
                     .padding(.leading, 14)
@@ -462,8 +462,8 @@ private struct SubagentDetail: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 6) {
-                    Text(subagent.name).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                    Text(display.label).font(.system(size: 11, weight: .medium)).foregroundStyle(display.color)
+                    Text(subagent.name).font(.pilot(.body, weight: .semibold)).lineLimit(1)
+                    Text(display.label).font(.pilot(.caption, weight: .medium)).foregroundStyle(display.color)
                     Spacer()
                     if subagent.isWorking {
                         Button("Stop", role: .destructive) { model.stopSubagent(subagent.name, in: session.id) }
@@ -476,14 +476,14 @@ private struct SubagentDetail: View {
                     meta("folder", URL(filePath: subagent.cwd).lastPathComponent)
                         .help(subagent.cwd.abbreviatingHome)
                     HStack(spacing: 3) {
-                        Image(systemName: "clock").font(.system(size: 9))
+                        Image(systemName: "clock").font(.pilot(.micro))
                         Text(Date(timeIntervalSince1970: subagent.createdAt / 1000), style: .relative)
                     }
-                    .font(.system(size: 10))
+                    .font(.pilot(.small))
                     .foregroundStyle(Theme.mutedForeground)
                 }
                 if let error = subagent.error {
-                    Text(error).font(.system(size: 11)).foregroundStyle(Theme.destructive).textSelection(.enabled)
+                    Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
                 }
             }
             .padding(12)
@@ -509,10 +509,10 @@ private struct SubagentDetail: View {
                     if feed.loading {
                         ProgressView("Loading transcript…").controlSize(.small).frame(maxWidth: .infinity)
                     } else if let error = feed.error {
-                        Text(error).font(.system(size: 12)).foregroundStyle(Theme.destructive)
+                        Text(error).font(.pilot(.label)).foregroundStyle(Theme.destructive)
                     } else if feed.presentation.rows.isEmpty {
                         Text(subagent.isWorking ? "Starting…" : "No messages yet.")
-                            .font(.system(size: 12)).foregroundStyle(Theme.faintForeground)
+                            .font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
                     }
                     ForEach(feed.presentation.rows) { row in
                         RowView(row: row).equatable()
@@ -532,7 +532,7 @@ private struct SubagentDetail: View {
     private var composer: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let error = draft.error {
-                Text(error).font(.system(size: 11)).foregroundStyle(Theme.destructive)
+                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
             }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField(
@@ -541,7 +541,7 @@ private struct SubagentDetail: View {
                     axis: .vertical
                 )
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(.pilot(.label))
                 .lineLimit(1 ... 6)
                 .onSubmit { send(subagent.isWorking ? .steer : .followUp) }
                 .disabled(!canMessage)
@@ -557,7 +557,7 @@ private struct SubagentDetail: View {
             }
             .controlSize(.small)
             Text("Messages go to the subagent only. Its answer is delivered to this chat.")
-                .font(.system(size: 10))
+                .font(.pilot(.small))
                 .foregroundStyle(Theme.faintForeground)
         }
         .padding(10)
@@ -584,10 +584,10 @@ private struct SubagentDetail: View {
 
     private func meta(_ icon: String, _ text: String) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: icon).font(.system(size: 9))
+            Image(systemName: icon).font(.pilot(.micro))
             Text(text).lineLimit(1)
         }
-        .font(.system(size: 10))
+        .font(.pilot(.small))
         .foregroundStyle(Theme.mutedForeground)
     }
 }
@@ -604,21 +604,21 @@ struct SubagentAnswerRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Image(systemName: notification.failed ? "exclamationmark.triangle" : "person.2")
-                    .font(.system(size: 11))
+                    .font(.pilot(.caption))
                     .foregroundStyle(notification.failed ? Theme.destructive : Theme.mutedForeground)
                 Text(notification.failed ? "\(notification.name) failed" : "\(notification.name) answered")
-                    .font(.system(size: 12, weight: .semibold))
+                    .font(.pilot(.label, weight: .semibold))
                 Spacer()
                 if let sessionId = model.selectedSessionId {
                     Button("Open") { model.openSubagent(notification.name, in: sessionId) }
                         .buttonStyle(.link)
-                        .font(.system(size: 11))
+                        .font(.pilot(.caption))
                 }
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { expansion.expanded.toggle() }
                 } label: {
                     Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                        .font(.pilot(.micro, weight: .semibold))
                         .rotationEffect(.degrees(expansion.expanded ? 90 : 0))
                         .foregroundStyle(Theme.mutedForeground)
                         .frame(width: 16, height: 16)
@@ -631,7 +631,7 @@ struct SubagentAnswerRow: View {
                 MarkdownView(text: notification.text)
             } else {
                 Text(notification.text)
-                    .font(.system(size: 12))
+                    .font(.pilot(.label))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(2)
             }

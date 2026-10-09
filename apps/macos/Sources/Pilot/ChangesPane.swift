@@ -76,19 +76,19 @@ struct ChangesPane: View {
         HStack(spacing: 8) {
             if let changes = model.changes {
                 Text(changes.files.isEmpty ? "No changes" : "\(changes.files.count) file\(changes.files.count == 1 ? "" : "s")")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.pilot(.label, weight: .medium))
                 DiffStat(
                     additions: changes.files.reduce(0) { $0 + $1.additions },
                     deletions: changes.files.reduce(0) { $0 + $1.deletions }
                 )
-                Text("since \(changes.base)").font(.caption).foregroundStyle(Theme.faintForeground)
+                Text("since \(changes.base)").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                     .lineLimit(1).truncationMode(.middle).help("Changes since \(changes.base)")
             } else {
-                Text("Changes").font(.system(size: 12, weight: .medium))
+                Text("Changes").font(.pilot(.label, weight: .medium))
             }
             Spacer()
             if model.loading { ProgressView().controlSize(.mini) }
-            Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise").font(.caption) }
+            Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise").font(.pilot(.small)) }
                 .buttonStyle(.borderless)
                 .help("Refresh")
         }
@@ -119,7 +119,7 @@ struct ChangesPane: View {
                         Rectangle().fill(Theme.border).frame(height: 1)
                     }
                     if changes.truncated {
-                        Text("Diff truncated at 1 MiB.").font(.caption).foregroundStyle(Theme.mutedForeground).padding(12)
+                        Text("Diff truncated at 1 MiB.").font(.pilot(.small)).foregroundStyle(Theme.mutedForeground).padding(12)
                     }
                 }
             }
@@ -131,7 +131,7 @@ struct ChangesPane: View {
     private func placeholder(icon: String, text: String) -> some View {
         VStack(spacing: 8) {
             Image(systemName: icon).font(.title2).foregroundStyle(Theme.faintForeground)
-            Text(text).font(.callout).foregroundStyle(Theme.mutedForeground).multilineTextAlignment(.center)
+            Text(text).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground).multilineTextAlignment(.center)
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -154,17 +154,17 @@ struct ChangesRepositoryContext: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 if !links.isEmpty {
                     Text("BRANCHES")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.pilot(.small, weight: .semibold))
                         .tracking(0.5)
                         .foregroundStyle(Theme.mutedForeground)
                     Text(String(links.count))
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.pilot(.small, weight: .medium))
                         .monospacedDigit()
                         .foregroundStyle(Theme.faintForeground)
                     Spacer(minLength: 8)
                 }
                 Label(session.workspaceLabel, systemImage: workspaceIcon)
-                    .font(.system(size: 10))
+                    .font(.pilot(.small))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -216,14 +216,14 @@ private struct BranchLinkRow: View {
                     if let pr = link.pullRequest {
                         PullRequestPill(pullRequest: pr, stale: stale)
                         Text(pr.title)
-                            .font(.system(size: 11))
+                            .font(.pilot(.caption))
                             .foregroundStyle(Theme.mutedForeground)
                             .lineLimit(1)
                             .truncationMode(.tail)
                             .help(pr.title)
                     } else {
                         Text("No pull request")
-                            .font(.system(size: 11))
+                            .font(.pilot(.caption))
                             .foregroundStyle(Theme.faintForeground)
                     }
                 }
@@ -239,7 +239,7 @@ private struct BranchLinkRow: View {
     @ViewBuilder private var name: some View {
         if let name = link.name {
             Text(name)
-                .font(.system(size: 11, weight: current ? .semibold : .regular, design: .monospaced))
+                .font(.pilot(.caption, weight: current ? .semibold : .regular, design: .monospaced))
                 .foregroundStyle(Theme.foreground)
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -247,7 +247,7 @@ private struct BranchLinkRow: View {
                 .accessibilityLabel(current ? "Current branch \(name)" : "Branch \(name)")
         } else {
             Text("Unknown branch")
-                .font(.system(size: 11))
+                .font(.pilot(.caption))
                 .italic()
                 .foregroundStyle(Theme.faintForeground)
         }
@@ -277,10 +277,10 @@ private struct PullRequestPill: View {
             if stale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
             } else {
-                Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
+                Image(systemName: "arrow.up.right").font(.pilot(.glyph, weight: .bold))
             }
         }
-        .font(.system(size: 10, weight: .semibold))
+        .font(.pilot(.small, weight: .semibold))
         .foregroundStyle(pr.state.color)
         .padding(.horizontal, 6)
         .padding(.vertical, 2)
@@ -304,18 +304,18 @@ private struct FileRow: View {
         Button(action: toggle) {
             HStack(spacing: 8) {
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.pilot(.micro, weight: .semibold))
                     .foregroundStyle(Theme.faintForeground)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
                 Text(letter)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .font(.pilot(.small, weight: .bold, design: .monospaced))
                     .foregroundStyle(color)
                     .frame(width: 14)
                 HStack(spacing: 0) {
                     Text(directory).foregroundStyle(Theme.mutedForeground)
                     Text(name).foregroundStyle(Theme.foreground)
                 }
-                .font(.system(size: 12))
+                .font(.pilot(.label))
                 .lineLimit(1)
                 .truncationMode(.head)
                 Spacer(minLength: 6)

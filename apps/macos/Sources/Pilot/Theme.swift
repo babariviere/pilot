@@ -45,6 +45,44 @@ enum Theme {
     static var codeBackground: Color { code }
     static var subtleFill: Color { muted }
     static var hairline: Color { border }
+
+    /// Type scale for app chrome: sidebars, cards, panes, badges and metadata.
+    ///
+    /// Use `.font(.pilot(.caption))` instead of `.system(size:)` literals, and vary weight or design
+    /// through the arguments rather than picking an in-between size. Chat and code content follow the
+    /// user's font settings through `PilotFonts` instead; this scale is fixed.
+    ///
+    /// - `display`: one large figure per card, such as a total.
+    /// - `title`: large decorative symbols, such as empty-state icons.
+    /// - `body`: primary row text, titles and empty-state messages.
+    /// - `label`: pane headers, controls and short supporting text.
+    /// - `caption`: metadata, secondary row lines, paths and inline errors.
+    /// - `small`: badges, counts, pills and uppercase section labels.
+    /// - `micro`: chart axes and small inline symbols, such as disclosure chevrons.
+    /// - `glyph`: the smallest inline symbols inside pills. Never use it for words.
+    enum TextRole: CaseIterable {
+        case display, title, body, label, caption, small, micro, glyph
+
+        var size: CGFloat {
+            switch self {
+            case .display: 26
+            case .title: 22
+            case .body: 13
+            case .label: 12
+            case .caption: 11
+            case .small: 10
+            case .micro: 9
+            case .glyph: 8
+            }
+        }
+    }
+}
+
+extension Font {
+    /// A font from the chrome type scale. See `Theme.TextRole`.
+    static func pilot(_ role: Theme.TextRole, weight: Font.Weight = .regular, design: Font.Design = .default) -> Font {
+        .system(size: role.size, weight: weight, design: design)
+    }
 }
 
 extension Color {
