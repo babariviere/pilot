@@ -21,6 +21,7 @@ import { TerminalManager } from "./terminals.ts";
 class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
 	state: SessionState = "idle";
+	error?: string;
 	busy = false;
 	readonly sent: KernelCommand[] = [];
 	readonly requests: KernelCommand[] = [];
@@ -94,6 +95,7 @@ async function fixture(
 	const spawn = async (projectId = project.id) => {
 		const session = await sessions.spawn({ projectId, message: "hello", title: "Chat" });
 		await until(() => workers.get(session.id));
+		await until(() => !sessions["starting"].has(session.id));
 		return session;
 	};
 	return { home, projects, project, other, sessions, store, service, workers, spawn };
@@ -337,6 +339,19 @@ test("agent calls run against the chat's mission and update its context", async 
 	assert.deepEqual(got.decisions, ["IDs are opaque"]);
 	const denied = await call("get", {}, f.workers.get(outsider.id)!);
 	assert.match(denied.error ?? "", /not part of a mission/);
+	await call("task", { title: "Docs" });
+	const started = (await call("start", { id: "2" })).result as unknown as SessionSummary;
+	assert.equal(started.missionId, mission.id);
+	const memberWorker = await until(() => f.workers.get(started.id));
+	const sent = await call("send", { targetSessionId: started.id, message: "Cover error cases" });
+	assert.deepEqual(sent.result, { sessionId: started.id, sent: true });
+	await until(() =>
+		memberWorker.requests.find((command) => command.type === "input" && command.content === "Cover error cases"),
+	);
+	const status = await call("status", {});
+	assert.ok((status.result as { members: Array<{ id: string }> }).members.some((member) => member.id === started.id));
+	const refused = await call("status", {}, memberWorker);
+	assert.match(refused.error ?? "", /Only the mission coordinator/);
 	assert.equal(
 		f.store.detail(mission.id).events.some((event) => event.sessionId === chat.id),
 		true,
@@ -415,6 +430,222 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 	const left = f.service.leave(session.id);
 	assert.equal(left.missionId, undefined);
 	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+});
+
+test("coordinator actions check the current role on every call before causing side effects", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Auth" }],
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const actions = [
+		["start", { id: "1" }],
+		["send", { targetSessionId: coordinator.id, message: "Continue" }],
+		["status", {}],
+	] as const;
+	const before = f.workers.get(coordinator.id)!.requests.length;
+	for (const [action, args] of actions) {
+		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
+		await assert.rejects(f.service.call(outsider.id, action, args), /not part of a mission/);
+	}
+	assert.equal(f.sessions.list().length, 3);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	assert.equal(f.workers.get(coordinator.id)!.requests.length, before);
+	f.store.update(mission.id, { coordinatorSessionId: member.id });
+	for (const [action, args] of actions)
+		await assert.rejects(f.service.call(coordinator.id, action, args), /Only the mission coordinator/);
+	await f.service.call(member.id, "status", {});
+	f.store.update(mission.id, { coordinatorSessionId: null });
+	for (const [action, args] of actions)
+		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
+});
+
+test("coordinator start reuses Start chat with task IDs or numbers and validates admission", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Auth", body: "Add login" }, { title: "Docs" }],
+	});
+	const startTask = t.mock.method(f.service, "startTask");
+	for (const args of [{}, { id: 1 }, { id: " " }])
+		await assert.rejects(f.service.call(coordinator.id, "start", args), /requires the task id or number/);
+	await assert.rejects(f.service.call(coordinator.id, "start", { id: "unknown" }), /Unknown task/);
+	await assert.rejects(f.service.call(coordinator.id, "start", { id: "1", message: 42 }), /message must be a string/);
+	const first = (await f.service.call(coordinator.id, "start", {
+		id: "#1",
+		message: "Focus on login",
+	})) as SessionSummary;
+	assert.deepEqual(startTask.mock.calls.at(-1)?.arguments, [mission.id, "#1", { message: "Focus on login" }]);
+	assert.equal(first.missionId, mission.id);
+	assert.equal(first.projectId, f.project.id);
+	assert.equal(first.title, "Auth");
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, first.id);
+	assert.equal(f.store.resolveTask(mission.id, "1").status, "in_progress");
+	const worker = await until(() => f.workers.get(first.id));
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Add login[\s\S]*Focus on login/);
+	assert.equal(f.service.context(first.id)?.tasks[0]?.number, 1);
+	await assert.rejects(f.service.call(coordinator.id, "start", { id: "1" }), /already claimed/);
+	const taskId = f.store.resolveTask(mission.id, "2").id;
+	for (const status of ["done", "archived"] as const) {
+		f.store.update(mission.id, { status });
+		await assert.rejects(f.service.call(coordinator.id, "start", { id: taskId }), /Reopen the mission/);
+	}
+	assert.equal(f.sessions.list().length, 2);
+	f.store.update(mission.id, { status: "active" });
+	const second = (await f.service.call(coordinator.id, "start", { id: taskId })) as SessionSummary;
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, second.id);
+});
+
+test("coordinator send admits follow-ups only to member chats and propagates delivery errors", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const foreign = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	for (const targetSessionId of [outsider.id, foreign.id, "unknown"])
+		await assert.rejects(
+			f.service.call(coordinator.id, "send", { targetSessionId, message: "Continue" }),
+			/not in this mission/,
+		);
+	for (const targetSessionId of [undefined, 1, " "])
+		await assert.rejects(
+			f.service.call(coordinator.id, "send", { targetSessionId, message: "Continue" }),
+			/requires targetSessionId/,
+		);
+	for (const message of [undefined, 1, " "])
+		await assert.rejects(
+			f.service.call(coordinator.id, "send", { targetSessionId: member.id, message }),
+			/requires message/,
+		);
+	const worker = f.workers.get(member.id)!;
+	await until(() => worker.requests.find((command) => command.type === "input"));
+	for (const state of ["idle", "working"] as const) {
+		worker.state = state;
+		worker.onPacket({ type: "working", working: state === "working" });
+		const message = `Continue while ${state}`;
+		const result = await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message });
+		assert.deepEqual(result, { sessionId: member.id, sent: true });
+		const input = await until(() =>
+			worker.requests.find((command) => command.type === "input" && command.content === message),
+		);
+		assert.ok(input?.type === "input");
+		assert.equal(input.content, message);
+		assert.equal(input.mode, "followUp");
+	}
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false });
+	await until(() => !f.sessions["starting"].has(member.id));
+	await f.sessions.archive(member.id);
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }),
+		/Restore the archived session/,
+	);
+	f.service.leave(member.id);
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }),
+		/not in this mission/,
+	);
+	t.mock.method(f.sessions, "send", async () => {
+		throw new Error("Delivery failed");
+	});
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: coordinator.id, message: "Continue" }),
+		/Delivery failed/,
+	);
+});
+
+test("coordinator status includes archived and parked members, outcomes and tasks without waking workers", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const working = await f.spawn();
+	const failed = await f.spawn();
+	const archived = await f.spawn();
+	const parked = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Auth" }, { title: "Docs" }],
+	});
+	for (const member of [working, failed, archived, parked]) {
+		f.service.join(member.id, { missionId: mission.id });
+		await until(() => f.workers.get(member.id)!.requests.find((command) => command.type === "input"));
+	}
+	f.service.join(working.id, { missionId: mission.id, taskId: "1" });
+	f.service.join(failed.id, { missionId: mission.id, taskId: "2" });
+	f.store.updateTask(mission.id, f.store.resolveTask(mission.id, "2").id, { status: "blocked" });
+	f.workers.get(working.id)!.state = "working";
+	f.workers.get(working.id)!.onPacket({ type: "working", working: true });
+	f.workers.get(failed.id)!.state = "failed";
+	f.workers.get(failed.id)!.error = "Model unavailable";
+	f.workers.get(failed.id)!.onPacket({
+		type: "working",
+		working: false,
+		completion: { outcome: "failed", outcomeAt: 42, outcomeReason: "Model unavailable" },
+	});
+	f.workers.get(archived.id)!.onPacket({
+		type: "working",
+		working: false,
+		completion: { outcome: "done", outcomeAt: 43 },
+	});
+	await f.sessions.archive(archived.id);
+	f.workers.get(parked.id)!.onPacket({
+		type: "working",
+		working: false,
+		completion: { outcome: "stopped", outcomeAt: 44 },
+	});
+	await f.sessions["unparked"](parked.id);
+	f.sessions["workers"].delete(parked.id);
+	const before = f.sessions["workers"].size;
+	const requests = [...f.workers.values()].map((worker) => worker.requests.length);
+	const events = f.store.events(mission.id);
+	const result = (await f.service.call(coordinator.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(result.members.length, 5);
+	assert.ok(!result.members.some((member) => member.id === outsider.id));
+	const members = new Map(result.members.map((member) => [member.id, member]));
+	assert.equal(members.get(coordinator.id)?.coordinator, true);
+	assert.equal(members.get(working.id)?.coordinator, false);
+	assert.equal(members.get(working.id)?.state, "working");
+	assert.deepEqual(members.get(working.id)?.tasks, [{ number: 1, title: "Auth", status: "in_progress" }]);
+	assert.equal(members.get(failed.id)?.state, "failed");
+	assert.equal(members.get(failed.id)?.outcome, "failed");
+	assert.equal(members.get(failed.id)?.outcomeAt, 42);
+	assert.equal(members.get(failed.id)?.outcomeReason, "Model unavailable");
+	assert.equal(members.get(failed.id)?.error, "Model unavailable");
+	assert.deepEqual(members.get(failed.id)?.tasks, [{ number: 2, title: "Docs", status: "blocked" }]);
+	assert.equal(members.get(archived.id)?.state, "idle");
+	assert.equal(members.get(archived.id)?.outcome, "done");
+	assert.equal(typeof members.get(archived.id)?.archivedAt, "number");
+	assert.equal(members.get(parked.id)?.state, "parked");
+	assert.equal(members.get(parked.id)?.outcome, "stopped");
+	assert.deepEqual(members.get(parked.id)?.tasks, []);
+	assert.equal(f.sessions["workers"].size, before);
+	assert.deepEqual(
+		[...f.workers.values()].map((worker) => worker.requests.length),
+		requests,
+	);
+	assert.deepEqual(f.store.events(mission.id), events);
 });
 
 test("a rejected task claim does not move a chat or release its previous work", async (t) => {

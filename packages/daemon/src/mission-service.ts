@@ -242,10 +242,47 @@ export class MissionService {
 	async call(sessionId: string, action: MissionAction, args: Record<string, unknown>): Promise<unknown> {
 		const missionId = this.store.missionOf(sessionId);
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
+		const mission = this.store.require(missionId);
+		if (["start", "send", "status"].includes(action) && mission.coordinatorSessionId !== sessionId)
+			throw new Conflict(`Only the mission coordinator can use ${action}`);
 		const actor = { sessionId };
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "start":
+				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				if (typeof args.id !== "string" || !args.id.trim()) throw new Error("start requires the task id or number");
+				return this.startTask(missionId, args.id, {
+					...(args.message !== undefined ? { message: args.message as string } : {}),
+				});
+			case "send": {
+				if (typeof args.targetSessionId !== "string" || !args.targetSessionId.trim())
+					throw new Error("send requires targetSessionId");
+				if (this.store.missionOf(args.targetSessionId) !== missionId)
+					throw new Conflict("That chat is not in this mission");
+				if (typeof args.message !== "string" || !args.message.trim()) throw new Error("send requires message");
+				await this.sessions.send(args.targetSessionId, args.message, "followUp");
+				return { sessionId: args.targetSessionId, sent: true };
+			}
+			case "status": {
+				const tasks = this.store.tasks(missionId);
+				return {
+					members: this.sessions.list({ missionId, archived: "all" }).map((member) => ({
+						id: member.id,
+						title: member.title,
+						coordinator: member.id === mission.coordinatorSessionId,
+						state: member.state,
+						...(member.outcome !== undefined ? { outcome: member.outcome } : {}),
+						...(member.outcomeAt !== undefined ? { outcomeAt: member.outcomeAt } : {}),
+						...(member.outcomeReason !== undefined ? { outcomeReason: member.outcomeReason } : {}),
+						...(member.archivedAt !== undefined ? { archivedAt: member.archivedAt } : {}),
+						...(member.error !== undefined ? { error: member.error } : {}),
+						tasks: tasks
+							.filter((task) => task.sessionId === member.id)
+							.map((task) => ({ number: task.number, title: task.title, status: task.status })),
+					})),
+				};
+			}
 			case "get": {
 				const detail = this.store.detail(missionId);
 				const { mission } = detail;

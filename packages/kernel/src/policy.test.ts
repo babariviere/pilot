@@ -33,6 +33,16 @@ test("mission prompt explains the shared state, the chat's tasks, decisions and 
 	assert.match(missionPrompt({ ...mission, status: "done" }), /This mission is done/);
 });
 
+test("the coordinator prompt explains chat controls without enabling autonomous starts", () => {
+	const prompt = missionPrompt({ ...mission, coordinator: "self" });
+	for (const action of ["start", "send", "status"]) assert.ok(prompt.includes(`action: "${action}"`));
+	assert.match(prompt, /Do not start chats unless the user asks/);
+	assert.match(prompt, /Autopilot is not enabled/);
+	assert.doesNotMatch(prompt, /Do not start chats or message other chats yourself/);
+	for (const coordinator of ["other", "user"] as const)
+		assert.doesNotMatch(missionPrompt({ ...mission, coordinator }), /action: "(?:start|send|status)"/);
+});
+
 test("deliverable guard blocks mission references in commits, bookmarks and pull requests only", () => {
 	assert.ok(missionLeak({ command: 'gh pr create --title "API v2 redesign: auth"' }, mission));
 	assert.ok(missionLeak({ command: 'jj describe -m "feat: auth (mission task #2)"' }, mission));
