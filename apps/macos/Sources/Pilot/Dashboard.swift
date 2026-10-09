@@ -24,11 +24,11 @@ struct DashboardCard<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Image(systemName: icon).font(.system(size: 11))
-                Text(title).font(.system(size: 12, weight: .medium))
+                Image(systemName: icon).font(.pilot(.caption))
+                Text(title).font(.pilot(.label, weight: .medium))
                 if let count, count > 0 {
                     Text("\(count)")
-                        .font(.system(size: 10, weight: .semibold))
+                        .font(.pilot(.small, weight: .semibold))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 1)
                         .background(Capsule().fill(Theme.muted))
@@ -47,7 +47,7 @@ struct DashboardCard<Content: View>: View {
 private struct EmptyLine: View {
     let text: String
     var body: some View {
-        Text(text).font(.system(size: 13)).foregroundStyle(Theme.faintForeground)
+        Text(text).font(.pilot(.body)).foregroundStyle(Theme.faintForeground)
     }
 }
 
@@ -64,13 +64,13 @@ private struct WorkingNowCard: View {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 SessionStatusIcon(status: session.status)
-                                Text(session.title).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                                Text(session.title).font(.pilot(.body, weight: .medium)).lineLimit(1)
                                 Spacer()
-                                Text(elapsed(session.listActivityAt)).font(.system(size: 11).monospacedDigit())
+                                Text(elapsed(session.listActivityAt)).font(.pilot(.caption).monospacedDigit())
                                     .foregroundStyle(Theme.mutedForeground)
                             }
                             Text("\(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome) · \(session.model ?? "default model")")
-                                .font(.system(size: 11, design: .monospaced))
+                                .font(.pilot(.caption, design: .monospaced))
                                 .foregroundStyle(Theme.faintForeground)
                                 .lineLimit(1)
                                 .padding(.leading, 22)
@@ -100,8 +100,8 @@ private struct ActivityCard: View {
         let peak = max(1, counts.map(\.count).max() ?? 1)
         DashboardCard(title: "Activity", icon: "chart.bar") {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text("\(total)").font(.system(size: 26, weight: .semibold)).foregroundStyle(Theme.foreground)
-                Text("sessions · 14 days").font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                Text("\(total)").font(.pilot(.display, weight: .semibold)).foregroundStyle(Theme.foreground)
+                Text("sessions · 14 days").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
             }
             HStack(alignment: .bottom, spacing: 5) {
                 ForEach(Array(counts.enumerated()), id: \.offset) { index, day in
@@ -109,7 +109,7 @@ private struct ActivityCard: View {
                         RoundedRectangle(cornerRadius: 2)
                             .fill(index == counts.count - 1 ? Theme.info : Theme.info.opacity(0.75))
                             .frame(height: max(3, CGFloat(day.count) / CGFloat(peak) * 54))
-                        Text(day.label).font(.system(size: 9)).foregroundStyle(Theme.faintForeground)
+                        Text(day.label).font(.pilot(.micro)).foregroundStyle(Theme.faintForeground)
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -147,9 +147,9 @@ private struct RecentCard: View {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
                             SessionStatusIcon(status: session.status)
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(session.title).font(.system(size: 13)).lineLimit(1)
+                                Text(session.title).font(.pilot(.body)).lineLimit(1)
                                 Text(app.client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome)
-                                    .font(.system(size: 11, design: .monospaced))
+                                    .font(.pilot(.caption, design: .monospaced))
                                     .foregroundStyle(Theme.faintForeground)
                                     .lineLimit(1)
                             }
@@ -180,21 +180,21 @@ private struct ProjectsCard: View {
                     HStack(spacing: 8) {
                         Circle().fill(owned.contains(where: \.isWorking) ? Theme.success : Theme.faintForeground.opacity(0.5))
                             .frame(width: 6, height: 6)
-                        Text(project.name).font(.system(size: 13, weight: .medium))
+                        Text(project.name).font(.pilot(.body, weight: .medium))
                         Text(project.path.abbreviatingHome)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.pilot(.caption, design: .monospaced))
                             .foregroundStyle(Theme.faintForeground)
                             .lineLimit(1)
                             .truncationMode(.head)
                         Spacer()
-                        Text("\(owned.count)").font(.system(size: 11).monospacedDigit()).foregroundStyle(Theme.mutedForeground)
+                        Text("\(owned.count)").font(.pilot(.caption).monospacedDigit()).foregroundStyle(Theme.mutedForeground)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             Button { app.addProject() } label: {
-                Label("Add project", systemImage: "plus").font(.system(size: 12))
+                Label("Add project", systemImage: "plus").font(.pilot(.label))
             }
             .buttonStyle(.plain)
             .foregroundStyle(Theme.mutedForeground)
