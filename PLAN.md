@@ -375,6 +375,11 @@ unresolved non-outdated review threads, and confirmed merge conflicts on open (i
 actually created by the agent in that session. PR ownership is recorded from successful agent creation
 tools and retained durably, not inferred from a matching branch alone. Only an idle session with no
 queued messages receives one combined follow-up; user input and fresh state win over in-flight lookups.
+Each fresh owned head is checked against its own branch, including earlier stack heads when the current
+PR is closed or merged. Actionable problems across those heads share one notification and reservation;
+a failed health lookup on one head does not hide actionable evidence from another. Creation recognition
+accepts ordinary semicolon/newline-separated commit/bookmark/push prefixes when `gh pr create` is the
+final executed command, but still rejects shell controls, lookups and ambiguous results as ownership proof.
 The kernel rechecks idle/inbox state before admission, including after reopening a parked session.
 
 Each session has one persisted budget of three automatic follow-ups total, shared across PRs and all

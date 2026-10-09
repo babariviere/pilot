@@ -185,7 +185,7 @@ try { await tools.bash({command:"gh pr create --id 3 --throw"}); } catch {}
 	await f.run(session, "nested", "codemode", {
 		code: `
 await Promise.all([
- tools.bash({command:"jj git push --bookmark fix/pr && gh pr create --id 4"}),
+ tools.bash({command:"jj commit -m 'feat: schema'; jj git push --bookmark fix/pr; gh pr create --id 4"}),
  tools.lookup_pr({command:"gh pr create"}),
  tools.bash({command:"gh pr view 99 --id 99"})
 ]);

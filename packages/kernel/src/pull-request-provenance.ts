@@ -11,7 +11,33 @@ export const PullRequestsDoc = defineDoc<{ urls: string[] }>({
 	initial: () => ({ urls: [] }),
 });
 
-const SHELL_CONTROL = new Set(["exec", "exit", "return", "eval", "source", ".", "trap", "break", "continue"]);
+const SHELL_CONTROL = new Set([
+	"exec",
+	"exit",
+	"return",
+	"eval",
+	"source",
+	".",
+	"trap",
+	"break",
+	"continue",
+	"if",
+	"then",
+	"else",
+	"elif",
+	"fi",
+	"for",
+	"while",
+	"until",
+	"do",
+	"done",
+	"case",
+	"esac",
+	"select",
+	"function",
+	"{",
+	"}",
+]);
 
 /** Prefixes must be ordinary commands, not shell controls which could skip the final creation with exit zero. */
 function ordinaryCommand(words: string[]): boolean {
@@ -36,7 +62,7 @@ function helpOrDryRun(word: string): boolean {
 	return false;
 }
 
-/** Deliberately conservative shell recognition, including quoted arguments and ordinary `push && gh ...` chains. */
+/** Conservative shell recognition: ordinary prefixes, then a final gh creation whose exit status is authoritative. */
 export function createsPullRequest(command: unknown): boolean {
 	if (typeof command !== "string") return false;
 	const script = command.trim();
@@ -63,7 +89,12 @@ export function createsPullRequest(command: unknown): boolean {
 			flush();
 			commands.push([]);
 			i++;
-		} else if (/[;|&<>`$()#\n\r]/.test(c)) return false;
+		} else if (c === ";" || c === "\n" || c === "\r") {
+			flush();
+			// Blank lines and CRLF do not introduce empty commands, unlike a doubled semicolon.
+			if (commands.at(-1)!.length) commands.push([]);
+			else if (c === ";") return false;
+		} else if (/[|&<>`$()#]/.test(c)) return false;
 		else if (/\s/.test(c)) flush();
 		else word += c;
 	}

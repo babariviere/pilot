@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand } from "@pilot/kernel";
+import type { SessionPullRequest } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { CommandRejected, SessionManager, type SessionWorker, WorkerUnavailable } from "./sessions.ts";
 import type { Runner } from "./workspaces.ts";
@@ -96,6 +97,9 @@ async function setup(cooldownMs?: number) {
 		healthCalls: 0,
 		graphqlCalls: 0,
 		request: undefined as ((command: Input) => Promise<void>) | undefined,
+		others: [] as SessionPullRequest[],
+		healthOutputs: new Map<number, string | Error>(),
+		healthNumbers: [] as number[],
 	};
 	const inputs: Input[] = [];
 	const runner: Runner = async (file, args) => {
@@ -103,6 +107,22 @@ async function setup(cooldownMs?: number) {
 		assert.equal(file, "gh", `unexpected command: ${file} ${args.join(" ")}`);
 		if (args[0] === "pr" && args[1] === "list") {
 			if (controls.listError) throw new Error("GitHub list offline");
+			const head = args.find((arg) => arg.startsWith("--head="))?.slice(7);
+			if (head !== branch) {
+				const pr = controls.others.find((pr) => pr.branch === head);
+				if (!pr || (args.includes("--state=open") && (pr.state === "merged" || pr.state === "closed"))) return "[]";
+				return JSON.stringify([
+					{
+						...pr,
+						state: pr.state === "draft" ? "OPEN" : pr.state.toUpperCase(),
+						isDraft: pr.state === "draft",
+						headRefName: pr.branch,
+						isCrossRepository: false,
+						createdAt: "2026-01-01T00:00:00Z",
+						mergedAt: new Date(Date.now()).toISOString(),
+					},
+				]);
+			}
 			if (args.includes("--state=open") && controls.state !== "OPEN") return "[]";
 			return JSON.stringify([
 				{
@@ -120,13 +140,17 @@ async function setup(cooldownMs?: number) {
 		}
 		if (args[0] === "pr" && args[1] === "view") {
 			controls.healthCalls++;
+			controls.healthNumbers.push(Number(args[2]));
 			await controls.healthGate?.promise;
 			if (controls.viewError) throw new Error("GitHub checks offline");
+			const output = controls.healthOutputs.get(Number(args[2]));
+			if (output instanceof Error) throw output;
+			if (output !== undefined) return output;
 			return (
 				controls.viewOutput ??
 				JSON.stringify({
-					state: controls.state,
-					headRefName: branch,
+					state: controls.others.some((pr) => pr.number === Number(args[2])) ? "OPEN" : controls.state,
+					headRefName: controls.others.find((pr) => pr.number === Number(args[2]))?.branch ?? branch,
 					statusCheckRollup: controls.checks
 						? [{ __typename: "CheckRun", name: "tests", status: "COMPLETED", conclusion: "FAILURE" }]
 						: [],
@@ -299,6 +323,148 @@ test("all PR problems share three attempts, and the cooldown starts after worker
 		assert.equal(f.manager["workers"].size, 0, "the persisted cap prevents reopening after restart");
 		assert.equal(f.inputs.length, 3);
 	});
+});
+
+function stackPr(number: number, state: SessionPullRequest["state"] = "draft"): SessionPullRequest {
+	return {
+		number,
+		url: `https://github.com/octo/repo/pull/${number}`,
+		title: `Stack PR ${number}`,
+		branch: `feat/stack-${number}`,
+		state,
+		checkedAt: 1,
+	};
+}
+
+test("one follow-up covers all fresh owned stack heads, even when the current PR is closed", async () => {
+	await fixture(async (f) => {
+		const prs = [stackPr(11), stackPr(12), stackPr(13), stackPr(14, "closed")];
+		f.controls.state = "CLOSED";
+		f.controls.others = prs;
+		f.meta.previousPullRequests = prs;
+		f.meta.agentPullRequests = [url, ...prs.filter((pr) => pr.number !== 13).map((pr) => pr.url)];
+		const before = activity(f.meta);
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		assert.deepEqual(f.controls.healthNumbers.sort(), [11, 12]);
+		for (const pr of prs.slice(0, 2)) {
+			assert.ok(f.inputs[0]!.content.includes(pr.url));
+			assert.ok(f.inputs[0]!.content.includes(pr.branch!));
+		}
+		assert.ok(!f.inputs[0]!.content.includes(prs[2]!.url));
+		assert.ok(!f.inputs[0]!.content.includes(prs[3]!.url));
+		assert.equal(f.meta.workspace?.branch, branch, "daemon must not switch the workspace to an earlier PR");
+		assert.equal(f.meta.prFollowUp?.attempts, 1, "the stack uses one shared reservation");
+		assert.deepEqual(activity(f.meta), before);
+	});
+});
+
+test("current and earlier problems share one prompt, while healthy or unfreshed cached heads stay out", async () => {
+	await fixture(async (f) => {
+		const prs = [stackPr(11), stackPr(12), stackPr(13)];
+		f.controls.others = prs;
+		f.meta.previousPullRequests = prs;
+		f.meta.agentPullRequests = [url, ...prs.map((pr) => pr.url)];
+		f.controls.healthOutputs.set(
+			12,
+			JSON.stringify({ state: "OPEN", headRefName: prs[1]!.branch, statusCheckRollup: [], mergeable: "MERGEABLE" }),
+		);
+		f.controls.reviews = false;
+		await f.manager["applyPullRequest"](f.meta, { pullRequest: f.meta.pullRequest, others: prs.slice(0, 2) });
+		assert.equal(f.inputs.length, 1);
+		for (const target of [url, prs[0]!.url]) assert.ok(f.inputs[0]!.content.includes(target));
+		for (const pr of prs.slice(1)) assert.ok(!f.inputs[0]!.content.includes(pr.url));
+		assert.deepEqual(
+			f.controls.healthNumbers.sort((a, b) => a - b),
+			[10, 11, 12],
+		);
+		assert.equal(f.meta.prFollowUp?.attempts, 1);
+	});
+});
+
+test("closed-current stacks keep polling across restart without bypassing cooldown or the shared cap", async (t) => {
+	let now = 1_800_000_000_000;
+	t.mock.method(Date, "now", () => now);
+	await fixture(async (f) => {
+		const prs = [stackPr(11), stackPr(12)];
+		f.controls.state = "CLOSED";
+		f.controls.others = prs;
+		f.meta.previousPullRequests = prs;
+		f.meta.agentPullRequests = prs.map((pr) => pr.url);
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		await f.restart();
+		assert.equal(f.inputs.length, 1, "restart preserves the cooldown");
+		for (let attempt = 2; attempt <= 3; attempt++) {
+			now += cooldown;
+			await f.refresh();
+			assert.equal(f.inputs.length, attempt);
+			assert.equal(f.meta.prFollowUp?.attempts, attempt);
+			for (const pr of prs) assert.ok(f.inputs.at(-1)!.content.includes(pr.url));
+		}
+		now += cooldown;
+		const calls = f.controls.healthCalls;
+		await f.restart();
+		assert.equal(f.inputs.length, 3);
+		assert.equal(f.controls.healthCalls, calls, "exhausted stack budget stops health queries");
+	});
+});
+
+test("a failed or stale earlier head cannot hide actionable problems on another owned PR", async (t) => {
+	t.mock.method(console, "warn", () => {});
+	await fixture(async (f) => {
+		const prs = [stackPr(11), stackPr(12), stackPr(13)];
+		f.controls.state = "CLOSED";
+		f.controls.others = prs;
+		f.meta.previousPullRequests = prs;
+		f.meta.agentPullRequests = prs.map((pr) => pr.url);
+		f.controls.healthOutputs.set(11, new Error("GitHub offline"));
+		f.controls.healthOutputs.set(12, JSON.stringify({ state: "OPEN", headRefName: "wrong-head" }));
+		await f.refresh();
+		assert.equal(f.inputs.length, 1);
+		assert.ok(f.inputs[0]!.content.includes(prs[2]!.url));
+		for (const pr of prs.slice(0, 2)) assert.ok(!f.inputs[0]!.content.includes(pr.url));
+	});
+});
+
+test("an earlier-only fresh result is eligible without a fresh current PR", async () => {
+	await fixture(async (f) => {
+		const pr = stackPr(11);
+		f.controls.others = [pr];
+		f.meta.agentPullRequests = [pr.url];
+		await f.manager["applyPullRequest"](f.meta, { others: [pr] });
+		assert.equal(f.inputs.length, 1);
+		assert.ok(f.inputs[0]!.content.includes(pr.url));
+		assert.deepEqual(f.controls.healthNumbers, [11]);
+	});
+});
+
+test("user input and branch changes invalidate in-flight stack health", async () => {
+	for (const race of ["user", "branch", "ownership", "closed"] as const) {
+		await fixture(async (f) => {
+			const pr = stackPr(11);
+			f.controls.state = "CLOSED";
+			f.controls.others = [pr];
+			f.meta.previousPullRequests = [pr];
+			f.meta.agentPullRequests = [pr.url];
+			const gate = deferred();
+			f.controls.healthGate = gate;
+			const refreshing = f.refresh();
+			try {
+				await until(() => f.controls.healthCalls === 1);
+				if (race === "user") await f.manager.send(f.id, "New work", "followUp", "stack-race");
+				else if (race === "branch") f.meta.workspace!.branch = "feat/new-work";
+				else if (race === "ownership") f.meta.agentPullRequests = [];
+				else f.meta.previousPullRequests = [{ ...pr, state: "closed" }];
+				gate.resolve();
+				await refreshing;
+				assert.equal(f.inputs.filter((input) => input.onlyIfIdle).length, 0, race);
+			} finally {
+				gate.resolve();
+				await refreshing;
+			}
+		});
+	}
 });
 
 test("real user input resets the shared budget, cooldown and generation and updates the user timestamp", async (t) => {

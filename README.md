@@ -51,7 +51,8 @@ Subscription data uses the extension's existing OAuth polling; Pilot does not re
 usage endpoints separately. Without that extension or subscription credentials, only context is shown.
 
 For PRs an agent opens from its private Build workspace, Pilot uses local `gh` authentication to check
-failed CI, unresolved current review threads and merge conflicts. It sends one combined follow-up only
+failed CI, unresolved current review threads and merge conflicts on every agent-owned open or draft PR,
+including earlier heads in a stack even if the current PR is closed. It sends one combined follow-up only
 when the agent is idle with no queued messages. Automatic follow-ups share a persistent limit of three
 per session, with a five-minute cooldown after each run finishes. Sending a user message resets that
 limit. Agents investigate flaky CI rather than blindly retrying it and report blocked or declined work
