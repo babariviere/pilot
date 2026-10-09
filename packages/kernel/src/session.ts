@@ -28,8 +28,9 @@ import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion } from "./attention.ts";
 import { submitIdleInput } from "./idle-input.ts";
+import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
-import { withPilotPolicy } from "./policy.ts";
+import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQueue } from "./queue.ts";
@@ -71,11 +72,15 @@ export interface KernelSessionHooks {
 	onPullRequestCreated?(url: string): void;
 	/** Full replacement whenever the subagents extension reports a change. */
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
+	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
+	callMission?: MissionCall;
 }
 
 export class KernelSession {
 	readonly #ask: boolean;
 	readonly #watches = new Map<string, () => Promise<void>>();
+	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
+	readonly #mission: { current?: MissionContext };
 	#working = false;
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
@@ -99,6 +104,7 @@ export class KernelSession {
 		todos: TodosWatch,
 		subagents: SubagentBridge,
 		ask: boolean,
+		mission: { current?: MissionContext },
 	) {
 		this.harness = harness;
 		this.conversation = conversation;
@@ -108,6 +114,7 @@ export class KernelSession {
 		this.todos = todos;
 		this.subagents = subagents;
 		this.#ask = ask;
+		this.#mission = mission;
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
@@ -116,6 +123,8 @@ export class KernelSession {
 		let harness: Harness | undefined;
 		let artifactConversation: Conversation | undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
+		const mission: { current?: MissionContext } = { current: spec.mission };
+		const missionTools = hooks.callMission ? [createMissionTool(hooks.callMission)] : [];
 		try {
 			const provenance =
 				spec.pilot?.workspace && !spec.pilot.ask
@@ -162,11 +171,13 @@ export class KernelSession {
 				hostExtensions: provenance ? [provenance.native] : [],
 				subagents,
 				...(spec.pilot?.ask
-					? { askArtifacts: artifactOptions }
-					: { sessionOptions: { customTools: createArtifactTools(artifactOptions) } }),
+					? { askArtifacts: artifactOptions, askTools: missionTools }
+					: { sessionOptions: { customTools: [...createArtifactTools(artifactOptions), ...missionTools] } }),
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
+			// Only mission chats declare the tool. It stays registered so joining can enable it live.
+			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
 			const prepare = (extension: Extension) => {
 				const prepared = replayUnsafe(
 					withPilotPolicy(
@@ -175,6 +186,7 @@ export class KernelSession {
 						() =>
 							adapter!.session.getCallableToolNames().includes("artifact") ||
 							adapter!.session.getActiveToolNames().includes("artifact"),
+						() => mission.current,
 					),
 				);
 				return provenance ? provenance.prepare(prepared) : prepared;
@@ -214,6 +226,7 @@ export class KernelSession {
 				new TodosWatch(todosDirectory(spec.cwd)),
 				subagents,
 				!!spec.pilot?.ask,
+				mission,
 			);
 			session.#working = status.snapshot.run !== undefined;
 			if (!session.#working) {
@@ -362,6 +375,18 @@ export class KernelSession {
 
 	get completion(): SessionCompletion | undefined {
 		return this.#completion;
+	}
+
+	/** Joining, leaving or a mission change. Applies from the next model request. */
+	setMission(context: MissionContext | undefined): void {
+		if (this.#closing) return;
+		this.#mission.current = context;
+		try {
+			this.adapter.setToolActive(MISSION_TOOL, !!context);
+		} catch (error) {
+			// Without a registered tool (no host bridge) the prompt still reflects membership.
+			console.warn("pilot: could not update the mission tool", error);
+		}
 	}
 
 	get subagentList(): KernelSubagent[] {

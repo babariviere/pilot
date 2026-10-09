@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { githubPosting, pilotPrompt } from "./policy.ts";
+import { githubPosting, type MissionContext, missionLeak, missionPrompt, pilotPrompt } from "./policy.ts";
+
+const mission: MissionContext = {
+	id: "m1",
+	title: "API v2 redesign",
+	goal: "Replace REST v1",
+	status: "active",
+	coordinator: "user",
+	tasks: [{ number: 2, title: "Auth endpoints", status: "in_progress" }],
+	decisions: ["IDs are opaque strings"],
+};
+
+test("mission prompt explains the shared state, the chat's tasks, decisions and the deliverable rule", () => {
+	const prompt = missionPrompt(mission);
+	assert.match(prompt, /part of the mission "API v2 redesign", whose goal is: Replace REST v1/);
+	assert.match(prompt, /mission\(\{action: "get"\}\)/);
+	assert.match(prompt, /The user coordinates this mission/);
+	assert.match(prompt, /#2 Auth endpoints \(in progress\)/);
+	assert.match(prompt, /Decisions \(binding, they override the brief\): IDs are opaque strings/);
+	assert.match(prompt, /Never mention the mission/);
+	assert.match(prompt, /Linear issue IDs are fine/);
+	assert.match(missionPrompt({ ...mission, coordinator: "self" }), /You coordinate this mission/);
+	assert.match(missionPrompt({ ...mission, status: "done" }), /This mission is done/);
+});
+
+test("deliverable guard blocks mission references in commits, bookmarks and pull requests only", () => {
+	assert.ok(missionLeak({ command: 'gh pr create --title "API v2 redesign: auth"' }, mission));
+	assert.ok(missionLeak({ command: 'jj describe -m "feat: auth (mission task #2)"' }, mission));
+	assert.ok(missionLeak({ command: 'git commit -m "Part of this mission"' }, mission));
+	assert.ok(
+		missionLeak({ code: "await tools.bash({command: \"gh pr create --body 'Coordinator chat asked'\"})" }, mission),
+	);
+	assert.equal(
+		missionLeak({ command: 'gh pr create --title "feat: auth endpoints" --body "Fixes ENG-12"' }, mission),
+		undefined,
+	);
+	assert.equal(
+		missionLeak({ command: "rg 'API v2 redesign' docs" }, mission),
+		undefined,
+		"reads are not deliverables",
+	);
+	assert.equal(missionLeak({ command: 'gh pr create --title "API v2 redesign"' }, undefined), undefined);
+	assert.equal(
+		missionLeak({ command: 'jj describe -m "feat(missions): add mission tool"' }, mission),
+		undefined,
+		"describing work on a missions feature itself is allowed",
+	);
+});
 
 test("Pilot diagram guidance is conditional on artifact availability", () => {
 	const enabled = pilotPrompt({}, true);

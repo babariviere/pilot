@@ -1,6 +1,10 @@
 /** Kernel worker entry: one process per session, driven over Node IPC by pilotd. */
 import { serialize } from "node:v8";
+import { randomUUID } from "node:crypto";
+import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
+import type { MissionCall } from "./mission-tools.ts";
+import type { MissionContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
 
@@ -112,6 +116,9 @@ export function runKernelWorker(): void {
 	let session: KernelSession | undefined;
 	let initialization: Promise<void> | undefined;
 	let commands: Promise<void> = Promise.resolve();
+	/** Latest context sent while the kernel was still starting. */
+	let pendingMission: { context?: MissionContext } | undefined;
+	const missionCalls = new Map<string, { resolve(value: JsonValue): void; reject(error: Error): void }>();
 	/** Subagent commands may wait on a child worker; they never block session commands. */
 	const subagentCommands = new Set<Promise<void>>();
 	let exiting = false;
@@ -130,6 +137,29 @@ export function runKernelWorker(): void {
 	const send = (packet: KernelPacket) => sender.send(packet);
 	// Notification hooks cannot await. Their retention is still bounded by the same FIFO.
 	const notify = (packet: KernelPacket) => void send(packet).catch(() => undefined);
+	const callMission: MissionCall = (action, args) =>
+		new Promise<JsonValue>((resolve, reject) => {
+			const callId = randomUUID();
+			const timer = setTimeout(() => {
+				missionCalls.delete(callId);
+				reject(new Error("pilotd did not answer the mission call"));
+			}, 60_000);
+			timer.unref();
+			missionCalls.set(callId, {
+				resolve: (value) => {
+					clearTimeout(timer);
+					resolve(value);
+				},
+				reject: (error) => {
+					clearTimeout(timer);
+					reject(error);
+				},
+			});
+			send({ type: "mission.call", callId, action, args }).catch((error: unknown) => {
+				missionCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
+				missionCalls.delete(callId);
+			});
+		});
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -203,17 +233,32 @@ export function runKernelWorker(): void {
 			void shutdown();
 			return;
 		}
+		if (command.type === "mission.result") {
+			const call = missionCalls.get(command.callId);
+			missionCalls.delete(command.callId);
+			if (command.error !== undefined) call?.reject(new Error(command.error));
+			else call?.resolve(command.result ?? null);
+			return;
+		}
+		if (command.type === "mission.context") {
+			if (session) session.setMission(command.context);
+			else pendingMission = { ...(command.context ? { context: command.context } : {}) };
+			return;
+		}
 		if (command.type === "start") {
 			if (initialization) return;
 			initialization = (async () => {
-				session = await KernelSession.open(command.spec, {
+				const opened = await KernelSession.open(command.spec, {
 					onWorking: (working, completion) =>
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
+					callMission,
 				});
+				if (pendingMission) opened.setMission(pendingMission.context);
+				session = opened;
 				await send({
 					type: "ready",
 					model: session.model,

@@ -53,6 +53,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let usage: SessionUsage?
     /// Named background subagents in spawn order. Omitted when the session has none.
     public let subagents: [SessionSubagent]?
+    /// Mission this chat belongs to. Omitted when it has none, or by older daemons.
+    public let missionId: String?
     public let error: String?
     public let outcome: SessionOutcome?
     /// Stable completion version, in milliseconds. Unlike updatedAt, survives parking.
@@ -113,7 +115,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
         lastUserMessageAt: Double? = nil,
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
-        subagents: [SessionSubagent]? = nil, pinned: Bool? = nil
+        subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -138,6 +140,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.thinking = thinking
         self.usage = usage
         self.subagents = subagents
+        self.missionId = missionId
         self.error = error
         self.outcome = outcome
         self.outcomeAt = outcomeAt

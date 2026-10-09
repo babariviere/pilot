@@ -19,6 +19,19 @@ export interface PilotContext {
 	requirePullRequest?: boolean;
 }
 
+/** What a mission chat needs in every prompt. Kept small and stable to preserve prompt caching. */
+export interface MissionContext {
+	id: string;
+	title: string;
+	goal: string;
+	status: "active" | "done" | "archived";
+	/** "self": this chat coordinates; "user": nobody does; "other": another chat. */
+	coordinator: "self" | "user" | "other";
+	/** Tasks this chat owns. */
+	tasks: Array<{ number: number; title: string; status: string }>;
+	decisions: string[];
+}
+
 /** Ask reads either the original checkout or a pinned tree in a daemon-owned bare object store. */
 export interface AskContext {
 	source: string;
@@ -36,6 +49,45 @@ const POSTING: Array<{ pattern: RegExp; what: string }> = [
 ];
 const API_WRITE = /\s(?:-X|--method)[\s=]*(?:POST|PATCH|PUT|DELETE)\b|\s-[fF]\s|\s--(?:raw-)?field\b|\s--input\b/i;
 const API_POSTING_PATH = /\/(?:comments|reviews|replies|merge)\b|\/pulls\/\d+\/reviews|\/issues\/\d+\/comments/;
+
+/** Commands that publish names or descriptions: commits, bookmarks/branches and pull requests. */
+const DELIVERABLE =
+	/\bgh\s+pr\s+(?:create|edit)\b|\bjj\s+(?:describe|desc|commit|ci|new|bookmark\s+(?:create|c|set|s|rename|r))\b|\bgit\s+(?:commit|switch\s+-[cC]|checkout\s+-[bB]|branch\s+(?:-m\s+)?[\w./-]+)\b/;
+const MISSION_TERMS =
+	/\b(?:pilot\s+)?missions?\s+(?:tasks?|brief|coordinator)s?\b|\b(?:this|the|our)\s+mission\b|\bcoordinator\s+chat\b/i;
+
+/** Why a deliverable command would mention internal mission coordination, or undefined. */
+export function missionLeak(arguments_: unknown, mission: MissionContext | undefined): string | undefined {
+	if (!mission) return undefined;
+	const text = strings(arguments_).join("\n");
+	if (!DELIVERABLE.test(text)) return undefined;
+	const title = mission.title.trim();
+	if (title.length >= 4 && text.toLowerCase().includes(title.toLowerCase())) return `the mission title "${title}"`;
+	const match = MISSION_TERMS.exec(text);
+	return match ? `"${match[0]}"` : undefined;
+}
+
+export function missionPrompt(mission: MissionContext): string {
+	const lines = [
+		`- This chat is part of the mission ${JSON.stringify(mission.title)}${mission.goal ? `, whose goal is: ${mission.goal}` : ""}. Several chats share its brief (the spec), tasks, decisions, comments, links, artifacts and activity through the \`mission\` tool. Call \`mission({action: "get"})\` before starting work and when you need the current state; read the full brief with \`mission({action: "brief"})\` when the task depends on it.`,
+		mission.coordinator === "self"
+			? "- You coordinate this mission: keep the brief and task list accurate, split work into tasks other chats can pick up, and summarize progress for the user. Do not start chats or message other chats yourself; the user starts them from tasks."
+			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your task, and add tasks for follow-up work you find instead of widening your scope.`,
+		"- Claim a task before working on it and keep its status current: in_progress while working, blocked with a comment explaining why, in_review once a pull request is open, done when finished. Edit the brief directly when the design changes, passing expectedRevision; on a conflict, re-read and reapply. Record agreed decisions with decide. Before stopping with unfinished work, post a handoff with log.",
+		"- The mission is internal coordination. Never mention the mission, its tasks, the coordinator, other chats or Pilot in commit messages, branch or bookmark names, pull request titles or descriptions. Describe the change itself. External tracker references such as Linear issue IDs are fine.",
+	];
+	if (mission.status !== "active")
+		lines.push(`- This mission is ${mission.status}. Do not start new mission work unless the user asks.`);
+	if (mission.tasks.length)
+		lines.push(
+			`- Your tasks: ${mission.tasks.map((task) => `#${task.number} ${task.title} (${task.status.replace("_", " ")})`).join("; ")}.`,
+		);
+	if (mission.decisions.length)
+		lines.push(
+			`- Decisions (binding, they override the brief): ${mission.decisions.map((d) => d.replace(/\s+/g, " ")).join(" | ")}`,
+		);
+	return lines.join("\n");
+}
 
 /** Why a tool call would post on GitHub, or undefined. Scans every string argument, including codemode scripts. */
 export function githubPosting(arguments_: unknown): string | undefined {
@@ -135,18 +187,31 @@ export function withPilotPolicy(
 	extension: Extension,
 	context: PilotContext,
 	artifactsAvailable: () => boolean = () => false,
+	mission: () => MissionContext | undefined = () => undefined,
 ): Extension {
 	return {
 		...extension,
-		sections: [...(extension.sections ?? []), section("pilot", () => pilotPrompt(context, artifactsAvailable()))],
+		sections: [
+			...(extension.sections ?? []),
+			section("pilot", () => {
+				const current = mission();
+				const prompt = pilotPrompt(context, artifactsAvailable());
+				return current ? `${prompt}\n${missionPrompt(current)}` : prompt;
+			}),
+		],
 		hooks: [
 			...(extension.hooks ?? []),
 			hook(ToolTask, {
 				beforeTool: (call) => {
 					const posting = githubPosting(call.arguments);
-					return posting
+					if (posting)
+						return {
+							block: `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`,
+						};
+					const leak = missionLeak(call.arguments, mission());
+					return leak
 						? {
-								block: `Pilot policy: agents do not ${posting} on GitHub. Report it in your final answer instead.`,
+								block: `Pilot policy: commit messages, branch or bookmark names and pull requests must not mention internal mission coordination (found ${leak}). Describe the change itself and retry; external tracker IDs such as Linear issues are fine.`,
 							}
 						: undefined;
 				},

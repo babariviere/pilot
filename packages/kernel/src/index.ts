@@ -1,4 +1,5 @@
-export type { AskContext, PilotContext, WorkspaceContext } from "./policy.ts";
+export type { AskContext, MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
+export type { MissionAction } from "./mission-tools.ts";
 export type { KernelCommand, KernelPacket, KernelSpec, KernelSubagent } from "./protocol.ts";
 export type { PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";
 export { subagentStorageSignature } from "./subagent-watch.ts";

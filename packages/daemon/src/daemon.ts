@@ -1,5 +1,8 @@
 /** pilotd: background pi agents on durable sessions. */
+import { join } from "node:path";
 import { loadConfig } from "./config.ts";
+import { MissionService } from "./mission-service.ts";
+import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -20,9 +23,15 @@ const sessions = new SessionManager(
 		workspaceRetentionMs: config.workspaceRetentionMs,
 	},
 );
+// Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
+const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
+const missionService = new MissionService(missionStore, sessions, projects);
 await sessions.load();
 const terminals = new TerminalManager();
-const server = createDaemonServer(config, sessions, projects, new ModelCatalog(config.agentDir), terminals);
+const server = createDaemonServer(config, sessions, projects, new ModelCatalog(config.agentDir), terminals, {
+	service: missionService,
+	store: missionStore,
+});
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
 });
@@ -34,6 +43,7 @@ async function stop(): Promise<void> {
 	console.log("pilotd: pausing sessions");
 	server.close();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
+	missionStore.close();
 	process.exit(0);
 }
 process.on("SIGINT", () => void stop());

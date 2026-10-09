@@ -14,6 +14,7 @@ struct SessionSidebar: View {
         let searching = !model.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty
         let unassigned = visible.filter { $0.projectId.map { !known.contains($0) } ?? true }
         List(selection: $model.selectedSessionId) {
+            missionsSection(visible: visible, searching: searching)
             ForEach(model.projectFolders.folders) { folder in
                 let projects = client.projects.filter { model.projectFolders.folderId(for: $0.id) == folder.id }
                 let matching = projects.filter { project in visible.contains { $0.projectId == project.id } }
@@ -87,14 +88,16 @@ struct SessionSidebar: View {
                 Menu {
                     Button("Add Project…") { model.addProject() }
                     Button("New Folder…") { folderEditor.begin() }
+                    Button("New Mission…") { model.missionSheet = .create(projectId: nil) }
+                        .disabled(client.projects.isEmpty)
                 } label: {
                     Image(systemName: "plus").frame(width: 28, height: 28)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("Add a project or create a folder")
-                .accessibilityLabel("Add a project or create a folder")
+                .help("Add a project, or create a folder or mission")
+                .accessibilityLabel("Add a project, or create a folder or mission")
             }
             SidebarButton(title: "Archived chats (\(client.archivedSessions.count))", icon: "archivebox",
                           selected: model.showingArchive && model.selectedSessionId == nil) {
@@ -134,6 +137,95 @@ struct SessionSidebar: View {
                       onArchive: { model.showArchive(in: project.id) },
                       onNew: { model.newSession(in: project.id) },
                       onNewFolder: { folderEditor.begin(projectId: project.id) })
+    }
+
+    @ViewBuilder
+    private func missionsSection(visible: [SessionSummary], searching: Bool) -> some View {
+        let query = model.sidebarQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        let matching = client.missions.filter { mission in
+            !searching || mission.title.lowercased().contains(query)
+                || visible.contains { $0.missionId == mission.id }
+        }
+        let active = matching.filter { $0.status == .active }.sidebarOrder
+        let inactive = matching.filter { $0.status != .active }.sidebarOrder
+        // Hidden until a mission exists; "New Mission…" lives in the add menu and project menus.
+        if !matching.isEmpty {
+            Section {
+                ForEach(active) { mission in
+                    missionRows(mission, visible: visible, searching: searching)
+                }
+                if active.isEmpty, !searching {
+                    Text("No active missions").font(.caption).foregroundStyle(Theme.faintForeground)
+                        .selectionDisabled(true)
+                }
+                if !inactive.isEmpty {
+                    let showing = searching || model.showingInactiveMissions
+                    Button { model.showingInactiveMissions.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: showing ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 9, weight: .semibold)).frame(width: 14)
+                            Text("Done and archived (\(inactive.count))").font(.caption)
+                            Spacer(minLength: 0)
+                        }
+                        .foregroundStyle(Theme.mutedForeground)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .selectionDisabled(true)
+                    if showing {
+                        ForEach(inactive) { mission in
+                            missionRows(mission, visible: visible, searching: searching)
+                        }
+                    }
+                }
+            } header: {
+                HStack(spacing: 6) {
+                    Image(systemName: "scope").font(.system(size: 10)).frame(width: 14)
+                    Text("Missions").font(.system(size: 11, weight: .semibold))
+                    Spacer(minLength: 0)
+                    Button { model.missionSheet = .create(projectId: nil) } label: { Image(systemName: "plus") }
+                        .buttonStyle(.borderless)
+                        .frame(width: 16, height: 16)
+                        .help("New mission…")
+                        .accessibilityLabel("New mission")
+                }
+                .contextMenu {
+                    Button("New Mission…") { model.missionSheet = .create(projectId: nil) }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func missionRows(_ mission: Mission, visible: [SessionSummary], searching: Bool) -> some View {
+        let members = MissionMembers.members(of: mission, in: visible)
+        let isExpanded = searching ? Binding.constant(true) : missionExpanded(mission.id)
+        MissionSidebarRow(mission: mission, needsYou: model.needsYou(mission).count,
+                          chatCount: members.count, working: members.filter(\.isWorking).count,
+                          selected: model.selectedMissionId == mission.id && model.selectedSessionId == nil,
+                          isExpanded: isExpanded)
+            .selectionDisabled(true)
+        if isExpanded.wrappedValue {
+            ForEach(members) { session in
+                SessionRow(session: session, showsMission: false)
+                    .padding(.leading, 20)
+                    .tag(session.id)
+            }
+            if members.isEmpty {
+                Text("No chats").font(.caption).foregroundStyle(Theme.faintForeground)
+                    .padding(.leading, 20)
+                    .selectionDisabled(true)
+            }
+        }
+    }
+
+    private func missionExpanded(_ id: String) -> Binding<Bool> {
+        Binding(
+            get: { model.expandedMissions.contains(id) },
+            set: { open in
+                if open { model.expandedMissions.insert(id) } else { model.expandedMissions.remove(id) }
+            }
+        )
     }
 
     @ViewBuilder
@@ -247,6 +339,7 @@ private struct ProjectHeader: View {
         }
         .contextMenu {
             Button("New Session", action: onNew)
+            Button("New Mission…") { model.missionSheet = .create(projectId: project.id) }
             Button("Browse Archived Chats", action: onArchive)
             Button("Open in Finder") { NSWorkspace.shared.open(URL(filePath: project.path)) }
             Menu("Move to Folder") {
@@ -291,6 +384,8 @@ private struct ProjectHeader: View {
 
 struct SessionRow: View {
     let session: SessionSummary
+    /// Off under the mission's own sidebar entry, where the mark would repeat.
+    var showsMission = true
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -302,6 +397,13 @@ struct SessionRow: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isUnread(session) { UnreadBadge() }
+                if showsMission, session.missionId != nil {
+                    Image(systemName: "scope")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .help("In mission: \(model.client.mission(session.missionId)?.title ?? "")")
+                        .accessibilityLabel("Mission chat")
+                }
                 if session.isPinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 10))
@@ -334,6 +436,9 @@ struct SessionRow: View {
             .help(session.isPinned ? "Return this chat to its usual list position and allow automatic archiving" :
                   "Keep this chat first and prevent automatic archiving")
             SessionArchiveAction(session: session)
+            Divider()
+            SessionMissionActions(session: session)
+            Divider()
             if session.isWorking {
                 Button("Stop Session") { model.stopSession(session.id) }
             }

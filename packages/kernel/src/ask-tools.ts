@@ -19,7 +19,7 @@ const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const UUID_PNG = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.png$/i;
 class ReadLimitError extends Error {}
 export const ASK_ATTACHMENTS = join(homedir(), "Library", "Application Support", "Pilot", "Attachments");
-export const ASK_TOOL_NAMES = ["read", "find", "grep", "ls", "codemode", "artifact"];
+export const ASK_TOOL_NAMES = ["read", "find", "grep", "ls", "codemode", "artifact", "mission"];
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 function contained(root: string, path: string): boolean {

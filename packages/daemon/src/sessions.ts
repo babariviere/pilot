@@ -11,6 +11,7 @@ import {
 	type KernelCommand,
 	type KernelPacket,
 	type KernelSubagent,
+	type MissionContext,
 	type PersistedSessionView,
 	type SubagentTranscriptRead,
 	subagentStorageSignature,
@@ -62,6 +63,15 @@ export { NotFound } from "./errors.ts";
 
 type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" }>;
 type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
+type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
+
+/** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
+export interface SessionMissionBridge {
+	/** The chat's mission, and whether it is still active. */
+	membership(sessionId: string): { missionId: string; active: boolean } | undefined;
+	context(sessionId: string): MissionContext | undefined;
+	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
+}
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
 export class CommandRejected extends Error {
@@ -582,6 +592,7 @@ export class SessionManager {
 	private readonly subagentAttachers = new Map<string, Set<() => void>>();
 	private readonly workerGenerations = new Map<string, number>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
+	private missions?: SessionMissionBridge;
 
 	private readonly home: string;
 	private readonly projects: ProjectStore;
@@ -756,6 +767,8 @@ export class SessionManager {
 			if (
 				meta.pinned ||
 				meta.archivedAt !== undefined ||
+				// Chats of an active mission wait for their mission, not a week of inactivity.
+				this.missions?.membership(meta.id)?.active ||
 				Math.max(meta.updatedAt, meta.restoredAt ?? 0) > staleBefore
 			)
 				continue;
@@ -962,6 +975,23 @@ export class SessionManager {
 		return () => this.artifactListeners.delete(listener);
 	}
 
+	setMissionBridge(bridge: SessionMissionBridge): void {
+		this.missions = bridge;
+	}
+
+	/** Membership or mission context changed: republish the summary and update a live kernel's context. */
+	missionChanged(id: string, context = this.missions?.context(id)): void {
+		const meta = this.metas.get(id);
+		if (!meta) return;
+		this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
+		this.emit(meta);
+	}
+
+	private missionSummary(id: string): { missionId?: string } {
+		const membership = this.missions?.membership(id);
+		return membership ? { missionId: membership.missionId } : {};
+	}
+
 	/** Read committed artifacts without creating or waking a kernel worker. */
 	async artifacts(id: string): Promise<ArtifactSummary[]> {
 		return this.artifactStore(id).list();
@@ -1001,7 +1031,8 @@ export class SessionManager {
 				const archived = meta.archivedAt !== undefined;
 				return (
 					(query.archived === "all" || archived === (query.archived === "true")) &&
-					(query.projectId === undefined || meta.projectId === query.projectId)
+					(query.projectId === undefined || meta.projectId === query.projectId) &&
+					(query.missionId === undefined || this.missions?.membership(meta.id)?.missionId === query.missionId)
 				);
 			})
 			.map((meta) => this.summary(meta))
@@ -2065,6 +2096,7 @@ export class SessionManager {
 		const createWorker =
 			this.factories.worker ??
 			((spec, onPacket, onExit) => new Worker(spec, onPacket, onExit, this.pool, this.workerOptions));
+		const mission = this.missions?.context(id);
 		const worker = createWorker(
 			{
 				sessionId: id,
@@ -2082,6 +2114,7 @@ export class SessionManager {
 						? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
 						: {}),
 				},
+				...(mission ? { mission } : {}),
 			},
 			(packet) => this.onPacket(meta, worker, packet),
 			(exited, code, signal) => this.onExit(meta, exited, code, signal),
@@ -2158,6 +2191,20 @@ export class SessionManager {
 			this.workers.get(meta.id) === worker
 		)
 			this.lastUse.set(meta.id, Date.now());
+		if (packet.type === "mission.call") {
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "mission.result", callId: packet.callId, ...(result as { result?: never }) });
+			};
+			const call = this.missions
+				? Promise.resolve().then(() => this.missions!.call(meta.id, packet))
+				: Promise.reject(new Error("Missions are unavailable"));
+			void call.then(
+				(result) => reply({ result: result ?? null }),
+				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+			);
+			return;
+		}
 		if (packet.type === "artifacts.changed") {
 			const next = (this.artifactNotifications.get(meta.id) ?? Promise.resolve())
 				.then(async () => {
@@ -2247,6 +2294,7 @@ export class SessionManager {
 			...(meta.lastUserMessageAt !== undefined ? { lastUserMessageAt: meta.lastUserMessageAt } : {}),
 			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
 			...(meta.pinned ? { pinned: true } : {}),
+			...this.missionSummary(meta.id),
 			...(meta.workspace?.shared ? { workspaceStorage: "shared" as const } : {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),

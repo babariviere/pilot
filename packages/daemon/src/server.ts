@@ -5,13 +5,24 @@ import type {
 	ArtifactLibrary,
 	ChangeModelRequest,
 	ClientMessage,
+	CreateMissionRequest,
 	EditQueuedMessageRequest,
+	JoinMissionRequest,
+	MissionArtifactLinkWrite,
+	MissionBriefWrite,
+	MissionCommentWrite,
+	MissionDecisionWrite,
+	MissionEventWrite,
+	MissionResourceWrite,
+	MissionTaskWrite,
 	ProjectRequest,
 	SendRequest,
 	ServerMessage,
 	SessionSummary,
 	SpawnRequest,
+	StartMissionTaskRequest,
 	SubagentMessageRequest,
+	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { boundedSender } from "./backpressure.ts";
@@ -20,6 +31,8 @@ import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
+import type { MissionService } from "./mission-service.ts";
+import type { MissionStore } from "./missions.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
@@ -71,8 +84,22 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 	}
 }
 
+type MissionClientMessage = Extract<ClientMessage, { missionId: string }>;
+type SessionClientMessage = Exclude<ClientMessage, MissionClientMessage>;
+
+function isMissionClientMessage(value: unknown): value is MissionClientMessage {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const message = value as Record<string, unknown>;
+	return (
+		(message.type === "mission.subscribe" || message.type === "mission.unsubscribe") &&
+		typeof message.missionId === "string" &&
+		message.missionId.length > 0 &&
+		message.missionId.length <= 128
+	);
+}
+
 /** Treat WebSocket JSON as untrusted input, not as an already-validated protocol union. */
-function isClientMessage(value: unknown): value is ClientMessage {
+function isClientMessage(value: unknown): value is SessionClientMessage {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
 	const message = value as Record<string, unknown>;
 	if (typeof message.type !== "string" || typeof message.sessionId !== "string" || !message.sessionId.trim())
@@ -110,6 +137,7 @@ export function createDaemonServer(
 	projects: ProjectStore,
 	models: ModelCatalog,
 	terminals: TerminalManager,
+	missions?: { service: MissionService; store: MissionStore },
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const repositoryChanges = new RepositoryChanges();
@@ -118,6 +146,7 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {
@@ -166,7 +195,11 @@ export function createDaemonServer(
 				return json(
 					res,
 					200,
-					sessions.list({ archived, projectId: url.searchParams.get("projectId") ?? undefined }),
+					sessions.list({
+						archived,
+						projectId: url.searchParams.get("projectId") ?? undefined,
+						missionId: url.searchParams.get("missionId") ?? undefined,
+					}),
 				);
 			}
 			if (req.method === "POST") return json(res, 201, await sessions.spawn(await readJson<SpawnRequest>(req)));
@@ -355,6 +388,35 @@ export function createDaemonServer(
 		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
 		broadcast({ type: "artifacts", sessionId, artifacts });
 	});
+	/** Subscribed sockets per mission. Detail is read once per change and shared. */
+	const missionSubscribers = new Map<string, Set<WebSocket>>();
+	const pushMission = (missionId: string, targets: Iterable<WebSocket>) => {
+		if (!missions) return;
+		const detail = missions.store.get(missionId) ? missions.store.detail(missionId) : undefined;
+		for (const ws of targets)
+			if (detail) send(ws, { type: "mission", mission: detail });
+			else send(ws, { type: "error", message: `Unknown mission: ${missionId}` });
+	};
+	if (missions) {
+		let pending = new Set<string>();
+		let scheduled = false;
+		// Coalesce bursts (a mission and its tasks created together) into one list and one detail per mission.
+		missions.store.onChange((missionId) => {
+			pending.add(missionId);
+			if (scheduled) return;
+			scheduled = true;
+			queueMicrotask(() => {
+				const changed = pending;
+				pending = new Set();
+				scheduled = false;
+				broadcast({ type: "missions", missions: missions.store.list() });
+				for (const id of changed) {
+					const subscribers = missionSubscribers.get(id);
+					if (subscribers?.size) pushMission(id, subscribers);
+				}
+			});
+		});
+	}
 
 	wss.on("connection", (ws: WebSocket) => {
 		clients.set(ws, boundedSender(ws));
@@ -363,6 +425,7 @@ export function createDaemonServer(
 		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
+		if (missions) send(ws, { type: "missions", missions: missions.store.list() });
 		ws.on("message", (raw) => {
 			if (ws.readyState !== ws.OPEN) return;
 			let message: unknown;
@@ -370,6 +433,18 @@ export function createDaemonServer(
 				message = JSON.parse(String(raw));
 			} catch {
 				return send(ws, { type: "error", message: "Invalid JSON" });
+			}
+			if (isMissionClientMessage(message)) {
+				if (!missions) return send(ws, { type: "error", message: "Missions are unavailable" });
+				const { missionId } = message;
+				if (message.type === "mission.unsubscribe") {
+					missionSubscribers.get(missionId)?.delete(ws);
+					return;
+				}
+				let subscribers = missionSubscribers.get(missionId);
+				if (!subscribers) missionSubscribers.set(missionId, (subscribers = new Set()));
+				subscribers.add(ws);
+				return pushMission(missionId, [ws]);
 			}
 			if (!isClientMessage(message)) return send(ws, { type: "error", message: "Invalid client message" });
 			const { sessionId } = message;
@@ -433,6 +508,10 @@ export function createDaemonServer(
 		});
 		ws.on("close", () => {
 			clients.delete(ws);
+			for (const [id, subscribers] of missionSubscribers) {
+				subscribers.delete(ws);
+				if (!subscribers.size) missionSubscribers.delete(id);
+			}
 			for (const unsubscribe of subscriptions.values()) unsubscribe();
 			subscriptions.clear();
 			for (const unsubscribe of subagentSubscriptions.values()) unsubscribe();
@@ -441,7 +520,7 @@ export function createDaemonServer(
 		});
 	});
 
-	function handleTerminal(message: ClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {
+	function handleTerminal(message: SessionClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {
 		const { sessionId } = message;
 		if (message.type === "terminal.attach" || message.type === "terminal.input") sessions.assertWritable(sessionId);
 		switch (message.type) {
@@ -486,4 +565,130 @@ export function createDaemonServer(
 	}
 
 	return server;
+}
+/** Mission routes under /api/missions and /api/sessions/:id/mission. Returns false when nothing matched. */
+async function missionRoute(
+	missions: { service: MissionService; store: MissionStore },
+	parts: string[],
+	url: URL,
+	req: IncomingMessage,
+	res: ServerResponse,
+): Promise<boolean> {
+	const { service, store } = missions;
+	const method = req.method;
+	if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "mission") {
+		if (method === "PUT")
+			return json(res, 200, service.join(parts[2]!, await readJson<JoinMissionRequest>(req))), true;
+		if (method === "DELETE") return json(res, 200, service.leave(parts[2]!)), true;
+		return false;
+	}
+	if (parts[1] !== "missions") return false;
+	const id = parts[2];
+	if (parts.length === 2) {
+		if (method === "GET") return json(res, 200, store.list(url.searchParams.get("projectId") ?? undefined)), true;
+		if (method === "POST")
+			return json(res, 201, await service.create(await readJson<CreateMissionRequest>(req))), true;
+		return false;
+	}
+	if (!id) return false;
+	if (parts.length === 3) {
+		if (method === "GET") return json(res, 200, store.detail(id)), true;
+		if (method === "PATCH") return json(res, 200, store.update(id, await readJson<UpdateMissionRequest>(req))), true;
+		if (method === "DELETE") {
+			store.remove(id);
+			return json(res, 200, { ok: true }), true;
+		}
+		return false;
+	}
+	const section = parts[3];
+	const item = parts[4];
+	if (section === "brief") {
+		if (parts.length === 4 && method === "GET") {
+			const value = url.searchParams.get("revision");
+			if (value !== null && !/^[1-9]\d*$/.test(value))
+				throw new HttpError(400, "revision must be a positive integer");
+			const brief = store.brief(id, value === null ? undefined : Number(value));
+			if (!brief) throw new HttpError(404, "No brief revision");
+			return json(res, 200, brief), true;
+		}
+		if (parts.length === 4 && method === "PUT") {
+			const body = await readJson<MissionBriefWrite>(req);
+			return json(res, 200, store.writeBrief(id, body?.markdown, body?.expectedRevision)), true;
+		}
+		if (parts.length === 5 && item === "revisions" && method === "GET")
+			return json(res, 200, store.briefRevisions(id)), true;
+		return false;
+	}
+	if (section === "tasks") {
+		if (parts.length === 4 && method === "POST")
+			return json(res, 201, store.addTask(id, await readJson<MissionTaskWrite>(req))), true;
+		if (parts.length === 5 && method === "PATCH")
+			return json(res, 200, store.updateTask(id, item!, await readJson<MissionTaskWrite>(req))), true;
+		if (parts.length === 5 && method === "DELETE") {
+			store.removeTask(id, item!);
+			return json(res, 200, { ok: true }), true;
+		}
+		if (parts.length === 6 && parts[5] === "start" && method === "POST") {
+			const body =
+				req.headers["content-length"] === "0"
+					? {}
+					: await readJson<StartMissionTaskRequest>(req).catch((error) => {
+							if (error instanceof HttpError && error.status === 415) return {};
+							throw error;
+						});
+			return json(res, 201, await service.startTask(id, item!, body ?? {})), true;
+		}
+		return false;
+	}
+	if (section === "decisions") {
+		if (parts.length === 4 && method === "POST")
+			return json(res, 201, store.addDecision(id, (await readJson<MissionDecisionWrite>(req))?.text)), true;
+		if (parts.length === 5 && method === "PATCH")
+			return (
+				json(res, 200, store.updateDecision(id, item!, (await readJson<MissionDecisionWrite>(req))?.text)), true
+			);
+		if (parts.length === 5 && method === "DELETE") {
+			store.removeDecision(id, item!);
+			return json(res, 200, { ok: true }), true;
+		}
+		return false;
+	}
+	if (section === "comments") {
+		if (parts.length === 4 && method === "POST")
+			return json(res, 201, store.addComment(id, await readJson<MissionCommentWrite>(req))), true;
+		if (parts.length === 6 && parts[5] === "resolve" && method === "POST")
+			return json(res, 200, store.resolveComment(id, item!)), true;
+		if (parts.length === 5 && method === "DELETE") {
+			store.removeComment(id, item!);
+			return json(res, 200, { ok: true }), true;
+		}
+		return false;
+	}
+	if (section === "resources") {
+		if (parts.length === 4 && method === "POST")
+			return json(res, 201, store.addResource(id, await readJson<MissionResourceWrite>(req))), true;
+		if (parts.length === 5 && method === "DELETE") {
+			store.removeResource(id, item!);
+			return json(res, 200, { ok: true }), true;
+		}
+		return false;
+	}
+	if (section === "artifacts") {
+		if (parts.length === 4 && method === "POST")
+			return json(res, 201, await service.linkArtifact(id, await readJson<MissionArtifactLinkWrite>(req))), true;
+		if (parts.length === 5 && method === "DELETE") {
+			store.unlinkArtifact(id, item!);
+			return json(res, 200, { ok: true }), true;
+		}
+		return false;
+	}
+	if (section === "events" && parts.length === 4) {
+		if (method === "GET") {
+			const before = url.searchParams.get("before");
+			if (before !== null && !/^\d+$/.test(before)) throw new HttpError(400, "before must be an event ID");
+			return json(res, 200, store.events(id, before === null ? undefined : Number(before))), true;
+		}
+		if (method === "POST") return json(res, 201, store.log(id, await readJson<MissionEventWrite>(req))), true;
+	}
+	return false;
 }

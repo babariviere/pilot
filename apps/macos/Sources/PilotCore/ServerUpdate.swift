@@ -9,6 +9,10 @@ public enum ServerUpdate: Sendable {
     /// A subagent transcript batch: a snapshot (or empty list) replaces it, entry_appended events extend it.
     case subagentEvents(sessionId: String, name: String, events: [JSONValue])
     case artifacts(ArtifactListMessage)
+    /// Every mission, including done and archived ones.
+    case missions([Mission])
+    /// Full detail for one subscribed mission.
+    case mission(MissionDetail)
     case terminalData(sessionId: String, data: String)
     case terminalExit(sessionId: String, code: Int)
     case error(sessionId: String?, name: String?, message: String)
@@ -37,6 +41,12 @@ public enum ServerUpdate: Sendable {
         case "artifacts":
             guard let update = ArtifactListMessage.parse(json) else { return nil }
             return .artifacts(update)
+        case "missions":
+            guard let list = json["missions"] else { return nil }
+            return .missions(try list.decode([Mission].self))
+        case "mission":
+            guard let detail = json["mission"] else { return nil }
+            return .mission(try detail.decode(MissionDetail.self))
         case "terminal.data":
             guard let id = json["sessionId"]?.string, let data = json["data"]?.string else { return nil }
             return .terminalData(sessionId: id, data: data)

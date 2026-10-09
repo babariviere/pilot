@@ -77,6 +77,7 @@ native macOS app, or from wherever the work came from.
 | **Policy** | Per-origin permissions: repositories, branches it may push, sandbox floor, tools, budget, auto-reply rights. |
 | **Workspace** | Daemon-owned Build working copy (shared jj workspace, legacy/Git private clone, or project checkout). Ask uses a read-only checkout or pinned snapshot instead. |
 | **Human gate** | A durable pause where the agent waits for a human answer or approval (`waiting` state). |
+| **Mission** | A goal spanning several chats of one project, with a shared versioned brief, tasks, artifact and resource links and an activity log (§5.7). |
 | **Outcome** | Structured end of a run: `fixed` (with PR/commit), `declined` (with reason), `failed`, `stopped`. |
 
 ### Session states
@@ -215,6 +216,96 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
 
 `~/.config/pilot/config.toml` (hot-reloaded): repositories, sources, policies, budgets, identities.
 Credentials resolve through fnox references.
+
+### 5.7 Missions
+
+A **mission** groups chats that pursue one goal over days, sharing a brief, tasks, artifacts, links and
+an activity log. It replaces running one very long chat. "Project" stays the repository; a mission
+belongs to exactly one project.
+
+**Model (daemon-owned).** Mission state lives in pilotd's own storage, never in a workspace: isolated
+Build workspaces each have their own `.pi/todos`, so files cannot be shared between chats. Exporting
+the brief into the repository is an explicit user action.
+
+- **Mission**: title, goal, project, status (`active`, `done`, `archived`), optional coordinator chat
+  and an Autopilot flag. Completing every task only suggests marking the mission done.
+- **Brief**: one markdown document (the spec), versioned. The user and every mission chat edit it
+  directly; each save is an immutable revision with its author, diffable and revertible. Writes carry
+  the expected revision and stale writes are rejected (HTTP 409), so concurrent edits never overwrite.
+- **Decisions**: short binding statements shown above the brief. Agents may record decisions; only the
+  user edits or removes them, and user decisions override the brief.
+- **Comments**: user or agent annotations anchored to a brief excerpt, optionally addressed to one chat.
+  Open comments are part of the context agents read; any mission chat can resolve them. Unaddressed
+  comments go to the coordinator, or to Needs you when there is none.
+- **Tasks**: ordered, with status `todo`, `in_progress`, `blocked`, `in_review`, `done` or `dropped`,
+  optional body, milestone and dependencies. A task is owned by at most one chat; claiming is atomic
+  and rejects a task owned by another chat.
+- **Artifacts**: links to artifacts that stay owned by their session, optionally pinned to a revision.
+- **Resources**: external links (Linear project or issue, GitHub issue or PR, Slack thread, any URL).
+  The kind and external ID are parsed when saved so later automation needs no migration.
+- **Activity**: append-only events: handoffs, status updates (optional health), claims, task changes,
+  brief revisions, decisions, links and membership changes.
+
+**Membership.** A session has at most one mission and must belong to the mission's project; attaching
+a chat from another project is rejected. Chats join through **Make a mission…** (the chat drafts the
+mission from its conversation), **Add to mission…**, or **Start chat** on a task (which also claims the
+task). **Remove from mission** releases its tasks. Archiving keeps mission membership: the mission's
+Chats tab filters active, archived or all chats, and the archive browser can narrow to one mission. Chats
+of an active mission are exempt from inactivity auto-archiving; merge-based archiving still applies.
+
+**Make a mission.** From any chat's overflow or sidebar context menu. A sheet takes the title (prefilled
+from the chat) and an optional goal; nothing exists until confirmed. The source chat joins and becomes
+coordinator by default (a checkbox opts out). By default pilotd then sends that chat a visible follow-up
+asking it to draft the goal, brief, decisions and initial tasks with the `mission` tool, without starting
+implementation. The chat already holds the context and its prompt cache, so the draft is better and
+cheaper than an out-of-band summary of the transcript; the user reviews and edits the result on the
+mission page, where every brief change is a revision.
+
+**Coordinator.** An optional role held by one mission chat (Build or Ask); **Make coordinator** moves it.
+The user is the coordinator when no chat holds the role. The coordinator can start chats for tasks and
+message member chats; it is woken with a batched, durable notice when a member settles, fails or waits on
+the user. Without Autopilot it starts chats only when asked; with Autopilot it may start chats for
+unblocked tasks on its own.
+
+**Agent tool.** One `mission({ action, ... })` tool, registered only for chats in a mission (including Ask
+chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
+
+| Action | Purpose |
+| --- | --- |
+| `get` | Goal, decisions, own task, open tasks, open comments, recent activity and the brief's revision and outline |
+| `brief` | Read the brief (optionally a revision), or replace it with `markdown` and `expectedRevision` |
+| `tasks`, `task`, `claim` | List tasks; create or update one; claim one for this chat |
+| `decide`, `comment`, `resolve` | Record a decision; add or resolve a comment |
+| `attach`, `link` | Link an artifact; link an external resource |
+| `log` | Post a handoff or status update |
+| `update` | Change the mission title or goal |
+| `start`, `send`, `status` | Coordinator only (phase 2): start a chat for a task, message a member chat, summarise member states |
+
+The tool is registered for every Build and Ask chat but declared to the model only while the chat is a
+member, so other chats pay no prompt cost. pilotd pushes membership and context changes to a live
+kernel, which applies them from the next model request; tool calls travel over the worker's IPC channel
+and pilotd checks membership on every call. Mission chats receive a compact mission header in Pilot's
+prompt section (goal, coordinator, own open tasks, decisions and how to use the tool), not the whole
+brief. The header only changes when those fields change, preserving prompt caching.
+
+**No mission references in deliverables.** Missions are internal coordination. The mission header
+forbids mentioning the mission, its tasks, coordinator or Pilot in commit messages, bookmarks, PR
+titles and bodies; external tracker references such as Linear issue IDs remain allowed so trackers can
+link and close them. A kernel hook checks commands that publish names or descriptions (`gh pr
+create`/`edit`, jj `describe`/`commit`/`new`/bookmark changes, `git commit` and branch creation)
+for the mission title and coordination phrases ("this mission", "mission task", "mission brief",
+"coordinator chat") and rejects the command before anything is published, asking the agent to rewrite.
+The bare word "mission" is allowed so work on mission features themselves stays possible.
+
+**Phases.**
+1. Missions, brief with revisions, decisions, comments, tasks with claiming, artifact and resource links,
+   activity, the `mission` tool, Make a mission, Add to mission, Start chat, Overview with Needs you, and
+   the deliverable guard.
+2. Coordinator role, wake-ups and Autopilot; handoff to a new chat; task dependencies and milestones;
+   tasks moving to `in_review`/`done` with their chat's PR state.
+3. Resource automation: `tracks` links that close Linear projects or epics on completion after user
+   confirmation, task-level Linear issues closed on merge, importing an epic's issues as tasks, and
+   posting mission updates to Linear. Validation step per milestone.
 
 ## 6. Integrations
 
@@ -523,6 +614,13 @@ reports), producing a morning summary in the app and Slack.
   and bounded compiler/runtime diagnostics, cancellation and a five-minute deadline. No network,
   workspace or credential access is granted. These are static, standalone previews, not project-aware
   or interactive views; agents use artifacts to show UI changes and label prototype limitations.
+- Missions (§5.7): a Missions sidebar section above Projects lists active missions with a Needs you
+  count and their chats; mission chats also stay under their project with a mission chip. The mission
+  page has Overview (progress, tasks, Needs you, recent activity, resources), Brief (editor, revisions,
+  decisions, comments), Tasks (grouped by status or milestone, reorder, Start chat), Chats (including
+  archived), Artifacts and Activity tabs. The chat inspector gains a Mission tab with the chat's task,
+  the brief and other tasks. Needs you collects member chats waiting on the user, PRs ready for review,
+  blocked tasks, comments for the user and pending external closes.
 - Terminal: libghostty per Build session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release
@@ -568,11 +666,16 @@ reports), producing a morning summary in the app and Slack.
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history with recoverable jj snapshots (done) |
 | `POST /api/sessions/:id/pin`, `POST /api/sessions/:id/unpin`, `SessionSummary.pinned` | Persist a user pin, sort pinned chats first, and prevent automatic archival until unpinned (done) |
 | `POST /api/sessions/:id/reclaim-workspace` | Manually reclaim an eligible archived shared jj workspace using the same snapshot/config preservation and unknown-file safety checks |
-| `GET /api/sessions?archived=true&projectId=…` | Browse archives globally or per project; default lists exclude archives, `archived=all` includes both (done) |
+| `GET /api/sessions?archived=true&projectId=…&missionId=…` | Browse archives globally, per project (done) or per mission; default lists exclude archives, `archived=all` includes both |
 | `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |
 | `SessionSummary.lastUserMessageAt` | Stable latest user-submission time for completion-aware session ordering and elapsed indicators (done) |
 | `SessionSummary.workspaceStorage`, `.workspaceReclaimedAt`, `.workspaceCleanupError` | Shared jj storage marker (absent for legacy/direct), reclamation timestamp, and safe-cleanup failure metadata; Swift labels shared/reclaimed workspaces |
 | `SessionSummary.sessionPath` | Daemon-provided session data directory for debug drafts, independent of the workspace path (done) |
+| `GET/POST /api/missions?projectId=…`, `GET/PATCH/DELETE /api/missions/:id`, WS `missions` | Mission index and settings (status, coordinator, Autopilot); clients subscribe with `mission.subscribe` for `MissionDetail` |
+| `GET/PUT /api/missions/:id/brief?revision=N`, `GET /api/missions/:id/brief/revisions` | Versioned brief; PUT requires `expectedRevision` and returns 409 when stale |
+| `/api/missions/:id/tasks` (POST), `/tasks/:taskId` (PATCH, DELETE), `/tasks/:taskId/claim`, `/tasks/:taskId/start` | Tasks, atomic claims and Start chat (returns the new session) |
+| `/api/missions/:id/decisions`, `/comments`, `/resources`, `/artifacts` (POST, PATCH/DELETE by id), `/events` (GET, POST) | Decisions, anchored comments, external links, artifact links and activity |
+| `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
 | `GET /api/audit` | External effects log |
 | WS `questions` | Push new questions to clients |
@@ -586,6 +689,7 @@ reports), producing a morning summary in the app and Slack.
 | **M3 Foundations + GitHub** | Workspaces and GitHub posting policy (done); origins, bindings, triage, outcome reporter, audit log, config file; GitHub source | §6.2 done-when, with a dry-run mode that pushes nothing |
 | **M4 Linear spec loop** | `ask_human`, `waiting` state, questions panel; Linear source | §6.4 done-when |
 | **M5 Slack bugs** | Slack Socket Mode source | §6.3 done-when |
+| **Missions** | §5.7 phase 1, then coordinator (phase 2) and Linear resource automation (phase 3) | A goal is split across chats that share brief, tasks and artifacts, tracked from one mission page, with no mission references in PRs |
 | **M6 Hosted** | Authenticated remote daemon, GitHub App, webhooks, multi-user tenancy, server workspaces | background-agents.com runs the same flows for a team |
 
 ## 10. Risks
