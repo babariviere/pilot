@@ -1555,7 +1555,7 @@ export class SessionManager {
 		}
 	}
 
-	async editQueuedMessage(id: string, submissionId: number, message: string): Promise<void> {
+	async editQueuedMessage(id: string, submissionId: number, message: string, mode?: DeliveryMode): Promise<void> {
 		const end = this.updateGate.begin();
 		try {
 			const meta = this.require(id);
@@ -1565,10 +1565,18 @@ export class SessionManager {
 			if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
 			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
+			if (mode !== undefined && mode !== "steer" && mode !== "followUp")
+				throw new Error("mode must be steer or followUp");
 			await this.unparked(id);
 			const worker = this.ensureWorker(id);
 			await worker.ready;
-			await worker.request({ type: "editQueuedMessage", requestId: randomUUID(), submissionId, content: message });
+			await worker.request({
+				type: "editQueuedMessage",
+				requestId: randomUUID(),
+				submissionId,
+				content: message,
+				...(mode === undefined ? {} : { mode }),
+			});
 			meta.updatedAt = Date.now();
 			await this.save(meta);
 			this.emit(meta);

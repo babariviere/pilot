@@ -180,12 +180,12 @@ final class PilotClient: ObservableObject {
         return session
     }
 
-    func editQueuedMessage(_ sessionId: String, submissionId: Int, message: String) async throws {
+    func editQueuedMessage(_ sessionId: String, submissionId: Int, message: String, mode: DeliveryMode? = nil) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before editing queued messages.") }
         let _: Ack = try await call(
             "api/sessions/\(sessionId)/queue/\(submissionId)",
             method: "PATCH",
-            body: EditQueuedMessageRequest(message: message)
+            body: EditQueuedMessageRequest(message: message, mode: mode)
         )
     }
 

@@ -98,6 +98,9 @@ private func json(_ text: String) -> JSONValue {
     let request = EditQueuedMessageRequest(message: "Edited\nDetails")
     let encoded = try JSONValue.decode(JSONEncoder().encode(request))
     #expect(encoded == .object(["message": .string("Edited\nDetails")]))
+    let switched = EditQueuedMessageRequest(message: "Edited", mode: .followUp)
+    #expect(try JSONValue.decode(JSONEncoder().encode(switched))
+        == .object(["message": .string("Edited"), "mode": .string("followUp")]))
 }
 
 @Test func queueDisplayPrioritizesSteeringAndPreservesOrderWithinEachMode() {

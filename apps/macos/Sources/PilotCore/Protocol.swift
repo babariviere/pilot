@@ -388,11 +388,15 @@ public struct ChangedFile: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-/// PATCH /api/sessions/:id/queue/:submissionId.
+/// PATCH /api/sessions/:id/queue/:submissionId. A nil mode keeps the message's delivery mode.
 public struct EditQueuedMessageRequest: Codable, Sendable {
     public let message: String
+    public let mode: DeliveryMode?
 
-    public init(message: String) { self.message = message }
+    public init(message: String, mode: DeliveryMode? = nil) {
+        self.message = message
+        self.mode = mode
+    }
 }
 
 /// DELETE /api/sessions/:id/queue/:submissionId. Only withdraws a still-queued input.

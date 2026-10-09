@@ -620,9 +620,13 @@ export interface SendRequest {
 	requestId?: string;
 }
 
-/** PATCH /api/sessions/:id/queue/:submissionId. Keeps the message's queue position and delivery mode. */
+/**
+ * PATCH /api/sessions/:id/queue/:submissionId. Keeps the message's queue position. Without `mode`, the delivery mode
+ * is unchanged; with it, the message is delivered as steering or as a follow-up from then on.
+ */
 export interface EditQueuedMessageRequest {
 	message: string;
+	mode?: DeliveryMode;
 }
 
 /** DELETE /api/sessions/:id/queue/:submissionId. No body. Only withdraws an input still in the durable queue. */

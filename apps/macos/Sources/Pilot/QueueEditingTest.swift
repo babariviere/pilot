@@ -17,7 +17,8 @@ enum QueueEditingTest {
         window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless()
         func settle() async {
-            for _ in 0..<8 {
+            // Outlast Theme.Motion.standard so animated row removals finish between key presses.
+            for _ in 0..<16 {
                 hosting.layoutSubtreeIfNeeded()
                 try? await Task.sleep(for: .milliseconds(25))
             }
@@ -78,7 +79,8 @@ enum QueueEditingTest {
         press(53)
         check(state.queueEditing.selected?.id == 10, "selection is frozen during save")
         await settle()
-        check(model.saves.count == 1 && model.saves[0].0 == 10 && model.saves[0].1 == "Edited first", "Enter saves selected message once")
+        check(model.saves.count == 1 && model.saves[0].0 == 10 && model.saves[0].1 == "Edited first"
+              && model.saves[0].2 == .steer, "Enter saves selected follow-up once, as steering")
         check(model.removals.isEmpty, "Command-Delete cannot remove during save")
         check(state.queueEditing.selected == nil && editor() === composerEditor, "successful save restores composer focus")
         press(125, .option)
@@ -89,7 +91,8 @@ enum QueueEditingTest {
         check(state.queueEditing.draft.contains("\n") && model.saves.count == 1, "Shift-Enter inserts newline")
         press(36, .option)
         await settle()
-        check(model.saves.count == 2 && model.saves[1].0 == 11 && model.sends.isEmpty, "Option-Enter also saves, never sends")
+        check(model.saves.count == 2 && model.saves[1].0 == 11 && model.saves[1].2 == .followUp && model.sends.isEmpty,
+              "Option-Enter saves steering as a follow-up, never sends")
         press(126, .option)
         await settle()
         type("Retain failed draft")
@@ -140,7 +143,7 @@ enum QueueEditingTest {
         press(36)
         press(36, .option)
         check(model.sends == [.steer, .followUp] && state.draft == "Keep my composer draft", "main composer and send shortcuts are unchanged")
-        print("queue-edit-test passed: inline focus, arrows, drafts, Enter, Escape, Shift-Enter, Command-Delete, failed/stale saves and removals")
+        print("queue-edit-test passed: inline focus, arrows, drafts, Enter/Option-Enter modes, Escape, Shift-Enter, Command-Delete, failed/stale saves and removals")
         window.orderOut(nil)
         exit(0)
     }
@@ -149,7 +152,7 @@ enum QueueEditingTest {
     private final class Model: ObservableObject {
         let composer = ComposerState()
         @Published var messages: [QueuedMessage]
-        var saves: [(Int, String)] = []
+        var saves: [(Int, String, DeliveryMode)] = []
         var sends: [DeliveryMode] = []
         var rejectSave = false
         var removals: [Int] = []
@@ -169,10 +172,10 @@ enum QueueEditingTest {
             Composer(state: model.composer, working: true, queuedMessages: model.messages,
                      completionDirectory: FileManager.default.temporaryDirectory.path,
                      onSend: { _, mode in model.sends.append(mode) }, onStop: {},
-                     onEditQueuedMessage: { id, text in
+                     onEditQueuedMessage: { id, text, mode in
                          try await Task.sleep(for: .milliseconds(100))
                          if model.rejectSave { throw NSError(domain: "Save rejected", code: 1) }
-                         model.saves.append((id, text))
+                         model.saves.append((id, text, mode))
                      },
                      onRemoveQueuedMessage: { id in
                          try await Task.sleep(for: .milliseconds(100))
