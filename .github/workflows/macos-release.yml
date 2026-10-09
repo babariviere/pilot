@@ -31,7 +31,9 @@ env:
   JJ_SHA256: 43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58
 
 jobs:
-  verify:
+  # Verification is split into independent jobs that run in parallel. Swift builds dominate
+  # (debug for tests, release for the bundle), and neither needs the Node toolchain.
+  node:
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -55,7 +57,6 @@ jobs:
       - name: Verify toolchain and architecture
         run: |
           test "$(uname -m)" = arm64
-          swift --version
           node --version
           jj --version
       - run: npm ci
@@ -66,12 +67,41 @@ jobs:
           for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
           python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_*.py'
           node --test apps/macos/scripts/tests/*.test.mjs
+
+  swift-test:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
+      PILOT_SWIFT_JOBS: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify toolchain and architecture
+        run: |
+          test "$(uname -m)" = arm64
+          swift --version
       - run: apps/macos/scripts/test.sh
+
+  app-bundle:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      PILOT_SWIFT_JOBS: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify toolchain and architecture
+        run: |
+          test "$(uname -m)" = arm64
+          swift --version
       # Build, sign and smoke-test the relocated app, not just the Swift executable.
       - run: apps/macos/scripts/bundle.sh
 
   release-please:
-    needs: verify
+    needs: [node, swift-test, app-bundle]
     # Never expose write permissions or release credentials to PRs or forks.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
     runs-on: ubuntu-latest
@@ -96,9 +126,9 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   release:
-    needs: [verify, release-please]
+    needs: [node, swift-test, app-bundle, release-please]
     # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && needs.verify.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.node.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
     # Serialize stable publishing. Semantic-version ordering protects latest.
