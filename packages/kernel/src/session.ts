@@ -32,6 +32,7 @@ import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-too
 import { NativeAdapter } from "./native-adapter.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
+import { refActivity } from "./ref-activity.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQueue } from "./queue.ts";
 import { openSessionStorage } from "./storage.ts";
@@ -70,6 +71,8 @@ export interface KernelSessionHooks {
 	onArtifactsChanged?(): void;
 	/** Created by an agent tool, committed before notification; replayed on open. */
 	onPullRequestCreated?(url: string): void;
+	/** A tool call may have changed branches or bookmarks. Hint only; may repeat. */
+	onRefsChanged?(): void;
 	/** Full replacement whenever the subagents extension reports a change. */
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
@@ -144,6 +147,10 @@ export class KernelSession {
 							if (added) hooks.onPullRequestCreated?.(url);
 						})
 					: undefined;
+			const refs =
+				spec.pilot?.workspace && !spec.pilot.ask && hooks.onRefsChanged
+					? refActivity(hooks.onRefsChanged)
+					: undefined;
 			const pinned = await pinnedAgent(owned.storage);
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
@@ -173,7 +180,7 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
-				hostExtensions: provenance ? [provenance.native] : [],
+				hostExtensions: [...(provenance ? [provenance.native] : []), ...(refs ? [refs.native] : [])],
 				subagents,
 				hostTools: missionTools,
 				...(spec.pilot?.ask
@@ -195,7 +202,8 @@ export class KernelSession {
 						() => mission.current,
 					),
 				);
-				return provenance ? provenance.prepare(prepared) : prepared;
+				const tracked = refs ? refs.prepare(prepared) : prepared;
+				return provenance ? provenance.prepare(tracked) : tracked;
 			};
 			const registry = createRegistry();
 			registry.install(prepare(adapter.extension));

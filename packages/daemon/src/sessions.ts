@@ -2294,6 +2294,12 @@ export class SessionManager {
 			}
 			return;
 		}
+		if (packet.type === "refs.changed") {
+			// A branch may have been created or pushed. Repeated hints coalesce in the sync.
+			if (this.workers.get(meta.id) === worker && meta.workspace && meta.mode !== "ask")
+				void this.pullRequests.refresh(meta);
+			return;
+		}
 		if (packet.type === "events") {
 			if (this.workers.get(meta.id) !== worker) return;
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);

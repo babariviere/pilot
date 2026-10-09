@@ -70,6 +70,8 @@ export type KernelPacket =
 	| { type: "subagents"; subagents: KernelSubagent[] }
 	| { type: "artifacts.changed" }
 	| { type: "pullRequest.created"; url: string }
+	/** The agent may have created, moved or pushed a branch. A hint to recheck PRs, not ownership. */
+	| { type: "refs.changed" }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	| { type: "accepted"; requestId: string }

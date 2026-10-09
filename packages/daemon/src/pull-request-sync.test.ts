@@ -1,5 +1,8 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Exercise the scheduler's private batch application.
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { SessionPullRequest } from "@pilot/protocol";
@@ -99,7 +102,9 @@ class FakeGitHub {
 					})),
 				});
 			}
-			const pr = this.numbers.get(key);
+			const pr =
+				this.numbers.get(key) ??
+				[...this.heads.values()].flat().find((candidate) => candidate.url.endsWith(`/${repo}/pull/${args[2]}`));
 			if (pr instanceof Error) throw pr;
 			return JSON.stringify(pr);
 		}
@@ -271,6 +276,57 @@ test("cadence adapts to PR state: pending checks fast, settled never, idle sessi
 		assert.deepEqual(counts(), { pending: 1, passing: 1, merged: 1, fresh: 1, idle: 1 });
 		await advance(2_000);
 		assert.deepEqual(counts(), { pending: 5, passing: 2, merged: 1, fresh: 3, idle: 1 });
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("local inspection is reused while the repository and session are unchanged", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pilot-sync-cache-"));
+	try {
+		await mkdir(join(cwd, ".git", "refs", "heads", "feat"), { recursive: true });
+		await writeFile(join(cwd, ".git", "HEAD"), "ref: refs/heads/feat/a\n");
+		await writeFile(join(cwd, ".git", "refs", "heads", "feat", "a"), "abc\n");
+		const github = new FakeGitHub();
+		github.heads.set("a/feat/a", [row("a", 1, "feat/a")]);
+		let local = 0;
+		const runner: Runner = async (file, ...rest) => {
+			if (file === "git") local++;
+			return github.runner(file, ...rest);
+		};
+		const target = session("a", "a", { cwd });
+		const sync = new PullRequestSync(host([target]), { runner });
+		try {
+			await sync.refresh(target);
+			const first = local;
+			assert.ok(first > 0);
+			assert.equal(target.pullRequest?.number, 1);
+			await sync.refresh(target);
+			assert.equal(local, first, "no git process while nothing changed");
+			assert.equal(github.calls.length, 2, "GitHub is still asked for fresh PR state");
+			await writeFile(join(cwd, ".git", "refs", "heads", "feat", "b"), "def\n");
+			await sync.refresh(target);
+			assert.ok(local > first, "a new branch invalidates the inspection");
+		} finally {
+			await sync.stop();
+		}
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("a known open PR is looked up by number instead of its head", async () => {
+	const github = new FakeGitHub();
+	const target = session("a", "a");
+	github.heads.set("a/feat/a", [row("a", 7, "feat/a")]);
+	const sync = new PullRequestSync(host([target]), { runner: github.runner });
+	try {
+		await sync.refresh(target);
+		await sync.refresh(target);
+		assert.deepEqual(
+			github.calls.map((call) => call.variables.filter((value) => /^[hn]\d+=/.test(value))),
+			[["h0=feat/a"], ["n0=7"]],
+		);
 	} finally {
 		await sync.stop();
 	}

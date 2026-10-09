@@ -141,6 +141,23 @@ async function setup(cooldownMs?: number) {
 				},
 			]);
 		}
+		if (args[0] === "pr" && args[1] === "view" && args.some((arg) => arg.includes("isCrossRepository"))) {
+			// Known PRs are looked up by number.
+			if (controls.listError) throw new Error("GitHub list offline");
+			const number = Number(args[2]);
+			const other = controls.others.find((pr) => pr.number === number);
+			return JSON.stringify({
+				number,
+				url: other?.url ?? url,
+				title: other?.title ?? "Fix the PR",
+				state: other ? (other.state === "draft" ? "OPEN" : other.state.toUpperCase()) : controls.state,
+				isDraft: other ? other.state === "draft" : controls.draft,
+				headRefName: other?.branch ?? branch,
+				isCrossRepository: false,
+				createdAt: "2026-01-01T00:00:00Z",
+				mergedAt: new Date(Date.now()).toISOString(),
+			});
+		}
 		if (args[0] === "pr" && args[1] === "view") {
 			controls.healthCalls++;
 			controls.healthNumbers.push(Number(args[2]));

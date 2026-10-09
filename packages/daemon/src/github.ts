@@ -351,16 +351,51 @@ async function lookupChunk(
 /**
  * Discover PRs for many heads and numbers of one repository, chunked. A failing number lookup is retried
  * alone so it cannot poison the rest of the batch. Head lookup failures reject the whole call.
+ *
+ * Heads with a known open PR (`known`, head to number) are looked up by number, which is cheaper than a
+ * head search and survives renamed or deleted branches. Only when that PR is no longer open on the same
+ * head (merged, closed, reassigned or unreadable) is the head searched, to find a reopened or newer PR.
  */
 export async function lookupPullRequests(
 	repo: Repository,
-	request: { heads?: Iterable<string>; numbers?: Iterable<number> },
+	request: { heads?: Iterable<string>; numbers?: Iterable<number>; known?: ReadonlyMap<string, number> },
 	cwd: string,
 	runner: Runner = run,
 	limits?: RateLimits,
 ): Promise<PullRequestBatch> {
-	const heads = [...new Set(request.heads ?? [])];
-	const numbers = [...new Set(request.numbers ?? [])];
+	const requested = [...new Set(request.heads ?? [])];
+	const known = new Map(
+		requested.flatMap((head) => (request.known?.has(head) ? [[head, request.known.get(head)!]] : [])),
+	);
+	const result = await lookupBatch(
+		repo,
+		requested.filter((head) => !known.has(head)),
+		[...new Set([...(request.numbers ?? []), ...known.values()])],
+		cwd,
+		runner,
+		limits,
+	);
+	const search: string[] = [];
+	for (const [head, number] of known) {
+		const pr = result.numbers.get(number);
+		if (pr?.state === "OPEN" && pr.headRefName === head && !pr.isCrossRepository) result.heads.set(head, pr);
+		else search.push(head);
+	}
+	if (search.length) {
+		const searched = await lookupBatch(repo, search, [], cwd, runner, limits);
+		for (const [head, pr] of searched.heads) result.heads.set(head, pr);
+	}
+	return result;
+}
+
+async function lookupBatch(
+	repo: Repository,
+	heads: string[],
+	numbers: number[],
+	cwd: string,
+	runner: Runner,
+	limits?: RateLimits,
+): Promise<PullRequestBatch> {
 	const result: PullRequestBatch = { heads: new Map(), numbers: new Map(), numberErrors: new Map() };
 	const merge = (part: PullRequestLookup) => {
 		for (const [key, value] of part.heads) result.heads.set(key, value);

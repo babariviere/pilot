@@ -1,4 +1,6 @@
 /** Read-only PR discovery for session branches, independent of a client or kernel. */
+import { readdir, readFile, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { SessionPullRequest } from "@pilot/protocol";
 import {
 	type Candidate,
@@ -126,6 +128,42 @@ export function createdBookmarks(opDiff: string): string[] {
  * records each operation's workspace, so sibling sessions' bookmarks are never attributed to this one.
  */
 export async function workspaceBookmarks(cwd: string, workspace: string, runner: Runner = run): Promise<string[]> {
+	// The shared operation log grows with every session's history. Read only operations newer than the
+	// last one seen, widening the window when many happened, and fall back to a full read when the log
+	// was rewritten (for example by `jj op abandon`).
+	const key = `${cwd}\0${workspace}`;
+	const seen = scannedOperations.get(key);
+	let ops: Operation[] = [];
+	let names: string[] | undefined;
+	for (const limit of seen ? [32, 512, undefined] : [undefined]) {
+		ops = await operations(cwd, runner, limit);
+		const known = seen ? ops.findIndex((op) => op.id === seen.head) : -1;
+		if (seen && known >= 0) {
+			names = [...(await createdBy(ops.slice(0, known), workspace, cwd, runner)), ...seen.names];
+			break;
+		}
+		if (limit === undefined || ops.length < limit) {
+			names = await createdBy(ops, workspace, cwd, runner);
+			break;
+		}
+	}
+	const unique = [...new Set(names)];
+	if (scannedOperations.size > 1024) scannedOperations.clear();
+	if (ops[0]) scannedOperations.set(key, { head: ops[0].id, names: unique });
+	return unique;
+}
+
+interface Operation {
+	id: string;
+	workspace: unknown;
+	bookmarks: boolean;
+}
+
+/** Newest operation and the names it implies, per workspace. Operations are immutable. */
+const scannedOperations = new Map<string, { head: string; names: string[] }>();
+
+/** Newest first. Every operation is listed so the newest one can anchor incremental reads. */
+async function operations(cwd: string, runner: Runner, limit?: number): Promise<Operation[]> {
 	const output = await runner(
 		"jj",
 		[
@@ -133,35 +171,44 @@ export async function workspaceBookmarks(cwd: string, workspace: string, runner:
 			"log",
 			"--ignore-working-copy",
 			"--no-graph",
+			...(limit === undefined ? [] : ["--limit", String(limit)]),
 			"-T",
-			'if(self.description().contains("bookmark"), self.id() ++ "\\t" ++ json(self.workspace_name()) ++ "\\n")',
+			'self.id() ++ "\\t" ++ json(self.workspace_name()) ++ "\\t" ++ if(self.description().contains("bookmark"), "b", "-") ++ "\\n"',
 		],
 		cwd,
 		10_000,
 	);
-	const names: string[] = [];
+	const ops: Operation[] = [];
 	for (const line of output.split("\n")) {
-		const [id, raw] = line.split("\t");
+		const [id, raw, kind] = line.split("\t");
 		if (!id || !raw) continue;
-		let name: unknown;
+		let workspace: unknown;
 		try {
-			name = JSON.parse(raw);
+			workspace = JSON.parse(raw);
 		} catch {
 			continue;
 		}
+		ops.push({ id, workspace, bookmarks: kind !== "-" });
+	}
+	return ops;
+}
+
+async function createdBy(ops: Operation[], workspace: string, cwd: string, runner: Runner): Promise<string[]> {
+	const names: string[] = [];
+	for (const op of ops) {
 		// jj renders workspace names with a trailing "@".
-		if (name !== workspace && name !== `${workspace}@`) continue;
-		let created = createdByOperation.get(id);
+		if (!op.bookmarks || (op.workspace !== workspace && op.workspace !== `${workspace}@`)) continue;
+		let created = createdByOperation.get(op.id);
 		if (!created) {
 			created = createdBookmarks(
-				await runner("jj", ["op", "show", "--ignore-working-copy", "--no-graph", "-T", "", id], cwd, 10_000),
+				await runner("jj", ["op", "show", "--ignore-working-copy", "--no-graph", "-T", "", op.id], cwd, 10_000),
 			);
 			if (createdByOperation.size > 4096) createdByOperation.clear();
-			createdByOperation.set(id, created);
+			createdByOperation.set(op.id, created);
 		}
 		names.push(...created);
 	}
-	return [...new Set(names)];
+	return names;
 }
 
 /**
@@ -206,7 +253,11 @@ export async function inspectWorkspace(
 	session: PullRequestSession,
 	runner: Runner = run,
 ): Promise<WorkspaceInspection> {
-	const none = (result: PullRequestResult): WorkspaceInspection => ({ result, others: [], created: [] });
+	const none = (result: PullRequestResult): WorkspaceInspection => ({
+		result,
+		others: [],
+		created: [],
+	});
 	if (!session.workspace) return none({});
 	if (session.workspaceRecovery) return none(session.workspace.branch ? { branch: session.workspace.branch } : {});
 	const workspace = session.workspace;
@@ -276,6 +327,24 @@ export function inspectionHeads(inspection: WorkspaceInspection): string[] {
 	return [...(inspection.current !== undefined ? [inspection.current] : []), ...inspection.others];
 }
 
+/** Heads whose cached PR is still open, looked up by number instead of a head search. */
+export function knownPullRequests(session: PullRequestSession, inspection: WorkspaceInspection): Map<string, number> {
+	const known = new Map<string, number>();
+	if (inspection.result) return known;
+	const current = session.pullRequest;
+	if (
+		inspection.current !== undefined &&
+		current &&
+		!isTerminalPullRequest(current) &&
+		(current.branch ?? session.workspace?.branch) === inspection.current
+	)
+		known.set(inspection.current, current.number);
+	for (const pr of session.previousPullRequests ?? [])
+		if (pr.branch && !isTerminalPullRequest(pr) && inspection.others.includes(pr.branch))
+			known.set(pr.branch, pr.number);
+	return known;
+}
+
 /** Combine a local inspection with GitHub's answers, or its lookup failure. */
 export function resolvePullRequests(
 	session: PullRequestSession,
@@ -332,10 +401,70 @@ export async function discoverPullRequest(
 	let found: ReadonlyMap<string, Candidate | undefined> | Error;
 	try {
 		found = (
-			await lookupPullRequests(inspection.repo!, { heads: inspectionHeads(inspection) }, session.cwd, runner, limits)
+			await lookupPullRequests(
+				inspection.repo!,
+				{ heads: inspectionHeads(inspection), known: knownPullRequests(session, inspection) },
+				session.cwd,
+				runner,
+				limits,
+			)
 		).heads;
 	} catch (error) {
 		found = error instanceof Error ? error : new Error(String(error));
 	}
 	return resolvePullRequests(session, inspection, found);
+}
+
+/** Loose ref files read for a git fingerprint. Beyond this, skip caching rather than walk a huge tree. */
+const maxRefFiles = 2_000;
+
+/**
+ * A fingerprint of everything workspace inspection reads from the repository, without starting a process:
+ * jj's operation heads (bookmarks and the working-copy commit only change through operations, and
+ * inspection ignores the working copy), or git's HEAD and local branch refs. Undefined when unknown.
+ */
+export async function repositoryState(cwd: string): Promise<string | undefined> {
+	try {
+		const jj = join(cwd, ".jj", "repo");
+		const info = await stat(jj).catch(() => undefined);
+		if (info) {
+			// Secondary workspaces store the repository path, relative to their .jj directory.
+			const repo = info.isDirectory() ? jj : resolve(join(cwd, ".jj"), (await readFile(jj, "utf8")).trim());
+			return `jj:${(await readdir(join(repo, "op_heads", "heads"))).sort().join(",")}`;
+		}
+		const git = join(cwd, ".git");
+		if (!(await stat(git)).isDirectory()) return undefined;
+		const parts = [`HEAD=${(await readFile(join(git, "HEAD"), "utf8")).trim()}`];
+		for (const file of ["packed-refs", "config"]) {
+			const info = await stat(join(git, file)).catch(() => undefined);
+			parts.push(`${file}=${info ? `${info.mtimeMs}:${info.size}` : "-"}`);
+		}
+		const walk = async (dir: string): Promise<boolean> => {
+			for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+				const path = join(dir, entry.name);
+				if (entry.isDirectory()) {
+					if (!(await walk(path))) return false;
+				} else {
+					const info = await stat(path);
+					parts.push(`${path.slice(git.length)}=${info.mtimeMs}:${info.size}`);
+					if (parts.length > maxRefFiles) return false;
+				}
+			}
+			return true;
+		};
+		if (!(await walk(join(git, "refs", "heads")))) return undefined;
+		return `git:${parts.join("\n")}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Session fields inspection depends on, besides the repository. Earlier PRs only matter once settled. */
+export function inspectionInputs(session: PullRequestSession): string {
+	return JSON.stringify([
+		session.workspace,
+		!!session.workspaceRecovery,
+		session.previousPullRequests?.map((pr) => [pr.branch, isTerminalPullRequest(pr)]),
+		session.previousBranches,
+	]);
 }
