@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/babariviere/pilot/compare/v1.7.0...v1.7.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **macos:** clarify mission task owners and coordinator ([b281e36](https://github.com/babariviere/pilot/commit/b281e3629bc088aefa7eef04a3ffa3e82912d669))
+
 ## [1.7.0](https://github.com/babariviere/pilot/compare/v1.6.2...v1.7.0) (2026-10-09)
 
 
