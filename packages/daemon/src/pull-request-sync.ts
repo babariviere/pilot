@@ -31,12 +31,15 @@ import {
 	checksState,
 	inspectionHeads,
 	inspectWorkspace,
+	inspectionInputs,
 	isTerminalPullRequest,
+	knownPullRequests,
 	type LinkedPullRequest,
 	type LinkedPullRequestTracking,
 	type PullRequestOptions,
 	type PullRequestResult,
 	type PullRequestSession,
+	repositoryState,
 	resolvePullRequests,
 	sessionPullRequests,
 	type WorkspaceInspection,
@@ -52,6 +55,8 @@ const maxBatch = 25;
 const maxUrgentBatch = 8;
 /** Never poll more rarely than this while something is still open or undiscovered. */
 const maxDelay = 30 * MINUTE;
+/** Safety net for a repository change the fingerprint missed. */
+const inspectionTtl = 10 * MINUTE;
 
 export interface HealthCheck {
 	pr: SessionPullRequest;
@@ -131,6 +136,8 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 	private readonly entries = new Map<string, Entry>();
 	/** Linked PRs refreshed explicitly, for when the host no longer lists them. */
 	private readonly linkedTargets = new Map<string, LinkedPullRequest>();
+	/** Last local inspection per session, reused while the repository and session inputs are unchanged. */
+	private readonly inspections = new Map<string, { key: string; at: number; inspection: WorkspaceInspection }>();
 	private readonly jobs = new Set<Promise<void>>();
 	private readonly limits = new RateLimits();
 	private readonly runner: Runner;
@@ -289,6 +296,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 			if (!live.has(key) && !entry.running && !entry.next && !entry.urgent) {
 				this.entries.delete(key);
 				if (key.startsWith("linked:")) this.linkedTargets.delete(key.slice("linked:".length));
+				else this.inspections.delete(key.slice("session:".length));
 			}
 	}
 
@@ -422,7 +430,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 		for (const item of work) {
 			if (item.kind !== "session" || this.stopped) continue;
 			try {
-				item.inspection = await inspectWorkspace(item.session, this.runner);
+				item.inspection = await this.inspect(item.session);
 			} catch (error) {
 				item.result = {
 					error: `Pull request lookup failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -436,11 +444,14 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 		}
 
 		// 2. One discovery request per repository for every head and linked number.
-		const repos = new Map<string, { repo: Repository; cwd: string; heads: Set<string>; numbers: Set<number> }>();
+		const repos = new Map<
+			string,
+			{ repo: Repository; cwd: string; heads: Set<string>; numbers: Set<number>; known: Map<string, number> }
+		>();
 		const group = (repo: Repository, cwd: string) => {
 			let entry = repos.get(repo.identity);
 			if (!entry) {
-				entry = { repo, cwd, heads: new Set(), numbers: new Set() };
+				entry = { repo, cwd, heads: new Set(), numbers: new Set(), known: new Map() };
 				repos.set(repo.identity, entry);
 			}
 			return entry;
@@ -451,6 +462,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				if (!inspection || inspection.result) continue;
 				const target = group(inspection.repo!, item.session.cwd);
 				for (const head of inspectionHeads(inspection)) target.heads.add(head);
+				for (const [head, number] of knownPullRequests(item.session, inspection)) target.known.set(head, number);
 			} else group(item.repo, item.target.cwd).numbers.add(item.number);
 		}
 		const found = new Map<string, Awaited<ReturnType<typeof lookupPullRequests>> | Error>();
@@ -503,6 +515,22 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 					: [],
 			),
 		);
+	}
+
+	/**
+	 * Local inspection, skipped while neither the repository (a file-system fingerprint, no process) nor the
+	 * session's own inputs changed. The fingerprint is read first, so a change during inspection is seen next time.
+	 */
+	private async inspect(session: Session): Promise<WorkspaceInspection> {
+		const state = session.workspace && !session.workspaceRecovery ? await repositoryState(session.cwd) : undefined;
+		const key = state === undefined ? undefined : `${state}\0${inspectionInputs(session)}`;
+		const cached = this.inspections.get(session.id);
+		if (key !== undefined && cached?.key === key && Date.now() - cached.at < inspectionTtl) return cached.inspection;
+		const inspection = await inspectWorkspace(session, this.runner);
+		if (key !== undefined && !inspection.error && !inspection.result?.error)
+			this.inspections.set(session.id, { key, at: Date.now(), inspection });
+		else this.inspections.delete(session.id);
+		return inspection;
 	}
 
 	/**

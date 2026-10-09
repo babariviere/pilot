@@ -257,6 +257,7 @@ export function runKernelWorker(): void {
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
+					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 				});
