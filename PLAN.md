@@ -596,7 +596,12 @@ reports), producing a morning summary in the app and Slack.
   including previously saved revisions.
   Markdown diagram source remains available from its context menu; its expanded viewer uses 90% of the display's usable area.
   Offscreen chat rows release their renderer; previews can also be hidden manually. An older running
-  daemon without artifact routes prompts for a restart once agents are idle. Native WebKit renders isolated,
+  daemon without artifact routes prompts for a restart once agents are idle.
+  Library bundles are prebuilt for releases, served with ETags, and kept in one shared, revalidated
+  in-app copy that survives brief daemon restarts. React artifacts load the shared React scripts instead
+  of embedding React. The content blocker is compiled once per app run, idle previews measure size less
+  often, and a crashed WebKit renderer reloads once. Pinned revisions cached for scrolled-away rows are
+  bounded by bytes as well as count. Native WebKit renders isolated,
   offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,
   ECharts and Motion are bundled; D3 and Three.js are opt-in bundled libraries. JSX compilation accepts
   only those libraries, not arbitrary package installs. Optional agent screenshots and console
@@ -614,6 +619,12 @@ reports), producing a morning summary in the app and Slack.
   and bounded compiler/runtime diagnostics, cancellation and a five-minute deadline. No network,
   workspace or credential access is granted. These are static, standalone previews, not project-aware
   or interactive views; agents use artifacts to show UI changes and label prototype limitations.
+  Compiles run in two locked slot directories with private APFS clones of a trusted, prewarmed SDK
+  module cache (about 1.5 seconds instead of about 35), and identical renders are reused in memory.
+  Browser previews share a warm Chromium with a fresh context each; HTML/React publications return
+  page errors as non-blocking warnings, as do updates without expectedRevision. Revision files are
+  fsynced, unreadable entries are skipped when listing, image bytes are stored once, and revisions
+  record their library versions.
 - Missions (§5.7): a Missions sidebar section above Projects lists active missions with a Needs you
   count and their chats; mission chats also stay under their project with a mission chip. The mission
   page has Overview (progress, tasks, Needs you, recent activity, resources), Brief (editor, revisions,

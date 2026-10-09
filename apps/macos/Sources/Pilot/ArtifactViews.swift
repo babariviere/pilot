@@ -35,17 +35,35 @@ final class ArtifactViewState: ObservableObject {
 enum ArtifactInlineCache {
     private static var revisions: [ArtifactReference: ArtifactRevision] = [:]
     private static var revisionOrder: [ArtifactReference] = []
+    private static var revisionBytes: [ArtifactReference: Int] = [:]
+    private static var totalBytes = 0
     private static var sizes: [ArtifactReference: CGSize] = [:]
     private static let revisionLimit = 32
+    /// Image revisions can each hold 16 MiB or more. Bound memory by size as well as count.
+    static let byteLimit = 64 * 1024 * 1024
     private static let sizeLimit = 512
 
     static func revision(for reference: ArtifactReference) -> ArtifactRevision? { revisions[reference] }
 
     static func store(_ revision: ArtifactRevision, for reference: ArtifactReference) {
-        if revisions.updateValue(revision, forKey: reference) != nil { revisionOrder.removeAll { $0 == reference } }
+        let bytes = revision.html.utf8.count + revision.source.utf8.count
+        // A single oversized revision is not retained; the visible card already holds it.
+        guard bytes <= byteLimit else { return }
+        if revisions.updateValue(revision, forKey: reference) != nil {
+            revisionOrder.removeAll { $0 == reference }
+            totalBytes -= revisionBytes[reference] ?? 0
+        }
         revisionOrder.append(reference)
-        while revisionOrder.count > revisionLimit { revisions[revisionOrder.removeFirst()] = nil }
+        revisionBytes[reference] = bytes
+        totalBytes += bytes
+        while revisionOrder.count > revisionLimit || totalBytes > byteLimit {
+            let evicted = revisionOrder.removeFirst()
+            revisions[evicted] = nil
+            totalBytes -= revisionBytes.removeValue(forKey: evicted) ?? 0
+        }
     }
+
+    static var retainedBytes: Int { totalBytes }
 
     static func contentSize(for reference: ArtifactReference) -> CGSize? { sizes[reference] }
 

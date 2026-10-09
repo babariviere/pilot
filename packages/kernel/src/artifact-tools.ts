@@ -4,6 +4,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	type ArtifactStore,
+	isBrowserPreviewAvailable,
 	isArtifactPreviewAvailable,
 	loadArtifactImage,
 	MAX_IMAGE_SOURCE_BYTES,
@@ -44,6 +45,7 @@ const referenceSchema = Type.Object({
 		title: Type.String(),
 		revision: Type.Integer(),
 	}),
+	warnings: Type.Optional(Type.Array(Type.String())),
 });
 const revisionNumber = Type.Integer({ minimum: 1 });
 const diagnosticsProperties = {
@@ -60,7 +62,24 @@ export interface ArtifactToolOptions {
 	preview?: typeof previewArtifact | false;
 	/** Ask permits session-local artifacts and sandboxed previews, but never arbitrary image-path reads. */
 	ask?: boolean;
+	/** After publishing HTML/React, render once to report runtime errors as non-blocking warnings.
+	 * Defaults to the installed browser renderer; tests inject or disable it. */
+	diagnose?: ArtifactDiagnose | false;
 }
+
+export type ArtifactDiagnose = (write: ArtifactWrite, signal?: AbortSignal) => Promise<string[]>;
+
+const DIAGNOSE_TIMEOUT_MS = 10_000;
+const MAX_WARNINGS = 10;
+
+/** Smoke render with the shared warm browser. Diagnostics never fail or block a publication. */
+export const diagnoseArtifact: ArtifactDiagnose = async (write, signal) => {
+	const result = await previewArtifact(write, { signal, timeoutMs: DIAGNOSE_TIMEOUT_MS });
+	return result.consoleMessages
+		.filter((message) => message.level === "error")
+		.slice(0, MAX_WARNINGS)
+		.map((message) => `Runtime error: ${message.text.slice(0, 500)}`);
+};
 
 function checkSource(write: ArtifactWrite): void {
 	if (write.kind !== "image" && Buffer.byteLength(write.source, "utf8") > MAX_SOURCE_BYTES)
@@ -91,11 +110,15 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		options.preview === false
 			? undefined
 			: (options.preview ?? (isArtifactPreviewAvailable() ? previewArtifact : undefined));
+	const diagnose =
+		options.diagnose === false
+			? undefined
+			: (options.diagnose ?? (isBrowserPreviewAvailable() ? diagnoseArtifact : undefined));
 	const actions = ["create", "update", "get", "list", ...(preview ? ["preview" as const] : [])] as const;
 	const previewDescription = preview
 		? "- preview: optionally render a draft without saving; returns screenshot and diagnostics. Preview is not required before publishing. If it fails, publish without preview.\n"
 		: "";
-	const published = async (value: ArtifactRevision) => {
+	const published = async (value: ArtifactRevision, warnings: string[] = []) => {
 		const artifact = {
 			id: value.id,
 			sessionId: value.sessionId,
@@ -114,7 +137,19 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 		} catch (error) {
 			console.warn("pilot: artifact change notification failed", error);
 		}
-		return dataResult({ artifact });
+		return dataResult(warnings.length ? { artifact, warnings } : { artifact });
+	};
+	const runtimeWarnings = async (write: ArtifactWrite, signal?: AbortSignal): Promise<string[]> => {
+		if (!diagnose || (write.kind !== "html" && write.kind !== "react")) return [];
+		try {
+			const warnings = await diagnose(write, signal);
+			return warnings.length
+				? [...warnings, "The artifact was published. Fix these errors with update if they affect the result."]
+				: [];
+		} catch {
+			// A missing, slow or crashed renderer says nothing about the artifact itself.
+			return [];
+		}
 	};
 	return [
 		defineTool({
@@ -177,7 +212,12 @@ Get the current source before updating, and pass its revision as expectedRevisio
 			outputSchema: Type.Union([
 				referenceSchema,
 				Type.Object({
-					artifact: Type.Object({ ...summaryProperties, source: Type.String(), libraries: Type.Array(library) }),
+					artifact: Type.Object({
+						...summaryProperties,
+						source: Type.String(),
+						libraries: Type.Array(library),
+						libraryVersions: Type.Optional(Type.Record(Type.String(), Type.String())),
+					}),
 				}),
 				Type.Object({ artifacts: Type.Array(Type.Object(summaryProperties)) }),
 				...(preview
@@ -206,7 +246,12 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						const value = await store.get(id!, params.revision);
 						if (!value) throw new Error(`Artifact not found: ${id}`);
 						return dataResult({
-							artifact: { ...summary(value), source: value.source, libraries: value.libraries },
+							artifact: {
+								...summary(value),
+								source: value.source,
+								libraries: value.libraries,
+								...(value.libraryVersions ? { libraryVersions: { ...value.libraryVersions } } : {}),
+							},
 						});
 					}
 					case "list":
@@ -234,9 +279,19 @@ Get the current source before updating, and pass its revision as expectedRevisio
 						checkSource(write);
 						if (write.kind === "swiftui" && write.libraries?.length)
 							throw new Error("SwiftUI artifacts do not use libraries");
-						if (action === "create") return published(await store.create(write, signal));
-						if (action === "update")
-							return published(await store.update(id!, write, params.expectedRevision, signal));
+						if (action === "create") {
+							const value = await store.create(write, signal);
+							return published(value, await runtimeWarnings(write, signal));
+						}
+						if (action === "update") {
+							const value = await store.update(id!, write, params.expectedRevision, signal);
+							const warnings = await runtimeWarnings(write, signal);
+							if (params.expectedRevision === undefined)
+								warnings.unshift(
+									`Updated without expectedRevision, so a concurrent change could have been replaced. Pass expectedRevision (${value.revision}) next time.`,
+								);
+							return published(value, warnings);
+						}
 						const result = await preview!(write, {
 							width: typeof params.width === "number" ? params.width : undefined,
 							height: typeof params.height === "number" ? params.height : undefined,

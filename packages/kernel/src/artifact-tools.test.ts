@@ -42,7 +42,12 @@ function fixture(overrides: Partial<ArtifactToolOptions> = {}) {
 			return [revision];
 		},
 	};
-	const tools = createArtifactTools({ store, onArtifactsChanged: () => notifications++, ...overrides });
+	const tools = createArtifactTools({
+		store,
+		onArtifactsChanged: () => notifications++,
+		diagnose: false,
+		...overrides,
+	});
 	return {
 		tools,
 		calls,
@@ -121,7 +126,7 @@ test("Ask artifact tools publish all session-local kinds and forward sandboxed p
 					: "self-contained source",
 		};
 		for (const action of ["create", "update", "preview"]) {
-			const args = { action, id: revision.id, ...document };
+			const args = { action, id: revision.id, ...document, ...(action === "update" ? { expectedRevision: 3 } : {}) };
 			assert.ok(validateToolArguments(tool, { type: "toolCall", id: "allowed", name: "artifact", arguments: args }));
 			const result = await execute(tool, args);
 			assert.ok(result.structuredContent);
@@ -519,4 +524,43 @@ test("committed publication keeps its metadata fallback when display admission f
 	assert.deepEqual(result.details, result.structuredContent);
 	assert.equal(f.notifications, 1, "the committed store still needs a list refresh");
 	assert.equal(warnings.mock.callCount(), 1);
+});
+
+test("publication reports runtime errors as non-blocking warnings, only for browser kinds", async () => {
+	const diagnosed: ArtifactWrite[] = [];
+	const f = fixture({
+		diagnose: async (document) => {
+			diagnosed.push(document);
+			return ["Runtime error: boom"];
+		},
+	});
+	const created = await f.call("create", write);
+	assert.deepEqual((created.structuredContent as { warnings: string[] }).warnings, [
+		"Runtime error: boom",
+		"The artifact was published. Fix these errors with update if they affect the result.",
+	]);
+	assert.equal((created.structuredContent as { artifact: { id: string } }).artifact.id, "artifact-1");
+	assert.equal(f.notifications, 1);
+	const failing = fixture({
+		diagnose: async () => {
+			throw new Error("browser crashed");
+		},
+	});
+	const quiet = await failing.call("create", write);
+	assert.ok(!("warnings" in (quiet.structuredContent as object)), "renderer failures are not artifact errors");
+	await f.call("create", {
+		title: "Native",
+		kind: "swiftui",
+		source: 'struct ArtifactView: View { var body: some View { Text("x") } }',
+	});
+	assert.equal(diagnosed.length, 1);
+});
+
+test("updates without expectedRevision succeed with a warning", async () => {
+	const f = fixture();
+	const result = await f.call("update", { id: "artifact-1", ...write });
+	const warnings = (result.structuredContent as { warnings?: string[] }).warnings ?? [];
+	assert.match(warnings[0] ?? "", /without expectedRevision.*\(3\)/);
+	const pinned = await f.call("update", { id: "artifact-1", expectedRevision: 2, ...write });
+	assert.ok(!("warnings" in (pinned.structuredContent as object)));
 });

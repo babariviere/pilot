@@ -3,6 +3,7 @@ import { serialize } from "node:v8";
 import { randomUUID } from "node:crypto";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
+import { closePreviewBrowser } from "@pilot/artifacts";
 import type { MissionCall } from "./mission-tools.ts";
 import type { MissionContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
@@ -171,6 +172,8 @@ export function runKernelWorker(): void {
 			await commands;
 			await Promise.allSettled(subagentCommands);
 			await session?.close();
+			// The warm artifact preview browser would otherwise outlive a graceful exit until Playwright's exit hook.
+			await closePreviewBrowser();
 		} catch (error) {
 			await send({ type: "error", message: `Shutdown failed: ${errorText(error)}` }).catch(() => undefined);
 			code = 1;

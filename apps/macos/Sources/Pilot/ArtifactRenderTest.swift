@@ -17,7 +17,16 @@ enum ArtifactRenderTest {
             let mermaidPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_MERMAID"]
                 ?? "node_modules/mermaid/dist/mermaid.min.js"
             let mermaid = try Data(contentsOf: URL(filePath: mermaidPath))
-            let server = try ArtifactTestServer(library: library, mermaid: mermaid)
+            // React artifacts load the shared React runtime as library scripts (npm run artifacts:libraries).
+            let reactDirectory = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_LIBRARIES"]
+                ?? "packages/artifacts/dist/libraries"
+            var extra: [String: Data] = [:]
+            for name in ["react", "react-dom"] {
+                if let data = try? Data(contentsOf: URL(filePath: reactDirectory).appending(path: "\(name).js")) {
+                    extra["/api/artifact-libraries/\(name)"] = data
+                }
+            }
+            let server = try ArtifactTestServer(library: library, mermaid: mermaid, extra: extra)
             defer { server.stop() }
             try await wait("HTTP server") { server.port != nil }
             let base = URL(string: "http://127.0.0.1:\(server.port!)")!
@@ -111,7 +120,9 @@ enum ArtifactRenderTest {
                 guard dialogDenied == true else { throw ClientError("Dialog not denied") }
                 try await Task.sleep(for: .milliseconds(250))
                 let requests = Array(server.paths.dropFirst(before))
-                guard requests == ["/api/artifact-libraries/echarts"] else {
+                // The first view loads the library; the second reuses the app's shared library cache.
+                guard requests == (csp ? ["/api/artifact-libraries/echarts"] : [])
+                        || (!csp && requests == ["/api/artifact-libraries/echarts"]) else {
                     throw ClientError("Unexpected native/network requests (CSP \(csp)): \(requests)")
                 }
                 let png = try await state.snapshotPNG()
@@ -412,8 +423,8 @@ enum ArtifactRenderTest {
         let html = try String(contentsOf: htmlURL, encoding: .utf8)
         let state = ArtifactRenderState()
         let coordinator = ArtifactWebView.Coordinator(state: state)
-        // Compiled React/Motion is standalone inline JS. No library fetch is required.
-        let handler = ArtifactLibraryHandler(libraries: [], client: client)
+        // Compiled React/Motion is inline JS that uses the shared React and ReactDOM library scripts.
+        let handler = ArtifactLibraryHandler(libraries: [.react, .reactDOM], client: client)
         let view = ArtifactWebView.makeSandboxView(coordinator: coordinator, libraries: handler)
         view.frame = CGRect(x: 0, y: 0, width: 760, height: 480)
         let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
@@ -447,12 +458,15 @@ enum ArtifactRenderTest {
             "document.getElementById('artifact-root').textContent.includes('Native React 8')"
         }
         let guardOK = try await view.evaluateJavaScript("['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection','WebTransport'].every(n=>window[n]===undefined)") as? Bool
-        guard guardOK == true, server.paths.count == before else { throw ClientError("React fixture escaped network boundary") }
+        let libraryPaths: Set<String> = ["/api/artifact-libraries/react", "/api/artifact-libraries/react-dom"]
+        guard guardOK == true, server.paths.dropFirst(before).allSatisfy(libraryPaths.contains) else {
+            throw ClientError("React fixture escaped network boundary")
+        }
         let image = try await view.takeSnapshot(configuration: nil)
         guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
               let png = bitmap.representation(using: .png, properties: [:]) else { throw ClientError("React snapshot unavailable") }
         try png.write(to: directory.appending(path: "artifact-react.png"))
-        print("artifact-render-test passed: prepared React bootstrap, Native React 7 → 8, \(hasMotionProbe || hasMotionCounter ? "Motion animation, " : "")zero network requests")
+        print("artifact-render-test passed: prepared React bootstrap, Native React 7 → 8, \(hasMotionProbe || hasMotionCounter ? "Motion animation, " : "")only shared React library requests")
     }
 
     private static func jsString(_ value: String) -> String {
@@ -486,8 +500,9 @@ private final class ArtifactTestServer {
     private(set) var port: UInt16?
     private(set) var paths: [String] = []
 
-    init(library: Data, mermaid: Data) throws {
+    init(library: Data, mermaid: Data, extra: [String: Data] = [:]) throws {
         self.libraries = ["/api/artifact-libraries/echarts": library, "/api/artifact-libraries/mermaid": mermaid]
+            .merging(extra) { current, _ in current }
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         listener = try NWListener(using: parameters)

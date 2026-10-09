@@ -21,6 +21,8 @@ const artifact = await prepareArtifact({
 });
 assert.match(artifact.html, /artifact-root/);
 assert.ok((await getLibrary('mermaid')).length > 0);
+const { existsSync } = await import('node:fs');
+assert.ok(existsSync('packages/artifacts/dist/libraries/manifest.json'), 'Prebuilt artifact libraries are missing');
 await import('ws');
 const pty = createRequire(import.meta.url)('node-pty');
 const terminal = pty.spawn('/bin/echo', ['pilot-runtime-ok'], { cwd: process.cwd(), env: process.env });

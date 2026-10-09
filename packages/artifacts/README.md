@@ -96,6 +96,11 @@ files, package installs, CDN imports, Tailwind, or arbitrary npm modules. Use in
 element for custom CSS. For HTML images, use embedded data URLs. Artifact revisions save the source
 and prepared HTML, not temporary workspace files.
 
+React and ReactDOM are not bundled into each revision. The compiled module imports them from the shared
+`react` and `react-dom` library scripts, which are added to the revision's libraries automatically (a
+trivial component is about 3 KB instead of about 290 KB). Other imports, such as `motion/react`, are
+bundled and share the same React globals.
+
 ### SwiftUI
 
 Provide self-contained Swift declarations with a zero-argument `ArtifactView`:
@@ -127,6 +132,15 @@ offline image document. Existing viewers can display it without a Swift toolchai
 Source shows the editable Swift code. Draft preview supports custom viewport dimensions using the
 same width/height options as browser previews. Content height is the fixed viewport height, not a
 scroll measurement. No Chromium installation is needed for SwiftUI.
+
+Swift's SDK module cache is only valid at the path where it was built, so compiles run in two fixed,
+lock-protected slot directories under `~/Library/Caches/Pilot/swiftui/<toolchain>` (override with
+`PILOT_SWIFTUI_CACHE`). The first compile in a slot builds its module cache from trusted warm-up source
+(the cold cost, often 30 seconds or more). Every compile then gets a private APFS clone of that cache,
+which takes a compile from about 35 seconds to about 1.5 seconds. Untrusted code never writes to the
+shared cache. When both slots are busy, a compile falls back to a cold temporary directory. Rendered
+results are also cached in memory by toolchain, viewport and source, so a preview followed by
+publication of the same source compiles once.
 
 Previews are standalone layout prototypes, not project-aware builds or interactive apps. Use fixture
 data and label that distinction when showing UI changes. Compiler failures include bounded diagnostics;
@@ -171,6 +185,23 @@ Browser previews use a fresh profile and an in-memory resource handler that deni
 Runtime messages are bounded, viewport dimensions are limited, and previews time out. Animated pages
 are sampled shortly after loading; a screenshot is not proof of every interactive state.
 
+One headless Chromium is kept warm for 60 seconds after the last preview, and each preview gets a new
+isolated browser context. A browser that crashes, or whose context does not close after a timeout, is
+replaced. When Chromium is installed, HTML and React `create`/`update` also render once after
+publishing and return page errors as `warnings` in the result. These diagnostics never block or undo a
+publication. Updates without `expectedRevision` succeed, with a warning.
+
+## Libraries
+
+Release bundles prebuild every library with `npm run artifacts:libraries` (run by
+`apps/macos/scripts/bundle-runtime.sh`) into `dist/libraries`, with a manifest of library and esbuild
+versions and checksums. pilotd serves a prebuilt file only if its key and checksum match, and otherwise
+builds the library once per process. Library responses carry an `ETag` and `Cache-Control: no-cache`.
+The app keeps one in-memory copy per library, revalidates it with `If-None-Match` at most every 30
+seconds, and coalesces concurrent loads. If pilotd is briefly unreachable, an already-loaded copy is
+still served. Revisions record `libraryVersions`, so drift after a library upgrade can be detected. Only
+the current version of each library is shipped, so older revisions render with it.
+
 ## Storage and security
 
 SwiftUI compilation (including compiler plugins) and rendering both use deny-by-default macOS sandbox
@@ -186,6 +217,9 @@ Files live at `$PILOT_HOME/sessions/<sessionId>/artifacts/<artifactId>/`. Number
 immutable after publication; an atomic `latest.json` points to the latest committed one. The session's
 single worker serializes writes. Unpublished files left by a crash are not exposed. Native tools remain
 replay-unsafe, so a crash after publication can leave an artifact with an interrupted tool result.
+Each file and its directory are fsynced around the rename, so power loss cannot leave an empty revision.
+Listing skips (and logs) an unreadable `latest.json` instead of failing the whole session or project.
+Image revisions store their bytes once, in `source`; the image document is rebuilt when read.
 
 The app uses an isolated nonpersistent WebKit view, a restrictive CSP, a fail-closed request blocker and
 a read-only allowlisted library scheme handler. Network, app origins, filesystem access, native message
