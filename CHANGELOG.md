@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.2](https://github.com/babariviere/pilot/compare/v1.10.1...v1.10.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **macos:** prioritize lead chats in grouped sidebar ([7b411f5](https://github.com/babariviere/pilot/commit/7b411f5366ed849c7ce17184f9bdfa49cea6e71a))
+
 ## [1.10.1](https://github.com/babariviere/pilot/compare/v1.10.0...v1.10.1) (2026-10-09)
 
 
