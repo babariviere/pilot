@@ -67,11 +67,18 @@ import Testing
         let topDistance = 20 + measuring.fittingSize.height - 8
         let point = NSPoint(x: 55, y: host.isFlipped ? topDistance : host.bounds.height - topDistance)
         let location = host.convert(point, to: nil)
-        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-            let event = try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+        let event = { (type: NSEvent.EventType) in
+            try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
                 timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1,
                 clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-            window.sendEvent(event)
+        }
+        // A button may track the mouse after mouseDown by pulling events from the queue until mouseUp.
+        // Queue the mouseUp first so tracking always ends, instead of waiting forever for a real one
+        // (seen on headless CI runners). Deliver it directly if nothing consumed it.
+        NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+        window.sendEvent(try event(.leftMouseDown))
+        if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+            window.sendEvent(up)
         }
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         #expect(expansion.expanded == expected)
