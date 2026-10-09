@@ -41,6 +41,9 @@ WebKit view, with bundled React, Mermaid, ECharts and Motion (D3 and Three.js ar
 The `artifact` tool (actions: `create`, `update`, `get`, `list`, `preview`)
 documents the available libraries and authoring examples. For agent-side screenshots and runtime
 diagnostics, install the optional preview browser once with `npm run artifacts:browser`.
+In codemode-only sessions, its size-limited tool list may omit `artifact` even though it is callable.
+Run `text(await describeTool("artifact"))` in codemode for the schema and authoring instructions,
+then use `tools.artifact(...)`. A missing preview renderer does not prevent HTML, React or image publication.
 
 The chat footer shows the session's context-window estimate. With pi-extensions' `usage` extension
 enabled, it also shows Claude or Codex subscription windows. Hover for reset times and snapshot freshness.

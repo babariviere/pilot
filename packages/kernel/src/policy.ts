@@ -60,6 +60,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 	const lines = ["You are running inside Pilot as a background agent. The user reviews your work in the Pilot app."];
 	if (artifactsAvailable) {
 		lines.push(
+			'- The artifact tool is available in this session, including through codemode as `tools.artifact(...)`. Codemode\'s size-limited tool list may omit it. If not listed, run `text(await describeTool("artifact"))` in codemode to read its full schema and authoring instructions before use. Do not infer unavailability from an omitted declaration; unavailable preview does not mean publication is unavailable.',
 			"- When explaining architecture, workflows, relationships or complex behavior, proactively publish a diagram with the artifact tool when it makes the explanation clearer, without waiting for the user to request one. Prefer simple Mermaid diagrams in HTML artifacts using the bundled mermaid library. Accompany the diagram with a short explanation; skip diagrams for trivial answers or when the user asks for text only.",
 			"- Artifact preview is optional verification, never a prerequisite for publishing. If preview is unavailable or fails, publish without it. Do not ask the user to install a browser just to create a diagram.",
 		);

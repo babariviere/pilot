@@ -23,7 +23,7 @@ import { KernelSession } from "./session.ts";
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==";
 
-async function fixture(t: TestContext, mode: "on" | "only" = "on") {
+async function fixture(t: TestContext, mode: "on" | "only" = "on", inlineBudget?: number) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-artifact-tools-"));
 	const cleanup: Array<() => Promise<void>> = [];
 	t.after(async () => {
@@ -58,7 +58,7 @@ async function fixture(t: TestContext, mode: "on" | "only" = "on") {
 			noThemes: true,
 			noContextFiles: true,
 			systemPrompt: "Offline artifact integration.",
-			extensionFactories: [createCodemodeExtension({ models: false, mode })],
+			extensionFactories: [createCodemodeExtension({ models: false, mode, inlineBudget })],
 		},
 	};
 	return { root, cleanup, options, faux };
@@ -294,14 +294,145 @@ for (const mode of ["on", "only"] as const) {
 			assert.equal(f.faux.state.callCount, 1);
 			assert.ok(prompt);
 			if (available) {
+				assert.ok(prompt.includes('text(await describeTool("artifact"))'));
 				assert.match(prompt, /proactively publish a diagram with the artifact tool/);
 				assert.match(prompt, /Artifact preview is optional verification/);
 			} else {
-				assert.doesNotMatch(prompt, /proactively publish a diagram|Artifact preview is optional verification/);
+				assert.doesNotMatch(
+					prompt,
+					/artifact tool is available|describeTool\("artifact"\)|proactively publish a diagram|Artifact preview is optional verification/,
+				);
 			}
 		});
 	}
 }
+
+test("budget-omitted artifacts can be discovered and published when pending codemode work resumes after restart", {
+	timeout: 20_000,
+}, async (t) => {
+	// A zero inline budget deterministically reproduces the omitted declaration, regardless
+	// of how many user extension/MCP tools compete for the normal 3000-token budget.
+	const f = await fixture(t, "only", 0);
+	const open = NativeAdapter.open;
+	const refreshUsage = NativeAdapter.prototype.refreshUsage;
+	const usageRefreshes: Promise<void>[] = [];
+	t.mock.method(
+		NativeAdapter.prototype,
+		"refreshUsage",
+		function (this: NativeAdapter, ...args: Parameters<typeof refreshUsage>) {
+			const refresh = refreshUsage.apply(this, args);
+			usageRefreshes.push(refresh);
+			return refresh;
+		},
+	);
+	let adapter: NativeAdapter | undefined;
+	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+		adapter = await open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionId: options.sessionId,
+			sessionFile: options.sessionFile,
+			sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+		});
+		return adapter;
+	});
+	const spec = { sessionId: "restart-artifacts", cwd: f.root, storageDir: join(f.root, "storage") };
+	const store = new ArtifactStore(f.root, { sessionId: spec.sessionId });
+	const session = await KernelSession.open(spec, { onWorking: () => {} });
+	f.cleanup.push(() => session.close());
+	f.faux.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: 'text(await tools.artifact({action:"create",title:"Before restart",kind:"html",source:"<h1>Before</h1>"}));',
+			}),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Published before restart."),
+	]);
+	await session.submit("before", "Create an artifact", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	const [before] = await store.list();
+	assert.ok(before);
+	const oldAdapter = adapter;
+	let enterRequest!: () => void;
+	const requestEntered = new Promise<void>((resolve) => {
+		enterRequest = resolve;
+	});
+	// Stop during a model request, leaving its prepared prompt and pending generation
+	// durable for KernelSession.open's harness.resume(). No new submission on reopen.
+	f.faux.setResponses([
+		async (_transcript, options) => {
+			enterRequest();
+			assert.ok(options?.signal);
+			await new Promise<void>((resolve) =>
+				options.signal!.addEventListener("abort", () => resolve(), { once: true }),
+			);
+			return fauxAssistantMessage("Interrupted request");
+		},
+	]);
+	await session.submit("after", "Show the artifact after restarting", "followUp");
+	await requestEntered;
+	await Promise.all(usageRefreshes);
+	await session.close();
+	f.faux.setResponses([
+		(transcript) => {
+			assert.ok(adapter);
+			assert.notEqual(adapter, oldAdapter);
+			assert.ok(adapter.session.getCallableToolNames().includes("artifact"));
+			assert.ok(!adapter.extension.tools?.some((tool) => tool.name === "artifact"));
+			const codemode = adapter.extension.tools?.find((tool) => tool.name === "codemode");
+			assert.ok(codemode);
+			assert.doesNotMatch(codemode.description, /### `artifact`/);
+			const prompt = transcript.messages
+				.filter((m) => m.role === "system")
+				.map(getSystemMessageText)
+				.join("\n");
+			assert.match(prompt, /artifact tool is available in this session/);
+			assert.ok(prompt.includes('text(await describeTool("artifact"))'));
+			return fauxAssistantMessage(fauxToolCall("codemode", { code: 'text(await describeTool("artifact"));' }), {
+				stopReason: "toolUse",
+			});
+		},
+		(transcript) => {
+			const result = transcript.messages.findLast((m) => m.role === "toolResult");
+			assert.ok(result?.role === "toolResult" && !result.isError);
+			const description = result.content
+				.filter((b) => b.type === "text")
+				.map((b) => b.text)
+				.join("\n");
+			assert.match(description, /artifact\(args:/);
+			assert.match(description, /self-contained Swift defining struct ArtifactView/);
+			return fauxAssistantMessage(
+				fauxToolCall("codemode", {
+					code: `
+const existing = await tools.artifact({action:"get",id:${JSON.stringify(before.id)}});
+text(await tools.artifact({action:"update",id:existing.artifact.id,expectedRevision:existing.artifact.revision,title:"After restart",kind:"html",source:"<h1>After</h1>"}));
+text(await tools.artifact({action:"create",title:"New after restart",kind:"html",source:"<h1>New</h1>"}));
+`,
+				}),
+				{ stopReason: "toolUse" },
+			);
+		},
+		fauxAssistantMessage("Published after restart."),
+	]);
+	const restored = await KernelSession.open(spec, { onWorking: () => {} });
+	f.cleanup.push(() => restored.close());
+	await restored.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.equal(f.faux.state.callCount, 6, "reopen retries the interrupted request without a new user message");
+	const artifacts = await store.list();
+	assert.equal(artifacts.length, 2);
+	assert.equal(artifacts.find((artifact) => artifact.id === before.id)?.revision, 2);
+	assert.equal((await store.get(before.id)).source, "<h1>After</h1>");
+	const view = await restored.conversation.context(BACKGROUND_CONTEXT);
+	const results = view.messages.filter((m) => m.role === "toolResult");
+	assert.equal(results.length, 3);
+	assert.ok(
+		results.every((result) => !result.isError),
+		JSON.stringify(results),
+	);
+	assert.equal(view.entries.filter((entry) => entry.kind === "pilot.artifact").length, 3);
+	await Promise.all(usageRefreshes);
+});
 
 test("busy codemode publications and automatic completion survive native tool refresh and reopen", {
 	timeout: 20_000,

@@ -4,6 +4,12 @@ import { githubPosting, pilotPrompt } from "./policy.ts";
 
 test("Pilot diagram guidance is conditional on artifact availability", () => {
 	const enabled = pilotPrompt({}, true);
+	assert.match(enabled, /artifact tool is available in this session/);
+	assert.match(enabled, /tools\.artifact\(\.\.\.\)/);
+	assert.match(enabled, /size-limited tool list may omit it/);
+	assert.ok(enabled.includes('text(await describeTool("artifact"))'));
+	assert.match(enabled, /Do not infer unavailability from an omitted declaration/);
+	assert.match(enabled, /unavailable preview does not mean publication is unavailable/);
 	assert.match(enabled, /proactively publish a diagram with the artifact tool/);
 	assert.match(enabled, /without waiting for the user to request one/);
 	assert.match(enabled, /Prefer simple Mermaid diagrams/);
@@ -22,6 +28,7 @@ test("Ask permits proactive session-local diagrams and sandboxed previews withou
 	assert.match(prompt, /Prefer simple Mermaid/);
 	assert.match(prompt, /Creating, updating and previewing host-owned session-local artifacts is allowed/);
 	assert.match(prompt, /installed sandboxed renderers/);
+	assert.ok(prompt.includes('text(await describeTool("artifact"))'));
 	assert.match(prompt, /artifacts do not modify the repository/);
 	assert.match(prompt, /Do not write repository files/);
 });
