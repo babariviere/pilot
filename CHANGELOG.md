@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.9.0](https://github.com/babariviere/pilot/compare/v1.8.0...v1.9.0) (2026-10-09)
+
+
+### Features
+
+* **tools:** add role-gated chat control actions ([c763f88](https://github.com/babariviere/pilot/commit/c763f88db5b780aed9513974ebe47ab18cfffa51))
+
+
+### Bug Fixes
+
+* **kernel:** check only executable policy arguments ([b1bcd3d](https://github.com/babariviere/pilot/commit/b1bcd3dc5a2719279c8f43c69b045f7825c0b2ff))
+* **kernel:** restrict unsafe stack commands ([8809613](https://github.com/babariviere/pilot/commit/8809613cd315a15de0500ef05fa7587f1b5836fd))
+* **macos:** prevent blank transcripts on session opening ([2745395](https://github.com/babariviere/pilot/commit/2745395bff9a00d7d2ef6b25c69fe68a44db00f1))
+* **tools:** tailor declarations to the current role ([b94a503](https://github.com/babariviere/pilot/commit/b94a5032e1060b64ee57bc600b6604e826771106))
+
 ## [1.8.0](https://github.com/babariviere/pilot/compare/v1.7.1...v1.8.0) (2026-10-09)
 
 
