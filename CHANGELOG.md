@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.1](https://github.com/babariviere/pilot/compare/v1.10.0...v1.10.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **ci:** follow up all agent-owned PR stack heads ([024f941](https://github.com/babariviere/pilot/commit/024f9419d0d43559bcaf74a2bcdec8901d7823cf))
+
 ## [1.10.0](https://github.com/babariviere/pilot/compare/v1.9.0...v1.10.0) (2026-10-09)
 
 
