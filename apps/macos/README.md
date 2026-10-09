@@ -121,6 +121,7 @@ Requires macOS 14+ and Swift 6.2+. Command Line Tools are enough:
 scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from the repo root)
 scripts/check-app.sh build/Pilot.app  # relocated app: packaged resources and terminal initialization
 scripts/test.sh              # PilotCore tests
+node apps/macos/scripts/test-live.mjs  # from repo root: isolated pilotd + real workers + native mission flows
 .build/debug/Pilot --queue-edit-test  # native queue editing/removal keys, focus, drafts, failed/stale requests
 swift run Pilot              # unbundled dev run (no notifications)
 .build/debug/Pilot --snapshot /tmp/pilot-snap   # home, session, changes, settings, done-question-unread, done-unread PNGs
@@ -157,6 +158,14 @@ local state in small `ObservableObject`s; Ghostty's resource lookup is patched t
 every bundle build smoke-tests terminal initialization from a temporary location without a daemon.
 Swift Testing's macro plugin lives outside the default plugin
 path, so `scripts/test.sh` passes it explicitly.
+
+The opt-in live suite uses a deterministic loopback model, an isolated project and data directory,
+and shipping native views in hosted AppKit windows. It does not use credentials, install a launch
+agent, or restart the user's daemon. It covers drafting, membership, brief conflicts, tasks,
+decisions, comments, resources, artifacts, activity, attention badges and daemon reconnect.
+It prints the temporary directory containing native PNGs and accessibility dumps for review.
+Normal tests skip this suite. Hosted controls do not replace a manual check of window-level menus,
+focus, keyboard shortcuts and sheet dismissal in the running app.
 
 Development bundles run `node src/main.ts` (Node's native TypeScript stripping, no loader) from this checkout's
 `packages/daemon`. Release
