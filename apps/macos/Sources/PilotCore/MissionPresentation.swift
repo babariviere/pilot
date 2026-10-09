@@ -123,3 +123,19 @@ public enum MissionMembers {
     }
 }
 
+/// How a task row names the chat that owns it. Chats started from a task take its title,
+/// so repeating that title next to the task would only add noise.
+public enum MissionTaskOwnerLabel {
+    public static func text(task: MissionTask, chatTitle: String?) -> String {
+        guard let title = chatTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return "Chat"
+        }
+        let same = title.compare(task.title.trimmingCharacters(in: .whitespacesAndNewlines),
+                                 options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        return same ? "Chat" : title
+    }
+
+    public static func help(chatTitle: String?) -> String {
+        chatTitle.map { "Open the chat “\($0)”" } ?? "Open the chat working on this task"
+    }
+}

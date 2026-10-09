@@ -91,13 +91,13 @@ private struct MissionHeader: View {
                     Text("·")
                     if let coordinator = mission.coordinatorSessionId {
                         Button { model.selectedSessionId = coordinator } label: {
-                            Label(client.session(coordinator)?.title ?? "Coordinator chat", systemImage: "star")
+                            Text("Coordinated by \(client.session(coordinator)?.title ?? "a chat")")
                                 .lineLimit(1)
                         }
                         .buttonStyle(.plain)
-                        .help("Coordinator chat. Open it.")
+                        .help("Open the coordinator chat")
                     } else {
-                        Label("You coordinate", systemImage: "person")
+                        Text("You coordinate")
                     }
                 }
                 .font(.caption)
@@ -434,13 +434,14 @@ struct CompactTaskRow: View {
                 .foregroundStyle(task.status.isClosed ? Theme.mutedForeground : Theme.foreground)
             Spacer(minLength: 8)
             if let sessionId = task.sessionId {
+                let title = client.session(sessionId)?.title
                 Button { model.selectedSessionId = sessionId } label: {
-                    Label(client.session(sessionId)?.title ?? "Chat", systemImage: "bubble.left")
+                    Label(MissionTaskOwnerLabel.text(task: task, chatTitle: title), systemImage: "bubble.left")
                         .lineLimit(1).font(.caption).foregroundStyle(Theme.mutedForeground)
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: 200, alignment: .trailing)
-                .help("Open the chat working on this task")
+                .help(MissionTaskOwnerLabel.help(chatTitle: title))
             }
         }
         .font(.callout)
@@ -514,4 +515,3 @@ private struct ResourceRow: View {
         .padding(.vertical, 7)
     }
 }
-

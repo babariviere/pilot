@@ -191,3 +191,11 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
                     Mission(id: "y", projectId: "p", title: "y", goal: "", createdAt: 2, updatedAt: 2)]
     #expect(missions.sidebarOrder.map(\.id) == ["y", "x"])
 }
+
+@Test func taskOwnerLabelsDoNotRepeatTheTaskTitle() {
+    let task = MissionTask(id: "t", number: 3, title: "Cursor pagination")
+    #expect(MissionTaskOwnerLabel.text(task: task, chatTitle: "cursor pagination ") == "Chat")
+    #expect(MissionTaskOwnerLabel.text(task: task, chatTitle: "Plan API v2") == "Plan API v2")
+    #expect(MissionTaskOwnerLabel.text(task: task, chatTitle: nil) == "Chat")
+    #expect(MissionTaskOwnerLabel.help(chatTitle: "Cursor pagination") == "Open the chat “Cursor pagination”")
+}

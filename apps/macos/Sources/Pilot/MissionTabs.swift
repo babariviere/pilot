@@ -494,7 +494,8 @@ struct MissionTaskRow: View {
             }
             if members.isEmpty { Text("No mission chats") }
         } label: {
-            Label(task.sessionId.map { client.session($0)?.title ?? "Chat" } ?? "Unassigned",
+            Label(task.sessionId.map { MissionTaskOwnerLabel.text(task: task, chatTitle: client.session($0)?.title) }
+                    ?? "Unassigned",
                   systemImage: task.sessionId == nil ? "person.crop.circle.dashed" : "bubble.left")
                 .lineLimit(1)
                 .font(.caption)
@@ -503,7 +504,8 @@ struct MissionTaskRow: View {
         .fixedSize()
         .frame(maxWidth: 200, alignment: .trailing)
         .foregroundStyle(Theme.mutedForeground)
-        .help("Assign this task to a mission chat")
+        .help(task.sessionId.map { "Assigned to “\(client.session($0)?.title ?? "a chat")”. Click to reassign." }
+              ?? "Assign this task to a mission chat")
     }
 
     private func saveTitle() {
