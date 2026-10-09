@@ -1,10 +1,13 @@
 import Foundation
 
-/// Host sizing for new and already-saved image documents, without changing revisions.
+/// Host layout defaults for new and already-saved documents, without changing revisions.
 public enum ArtifactPreviewDocument {
     public static func document(_ revision: ArtifactRevision) -> String {
         guard revision.kind == .image || revision.kind == .swiftui else {
-            return ArtifactSandboxPolicy.document(revision.html)
+            // Saved artifacts predate the centered Mermaid default. Keep this low-specificity
+            // and before author styles so intentional custom layouts still take precedence.
+            let diagrams = "<style id=\"pilot-artifact-diagram-layout\">:where(.mermaid) > svg{display:block;margin-inline:auto}</style>"
+            return ArtifactSandboxPolicy.document(diagrams + revision.html)
         }
         // SwiftUI snapshots represent the renderer's default 800 × 600 logical viewport.
         // Images use intrinsic dimensions. Both shrink proportionally, never enlarge.
