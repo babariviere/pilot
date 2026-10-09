@@ -35,7 +35,7 @@ jobs:
   # (debug for tests, release for the bundle), and neither needs the Node toolchain.
   node:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,7 +70,8 @@ jobs:
 
   swift-test:
     runs-on: macos-15
-    timeout-minutes: 30
+    # A normal run takes about 3 minutes. Fail a hung test process quickly instead of after 30.
+    timeout-minutes: 12
     env:
       # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
       PILOT_SWIFT_JOBS: 3
@@ -86,7 +87,7 @@ jobs:
 
   app-bundle:
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       PILOT_SWIFT_JOBS: 3
     steps:
