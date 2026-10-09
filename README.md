@@ -106,6 +106,9 @@ Offline transcript-opening regression (cached history, session switches, width c
 `apps/macos/.build/debug/Pilot --transcript-opening-check /tmp/pilot-opening-check`.
 Add `--transcript-fixture <snapshot.json>` to replay a saved snapshot without connecting to the daemon.
 
+Offline scroll-anchoring regression (large inline artifacts, lazy rows realized above the viewport, first artifact
+measurement): `apps/macos/.build/debug/Pilot --artifact-scroll-check`.
+
 ## Private releases and updates
 
 GitHub Actions can build self-contained Apple Silicon releases on `main`. Pilot authenticates private
