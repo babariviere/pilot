@@ -18,6 +18,8 @@ enum Theme {
     static let muted = Color.black.opacity(0.04)
     static let selected = Color.black.opacity(0.06)
     static let card = Color.white
+    /// Opaque tray behind composers. Holds the editor card and its controls.
+    static let tray = Color(hex: 0xF5F5F5)
     static let code = Color(hex: 0xFAFAFA)
     static let primary = Color(hex: 0x262626)
 

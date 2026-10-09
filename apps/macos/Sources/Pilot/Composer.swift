@@ -124,8 +124,17 @@ struct Composer: View {
                                        Task { await state.removeQueuedMessage(id, perform: onRemoveQueuedMessage) }
                                    })
             }
-            editor
-            controls
+            // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
+            VStack(spacing: 0) {
+                editor
+                controls
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Theme.tray)
+                    .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
+            )
+            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
             if let error = state.error {
                 Text(error).font(.caption).foregroundStyle(Theme.destructive)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,7 +176,8 @@ struct Composer: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .card(radius: 14, shadow: true)
+        .card(radius: 10)
+        .padding([.horizontal, .top], 4)
     }
 
     private var controls: some View {
@@ -184,6 +194,7 @@ struct Composer: View {
                                 working: working, onStop: onStop, onSend: { send(.steer) })
         }
         .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private func send(_ mode: DeliveryMode) {
