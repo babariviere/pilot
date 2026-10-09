@@ -3,39 +3,53 @@ import SwiftUI
 
 /// Browser links only, one per PR the session opened. PR state never replaces outcome or unread indicators.
 struct PullRequestBadge: View {
+    enum Presentation { case badge, details }
+
     let session: SessionSummary
-    var showsStateIcon = true
+    var presentation: Presentation = .badge
 
     var body: some View {
         Group {
             let prs = session.linkedPullRequests
             if !prs.isEmpty {
-                HStack(spacing: 6) {
-                    ForEach(prs, id: \.url) { pr in
-                        if let url = pr.browserURL {
-                            Link(destination: url) { badge(pr) }
-                                .buttonStyle(.plain)
-                        } else {
-                            badge(pr)
-                        }
-                    }
+                if presentation == .details {
+                    ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 6) { links }
+                } else {
+                    HStack(spacing: 6) { links }
                 }
             } else if session.pullRequestError != nil {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .accessibilityLabel("Pull request lookup unavailable")
+                HStack(spacing: 4) {
+                    Image(systemName: "exclamationmark.triangle")
+                    if presentation == .details { Text("PR status unavailable") }
+                }
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(Theme.mutedForeground)
+                .accessibilityLabel("Pull request lookup unavailable")
             }
         }
         .help(session.pullRequestHelpText ?? "")
     }
 
+    private var links: some View {
+        ForEach(session.linkedPullRequests, id: \.url) { pr in
+            if let url = pr.browserURL {
+                Link(destination: url) { badge(pr) }
+                    .buttonStyle(.plain)
+            } else {
+                badge(pr)
+            }
+        }
+    }
+
     private func badge(_ pr: SessionPullRequest) -> some View {
         HStack(spacing: 4) {
-            if showsStateIcon { pr.state.icon }
-            Text("#\(pr.number)")
+            if presentation == .badge { pr.state.icon }
+            Text(presentation == .details ? "\(pr.state.compactLabel) PR #\(pr.number)" : "#\(pr.number)")
             if session.pullRequestIsStale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
+            }
+            if presentation == .details, pr.browserURL != nil {
+                Image(systemName: "arrow.up.right").accessibilityHidden(true)
             }
         }
         .font(.system(size: 10, weight: .medium))

@@ -75,7 +75,7 @@ struct SessionDetail: View {
         .navigationTitle(session.title)
         .navigationSubtitle(subtitle)
         .toolbar {
-            repositoryToolbar
+            contextToolbar
             ToolbarItem(placement: .primaryAction) {
                 SessionInspectorActions(session: session)
             }
@@ -89,65 +89,42 @@ struct SessionDetail: View {
     }
 
     @ToolbarContentBuilder
-    private var repositoryToolbar: some ToolbarContent {
+    private var contextToolbar: some ToolbarContent {
         if #available(macOS 26.0, *) {
-            repositoryToolbarItem.sharedBackgroundVisibility(.hidden)
+            contextToolbarItem.sharedBackgroundVisibility(.hidden)
         } else {
-            repositoryToolbarItem
+            contextToolbarItem
         }
     }
 
-    private var repositoryToolbarItem: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            HStack(spacing: 8) {
-                if model.isUnread(session) { UnreadBadge() }
-                SessionToolbarMetadata(session: session)
+    @ToolbarContentBuilder
+    private var contextToolbarItem: some ToolbarContent {
+        if model.isUnread(session) || session.isAsk {
+            ToolbarItem(placement: .primaryAction) {
+                HStack(spacing: 8) {
+                    if model.isUnread(session) { UnreadBadge() }
+                    // Ask has no Changes pane, so its read-only boundary stays visible here.
+                    if session.isAsk { SessionContextBadge(session: session) }
+                }
             }
         }
     }
 
     private var subtitle: String {
         let place = client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome
-        return [place, session.model].compactMap { $0 }.joined(separator: " · ")
+        return SessionHeaderContext.subtitle(for: session, place: place)
     }
 }
 
-/// Read-only repository context sits beside, not inside, the toolbar's action group.
-struct SessionToolbarMetadata: View {
-    let session: SessionSummary
+/// Keep orientation in the title area, leaving workspace and PR details to Changes.
+enum SessionHeaderContext {
+    static func source(for session: SessionSummary) -> String? {
+        let source = session.isAsk ? session.sourceLabel : session.branch
+        return source.flatMap { $0.isEmpty ? nil : $0 }
+    }
 
-    var source: String? { session.isAsk ? session.sourceLabel : session.branch }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            SessionContextBadge(session: session)
-            if let source, !source.isEmpty {
-                HStack(spacing: 5) {
-                    if session.isAsk && session.sourceBranch == nil {
-                        Image(systemName: "folder")
-                            .frame(width: 14, height: 14)
-                            .accessibilityHidden(true)
-                    } else {
-                        Image(nsImage: GitBranchGlyph.image)
-                            .resizable()
-                            .frame(width: 14, height: 14)
-                            .accessibilityHidden(true)
-                    }
-                    Text(source)
-                        .font(.system(size: 11, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .foregroundStyle(Theme.mutedForeground)
-                .frame(maxWidth: 200)
-                .help(session.isAsk ? session.workspaceHelp : "Branch: \(source)")
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(session.isAsk ? "Source \(source)" : "Branch \(source)")
-            }
-            if !session.isAsk {
-                PullRequestBadge(session: session, showsStateIcon: false)
-            }
-        }
+    static func subtitle(for session: SessionSummary, place: String) -> String {
+        [place, source(for: session)].compactMap { $0 }.joined(separator: " · ")
     }
 }
 

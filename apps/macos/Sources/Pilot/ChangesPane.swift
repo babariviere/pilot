@@ -55,6 +55,8 @@ struct ChangesPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ChangesRepositoryContext(session: session, changes: model.changes)
+            Rectangle().fill(Theme.border).frame(height: 1)
             header
             Rectangle().fill(Theme.border).frame(height: 1)
             content
@@ -79,7 +81,8 @@ struct ChangesPane: View {
                     additions: changes.files.reduce(0) { $0 + $1.additions },
                     deletions: changes.files.reduce(0) { $0 + $1.deletions }
                 )
-                Text("since \(changes.base)").font(.caption).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                Text("since \(changes.base)").font(.caption).foregroundStyle(Theme.faintForeground)
+                    .lineLimit(1).truncationMode(.middle).help("Changes since \(changes.base)")
             } else {
                 Text("Changes").font(.system(size: 12, weight: .medium))
             }
@@ -132,6 +135,38 @@ struct ChangesPane: View {
         }
         .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Repository context remains available while diffs are loading, empty, or unavailable.
+struct ChangesRepositoryContext: View {
+    let session: SessionSummary
+    var changes: SessionChanges?
+
+    var branch: String? {
+        if let changes { return changes.branch }
+        return session.branch
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let branch, !branch.isEmpty {
+                Text(branch)
+                    .font(.system(size: 11, design: .monospaced))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .help("Branch: \(branch)")
+                    .accessibilityLabel("Branch \(branch)")
+            }
+            Text(session.workspaceLabel)
+                .font(.system(size: 11))
+                .foregroundStyle(Theme.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(session.workspaceHelp)
+            PullRequestBadge(session: session, presentation: .details)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
     }
 }
 
