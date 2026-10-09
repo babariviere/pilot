@@ -515,6 +515,11 @@ reports), producing a morning summary in the app and Slack.
   after consumption without resubmitting. Remove individual queued messages before delivery without
   stopping the active run; Command-Delete removes the selected row only from its focused inline
   editor. Reject removal once a message has been consumed.
+- Message times: user bubbles and assistant text reveal a muted date/time footer only on click.
+  Click again or elsewhere in the window to dismiss. Use the original pi-ai epoch-millisecond
+  timestamp in local time, with exact date, seconds and timezone in the tooltip and accessibility
+  label. Missing or invalid legacy timestamps stay hidden. Native text selection and message
+  controls remain usable; revealing a footer pauses bottom-follow like expanding a message.
 - Keep unsent text, image attachments and queued-message edits per chat when navigating between
   chats, Home and archives or reopening the window. Keep the new-task form and its base-branch
   selection too. Save drafts atomically to a private local JSON file in

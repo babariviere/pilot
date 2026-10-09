@@ -116,7 +116,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         rows.reduce(0) { total, row in
             let base = total + 128 + row.id.utf8.count
             switch row {
-            case let .user(_, text), let .text(_, text), let .thinking(_, text, _),
+            case let .user(_, text, _), let .text(_, text, _), let .thinking(_, text, _),
                  let .error(_, text), let .notice(_, text):
                 return base + text.utf8.count
             case let .tools(_, items):

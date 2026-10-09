@@ -116,6 +116,7 @@ struct ChatView: View {
     @StateObject private var preparedAction = TranscriptPreparedAction()
     @StateObject private var toolExpansions = TranscriptExpansions()
     @StateObject private var messageExpansions = TranscriptExpansions()
+    @StateObject private var messageTimestamps = MessageTimestampSelection()
     private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
@@ -184,6 +185,8 @@ struct ChatView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
+        .environment(\.messageTimestampSelection, messageTimestamps)
+        .background(MessageTimestampClickObserver(selection: messageTimestamps, onToggle: scroll.messageToggled))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if session.isAsk {
@@ -229,6 +232,7 @@ struct ChatView: View {
             feed.start()
         }
         .onDisappear {
+            messageTimestamps.dismiss()
             feed.onEventsApplied = nil
             feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
         }
@@ -329,15 +333,16 @@ struct RowView: View, Equatable {
 
     @ViewBuilder private var content: some View {
         switch row {
-        case let .user(id, text):
+        case let .user(id, text, timestamp):
             if let notification = SubagentNotification(message: text) {
                 SubagentAnswerRow(notification: notification)
             } else {
-                UserMessage(text: text, expansion: messageExpansions?.state(for: id))
+                UserMessage(text: text, expansion: messageExpansions?.state(for: id),
+                            messageID: id, timestamp: timestamp)
             }
-        case let .text(_, text):
+        case let .text(id, text, timestamp):
             // Agent replies are always shown in full. Only user bubbles fold.
-            MarkdownView(text: text)
+            MessageTimestamp(rowID: id, milliseconds: timestamp) { MarkdownView(text: text) }
         case let .thinking(_, text, streaming):
             ThinkingRow(text: text, streaming: streaming)
         case let .tools(_, items):
@@ -360,15 +365,19 @@ struct UserMessage: View {
     @Environment(\.pilotFonts) private var fonts
     let text: String
     var expansion: ExpansionState? = nil
+    var messageID: String = ""
+    var timestamp: Double? = nil
 
     var body: some View {
         HStack {
             Spacer(minLength: 72)
-            CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
-                Text(text)
-                    .font(fonts.body)
-                    .lineSpacing(3)
-                    .textSelection(.enabled)
+            MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
+                CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
+                    Text(text)
+                        .font(fonts.body)
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
+                }
             }
         }
         .padding(.top, 6)

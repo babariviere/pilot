@@ -356,7 +356,7 @@ private struct SubagentActivityLine: View {
                 .foregroundStyle(item.status == .error ? Theme.destructive : Theme.mutedForeground)
                 .lineLimit(1)
             }
-        case let .text(_, text):
+        case let .text(_, text, _):
             Text(Self.inline(text)).font(.system(size: 12)).foregroundStyle(Theme.foreground).lineLimit(3)
         case let .error(_, text):
             Text(text).font(.system(size: 11)).foregroundStyle(Theme.destructive).lineLimit(2)

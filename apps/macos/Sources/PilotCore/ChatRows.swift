@@ -38,8 +38,8 @@ public struct ToolItem: Identifiable, Equatable, Sendable {
 
 /// One visual row of the chat. Consecutive tool calls are grouped.
 public enum ChatRow: Identifiable, Equatable, Sendable {
-    case user(id: String, text: String)
-    case text(id: String, text: String)
+    case user(id: String, text: String, timestamp: Double? = nil)
+    case text(id: String, text: String, timestamp: Double? = nil)
     case thinking(id: String, text: String, streaming: Bool)
     case tools(id: String, items: [ToolItem])
     case artifact(id: String, reference: ArtifactReference)
@@ -48,7 +48,7 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
 
     public var id: String {
         switch self {
-        case let .user(id, _), let .text(id, _), let .thinking(id, _, _), let .tools(id, _), let .error(id, _),
+        case let .user(id, _, _), let .text(id, _, _), let .thinking(id, _, _), let .tools(id, _), let .error(id, _),
              let .notice(id, _), let .artifact(id, _):
             id
         }
@@ -102,7 +102,7 @@ extension Transcript {
                 let isLast = index == message.blocks.count - 1
                 switch block {
                 case let .text(text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
-                    append(.text(id: blockId, text: text))
+                    append(.text(id: blockId, text: text, timestamp: message.timestamp))
                 case let .thinking(text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                     append(.thinking(id: blockId, text: text, streaming: streaming && isLast))
                 case let .toolCall(callId, name, arguments):
@@ -129,7 +129,7 @@ extension Transcript {
                 for (index, message) in entry.messages.enumerated() {
                     let id = "\(entry.id)-\(index)"
                     switch message.role {
-                    case "user": append(.user(id: id, text: message.text))
+                    case "user": append(.user(id: id, text: message.text, timestamp: message.timestamp))
                     case "assistant": appendAssistant(message, id: id, streaming: false)
                     default: break
                     }
