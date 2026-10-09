@@ -149,27 +149,55 @@ struct ChangesRepositoryContext: View {
     }
 
     var body: some View {
+        let links = session.branchLinks(current: branch)
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(session.branchLinks(current: branch)) { link in
-                BranchLinkRow(link: link, current: link.name != nil && link.name == branch,
-                              stale: session.pullRequestIsStale)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                if !links.isEmpty {
+                    Text("BRANCHES")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(0.5)
+                        .foregroundStyle(Theme.mutedForeground)
+                    Text(String(links.count))
+                        .font(.system(size: 10, weight: .medium))
+                        .monospacedDigit()
+                        .foregroundStyle(Theme.faintForeground)
+                    Spacer(minLength: 8)
+                }
+                Label(session.workspaceLabel, systemImage: workspaceIcon)
+                    .font(.system(size: 10))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(session.workspaceHelp)
             }
-            Text(session.workspaceLabel)
-                .font(.system(size: 11))
-                .foregroundStyle(Theme.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
-                .help(session.workspaceHelp)
-            if session.linkedPullRequests.isEmpty {
+            .padding(.horizontal, 8)
+            if !links.isEmpty {
+                VStack(spacing: 2) {
+                    ForEach(links) { link in
+                        BranchLinkRow(link: link, current: link.name != nil && link.name == branch,
+                                      stale: session.pullRequestIsStale)
+                    }
+                }
+            }
+            if session.linkedPullRequests.isEmpty, session.pullRequestError != nil {
                 // Lookup failures without a cached PR.
                 PullRequestBadge(session: session, presentation: .details)
+                    .padding(.horizontal, 8)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 10)
+    }
+
+    private var workspaceIcon: String {
+        if session.isAsk { return "eye" }
+        if session.workspaceStorage == .shared { return "square.stack.3d.up" }
+        return session.workspace == .direct ? "folder" : "doc.on.doc"
     }
 }
 
-/// A session branch with the PR opened from it. Long names wrap so the full branch stays readable.
+/// A session branch and the PR opened from it. Long names wrap so the full branch stays readable.
 private struct BranchLinkRow: View {
     let link: SessionBranchLink
     let current: Bool
@@ -177,26 +205,88 @@ private struct BranchLinkRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if let name = link.name {
-                Text(name)
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(current ? Theme.foreground : Theme.mutedForeground)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-                    .help(current ? "Current branch: \(name)" : "Branch: \(name)")
-                    .accessibilityLabel(current ? "Current branch \(name)" : "Branch \(name)")
-            } else {
-                Text("Unknown branch")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.faintForeground)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            Image(nsImage: GitBranchGlyph.image)
+                .resizable()
+                .frame(width: 10, height: 10)
+                .foregroundStyle(current ? Theme.foreground : Theme.faintForeground)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                name
+                HStack(spacing: 6) {
+                    if let pr = link.pullRequest {
+                        PullRequestPill(pullRequest: pr, stale: stale)
+                        Text(pr.title)
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .help(pr.title)
+                    } else {
+                        Text("No pull request")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Theme.faintForeground)
+                    }
+                }
             }
-            if let pr = link.pullRequest {
-                PullRequestLink(pullRequest: pr, presentation: .details, stale: stale)
-                    .help("\(stale ? "Last known: " : "")\(pr.label): \(pr.title)\n\(pr.url)")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 6).fill(current ? Theme.muted : .clear))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder private var name: some View {
+        if let name = link.name {
+            Text(name)
+                .font(.system(size: 11, weight: current ? .semibold : .regular, design: .monospaced))
+                .foregroundStyle(Theme.foreground)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .help(current ? "Current branch: \(name)" : "Branch: \(name)")
+                .accessibilityLabel(current ? "Current branch \(name)" : "Branch \(name)")
+        } else {
+            Text("Unknown branch")
+                .font(.system(size: 11))
+                .italic()
+                .foregroundStyle(Theme.faintForeground)
+        }
+    }
+}
+
+/// A PR state and number, tinted by state, opening the PR in the browser.
+private struct PullRequestPill: View {
+    let pullRequest: SessionPullRequest
+    let stale: Bool
+
+    var body: some View {
+        if let url = pullRequest.browserURL {
+            Link(destination: url) { pill }
+                .buttonStyle(.plain)
+                .help("\(stale ? "Last known: " : "")\(pullRequest.label)\n\(pullRequest.url)")
+        } else {
+            pill.help("Invalid pull request link. Cannot open in browser.")
+        }
+    }
+
+    private var pill: some View {
+        let pr = pullRequest
+        return HStack(spacing: 3) {
+            pr.state.icon
+            Text("\(pr.state.compactLabel) #\(String(pr.number))")
+            if stale || pr.browserURL == nil {
+                Image(systemName: "exclamationmark.triangle")
+            } else {
+                Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
             }
         }
+        .font(.system(size: 10, weight: .semibold))
+        .foregroundStyle(pr.state.color)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(pr.state.color.opacity(0.1)))
+        .fixedSize()
+        .accessibilityLabel("Pull request \(pr.number), \(stale ? "last known " : "")\(pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
     }
 }
 
