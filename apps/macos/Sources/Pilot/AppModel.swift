@@ -257,8 +257,8 @@ final class AppModel: ObservableObject {
         guard session.isAsk else { return }
         let discussion = rows.compactMap { row -> String? in
             switch row {
-            case let .user(_, text): return "User:\n\(text)"
-            case let .text(_, text): return "Assistant:\n\(text)"
+            case let .user(_, text, _): return "User:\n\(text)"
+            case let .text(_, text, _): return "Assistant:\n\(text)"
             default: return nil
             }
         }.joined(separator: "\n\n")

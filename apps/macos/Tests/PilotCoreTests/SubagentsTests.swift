@@ -85,6 +85,6 @@ private func decodeSession(_ extra: String = "") throws -> SessionSummary {
     """#.utf8))
     let rows = Transcript(events: events).rows
     #expect(rows.count == 2)
-    if case let .user(_, text) = rows[0] { #expect(text == "Review the protocol") } else { Issue.record("expected user row") }
-    if case let .text(_, text) = rows[1] { #expect(text == "Two gaps.") } else { Issue.record("expected text row") }
+    if case let .user(_, text, _) = rows[0] { #expect(text == "Review the protocol") } else { Issue.record("expected user row") }
+    if case let .text(_, text, _) = rows[1] { #expect(text == "Two gaps.") } else { Issue.record("expected text row") }
 }

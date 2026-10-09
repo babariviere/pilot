@@ -26,6 +26,8 @@ public enum Block: Equatable, Sendable {
 
 public struct ChatMessage: Equatable, Sendable {
     public var role: String
+    /// pi-ai's original epoch-millisecond message time, never the client receipt time.
+    public var timestamp: Double?
     public var blocks: [Block]
     public var toolCallId: String?
     public var isError: Bool
@@ -35,6 +37,7 @@ public struct ChatMessage: Equatable, Sendable {
 
     public init(json: JSONValue) {
         role = json["role"]?.string ?? "unknown"
+        timestamp = json["timestamp"]?.number.flatMap { MessageTimeFormatting.date($0) == nil ? nil : $0 }
         if let text = json["content"]?.string {
             blocks = [.text(text)]
         } else {
