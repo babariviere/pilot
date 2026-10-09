@@ -101,6 +101,10 @@ open apps/macos/build/Pilot.app
 Daemon only, in the foreground: `npm run dev:daemon`. Checks: `npm run typecheck`, `npm test`,
 `apps/macos/scripts/test.sh`.
 
+Offline transcript-opening regression (cached history, session switches, width changes, and delayed snapshots):
+`apps/macos/.build/debug/Pilot --transcript-opening-check /tmp/pilot-opening-check`.
+Add `--transcript-fixture <snapshot.json>` to replay a saved snapshot without connecting to the daemon.
+
 ## Private releases and updates
 
 GitHub Actions can build self-contained Apple Silicon releases on `main`. Pilot authenticates private
