@@ -1,6 +1,8 @@
 /** IPC between pilotd and one kernel worker process. */
 import type { AgentEvent, DeliveryMode, SessionCompletion, SessionSubagent, SessionUsage } from "@pilot/protocol";
-import type { PilotContext } from "./policy.ts";
+import type { JsonValue } from "@earendil-works/chord";
+import type { MissionAction } from "./mission-tools.ts";
+import type { MissionContext, PilotContext } from "./policy.ts";
 
 /** A subagent as reported by the kernel, including where its read-only transcript lives. */
 export interface KernelSubagent extends SessionSubagent {
@@ -26,6 +28,8 @@ export interface KernelSpec {
 	trustDirectory?: string;
 	/** Workspace and policy context for Pilot's prompt section. */
 	pilot?: PilotContext;
+	/** The mission this chat belongs to, when it starts. Later changes arrive as `mission.context`. */
+	mission?: MissionContext;
 }
 
 export type KernelCommand =
@@ -46,6 +50,9 @@ export type KernelCommand =
 	  }
 	| { type: "watch"; watchId: string; includeTodos?: boolean; activityOnly?: boolean }
 	| { type: "unwatch"; watchId: string }
+	/** Replaces the mission context; omitted when the chat left its mission. */
+	| { type: "mission.context"; context?: MissionContext }
+	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "shutdown" };
 
 export type KernelPacket =
@@ -63,6 +70,8 @@ export type KernelPacket =
 	| { type: "subagents"; subagents: KernelSubagent[] }
 	| { type: "artifacts.changed" }
 	| { type: "pullRequest.created"; url: string }
+	/** A `mission` tool call, answered by `mission.result`. */
+	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
 	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: SessionUsage }

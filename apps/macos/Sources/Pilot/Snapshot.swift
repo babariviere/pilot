@@ -208,6 +208,68 @@ enum Snapshot {
             print("snapshots written to \(directory.path)")
             exit(0)
         }
+        // Missions: sidebar section and mission page tabs, from static fixtures.
+        if CommandLine.arguments.contains("--missions-only") {
+            let now = Fixtures.now
+            func member(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,
+                        ago: Double) -> SessionSummary {
+                SessionSummary(id: id, title: title, cwd: Fixtures.projects[0].path, projectId: "p1",
+                               branch: "feat/\(id)", createdAt: now - ago, updatedAt: now - ago, state: state,
+                               outcome: outcome, outcomeAt: outcome == nil ? nil : now - ago, missionId: "m1")
+            }
+            let sessions = [
+                member("coord", "Plan API v2 migration", ago: 3_600_000),
+                member("auth", "Port auth endpoints", state: "working", ago: 60_000),
+                member("pagination", "Cursor pagination", outcome: .done, ago: 900_000),
+                member("errors", "Error envelope", outcome: .failed, ago: 1_800_000),
+                SessionSummary(id: "solo", title: "Fix flaky CI cache", cwd: Fixtures.projects[0].path, projectId: "p1",
+                               createdAt: now - 7_200_000, updatedAt: now - 7_200_000, state: "idle"),
+            ]
+            let json = """
+            [{"mission":{"id":"m1","projectId":"p1","title":"API v2","goal":"Ship the v2 public API with cursor pagination, a single error envelope and token auth, without breaking v1 clients.","status":"active","coordinatorSessionId":"coord","briefRevision":4,"createdAt":\(now - 86_400_000),"updatedAt":\(now)},
+              "brief":{"missionId":"m1","revision":4,"markdown":"# API v2\\n\\n## Scope\\n- Cursor pagination on every list endpoint\\n- One error envelope\\n","authorSessionId":"coord","createdAt":\(now - 600_000)},
+              "decisions":[{"id":"d1","text":"Cursors are opaque base64 strings.","createdAt":1,"updatedAt":1},
+                           {"id":"d2","text":"v1 stays frozen; no new fields.","authorSessionId":"coord","createdAt":1,"updatedAt":1}],
+              "comments":[{"id":"c1","text":"Should rate-limit errors share the envelope?","anchor":"One error envelope","authorSessionId":"errors","createdAt":\(now - 500_000)}],
+              "tasks":[{"id":"t1","number":1,"title":"Inventory v1 endpoints","status":"done","order":1,"sessionId":"coord","createdAt":1,"updatedAt":1},
+                       {"id":"t2","number":2,"title":"Port auth endpoints","status":"in_progress","order":2,"sessionId":"auth","createdAt":1,"updatedAt":1},
+                       {"id":"t3","number":3,"title":"Cursor pagination","status":"in_review","order":3,"sessionId":"pagination","createdAt":1,"updatedAt":1},
+                       {"id":"t4","number":4,"title":"Error envelope","status":"blocked","order":4,"sessionId":"errors","createdAt":1,"updatedAt":1},
+                       {"id":"t5","number":5,"title":"SDK regeneration","status":"todo","order":5,"createdAt":1,"updatedAt":1},
+                       {"id":"t6","number":6,"title":"Migration guide","status":"todo","order":6,"createdAt":1,"updatedAt":1}],
+              "artifacts":[{"artifactId":"a1","sessionId":"coord","title":"Endpoint map","kind":"html","linkedAt":1}],
+              "resources":[{"id":"r1","url":"https://linear.app/acme/project/api-v2","kind":"linear.project","externalId":"api-v2","title":"API v2 (Linear)","createdAt":1},
+                           {"id":"r2","url":"https://github.com/acme/api/pull/412","kind":"github.pr","externalId":"acme/api#412","createdAt":1}],
+              "events":[{"id":9,"kind":"update","text":"Auth port is halfway; token refresh remains.","sessionId":"auth","health":"on_track","at":\(now - 120_000)},
+                        {"id":8,"kind":"task","text":"Error envelope is blocked on the rate-limit question.","sessionId":"errors","at":\(now - 1_800_000)},
+                        {"id":7,"kind":"brief","text":"Brief revision 4","sessionId":"coord","at":\(now - 3_000_000)}]},
+             {"mission":{"id":"m2","projectId":"p1","title":"Billing cleanup","goal":"Remove legacy invoices.","status":"done","briefRevision":1,"createdAt":\(now - 900_000_000),"updatedAt":1},
+              "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]}]
+            """
+            guard let details = try? JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8)) else {
+                print("Invalid mission fixture")
+                exit(1)
+            }
+            model.client.loadFixture(projects: Fixtures.projects, sessions: sessions)
+            model.client.loadMissionFixture(details)
+            model.selectedSessionId = nil
+            model.expandedMissions = ["m1"]
+            model.showingInactiveMissions = true
+            await render(SessionSidebar(model: model, client: model.client), size: CGSize(width: 300, height: 680),
+                         to: directory.appending(path: "missions-sidebar.png"))
+            model.openMission("m1")
+            for tab in MissionTab.allCases {
+                model.missionTab = tab
+                await render(MissionPage(missionId: "m1"), size: CGSize(width: 1000, height: 900),
+                             to: directory.appending(path: "mission-\(tab.rawValue).png"))
+            }
+            model.inspectorTab = .mission
+            await render(MissionInspectorPane(session: sessions[1]), size: CGSize(width: 420, height: 700),
+                         to: directory.appending(path: "mission-inspector.png"))
+            print("snapshots written to \(directory.path)")
+            exit(0)
+        }
+
 
         // Dense repository metadata must not push titles or timestamps out of narrow rows.
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sidebarLayoutSessions)

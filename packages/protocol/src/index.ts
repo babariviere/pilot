@@ -127,6 +127,8 @@ export interface SessionSummary {
 	usage?: SessionUsage;
 	/** Named background subagents, in spawn order. Omitted when the session has none. */
 	subagents?: SessionSubagent[];
+	/** Mission this chat belongs to. Omitted when it has none. */
+	missionId?: string;
 	error?: string;
 }
 
@@ -136,10 +138,11 @@ export interface ContextUsage {
 	percent?: number;
 }
 
-/** GET /api/sessions. Defaults to active sessions; projectId narrows either view. */
+/** GET /api/sessions. Defaults to active sessions; projectId and missionId narrow either view. */
 export interface SessionListQuery {
 	archived?: "false" | "true" | "all";
 	projectId?: string;
+	missionId?: string;
 }
 
 export interface SubscriptionUsage {
@@ -272,6 +275,251 @@ export interface ProjectRequest {
 	requirePullRequest?: boolean;
 }
 
+/** Missions (PLAN.md §5.7): a goal spanning several chats of one project. State is daemon-owned. */
+export type MissionStatus = "active" | "done" | "archived";
+export type MissionTaskStatus = "todo" | "in_progress" | "blocked" | "in_review" | "done" | "dropped";
+export type MissionHealth = "on_track" | "at_risk" | "off_track";
+export type MissionResourceKind =
+	| "linear.project"
+	| "linear.issue"
+	| "github.issue"
+	| "github.pr"
+	| "slack.thread"
+	| "url";
+export type MissionEventKind =
+	| "created"
+	| "status"
+	| "handoff"
+	| "update"
+	| "brief"
+	| "decision"
+	| "comment"
+	| "task"
+	| "claim"
+	| "artifact"
+	| "resource"
+	| "member"
+	| "coordinator";
+
+export interface Mission {
+	id: string;
+	/** Every member session belongs to this project. */
+	projectId: string;
+	title: string;
+	goal: string;
+	status: MissionStatus;
+	/** Chat holding the coordinator role. Omitted: the user coordinates. */
+	coordinatorSessionId?: string;
+	/** The coordinator may start chats for unblocked tasks without being asked. */
+	autopilot?: boolean;
+	/** Latest brief revision; 0 before the first save. */
+	briefRevision: number;
+	createdAt: number;
+	updatedAt: number;
+	completedAt?: number;
+	archivedAt?: number;
+}
+
+/** One immutable brief revision. Omitted authorSessionId means the user wrote it. */
+export interface MissionBrief {
+	missionId: string;
+	revision: number;
+	markdown: string;
+	authorSessionId?: string;
+	createdAt: number;
+}
+
+/** Revision history entry, without content. */
+export interface MissionBriefRevision {
+	revision: number;
+	authorSessionId?: string;
+	createdAt: number;
+}
+
+/** PUT /api/missions/:id/brief. A stale expectedRevision is rejected with 409. */
+export interface MissionBriefWrite {
+	markdown: string;
+	expectedRevision: number;
+}
+
+/** Binding statement. Agents may add decisions; only the user edits or removes them. */
+export interface MissionDecision {
+	id: string;
+	text: string;
+	authorSessionId?: string;
+	createdAt: number;
+	updatedAt: number;
+}
+
+/** Annotation anchored to a brief excerpt, optionally addressed to one member chat. */
+export interface MissionComment {
+	id: string;
+	text: string;
+	/** Quoted brief excerpt the comment refers to. Omitted: the whole brief. */
+	anchor?: string;
+	/** Brief revision the anchor was taken from. */
+	revision?: number;
+	authorSessionId?: string;
+	/** Addressed chat. Omitted: the coordinator, or the user when there is none. */
+	targetSessionId?: string;
+	createdAt: number;
+	resolvedAt?: number;
+	resolvedBySessionId?: string;
+}
+
+export interface MissionTask {
+	id: string;
+	/** Per-mission display number, stable once assigned. */
+	number: number;
+	title: string;
+	body?: string;
+	status: MissionTaskStatus;
+	/** Sort key within the mission. */
+	order: number;
+	milestone?: string;
+	/** Task IDs that must be done before this one can start. */
+	dependsOn?: string[];
+	/** Owning chat. At most one; claiming another chat's task is rejected with 409. */
+	sessionId?: string;
+	createdAt: number;
+	updatedAt: number;
+	completedAt?: number;
+}
+
+/** POST /api/missions/:id/tasks; PATCH /api/missions/:id/tasks/:taskId sends only changed fields. */
+export interface MissionTaskWrite {
+	title?: string;
+	body?: string;
+	status?: MissionTaskStatus;
+	order?: number;
+	milestone?: string;
+	dependsOn?: string[];
+	/** User assignment: a member chat ID, or null to release. Agents claim through the mission tool instead. */
+	sessionId?: string | null;
+}
+
+/** An artifact linked to a mission. It stays owned by its session. */
+export interface MissionArtifactLink {
+	artifactId: string;
+	sessionId: string;
+	title: string;
+	kind: ArtifactKind;
+	/** Pinned revision. Omitted opens the latest. */
+	revision?: number;
+	linkedBySessionId?: string;
+	linkedAt: number;
+}
+
+/** External link. Kind and external ID are parsed by pilotd when saved. */
+export interface MissionResource {
+	id: string;
+	url: string;
+	title?: string;
+	kind: MissionResourceKind;
+	/** Linear identifier ("ENG-123" or project slug), GitHub "owner/repo#42", Slack "channel/ts". */
+	externalId?: string;
+	addedBySessionId?: string;
+	createdAt: number;
+}
+
+export interface MissionResourceWrite {
+	url: string;
+	title?: string;
+}
+
+/** POST /api/missions/:id/decisions; PATCH /api/missions/:id/decisions/:decisionId. */
+export interface MissionDecisionWrite {
+	text: string;
+}
+
+/** POST /api/missions/:id/comments. */
+export interface MissionCommentWrite {
+	text: string;
+	anchor?: string;
+	targetSessionId?: string;
+}
+
+/** POST /api/missions/:id/artifacts. The artifact must belong to a member chat. */
+export interface MissionArtifactLinkWrite {
+	sessionId: string;
+	artifactId: string;
+	revision?: number;
+}
+
+/** POST /api/missions/:id/events: a handoff or status update. */
+export interface MissionEventWrite {
+	text: string;
+	kind?: "update" | "handoff";
+	health?: MissionHealth;
+}
+
+/** Append-only activity entry. Omitted sessionId means the user or the daemon. */
+export interface MissionEvent {
+	id: number;
+	kind: MissionEventKind;
+	text: string;
+	sessionId?: string;
+	taskId?: string;
+	/** Only on status updates. */
+	health?: MissionHealth;
+	at: number;
+}
+
+/** GET /api/missions/:id, and the payload of WS `mission`. Member sessions come from the session list. */
+export interface MissionDetail {
+	mission: Mission;
+	brief?: MissionBrief;
+	decisions: MissionDecision[];
+	/** Open comments, plus recently resolved ones. */
+	comments: MissionComment[];
+	tasks: MissionTask[];
+	artifacts: MissionArtifactLink[];
+	resources: MissionResource[];
+	/** Most recent first, bounded. Older entries: GET /api/missions/:id/events?before=<id>. */
+	events: MissionEvent[];
+}
+
+/** POST /api/missions. */
+export interface CreateMissionRequest {
+	projectId: string;
+	title: string;
+	/** Empty when omitted, for example while the chat drafts it. */
+	goal?: string;
+	brief?: string;
+	tasks?: Array<{ title: string; body?: string }>;
+	/** Chat that joins the new mission ("Make a mission"). Must belong to projectId. */
+	fromSessionId?: string;
+	/** With fromSessionId: that chat becomes coordinator. Defaults to true. */
+	coordinator?: boolean;
+	/** With fromSessionId: ask that chat to draft the goal, brief and tasks from its conversation. Defaults to true. */
+	draft?: boolean;
+}
+
+/** PATCH /api/missions/:id. A null coordinatorSessionId hands coordination back to the user. */
+export interface UpdateMissionRequest {
+	title?: string;
+	goal?: string;
+	status?: MissionStatus;
+	coordinatorSessionId?: string | null;
+	autopilot?: boolean;
+}
+
+/** PUT /api/sessions/:id/mission. The session must belong to the mission's project. */
+export interface JoinMissionRequest {
+	missionId: string;
+	/** Task to claim for this chat. */
+	taskId?: string;
+}
+
+/** POST /api/missions/:id/tasks/:taskId/start: a new chat in the mission's project that claims the task. */
+export interface StartMissionTaskRequest {
+	message?: string;
+	model?: string;
+	thinking?: string;
+	mode?: ChatMode;
+	baseBranch?: string;
+}
+
 /** One selectable model, from the user's pi scope. */
 export interface ModelOption {
 	/** "provider/modelId", the value to send as `model`. */
@@ -384,7 +632,10 @@ export type ClientMessage =
 	| { type: "terminal.close"; sessionId: string }
 	/** Stream one subagent's transcript: a snapshot first (also after reconnects), then appended entries. */
 	| { type: "subagent.subscribe"; sessionId: string; name: string }
-	| { type: "subagent.unsubscribe"; sessionId: string; name: string };
+	| { type: "subagent.unsubscribe"; sessionId: string; name: string }
+	/** Receive `mission` details for one mission: the current detail first, then after every change. */
+	| { type: "mission.subscribe"; missionId: string }
+	| { type: "mission.unsubscribe"; missionId: string };
 
 /** Daemon to client, over /api/ws. */
 export type ServerMessage =
@@ -393,6 +644,10 @@ export type ServerMessage =
 	| { type: "session"; session: SessionSummary }
 	| { type: "projects"; projects: Project[] }
 	| { type: "artifacts"; sessionId: string; artifacts: ArtifactSummary[] }
+	/** All missions, including done and archived ones, so clients can filter locally. */
+	| { type: "missions"; missions: Mission[] }
+	/** Full detail for a subscribed mission, on subscription and after every change. */
+	| { type: "mission"; mission: MissionDetail }
 	/** Starts with a snapshot event on every (re)subscription, then incremental batches. */
 	| { type: "events"; sessionId: string; events: AgentEvent[] }
 	| { type: "terminal.data"; sessionId: string; data: string }

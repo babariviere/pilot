@@ -39,6 +39,7 @@ import {
 	resolveModelScopeWithDiagnostics,
 	SessionManager,
 	SettingsManager,
+	type ToolDefinition,
 	wrapRegisteredTool,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -81,6 +82,8 @@ export interface NativeAdapterOptions {
 	ask?: AskContext;
 	/** Host-owned session-local artifact store and installed sandboxed renderers. */
 	askArtifacts?: ArtifactToolOptions;
+	/** Additional host-owned tools for Ask sessions, allowed by ASK_TOOL_NAMES. */
+	askTools?: ToolDefinition[];
 	/** Working directory for tools, context files and project configuration. */
 	cwd: string;
 	/** "provider/modelId", optionally with ":thinking". Defaults to pi's configured default. */
@@ -377,6 +380,7 @@ export class NativeAdapter {
 						customTools: [
 							...(await createAskTools(options.ask, { artifactSkill: hasArtifacts })),
 							...(options.askArtifacts ? createArtifactTools({ ...options.askArtifacts, ask: true }) : []),
+							...(options.askTools ?? []),
 						],
 					}
 				: {}),
@@ -631,6 +635,17 @@ export class NativeAdapter {
 		} finally {
 			this.session.clearQueue();
 		}
+	}
+
+	/** Declare or withdraw a registered tool from the next request. Returns whether the tool is now active. */
+	setToolActive(name: string, active: boolean): boolean {
+		this.assertOpen();
+		const names = this.session.getActiveToolNames();
+		if (names.includes(name) !== active) {
+			this.session.setActiveToolsByName(active ? [...names, name] : names.filter((tool) => tool !== name));
+			this.refreshTools();
+		}
+		return this.session.getActiveToolNames().includes(name);
 	}
 
 	refreshTools(): Extension {

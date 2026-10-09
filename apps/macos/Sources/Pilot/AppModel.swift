@@ -7,8 +7,12 @@ enum InspectorTab: Hashable {
     case terminal
     case artifacts
     case agents
+    case mission
 
-    func isAvailable(for session: SessionSummary) -> Bool { !session.isAsk || self == .artifacts }
+    func isAvailable(for session: SessionSummary) -> Bool {
+        if self == .mission { return session.missionId != nil }
+        return !session.isAsk || self == .artifacts
+    }
 }
 
 @MainActor
@@ -28,7 +32,16 @@ final class AppModel: ObservableObject {
     private var chatComposers: [String: ComposerState] = [:]
     @Published private(set) var reviewRevision = 0
 
-    @Published var selectedSessionId: String?
+    @Published var selectedSessionId: String? {
+        didSet { if selectedSessionId != nil, selectedMissionId != nil { selectedMissionId = nil } }
+    }
+    /// The mission page shown in the detail area when no chat is selected.
+    @Published var selectedMissionId: String?
+    @Published var missionTab: MissionTab = .overview
+    @Published var missionSheet: MissionSheet?
+    /// Missions whose chats are listed in the sidebar.
+    @Published var expandedMissions: Set<String> = []
+    @Published var showingInactiveMissions = false
     @Published var inspectorVisible = false
     @Published var inspectorTab: InspectorTab = .changes
     @Published var sidebarQuery = ""
@@ -226,6 +239,7 @@ final class AppModel: ObservableObject {
             draftRevision += 1
         }
         selectedSessionId = nil
+        selectedMissionId = nil
     }
 
     /// An explicit new Build draft. The original Ask session and its history are never changed.
@@ -318,6 +332,7 @@ final class AppModel: ObservableObject {
         archiveProjectId = projectId
         showingArchive = true
         selectedSessionId = nil
+        selectedMissionId = nil
     }
 
     func setPinned(_ pinned: Bool, sessionId: String) {

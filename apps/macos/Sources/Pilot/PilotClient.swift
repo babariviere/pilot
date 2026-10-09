@@ -10,6 +10,14 @@ final class PilotClient: ObservableObject {
     @Published private(set) var hasProjectSnapshot = false
     @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
     private var artifactVersions: [String: Int] = [:]
+    /// Every mission, including done and archived ones.
+    @Published private(set) var missions: [Mission] = []
+    /// Details of subscribed missions only.
+    @Published private(set) var missionDetails: [String: MissionDetail] = [:]
+    /// Subscription reference counts. Active missions are always held so sidebar badges stay current.
+    private var missionRefs: [String: Int] = [:]
+    private var heldActiveMissions: Set<String> = []
+    private var fixtureMissions = false
     @Published private(set) var connected = false
 
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
@@ -58,12 +66,23 @@ final class PilotClient: ObservableObject {
         id.flatMap { id in projects.first { $0.id == id } }
     }
 
+    func mission(_ id: String?) -> Mission? {
+        id.flatMap { id in missions.first { $0.id == id } }
+    }
+
     /// Static data for snapshots and previews.
     func loadFixture(projects: [Project], sessions: [SessionSummary]) {
         self.projects = projects
         hasProjectSnapshot = true
         self.sessions = sessions.sorted(by: SessionSummary.listPrecedes)
         connected = true
+    }
+
+    /// Static missions for snapshots and previews. Details are served without subscriptions.
+    func loadMissionFixture(_ details: [MissionDetail]) {
+        fixtureMissions = true
+        missions = details.map(\.mission)
+        missionDetails = Dictionary(uniqueKeysWithValues: details.map { ($0.mission.id, $0) })
     }
 
     // MARK: Commands
@@ -392,9 +411,214 @@ final class PilotClient: ObservableObject {
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
-            throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
+            throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)", status: status)
         }
         return try JSONDecoder().decode(Response.self, from: data)
+    }
+
+    // MARK: Missions
+
+    /// Keeps a mission's detail live while a view shows it. Balance with `releaseMission`.
+    func retainMission(_ id: String) {
+        missionRefs[id, default: 0] += 1
+        if missionRefs[id] == 1, !fixtureMissions {
+            post(["type": .string("mission.subscribe"), "missionId": .string(id)])
+        }
+    }
+
+    func releaseMission(_ id: String) {
+        guard let count = missionRefs[id] else { return }
+        if count > 1 { missionRefs[id] = count - 1; return }
+        missionRefs[id] = nil
+        guard !fixtureMissions else { return }
+        missionDetails[id] = nil
+        post(["type": .string("mission.unsubscribe"), "missionId": .string(id)])
+    }
+
+    private func applyMissions(_ list: [Mission]) {
+        missions = list
+        let active = Set(list.filter { $0.status == .active }.map(\.id))
+        for id in active.subtracting(heldActiveMissions) { retainMission(id) }
+        for id in heldActiveMissions.subtracting(active) { releaseMission(id) }
+        heldActiveMissions = active
+        let known = Set(list.map(\.id))
+        for id in missionDetails.keys where !known.contains(id) { missionDetails[id] = nil }
+    }
+
+    private func upsert(_ mission: Mission) {
+        if let index = missions.firstIndex(where: { $0.id == mission.id }) { missions[index] = mission }
+        else { missions.append(mission) }
+    }
+
+    private func missionURL(_ components: [String], query: [URLQueryItem] = []) throws -> URL {
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        var url = baseURL.appendingPathComponent("api")
+        for component in components {
+            guard !component.isEmpty, component != ".", component != "..",
+                  component.rangeOfCharacter(from: CharacterSet(charactersIn: "/\\?#%")) == nil
+            else { throw ClientError("Invalid mission identifier") }
+            url.appendPathComponent(component)
+        }
+        guard !query.isEmpty, var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return url }
+        parts.queryItems = query
+        return parts.url ?? url
+    }
+
+    private func missionRequest<Response: Decodable>(_ components: [String], method: String = "GET",
+                                                     query: [URLQueryItem] = []) async throws -> Response {
+        var request = URLRequest(url: try missionURL(components, query: query))
+        request.httpMethod = method
+        return try await call(request)
+    }
+
+    private func missionRequest<Body: Encodable, Response: Decodable>(
+        _ components: [String], method: String = "POST", body: Body
+    ) async throws -> Response {
+        try await call(url: missionURL(components), method: method, body: body)
+    }
+
+    func missionList(projectId: String? = nil) async throws -> [Mission] {
+        try await missionRequest(["missions"], query: projectId.map { [URLQueryItem(name: "projectId", value: $0)] } ?? [])
+    }
+
+    func createMission(_ request: CreateMissionRequest) async throws -> MissionDetail {
+        let detail: MissionDetail = try await missionRequest(["missions"], body: request)
+        upsert(detail.mission)
+        if missionRefs[detail.mission.id] != nil { missionDetails[detail.mission.id] = detail }
+        return detail
+    }
+
+    func missionDetail(_ id: String) async throws -> MissionDetail {
+        if fixtureMissions, let detail = missionDetails[id] { return detail }
+        return try await missionRequest(["missions", id])
+    }
+
+    @discardableResult
+    func updateMission(_ id: String, _ request: UpdateMissionRequest) async throws -> Mission {
+        let mission: Mission = try await missionRequest(["missions", id], method: "PATCH", body: request)
+        upsert(mission)
+        return mission
+    }
+
+    func deleteMission(_ id: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id], method: "DELETE")
+        missions.removeAll { $0.id == id }
+        missionDetails[id] = nil
+    }
+
+    /// Nil before the first save.
+    func missionBrief(_ id: String, revision: Int? = nil) async throws -> MissionBrief? {
+        do {
+            return try await missionRequest(["missions", id, "brief"],
+                                            query: revision.map { [URLQueryItem(name: "revision", value: String($0))] } ?? [])
+        } catch let error as ClientError where error.status == 404 {
+            return nil
+        }
+    }
+
+    /// Throws a ClientError with status 409 when the expected revision is stale.
+    func saveMissionBrief(_ id: String, _ write: MissionBriefWrite) async throws -> MissionBrief {
+        try await missionRequest(["missions", id, "brief"], method: "PUT", body: write)
+    }
+
+    func missionBriefRevisions(_ id: String) async throws -> [MissionBriefRevision] {
+        try await missionRequest(["missions", id, "brief", "revisions"])
+    }
+
+    @discardableResult
+    func createMissionTask(_ id: String, _ write: MissionTaskWrite) async throws -> MissionTask {
+        try await missionRequest(["missions", id, "tasks"], body: write)
+    }
+
+    @discardableResult
+    func updateMissionTask(_ id: String, taskId: String, _ write: MissionTaskWrite) async throws -> MissionTask {
+        try await missionRequest(["missions", id, "tasks", taskId], method: "PATCH", body: write)
+    }
+
+    func deleteMissionTask(_ id: String, taskId: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "tasks", taskId], method: "DELETE")
+    }
+
+    /// A new chat in the mission's project that joins the mission and claims the task.
+    func startMissionTask(_ id: String, taskId: String,
+                          _ request: StartMissionTaskRequest = StartMissionTaskRequest()) async throws -> SessionSummary {
+        let session: SessionSummary = try await missionRequest(["missions", id, "tasks", taskId, "start"], body: request)
+        if self.session(session.id) == nil {
+            awaitingList[session.id] = session
+            update(session)
+        }
+        return session
+    }
+
+    @discardableResult
+    func addMissionDecision(_ id: String, text: String) async throws -> MissionDecision {
+        try await missionRequest(["missions", id, "decisions"], body: MissionDecisionWrite(text: text))
+    }
+
+    @discardableResult
+    func updateMissionDecision(_ id: String, decisionId: String, text: String) async throws -> MissionDecision {
+        try await missionRequest(["missions", id, "decisions", decisionId], method: "PATCH", body: MissionDecisionWrite(text: text))
+    }
+
+    func deleteMissionDecision(_ id: String, decisionId: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "decisions", decisionId], method: "DELETE")
+    }
+
+    @discardableResult
+    func addMissionComment(_ id: String, _ write: MissionCommentWrite) async throws -> MissionComment {
+        try await missionRequest(["missions", id, "comments"], body: write)
+    }
+
+    @discardableResult
+    func resolveMissionComment(_ id: String, commentId: String) async throws -> MissionComment {
+        try await missionRequest(["missions", id, "comments", commentId, "resolve"], body: [String: String]())
+    }
+
+    func deleteMissionComment(_ id: String, commentId: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "comments", commentId], method: "DELETE")
+    }
+
+    @discardableResult
+    func addMissionResource(_ id: String, _ write: MissionResourceWrite) async throws -> MissionResource {
+        try await missionRequest(["missions", id, "resources"], body: write)
+    }
+
+    func deleteMissionResource(_ id: String, resourceId: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "resources", resourceId], method: "DELETE")
+    }
+
+    @discardableResult
+    func linkMissionArtifact(_ id: String, _ write: MissionArtifactLinkWrite) async throws -> MissionArtifactLink {
+        try await missionRequest(["missions", id, "artifacts"], body: write)
+    }
+
+    func unlinkMissionArtifact(_ id: String, artifactId: String) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "artifacts", artifactId], method: "DELETE")
+    }
+
+    /// Newest first.
+    func missionEvents(_ id: String, before: Int? = nil) async throws -> [MissionEvent] {
+        try await missionRequest(["missions", id, "events"],
+                                 query: before.map { [URLQueryItem(name: "before", value: String($0))] } ?? [])
+    }
+
+    @discardableResult
+    func postMissionEvent(_ id: String, _ write: MissionEventWrite) async throws -> MissionEvent {
+        try await missionRequest(["missions", id, "events"], body: write)
+    }
+
+    @discardableResult
+    func joinMission(_ sessionId: String, _ request: JoinMissionRequest) async throws -> SessionSummary {
+        let session: SessionSummary = try await missionRequest(["sessions", sessionId, "mission"], method: "PUT", body: request)
+        update(session)
+        return session
+    }
+
+    @discardableResult
+    func leaveMission(_ sessionId: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await missionRequest(["sessions", sessionId, "mission"], method: "DELETE")
+        update(session)
+        return session
     }
 
     // MARK: Event streams
@@ -493,6 +717,9 @@ final class PilotClient: ObservableObject {
                         // The daemon sends a fresh snapshot per subscription, so reconnects resync.
                         for id in self.listeners.keys { self.post(["type": .string("subscribe"), "sessionId": .string(id)]) }
                         for key in self.subagentListeners.keys { self.postSubagent("subagent.subscribe", key) }
+                        for id in self.missionRefs.keys {
+                            self.post(["type": .string("mission.subscribe"), "missionId": .string(id)])
+                        }
                         for id in self.terminals.keys { self.sendAttach(id, restart: false) }
                     }
                     if let decoded { self.handle(decoded) }
@@ -548,6 +775,12 @@ final class PilotClient: ObservableObject {
         case let .artifacts(update):
             artifactVersions[update.sessionId, default: 0] += 1
             artifacts[update.sessionId] = update.artifacts
+        case let .missions(list):
+            applyMissions(list)
+        case let .mission(detail):
+            guard missionRefs[detail.mission.id] != nil else { break }
+            missionDetails[detail.mission.id] = detail
+            upsert(detail.mission)
         case let .terminalData(id, data):
             terminals[id]?.onData(data)
         case let .terminalExit(id, code):
@@ -564,7 +797,12 @@ final class PilotClient: ObservableObject {
 
 struct ClientError: LocalizedError {
     let message: String
-    init(_ message: String) { self.message = message }
+    /// HTTP status, when the daemon rejected a request.
+    let status: Int?
+    init(_ message: String, status: Int? = nil) {
+        self.message = message
+        self.status = status
+    }
     var errorDescription: String? { message }
 }
 

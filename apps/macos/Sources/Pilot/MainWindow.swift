@@ -20,6 +20,9 @@ struct MainWindow: View {
                 if let session = model.selectedSession {
                     SessionDetail(session: session)
                         .id(session.id)
+                } else if let missionId = model.selectedMissionId {
+                    MissionPage(missionId: missionId)
+                        .id(missionId)
                 } else if model.showingArchive {
                     ArchiveView()
                 } else {
@@ -42,6 +45,9 @@ struct MainWindow: View {
             Button("OK") { model.sessionActionError = nil }
         } message: {
             Text(model.sessionActionError ?? "")
+        }
+        .sheet(item: $model.missionSheet) { sheet in
+            MissionSheetView(sheet: sheet).environmentObject(model)
         }
         .onAppear {
             model.openWindowAction = { openWindow(id: MainWindow.id) }
@@ -97,10 +103,11 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
-        if model.isUnread(session) || session.isAsk {
+        if model.isUnread(session) || session.isAsk || session.missionId != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     if model.isUnread(session) { UnreadBadge() }
+                    if let missionId = session.missionId { MissionChip(missionId: missionId) }
                     // Ask has no Changes pane, so its read-only boundary stays visible here.
                     if session.isAsk { SessionContextBadge(session: session) }
                 }
@@ -143,6 +150,9 @@ struct SessionInspectorControls: View {
 
     @ViewBuilder
     var body: some View {
+        if session.missionId != nil {
+            InspectorToggle(tab: .mission, icon: "scope", help: "Mission")
+        }
         if !session.isAsk {
             InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
             InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
@@ -165,6 +175,8 @@ struct SessionMoreActions: View {
 
     var body: some View {
         Menu {
+            SessionMissionActions(session: session)
+            Divider()
             SessionArchiveAction(session: session)
             if session.isArchived {
                 Button { model.showArchive(in: model.archiveProjectId) } label: {
@@ -222,6 +234,9 @@ struct Inspector: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 2) {
+                if session.missionId != nil {
+                    tab("Mission", .mission)
+                }
                 if !session.isAsk {
                     tab("Changes", .changes)
                     tab("Terminal", .terminal)
@@ -260,6 +275,10 @@ struct Inspector: View {
                 }
                 if !session.isAsk && model.inspectorTab == .agents {
                     SubagentsPane(session: session)
+                        .id(session.id)
+                }
+                if model.inspectorTab == .mission, session.missionId != nil {
+                    MissionInspectorPane(session: session)
                         .id(session.id)
                 }
             }
