@@ -293,8 +293,10 @@ The tool is registered for every Build and Ask chat but declared to the model on
 member, so other chats pay no prompt cost. pilotd pushes membership and context changes to a live
 kernel, which applies them from the next model request; tool calls travel over the worker's IPC channel
 and pilotd checks membership on every call and the current coordinator role for these three actions.
-`start` reuses Start chat and requires an active mission. `send` queues a follow-up if the member is busy
-and requires restoring an archived chat first. `status` reads summaries without waking workers,
+These three actions and their guidance are declared only to the coordinator. Changes to membership
+or coordinator role refresh the tool in place, including codemode discovery. `start` reuses Start chat
+and requires an active mission. `send` queues a follow-up if the member is busy and requires restoring
+an archived chat first. `status` reads summaries without waking workers,
 including lifecycle state, latest outcome, archive status and assigned tasks. Mission chats receive a
 compact mission header in Pilot's prompt section (goal, coordinator, own open tasks, decisions and how
 to use the tool), not the whole brief. The header only changes when those fields change, preserving

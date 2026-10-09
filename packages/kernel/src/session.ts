@@ -94,6 +94,7 @@ export class KernelSession {
 	private readonly status: AgentEventStream;
 	private readonly todos: TodosWatch;
 	private readonly subagents: SubagentBridge;
+	private readonly callMission?: MissionCall;
 
 	private constructor(
 		harness: Harness,
@@ -105,6 +106,7 @@ export class KernelSession {
 		subagents: SubagentBridge,
 		ask: boolean,
 		mission: { current?: MissionContext },
+		callMission?: MissionCall,
 	) {
 		this.harness = harness;
 		this.conversation = conversation;
@@ -115,6 +117,7 @@ export class KernelSession {
 		this.subagents = subagents;
 		this.#ask = ask;
 		this.#mission = mission;
+		this.callMission = callMission;
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
@@ -124,7 +127,9 @@ export class KernelSession {
 		let artifactConversation: Conversation | undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const mission: { current?: MissionContext } = { current: spec.mission };
-		const missionTools = hooks.callMission ? [createMissionTool(hooks.callMission)] : [];
+		const missionTools = hooks.callMission
+			? [createMissionTool(hooks.callMission, mission.current?.coordinator === "self")]
+			: [];
 		try {
 			const provenance =
 				spec.pilot?.workspace && !spec.pilot.ask
@@ -170,9 +175,10 @@ export class KernelSession {
 				onUsageChanged: hooks.onUsageChanged,
 				hostExtensions: provenance ? [provenance.native] : [],
 				subagents,
+				hostTools: missionTools,
 				...(spec.pilot?.ask
-					? { askArtifacts: artifactOptions, askTools: missionTools }
-					: { sessionOptions: { customTools: [...createArtifactTools(artifactOptions), ...missionTools] } }),
+					? { askArtifacts: artifactOptions }
+					: { sessionOptions: { customTools: createArtifactTools(artifactOptions) } }),
 				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
 				thinking: pinned?.thinkingLevel ?? spec.thinking,
 			});
@@ -227,6 +233,7 @@ export class KernelSession {
 				subagents,
 				!!spec.pilot?.ask,
 				mission,
+				hooks.callMission,
 			);
 			session.#working = status.snapshot.run !== undefined;
 			if (!session.#working) {
@@ -380,8 +387,11 @@ export class KernelSession {
 	/** Joining, leaving or a mission change. Applies from the next model request. */
 	setMission(context: MissionContext | undefined): void {
 		if (this.#closing) return;
+		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
 		this.#mission.current = context;
 		try {
+			if (coordinatorChanged && this.callMission)
+				this.adapter.registerHostTool(createMissionTool(this.callMission, context?.coordinator === "self"));
 			this.adapter.setToolActive(MISSION_TOOL, !!context);
 		} catch (error) {
 			// Without a registered tool (no host bridge) the prompt still reflects membership.
