@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.11.0](https://github.com/babariviere/pilot/compare/v1.10.2...v1.11.0) (2026-10-09)
+
+
+### Features
+
+* **macos:** compact queued message strip with steer and follow-up edits ([46beb36](https://github.com/babariviere/pilot/commit/46beb36e19ee5cfa4eeac46d05c1ce605907ebbd))
+
+
+### Bug Fixes
+
+* **macos:** fit inline image artifacts to their content ([160be54](https://github.com/babariviere/pilot/commit/160be54a01d1c9078e4ec1f23bf1c5cb736bb850))
+* **macos:** unify composer pickers and remove UI noise ([37bd280](https://github.com/babariviere/pilot/commit/37bd2805041527b3346b5eefa223ce22abfe2a8c))
+
+
+### Performance Improvements
+
+* **daemon:** cache workspace inspection, look up known PRs by number, react to ref changes ([d67fa90](https://github.com/babariviere/pilot/commit/d67fa900f5ffa59b4dc0217afcab0ebba1c5143b))
+* **daemon:** schedule GitHub PR sync with batched GraphQL lookups ([df3fa42](https://github.com/babariviere/pilot/commit/df3fa425f2f11cd5d87556aa6b8a38ea34cad67b))
+
 ## [1.10.2](https://github.com/babariviere/pilot/compare/v1.10.1...v1.10.2) (2026-10-09)
 
 
