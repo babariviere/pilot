@@ -100,15 +100,15 @@ export class RepositoryChanges {
 		weight: (value) => Buffer.byteLength(JSON.stringify(value)),
 	});
 
-	changes(cwd: string, base = "HEAD"): Promise<SessionChanges> {
-		return this.cache.get(JSON.stringify([cwd, base, "full"]), () =>
-			collectChanges(cwd, base),
+	changes(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChanges> {
+		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "full"]), () =>
+			collectChanges(cwd, base, baseBranch),
 		) as Promise<SessionChanges>;
 	}
 
-	summary(cwd: string, base = "HEAD"): Promise<SessionChangeSummary> {
-		return this.cache.get(JSON.stringify([cwd, base, "summary"]), () =>
-			collectChangeSummary(cwd, base),
+	summary(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChangeSummary> {
+		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "summary"]), () =>
+			collectChangeSummary(cwd, base, baseBranch),
 		) as Promise<SessionChangeSummary>;
 	}
 
@@ -137,14 +137,36 @@ const STATUS: Record<string, ChangedFile["status"]> = {
 	T: "modified",
 };
 
-async function changeBase(cwd: string, base: string) {
+/**
+ * The pinned creation base, or the base branch's newer merge base once the session has rebased onto or merged a
+ * later tip. Without this, every upstream commit since session creation would count as the session's own change.
+ */
+async function changeBase(cwd: string, base: string, baseBranch?: string) {
 	if ((await git(cwd, ["rev-parse", "--is-inside-work-tree"]).catch(() => "")).trim() !== "true")
 		throw new Error("Not a git repository");
 	const branch = await workspaceBranch(cwd).catch(() => undefined);
-	const mergeBase = (await git(cwd, ["merge-base", "HEAD", base]).catch(() => "")).trim() || base;
+	let mergeBase = (await git(cwd, ["merge-base", "HEAD", base]).catch(() => "")).trim() || base;
+	let label = base;
+	if (baseBranch) {
+		const latest = (
+			await git(cwd, ["merge-base", "HEAD", `refs/remotes/origin/${baseBranch}`]).catch(() => "")
+		).trim();
+		// Only move forward: a stale or rewound remote-tracking ref must not widen the diff.
+		if (
+			latest &&
+			latest !== mergeBase &&
+			(await git(cwd, ["merge-base", "--is-ancestor", mergeBase, latest]).then(
+				() => true,
+				() => false,
+			))
+		) {
+			mergeBase = latest;
+			label = `origin/${baseBranch}`;
+		}
+	}
 	return {
 		mergeBase,
-		base: mergeBase === base ? base : `${base} (${mergeBase.slice(0, 8)})`,
+		base: mergeBase === label ? label : `${label} (${mergeBase.slice(0, 8)})`,
 		...(branch ? { branch } : {}),
 	};
 }
@@ -193,8 +215,12 @@ async function lineStats(cwd: string, mergeBase: string, untracked: string[]) {
 }
 
 /** Count changed paths and lines without generating patches. Renames count once. */
-export async function collectChangeSummary(cwd: string, base = "HEAD"): Promise<SessionChangeSummary> {
-	const { mergeBase, ...metadata } = await changeBase(cwd, base);
+export async function collectChangeSummary(
+	cwd: string,
+	base = "HEAD",
+	baseBranch?: string,
+): Promise<SessionChangeSummary> {
+	const { mergeBase, ...metadata } = await changeBase(cwd, base, baseBranch);
 	const tracked = await git(cwd, ["diff", "--name-only", "-z", "-M", mergeBase, "--"]);
 	const untracked = await git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
 	// NUL records preserve tabs, newlines and quoted/non-ASCII filenames. A rename emits only its destination.
@@ -211,10 +237,11 @@ export async function collectChangeSummary(cwd: string, base = "HEAD"): Promise<
 
 /**
  * Committed and uncommitted changes since `base` (default `HEAD`), including untracked files. Uses the
- * merge base, so commits that landed on the base branch afterwards are not shown as changes.
+ * merge base, so commits that landed on the base branch afterwards are not shown as changes. With `baseBranch`,
+ * a session rebased onto a newer `origin/<baseBranch>` is compared against that newer merge base instead.
  */
-export async function collectChanges(cwd: string, base = "HEAD"): Promise<SessionChanges> {
-	const { mergeBase, ...metadata } = await changeBase(cwd, base);
+export async function collectChanges(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChanges> {
+	const { mergeBase, ...metadata } = await changeBase(cwd, base, baseBranch);
 
 	const files = new Map<string, ChangedFile>();
 	const records = (await git(cwd, ["diff", "--name-status", "-z", "-M", mergeBase, "--"])).split("\0");

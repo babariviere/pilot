@@ -60,6 +60,52 @@ test("reports committed, uncommitted and untracked changes since the base", asyn
 	}
 });
 
+test("a session rebased onto a newer base branch only reports its own changes", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-changes-rebased-"));
+	try {
+		git(root, "init", "--quiet", "-b", "main");
+		writeFileSync(join(root, "a.txt"), "base\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "base");
+		const created = git(root, "rev-parse", "HEAD").trim();
+		git(root, "update-ref", "refs/remotes/origin/main", created);
+		// Upstream lands work after the session was created, and the session rebases onto it.
+		writeFileSync(join(root, "upstream.txt"), "one\ntwo\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "upstream");
+		const latest = git(root, "rev-parse", "HEAD").trim();
+		git(root, "switch", "--quiet", "-c", "session");
+		writeFileSync(join(root, "mine.txt"), "mine\n");
+		git(root, "add", ".");
+		git(root, "commit", "--quiet", "-m", "mine");
+
+		// The remote-tracking ref is behind the session's base: never widen the diff.
+		const stale = await collectChangeSummary(root, created, "main");
+		assert.equal(stale.fileCount, 2);
+		assert.equal(stale.base, created);
+
+		git(root, "update-ref", "refs/remotes/origin/main", latest);
+		const summary = await collectChangeSummary(root, created, "main");
+		assert.deepEqual(summary, {
+			base: `origin/main (${latest.slice(0, 8)})`,
+			branch: "session",
+			fileCount: 1,
+			additions: 1,
+			deletions: 0,
+		});
+		const changes = await collectChanges(root, created, "main");
+		assert.deepEqual(
+			changes.files.map((file) => file.path),
+			["mine.txt"],
+		);
+		assert.doesNotMatch(changes.diff, /upstream\.txt/);
+		// Without a base branch, the pinned creation base still applies.
+		assert.equal((await collectChangeSummary(root, created)).fileCount, 2);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("summary counts NUL-delimited tracked and untracked paths, renames once, and excludes ignored files", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-changes-summary-"));
 	try {

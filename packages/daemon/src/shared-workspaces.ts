@@ -319,6 +319,57 @@ export class SharedWorkspaceStore {
 		}
 	}
 
+	/**
+	 * Seed remote-tracking refs from the source checkout's view of origin, which may be days old. Only missing refs
+	 * are created and existing ones fast-forwarded, so a stale source never rewinds a tip another session fetched.
+	 */
+	private async seedRemoteRefs(source: string, repository: string, runner: Runner) {
+		const staging = "refs/pilot/source-origin/";
+		await runner(
+			"git",
+			[
+				...maintenance,
+				"fetch",
+				"--quiet",
+				"--no-tags",
+				"--no-write-fetch-head",
+				"--prune",
+				source,
+				`+refs/remotes/origin/*:${staging}*`,
+			],
+			repository,
+		);
+		const refs = async (prefix: string) => {
+			const output = await runner("git", ["for-each-ref", "--format=%(objectname) %(refname)", prefix], repository);
+			const map = new Map<string, string>();
+			for (const line of output.split("\n")) {
+				const space = line.indexOf(" ");
+				if (space > 0) map.set(line.slice(space + 1).slice(prefix.length), line.slice(0, space));
+			}
+			return map;
+		};
+		const [seeded, current] = await Promise.all([refs(staging), refs("refs/remotes/origin/")]);
+		for (const [name, commit] of seeded) {
+			// origin/HEAD is a symbolic ref. Updating it would move whichever branch it points to.
+			if (name === "HEAD") continue;
+			const existing = current.get(name);
+			if (existing === commit) continue;
+			if (
+				existing &&
+				(await this.optional("git", ["merge-base", "--is-ancestor", existing, commit], repository, runner)) ===
+					undefined
+			)
+				continue;
+			// The old value guards against a concurrent fetch. Losing that race keeps the newer ref.
+			await this.optional(
+				"git",
+				["update-ref", `refs/remotes/origin/${name}`, commit, ...(existing ? [existing] : [])],
+				repository,
+				runner,
+			);
+		}
+	}
+
 	private async base(source: string, repository: string, baseBranch: string | undefined, runner: Runner) {
 		const sourceUpstream = await this.optional("git", ["remote", "get-url", "origin"], source, runner);
 		const upstream = sourceUpstream ? await remoteUrl(source, sourceUpstream) : undefined;
@@ -346,19 +397,21 @@ export class SharedWorkspaceStore {
 			}
 			branch = baseBranch;
 		} else {
-			await runner(
-				"git",
-				[
-					...maintenance,
-					"fetch",
-					"--quiet",
-					"--no-tags",
-					"--no-write-fetch-head",
-					source,
-					upstream ? "+refs/remotes/origin/*:refs/remotes/origin/*" : "+refs/heads/*:refs/remotes/origin/*",
-				],
-				repository,
-			);
+			if (upstream) await this.seedRemoteRefs(source, repository, runner);
+			else
+				await runner(
+					"git",
+					[
+						...maintenance,
+						"fetch",
+						"--quiet",
+						"--no-tags",
+						"--no-write-fetch-head",
+						source,
+						"+refs/heads/*:refs/remotes/origin/*",
+					],
+					repository,
+				);
 			if (upstream) {
 				await this.optional("git", [...maintenance, "fetch", "--quiet", "origin"], repository, runner);
 				const head =

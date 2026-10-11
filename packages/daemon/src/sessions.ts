@@ -1284,11 +1284,16 @@ export class SessionManager {
 	}
 
 	/** Where the session's changes start: its workspace base, else the folder's HEAD. */
-	changeBase(id: string): { cwd: string; base?: string } {
+	changeBase(id: string): { cwd: string; base?: string; baseBranch?: string } {
 		this.assertWritable(id);
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
-		return { cwd: meta.cwd, ...(meta.workspace ? { base: meta.workspace.base } : {}) };
+		const workspace = meta.workspace;
+		return {
+			cwd: meta.cwd,
+			...(workspace ? { base: workspace.base } : {}),
+			...(workspace?.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
+		};
 	}
 
 	/** Server-side capability check, independent of client controls. */

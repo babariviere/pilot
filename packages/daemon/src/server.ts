@@ -228,8 +228,8 @@ export function createDaemonServer(
 			return json(res, 200, session);
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "changes" && req.method === "GET") {
-			const { cwd, base } = sessions.changeBase(parts[2]!);
-			return json(res, 200, await repositoryChanges.changes(cwd, base));
+			const { cwd, base, baseBranch } = sessions.changeBase(parts[2]!);
+			return json(res, 200, await repositoryChanges.changes(cwd, base, baseBranch));
 		}
 		if (
 			parts[1] === "sessions" &&
@@ -238,8 +238,8 @@ export function createDaemonServer(
 			parts[4] === "summary" &&
 			req.method === "GET"
 		) {
-			const { cwd, base } = sessions.changeBase(parts[2]!);
-			return json(res, 200, await repositoryChanges.summary(cwd, base));
+			const { cwd, base, baseBranch } = sessions.changeBase(parts[2]!);
+			return json(res, 200, await repositoryChanges.summary(cwd, base, baseBranch));
 		}
 		if (parts[1] === "sessions" && parts[3] === "artifacts" && req.method === "GET") {
 			if (parts.length === 4) return json(res, 200, await sessions.artifacts(parts[2]!));
