@@ -23,7 +23,7 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
-import type { AgentEvent, DeliveryMode, SessionCompletion, SessionUsage } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCompletion } from "@pilot/protocol";
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion } from "./attention.ts";
@@ -38,6 +38,7 @@ import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQue
 import { openSessionStorage } from "./storage.ts";
 import { type SubagentCommand, SubagentBridge } from "./subagents.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
+import type { KernelUsage } from "./usage.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
 
@@ -66,7 +67,7 @@ async function pinnedAgent(
 
 export interface KernelSessionHooks {
 	onWorking(working: boolean, completion?: SessionCompletion): void;
-	onUsageChanged?(usage: SessionUsage): void;
+	onUsageChanged?(usage: KernelUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
 	onArtifactsChanged?(): void;
 	/** Created by an agent tool, committed before notification; replayed on open. */
@@ -333,8 +334,6 @@ export class KernelSession {
 		this.#changingModel = true;
 		const previous = this.adapter.session.model!;
 		const previousThinking = this.adapter.thinkingLevel;
-		const previousSubscription = this.adapter.usage.current.subscription;
-		let providerChanged = false;
 		const configureIdle = (change = false) =>
 			this.conversation.commit(async (tx) => {
 				const live = await tx.doc(LiveDoc, this.conversation.id);
@@ -357,10 +356,6 @@ export class KernelSession {
 			)
 				throw new Error(`Thinking level is not supported by ${model.trim()}: ${thinking}`);
 			await configureIdle();
-			providerChanged = previous.provider !== choice.model.provider;
-			// model_select handlers may publish fresh destination usage during setModel. Clear first,
-			// not afterwards, so that snapshot is included in the modelChanged acknowledgement.
-			if (providerChanged) this.adapter.usage.clearSubscription();
 			// A thinking-only edit must not reselect the model or reapply its scoped startup level.
 			if (thinking === undefined || model.trim() !== this.model) await this.adapter.session.setModel(choice.model);
 			const level = thinking ?? choice.thinkingLevel;
@@ -377,14 +372,13 @@ export class KernelSession {
 			if (this.adapter.thinkingLevel !== previousThinking) {
 				this.adapter.session.setThinkingLevel(previousThinking);
 			}
-			if (providerChanged) this.adapter.usage.setSubscription(previousSubscription);
 			throw error;
 		} finally {
 			this.#changingModel = false;
 		}
 	}
 
-	get usage(): SessionUsage {
+	get usage(): KernelUsage {
 		return this.adapter.usage.current;
 	}
 

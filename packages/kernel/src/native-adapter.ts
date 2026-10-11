@@ -57,14 +57,14 @@ import {
 	ToolTask,
 	type UserInput,
 } from "@earendil-works/pi-durable";
-import type { DeliveryMode, SessionUsage } from "@pilot/protocol";
+import type { DeliveryMode } from "@pilot/protocol";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
-import { contextUsage, UsageTracker } from "./usage.ts";
+import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
 import { InfrastructureChildren, inspectChildren } from "./activity.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
@@ -105,7 +105,7 @@ export interface NativeAdapterOptions {
 	 */
 	sessionFile?: string;
 	/** Live display data, independent from the durable transcript. */
-	onUsageChanged?: (usage: SessionUsage) => void;
+	onUsageChanged?: (usage: KernelUsage) => void;
 	/** Host observers, also applied to nested native tool calls. Build sessions only. */
 	hostExtensions?: ExtensionFactory[];
 	/** Receives pi-extensions subagents host events. */
@@ -315,7 +315,6 @@ export class NativeAdapter {
 		let registerHostTool: ((tool: ToolDefinition) => void) | undefined;
 		const hostTools = new Map((options.hostTools ?? []).map((tool) => [tool.name, tool]));
 		const usage = new UsageTracker(options.onUsageChanged);
-		let stopUsage: (() => void) | undefined;
 		const infrastructure = new InfrastructureChildren();
 		const mcp = createTrackedMcpExtension(infrastructure);
 		const capture: ExtensionFactory = (pi) => {
@@ -331,10 +330,8 @@ export class NativeAdapter {
 						return { block: true, reason: `Ask mode denies tool: ${event.toolName}` };
 				});
 			}
-			stopUsage = pi.events.on("usage:snapshot", (data) => usage.receive(data));
 			if (!options.ask) options.subagents?.attach(pi.events);
 			pi.on("session_shutdown", () => {
-				stopUsage?.();
 				options.subagents?.detach();
 			});
 			// Last inline handler retains the public event's SDK-rendered prompt getter. Calling it
@@ -532,7 +529,7 @@ export class NativeAdapter {
 			if (latest?.role === "assistant")
 				model = this.session.modelRuntime.getPhysicalModel(latest.provider, latest.model) ?? model;
 		}
-		this.usage.setContext(contextUsage(view, model?.contextWindow));
+		this.usage.set(contextUsage(view, model?.contextWindow), model?.provider);
 	}
 	private assertOpen(): void {
 		if (this.#closed) throw new Error("Native adapter is closed");

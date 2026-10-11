@@ -11,6 +11,7 @@ import {
 	type KernelCommand,
 	type KernelPacket,
 	type KernelSubagent,
+	type KernelUsage,
 	type MissionContext,
 	type PersistedSessionView,
 	type SubagentTranscriptRead,
@@ -50,6 +51,13 @@ import {
 import type { PullRequestProblems } from "./github.ts";
 import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
 import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
+import {
+	modelProvider,
+	type SubscriptionProvider,
+	SubscriptionUsageCache,
+	type SubscriptionUsageSource,
+	subscriptionProvider,
+} from "./subscription-usage.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
@@ -114,7 +122,7 @@ export interface SessionWorker {
 	readonly busy?: boolean;
 	state: SessionState;
 	error?: string;
-	usage?: SessionUsage;
+	usage?: KernelUsage;
 	send(command: KernelCommand): void;
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void>;
 	close(): Promise<void>;
@@ -127,6 +135,8 @@ export interface SessionManagerOptions {
 	prFollowUpCooldownMs?: number;
 	/** Close idle, unwatched kernels after this long. Their sessions reopen on demand. Defaults to 10 minutes. */
 	idleParkMs?: number;
+	/** Account-wide subscription usage. Defaults to pi's shared usage cache, or none with injected workers. */
+	subscriptionUsage?: (onChange: (provider: SubscriptionProvider) => void) => SubscriptionUsageSource;
 	startupTimeoutMs?: number;
 	commandTimeoutMs?: number;
 	/** Reclaim shared workspaces this long after archival. Defaults to 30 days; Infinity disables. */
@@ -325,8 +335,8 @@ export class Worker implements SessionWorker {
 	readonly ready: Promise<void>;
 	state: SessionState = "starting";
 	error?: string;
-	/** Ephemeral. Never persist provider quota windows as current after a daemon restart. */
-	usage?: SessionUsage;
+	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
+	usage?: KernelUsage;
 	private readonly pending = new Map<
 		string,
 		{ resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; onlyIfIdle?: boolean }
@@ -590,6 +600,7 @@ export class SessionManager {
 	private archiveSweep?: Promise<void>;
 	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
 	private readonly pool?: WorkerPool;
+	private readonly subscriptionUsage?: SubscriptionUsageSource;
 	private readonly idleParkMs: number;
 	private readonly prFollowUpCooldownMs: number;
 	private readonly workerOptions: WorkerOptions;
@@ -640,6 +651,10 @@ export class SessionManager {
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? 30 * DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
 		if (!factories.worker) this.pool = new WorkerPool();
+		const onUsage = (provider: SubscriptionProvider) => this.subscriptionUsageChanged(provider);
+		this.subscriptionUsage =
+			options.subscriptionUsage?.(onUsage) ??
+			(factories.worker ? undefined : new SubscriptionUsageCache(onUsage, { agentDir }));
 		this.home = home;
 		this.projects = projects;
 		this.agentDir = agentDir;
@@ -697,6 +712,7 @@ export class SessionManager {
 			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
+		await this.subscriptionUsage?.start();
 		this.scheduleArchiveSweep();
 		// Resume dissociation interrupted by a restart.
 		for (const meta of this.metas.values()) if (!meta.preparing) this.dissociate(meta);
@@ -2046,6 +2062,7 @@ export class SessionManager {
 		clearTimeout(this.archiveTimer);
 		clearTimeout(this.parkTimer);
 		this.pool?.close();
+		this.subscriptionUsage?.close();
 		const drainPullRequests = this.pullRequests.stop();
 		this.shutdownSignal.abort();
 		await Promise.allSettled([...this.titleTasks]);
@@ -2445,6 +2462,7 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const usage = this.usage(meta, worker);
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
@@ -2480,7 +2498,7 @@ export class SessionManager {
 						: (worker?.state ?? "parked"),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
-			...(worker?.usage ? { usage: worker.usage } : {}),
+			...(usage ? { usage } : {}),
 			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
 			...(meta.outcome ? { outcome: meta.outcome } : {}),
 			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
@@ -2823,6 +2841,26 @@ export class SessionManager {
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
 		for (const listener of this.changeListeners) listener(summary);
+	}
+
+	/** The live kernel's physical provider (resolving virtual routers), else the pinned model's. */
+	private subscriptionProviderOf(meta: SessionMeta, worker?: SessionWorker): SubscriptionProvider | undefined {
+		return subscriptionProvider(worker?.usage?.provider ?? modelProvider(meta.model));
+	}
+
+	private usage(meta: SessionMeta, worker?: SessionWorker): SessionUsage | undefined {
+		const context = worker?.usage?.context;
+		const provider = this.subscriptionProviderOf(meta, worker);
+		const subscription = provider ? this.subscriptionUsage?.get(provider) : undefined;
+		if (!context && !subscription) return undefined;
+		return { ...(context ? { context } : {}), ...(subscription ? { subscription } : {}) };
+	}
+
+	private subscriptionUsageChanged(provider: SubscriptionProvider): void {
+		if (this.closing) return;
+		for (const meta of this.metas.values())
+			if (meta.archivedAt === undefined && this.subscriptionProviderOf(meta, this.workers.get(meta.id)) === provider)
+				this.emit(meta);
 	}
 
 	private require(id: string): SessionMeta {

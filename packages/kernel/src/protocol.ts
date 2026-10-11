@@ -1,8 +1,11 @@
 /** IPC between pilotd and one kernel worker process. */
-import type { AgentEvent, DeliveryMode, SessionCompletion, SessionSubagent, SessionUsage } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCompletion, SessionSubagent } from "@pilot/protocol";
 import type { JsonValue } from "@earendil-works/chord";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext } from "./policy.ts";
+import type { KernelUsage } from "./usage.ts";
+
+export type { KernelUsage } from "./usage.ts";
 
 /** A subagent as reported by the kernel, including where its read-only transcript lives. */
 export interface KernelSubagent extends SessionSubagent {
@@ -61,10 +64,10 @@ export type KernelPacket =
 			model: string;
 			thinking?: string;
 			working: boolean;
-			usage: SessionUsage;
+			usage: KernelUsage;
 			completion?: SessionCompletion;
 	  }
-	| { type: "usage"; usage: SessionUsage }
+	| { type: "usage"; usage: KernelUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
 	/** Full replacement, after every change reported by the subagents extension. */
 	| { type: "subagents"; subagents: KernelSubagent[] }
@@ -76,7 +79,7 @@ export type KernelPacket =
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
-	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: SessionUsage }
+	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: KernelUsage }
 	| { type: "working"; working: boolean; completion?: SessionCompletion }
 	| { type: "events"; watchId: string; events: AgentEvent[] }
 	| { type: "error"; requestId?: string; message: string; code?: "busy" };

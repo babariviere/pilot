@@ -15,21 +15,12 @@ import {
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { AssistantEntry, createRegistry, Harness, MemoryStorage, UserEntry } from "@earendil-works/pi-durable";
-import type { SessionUsage } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
 const contextWindow = 32_000;
-const snapshot = {
-	fetchedAt: 1_700_000_000_000,
-	snapshot: {
-		provider: "anthropic",
-		windows: [{ label: "5 hours", usedPercent: 27, resetsAt: "2026-07-04T12:00:00Z" }],
-	},
-};
-const subscription = { fetchedAt: snapshot.fetchedAt, ...snapshot.snapshot };
-
 async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-usage-"));
 	const cleanup: Array<() => Promise<void>> = [];
@@ -84,7 +75,7 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 		bus,
 		faux,
 		cleanup,
-		async open(onUsageChanged?: (usage: SessionUsage) => void) {
+		async open(onUsageChanged?: (usage: KernelUsage) => void) {
 			const adapter = await NativeAdapter.open({ ...options, onUsageChanged });
 			cleanup.push(() => adapter.close());
 			return adapter;
@@ -104,69 +95,24 @@ async function bindHarness(f: Awaited<ReturnType<typeof fixture>>, adapter: Nati
 	return { harness, conversation };
 }
 
-test("native usage captures extension startup and later bus events, ignores malformed data, and unsubscribes", async (t) => {
-	let startupCount = 0;
+test("native usage ignores the pi event bus; subscription windows are served by the daemon", async (t) => {
 	const f = await fixture(t, [
 		(pi) => {
 			pi.on("session_start", () => {
-				startupCount++;
-				pi.events.emit("usage:snapshot", { fetchedAt: "malformed", snapshot: null });
-				pi.events.emit("usage:snapshot", snapshot);
+				pi.events.emit("usage:snapshot", { fetchedAt: 1, snapshot: { provider: "anthropic", windows: [] } });
 			});
 		},
 	]);
-	const changes: SessionUsage[] = [];
+	const changes: KernelUsage[] = [];
 	const adapter = await f.open((usage) => changes.push(usage));
-	assert.equal(startupCount, 1);
-	assert.deepEqual(changes, [{ subscription }]);
-	assert.deepEqual(adapter.usage.current, { subscription });
-
-	const later = {
-		fetchedAt: snapshot.fetchedAt + 1,
-		snapshot: {
-			provider: "openai",
-			windows: [{ label: "Week", usedPercent: 54 }],
-			error: "temporarily unavailable",
-			accessToken: "must-not-be-forwarded",
-		},
-		credentials: { apiKey: "must-not-be-forwarded" },
-	};
-	f.bus.emit("usage:snapshot", later);
-	const expected = {
-		subscription: {
-			fetchedAt: later.fetchedAt,
-			provider: "openai",
-			windows: [{ label: "Week", usedPercent: 54 }],
-			error: "temporarily unavailable",
-		},
-	};
-	assert.deepEqual(adapter.usage.current, expected);
-	assert.deepEqual(changes.at(-1), expected);
-	f.bus.emit("usage:snapshot", later);
-	assert.equal(changes.length, 2, "identical events do not publish twice");
-	for (const malformed of [
-		null,
-		[],
-		{},
-		{ ...snapshot, fetchedAt: Number.NaN },
-		{ ...snapshot, snapshot: { windows: "bad" } },
-		{ ...snapshot, snapshot: { windows: [{ label: "bad", usedPercent: -1 }] } },
-		{ ...snapshot, snapshot: { provider: "unknown", windows: [] } },
-	]) {
-		assert.doesNotThrow(() => f.bus.emit("usage:snapshot", malformed));
-	}
-	assert.equal(changes.length, 2);
-	assert.deepEqual(adapter.usage.current, expected);
-
-	await adapter.close();
-	await adapter.close();
-	f.bus.emit("usage:snapshot", snapshot);
-	assert.equal(changes.length, 2, "closed adapters no longer receive usage");
+	f.bus.emit("usage:snapshot", { fetchedAt: 2, snapshot: { provider: "openai", windows: [] } });
+	assert.deepEqual(adapter.usage.current, {});
+	assert.deepEqual(changes, []);
 });
 
-test("without a usage extension, refresh reads committed Harness context without changing native history", async (t) => {
+test("refresh reads committed Harness context without changing native history", async (t) => {
 	const f = await fixture(t);
-	const changes: SessionUsage[] = [];
+	const changes: KernelUsage[] = [];
 	const adapter = await f.open((usage) => changes.push(usage));
 	assert.deepEqual(adapter.usage.current, {});
 	await adapter.refreshUsage(context);
@@ -187,6 +133,7 @@ test("without a usage extension, refresh reads committed Harness context without
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current, {
 		context: { tokens: 2, contextWindow, percent: (2 / contextWindow) * 100 },
+		provider: adapter.model.provider,
 	});
 	assert.deepEqual(changes, [adapter.usage.current]);
 	assert.deepEqual(adapter.session.sessionManager.getEntries(), nativeEntries);
@@ -262,10 +209,9 @@ test("committed response usage anchors trailing context, while resets discard ol
 		await tx.appendEntry(AssistantEntry, conversation.id, { model: [response] });
 		await tx.appendEntry(UserEntry, conversation.id, { model: [trailing] });
 	}, context);
-	f.bus.emit("usage:snapshot", snapshot);
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current, {
-		subscription,
+		provider: adapter.model.provider,
 		context: { tokens: 153, contextWindow, percent: (153 / contextWindow) * 100 },
 	});
 
@@ -273,7 +219,7 @@ test("committed response usage anchors trailing context, while resets discard ol
 	await conversation.waitForIdle(context);
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current, {
-		subscription,
+		provider: adapter.model.provider,
 		context: { tokens: 2, contextWindow, percent: (2 / contextWindow) * 100 },
 	});
 });
@@ -295,6 +241,7 @@ test("virtual selection displays the latest successful physical response's conte
 	const { conversation } = await bindHarness(f, adapter);
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current.context, { tokens: 0, contextWindow: virtualWindow, percent: 0 });
+	assert.equal(adapter.usage.current.provider, "pilot-usage-router");
 	const physical = f.faux.getModel();
 	const response = {
 		...fauxAssistantMessage("physical answer"),
@@ -312,6 +259,7 @@ test("virtual selection displays the latest successful physical response's conte
 		contextWindow,
 		percent: (100 / contextWindow) * 100,
 	});
+	assert.equal(adapter.usage.current.provider, physical.provider, "subscription lookup follows the physical route");
 	assert.equal(adapter.session.model?.api, "pi-virtual", "refresh leaves the selected virtual model unchanged");
 	assert.equal(f.faux.state.callCount, 0);
 });
@@ -319,11 +267,7 @@ test("virtual selection displays the latest successful physical response's conte
 test("KernelSession exposes startup usage for ready and publishes committed final-response context", {
 	timeout: 15_000,
 }, async (t) => {
-	const f = await fixture(t, [
-		(pi) => {
-			pi.on("session_start", () => pi.events.emit("usage:snapshot", snapshot));
-		},
-	]);
+	const f = await fixture(t);
 	const openAdapter = NativeAdapter.open;
 	// KernelSession has no public SDK DI argument. Replace only its opening boundary with the real offline SDK adapter.
 	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) =>
@@ -336,9 +280,9 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 			onUsageChanged: options.onUsageChanged,
 		}),
 	);
-	const changes: SessionUsage[] = [];
+	const changes: KernelUsage[] = [];
 	const working: boolean[] = [];
-	let usageChanged: ((usage: SessionUsage) => void) | undefined;
+	let usageChanged: ((usage: KernelUsage) => void) | undefined;
 	let settle!: () => void;
 	const settled = new Promise<void>((resolve) => {
 		settle = resolve;
@@ -370,12 +314,13 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 			};
 		});
 	};
-	assert.deepEqual(session.usage, { subscription, context: { tokens: 0, contextWindow, percent: 0 } });
+	const provider = f.faux.getModel().provider;
+	assert.deepEqual(session.usage, { provider, context: { tokens: 0, contextWindow, percent: 0 } });
 	assert.deepEqual(changes.at(-1), session.usage, "ready can read the same state as the usage hook");
 	assert.equal(session.working, false);
 	const readyUsage = session.usage;
-	readyUsage.subscription!.windows[0]!.usedPercent = 999;
-	assert.equal(session.usage.subscription!.windows[0]!.usedPercent, 27, "ready getter returns a detached snapshot");
+	readyUsage.context!.tokens = 999;
+	assert.equal(session.usage.context!.tokens, 0, "ready getter returns a detached snapshot");
 
 	f.faux.setResponses([fauxAssistantMessage("offline final response")]);
 	await session.submit("offline-input", "Hello offline model", "followUp");
@@ -391,7 +336,7 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	// Lifecycle notification precedes the same batch's asynchronous usage refresh.
 	await waitForTokens(tokens);
 	assert.deepEqual(session.usage, {
-		subscription,
+		provider,
 		context: { tokens, contextWindow, percent: (tokens / contextWindow) * 100 },
 	});
 	assert.deepEqual(changes.at(-1), session.usage);
@@ -411,7 +356,7 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 	});
 	f.cleanup.push(() => restored.close());
 	assert.deepEqual(restored.usage, {
-		subscription,
+		provider,
 		context: { tokens: tokens + 1, contextWindow, percent: ((tokens + 1) / contextWindow) * 100 },
 	});
 	assert.equal(f.faux.state.callCount, 1, "restoring ready usage never invokes a model");
