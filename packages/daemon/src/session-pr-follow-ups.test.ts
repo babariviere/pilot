@@ -82,7 +82,8 @@ async function setup(cooldownMs?: number) {
 	await mkdir(join(home, "sessions", otherId));
 	await writeFile(
 		join(home, "sessions", otherId, "meta.json"),
-		JSON.stringify({ id: otherId, title: "Other", cwd: home, createdAt: 1, updatedAt: 3 }),
+		// The other session owns the PR during load, so the first sweep cannot claim it for this one.
+		JSON.stringify({ id: otherId, title: "Other", cwd: home, createdAt: 1, updatedAt: 3, agentPullRequests: [url] }),
 	);
 	const controls = {
 		checks: true,
@@ -232,10 +233,15 @@ async function setup(cooldownMs?: number) {
 	await manager.load();
 	await manager["pullRequests"].settled();
 	// Ownership is deliberately absent on load, so each test controls the first eligible sweep.
+	delete manager["metas"].get(otherId)!.agentPullRequests;
 	manager["metas"].get(id)!.agentPullRequests = [url];
 	return {
 		home,
 		id,
+		/** A PR owned by another session can never be claimed by this one. */
+		ownElsewhere: (...urls: string[]) => {
+			manager["metas"].get(otherId)!.agentPullRequests = urls;
+		},
 		controls,
 		inputs,
 		get manager() {
@@ -376,6 +382,7 @@ test("one follow-up covers all fresh owned stack heads, even when the current PR
 		f.controls.others = prs;
 		f.meta.previousPullRequests = prs;
 		f.meta.agentPullRequests = [url, ...prs.filter((pr) => pr.number !== 13).map((pr) => pr.url)];
+		f.ownElsewhere(prs[2]!.url);
 		const before = activity(f.meta);
 		await f.refresh();
 		assert.equal(f.inputs.length, 1);
@@ -487,8 +494,10 @@ test("user input and branch changes invalidate in-flight stack health", async ()
 				await until(() => f.controls.healthCalls === 1);
 				if (race === "user") await f.manager.send(f.id, "New work", "followUp", "stack-race");
 				else if (race === "branch") f.meta.workspace!.branch = "feat/new-work";
-				else if (race === "ownership") f.meta.agentPullRequests = [];
-				else f.meta.previousPullRequests = [{ ...pr, state: "closed" }];
+				else if (race === "ownership") {
+					f.meta.agentPullRequests = [];
+					f.ownElsewhere(pr.url);
+				} else f.meta.previousPullRequests = [{ ...pr, state: "closed" }];
 				gate.resolve();
 				await refreshing;
 				assert.equal(f.inputs.filter((input) => input.onlyIfIdle).length, 0, race);
@@ -743,11 +752,27 @@ test("busy, queued, unowned, direct, ask, archived and transitional sessions do 
 			["archived", () => (meta.archivedAt = 20), () => delete meta.archivedAt],
 			["ask", () => (meta.mode = "ask"), () => delete meta.mode],
 			["direct workspace", () => delete meta.workspace, () => (meta.workspace = workspace)],
-			["unowned PR", () => (meta.agentPullRequests = []), () => (meta.agentPullRequests = [url])],
+			[
+				"PR owned by another session",
+				() => {
+					meta.agentPullRequests = [];
+					f.ownElsewhere(url);
+				},
+				() => {
+					meta.agentPullRequests = [url];
+					f.ownElsewhere();
+				},
+			],
 			[
 				"different owned PR",
-				() => (meta.agentPullRequests = ["https://github.com/octo/repo/pull/11"]),
-				() => (meta.agentPullRequests = [url]),
+				() => {
+					meta.agentPullRequests = ["https://github.com/octo/repo/pull/11"];
+					f.ownElsewhere(url);
+				},
+				() => {
+					meta.agentPullRequests = [url];
+					f.ownElsewhere();
+				},
 			],
 			["closed PR", () => (f.controls.state = "CLOSED"), () => (f.controls.state = "OPEN")],
 			["merged PR", () => (f.controls.state = "MERGED"), () => (f.controls.state = "OPEN")],
@@ -766,6 +791,39 @@ test("busy, queued, unowned, direct, ask, archived and transitional sessions do 
 		}
 		await f.refresh();
 		assert.equal(f.inputs.length, 1, "a proven idle live worker accepts the follow-up");
+	});
+});
+
+test("the first private session to discover an unowned PR claims it, and a PR has one owner", async () => {
+	await fixture(async (f) => {
+		// Another session owns it, archived or not: discovery and creation packets cannot take it over.
+		delete f.meta.agentPullRequests;
+		f.ownElsewhere(url);
+		await f.refresh();
+		f.manager["onPacket"](f.meta, f.worker(), { type: "pullRequest.created", url });
+		assert.equal(f.meta.agentPullRequests, undefined);
+		assert.equal(f.controls.healthCalls, 0);
+		assert.equal(f.inputs.length, 0);
+
+		// Ask and archived sessions never claim delivery PRs.
+		f.ownElsewhere();
+		for (const [start, stop] of [
+			[() => (f.meta.mode = "ask"), () => delete f.meta.mode],
+			[() => (f.meta.archivedAt = 20), () => delete f.meta.archivedAt],
+		] as const) {
+			start();
+			await f.refresh();
+			stop();
+			assert.equal(f.meta.agentPullRequests, undefined);
+		}
+
+		// An unrecognized creation, or a PR the session was asked to take over, is claimed on discovery.
+		await f.refresh();
+		assert.deepEqual(f.meta.agentPullRequests, [url]);
+		assert.deepEqual((await f.saved()).agentPullRequests, [url]);
+		assert.equal(f.inputs.length, 1);
+		assert.match(f.inputs[0]!.content, /merge conflicts/);
+		assert.equal(f.manager["pullRequestOwner"](url), f.id);
 	});
 });
 
