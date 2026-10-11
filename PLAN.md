@@ -399,7 +399,9 @@ Each fresh owned head is checked against its own branch, including earlier stack
 PR is closed or merged. Actionable problems across those heads share one notification and reservation;
 a failed health lookup on one head does not hide actionable evidence from another. Creation recognition
 accepts ordinary semicolon/newline-separated commit/bookmark/push prefixes when `gh pr create` is the
-final executed command, but still rejects shell controls, lookups and ambiguous results as ownership proof.
+final executed command, and double-quoted `$(printf|echo|cat ...)` arguments without redirections or
+operators (common for PR bodies). It still rejects other substitutions, `--web`, trailing commands, shell
+controls, lookups and ambiguous results as ownership proof; the agent prompt asks for a final `gh pr create`.
 The kernel rechecks idle/inbox state before admission, including after reopening a parked session.
 
 Each session has one persisted budget of three automatic follow-ups total, shared across PRs and all

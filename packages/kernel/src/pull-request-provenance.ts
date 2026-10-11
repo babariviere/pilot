@@ -50,16 +50,60 @@ function ordinaryCommand(words: string[]): boolean {
 	return words[index] !== undefined && !SHELL_CONTROL.has(words[index]!);
 }
 
-function helpOrDryRun(word: string): boolean {
-	if (/^--(?:help|dry-run)(?:=|$)/.test(word)) return true;
+/** Flags whose successful exit is not a creation: help, dry runs, and --web (no PR URL is printed). */
+function noCreationProof(word: string): boolean {
+	if (/^--(?:help|dry-run|web)(?:=|$)/.test(word)) return true;
 	if (!/^-[^-]/.test(word)) return false;
 	// Cobra accepts bundled booleans and shorthand assignments (-fh, -h=true).
 	// A value-taking shorthand consumes the rest of its token, so -tTitle is not help.
 	for (const flag of word.slice(1).split("=")[0]!) {
-		if (flag === "h") return true;
+		if (flag === "h" || flag === "w") return true;
 		if ("tbBHarlmpR".includes(flag)) return false;
 	}
 	return false;
+}
+
+/** Substitutions which only write their arguments or a file to stdout, so they cannot add output lines. */
+const INERT_SUBSTITUTIONS = new Set(["printf", "echo", "cat"]);
+
+/**
+ * A `$(...)` starting at `start` (just after the opening parenthesis) that is one simple inert command, such
+ * as `--body "$(printf '%s\n' ...)"`. Returns the index of its closing parenthesis, or -1. Redirections,
+ * operators and nested substitutions are rejected, so it cannot print a URL to the tool output or change
+ * the outer command's exit status.
+ */
+function inertSubstitution(script: string, start: number): number {
+	const words: string[] = [];
+	let word = "";
+	let quoted = false;
+	let quote = "";
+	let escaped = false;
+	const flush = () => {
+		if (word || quoted) words.push(word);
+		word = "";
+		quoted = false;
+	};
+	for (let i = start; i < script.length; i++) {
+		const c = script[i]!;
+		if (escaped) {
+			word += c;
+			escaped = false;
+		} else if (c === "\\" && quote !== "'") escaped = true;
+		else if (quote) {
+			if (quote === '"' && (c === "`" || (c === "$" && script[i + 1] === "("))) return -1;
+			if (c === quote) quote = "";
+			else word += c;
+		} else if (c === "'" || c === '"') {
+			quote = c;
+			quoted = true;
+		} else if (c === ")") {
+			flush();
+			return words[0] !== undefined && INERT_SUBSTITUTIONS.has(words[0]) ? i : -1;
+		} else if (/[|&;<>`$(#\n\r]/.test(c)) return -1;
+		else if (/\s/.test(c)) flush();
+		else word += c;
+	}
+	return -1;
 }
 
 /** Conservative shell recognition: ordinary prefixes, then a final gh creation whose exit status is authoritative. */
@@ -81,8 +125,14 @@ export function createsPullRequest(command: unknown): boolean {
 			escaped = false;
 		} else if (c === "\\" && quote !== "'") escaped = true;
 		else if (quote) {
-			if (quote === '"' && (c === "`" || (c === "$" && script[i + 1] === "("))) return false;
-			if (c === quote) quote = "";
+			if (quote === '"' && c === "$" && script[i + 1] === "(") {
+				const end = inertSubstitution(script, i + 2);
+				if (end < 0) return false;
+				// The substituted text is an argument value; only its presence matters here.
+				word += "$()";
+				i = end;
+			} else if (quote === '"' && c === "`") return false;
+			else if (c === quote) quote = "";
 			else word += c;
 		} else if (c === "'" || c === '"') quote = c;
 		else if (c === "&" && script[i + 1] === "&") {
@@ -106,7 +156,7 @@ export function createsPullRequest(command: unknown): boolean {
 		final[0] === "gh" &&
 		final[1] === "pr" &&
 		final[2] === "create" &&
-		!final.slice(3).some(helpOrDryRun)
+		!final.slice(3).some(noCreationProof)
 	);
 }
 

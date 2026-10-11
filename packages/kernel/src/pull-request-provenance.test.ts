@@ -15,6 +15,9 @@ test("PR creation requires the actual gh command, never text in an unrelated too
 		"npm test && git push && gh pr create --fill",
 		"jj commit -m 'feat: schema'; jj bookmark set feat/schema -r @-; jj git push --bookmark feat/schema; gh pr create --draft",
 		"jj git push --bookmark feat/schema\ngh pr create --draft",
+		"gh pr create --title t --body \"$(printf '%s\\n' '## Summary' '- Uses (parentheses) and \"quotes\"')\"",
+		'gh pr create --body "Intro\n$(cat /tmp/body.md)\n$(echo done)" --fill',
+		'jj git push --bookmark fix/pr && gh pr create --title "$(echo fix)" --body "$( printf %s body )"',
 	])
 		assert.ok(createsPullRequest(command), command);
 	for (const command of [
@@ -49,8 +52,19 @@ test("PR creation requires the actual gh command, never text in an unrelated too
 		'gh pr create --title "$(echo https://github.com/owner/repo/pull/12 >&2)"',
 		'gh pr create --help --title "$(echo https://github.com/owner/repo/pull/12 >&2)"',
 		'gh pr create --title "`echo https://github.com/owner/repo/pull/12`"',
-		'git push --repo "$(echo origin)" && gh pr create',
+		'git push --repo "$(git remote)" && gh pr create',
 		'echo "`exit 0`" && gh pr create',
+		'gh pr create --body "$(echo https://github.com/owner/repo/pull/12 1>&2)"',
+		'gh pr create --body "$(printf x; echo https://github.com/owner/repo/pull/12)"',
+		'gh pr create --body "$(cat body.md | tee /dev/stderr)"',
+		'gh pr create --body "$(git log -1)"',
+		'gh pr create --body "$(exit 0)"',
+		'gh pr create --body "$()"',
+		'gh pr create --body "$(printf \"$(echo x)\")"',
+		'gh pr create --body "$(printf \"`echo x`\")"',
+		'gh pr create --body "$(printf %s\necho x)"',
+		'gh pr create --body "$(printf %s',
+		"gh pr create --body $(printf %s body)",
 	])
 		assert.equal(createsPullRequest(command), false, String(command));
 	for (const toolName of ["read", "write", "codemode", "grep", "mcp__github__get_pull_request"])
@@ -86,8 +100,9 @@ test("PR results require success and one bare HTTPS pull URL from that matching 
 	assert.equal(createdPullRequest({ ...result, input: { command: "gh pr view 12" } }), undefined);
 });
 
-test("shorthand help and bundled help flags cannot claim an echoed existing PR", () => {
-	for (const flag of ["-h=true", "-h=false", "-fh", "-fh=true", "-dh", "-hf"])
+test("help, web and bundled shorthand flags cannot claim an echoed existing PR", () => {
+	for (const flag of ["-h=true", "-h=false", "-fh", "-fh=true", "-dh", "-hf", "--web", "--web=true", "-w", "-fw"])
 		assert.equal(createsPullRequest(`echo ${url} && gh pr create ${flag}`), false, flag);
 	assert.equal(createsPullRequest("gh pr create -tTitle-with-h --fill"), true);
+	assert.equal(createsPullRequest("gh pr create -tTitle-with-w --fill"), true);
 });
