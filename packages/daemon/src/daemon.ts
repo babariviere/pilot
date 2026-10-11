@@ -27,6 +27,7 @@ const sessions = new SessionManager(
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionService = new MissionService(missionStore, sessions, projects);
 await sessions.load();
+missionService.notices.start();
 const terminals = new TerminalManager();
 const server = createDaemonServer(config, sessions, projects, new ModelCatalog(config.agentDir), terminals, {
 	service: missionService,
@@ -42,6 +43,7 @@ async function stop(): Promise<void> {
 	stopping = true;
 	console.log("pilotd: pausing sessions");
 	server.close();
+	await missionService.notices.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
 	missionStore.close();
 	process.exit(0);

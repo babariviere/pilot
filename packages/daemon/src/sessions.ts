@@ -69,6 +69,8 @@ type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Revalidate an automatic notice after persistence/startup, before kernel admission. */
+	noticeAllowed?(sessionId: string, requestId: string): boolean;
 	/** Validate new-chat admission and resolve the mission's project. */
 	spawnProject(missionId: string): string;
 	/** Join after metadata is saved, but before starting the worker. */
@@ -1518,6 +1520,70 @@ export class SessionManager {
 		void task.finally(() => this.titleTasks.delete(task)).catch(() => undefined);
 	}
 
+	/** Idle-only automatic inputs do not reset user activity or the automatic PR-repair budget. */
+	canSendNotice(id: string, requestId?: string): boolean {
+		const meta = this.metas.get(id);
+		const worker = this.workers.get(id);
+		return (
+			!!meta &&
+			!this.closing &&
+			meta.archivedAt === undefined &&
+			!meta.failure &&
+			!meta.working &&
+			!meta.initializing &&
+			!meta.preparing &&
+			!meta.workspaceRecovery &&
+			!this.workspaceMaintenance.has(id) &&
+			!this.starting.has(id) &&
+			!this.sending.has(id) &&
+			!this.parking.has(id) &&
+			!this.changingModels.has(id) &&
+			!this.archiveTransitions.has(id) &&
+			!meta.pending?.some((command) => command.requestId !== requestId) &&
+			(!worker || (worker.state === "idle" && worker.busy === false))
+		);
+	}
+
+	async sendNotice(id: string, content: string, requestId: string): Promise<boolean> {
+		if (!this.canSendNotice(id, requestId) || !this.missions?.noticeAllowed?.(id, requestId)) return false;
+		const end = this.updateGate.begin();
+		const meta = this.require(id);
+		this.sending.set(id, 1);
+		try {
+			meta.pending ??= [];
+			const existing = meta.pending.find((command) => command.requestId === requestId);
+			const command: KernelCommand = existing ?? {
+				type: "input",
+				requestId,
+				content,
+				mode: "followUp",
+				onlyIfIdle: true,
+			};
+			if (!existing) meta.pending.push(command);
+			try {
+				await this.save(meta);
+			} catch (error) {
+				if (!existing) meta.pending = meta.pending.filter((pending) => pending !== command);
+				throw error;
+			}
+			// A concurrent user drain may have removed this reservation while its save awaited I/O.
+			// Do not mistake an empty new drain for acknowledgement of this input.
+			if (!meta.pending.some((pending) => pending === command)) return false;
+			const rejected = await this.start(id, true);
+			const error = rejected.get(requestId);
+			if (error instanceof CommandRejected && error.code === "busy") return false;
+			if (error) throw error;
+			if (meta.pending?.some((command) => command.requestId === requestId))
+				throw new WorkerUnavailable("Notice admission acknowledgement is uncertain");
+			return true;
+		} finally {
+			const count = (this.sending.get(id) ?? 1) - 1;
+			if (count) this.sending.set(id, count);
+			else this.sending.delete(id);
+			end();
+		}
+	}
+
 	async send(
 		id: string,
 		message: string,
@@ -2086,9 +2152,15 @@ export class SessionManager {
 						if (
 							command.type === "input" &&
 							command.onlyIfIdle &&
-							(meta.prFollowUp?.requestId !== command.requestId ||
+							((command.requestId.startsWith("mission-notice:")
+								? !this.missions?.noticeAllowed?.(id, command.requestId) || meta.archivedAt !== undefined
+								: meta.prFollowUp?.requestId !== command.requestId) ||
 								meta.pending.some((pending) => pending !== command))
 						) {
+							rejected.set(
+								command.requestId,
+								new CommandRejected("Automatic input is no longer eligible", "busy"),
+							);
 							if (meta.prFollowUp?.requestId === command.requestId) {
 								meta.prFollowUp.attempts = Math.max(0, meta.prFollowUp.attempts - 1);
 								delete meta.prFollowUp.requestId;
