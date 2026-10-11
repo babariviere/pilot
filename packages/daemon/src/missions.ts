@@ -840,22 +840,56 @@ export class MissionStore {
 		this.assertMember(id, sessionId);
 		const task = this.transaction(() => {
 			const task = this.resolveTask(id, taskId);
-			if (task.sessionId === sessionId) return task;
-			if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by another chat`);
-			const now = Date.now();
-			const status = task.status === "todo" ? "in_progress" : task.status;
-			this.run(
-				"UPDATE tasks SET session_id = ?, status = ?, updated_at = ? WHERE id = ?",
-				sessionId,
-				status,
-				now,
-				task.id,
-			);
-			this.event(id, "claim", `Task #${task.number} claimed: ${task.title}`, actor, { taskId: task.id, at: now });
-			return this.task(id, task.id);
+			return this.takeTask(id, task, sessionId, actor);
 		});
 		this.changed(id, [sessionId]);
 		return task;
+	}
+
+	/** Partial success for a batch, without exposing intermediate state to member contexts. */
+	claimTasks(id: string, refs: string[], sessionId: string, actor: MissionActor = { sessionId }) {
+		this.assertMember(id, sessionId);
+		const result = this.transaction(() => {
+			const claimed: MissionTask[] = [];
+			const skipped: Array<{ ref: string; reason: string; task?: MissionTask }> = [];
+			const seen = new Set<string>();
+			for (const ref of refs) {
+				let task: MissionTask;
+				try {
+					task = this.resolveTask(id, ref);
+				} catch (error) {
+					if (!(error instanceof NotFound)) throw error;
+					skipped.push({ ref, reason: error.message });
+					continue;
+				}
+				if (seen.has(task.id)) continue;
+				seen.add(task.id);
+				if (task.sessionId && task.sessionId !== sessionId) {
+					skipped.push({ ref, reason: `Task #${task.number} is already claimed by another chat`, task });
+					continue;
+				}
+				claimed.push(this.takeTask(id, task, sessionId, actor));
+			}
+			return { claimed, skipped };
+		});
+		if (result.claimed.length) this.changed(id, [sessionId]);
+		return result;
+	}
+
+	private takeTask(id: string, task: MissionTask, sessionId: string, actor: MissionActor): MissionTask {
+		if (task.sessionId === sessionId) return task;
+		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by another chat`);
+		const now = Date.now();
+		const status = task.status === "todo" ? "in_progress" : task.status;
+		this.run(
+			"UPDATE tasks SET session_id = ?, status = ?, updated_at = ? WHERE id = ?",
+			sessionId,
+			status,
+			now,
+			task.id,
+		);
+		this.event(id, "claim", `Task #${task.number} claimed: ${task.title}`, actor, { taskId: task.id, at: now });
+		return this.task(id, task.id);
 	}
 
 	// Decisions

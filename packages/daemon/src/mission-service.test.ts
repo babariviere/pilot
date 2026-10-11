@@ -529,6 +529,68 @@ test("tool task links resolve numbers, appear with tasks, and auto-link each own
 	await assert.rejects(f.service.call(chat.id, "link", { url, taskId: "missing" }), /Unknown task/);
 });
 
+test("multi-task claims handle ranges, partial success and context updates while preserving single claims", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const owner = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: chat.id,
+		draft: false,
+		tasks: Array.from({ length: 7 }, (_, i) => ({ title: `Task ${i + 1}` })),
+	});
+	f.service.join(owner.id, { missionId: mission.id, taskId: "2" });
+	const batch = (await f.service.call(chat.id, "claim", { ids: ["1-5", 7, "#1", "99"] })) as {
+		claimed: Array<{ id: string; number: number; sessionId: string }>;
+		skipped: Array<{ ref: string; reason: string }>;
+	};
+	assert.deepEqual(
+		batch.claimed.map((task) => task.number),
+		[1, 3, 4, 5, 7],
+	);
+	assert.ok(batch.claimed.every((task) => task.sessionId === chat.id));
+	assert.deepEqual(
+		batch.skipped.map((item) => item.ref),
+		["2", "99"],
+	);
+	assert.match(batch.skipped[0]!.reason, /already claimed/);
+	assert.match(batch.skipped[1]!.reason, /Unknown task/);
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, owner.id);
+	assert.deepEqual(
+		f.service.context(chat.id)?.tasks.map((task) => task.number),
+		[1, 3, 4, 5, 7],
+	);
+	const last = f.workers.get(chat.id)!.sent.findLast((command) => command.type === "mission.context");
+	assert.ok(last?.type === "mission.context");
+	assert.equal(last.context?.tasks.length, 5);
+	const range = (await f.service.call(chat.id, "claim", { id: "5-6" })) as typeof batch;
+	assert.deepEqual(
+		range.claimed.map((task) => task.number),
+		[5, 6],
+	);
+	const single = (await f.service.call(chat.id, "claim", { id: batch.claimed[0]!.id })) as { number: number };
+	assert.equal(single.number, 1, "single ID retains the task result");
+	await assert.rejects(f.service.call(chat.id, "claim", { id: "2" }), /already claimed/);
+	await assert.rejects(f.service.call(outsider.id, "claim", { ids: ["1-5"] }), /not part of a mission/);
+	const before = f.store.tasks(mission.id);
+	const events = f.store.events(mission.id);
+	for (const args of [
+		{},
+		{ ids: [] },
+		{ ids: "1-5" },
+		{ id: "1", ids: ["2"] },
+		{ id: [] },
+		{ ids: ["1", "5-2"] },
+		{ ids: ["1", null] },
+		{ ids: ["1-1001"] },
+	])
+		await assert.rejects(f.service.call(chat.id, "claim", args));
+	assert.deepEqual(f.store.tasks(mission.id), before);
+	assert.deepEqual(f.store.events(mission.id), events);
+});
+
 test("Make a mission joins the chat as coordinator and asks it to draft", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();

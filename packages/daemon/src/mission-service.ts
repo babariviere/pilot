@@ -11,6 +11,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
+import { parseTaskRefs } from "./mission-task-refs.ts";
 import type { MissionActor, MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -400,9 +401,20 @@ export class MissionService {
 					? this.store.addTask(missionId, write, actor)
 					: this.store.updateTask(missionId, this.store.resolveTask(missionId, args.id).id, write, actor);
 			}
-			case "claim":
-				if (args.id === undefined) throw new Error("claim requires the task id or number");
-				return this.store.claimTask(missionId, args.id, sessionId);
+			case "claim": {
+				if (args.id !== undefined && args.ids !== undefined) throw new Error("claim accepts id or ids, not both");
+				if (args.ids !== undefined && !Array.isArray(args.ids)) throw new Error("claim ids must be an array");
+				if (args.id === undefined && args.ids === undefined) throw new Error("claim requires id or ids");
+				if (args.id !== undefined && typeof args.id !== "string" && typeof args.id !== "number")
+					throw new Error("claim id must be a task ID, number or range");
+				const refs = parseTaskRefs(args.ids ?? args.id);
+				// Preserve the single-id result and conflict error for existing callers.
+				const batch =
+					args.ids !== undefined || (typeof args.id === "string" && /,|^#?\d+\s*-\s*#?\d+$/.test(args.id.trim()));
+				return batch
+					? this.store.claimTasks(missionId, refs, sessionId)
+					: this.store.claimTask(missionId, refs[0], sessionId);
+			}
 			case "decide":
 				return this.store.addDecision(missionId, args.text, actor);
 			case "comment":

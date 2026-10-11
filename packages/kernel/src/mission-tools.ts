@@ -37,7 +37,7 @@ Actions:
 - brief: read the brief (optionally an older revision). With markdown and expectedRevision, replace the whole brief; a stale expectedRevision fails, so re-read and reapply your change.
 - update: change the mission title or goal.
 - tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3).
-- claim: take a task for this chat. Tasks claimed by another chat cannot be taken.
+- claim: take tasks for this chat. Use id for one task or ids for several IDs, numbers or ranges (for example ["1-5", "#8"]). A range or comma-separated list also works in id. Batch results contain claimed tasks and skipped tasks with reasons (owned by another chat or not found); other chats' tasks are never taken. Claim requested tasks, then work on them one at a time in dependency order and keep each status current.
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin).
@@ -59,8 +59,16 @@ Actions:
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number (task, claim, start), or comment ID (resolve)."
-						: "Task ID or number (task, claim), or comment ID (resolve).",
+						? "Task ID or number (task, claim, start), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both."
+						: "Task ID or number (task, claim), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
+				}),
+			),
+			ids: Type.Optional(
+				Type.Array(Type.Union([Type.String({ maxLength: 128 }), Type.Integer({ minimum: 1 })]), {
+					minItems: 1,
+					maxItems: 1000,
+					description:
+						"For claim only: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed and skipped. Use instead of id.",
 				}),
 			),
 			markdown: Type.Optional(Type.String({ maxLength: 262144, description: "Complete replacement brief." })),

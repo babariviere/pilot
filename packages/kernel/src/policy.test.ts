@@ -33,6 +33,25 @@ test("mission prompt explains the shared state, the chat's tasks, decisions and 
 	assert.match(missionPrompt({ ...mission, status: "done" }), /This mission is done/);
 });
 
+test("multi-task guidance claims requested tasks, orders work, maintains statuses and separates PRs", () => {
+	for (const coordinator of ["self", "other", "user"] as const) {
+		const prompt = missionPrompt({ ...mission, coordinator, tasks: [] });
+		assert.match(prompt, /tackle tasks 1 to 5/);
+		assert.match(prompt, /claim the requested tasks with mission\(\{action: "claim", ids: \["1-5"\]\}\)/);
+		assert.match(prompt, /report any skipped claims/);
+		assert.match(prompt, /one at a time in dependency order/);
+		assert.match(prompt, /set queued tasks back to todo/);
+		assert.match(prompt, /in_progress only while working/);
+		assert.match(prompt, /blocked with a comment explaining unfinished dependencies/);
+		assert.match(prompt, /skip or report blocked tasks instead of working past unfinished dependencies/);
+		assert.match(prompt, /Open one pull request per task, not one combined/);
+		assert.match(prompt, /gh stack link/);
+		assert.match(prompt, /If stacking is unavailable, use plain PRs based on the dependency's branch/);
+		assert.match(prompt, /Never rewrite or push another chat's branches/);
+		assert.match(prompt, /Link each PR to its intended task.*taskId/);
+	}
+});
+
 test("the coordinator prompt explains chat controls without enabling autonomous starts", () => {
 	const prompt = missionPrompt({ ...mission, coordinator: "self" });
 	for (const action of ["start", "send", "status"]) assert.ok(prompt.includes(`action: "${action}"`));

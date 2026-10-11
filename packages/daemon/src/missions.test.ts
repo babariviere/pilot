@@ -235,6 +235,78 @@ test("membership, atomic claims and release on leave", () => {
 	assert.ok(sessions.includes("s1") && sessions.includes("s2"));
 });
 
+test("batch claims keep other owners, report missing tasks, deduplicate aliases and notify once", (t) => {
+	const missions = store();
+	t.after(() => missions.close());
+	const { id } = missions.create({
+		projectId: "p",
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+	});
+	const foreign = missions.create({ projectId: "p", title: "Other", tasks: [{ title: "Foreign" }] });
+	missions.join("s1", id);
+	missions.join("s2", id);
+	missions.claimTask(id, "2", "s2");
+	missions.claimTask(id, "3", "s1");
+	missions.updateTask(id, "3", { status: "blocked" });
+	const before = missions.tasks(id);
+	const events = missions.events(id).length;
+	let changes = 0;
+	missions.onChange(() => {
+		changes++;
+		assert.equal(missions.resolveTask(id, "1").sessionId, "s1");
+	});
+	const result = missions.claimTasks(
+		id,
+		["1", before[0]!.id, "2", "3", "#3", "99", missions.tasks(foreign.id)[0]!.id],
+		"s1",
+	);
+	assert.deepEqual(
+		result.claimed.map((task) => [task.number, task.status]),
+		[
+			[1, "in_progress"],
+			[3, "blocked"],
+		],
+	);
+	assert.deepEqual(
+		result.skipped.map((item) => item.ref),
+		["2", "99", missions.tasks(foreign.id)[0]!.id],
+	);
+	assert.match(result.skipped[0]!.reason, /already claimed by another chat/);
+	assert.equal(result.skipped[0]!.task?.sessionId, "s2");
+	assert.match(result.skipped[1]!.reason, /Unknown task/);
+	assert.deepEqual(missions.resolveTask(id, "2"), before[1]);
+	assert.equal(missions.events(id).length, events + 1, "only the new claim adds activity");
+	assert.equal(changes, 1, "no intermediate batch contexts");
+	const repeated = missions.claimTasks(id, ["1", "3"], "s1");
+	assert.deepEqual(repeated.claimed, result.claimed);
+	assert.equal(missions.events(id).length, events + 1);
+	const skipped = missions.claimTasks(id, ["2"], "s1");
+	assert.equal(skipped.claimed.length, 0);
+	assert.equal(changes, 2, "all-skipped batches do not publish a context change");
+	assert.throws(() => missions.claimTasks(id, ["1"], "outsider"), /not in this mission/);
+});
+
+test("unexpected failures roll back a batch instead of reporting a partial claim", (t) => {
+	const missions = store();
+	t.after(() => missions.close());
+	const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	missions.join("s1", id);
+	const before = missions.tasks(id);
+	const events = missions.events(id);
+	let changes = 0;
+	missions.onChange(() => changes++);
+	const resolve = missions.resolveTask.bind(missions);
+	t.mock.method(missions, "resolveTask", (id: string, ref: unknown) => {
+		if (ref === "2") throw new Error("Storage failed");
+		return resolve(id, ref);
+	});
+	assert.throws(() => missions.claimTasks(id, ["1", "2"], "s1"), /Storage failed/);
+	assert.deepEqual(missions.tasks(id), before);
+	assert.deepEqual(missions.events(id), events);
+	assert.equal(changes, 0);
+});
+
 test("joining another mission moves the chat", () => {
 	const missions = store();
 	const first = missions.create({ projectId: "p", title: "One", tasks: [{ title: "A" }] });
