@@ -417,7 +417,16 @@ test("selected origin branches fetch fresh tips, default offline bases fall back
 		rmSync(remote, { recursive: true, force: true });
 		const offline = await f.store.create(f.source, f.path("offline"));
 		assert.equal(offline.baseBranch, "release");
-		assert.equal(offline.base, git(f.source, "rev-parse", "refs/remotes/origin/release"));
+		// The source never fetched the fresh tip. Its stale view must not rewind the shared repository.
+		assert.equal(offline.base, git(publisher, "rev-parse", "HEAD"));
+		assert.notEqual(offline.base, git(f.source, "rev-parse", "refs/remotes/origin/release"));
+		// Refs the shared repository lacks, or that the source has moved forward, are still seeded.
+		git(f.source, "update-ref", "refs/remotes/origin/source-only", git(f.source, "rev-parse", "HEAD"));
+		await f.store.create(f.source, f.path("seeded"));
+		assert.equal(
+			git(w.shared!.repository, "rev-parse", "refs/remotes/origin/source-only"),
+			git(f.source, "rev-parse", "HEAD"),
+		);
 		await assert.rejects(
 			f.store.create(f.source, f.path("selected-offline"), undefined, "release"),
 			/Origin branch unavailable/,
