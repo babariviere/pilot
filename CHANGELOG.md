@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.12.1](https://github.com/babariviere/pilot/compare/v1.12.0...v1.12.1) (2026-10-11)
+
+
+### Bug Fixes
+
+* **daemon:** give each PR one owner, claimed by the first session to discover it ([627893e](https://github.com/babariviere/pilot/commit/627893eba34a74246a59db7e8be25f7d0d26e3a7))
+* **kernel:** record PR ownership for inert body substitutions ([8e434fd](https://github.com/babariviere/pilot/commit/8e434fd6eabc57c449b45527dae2c39dc45380d7))
+
 ## [1.12.0](https://github.com/babariviere/pilot/compare/v1.11.1...v1.12.0) (2026-10-11)
 
 
