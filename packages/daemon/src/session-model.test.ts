@@ -7,8 +7,8 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { KernelCommand, KernelPacket } from "@pilot/kernel";
-import type { SessionState, SessionSummary, SessionUsage } from "@pilot/protocol";
+import type { KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
+import type { SessionState, SessionSummary } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -31,10 +31,7 @@ class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
 	state: SessionState = "idle";
 	busy = false;
-	usage: SessionUsage = {
-		context: { tokens: 5, contextWindow: 100, percent: 5 },
-		subscription: { fetchedAt: 100, windows: [] },
-	};
+	usage: KernelUsage = { context: { tokens: 5, contextWindow: 100, percent: 5 }, provider: "provider" };
 	readonly commands: Command[] = [];
 	rejectBusy = false;
 	gate?: Promise<void>;

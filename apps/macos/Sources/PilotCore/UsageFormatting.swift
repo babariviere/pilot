@@ -104,6 +104,24 @@ extension SubscriptionUsage {
         return Date(timeIntervalSince1970: fetchedAt / 1_000)
     }
 
+    /// The shared snapshot is refreshed every minute while any pi session uses the subscription.
+    public static let staleAfter: TimeInterval = 10 * 60
+
+    /// Old snapshots stay visible with their age instead of disappearing.
+    public func isStale(now: Date = Date()) -> Bool {
+        guard let fetchedDate else { return false }
+        return now.timeIntervalSince(fetchedDate) > Self.staleAfter
+    }
+
+    public func displayAvailabilityLabel(now: Date = Date()) -> String? {
+        availabilityLabel ?? (isStale(now: now) ? "Not recent" : nil)
+    }
+
+    public func displayHelpText(now: Date = Date()) -> String {
+        guard isStale(now: now) else { return helpText }
+        return helpText + "\nNot updated recently. Usage refreshes while a session uses this subscription."
+    }
+
     public var helpText: String {
         var lines = ["\(providerLabel) subscription usage"]
         lines.append("Fetched: \(fetchedDate.map { UsageFormatting.timestamp($0) } ?? "Unknown")")

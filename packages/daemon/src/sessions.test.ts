@@ -9,8 +9,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { KernelCommand, KernelPacket, KernelSubagent } from "@pilot/kernel";
-import type { AgentEvent, SessionCompletion, SessionState, SessionSummary, SessionUsage } from "@pilot/protocol";
+import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
+import type { AgentEvent, SessionCompletion, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -341,7 +341,7 @@ class FakeWorker implements SessionWorker {
 	readonly gate = deferred();
 	readonly ready = this.gate.promise;
 	state: SessionState = "starting";
-	usage?: SessionUsage;
+	usage?: KernelUsage;
 	error?: string;
 	readonly sent: KernelCommand[] = [];
 	readonly requests: Command[] = [];
@@ -378,7 +378,7 @@ class FakeWorker implements SessionWorker {
 		this.gate.resolve();
 	}
 
-	reportUsage(usage: SessionUsage): void {
+	reportUsage(usage: KernelUsage): void {
 		this.usage = usage;
 		this.onPacket({ type: "usage", usage });
 	}
@@ -1177,20 +1177,17 @@ test("stopped preparation stays cancelled across restart and immediately clears 
 	assert.equal(f.workers[0]!.requests[0]!.type, "abort");
 });
 
-test("worker usage updates reach summaries and are dropped when the worker exits", async (t) => {
+test("worker context updates reach summaries and are dropped when the worker exits", async (t) => {
 	const f = await fixture(t);
 	const sessions = await f.manager();
 	const created = await sessions.spawn({ cwd: f.source, message: "usage" });
 	await until(() => sessions.get(created.id)?.state === "working");
 	const changes: SessionSummary[] = [];
 	sessions.onChange((session) => changes.push(session));
-	const usage: SessionUsage = {
-		context: { tokens: 100, contextWindow: 200_000, percent: 0.05 },
-		subscription: { fetchedAt: 1, provider: "anthropic", windows: [{ label: "5h", usedPercent: 25 }] },
-	};
-	f.workers[0]!.reportUsage(usage);
-	assert.deepEqual(sessions.get(created.id)?.usage, usage);
-	assert.deepEqual(changes.at(-1)?.usage, usage);
+	const context = { tokens: 100, contextWindow: 200_000, percent: 0.05 };
+	f.workers[0]!.reportUsage({ context, provider: "faux" });
+	assert.deepEqual(sessions.get(created.id)?.usage, { context });
+	assert.deepEqual(changes.at(-1)?.usage, { context });
 	await f.workers[0]!.close();
 	assert.equal(sessions.get(created.id)?.usage, undefined);
 	assert.equal(changes.at(-1)?.usage, undefined);
@@ -1370,13 +1367,13 @@ for (const telemetry of ["usage", "artifacts.changed"] as const) {
 		const lastUse = sessions["lastUse"].get(created.id)!;
 		let now = lastUse + idleParkMs - 1;
 		t.mock.method(Date, "now", () => now);
-		if (telemetry === "usage") worker.reportUsage({ subscription: { fetchedAt: now, windows: [] } });
+		if (telemetry === "usage") worker.reportUsage({ context: { tokens: now, contextWindow: 200_000 } });
 		else sessions["onPacket"](sessions["metas"].get(created.id)!, worker, { type: telemetry });
 		assert.equal(sessions["lastUse"].get(created.id), lastUse, "telemetry is not execution activity");
 		await sessions["parkIdleWorkers"]();
 		assert.equal(worker.closed, false, "the original inactivity deadline still applies");
 		now += 2;
-		if (telemetry === "usage") worker.reportUsage({ subscription: { fetchedAt: now, windows: [] } });
+		if (telemetry === "usage") worker.reportUsage({ context: { tokens: now, contextWindow: 200_000 } });
 		else sessions["onPacket"](sessions["metas"].get(created.id)!, worker, { type: telemetry });
 		await sessions["parkIdleWorkers"]();
 		await sessions["unparked"](created.id);

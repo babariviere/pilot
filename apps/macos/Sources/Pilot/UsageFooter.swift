@@ -11,6 +11,8 @@ final class UsageFooterState: ObservableObject {
         let model: String?
         let locale: String
         let timeZone: String
+        /// Age changes without new data, so staleness is part of the input.
+        let stale: Bool
     }
 
     struct Indicator {
@@ -35,7 +37,7 @@ final class UsageFooterState: ObservableObject {
     /// One snapshot per input change, not per layout probe, hover, or popover update.
     func display(usage: SessionUsage, model: String?) -> Display {
         let next = Key(usage: usage, model: model, locale: Locale.current.identifier,
-                       timeZone: TimeZone.current.identifier)
+                       timeZone: TimeZone.current.identifier, stale: usage.subscription?.isStale() == true)
         if next == key { return cached }
         let fallback = usage.fallbackSubscriptionProvider(model: model)
         var display = Display()
@@ -48,8 +50,8 @@ final class UsageFooterState: ObservableObject {
                       label: "\($0.label) \($0.percentLabel)", help: $0.helpText)
         }
         display.hasSubscription = usage.subscription?.hasDisplayData == true || fallback != nil
-        display.subscriptionHelp = usage.subscription?.helpText ?? fallback?.unavailableHelpText ?? ""
-        display.availability = usage.subscription?.availabilityLabel
+        display.subscriptionHelp = usage.subscription?.displayHelpText() ?? fallback?.unavailableHelpText ?? ""
+        display.availability = usage.subscription?.displayAvailabilityLabel()
         display.missingSnapshot = usage.subscription == nil && fallback != nil
         display.hasError = usage.subscription?.error != nil
         key = next

@@ -621,8 +621,12 @@ reports), producing a morning summary in the app and Slack.
   sidecar before sending images so a stale draft snapshot cannot later delete history's files;
   an image-retention failure prevents submission. Accept up to eight raster images per message,
   32 MiB and 24 megapixels each.
-- Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times,
-  supplied by the user's pi-extensions `usage` event bus (no duplicate polling or credential store).
+- Chat footer: live context-window estimate and Claude/Codex subscription windows with reset times.
+  Subscription quotas are account-wide: pilotd reads pi-extensions' shared usage cache
+  (`<agentDir>/cache/usage-status/<provider>/cache.json`), whose single elected poller may be any pi
+  process, including Pilot's kernels. pilotd never polls or reads credentials. Every session, parked or
+  live, shows its provider's snapshot; kernels report only context and the physical provider (resolving
+  virtual routers). Snapshots older than ten minutes stay visible, marked as not recent.
   A subtle controls row below the message box combines model and thinking-level selectors with labeled
   context, 5h, and weekly usage gauges. Both can be changed while idle with no queued messages and are
   pinned per chat across reopening. Thinking choices follow the selected model's supported levels.

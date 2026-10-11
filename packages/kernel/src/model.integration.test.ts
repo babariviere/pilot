@@ -12,18 +12,14 @@ import {
 } from "@earendil-works/pi-ai";
 import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
-import type { SessionUsage } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
 const first = "pilot-model-a/one";
 const second = "pilot-model-a/two";
 const third = "pilot-model-b/three";
-const subscription = {
-	fetchedAt: 100,
-	snapshot: { provider: "anthropic", windows: [{ label: "5 hours", usedPercent: 20 }] },
-};
 
 function deferred<T = void>() {
 	let resolve!: (value: T) => void;
@@ -103,7 +99,7 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 		agentDir: join(root, "agent"),
 		model: first,
 	};
-	const changes: SessionUsage[] = [];
+	const changes: KernelUsage[] = [];
 	const open = async (model = first) => {
 		const session = await KernelSession.open(
 			{ ...spec, model },
@@ -122,14 +118,13 @@ test("model selection updates native and durable choices, context usage and thin
 	const session = await f.open();
 	const adapter = f.adapters[0]!;
 	const globalSettings = adapter.session.settingsManager.getGlobalSettings();
-	f.bus.emit("usage:snapshot", subscription);
 	await session.changeModel(second);
 	assert.equal(session.model, second);
 	assert.equal(adapter.session.model?.id, "two");
 	assert.equal(session.thinkingLevel, "high");
 	assert.equal((await session.conversation.agent(context)).thinkingLevel, "high");
 	assert.equal(session.usage.context?.contextWindow, 64_000);
-	assert.ok(session.usage.subscription, "same-provider selection retains subscription data");
+	assert.equal(session.usage.provider, "pilot-model-a");
 	assert.equal(
 		adapter.session.sessionManager.getEntries().findLast((entry) => entry.type === "model_change")?.modelId,
 		"two",
@@ -138,8 +133,8 @@ test("model selection updates native and durable choices, context usage and thin
 	assert.equal(session.model, third);
 	assert.equal(session.thinkingLevel, "low");
 	assert.deepEqual((await session.conversation.agent(context)).model, { provider: "pilot-model-b", modelId: "three" });
-	assert.equal(session.usage.subscription, undefined, "provider switch removes stale subscription entirely");
-	assert.ok(!("subscription" in f.changes.at(-1)!));
+	assert.equal(session.usage.provider, "pilot-model-b", "usage reports the selected provider for subscription lookup");
+	assert.deepEqual(f.changes.at(-1), session.usage);
 	assert.equal(session.usage.context?.contextWindow, 128_000);
 	assert.equal(f.a.state.callCount + f.b.state.callCount, 0, "switching never runs a model");
 	await session.close();
@@ -157,29 +152,16 @@ test("model selection updates native and durable choices, context usage and thin
 	);
 });
 
-test("provider switching preserves fresh usage emitted by native model_select and restores usage on rejection", async (t) => {
-	const fresh = { fetchedAt: 200, snapshot: { provider: "openai", windows: [{ label: "Week", usedPercent: 45 }] } };
-	const f = await fixture(t, [
-		(pi) => {
-			pi.on("model_select", (event) => {
-				if (event.model.provider === "pilot-model-b") pi.events.emit("usage:snapshot", fresh);
-			});
-		},
-	]);
+test("a rejected provider switch keeps the previous provider's usage", async (t) => {
+	const f = await fixture(t);
 	const session = await f.open();
-	f.bus.emit("usage:snapshot", subscription);
-	await session.changeModel(third);
-	assert.deepEqual(session.usage.subscription, { fetchedAt: fresh.fetchedAt, ...fresh.snapshot });
-	assert.deepEqual(f.changes.at(-1), session.usage, "modelChanged reads fresh usage, not a post-selection clear");
-	await session.changeModel(first);
-	f.bus.emit("usage:snapshot", subscription);
 	const adapter = f.adapters[0]!;
 	t.mock.method(adapter.session, "setModel", async () => {
 		throw new Error("authentication unavailable");
 	});
 	await assert.rejects(session.changeModel(third), /authentication unavailable/);
 	assert.equal(session.model, first);
-	assert.deepEqual(session.usage.subscription, { fetchedAt: subscription.fetchedAt, ...subscription.snapshot });
+	assert.equal(session.usage.provider, "pilot-model-a");
 	assert.deepEqual((await session.conversation.agent(context)).model, { provider: "pilot-model-a", modelId: "one" });
 });
 

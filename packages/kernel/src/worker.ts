@@ -251,6 +251,8 @@ export function runKernelWorker(): void {
 		if (command.type === "start") {
 			if (initialization) return;
 			initialization = (async () => {
+				// Extensions resolve pi's agent directory from the environment, e.g. for the shared usage cache.
+				if (command.spec.agentDir) process.env.PI_CODING_AGENT_DIR = command.spec.agentDir;
 				const opened = await KernelSession.open(command.spec, {
 					onWorking: (working, completion) =>
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),

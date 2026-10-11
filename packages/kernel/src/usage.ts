@@ -1,8 +1,15 @@
-/** Usage presentation only. Provider polling and credentials stay in the user's usage extension. */
+/** Per-session context usage. Subscription quotas are account-wide and served by the daemon. */
 import type { Message } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
 import type { ContextView } from "@earendil-works/pi-durable";
-import type { ContextUsage, SessionUsage, SubscriptionUsage } from "@pilot/protocol";
+import type { ContextUsage } from "@pilot/protocol";
+
+/** What a kernel reports about its session's usage. */
+export interface KernelUsage {
+	context?: ContextUsage;
+	/** pi provider of the physical model serving the session, resolved through virtual routers. */
+	provider?: string;
+}
 
 /** Match the Harness's request-size estimate, never trusting usage from before a reset/compaction. */
 export function contextUsage(view: ContextView, contextWindow: number | undefined): ContextUsage | undefined {
@@ -21,63 +28,19 @@ export function contextUsage(view: ContextView, contextWindow: number | undefine
 	return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 };
 }
 
-const record = (value: unknown): value is Record<string, unknown> =>
-	value !== null && typeof value === "object" && !Array.isArray(value);
-const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
-
-/** Validate and copy the untyped event bus payload, forwarding only display data (never credentials). */
-export function subscriptionUsage(data: unknown): SubscriptionUsage | undefined {
-	if (!record(data) || !finite(data.fetchedAt) || data.fetchedAt < 0 || !record(data.snapshot)) return undefined;
-	const snapshot = data.snapshot;
-	if (!Array.isArray(snapshot.windows)) return undefined;
-	if (snapshot.provider !== undefined && snapshot.provider !== "anthropic" && snapshot.provider !== "openai")
-		return undefined;
-	if (snapshot.error !== undefined && typeof snapshot.error !== "string") return undefined;
-	const windows: SubscriptionUsage["windows"] = [];
-	for (const window of snapshot.windows) {
-		if (!record(window) || typeof window.label !== "string" || !finite(window.usedPercent) || window.usedPercent < 0)
-			return undefined;
-		if (window.resetsAt !== undefined && typeof window.resetsAt !== "string") return undefined;
-		windows.push({
-			label: window.label,
-			usedPercent: window.usedPercent,
-			...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
-		});
-	}
-	return {
-		fetchedAt: data.fetchedAt,
-		...(snapshot.provider === undefined ? {} : { provider: snapshot.provider }),
-		windows,
-		...(snapshot.error === undefined ? {} : { error: snapshot.error }),
-	};
-}
-
 export class UsageTracker {
-	#usage: SessionUsage = {};
-	private readonly onChange?: (usage: SessionUsage) => void;
-	constructor(onChange?: (usage: SessionUsage) => void) {
+	#usage: KernelUsage = {};
+	private readonly onChange?: (usage: KernelUsage) => void;
+	constructor(onChange?: (usage: KernelUsage) => void) {
 		this.onChange = onChange;
 	}
-	get current(): SessionUsage {
+	get current(): KernelUsage {
 		return structuredClone(this.#usage);
 	}
-	setContext(context: ContextUsage | undefined): void {
-		const { context: _previous, ...rest } = this.#usage;
-		this.publish({ ...rest, ...(context ? { context } : {}) });
+	set(context: ContextUsage | undefined, provider: string | undefined): void {
+		this.publish({ ...(context ? { context } : {}), ...(provider ? { provider } : {}) });
 	}
-	clearSubscription(): void {
-		this.setSubscription(undefined);
-	}
-	setSubscription(subscription: SubscriptionUsage | undefined): void {
-		const { subscription: _previous, ...rest } = this.#usage;
-		this.publish({ ...rest, ...(subscription ? { subscription } : {}) });
-	}
-	receive(data: unknown): void {
-		const subscription = subscriptionUsage(data);
-		if (!subscription) return;
-		this.publish({ ...this.#usage, subscription });
-	}
-	private publish(usage: SessionUsage): void {
+	private publish(usage: KernelUsage): void {
 		if (JSON.stringify(usage) === JSON.stringify(this.#usage)) return;
 		this.#usage = structuredClone(usage);
 		this.onChange?.(this.current);

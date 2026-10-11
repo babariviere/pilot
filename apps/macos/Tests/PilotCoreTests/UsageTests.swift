@@ -119,6 +119,23 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
     #expect(SubscriptionUsage(fetchedAt: .nan, windows: []).helpText.contains("Fetched: Unknown"))
 }
 
+@Test func oldSnapshotsStayVisibleButAreMarkedNotRecent() {
+    let fetched = Date(timeIntervalSince1970: 1_000)
+    let usage = SubscriptionUsage(fetchedAt: fetched.timeIntervalSince1970 * 1_000, provider: .anthropic,
+                                  windows: [SubscriptionWindow(label: "5h", usedPercent: 12)])
+    let recent = fetched.addingTimeInterval(SubscriptionUsage.staleAfter)
+    #expect(!usage.isStale(now: recent))
+    #expect(usage.displayAvailabilityLabel(now: recent) == nil)
+    #expect(usage.displayHelpText(now: recent) == usage.helpText)
+    let old = recent.addingTimeInterval(1)
+    #expect(usage.isStale(now: old))
+    #expect(usage.displayAvailabilityLabel(now: old) == "Not recent")
+    #expect(usage.displayHelpText(now: old).contains("Not updated recently"))
+    let failed = SubscriptionUsage(fetchedAt: usage.fetchedAt, windows: [], error: "Unauthorized")
+    #expect(failed.displayAvailabilityLabel(now: old) == "Unavailable", "errors take precedence over age")
+    #expect(!SubscriptionUsage(fetchedAt: .nan, windows: []).isStale(now: old))
+}
+
 @Test func providerlessEmptySnapshotClearsSubscriptionWithoutTakingSpace() {
     let cleared = SubscriptionUsage(fetchedAt: 1_710_000_000_000, windows: [])
     #expect(!cleared.hasDisplayData)
