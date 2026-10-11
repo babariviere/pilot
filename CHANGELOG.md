@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.12.2](https://github.com/babariviere/pilot/compare/v1.12.1...v1.12.2) (2026-10-11)
+
+
+### Performance Improvements
+
+* **sidebar:** use summary-backed attention counts ([bc3c6a0](https://github.com/babariviere/pilot/commit/bc3c6a058a20d633634b826ee79af379c5c48687))
+
 ## [1.12.1](https://github.com/babariviere/pilot/compare/v1.12.0...v1.12.1) (2026-10-11)
 
 
