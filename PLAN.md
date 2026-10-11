@@ -259,7 +259,9 @@ a chat from another project is rejected. Chats join through **Make a mission…*
 mission from its conversation), **Add to mission…**, or **Start chat** on a task (which also claims the
 task). **Remove from mission** releases its tasks. Archiving keeps mission membership: the mission's
 Chats tab filters active, archived or all chats, and the archive browser can narrow to one mission. Chats
-of an active mission are exempt from inactivity auto-archiving; merge-based archiving still applies.
+of an active mission are exempt from inactivity auto-archiving. Its coordinator is also exempt from
+merge-based archiving and terminal-PR presentation (ordering, suppressed unread/notifications and done
+indicators) until the mission is done/archived or the role moves. Other members retain merge-based rules.
 
 **Make a mission.** From any chat's overflow or sidebar context menu. A sheet takes the title (prefilled
 from the chat) and an optional goal; nothing exists until confirmed. The source chat joins and becomes
@@ -512,6 +514,8 @@ reports), producing a morning summary in the app and Slack.
   Closed/merged PR chats have no unread indicators or completion notifications. Suppressed completion
   versions are still observed, so reopening a PR cannot replay old notifications (unreviewed results
   may become unread again on reopening). Last-known terminal PR states obey the same rule.
+  An active mission's coordinator is exempt: it sorts with active work, keeps unread indicators and
+  completion notifications, and shows the coordinator indicator rather than a done state.
 - The chat transcript shows an activity indicator while the agent is working, but no settled
   status icon or outcome-reason footer. Reaching the transcript end in the active window still
   marks the latest settled outcome as reviewed; status icons remain elsewhere in the app.
@@ -679,7 +683,7 @@ reports), producing a morning summary in the app and Slack.
   fsynced, unreadable entries are skipped when listing, image bytes are stored once, and revisions
   record their library versions.
 - Missions (§5.7): a Missions sidebar section above Projects lists active missions with a Needs you
-  count and their chats. Each mission's coordinator chat comes first, ahead of pins, PR state and activity,
+  count and their chats. Each active mission's coordinator chat comes first, ahead of pins, PR state and activity,
   with a gold star and tooltip shared with the Chats tab and mission header. Mission chats also stay
   under their project with a mission chip. The mission
   page has Overview (progress, tasks, Needs you, recent activity, resources), Brief (editor, revisions,

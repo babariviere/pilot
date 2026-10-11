@@ -90,3 +90,23 @@ private func sidebarMeasuredSizes<V: View>(_ view: V, width: CGFloat) -> [CGSize
     #expect(!branch.isEmpty)
     #expect(branch.allSatisfy { $0.width <= 150.5 && $0.height > 0 && $0.height < 25 })
 }
+
+@Test @MainActor func activeCoordinatorRowRetainsUnreadWithMergedPRAtNarrowWidths() throws {
+    _ = NSApplication.shared
+    let suite = "CoordinatorSidebarLayoutTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let model = AppModel(projectFolderDefaults: defaults)
+    let now = Date().timeIntervalSince1970 * 1000
+    for state in ["idle", "working"] {
+        let session = SessionSummary(id: UUID().uuidString, title: "Coordinate ongoing work", cwd: "/repository",
+                                     createdAt: now, updatedAt: now, state: state, outcome: .done, outcomeAt: now,
+                                     pullRequest: SessionPullRequest(number: 1, url: "https://github.com/example/repo/pull/1",
+                                                                    title: "Merged work", state: .merged, checkedAt: now),
+                                     activeMissionCoordinator: true)
+        #expect(model.isUnread(session) == (state == "idle"))
+        let sizes = sidebarMeasuredSizes(SessionRow(session: session).environmentObject(model), width: 178)
+        #expect(!sizes.isEmpty)
+        #expect(sizes.allSatisfy { $0.width <= 178.5 && $0.height < 60 })
+    }
+}

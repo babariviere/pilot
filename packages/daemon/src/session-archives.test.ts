@@ -10,6 +10,8 @@ import { test } from "node:test";
 import type { ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { Conflict, NotFound } from "./errors.ts";
+import { MissionService } from "./mission-service.ts";
+import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -95,7 +97,7 @@ async function fixture() {
 		);
 	}
 	const managers: SessionManager[] = [];
-	const manager = async () => {
+	const manager = async (bridge?: Parameters<SessionManager["setMissionBridge"]>[0]) => {
 		const sessions = new SessionManager(
 			home,
 			projects,
@@ -108,6 +110,7 @@ async function fixture() {
 			{ runner: legacyGitHub(async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]")) },
 		);
 		managers.push(sessions);
+		if (bridge) sessions.setMissionBridge(bridge);
 		await sessions.load();
 		await sessions["pullRequests"].settled();
 		return sessions;
@@ -218,6 +221,101 @@ test("pins prevent inactivity and merged PR automatic archival across restarts u
 		);
 	} finally {
 		await cleanup();
+	}
+});
+
+for (const release of ["done", "archived", "role", "leave"] as const) {
+	test(`active coordinator keeps merged PR chats active until ${release}`, async () => {
+		const { sessions, projects, first, ids, cleanup } = await fixture();
+		const store = new MissionStore(":memory:");
+		new MissionService(store, sessions, projects);
+		try {
+			const id = ids[0]!;
+			const mission = store.create({ projectId: first.id, title: "Shared work" });
+			store.join(id, mission.id);
+			store.update(mission.id, { coordinatorSessionId: id });
+			const meta = sessions["metas"].get(id)!;
+			meta.updatedAt = Date.now() - 8 * 86_400_000;
+			meta.pullRequest!.state = "merged";
+			meta.pullRequest!.mergedAt = Date.now() - 2 * 86_400_000;
+			meta.pullRequestMergedAt = meta.pullRequest!.mergedAt;
+			delete meta.pullRequestError;
+			await sessions["save"](meta);
+			await sessions["archiveInactiveSessions"]();
+			assert.equal(sessions.get(id)?.activeMissionCoordinator, true);
+			assert.equal(sessions.get(id)?.archivedAt, undefined);
+			assert.equal(meta.autoArchivedPullRequest, undefined, "exemption does not consume the merge marker");
+
+			if (release === "role") {
+				const next = ids[2]!;
+				sessions["metas"].get(next)!.projectId = first.id;
+				store.join(next, mission.id);
+				store.update(mission.id, { coordinatorSessionId: next });
+				assert.equal(sessions.get(next)?.activeMissionCoordinator, true);
+			} else if (release === "leave") store.leave(id);
+			else store.update(mission.id, { status: release });
+			await sessions["archiveTransitions"].get(id)?.promise;
+			assert.equal(sessions.get(id)?.activeMissionCoordinator, undefined);
+			assert.ok(sessions.get(id)?.archivedAt, "role/status changes re-evaluate the persisted deadline");
+			assert.equal(meta.autoArchivedPullRequest, meta.pullRequest!.url);
+		} finally {
+			await cleanup();
+			store.close();
+		}
+	});
+}
+
+test("active coordinator exemption survives restart while ordinary mission members still merge-archive", async () => {
+	const { sessions, projects, first, ids, manager, cleanup } = await fixture();
+	const store = new MissionStore(":memory:");
+	new MissionService(store, sessions, projects);
+	try {
+		const mission = store.create({ projectId: first.id, title: "Shared work" });
+		for (const id of ids.slice(0, 2)) {
+			const meta = sessions["metas"].get(id)!;
+			meta.projectId = first.id;
+			store.join(id, mission.id);
+			meta.pullRequest!.state = "merged";
+			meta.pullRequest!.mergedAt = Date.now() - 2 * 86_400_000;
+			delete meta.pullRequestError;
+			await sessions["save"](meta);
+		}
+		store.update(mission.id, { coordinatorSessionId: ids[0]! });
+		await sessions.shutdown();
+		const reopened = await manager(sessions["missions"]!);
+		await reopened["archiveInactiveSessions"]();
+		assert.equal(reopened.get(ids[0]!)?.activeMissionCoordinator, true);
+		assert.equal(reopened.get(ids[0]!)?.archivedAt, undefined);
+		assert.equal(reopened.get(ids[1]!)?.activeMissionCoordinator, undefined);
+		assert.ok(reopened.get(ids[1]!)?.archivedAt);
+	} finally {
+		await cleanup();
+		store.close();
+	}
+});
+
+test("queued merge archives recheck a promotion to active coordinator", async () => {
+	const { sessions, projects, first, ids, cleanup } = await fixture();
+	const store = new MissionStore(":memory:");
+	new MissionService(store, sessions, projects);
+	try {
+		const id = ids[0]!;
+		const mission = store.create({ projectId: first.id, title: "Shared work" });
+		store.join(id, mission.id);
+		const meta = sessions["metas"].get(id)!;
+		meta.pullRequest!.state = "merged";
+		meta.pullRequest!.mergedAt = Date.now() - 2 * 86_400_000;
+		delete meta.pullRequestError;
+		const pending = sessions["archiveMergedPullRequest"](meta);
+		store.update(mission.id, { coordinatorSessionId: id });
+		await pending;
+		assert.equal(sessions.get(id)?.archivedAt, undefined);
+		assert.equal(sessions.get(id)?.activeMissionCoordinator, true);
+		assert.equal(meta.autoArchivedPullRequest, undefined);
+		assert.ok((await sessions.archive(id)).archivedAt, "manual archive remains available");
+	} finally {
+		await cleanup();
+		store.close();
 	}
 });
 

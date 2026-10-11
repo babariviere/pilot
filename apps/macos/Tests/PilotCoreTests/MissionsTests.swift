@@ -220,6 +220,17 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     }
 }
 
+@Test func inactiveMissionsRestoreTerminalPRMemberOrdering() {
+    let merged = SessionPullRequest(number: 1, url: "https://github.com/example/repo/pull/1",
+                                   title: "Merged", state: .merged, checkedAt: 1)
+    let members = [session("lead", activity: 10, pullRequest: merged), session("open", activity: 1)]
+    for status in [MissionStatus.done, .archived] {
+        let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", status: status,
+                              coordinatorSessionId: "lead", createdAt: 1, updatedAt: 1)
+        #expect(MissionMembers.members(of: mission, in: members).map(\.id) == ["open", "lead"])
+    }
+}
+
 @Test func missionMembersRespectFiltersAndCoordinatorChanges() {
     let sessions = [session("archived", archived: true), session("new", activity: 3),
                     session("pin", activity: 2, pinned: true)]

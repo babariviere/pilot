@@ -388,13 +388,19 @@ struct SessionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                SessionStatusIcon(status: session.status)
+                if session.isActiveMissionCoordinator && !session.isWorking {
+                    MissionCoordinatorIndicator()
+                } else {
+                    SessionStatusIcon(status: session.status)
+                }
                 Text(session.title)
                     .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 if model.isUnread(session) { UnreadBadge() }
-                if isCoordinator { MissionCoordinatorIndicator() }
+                if (isCoordinator && !session.isActiveMissionCoordinator) || (session.isActiveMissionCoordinator && session.isWorking) {
+                    MissionCoordinatorIndicator()
+                }
                 if showsMission, session.missionId != nil {
                     Image(systemName: "scope")
                         .font(.system(size: 10))

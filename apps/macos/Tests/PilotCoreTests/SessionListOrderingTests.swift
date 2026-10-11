@@ -5,13 +5,15 @@ import Testing
 private func listSession(
     _ id: String, state: String = "idle", updatedAt: Double = 1_000,
     userAt: Double? = nil, outcome: SessionOutcome? = .done, finishAt: Double? = 500,
-    prState: PullRequestState? = nil, prError: String? = nil, pinned: Bool? = nil
+    prState: PullRequestState? = nil, prError: String? = nil, pinned: Bool? = nil,
+    coordinator: Bool? = nil
 ) -> SessionSummary {
     SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: updatedAt, state: state,
                    outcome: outcome, outcomeAt: finishAt,
                    pullRequest: prState.map { SessionPullRequest(number: 1, url: "https://github.com/a/b/pull/1",
                                                                 title: "PR", state: $0, checkedAt: 1) },
-                   pullRequestError: prError, lastUserMessageAt: userAt, pinned: pinned)
+                   pullRequestError: prError, lastUserMessageAt: userAt, pinned: pinned,
+                   activeMissionCoordinator: coordinator)
 }
 
 @Test func pinnedSessionsPrecedeTerminalPRAndActivityGroups() throws {
@@ -114,4 +116,48 @@ private func listSession(
     _ = attention.observe([], snapshot: true)
     #expect(attention.observe([listSession("s", state: "working", prState: .merged)], snapshot: false).isEmpty)
     #expect(attention.observe([listSession("s", prState: .open)], snapshot: false).isEmpty)
+}
+
+@Test func activeCoordinatorUsesActiveOrderingAndAttentionUntilRoleEnds() throws {
+    let suite = "CoordinatorAttentionTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let attention = SessionAttention(defaults: defaults)
+    _ = attention.observe([], snapshot: true)
+    for prState in [PullRequestState.merged, .closed] {
+        let active = listSession(prState.rawValue, finishAt: 2_000, prState: prState, coordinator: true)
+        #expect(!active.hasTerminalPullRequest)
+        #expect(active.status == .idle)
+        #expect(attention.isUnread(active))
+        let notifications = attention.observe([active], snapshot: false)
+        #expect(notifications.count == 1)
+        #expect(notifications.first?.title == "New result")
+        let open = listSession("open", finishAt: 1_000, prState: .open)
+        #expect([open, active].sorted(by: SessionSummary.listPrecedes).map(\.id) == [active.id, open.id])
+        #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(active)) == active)
+        for role in [Bool?.none, false] {
+            let released = listSession(active.id, finishAt: 3_000, prState: prState, coordinator: role)
+            #expect(released.hasTerminalPullRequest)
+            #expect(released.status == .done)
+            #expect(!attention.isUnread(released))
+            #expect(attention.observe([released], snapshot: false).isEmpty)
+            #expect([released, open].sorted(by: SessionSummary.listPrecedes).map(\.id) == [open.id, released.id])
+        }
+    }
+}
+
+@Test func activeCoordinatorDefersWorkingNotificationsAndReviewsNormally() {
+    let suite = "CoordinatorWorkingAttentionTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let attention = SessionAttention(defaults: defaults)
+    _ = attention.observe([], snapshot: true)
+    let working = listSession("s", state: "working", prState: .merged, coordinator: true)
+    #expect(working.status == .working)
+    #expect(attention.observe([working], snapshot: false).isEmpty)
+    let idle = listSession("s", prState: .merged, coordinator: true)
+    #expect(attention.observe([idle], snapshot: false).count == 1)
+    #expect(attention.review(idle, chatVisible: true, appActive: true))
+    #expect(!attention.isUnread(idle))
+    #expect(attention.observe([idle], snapshot: true).isEmpty)
 }

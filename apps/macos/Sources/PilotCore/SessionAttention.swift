@@ -33,11 +33,11 @@ public enum SessionStatus: String, Sendable {
 }
 
 extension SessionSummary {
-    /// Outcome is independent of lifecycle, and is hidden only while working.
+    /// Outcomes survive lifecycle changes. A completed turn does not finish active coordination.
     public var status: SessionStatus {
         if isWorking { return .working }
         switch outcome {
-        case .done: return .done
+        case .done: return isActiveMissionCoordinator ? .idle : .done
         case .failed: return .failed
         case .stopped: return .stopped
         case nil: return state == "failed" ? .failed : .idle
@@ -103,7 +103,7 @@ public final class SessionAttention {
             guard !baseline, isUnread(session) else { continue }
             let title: String
             switch session.outcome {
-            case .done: title = "Session done"
+            case .done: title = session.isActiveMissionCoordinator ? "New result" : "Session done"
             case .failed: title = "Session failed"
             case .stopped: title = "Session stopped"
             case nil: continue

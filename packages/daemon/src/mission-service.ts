@@ -72,7 +72,14 @@ export class MissionService {
 			},
 			membership: (sessionId) => {
 				const missionId = store.missionOf(sessionId);
-				return missionId ? { missionId, active: store.get(missionId)?.status === "active" } : undefined;
+				const mission = missionId ? store.get(missionId) : undefined;
+				return mission
+					? {
+							missionId: mission.id,
+							active: mission.status === "active",
+							coordinator: mission.coordinatorSessionId === sessionId,
+						}
+					: undefined;
 			},
 			context: (sessionId) => this.context(sessionId),
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),

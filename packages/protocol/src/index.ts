@@ -134,6 +134,8 @@ export interface SessionSummary {
 	subagents?: SessionSubagent[];
 	/** Mission this chat belongs to. Omitted when it has none. */
 	missionId?: string;
+	/** Current coordinator of an active mission. Exempt from terminal-PR treatment and merge auto-archiving. */
+	activeMissionCoordinator?: boolean;
 	error?: string;
 }
 

@@ -55,6 +55,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let subagents: [SessionSubagent]?
     /// Mission this chat belongs to. Omitted when it has none, or by older daemons.
     public let missionId: String?
+    /// Daemon-owned active role. Omitted by older daemons or when terminal-PR rules apply normally.
+    public let activeMissionCoordinator: Bool?
     public let error: String?
     public let outcome: SessionOutcome?
     /// Stable completion version, in milliseconds. Unlike updatedAt, survives parking.
@@ -104,6 +106,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var isArchived: Bool { archivedAt != nil }
     public var isPinned: Bool { pinned ?? false }
+    public var isActiveMissionCoordinator: Bool { activeMissionCoordinator ?? false }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
     public var canArchive: Bool { !isArchived && !isWorking }
 
@@ -118,7 +121,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         lastUserMessageAt: Double? = nil,
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
-        branches: [String]? = nil
+        branches: [String]? = nil, activeMissionCoordinator: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -144,6 +147,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.usage = usage
         self.subagents = subagents
         self.missionId = missionId
+        self.activeMissionCoordinator = activeMissionCoordinator
         self.error = error
         self.outcome = outcome
         self.outcomeAt = outcomeAt
