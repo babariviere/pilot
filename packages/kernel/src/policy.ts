@@ -173,6 +173,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 			lines.push(
 				"- Choose or create a descriptive branch or bookmark for this task before making changes. New names must use `<type>/<short-description>`, with a conventional prefix matching the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/`, or `revert/` (for example, `fix/branch-prefix-policy`). Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention. Do not use a `pilot/` prefix for new names. Never push the default branch.",
 				"- When the work is ready, open a pull request with `gh pr create`. It is opened as the user. Never merge.",
+				"- Run `gh pr create` as the last command of its shell call, with nothing after it (no `;`, `&&` or pipe), so Pilot can record the PR as yours and follow up on its CI, reviews and conflicts. Pass a long body with `--body-file` or a single `$(printf ...)`, `$(cat ...)` or `$(echo ...)` argument.",
 			);
 		} else {
 			lines.push(
