@@ -75,7 +75,15 @@ async function fixture(
 		lastCompletionAt: 10,
 		...(initialPullRequest ? { pullRequest: initialPullRequest } : {}),
 	};
-	const direct: Meta = { id: randomUUID(), title: "Direct", cwd: home, createdAt: 1, updatedAt: 3 };
+	// The direct session owns the PR, so discovery here never claims it or looks up its health for follow-ups.
+	const direct: Meta = {
+		id: randomUUID(),
+		title: "Direct",
+		cwd: home,
+		createdAt: 1,
+		updatedAt: 3,
+		agentPullRequests: [cached.url],
+	};
 	await mkdir(cwd, { recursive: true });
 	await mkdir(join(home, "sessions", direct.id), { recursive: true });
 	await writeFile(join(home, "sessions", id, "meta.json"), JSON.stringify(meta));

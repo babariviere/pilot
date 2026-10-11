@@ -192,7 +192,10 @@ interface SessionMeta extends OutcomeMeta {
 	pullRequestError?: string;
 	/** Observed GitHub merge time of the current PR, retained for local delayed archiving without terminal PR polling. */
 	pullRequestMergedAt?: number;
-	/** Only PRs actually opened by this agent are eligible for automatic work. */
+	/**
+	 * PRs this session owns, the only ones eligible for automatic work. A PR has at most one owner: the session
+	 * that created it, or else the first private-workspace session to discover it on its branch.
+	 */
 	agentPullRequests?: string[];
 	/** One persisted budget shared by all PR problems, reset only by user input. */
 	prFollowUp?: { attempts: number; nextAttemptAt: number; generation: number; requestId?: string };
@@ -2381,9 +2384,9 @@ export class SessionManager {
 		}
 		if (packet.type === "pullRequest.created") {
 			if (this.workers.get(meta.id) !== worker || !meta.workspace || meta.mode === "ask") return;
-			meta.agentPullRequests ??= [];
-			if (!meta.agentPullRequests.includes(packet.url)) {
-				meta.agentPullRequests.push(packet.url);
+			// Only one session owns a PR. The creator is normally the first, unless another session claimed it.
+			if (this.pullRequestOwner(packet.url) === undefined) {
+				meta.agentPullRequests = [...(meta.agentPullRequests ?? []), packet.url];
 				this.missions?.pullRequestCreated?.(meta.id, packet.url);
 				void this.save(meta).catch((error: unknown) =>
 					console.warn(`pilotd: could not save PR ownership: ${error}`),
@@ -2500,12 +2503,14 @@ export class SessionManager {
 		const fresh = [result.pullRequest, ...(result.others ?? [])].filter(
 			(pr): pr is SessionPullRequest => pr !== undefined,
 		);
-		if (!this.canFollowUp(meta, [...fresh, ...sessionPullRequests(meta)])) return undefined;
+		const eligible = (pr: SessionPullRequest) =>
+			this.ownsOpenPullRequest(meta, pr) || this.canClaimPullRequest(meta, pr);
+		if (!this.canFollowUp(meta, [...fresh, ...sessionPullRequests(meta)], eligible)) return undefined;
 		const branch = result.branch ?? meta.workspace?.branch;
 		const current = result.pullRequest?.url ?? meta.pullRequest?.url;
-		// Only fresh, owned heads qualify. The current branch may already be terminal while
+		// Only fresh heads owned (or claimable) by this session qualify. The current branch may already be terminal while
 		// earlier stack heads are still open. Query each PR against its own head, not the workspace's.
-		const prs = fresh.filter((pr) => this.ownsOpenPullRequest(meta, pr) && (pr.branch || pr.url === current));
+		const prs = fresh.filter((pr) => eligible(pr) && (pr.branch || pr.url === current));
 		return prs.length
 			? {
 					prs,
@@ -2581,9 +2586,16 @@ export class SessionManager {
 		else delete meta.previousBranches;
 		if (result.error) meta.pullRequestError = result.error;
 		else delete meta.pullRequestError;
+		const previousOwned = meta.agentPullRequests;
+		const claims = result.error
+			? []
+			: [next, ...(result.others ?? [])].filter(
+					(pr): pr is SessionPullRequest => pr !== undefined && this.canClaimPullRequest(meta, pr),
+				);
+		if (claims.length) meta.agentPullRequests = [...(previousOwned ?? []), ...new Set(claims.map((pr) => pr.url))];
 		const fresh = next !== undefined || (result.others?.length ?? 0) > 0;
 		// PR freshness is not agent activity. Keep ordering and completion versions unchanged.
-		if (fresh || changed) {
+		if (fresh || changed || claims.length) {
 			try {
 				await this.save(meta);
 			} catch (error) {
@@ -2603,6 +2615,8 @@ export class SessionManager {
 				else delete meta.pullRequestError;
 				if (previousMergedAt !== undefined) meta.pullRequestMergedAt = previousMergedAt;
 				else delete meta.pullRequestMergedAt;
+				if (previousOwned) meta.agentPullRequests = previousOwned;
+				else delete meta.agentPullRequests;
 				throw error;
 			}
 		}
@@ -2672,7 +2686,11 @@ export class SessionManager {
 	}
 
 	/** `prs` defaults to the session's known PRs; health planning passes fresh ones not yet applied. */
-	private canFollowUp(meta: SessionMeta, prs = sessionPullRequests(meta)): boolean {
+	private canFollowUp(
+		meta: SessionMeta,
+		prs = sessionPullRequests(meta),
+		eligible = (pr: SessionPullRequest) => this.ownsOpenPullRequest(meta, pr),
+	): boolean {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
@@ -2694,7 +2712,7 @@ export class SessionManager {
 				!this.changingModels.has(meta.id) &&
 				!this.archiveTransitions.has(meta.id) &&
 				(!worker || (worker.state === "idle" && worker.busy === false)) &&
-				prs.some((pr) => this.ownsOpenPullRequest(meta, pr)) &&
+				prs.some(eligible) &&
 				(meta.prFollowUp?.attempts ?? 0) < 3 &&
 				Date.now() >= (meta.prFollowUp?.nextAttemptAt ?? 0),
 		);
@@ -2702,6 +2720,26 @@ export class SessionManager {
 
 	private ownsOpenPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
 		return (pr.state === "open" || pr.state === "draft") && Boolean(meta.agentPullRequests?.includes(pr.url));
+	}
+
+	/** The one session owning a PR, archived ones included, so a restored session resumes its own PRs. */
+	private pullRequestOwner(url: string): string | undefined {
+		for (const meta of this.metas.values()) if (meta.agentPullRequests?.includes(url)) return meta.id;
+		return undefined;
+	}
+
+	/**
+	 * An open PR discovered on this private delivery session's branch, owned by no session yet. The first session
+	 * to see it claims it, which covers PRs it was asked to take over and creations the kernel did not recognize.
+	 */
+	private canClaimPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
+		return Boolean(
+			meta.workspace &&
+				meta.mode !== "ask" &&
+				meta.archivedAt === undefined &&
+				(pr.state === "open" || pr.state === "draft") &&
+				this.pullRequestOwner(pr.url) === undefined,
+		);
 	}
 
 	private async followUpPullRequests(

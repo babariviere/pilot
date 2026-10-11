@@ -385,8 +385,10 @@ the isolated working copy is ready.
 
 **Private-session automatic follow-ups.** The daemon's existing branch-linked PR poller checks failed CI,
 unresolved non-outdated review threads, and confirmed merge conflicts on open (including draft) PRs
-actually created by the agent in that session. PR ownership is recorded from successful agent creation
-tools and retained durably, not inferred from a matching branch alone. Only an idle session with no
+owned by that session. Each PR has at most one owner, retained durably: the session whose agent created
+it, or else the first non-archived, non-Ask private-workspace session to discover it on its branch (an
+unrecognized creation, or a PR the session was asked to take over). A PR owned by another session,
+archived or not, is never claimed again. Only an idle session with no
 queued messages receives one combined follow-up; user input and fresh state win over in-flight lookups.
 Each fresh owned head is checked against its own branch, including earlier stack heads when the current
 PR is closed or merged. Actionable problems across those heads share one notification and reservation;
@@ -394,7 +396,7 @@ a failed health lookup on one head does not hide actionable evidence from anothe
 accepts ordinary semicolon/newline-separated commit/bookmark/push prefixes when `gh pr create` is the
 final executed command, and double-quoted `$(printf|echo|cat ...)` arguments without redirections or
 operators (common for PR bodies). It still rejects other substitutions, `--web`, trailing commands, shell
-controls, lookups and ambiguous results as ownership proof; the agent prompt asks for a final `gh pr create`.
+controls, lookups and ambiguous results as creation proof; discovery then claims such PRs instead.
 The kernel rechecks idle/inbox state before admission, including after reopening a parked session.
 
 Each session has one persisted budget of three automatic follow-ups total, shared across PRs and all
