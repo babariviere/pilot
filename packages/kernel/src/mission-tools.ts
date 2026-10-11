@@ -99,6 +99,8 @@ Actions:
 			kind: Type.Optional(StringEnum(["update", "handoff"] as const)),
 			health: Type.Optional(StringEnum(["on_track", "at_risk", "off_track"] as const)),
 		}),
+		// The daemon owns the action-specific result shapes; every action returns a JSON object.
+		outputSchema: Type.Record(Type.String(), Type.Unknown()),
 		async execute(_callId, params, signal): Promise<AgentToolResult<JsonValue>> {
 			signal?.throwIfAborted();
 			const { action, ...rest } = params;
@@ -107,7 +109,7 @@ Actions:
 				JsonValue
 			>;
 			const data = await call(action, args);
-			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data };
+			return { content: [{ type: "text", text: JSON.stringify(data) }], details: data, structuredContent: data };
 		},
 	});
 }

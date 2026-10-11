@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	fauxProvider,
@@ -32,7 +33,10 @@ test("the mission tool forwards actions with only the supplied arguments", async
 		{} as never,
 	);
 	assert.deepEqual(calls, [["task", { title: "Auth", status: "todo" }]]);
+	assert.ok(tool.outputSchema);
 	assert.deepEqual(result.details, { ok: true });
+	assert.deepEqual(result.structuredContent, { ok: true });
+	assert.deepEqual(result.content, [{ type: "text", text: '{"ok":true}' }]);
 	await assert.rejects(
 		createMissionTool(async () => {
 			throw new Error("This chat is not part of a mission.");
@@ -82,7 +86,7 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.ok(schema.properties.action.enum.includes("get"));
 });
 
-async function fixture(t: TestContext) {
+async function fixture(t: TestContext, mode: "on" | "only" = "on") {
 	const root = await mkdtemp(join(tmpdir(), "pilot-mission-tool-"));
 	const cleanup: Array<() => Promise<void>> = [];
 	t.after(async () => {
@@ -117,10 +121,87 @@ async function fixture(t: TestContext) {
 			noThemes: true,
 			noContextFiles: true,
 			systemPrompt: "Offline mission integration.",
-			extensionFactories: [createCodemodeExtension({ models: false, mode: "on" })],
+			extensionFactories: [createCodemodeExtension({ models: false, mode })],
 		},
 	};
 	return { root, options, faux, cleanup };
+}
+
+for (const mode of ["on", "only"] as const) {
+	for (const coordinator of [false, true]) {
+		test(`mission results are structured in codemode (${mode}, ${coordinator ? "coordinator" : "member"})`, {
+			timeout: 15_000,
+		}, async (t) => {
+			const f = await fixture(t, mode);
+			const calls: unknown[] = [];
+			const tool = createMissionTool(async (action, args): Promise<JsonValue> => {
+				calls.push([action, args]);
+				switch (action) {
+					case "get":
+						return { mission: { title: "Shared goal", status: "active" }, decisions: [], doneTasks: 0 };
+					case "brief":
+						if (args.markdown !== undefined) return { revision: 2 };
+						return { revision: 1, markdown: "# Goal", by: "you" };
+					case "tasks":
+						return { tasks: [{ id: "t1", number: 1, title: "Ship", status: "todo", resources: [] }] };
+					case "task":
+						return { id: args.id ?? "t1", status: args.status ?? "todo" };
+					case "status":
+						return { members: [{ id: "member", tasks: [] }] };
+					default:
+						throw new Error("Claim conflict");
+				}
+			}, coordinator);
+			const adapter = await NativeAdapter.open({ ...f.options, hostTools: [tool] });
+			f.cleanup.push(() => adapter.close());
+			const codemode = adapter.session.agent.state.tools.find((candidate) => candidate.name === "codemode")!;
+			adapter.session.agent.state.messages.push(
+				fauxAssistantMessage(
+					{ type: "toolCall", id: "structured-mission", name: "codemode", arguments: {} },
+					{ stopReason: "toolUse" },
+				),
+			);
+			const result = await codemode.execute(
+				"structured-mission",
+				{
+					code: `
+const description = await describeTool("mission");
+text({objectDeclaration: !description.includes("Promise<string>")});
+const got = await tools.mission({action: "get"});
+const brief = await tools.mission({action: "brief"});
+const saved = await tools.mission({action: "brief", markdown: brief.markdown + "\\nUpdated", expectedRevision: brief.revision});
+const listed = await tools.mission({action: "tasks"});
+const updated = await tools.mission({action: "task", id: listed.tasks[0].id, status: "in_progress"});
+text({title: got.mission.title, decisions: got.decisions.length, done: got.doneTasks, revision: saved.revision, status: updated.status});
+${coordinator ? 'const status = await tools.mission({action: "status"}); text({member: status.members[0].id});' : ""}
+try { await tools.mission({action: "claim", id: "t1"}); text("unexpected success"); }
+catch (error) { text({error: error.message}); }
+`,
+				},
+				undefined,
+			);
+			const output = result.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+			assert.ok(!result.isError, output);
+			assert.ok(output.includes('"objectDeclaration":true'), output);
+			assert.ok(
+				output.includes('"title":"Shared goal","decisions":0,"done":0,"revision":2,"status":"in_progress"'),
+				output,
+			);
+			if (coordinator) assert.ok(output.includes('"member":"member"'), output);
+			assert.match(output, /Claim conflict/);
+			assert.doesNotMatch(output, /unexpected success/);
+			assert.deepEqual(calls, [
+				["get", {}],
+				["brief", {}],
+				["brief", { markdown: "# Goal\nUpdated", expectedRevision: 1 }],
+				["tasks", {}],
+				["task", { id: "t1", status: "in_progress" }],
+				...(coordinator ? [["status", {}]] : []),
+				["claim", { id: "t1" }],
+			]);
+			assert.equal(f.faux.state.callCount, 0, "scripts do not invoke the native model loop");
+		});
+	}
 }
 
 test("mission tool declarations follow membership without re-registering", { timeout: 15_000 }, async (t) => {
