@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.12.0](https://github.com/babariviere/pilot/compare/v1.11.1...v1.12.0) (2026-10-11)
+
+
+### Features
+
+* **daemon:** deliver durable batched event notices ([33e9710](https://github.com/babariviere/pilot/commit/33e9710f237c8cd13c312ea6aea398c2891f4d74))
+* **daemon:** support multi-task claims and task sequencing ([b7e313f](https://github.com/babariviere/pilot/commit/b7e313fc62b092a74892ca9ec5f4a2fdfb10b8c9))
+
+
+### Bug Fixes
+
+* **chats:** preserve active roles after PR merges ([a647321](https://github.com/babariviere/pilot/commit/a647321570a00e22abac04abc497d8630090529e))
+* **daemon:** diff sessions against their current base branch ([703131c](https://github.com/babariviere/pilot/commit/703131c0c964d4d16cf1692499aa6d19ac5175b7))
+* **kernel:** return structured tool results in codemode ([63eb287](https://github.com/babariviere/pilot/commit/63eb287a19852ab285f1fa72f7729f7daecb2f9a))
+
 ## [1.11.1](https://github.com/babariviere/pilot/compare/v1.11.0...v1.11.1) (2026-10-09)
 
 
