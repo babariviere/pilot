@@ -33,6 +33,78 @@ function store() {
 	return new MissionStore(":memory:");
 }
 
+test("summary attention counts track task and comment changes without loading detail", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		const other = missions.create({ projectId: "other", title: "Other" });
+		missions.addTask(other.id, { title: "Other blocked", status: "blocked" });
+		missions.addComment(other.id, { text: "Other comment" }, { sessionId: "other-agent" });
+		missions.join("agent", id);
+		const counts = () => {
+			const summary = missions.require(id);
+			assert.deepEqual(missions.list("p"), [summary]);
+			assert.equal(missions.list().find((item) => item.id === id)?.needsYouCount, summary.needsYouCount);
+			return summary.needsYouCount;
+		};
+		// A summary must not fetch any task/comment bodies, brief, resources or activity.
+		missions.detail = () => {
+			throw new Error("unexpected detail read");
+		};
+		assert.equal(counts(), 0);
+		const task = missions.resolveTask(id, "1");
+		missions.updateTask(id, task.id, { status: "blocked" });
+		assert.equal(counts(), 1);
+		missions.addComment(id, { text: "User's own comment" });
+		missions.addComment(id, { text: "Addressed", targetSessionId: "agent" }, { sessionId: "agent" });
+		assert.equal(counts(), 1);
+		const comment = missions.addComment(id, { text: "Unaddressed" }, { sessionId: "agent" });
+		assert.equal(counts(), 2);
+		missions.update(id, { coordinatorSessionId: "agent" });
+		assert.equal(counts(), 1);
+		missions.update(id, { coordinatorSessionId: null });
+		assert.equal(counts(), 2);
+		missions.resolveComment(id, comment.id);
+		assert.equal(counts(), 1);
+		const deleted = missions.addComment(id, { text: "Delete me" }, { sessionId: "agent" });
+		assert.equal(counts(), 2);
+		missions.removeComment(id, deleted.id);
+		assert.equal(counts(), 1);
+		for (const status of ["todo", "in_progress", "in_review", "done", "dropped"] as const) {
+			missions.updateTask(id, task.id, { status });
+			assert.equal(counts(), 0);
+		}
+		missions.updateTask(id, task.id, { status: "blocked" });
+		missions.removeTask(id, task.id);
+		assert.equal(counts(), 0);
+		assert.equal(missions.require(other.id).needsYouCount, 2);
+	} finally {
+		missions.close();
+	}
+});
+
+test("summary attention counts survive restart and ignore resolved-comment detail limits", () => {
+	const home = mkdtempSync(join(tmpdir(), "pilot-attention-"));
+	const path = join(home, "missions.sqlite");
+	let missions = new MissionStore(path);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M" });
+		missions.addTask(id, { title: "Blocked", status: "blocked" });
+		for (let i = 0; i < 25; i++) {
+			const comment = missions.addComment(id, { text: "Resolved" }, { sessionId: "agent" });
+			missions.resolveComment(id, comment.id);
+		}
+		missions.addComment(id, { text: "Open" }, { sessionId: "agent" });
+		missions.close();
+		missions = new MissionStore(path);
+		assert.equal(missions.list()[0]?.needsYouCount, 2);
+		assert.equal(missions.detail(id).mission.needsYouCount, 2);
+	} finally {
+		missions.close();
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
 const pr = (number: number, state: SessionPullRequest["state"]): SessionPullRequest => ({
 	number,
 	state,

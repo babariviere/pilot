@@ -1055,6 +1055,27 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	ws.on("message", (raw) => messages.push(JSON.parse(String(raw)) as ServerMessage));
 	await once(ws, "open");
 	await until(() => messages.find((message) => message.type === "missions"));
+	assert.equal(detail.mission.needsYouCount, 0);
+	// Sidebar clients receive count updates without subscribing to full detail.
+	const summaryTask = f.store.addTask(id, { title: "Summary-only blocked task", status: "blocked" });
+	const summaryComment = f.store.addComment(id, { text: "Needs user" }, { sessionId: "agent" });
+	await until(() =>
+		messages.findLast(
+			(message) => message.type === "missions" && message.missions.some((m) => m.id === id && m.needsYouCount === 2),
+		),
+	);
+	assert.equal((await api(`/missions?projectId=${f.project.id}`).then((r) => r.json()))[0].needsYouCount, 2);
+	assert.equal((await api(`/missions/${id}`).then((r) => r.json())).mission.needsYouCount, 2);
+	assert.ok(!messages.some((message) => message.type === "mission"));
+	messages.length = 0;
+	f.store.resolveComment(id, summaryComment.id);
+	f.store.removeTask(id, summaryTask.id);
+	await until(() =>
+		messages.findLast(
+			(message) => message.type === "missions" && message.missions.some((m) => m.id === id && m.needsYouCount === 0),
+		),
+	);
+	assert.ok(!messages.some((message) => message.type === "mission"));
 	ws.send(JSON.stringify({ type: "mission.subscribe", missionId: id }));
 	await until(() => messages.find((message) => message.type === "mission"));
 

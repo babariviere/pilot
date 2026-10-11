@@ -15,9 +15,8 @@ final class PilotClient: ObservableObject {
     @Published private(set) var missions: [Mission] = []
     /// Details of subscribed missions only.
     @Published private(set) var missionDetails: [String: MissionDetail] = [:]
-    /// Subscription reference counts. Active missions are always held so sidebar badges stay current.
+    /// Subscription reference counts for views displaying mission detail.
     private var missionRefs: [String: Int] = [:]
-    private var heldActiveMissions: Set<String> = []
     private var fixtureMissions = false
     @Published private(set) var connected = false
 
@@ -445,10 +444,6 @@ final class PilotClient: ObservableObject {
 
     private func applyMissions(_ list: [Mission]) {
         missions = list
-        let active = Set(list.filter { $0.status == .active }.map(\.id))
-        for id in active.subtracting(heldActiveMissions) { retainMission(id) }
-        for id in heldActiveMissions.subtracting(active) { releaseMission(id) }
-        heldActiveMissions = active
         let known = Set(list.map(\.id))
         for id in missionDetails.keys where !known.contains(id) { missionDetails[id] = nil }
     }

@@ -56,6 +56,11 @@ extension AppModel {
                               members: members(of: mission), isUnread: { attention.isUnread($0) })
     }
 
+    func needsYouCount(_ mission: Mission) -> Int {
+        MissionNeedsYou.count(mission: mission, members: members(of: mission),
+                              isUnread: { attention.isUnread($0) })
+    }
+
     /// Runs a mission write, reporting failures in the window's action alert.
     func missionAction(_ operation: @escaping @MainActor () async throws -> Void) {
         Task {
@@ -223,4 +228,3 @@ func missionAuthorName(_ sessionId: String?, client: PilotClient) -> String {
 func missionRelativeTime(_ milliseconds: Double, now: Date = Date()) -> String {
     SessionTimeFormatting.relative(milliseconds, now: now)
 }
-

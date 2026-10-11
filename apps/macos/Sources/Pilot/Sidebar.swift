@@ -200,7 +200,7 @@ struct SessionSidebar: View {
     private func missionRows(_ mission: Mission, visible: [SessionSummary], searching: Bool) -> some View {
         let members = MissionMembers.members(of: mission, in: visible)
         let isExpanded = searching ? Binding.constant(true) : missionExpanded(mission.id)
-        MissionSidebarRow(mission: mission, needsYou: model.needsYou(mission).count,
+        MissionSidebarRow(mission: mission, needsYou: model.needsYouCount(mission),
                           chatCount: members.count, working: members.filter(\.isWorking).count,
                           selected: model.selectedMissionId == mission.id && model.selectedSessionId == nil,
                           isExpanded: isExpanded)
