@@ -39,6 +39,7 @@ import Testing
     """#.utf8))
     #expect(detail.mission.coordinatorSessionId == "s1")
     #expect(!detail.mission.isAutopilot)
+    #expect(detail.mission.needsYouCount == nil, "older daemons remain decodable")
     #expect(detail.decisions[0].isUserDecision)
     #expect(detail.comments[0].isOpen)
     #expect(detail.orderedTasks.map(\.number) == [1, 2, 3, 4])
@@ -99,11 +100,12 @@ private func json(_ value: some Encodable) throws -> [String: Any] {
 @Test func serverUpdateDecodesMissionsAndMissionDetail() throws {
     let list = try ServerUpdate.decode(Data(#"""
     {"type":"missions","missions":[{"id":"m1","projectId":"p1","title":"API","goal":"g","status":"done",
-     "briefRevision":0,"createdAt":1,"updatedAt":1}]}
+     "needsYouCount":3,"briefRevision":0,"createdAt":1,"updatedAt":1}]}
     """#.utf8))
     guard case let .missions(missions)? = list else { Issue.record("expected missions"); return }
     #expect(missions.map(\.id) == ["m1"])
     #expect(missions[0].status == .done)
+    #expect(missions[0].needsYouCount == 3)
 
     let detail = try ServerUpdate.decode(Data(#"""
     {"type":"mission","mission":{"mission":{"id":"m1","projectId":"p1","title":"API","goal":"g","status":"active",
@@ -160,6 +162,27 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     let routed = MissionNeedsYou.items(mission: coordinated, detail: detail(coordinated, tasks: tasks, comments: comments),
                                        members: members) { unread.contains($0.id) }
     #expect(!routed.contains { $0.id == "comment-agent" }, "the coordinator receives unaddressed comments")
+}
+
+@Test func summaryNeedsYouCountAddsOnlyLocallyUnreadChatResults() throws {
+    let members = [session("done"), session("failed", outcome: .failed), session("read"),
+                   session("stopped", outcome: .stopped), session("working", state: "working"),
+                   session("archived", archived: true), session("other", mission: "m2")]
+    let unread: (SessionSummary) -> Bool = { $0.id != "read" }
+    let tasks = [MissionTask(id: "t", number: 1, title: "Blocked", status: .blocked)]
+    let comments = [try comment("open", author: "s"), try comment("mine", author: nil),
+                    try comment("targeted", author: "s", target: "s"), try comment("closed", author: "s", resolved: true)]
+    for coordinator in [nil, "s"] as [String?] {
+        let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", coordinatorSessionId: coordinator,
+                              createdAt: 1, updatedAt: 1, needsYouCount: coordinator == nil ? 2 : 1)
+        let count = MissionNeedsYou.count(mission: mission, members: members, isUnread: unread)
+        #expect(count == (coordinator == nil ? 4 : 3))
+        #expect(count == MissionNeedsYou.items(mission: mission, detail: detail(mission, tasks: tasks, comments: comments),
+                                              members: members, isUnread: unread).count)
+        #expect(MissionNeedsYou.count(mission: mission, members: members) { _ in false } == mission.needsYouCount)
+    }
+    let older = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", createdAt: 1, updatedAt: 1)
+    #expect(MissionNeedsYou.count(mission: older, members: members, isUnread: unread) == 2)
 }
 
 @Test func taskGroupsFollowWorkflowOrderAndTaskOrder() {

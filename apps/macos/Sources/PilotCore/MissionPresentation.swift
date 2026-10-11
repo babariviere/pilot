@@ -20,14 +20,27 @@ public enum MissionNeedsYouItem: Identifiable, Equatable, Sendable {
 }
 
 public enum MissionNeedsYou {
+    /// Sidebar badges use only the summary and the session list, never full mission detail.
+    public static func count(
+        mission: Mission, members: [SessionSummary], isUnread: (SessionSummary) -> Bool
+    ) -> Int {
+        (mission.needsYouCount ?? 0) + unreadChats(mission: mission, members: members, isUnread: isUnread).count
+    }
+
+    private static func unreadChats(
+        mission: Mission, members: [SessionSummary], isUnread: (SessionSummary) -> Bool
+    ) -> [SessionSummary] {
+        members
+            .filter { $0.missionId == mission.id && !$0.isArchived && !$0.isWorking }
+            .filter { ($0.outcome == .done || $0.outcome == .failed) && isUnread($0) }
+    }
+
     /// Member chats come from the session list; `detail` is nil until the mission's detail is loaded.
     public static func items(
         mission: Mission, detail: MissionDetail?, members: [SessionSummary],
         isUnread: (SessionSummary) -> Bool
     ) -> [MissionNeedsYouItem] {
-        var items: [MissionNeedsYouItem] = members
-            .filter { $0.missionId == mission.id && !$0.isArchived && !$0.isWorking }
-            .filter { ($0.outcome == .done || $0.outcome == .failed) && isUnread($0) }
+        var items: [MissionNeedsYouItem] = unreadChats(mission: mission, members: members, isUnread: isUnread)
             .map { .chat($0) }
         guard let detail else { return items }
         items += MissionTaskOrdering.sorted(detail.tasks).filter { $0.status == .blocked }.map { .blockedTask($0) }

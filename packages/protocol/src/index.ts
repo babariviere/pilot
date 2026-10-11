@@ -323,6 +323,9 @@ export interface Mission {
 	autopilot?: boolean;
 	/** Latest brief revision; 0 before the first save. */
 	briefRevision: number;
+	/** Blocked tasks plus open, unaddressed agent comments when there is no coordinator.
+	 * Excludes unread member-chat results, which clients count locally. */
+	needsYouCount: number;
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;

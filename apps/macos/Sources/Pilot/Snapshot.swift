@@ -234,7 +234,7 @@ enum Snapshot {
                                createdAt: now - 7_200_000, updatedAt: now - 7_200_000, state: "idle"),
             ]
             let json = """
-            [{"mission":{"id":"m1","projectId":"p1","title":"API v2","goal":"Ship the v2 public API with cursor pagination, a single error envelope and token auth, without breaking v1 clients.","status":"active","coordinatorSessionId":"coord","briefRevision":4,"createdAt":\(now - 86_400_000),"updatedAt":\(now)},
+            [{"mission":{"id":"m1","projectId":"p1","title":"API v2","goal":"Ship the v2 public API with cursor pagination, a single error envelope and token auth, without breaking v1 clients.","status":"active","coordinatorSessionId":"coord","needsYouCount":1,"briefRevision":4,"createdAt":\(now - 86_400_000),"updatedAt":\(now)},
               "brief":{"missionId":"m1","revision":4,"markdown":"# API v2\\n\\n## Scope\\n- Cursor pagination on every list endpoint\\n- One error envelope\\n","authorSessionId":"coord","createdAt":\(now - 600_000)},
               "decisions":[{"id":"d1","text":"Cursors are opaque base64 strings.","createdAt":1,"updatedAt":1},
                            {"id":"d2","text":"v1 stays frozen; no new fields.","authorSessionId":"coord","createdAt":1,"updatedAt":1}],

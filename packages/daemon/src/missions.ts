@@ -168,6 +168,9 @@ CREATE TABLE IF NOT EXISTS member_completions (
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
 	outcome_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS blocked_tasks_by_mission ON tasks (mission_id) WHERE status = 'blocked';
+CREATE INDEX IF NOT EXISTS needs_you_comments_by_mission ON comments (mission_id)
+	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
 `;
 
 export interface MissionNotice {
@@ -182,6 +185,15 @@ export const NOTICE_DEBOUNCE_MS = 30_000;
 export const NOTICE_MAX_DELAY_MS = 120_000;
 export const NOTICE_WINDOW_MS = 3_600_000;
 export const NOTICE_HOURLY_CAP = 20;
+
+/** Summary-only attention counts, without loading task/comment bodies or any other detail. */
+const MISSION_SELECT = `SELECT missions.*,
+	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'blocked') +
+	CASE WHEN coordinator_session_id IS NULL THEN
+		(SELECT COUNT(*) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
+			AND target_session_id IS NULL AND author_session_id IS NOT NULL)
+	ELSE 0 END AS needs_you_count
+	FROM missions`;
 
 type Row = Record<string, SQLInputValue>;
 
@@ -462,13 +474,13 @@ export class MissionStore {
 
 	list(projectId?: string): Mission[] {
 		const rows = projectId
-			? this.all("SELECT * FROM missions WHERE project_id = ? ORDER BY updated_at DESC", projectId)
-			: this.all("SELECT * FROM missions ORDER BY updated_at DESC");
+			? this.all(`${MISSION_SELECT} WHERE project_id = ? ORDER BY updated_at DESC`, projectId)
+			: this.all(`${MISSION_SELECT} ORDER BY updated_at DESC`);
 		return rows.map(missionFrom);
 	}
 
 	get(id: string): Mission | undefined {
-		const row = this.one("SELECT * FROM missions WHERE id = ?", id);
+		const row = this.one(`${MISSION_SELECT} WHERE id = ?`, id);
 		return row ? missionFrom(row) : undefined;
 	}
 
@@ -1305,6 +1317,7 @@ function missionFrom(row: Row): Mission {
 		...(row.coordinator_session_id ? { coordinatorSessionId: str(row.coordinator_session_id) } : {}),
 		...(row.autopilot ? { autopilot: true } : {}),
 		briefRevision: num(row.brief_revision!),
+		needsYouCount: num(row.needs_you_count!),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),
 		...(row.completed_at !== null && row.completed_at !== undefined ? { completedAt: num(row.completed_at) } : {}),

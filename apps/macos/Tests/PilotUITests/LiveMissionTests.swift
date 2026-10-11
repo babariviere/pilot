@@ -22,6 +22,8 @@ import WebKit
     let made = try await client.createMission(CreateMissionRequest(projectId: project.id, title: "Drafted goal",
                                                                   goal: "", fromSessionId: source.id))
     let id = made.mission.id
+    client.retainMission(id)
+    defer { client.releaseMission(id) }
     try await liveUntil { client.missionDetails[id]?.brief != nil && client.missionDetails[id]?.tasks.count == 1 }
     #expect(client.mission(id)?.coordinatorSessionId == source.id)
     #expect(client.mission(id)?.goal == "Live drafted goal")
@@ -169,7 +171,7 @@ import WebKit
         try await liveUntil { client.session(other.id)?.missionId != nil }
     })
     let mission = try #require(client.mission(id))
-    try await liveCapture(MissionSidebarRow(mission: mission, needsYou: model.needsYou(mission).count,
+    try await liveCapture(MissionSidebarRow(mission: mission, needsYou: model.needsYouCount(mission),
                                            chatCount: model.members(of: mission).count, working: 0,
                                            selected: true, isExpanded: .constant(true)).environmentObject(model).frame(width: 260),
                           name: "sidebar")
