@@ -15,7 +15,7 @@ import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
 import { createDaemonServer } from "./server.ts";
-import { type SessionWorker, SessionManager } from "./sessions.ts";
+import { CommandRejected, type SessionWorker, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 
@@ -88,6 +88,7 @@ async function fixture(
 	const service = new MissionService(store, sessions, projects);
 	await sessions.load();
 	t.after(async () => {
+		await service.notices.stop();
 		await sessions.shutdown();
 		await Promise.allSettled(sessions["saving"].values());
 		store.close();
@@ -149,6 +150,276 @@ test("hand-linked PRs poll without a worker, finish after all settle, and respec
 		f.store.detail(id).resources.find((resource) => resource.url.endsWith("/3"))?.pullRequest?.state,
 		"merged",
 	);
+});
+
+test("member settlements wake only an idle lead with a guarded follow-up and no user-activity reset", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const mission = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.store.addTask(mission.mission.id, { title: "Pagination" });
+	f.service.join(member.id, { missionId: mission.mission.id, taskId: "1" });
+	f.service.notices.start();
+	const worker = f.workers.get(lead.id)!;
+	const memberWorker = f.workers.get(member.id)!;
+	const meta = f.sessions["require"](lead.id);
+	const before = {
+		updatedAt: meta.updatedAt,
+		lastUserMessageAt: meta.lastUserMessageAt,
+		prFollowUp: { ...meta.prFollowUp },
+	};
+	worker.busy = true;
+	memberWorker.onPacket({ type: "working", working: true });
+	memberWorker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: 1 } });
+	const now = Date.now() + 120_000;
+	await f.service.notices.flush(now);
+	assert.equal(f.store.pendingNotice(mission.mission.id), undefined);
+	assert.equal(meta.pending?.length ?? 0, 0);
+	worker.busy = false;
+	await f.service.notices.flush(now);
+	const inputs = worker.requests.filter(
+		(command) => command.type === "input" && command.requestId.startsWith("mission-notice:"),
+	);
+	assert.equal(inputs.length, 1);
+	assert.equal(inputs[0]!.type, "input");
+	if (inputs[0]!.type !== "input") throw new Error("expected input");
+	assert.equal(inputs[0]!.onlyIfIdle, true);
+	assert.equal(inputs[0]!.mode, "followUp");
+	assert.match(inputs[0]!.content, /#1 Pagination: chat finished/);
+	assert.deepEqual(
+		{ updatedAt: meta.updatedAt, lastUserMessageAt: meta.lastUserMessageAt, prFollowUp: { ...meta.prFollowUp } },
+		before,
+	);
+	memberWorker.onPacket({
+		type: "ready",
+		model: "test/model",
+		usage: {},
+		working: false,
+		completion: { outcome: "done", outcomeAt: 1 },
+	});
+	await f.service.notices.flush(now);
+	assert.equal(
+		worker.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+			.length,
+		1,
+	);
+});
+
+test("kernel idle rejection leaves the frozen notice pending, without failing the chat", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "review this" });
+	const worker = f.workers.get(lead.id)!;
+	const request = worker.request.bind(worker);
+	let reject = true;
+	worker.request = async (command) => {
+		await request(command);
+		if (reject && command.type === "input") throw new CommandRejected("busy", "busy");
+	};
+	const now = Date.now() + 30_000;
+	await f.service.notices.flush(now);
+	const notice = f.store.pendingNotice(detail.mission.id)!;
+	assert.ok(notice);
+	assert.equal(f.sessions["require"](lead.id).inputError, undefined);
+	assert.deepEqual(f.sessions["require"](lead.id).pending, []);
+	reject = false;
+	await f.service.notices.flush(now);
+	assert.equal(f.store.pendingNotice(detail.mission.id), undefined);
+	assert.equal((worker.requests.at(-1) as Extract<KernelCommand, { requestId: string }>).requestId, notice.requestId);
+});
+
+test("uncertain notice admission retries the original payload and ID before delivering newer events", async (t) => {
+	t.mock.method(console, "warn", () => {});
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "first event" });
+	const worker = f.workers.get(lead.id)!;
+	const accepted = new Set<string>();
+	const request = worker.request.bind(worker);
+	let loseAck = true;
+	worker.request = async (command) => {
+		await request(command);
+		if ("requestId" in command) accepted.add(command.requestId);
+		if (loseAck) throw new Error("ack lost");
+	};
+	const now = Date.now() + 120_000;
+	await f.service.notices.flush(now);
+	const notice = f.store.pendingNotice(detail.mission.id)!;
+	const pending = [...f.sessions["require"](lead.id).pending!];
+	assert.equal(pending[0]!.requestId, notice.requestId);
+	f.store.addComment(detail.mission.id, { text: "later event" });
+	loseAck = false;
+	await f.service.notices.flush(now);
+	assert.equal(accepted.size, 1);
+	assert.deepEqual(worker.requests.at(-1), pending[0]);
+	await f.service.notices.flush(now);
+	assert.equal(accepted.size, 2);
+	const last = worker.requests.at(-1)!;
+	if (last.type !== "input") throw new Error("expected input");
+	assert.match(last.content, /later event/);
+	assert.doesNotMatch(last.content, /first event/);
+});
+
+test("daemon restart replays a durable notice once with the same request ID", async (t) => {
+	t.mock.method(console, "warn", () => {});
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "restart-safe update" });
+	const accepted = new Set<string>();
+	const attempts: KernelCommand[] = [];
+	f.workers.get(lead.id)!.request = async (command) => {
+		attempts.push(command);
+		if ("requestId" in command) accepted.add(command.requestId);
+		throw new Error("acknowledgement lost");
+	};
+	const now = Date.now() + 30_000;
+	await f.service.notices.flush(now);
+	assert.equal(accepted.size, 1);
+	const notice = f.store.pendingNotice(detail.mission.id)!;
+	await f.service.notices.stop();
+	await f.sessions.shutdown();
+	const workerFactory = f.sessions["factories"].worker!;
+	const reopened = new SessionManager(
+		join(f.home, "data"),
+		f.projects,
+		undefined,
+		{
+			...f.sessions["factories"],
+			worker: (spec, onPacket, onExit) => {
+				const worker = workerFactory(spec, onPacket, onExit);
+				worker.request = async (command) => {
+					attempts.push(command);
+					accepted.add(command.requestId);
+				};
+				return worker;
+			},
+		},
+		{
+			runner: async () => {
+				throw new Error("GitHub unavailable");
+			},
+		},
+	);
+	const service = new MissionService(f.store, reopened, f.projects);
+	try {
+		await reopened.load();
+		await until(() => !reopened["starting"].has(lead.id));
+		assert.equal(reopened["require"](lead.id).pending?.length ?? 0, 0);
+		service.notices.start();
+		await service.notices.flush(now);
+		assert.equal(accepted.size, 1, "all delivery paths retry the same durable submission");
+		assert.equal(attempts.length, 3, "initial delivery, session-outbox replay, then notice acknowledgement recovery");
+		assert.ok(
+			attempts.every(
+				(attempt) => attempt.type === "input" && attempt.requestId === notice.requestId && attempt.onlyIfIdle,
+			),
+		);
+		assert.deepEqual(f.store.noticeDeadlines(now), []);
+	} finally {
+		await service.notices.stop();
+		await reopened.shutdown();
+	}
+});
+
+test("role and active-state changes during persistence revoke notice delivery", async (t) => {
+	for (const change of ["role", "inactive"] as const) {
+		const f = await fixture(t);
+		const lead = await f.spawn();
+		const member = await f.spawn();
+		const detail = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: lead.id,
+			draft: false,
+		});
+		f.service.join(member.id, { missionId: detail.mission.id });
+		f.service.notices.start();
+		f.store.addComment(detail.mission.id, { text: "pending event" });
+		const save = f.sessions["save"].bind(f.sessions);
+		let once = true;
+		t.mock.method(f.sessions, "save" as never, async (meta: Parameters<typeof save>[0]) => {
+			await save(meta);
+			if (once && meta.pending?.some((command) => command.requestId.startsWith("mission-notice:"))) {
+				once = false;
+				f.store.update(
+					detail.mission.id,
+					change === "role" ? { coordinatorSessionId: member.id } : { status: "done" },
+				);
+			}
+		});
+		await f.service.notices.flush(Date.now() + 30_000);
+		assert.equal(
+			f.workers
+				.get(lead.id)!
+				.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+				.length,
+			0,
+		);
+		assert.equal(f.store.noticeDeadlines(Date.now()).length, 1, `${change} retains the events`);
+		assert.deepEqual(f.sessions["require"](lead.id).pending, []);
+	}
+});
+
+test("user input wins while notice persistence is in flight, without acknowledging an undelivered batch", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "pending event" });
+	const save = f.sessions["save"].bind(f.sessions);
+	let release!: () => void;
+	let blocked!: () => void;
+	const waiting = new Promise<void>((resolve) => {
+		blocked = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let once = true;
+	t.mock.method(f.sessions, "save" as never, async (meta: Parameters<typeof save>[0]) => {
+		await save(meta);
+		if (once && meta.pending?.some((command) => command.requestId.startsWith("mission-notice:"))) {
+			once = false;
+			blocked();
+			await gate;
+		}
+	});
+	const flushing = f.service.notices.flush(Date.now() + 30_000);
+	try {
+		await waiting;
+		await f.sessions.send(lead.id, "new work", "followUp", "user-work");
+		release();
+		await flushing;
+		const requests = f.workers.get(lead.id)!.requests;
+		assert.equal(
+			requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+				.length,
+			0,
+		);
+		assert.equal((requests.at(-1) as Extract<KernelCommand, { requestId: string }>).requestId, "user-work");
+		assert.ok(f.store.pendingNotice(detail.mission.id));
+		await f.service.notices.flush(Date.now() + 30_000);
+		assert.equal(
+			requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+				.length,
+			1,
+		);
+		assert.equal(f.store.pendingNotice(detail.mission.id), undefined);
+	} finally {
+		release();
+		await flushing;
+	}
 });
 
 test("a user reset during an in-flight linked PR lookup wins over its merge result", async (t) => {

@@ -10,6 +10,7 @@ import type {
 	StartMissionTaskRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { MissionNotices } from "./mission-notices.ts";
 import type { MissionActor, MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -48,6 +49,7 @@ function outline(markdown: string): string[] {
 }
 
 export class MissionService {
+	readonly notices: MissionNotices;
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
 	private readonly projects: ProjectStore;
@@ -58,7 +60,9 @@ export class MissionService {
 		this.store = store;
 		this.sessions = sessions;
 		this.projects = projects;
+		this.notices = new MissionNotices(store, sessions);
 		sessions.setMissionBridge({
+			noticeAllowed: (sessionId, requestId) => store.noticeAllowed(sessionId, requestId),
 			spawnProject: (missionId) => {
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
