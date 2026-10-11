@@ -239,7 +239,14 @@ the brief into the repository is an explicit user action.
   comments go to the coordinator, or to Needs you when there is none.
 - **Tasks**: ordered, with status `todo`, `in_progress`, `blocked`, `in_review`, `done` or `dropped`,
   optional body, milestone and dependencies. A task is owned by at most one chat; claiming is atomic
-  and rejects a task owned by another chat.
+  and rejects a task owned by another chat. A chat can claim several tasks with `ids` (IDs, numbers
+  or inclusive ascending ranges such as `1-5`, at most 1000 expanded references). Batch claims return
+  `claimed` and `skipped` with reasons, leaving other chats' claims untouched. The single `id` form
+  keeps its task result and conflict error; a range or comma-separated list in `id` uses batch results.
+  Chats claim the requested tasks, work through them one at a time in dependency order, keep queued
+  tasks `todo` and each working/review/blocked status current, and skip or report unfinished dependencies.
+  Open dependency PRs can support dependent work as a stack: one PR per task, based on the dependency's
+  branch, linked bottom-to-top with `gh stack link` (plain dependent-base PRs if unavailable).
 - **Artifacts**: links to artifacts that stay owned by their session, optionally pinned to a revision.
 - **Resources**: external links (Linear project or issue, GitHub issue or PR, Slack thread, any URL).
   Links optionally belong to a task, appear on its row and in agent task views, and can be added or
@@ -293,9 +300,9 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 
 | Action | Purpose |
 | --- | --- |
-| `get` | Goal, decisions, own task, open tasks, open comments, recent activity and the brief's revision and outline |
+| `get` | Goal, decisions, own tasks, open tasks, open comments, recent activity and the brief's revision and outline |
 | `brief` | Read the brief (optionally a revision), or replace it with `markdown` and `expectedRevision` |
-| `tasks`, `task`, `claim` | List tasks; create or update one; claim one for this chat |
+| `tasks`, `task`, `claim` | List tasks; create or update one; claim one (`id`) or several (`ids`, including ranges) for this chat |
 | `decide`, `comment`, `resolve` | Record a decision; add or resolve a comment |
 | `attach`, `link` | Link an artifact; link an external resource |
 | `log` | Post a handoff or status update |

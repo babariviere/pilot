@@ -45,6 +45,33 @@ test("the mission tool forwards actions with only the supplied arguments", async
 	);
 });
 
+test("the mission tool declares and forwards batch task claims for members and coordinators", async () => {
+	for (const coordinator of [false, true]) {
+		const calls: unknown[] = [];
+		const data = { claimed: [{ number: 1 }], skipped: [{ ref: "2", reason: "already claimed" }] };
+		const tool = createMissionTool(async (action, args) => {
+			calls.push([action, args]);
+			return data;
+		}, coordinator);
+		const schema = tool.parameters as { properties: { ids: { minItems: number; items: { anyOf: unknown[] } } } };
+		assert.equal(schema.properties.ids.minItems, 1);
+		assert.equal(schema.properties.ids.items.anyOf.length, 2);
+		assert.match(tool.description, /ranges.*1-5/);
+		assert.match(tool.description, /claimed tasks and skipped tasks with reasons/);
+		for (const args of [{ ids: ["1-5", 8, "task-id"] }, { id: "1-5" }, { id: "#1" }]) {
+			const result = await tool.execute(
+				"call",
+				{ action: "claim", ...args } as never,
+				undefined,
+				undefined,
+				{} as never,
+			);
+			assert.deepEqual(result.details, data);
+			assert.deepEqual(calls.at(-1), ["claim", args]);
+		}
+	}
+});
+
 test("the mission tool declares and forwards coordinator actions", async () => {
 	const calls: unknown[] = [];
 	const tool = createMissionTool(async (action, args) => {
