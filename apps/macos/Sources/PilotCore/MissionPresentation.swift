@@ -112,12 +112,12 @@ public extension Collection where Element == Mission {
 }
 
 public enum MissionMembers {
-    /// A mission's chats: the coordinator before pins, PR state and activity, then the session list order.
+    /// An active mission's coordinator precedes pins, PR state and activity; otherwise use session order.
     /// Only orders the supplied members, so filtered or archived chats are not reintroduced.
     public static func members(of mission: Mission, in sessions: [SessionSummary]) -> [SessionSummary] {
         sessions.filter { $0.missionId == mission.id }.sorted { lhs, rhs in
-            let lhsCoordinates = lhs.id == mission.coordinatorSessionId
-            let rhsCoordinates = rhs.id == mission.coordinatorSessionId
+            let lhsCoordinates = mission.status == .active && lhs.id == mission.coordinatorSessionId
+            let rhsCoordinates = mission.status == .active && rhs.id == mission.coordinatorSessionId
             if lhsCoordinates != rhsCoordinates { return lhsCoordinates }
             return SessionSummary.listPrecedes(lhs, rhs)
         }

@@ -667,7 +667,7 @@ private struct MissionChatRow: View {
     var body: some View {
         let coordinator = mission.coordinatorSessionId == session.id
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            SessionStatusIcon(status: session.status)
+            if !session.isActiveMissionCoordinator || session.isWorking { SessionStatusIcon(status: session.status) }
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(session.title).lineLimit(1)

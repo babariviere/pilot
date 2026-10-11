@@ -73,8 +73,8 @@ export interface SessionMissionBridge {
 	spawnProject(missionId: string): string;
 	/** Join after metadata is saved, but before starting the worker. */
 	joinSpawn(sessionId: string, missionId: string): void;
-	/** The chat's mission, and whether it is still active. */
-	membership(sessionId: string): { missionId: string; active: boolean } | undefined;
+	/** The chat's mission, its status and this member's coordinator role. */
+	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
 	pullRequestCreated?(sessionId: string, url: string): void;
@@ -1026,11 +1026,25 @@ export class SessionManager {
 		if (!meta) return;
 		this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
 		this.emit(meta);
+		// A role/status change can release a persisted merge deadline without another GitHub lookup.
+		void this.archiveMergedPullRequest(meta).catch((error: unknown) =>
+			console.warn(`pilotd: could not archive merged PR session ${id}: ${error}`),
+		);
 	}
 
-	private missionSummary(id: string): { missionId?: string } {
+	private isActiveMissionCoordinator(id: string): boolean {
 		const membership = this.missions?.membership(id);
-		return membership ? { missionId: membership.missionId } : {};
+		return membership?.active === true && membership.coordinator === true;
+	}
+
+	private missionSummary(id: string): Pick<SessionSummary, "missionId" | "activeMissionCoordinator"> {
+		const membership = this.missions?.membership(id);
+		return membership
+			? {
+					missionId: membership.missionId,
+					...(membership.active && membership.coordinator ? { activeMissionCoordinator: true } : {}),
+				}
+			: {};
 	}
 
 	/** Read committed artifacts without creating or waking a kernel worker. */
@@ -2543,6 +2557,7 @@ export class SessionManager {
 	 * latest known merge time decides the deadline. Persisted merge times avoid polling terminal PRs.
 	 */
 	private mergeArchiveTarget(meta: SessionMeta): { url: string; mergedAt: number } | undefined {
+		if (this.isActiveMissionCoordinator(meta.id)) return undefined;
 		const pr = meta.pullRequest;
 		const mergedAt = meta.pullRequestMergedAt ?? pr?.mergedAt;
 		if (pr?.state !== "merged" || meta.pullRequestError || mergedAt === undefined || !Number.isFinite(mergedAt))

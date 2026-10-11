@@ -388,7 +388,9 @@ private struct NeedsYouRow: View {
 
     @ViewBuilder private var icon: some View {
         switch item {
-        case let .chat(session): SessionStatusIcon(status: session.status)
+        case let .chat(session):
+            if session.isActiveMissionCoordinator { MissionCoordinatorIndicator() }
+            else { SessionStatusIcon(status: session.status) }
         case .blockedTask: Image(systemName: MissionTaskStatus.blocked.symbol).foregroundStyle(MissionTaskStatus.blocked.color)
         case .comment: Image(systemName: "text.quote").foregroundStyle(Theme.info)
         }
@@ -405,7 +407,8 @@ private struct NeedsYouRow: View {
     private var subtitle: String {
         switch item {
         case let .chat(session):
-            session.outcome == .failed ? "Failed. Review the chat." : "Finished. Review the result."
+            session.outcome == .failed ? "Failed. Review the chat." :
+                session.isActiveMissionCoordinator ? "New result. Review the chat." : "Finished. Review the result."
         case let .blockedTask(task):
             "Blocked" + (task.sessionId.flatMap { client.session($0)?.title }.map { " · \($0)" } ?? "")
         case let .comment(comment):
