@@ -17,9 +17,16 @@ test("branch, bookmark and push commands hint a PR recheck, other commands do no
 		"cd repo; gh pr ready 12",
 	])
 		assert.equal(changesRefs("bash", { command }), true, command);
-	for (const command of ["jj log", "jj st", "git status", "git branch", "git log --branches", "echo pushed", "npm test"])
+	for (const command of [
+		"jj log",
+		"jj st",
+		"git status",
+		"git branch",
+		"git log --branches",
+		"echo pushed",
+		"npm test",
+	])
 		assert.equal(changesRefs("bash", { command }), false, command);
 	assert.equal(changesRefs("read", { command: "git push" }), false);
 	assert.equal(changesRefs("bash", {}), false);
 });
-
