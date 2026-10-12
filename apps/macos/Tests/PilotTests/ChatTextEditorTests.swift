@@ -1,4 +1,5 @@
 import AppKit
+import PilotCore
 import Testing
 @testable import Pilot
 
@@ -54,9 +55,9 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     editor.onRemoveQueuedMessage = { removals += 1 }
     editor.onSubmit = { _ in Issue.record("Removal must not save or send") }
     editor.insertTab(nil)
-    #expect(editor.pathPicker != nil)
+    #expect(editor.completionPicker != nil)
     editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: .command))
-    #expect(editor.pathPicker == nil)
+    #expect(editor.completionPicker == nil)
     #expect(editor.string == "R")
     #expect(removals == 1)
 }
@@ -79,13 +80,13 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     editor.onNavigateQueue = { _ in queueNavigations += 1; return true }
     editor.insertTab(nil)
     editor.keyDown(with: try pickerKey(125, "\u{f701}"))
-    #expect(editor.pathPicker?.model.selected == 1)
+    #expect(editor.completionPicker?.model.selected == 1)
     editor.keyDown(with: try pickerKey(126, "\u{f700}"))
-    #expect(editor.pathPicker?.model.selected == 0)
+    #expect(editor.completionPicker?.model.selected == 0)
     editor.keyDown(with: try pickerKey(48, "\t", flags: .shift))
-    #expect(editor.pathPicker?.model.selected == 1)
+    #expect(editor.completionPicker?.model.selected == 1)
     editor.keyDown(with: try pickerKey(53, "\u{1b}"))
-    #expect(editor.pathPicker == nil)
+    #expect(editor.completionPicker == nil)
     #expect(editor.string == "R")
     #expect(cancellations == 0)
     #expect(queueNavigations == 0)
@@ -97,7 +98,7 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
         editor.insertTab(nil)
         editor.keyDown(with: try pickerKey(code, code == 48 ? "\t" : "\r"))
         #expect(editor.string == "README.md")
-        #expect(editor.pathPicker == nil)
+        #expect(editor.completionPicker == nil)
         #expect(saves == 0)
     }
     editor.keyDown(with: try pickerKey(36, "\r"))
@@ -119,9 +120,9 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     for code: UInt16 in [126, 125] {
         editor.keyDown(with: try pickerKey(code, "", flags: .option))
         editor.insertTab(nil)
-        #expect(editor.pathPicker != nil)
+        #expect(editor.completionPicker != nil)
         editor.keyDown(with: try pickerKey(code, "", flags: .option))
-        #expect(editor.pathPicker == nil)
+        #expect(editor.completionPicker == nil)
         #expect(editor.string == "R")
     }
     #expect(directions == ["up", "up", "down", "down"])
@@ -146,12 +147,12 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     var submissions = 0
     editor.onSubmit = { _ in submissions += 1 }
     editor.insertTab(nil)
-    #expect(editor.pathPicker?.model.candidates == ["README.md", "Report.txt"])
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["README.md", "Report.txt"])
     let event = try pickerKey(36, "\r")
     editor.keyDown(with: event)
     #expect(editor.string == "Read README.md")
     #expect(submissions == 0)
-    #expect(editor.pathPicker == nil)
+    #expect(editor.completionPicker == nil)
     editor.keyDown(with: event)
     #expect(submissions == 1)
 }
@@ -168,16 +169,16 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     editor.setSelectedRange(NSRange(location: 1, length: 0))
     editor.insertTab(nil)
     editor.keyDown(with: try pickerKey(125, "\u{f701}"))
-    #expect(editor.pathPicker?.model.selected == 1)
+    #expect(editor.completionPicker?.model.selected == 1)
     editor.keyDown(with: try pickerKey(126, "\u{f700}"))
-    #expect(editor.pathPicker?.model.selected == 0)
+    #expect(editor.completionPicker?.model.selected == 0)
     editor.keyDown(with: try pickerKey(48, "\t", flags: .shift))
-    #expect(editor.pathPicker?.model.selected == 1)
+    #expect(editor.completionPicker?.model.selected == 1)
     editor.keyDown(with: try pickerKey(53, "\u{1b}"))
-    #expect(editor.pathPicker == nil)
+    #expect(editor.completionPicker == nil)
     #expect(editor.string == "R")
     editor.insertTab(nil)
-    editor.pathPicker?.model.choose?(1)
+    editor.completionPicker?.model.choose?(1)
     #expect(editor.string == "Report.txt")
     editor.string = "R"
     editor.setSelectedRange(NSRange(location: 1, length: 0))
@@ -188,23 +189,125 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     editor.setSelectedRange(NSRange(location: 1, length: 0))
     editor.insertTab(nil)
     editor.completionDirectory = "/"
-    #expect(editor.pathPicker == nil)
+    #expect(editor.completionPicker == nil)
     editor.completionDirectory = directory.path
     editor.insertTab(nil)
     editor.string = "changed outside the editor"
-    editor.pathPicker?.model.choose?(0)
+    editor.completionPicker?.model.choose?(0)
     #expect(editor.string == "changed outside the editor")
-    #expect(editor.pathPicker == nil)
+    #expect(editor.completionPicker == nil)
+}
+
+private func slashEditor(_ commands: [SlashCommand] = SlashCommands.all([
+    SessionCommand(name: "review", source: .prompt, argumentHint: "<focus>"),
+    SessionCommand(name: "skill:commit", source: .skill),
+])) -> SubmitTextView {
+    _ = NSApplication.shared
+    let editor = SubmitTextView()
+    editor.completionDirectory = nil
+    editor.slashCommands = commands
+    return editor
+}
+
+private func type(_ text: String, into editor: SubmitTextView) {
+    editor.insertText(text, replacementRange: editor.selectedRange())
+}
+
+@Test @MainActor func slashMenuOpensAtTheStartRefinesWhileTypingAndClosesOnSpace() throws {
+    let editor = slashEditor()
+    var needed = 0
+    editor.onSlashCommandsNeeded = { needed += 1 }
+    type("/", into: editor)
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "review", "skill:commit"])
+    #expect(needed == 1)
+    let picker = editor.completionPicker
+    type("co", into: editor)
+    #expect(editor.completionPicker === picker, "the open menu is updated in place, not recreated")
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "skill:commit"])
+    #expect(needed == 1)
+    type("x", into: editor)
+    #expect(editor.completionPicker == nil, "no matches")
+    editor.string = ""
+    type("hello /", into: editor)
+    #expect(editor.completionPicker == nil, "only at the start of the message")
+    editor.string = ""
+    type("/compact", into: editor)
+    #expect(editor.completionPicker != nil)
+    type(" ", into: editor)
+    #expect(editor.completionPicker == nil, "arguments close the menu")
+    editor.slashCommands = nil
+    editor.string = ""
+    type("/", into: editor)
+    #expect(editor.completionPicker == nil, "disabled without commands")
+}
+
+@Test @MainActor func slashTabCompletesAndReturnRunsUnlessArgumentsAreExpected() throws {
+    let editor = slashEditor()
+    var submissions: [NSEvent.ModifierFlags] = []
+    editor.onSubmit = { submissions.append($0) }
+    type("/rev", into: editor)
+    editor.keyDown(with: try pickerKey(48, "\t"))
+    #expect(editor.string == "/review ")
+    #expect(editor.completionPicker == nil)
+    #expect(submissions.isEmpty)
+
+    editor.string = ""
+    type("/rev", into: editor)
+    editor.keyDown(with: try pickerKey(36, "\r"))
+    #expect(editor.string == "/review ", "a template with an argument hint is completed, not run")
+    #expect(submissions.isEmpty)
+
+    editor.string = ""
+    type("/com", into: editor)
+    editor.keyDown(with: try pickerKey(125, "\u{f701}"))
+    #expect(editor.completionPicker?.model.selected == 1)
+    editor.keyDown(with: try pickerKey(36, "\r", flags: .option))
+    #expect(editor.string == "/skill:commit")
+    #expect(submissions == [.option], "Return runs the command with the pressed delivery modifier")
+    #expect(editor.completionPicker == nil)
+
+    editor.string = ""
+    type("/compact", into: editor)
+    editor.keyDown(with: try pickerKey(36, "\r"))
+    #expect(editor.string == "/compact")
+    #expect(submissions.count == 2)
+}
+
+@Test @MainActor func slashEscapeAndShiftReturnLeaveTheDraftAlone() throws {
+    let editor = slashEditor()
+    var cancellations = 0
+    var submissions = 0
+    editor.onCancel = { cancellations += 1; return true }
+    editor.onSubmit = { _ in submissions += 1 }
+    type("/com", into: editor)
+    editor.keyDown(with: try pickerKey(53, "\u{1b}"))
+    #expect(editor.completionPicker == nil)
+    #expect(editor.string == "/com")
+    #expect(cancellations == 0, "Escape closes the menu before cancelling a queue edit")
+    editor.string = ""
+    type("/com", into: editor)
+    editor.keyDown(with: try pickerKey(36, "\r", flags: .shift))
+    #expect(editor.string == "/com\n")
+    #expect(editor.completionPicker == nil)
+    #expect(submissions == 0)
+}
+
+@Test @MainActor func loadedSessionCommandsRefreshAnOpenSlashMenu() throws {
+    let editor = slashEditor(SlashCommands.builtins)
+    type("/", into: editor)
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact"])
+    editor.slashCommands = SlashCommands.all([SessionCommand(name: "review", source: .prompt)])
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "review"])
 }
 
 @Test @MainActor func pathPickerStaysWithinSmallAndSecondaryScreens() {
-    let compact = PathCompletionPicker.frame(caret: CGRect(x: 300, y: 600, width: 0, height: 18),
+    let compact = CompletionPicker.frame(caret: CGRect(x: 300, y: 600, width: 0, height: 18),
                                              screen: CGRect(x: 0, y: 0, width: 1440, height: 900), count: 3)
     #expect(compact.height == 184) // Three compact rows plus keyboard footer and insets, no header.
     for screen in [CGRect(x: 0, y: 0, width: 380, height: 300), CGRect(x: -1440, y: 0, width: 1440, height: 900)] {
         for caret in [CGRect(x: screen.minX, y: screen.minY, width: 0, height: 18),
                       CGRect(x: screen.maxX, y: screen.maxY, width: 0, height: 18)] {
-            let frame = PathCompletionPicker.frame(caret: caret, screen: screen, count: 100)
+            let frame = CompletionPicker.frame(caret: caret, screen: screen, count: 100)
             #expect(screen.insetBy(dx: 12, dy: 12).contains(frame))
         }
     }

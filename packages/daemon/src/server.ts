@@ -5,6 +5,7 @@ import type {
 	ArtifactLibrary,
 	ChangeModelRequest,
 	ClientMessage,
+	CompactRequest,
 	CreateMissionRequest,
 	EditQueuedMessageRequest,
 	JoinMissionRequest,
@@ -18,6 +19,7 @@ import type {
 	ProjectRequest,
 	SendRequest,
 	ServerMessage,
+	SessionCommandsResponse,
 	SessionSummary,
 	SpawnRequest,
 	StartMissionTaskRequest,
@@ -232,6 +234,10 @@ export function createDaemonServer(
 			const { cwd, base, baseBranch } = sessions.changeBase(parts[2]!);
 			return json(res, 200, await repositoryChanges.changes(cwd, base, baseBranch));
 		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "commands" && req.method === "GET") {
+			const response: SessionCommandsResponse = { commands: await sessions.commands(parts[2]!) };
+			return json(res, 200, response);
+		}
 		if (
 			parts[1] === "sessions" &&
 			parts.length === 5 &&
@@ -281,6 +287,13 @@ export function createDaemonServer(
 			}
 			if (parts[3] === "stop") {
 				await sessions.stop(id);
+				return json(res, 202, { ok: true });
+			}
+			if (parts[3] === "compact") {
+				const body = (await readJson<CompactRequest | null>(req)) ?? {};
+				if (body.instructions !== undefined && typeof body.instructions !== "string")
+					throw new HttpError(400, "instructions must be a string");
+				await sessions.compact(id, body.instructions);
 				return json(res, 202, { ok: true });
 			}
 		}

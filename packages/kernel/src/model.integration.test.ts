@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -29,7 +29,11 @@ function deferred<T = void>() {
 	return { promise, resolve };
 }
 
-async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
+async function fixture(
+	t: TestContext,
+	extensions: ExtensionFactory[] = [],
+	resources: (root: string) => Promise<Partial<NonNullable<NativeAdapterOptions["loaderOptions"]>>> = async () => ({}),
+) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-model-"));
 	const sessions: KernelSession[] = [];
 	t.after(async () => {
@@ -69,6 +73,7 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 	});
 	const adapters: NativeAdapter[] = [];
 	const openAdapter = NativeAdapter.open;
+	const loaded = await resources(root);
 	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
 		const adapter = await openAdapter.call(NativeAdapter, {
 			...options,
@@ -87,6 +92,7 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[] = []) {
 				systemPrompt: "Offline model selection fixture.",
 				appendSystemPrompt: [],
 				extensionFactories: extensions,
+				...loaded,
 			},
 		});
 		adapters.push(adapter);
@@ -150,6 +156,37 @@ test("model selection updates native and durable choices, context usage and thin
 		globalSettings,
 		"session-specific selection does not rewrite pi's global model, thinking or scope settings",
 	);
+});
+
+test("slash commands list prompt templates and skills, expand on input, and queue a manual compaction", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t, [], async (root) => {
+		const prompt = join(root, "review.md");
+		await writeFile(
+			prompt,
+			"---\ndescription: Review the diff\nargument-hint: <focus>\n---\nReview with focus on $1.\n",
+		);
+		const skill = join(root, "skills", "commit");
+		await mkdir(skill, { recursive: true });
+		await writeFile(
+			join(skill, "SKILL.md"),
+			"---\nname: commit\ndescription: Create a commit\n---\nCommit the work.\n",
+		);
+		return { additionalPromptTemplatePaths: [prompt], additionalSkillPaths: [skill] };
+	});
+	const session = await f.open();
+	assert.deepEqual(session.commands, [
+		{ name: "review", source: "prompt", description: "Review the diff", argumentHint: "<focus>" },
+		{ name: "skill:commit", source: "skill", description: "Create a commit" },
+	]);
+	const adapter = f.adapters[0]!;
+	assert.equal(await adapter.prepareInput("/review tests"), "Review with focus on tests.");
+	assert.match(
+		await adapter.prepareInput("/skill:commit now"),
+		/^<skill name="commit"[\s\S]*Commit the work\.\n<\/skill>\n\nnow$/,
+	);
+	await session.compact("  keep test names  ");
 });
 
 test("a rejected provider switch keeps the previous provider's usage", async (t) => {

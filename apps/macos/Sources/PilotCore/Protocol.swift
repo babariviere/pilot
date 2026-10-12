@@ -363,6 +363,37 @@ public struct SendRequest: Codable, Sendable {
     }
 }
 
+/// A prompt template (`/name`) or skill (`/skill:name`) that the session's kernel expands when sent.
+public struct SessionCommand: Codable, Equatable, Sendable {
+    public enum Source: String, Codable, Sendable { case prompt, skill }
+    /// Invocation name without the leading slash.
+    public let name: String
+    public let source: Source
+    public let description: String?
+    public let argumentHint: String?
+
+    public init(name: String, source: Source, description: String? = nil, argumentHint: String? = nil) {
+        self.name = name
+        self.source = source
+        self.description = description
+        self.argumentHint = argumentHint
+    }
+}
+
+/// GET /api/sessions/:id/commands
+public struct SessionCommandsResponse: Codable, Sendable {
+    public let commands: [SessionCommand]
+}
+
+/// POST /api/sessions/:id/compact
+public struct CompactRequest: Codable, Sendable {
+    public let instructions: String?
+
+    public init(instructions: String?) {
+        self.instructions = instructions
+    }
+}
+
 /// POST /api/sessions/:id/model. Only idle chats can change their pinned model.
 public struct ChangeModelRequest: Codable, Sendable {
     public let model: String

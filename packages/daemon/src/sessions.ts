@@ -24,6 +24,7 @@ import type {
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
+	SessionCommand,
 	SessionListQuery,
 	SessionPullRequest,
 	SessionState,
@@ -647,6 +648,8 @@ export class SessionManager {
 	/** Live subagent subscriptions waiting for, or following, their child's storage. */
 	private readonly subagentAttachers = new Map<string, Set<() => void>>();
 	private readonly workerGenerations = new Map<string, number>();
+	/** Slash commands from each session's latest ready kernel. Kept while parked so listing never reopens it. */
+	private readonly commandLists = new Map<string, SessionCommand[]>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
 	private missions?: SessionMissionBridge;
 	/** Consecutive kernel crashes per session, so automatic work cannot restart a failing kernel in a loop. */
@@ -1760,6 +1763,72 @@ export class SessionManager {
 		}
 	}
 
+	/**
+	 * Prompt templates and skill commands the session's kernel expands. Served from the last ready kernel, so
+	 * listing reopens a parked session only the first time. Archived, preparing or failed sessions list none.
+	 */
+	async commands(id: string): Promise<SessionCommand[]> {
+		const cached = this.commandLists.get(id);
+		if (cached) return cached;
+		const meta = this.require(id);
+		if (meta.archivedAt !== undefined || meta.preparing || meta.workspaceRecovery || meta.failure) return [];
+		const end = this.updateGate.begin();
+		try {
+			if (this.closing) throw new Error("pilotd is shutting down");
+			await this.unparked(id);
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			return this.commandLists.get(id) ?? [];
+		} finally {
+			end();
+		}
+	}
+
+	/**
+	 * Queue a manual compaction. Resolves once the kernel has committed its task; the conversation keeps working and
+	 * the summary is placed when idle or at the next turn boundary. Stop cancels it.
+	 */
+	async compact(id: string, instructions?: string): Promise<void> {
+		const end = this.updateGate.begin();
+		let admitted = false;
+		try {
+			const meta = this.require(id);
+			if (instructions !== undefined && typeof instructions !== "string")
+				throw new Error("instructions must be a string");
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before compacting it");
+			if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
+			if (meta.preparing) throw new Conflict("Session workspace is still preparing");
+			if (this.closing) throw new Error("pilotd is shutting down");
+			if (meta.failure) throw new Error(meta.failure);
+			// Prevent archiving between the checks above, worker readiness, and the acknowledgement.
+			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+			admitted = true;
+			await this.unparked(id);
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			try {
+				await worker.request({
+					type: "compact",
+					requestId: randomUUID(),
+					...(instructions?.trim() ? { instructions: instructions.trim() } : {}),
+				});
+			} catch (error) {
+				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
+				throw error;
+			}
+			this.lastUse.set(id, Date.now());
+		} finally {
+			if (admitted) {
+				const count = (this.sending.get(id) ?? 1) - 1;
+				if (count) this.sending.set(id, count);
+				else this.sending.delete(id);
+			}
+			end();
+		}
+	}
+
 	/** Withdraw durable queued input, never daemon outbox commands or placed messages. */
 	async removeQueuedMessage(id: string, submissionId: number): Promise<void> {
 		const end = this.updateGate.begin();
@@ -2508,6 +2577,8 @@ export class SessionManager {
 				// A fresh kernel recovers from an earlier crash. Queued commands keep their error until admitted.
 				this.kernelErrors.delete(meta.id);
 				if (!meta.pending?.length) delete meta.inputError;
+				if (packet.commands && this.workers.get(meta.id) === worker)
+					this.commandLists.set(meta.id, packet.commands);
 				void this.save(meta);
 			} else if (wasWorking !== packet.working || (changed && packet.completion)) {
 				meta.updatedAt = Date.now();

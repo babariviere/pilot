@@ -23,7 +23,7 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
-import type { AgentEvent, DeliveryMode, SessionCompletion } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCommand, SessionCompletion } from "@pilot/protocol";
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion } from "./attention.ts";
@@ -440,6 +440,21 @@ export class KernelSession {
 	/** Withdraw one queued input without stopping the active run. */
 	async removeQueuedMessage(submissionId: number): Promise<void> {
 		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context);
+	}
+
+	/** Prompt templates and skill commands that input admission expands. */
+	get commands(): SessionCommand[] {
+		return this.adapter.commands();
+	}
+
+	/**
+	 * Queue a manual compaction. Returns once its task is committed; the summary is placed when idle or at the next
+	 * turn boundary, and `abort()` cancels it.
+	 */
+	async compact(instructions?: string): Promise<void> {
+		if (this.#closing || this.#changingModel) throw new ConversationBusy(this.conversation.id);
+		const trimmed = instructions?.trim();
+		await this.conversation.compact(trimmed || undefined, context);
 	}
 
 	/** Withdraw queued input and abort the current run. The conversation stays usable. */

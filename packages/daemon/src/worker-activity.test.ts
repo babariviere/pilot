@@ -22,6 +22,20 @@ test("ready idle is not safe before the initial activity snapshot", () => {
 	assert.equal(activity.busy, false);
 });
 
+test("a running compaction keeps an idle worker busy", () => {
+	const activity = new WorkerActivity();
+	const compaction = {
+		taskId: 7,
+		reason: "manual",
+		blocking: false,
+		attempt: 1,
+	} as SnapshotEvent["compactions"][number];
+	activity.observe([snapshot({ compactions: [compaction] })]);
+	assert.equal(activity.busy, true);
+	activity.observe([snapshot()]);
+	assert.equal(activity.busy, false);
+});
+
 test("accepted before working cannot open a preparation gap", () => {
 	const activity = new WorkerActivity();
 	const gate = new UpdateGate();

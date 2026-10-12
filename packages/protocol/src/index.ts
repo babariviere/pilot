@@ -638,6 +638,33 @@ export interface SendRequest {
 }
 
 /**
+ * A slash command the session's kernel expands when it is sent as a message. Prompt templates are invoked as
+ * `/name args` and skills as `/skill:name args`. Built-in client commands such as `/compact` are not listed.
+ */
+export interface SessionCommand {
+	/** Invocation name without the leading slash, for example "review" or "skill:commit". */
+	name: string;
+	source: "prompt" | "skill";
+	description?: string;
+	/** Argument placeholder from a prompt template's `argument-hint` frontmatter. */
+	argumentHint?: string;
+}
+
+/** GET /api/sessions/:id/commands. Reopens a parked session only when no list is cached. */
+export interface SessionCommandsResponse {
+	commands: SessionCommand[];
+}
+
+/**
+ * POST /api/sessions/:id/compact. Starts a manual compaction and returns once it is durably queued. The conversation
+ * keeps working; the summary is placed when idle or at the next turn boundary. Stop cancels it.
+ */
+export interface CompactRequest {
+	/** Optional guidance for what the summary should keep. */
+	instructions?: string;
+}
+
+/**
  * PATCH /api/sessions/:id/queue/:submissionId. Keeps the message's queue position. Without `mode`, the delivery mode
  * is unchanged; with it, the message is delivered as steering or as a follow-up from then on.
  */

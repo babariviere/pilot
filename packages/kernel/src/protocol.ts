@@ -1,5 +1,5 @@
 /** IPC between pilotd and one kernel worker process. */
-import type { AgentEvent, DeliveryMode, SessionCompletion, SessionSubagent } from "@pilot/protocol";
+import type { AgentEvent, DeliveryMode, SessionCommand, SessionCompletion, SessionSubagent } from "@pilot/protocol";
 import type { JsonValue } from "@earendil-works/chord";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext } from "./policy.ts";
@@ -41,6 +41,8 @@ export type KernelCommand =
 	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string; mode?: DeliveryMode }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
+	/** Manual compaction, acknowledged with `accepted` once its task is committed. */
+	| { type: "compact"; requestId: string; instructions?: string }
 	| { type: "abort"; requestId: string }
 	| { type: "inspectChildren"; requestId: string }
 	| {
@@ -66,6 +68,8 @@ export type KernelPacket =
 			working: boolean;
 			usage: KernelUsage;
 			completion?: SessionCompletion;
+			/** Prompt templates and skill commands the native kernel expands on input. */
+			commands?: SessionCommand[];
 	  }
 	| { type: "usage"; usage: KernelUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }

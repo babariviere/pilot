@@ -100,7 +100,8 @@ function snapshot(live: Readonly<LiveState> | null, inbox: Readonly<InboxState> 
 		type: "snapshot",
 		entries: [],
 		tools: [],
-		compactions: [],
+		// Manual compactions run without a run; an idle kernel must not be parked under them.
+		compactions: [...(live?.compactions ?? [])],
 		agent: {},
 		usage: { models: {}, tools: {} },
 		...(live?.run ? { run: { inputs: [...live.run.inputs] } } : {}),
@@ -156,6 +157,7 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 			// Keep only the small projection, not potentially large tool output or queued content.
 			let run = initial.run;
 			let queued = initial.inbox;
+			let compactions = initial.compactions;
 			detachCommit = session.subscribeCommits((publication) => {
 				if (stopped) return;
 				let touched = false;
@@ -165,6 +167,7 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 					if (change.record.kind === LiveDoc.definition.kind) {
 						const live = change.value as Readonly<LiveState> | null;
 						run = live?.run ? { inputs: [...live.run.inputs] } : undefined;
+						compactions = [...(live?.compactions ?? [])];
 						touched = true;
 					} else if (change.record.kind === InboxDoc.definition.kind) {
 						const inbox = change.value as Readonly<InboxState> | null;
@@ -173,7 +176,7 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 					}
 				}
 				if (!touched) return;
-				const frame: SnapshotEvent = { ...initial, ...(run ? { run } : {}), inbox: queued };
+				const frame: SnapshotEvent = { ...initial, ...(run ? { run } : {}), inbox: queued, compactions };
 				if (!run) delete frame.run;
 				const key = JSON.stringify(frame);
 				if (key === last) return;

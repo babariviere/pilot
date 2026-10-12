@@ -212,6 +212,10 @@ export function runKernelWorker(): void {
 				await session.removeQueuedMessage(command.submissionId);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
+			case "compact":
+				await session.compact(command.instructions);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "inspectChildren":
 				await send({ type: "children", requestId: command.requestId, hasChildren: await session.hasChildren() });
 				break;
@@ -272,6 +276,7 @@ export function runKernelWorker(): void {
 					working: session.working,
 					usage: session.usage,
 					...(session.completion ? { completion: session.completion } : {}),
+					commands: session.commands,
 				});
 			})();
 			void initialization.catch(async (error) => {

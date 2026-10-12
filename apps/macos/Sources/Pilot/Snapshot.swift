@@ -436,6 +436,34 @@ enum Snapshot {
             completionPreview: true
         )
 
+        // Typing "/" opens the slash command menu: Pilot's built-ins, then prompt templates and skills.
+        await render(
+            VStack {
+                Spacer()
+                Composer(
+                    state: ComposerState(), working: false, queuedMessages: [], completionDirectory: nil,
+                    onSend: { _, _ in }, onStop: {}, onEditQueuedMessage: { _, _, _ in }, onRemoveQueuedMessage: { _ in },
+                    slashCommands: SlashCommands.all([
+                        SessionCommand(name: "review", source: .prompt, description: "Review the current diff for bugs and risky changes",
+                                       argumentHint: "<focus>"),
+                        SessionCommand(name: "changelog", source: .prompt, description: "Draft release notes from merged changes"),
+                        SessionCommand(name: "skill:commit", source: .skill,
+                                       description: "Create a conventional jj commit and, when requested, push a relevant or inferred bookmark."),
+                        SessionCommand(name: "skill:pilot-artifacts", source: .skill,
+                                       description: "Author, publish, or update offline HTML, React, image, and SwiftUI artifacts."),
+                    ])
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.background),
+            size: CGSize(width: 840, height: 560),
+            to: directory.appending(path: "slash-completion.png"),
+            completionPreview: true, completionText: "/"
+        )
+        if CommandLine.arguments.contains("--completion-only") {
+            NSApp.terminate(nil)
+            return
+        }
+
         let session = Fixtures.sessions[0]
         model.selectedSessionId = session.id
         let feed = SessionFeed(sessionId: session.id, transcript: Fixtures.transcript)
@@ -768,6 +796,7 @@ enum Snapshot {
     }
 
     private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false,
+                                       completionText: String? = nil,
                                        scrollEditorToEnd: Bool = false, scrollTranscriptUp: Bool = false) async {
         let root = view
             .environmentObject(AppModel.shared)
@@ -812,10 +841,14 @@ enum Snapshot {
                 previewEditor = editor
                 window.makeKeyAndOrderFront(nil)
                 window.makeFirstResponder(editor)
-                editor.insertText("Please review apps/macos/Sources/Pilot/Cha", replacementRange: NSRange(location: 0, length: 0))
-                try? await Task.sleep(for: .milliseconds(300))
-                editor.completionDirectory = AppModel.shared.daemon.repoURL.path
-                editor.insertTab(nil)
+                if let completionText {
+                    editor.insertText(completionText, replacementRange: NSRange(location: 0, length: 0))
+                } else {
+                    editor.insertText("Please review apps/macos/Sources/Pilot/Cha", replacementRange: NSRange(location: 0, length: 0))
+                    try? await Task.sleep(for: .milliseconds(300))
+                    editor.completionDirectory = AppModel.shared.daemon.repoURL.path
+                    editor.insertTab(nil)
+                }
             } else {
                 let end = NSRange(location: editor.string.utf16.count, length: 0)
                 editor.setSelectedRange(end)
@@ -851,7 +884,7 @@ enum Snapshot {
             NSGraphicsContext.restoreGraphicsState()
         }
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
-        previewEditor?.dismissPathPicker()
+        previewEditor?.dismissCompletionPicker()
         window.orderOut(nil)
     }
 

@@ -136,6 +136,9 @@ public struct Transcript: Equatable, Sendable {
     public var todos: [SessionTodo] = []
     public var queued: Int { queuedMessages.count }
     public var retry: String?
+    /// Running compaction task IDs. Manual compactions can run while no run is active.
+    private var compactionTasks: Set<Int> = []
+    public var compacting: Bool { !compactionTasks.isEmpty }
     public var error: String? {
         didSet { if error != oldValue { rowRevision &+= 1 } }
     }
@@ -146,6 +149,7 @@ public struct Transcript: Equatable, Sendable {
         lhs.entries == rhs.entries && lhs.streaming == rhs.streaming && lhs.tools == rhs.tools
             && lhs.working == rhs.working && lhs.queuedMessages == rhs.queuedMessages
             && lhs.todos == rhs.todos && lhs.retry == rhs.retry && lhs.error == rhs.error
+            && lhs.compactionTasks == rhs.compactionTasks
     }
 
     private mutating func invalidateCommittedRows() {
@@ -212,6 +216,7 @@ public struct Transcript: Equatable, Sendable {
             }
             working = event["run"].map { !$0.isNull } ?? false
             retry = event["generation"]?["retry"]?["error"]?.string
+            compactionTasks = Set((event["compactions"]?.array ?? []).compactMap { $0["taskId"]?.int })
             // A replacement always invalidates rendering context, including result and
             // artifact lookups. Never reuse a previous snapshot's generation numbers.
             rowRevision = savedRowRevision &+ 1
@@ -265,6 +270,10 @@ public struct Transcript: Equatable, Sendable {
             retry = event["errorMessage"]?.string
         case "auto_retry_end":
             retry = nil
+        case "compaction_start":
+            if let id = event["taskId"]?.int { compactionTasks.insert(id) }
+        case "compaction_end":
+            if let id = event["taskId"]?.int { compactionTasks.remove(id) }
         case "task_failed":
             error = event["message"]?.string
         default:

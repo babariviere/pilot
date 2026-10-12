@@ -57,7 +57,7 @@ import {
 	ToolTask,
 	type UserInput,
 } from "@earendil-works/pi-durable";
-import type { DeliveryMode } from "@pilot/protocol";
+import type { DeliveryMode, SessionCommand } from "@pilot/protocol";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
@@ -644,6 +644,29 @@ export class NativeAdapter {
 		} finally {
 			this.session.clearQueue();
 		}
+	}
+
+	/** Prompt templates and skills that `prepareInput` expands, in pi's order: templates, then skills. */
+	commands(): SessionCommand[] {
+		this.assertOpen();
+		const templates = this.session.promptTemplates.map(
+			(template): SessionCommand => ({
+				name: template.name,
+				source: "prompt",
+				...(template.description ? { description: template.description } : {}),
+				...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
+			}),
+		);
+		const skills = this.session.settingsManager.getEnableSkillCommands()
+			? this.session.resourceLoader.getSkills().skills.map(
+					(skill): SessionCommand => ({
+						name: `skill:${skill.name}`,
+						source: "skill",
+						...(skill.description ? { description: skill.description } : {}),
+					}),
+				)
+			: [];
+		return [...templates, ...skills];
 	}
 
 	/** Register or replace a host tool through the SDK, refreshing direct and codemode declarations. */
