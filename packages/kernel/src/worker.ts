@@ -194,6 +194,15 @@ export function runKernelWorker(): void {
 				await session.abort();
 				await send({ type: "aborted", requestId: command.requestId });
 				break;
+			case "rewind":
+			case "activateAttempt": {
+				const result =
+					command.type === "rewind"
+						? await session.rewind(command.action, command.entryId)
+						: await session.activateAttempt(command.attemptId);
+				await send({ type: "rewound", requestId: command.requestId, ...result });
+				break;
+			}
 			case "editQueuedMessage":
 				await session.editQueuedMessage(command.submissionId, command.content, command.mode);
 				await send({ type: "accepted", requestId: command.requestId });
@@ -277,6 +286,7 @@ export function runKernelWorker(): void {
 					usage: session.usage,
 					...(session.completion ? { completion: session.completion } : {}),
 					commands: session.commands,
+					...(session.attempts ? { attempts: session.attempts } : {}),
 				});
 			})();
 			void initialization.catch(async (error) => {

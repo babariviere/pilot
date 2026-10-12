@@ -61,3 +61,19 @@ export function applyFailure(meta: OutcomeMeta, reason: string, now: number): bo
 	meta.outcomeReason = reason;
 	return true;
 }
+
+/**
+ * The session moved to another conversation attempt, whose own completions follow. Keeps the version high-water
+ * marks, so the left attempt's outcome cannot return and attention versions stay monotonic.
+ */
+export function clearOutcome(meta: OutcomeMeta): boolean {
+	if (meta.outcome === undefined && meta.outcomeAt === undefined && meta.outcomeReason === undefined) return false;
+	if (meta.outcomeAt !== undefined) {
+		meta.lastOutcomeAt = Math.max(meta.lastOutcomeAt ?? -1, meta.outcomeAt);
+		meta.lastCompletionAt ??= meta.outcomeAt;
+	}
+	delete meta.outcome;
+	delete meta.outcomeAt;
+	delete meta.outcomeReason;
+	return true;
+}

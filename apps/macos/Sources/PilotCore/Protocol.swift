@@ -69,6 +69,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let branches: [String]?
     /// A lookup failed. Any retained pull request is last-known, not a fresh result.
     public let pullRequestError: String?
+    /// Conversation attempts from retry, edit and restore, oldest first. Omitted while there is only the original.
+    public let attempts: [SessionAttempt]?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
     public var effectiveMode: ChatMode { mode ?? .build }
@@ -121,7 +123,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         lastUserMessageAt: Double? = nil,
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
-        branches: [String]? = nil, activeMissionCoordinator: Bool? = nil
+        branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil
     ) {
         self.id = id
         self.title = title
@@ -156,6 +158,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.pullRequests = pullRequests
         self.branches = branches
         self.pullRequestError = pullRequestError
+        self.attempts = attempts
     }
 }
 
@@ -401,6 +404,73 @@ public struct CompactRequest: Codable, Sendable {
     public init(instructions: String?) {
         self.instructions = instructions
     }
+}
+
+/// How an attempt started. Mirrors packages/protocol's RewindAction.
+public enum RewindAction: String, Codable, Hashable, Sendable {
+    case retry
+    case edit
+    case restore
+}
+
+/// One conversation of a session. The chat shows and continues only its active attempt.
+public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    /// Nil for the original conversation, and for actions this client does not know.
+    public let reason: RewindAction?
+    /// Epoch milliseconds. Nil for the original conversation.
+    public let createdAt: Double?
+    public let preview: String?
+    public let active: Bool?
+
+    public var isActive: Bool { active ?? false }
+
+    public init(id: String, reason: RewindAction? = nil, createdAt: Double? = nil, preview: String? = nil,
+                active: Bool? = nil) {
+        self.id = id
+        self.reason = reason
+        self.createdAt = createdAt
+        self.preview = preview
+        self.active = active
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        reason = (try? container.decodeIfPresent(String.self, forKey: .reason)).flatMap { $0.flatMap(RewindAction.init(rawValue:)) }
+        createdAt = try container.decodeIfPresent(Double.self, forKey: .createdAt)
+        preview = try container.decodeIfPresent(String.self, forKey: .preview)
+        active = try container.decodeIfPresent(Bool.self, forKey: .active)
+    }
+
+    /// Menu label, e.g. "Retry", "Edited: fix the login test".
+    public var title: String {
+        let detail = preview.map { $0.split(whereSeparator: \.isNewline).first.map(String.init) ?? $0 }
+            .map { $0.count > 48 ? String($0.prefix(47)) + "…" : $0 }
+        switch reason {
+        case nil: return "Original"
+        case .retry: return "Retry"
+        case .restore: return "Restored"
+        case .edit: return detail.map { "Edited: \($0)" } ?? "Edited"
+        }
+    }
+}
+
+/// POST /api/sessions/:id/rewind
+public struct RewindRequest: Codable, Sendable {
+    public let action: RewindAction
+    public let entryId: Int
+
+    public init(action: RewindAction, entryId: Int) {
+        self.action = action
+        self.entryId = entryId
+    }
+}
+
+public struct RewindResponse: Codable, Sendable {
+    public let session: SessionSummary
+    /// Text of the edited message, for the composer.
+    public let draft: String?
 }
 
 /// POST /api/sessions/:id/model. Only idle chats can change their pinned model.

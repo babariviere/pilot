@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,8 +20,10 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import { userText } from "./attempts.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
+import { readSessionSnapshot } from "./snapshot.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -121,7 +124,7 @@ async function fixture(
 		sessions.push(session);
 		return session;
 	};
-	return { open, a, b, bus, changes, adapters };
+	return { open, a, b, bus, changes, adapters, spec };
 }
 
 test("jobs-style completions stay pending while Harness works and wake it once after settling", {
@@ -677,4 +680,146 @@ test("idle-only input checks durable state after native preparation and guards c
 	f.a.setResponses([fauxAssistantMessage("done")]);
 	await session.submit("idle-preparing", "Can retry rejected admission", "followUp", true);
 	await session.conversation.waitForIdle(context);
+});
+
+test("retry, edit and restore continue from earlier points in attempts that survive reopening", {
+	timeout: 30_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const failure = (message = "Invalid request") =>
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: message });
+	const entries = async (session: KernelSession) =>
+		(await session.conversation.entries({}, 100, undefined, context)).items.toReversed();
+	const texts = async (session: KernelSession) =>
+		(await entries(session))
+			.filter((entry) => entry.kind !== "pi.system")
+			.map((entry) =>
+				entry.kind === "pi.user"
+					? `user:${userText(entry)}`
+					: `${entry.kind}:${(entry.model ?? [])
+							.map((message) =>
+								message.role === "assistant"
+									? (message.errorMessage ??
+										message.content.map((part) => (part.type === "text" ? part.text : "")).join(""))
+									: "",
+							)
+							.join("")}`,
+			);
+	const run = async (
+		session: KernelSession,
+		content: string,
+		...responses: ReturnType<typeof fauxAssistantMessage>[]
+	) => {
+		f.a.setResponses(responses);
+		await session.submit(randomUUID(), content, "followUp");
+		await session.conversation.waitForIdle(context);
+	};
+
+	let session = await f.open();
+	await run(session, "first", fauxAssistantMessage("Answer one"));
+	await run(session, "second", failure());
+	assert.deepEqual(await texts(session), [
+		"user:first",
+		"pi.assistant:Answer one",
+		"user:second",
+		"pi.assistant:Invalid request",
+	]);
+	// The user switches model to get past the failure; the retry keeps that choice.
+	await session.changeModel(second);
+	const failed = (await entries(session)).at(-1)!;
+	const retried = await session.rewind("retry", failed.id);
+	assert.equal(retried.content, "second");
+	assert.equal(retried.switched, true);
+	assert.deepEqual(
+		retried.attempts?.map((attempt) => [attempt.reason, attempt.active ?? false]),
+		[
+			[undefined, false],
+			["retry", true],
+		],
+	);
+	await assert.rejects(
+		session.submit(randomUUID(), "late", "followUp"),
+		ConversationBusy,
+		"a retired kernel takes no input",
+	);
+	await session.close();
+
+	session = await f.open();
+	assert.equal(session.model, second);
+	assert.deepEqual(await texts(session), ["user:first", "pi.assistant:Answer one"]);
+	await run(session, "second", failure());
+	const retriedAgain = await session.rewind("retry", (await entries(session)).at(-1)!.id);
+	assert.deepEqual(
+		retriedAgain.attempts?.map((attempt) => attempt.reason),
+		[undefined, "retry"],
+		"an attempt holding only a failed turn is replaced, not listed",
+	);
+	await session.close();
+
+	session = await f.open();
+	await run(session, "second", fauxAssistantMessage("Answer two"));
+	const kept = session.conversation.id;
+	const answer = (await entries(session)).find((entry) => entry.kind === "pi.assistant")!;
+	const restored = await session.rewind("restore", answer.id);
+	assert.equal(restored.content, undefined);
+	assert.deepEqual(
+		restored.attempts?.map((attempt) => attempt.reason),
+		[undefined, "retry", "restore"],
+	);
+	await session.close();
+
+	session = await f.open();
+	assert.deepEqual(await texts(session), ["user:first", "pi.assistant:Answer one"]);
+	await assert.rejects(session.activateAttempt(424242), /Unknown attempt/);
+	assert.equal((await session.activateAttempt(Number(session.conversation.id))).switched, false);
+	const activated = await session.activateAttempt(Number(kept));
+	assert.equal(activated.switched, true);
+	assert.deepEqual(
+		activated.attempts?.map((attempt) => [attempt.reason, attempt.active ?? false]),
+		[
+			[undefined, false],
+			["retry", true],
+		],
+		"the empty restore attempt is hidden once left",
+	);
+	await session.close();
+
+	session = await f.open();
+	assert.equal(session.conversation.id, kept);
+	assert.deepEqual((await texts(session)).slice(-2), ["user:second", "pi.assistant:Answer two"]);
+	const firstMessage = (await entries(session))[0]!;
+	const edited = await session.rewind("edit", firstMessage.id);
+	assert.equal(edited.content, "first");
+	await session.close();
+
+	session = await f.open();
+	assert.deepEqual(await texts(session), [], "editing the first message starts from an empty conversation");
+	assert.equal(session.model, second);
+	assert.deepEqual(session.attempts?.at(-1)?.preview, "first");
+	await session.close();
+	const cold = await readSessionSnapshot(f.spec.storageDir, f.spec.cwd, false);
+	const snapshot = cold.events[0];
+	assert.equal(
+		snapshot?.type === "snapshot" ? snapshot.entries.length : -1,
+		0,
+		"cold views follow the active attempt",
+	);
+	assert.equal(f.a.state.callCount + f.b.state.callCount, 4, "rewinding and switching never run a model");
+});
+
+test("rewinding rejects unknown entries and points that cannot be resent", { timeout: 15_000 }, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	f.a.setResponses([fauxAssistantMessage("Answer")]);
+	await session.submit(randomUUID(), "only", "followUp");
+	await session.conversation.waitForIdle(context);
+	const listed = (await session.conversation.entries({}, 10, undefined, context)).items;
+	const user = listed.find((entry) => entry.kind === "pi.user");
+	const assistant = listed.find((entry) => entry.kind === "pi.assistant");
+	await assert.rejects(session.rewind("edit", 999_999), /not part of this conversation/);
+	await assert.rejects(session.rewind("edit", assistant!.id), /Only a user message/);
+	await assert.rejects(session.rewind("restore", user!.id), /Only an agent message/);
+	await assert.rejects(session.rewind("restore", assistant!.id), /already the latest point/);
+	assert.equal(session.attempts, undefined);
+	await session.submit(randomUUID(), "still usable", "followUp");
 });

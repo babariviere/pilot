@@ -1,5 +1,13 @@
 /** IPC between pilotd and one kernel worker process. */
-import type { AgentEvent, DeliveryMode, SessionCommand, SessionCompletion, SessionSubagent } from "@pilot/protocol";
+import type {
+	AgentEvent,
+	DeliveryMode,
+	RewindAction,
+	SessionAttempt,
+	SessionCommand,
+	SessionCompletion,
+	SessionSubagent,
+} from "@pilot/protocol";
 import type { JsonValue } from "@earendil-works/chord";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext } from "./policy.ts";
@@ -44,6 +52,10 @@ export type KernelCommand =
 	/** Manual compaction, acknowledged with `accepted` once its task is committed. */
 	| { type: "compact"; requestId: string; instructions?: string }
 	| { type: "abort"; requestId: string }
+	/** Stop work and continue from an earlier point in a new attempt. Answered by `rewound`. */
+	| { type: "rewind"; requestId: string; action: RewindAction; entryId: number }
+	/** Stop work and continue another attempt. Answered by `rewound`. */
+	| { type: "activateAttempt"; requestId: string; attemptId: number }
 	| { type: "inspectChildren"; requestId: string }
 	| {
 			type: "subagent";
@@ -70,6 +82,8 @@ export type KernelPacket =
 			completion?: SessionCompletion;
 			/** Prompt templates and skill commands the native kernel expands on input. */
 			commands?: SessionCommand[];
+			/** Omitted while the session has a single attempt. */
+			attempts?: SessionAttempt[];
 	  }
 	| { type: "usage"; usage: KernelUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
@@ -83,6 +97,11 @@ export type KernelPacket =
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
+	/**
+	 * The active attempt changed (`switched`): this kernel accepts no more work and must be replaced. `content` is the
+	 * message retry resends or edit restores to the composer.
+	 */
+	| { type: "rewound"; requestId: string; switched: boolean; content?: string; attempts?: SessionAttempt[] }
 	| { type: "modelChanged"; requestId: string; model: string; thinking: string; usage: KernelUsage }
 	| { type: "working"; working: boolean; completion?: SessionCompletion }
 	| { type: "events"; watchId: string; events: AgentEvent[] }

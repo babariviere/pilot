@@ -8,12 +8,12 @@ import {
 	type EntryRecord,
 	InboxDoc,
 	LiveDoc,
-	ROOT_CONVERSATION_ID,
 	type Storage,
 	UsageDoc,
 } from "@earendil-works/pi-durable";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
+import { activeConversation, lineage } from "./attempts.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
@@ -59,7 +59,7 @@ async function conversationView(
 		]);
 		const snapshot: AgentEvent = {
 			type: "snapshot",
-			entries: await new InputOrigins(storage, id, context).entries(
+			entries: await new InputOrigins(storage, await lineage(storage, id, context), context).entries(
 				head ? [head, ...range.filter((entry) => entry.head === undefined)] : range,
 			),
 			...(live?.run ? { run: { inputs: live.run.inputs } } : {}),
@@ -178,10 +178,11 @@ export async function readEarlierEntries(
 	let bytes = 0;
 	let more = false;
 	try {
+		const conversationId = await activeConversation(storage, context);
 		let cursor: Cursor | undefined;
 		do {
 			const page = await storage.scanEntries(
-				{ conversationId: ROOT_CONVERSATION_ID, maxEntryId: (before - 1) as EntryRecord["id"] },
+				{ conversationId, maxEntryId: (before - 1) as EntryRecord["id"] },
 				64,
 				cursor,
 				context,
@@ -200,7 +201,9 @@ export async function readEarlierEntries(
 		entries.splice(
 			0,
 			entries.length,
-			...(await new InputOrigins(storage, ROOT_CONVERSATION_ID, context).entries(entries)),
+			...(await new InputOrigins(storage, await lineage(storage, conversationId, context), context).entries(
+				entries,
+			)),
 		);
 	} finally {
 		await storage.close(context);
@@ -231,7 +234,7 @@ export async function readSessionSnapshot(
 			queueUpdate(null),
 		];
 	} else {
-		const view = await conversationView(storage, ROOT_CONVERSATION_ID);
+		const view = await conversationView(storage, await activeConversation(storage, context));
 		events = view.events;
 		completion = view.completion;
 	}

@@ -17,6 +17,7 @@ import type {
 	MissionResourceWrite,
 	MissionTaskWrite,
 	ProjectRequest,
+	RewindRequest,
 	SendRequest,
 	ServerMessage,
 	SessionCommandsResponse,
@@ -309,6 +310,25 @@ export function createDaemonServer(
 				await sessions.compact(id, body.instructions);
 				return json(res, 202, { ok: true });
 			}
+			if (parts[3] === "rewind") {
+				const body = await readJson<RewindRequest | null>(req);
+				if (!body || (body.action !== "retry" && body.action !== "edit" && body.action !== "restore"))
+					throw new HttpError(400, "action must be retry, edit or restore");
+				if (typeof body.entryId !== "number" || !Number.isSafeInteger(body.entryId) || body.entryId <= 0)
+					throw new HttpError(400, "entryId must be a positive integer");
+				return json(res, 200, await sessions.rewind(id, body.action, body.entryId));
+			}
+		}
+		if (
+			parts[1] === "sessions" &&
+			parts.length === 6 &&
+			parts[3] === "attempts" &&
+			parts[5] === "activate" &&
+			req.method === "POST"
+		) {
+			if (!/^[1-9]\d*$/.test(parts[4]!) || !Number.isSafeInteger(Number(parts[4])))
+				throw new HttpError(400, "Invalid attempt ID");
+			return json(res, 200, await sessions.activateAttempt(parts[2]!, parts[4]!));
 		}
 		if (parts[1] === "sessions" && parts.length === 6 && parts[3] === "subagents") {
 			const id = parts[2]!;

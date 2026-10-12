@@ -292,3 +292,32 @@ public struct ToolSummary: Equatable, Sendable {
         return object.keys.sorted().lazy.compactMap { object[$0]?.string }.first
     }
 }
+
+/// Conversation points a row offers to continue from. Only committed rows qualify: streaming rows and the live
+/// error row have no durable entry yet.
+extension ChatRow {
+    /// The durable entry a committed row was rendered from. Row IDs start with the entry ID.
+    public var entryID: Int? {
+        guard let prefix = id.split(separator: "-", maxSplits: 1).first, let value = Int(prefix), value > 0 else { return nil }
+        return value
+    }
+
+    /// Edit for messages the user typed, restore for agent replies, retry for a failed turn.
+    public var rewindAction: RewindAction? {
+        guard entryID != nil else { return nil }
+        switch self {
+        case .user: return .edit
+        case .text: return .restore
+        case .error: return .retry
+        default: return nil
+        }
+    }
+}
+
+extension TranscriptPresentation {
+    /// The failed turn the chat offers to retry: a committed error that is the transcript's last row while idle.
+    public var retryEntryID: Int? {
+        guard !working, !streaming, let last = liveRows.last ?? historyRows.last, last.rewindAction == .retry else { return nil }
+        return last.entryID
+    }
+}

@@ -704,6 +704,24 @@ reports), producing a morning summary in the app and Slack.
   reads pages on its snapshot reader threads, never waking a parked kernel; the app reduces each page in
   order with the live stream, and scroll anchoring keeps the visible rows in place. Loaded pages survive
   reconnect snapshots for the same compaction and are dropped when the chat is closed.
+- Conversation attempts let a chat continue from an earlier point without losing what happened after it.
+  The durable conversation is never truncated: Pilot forks it (pi-durable `fork`) and switches the session to
+  the fork, recorded in a session-scoped `pilot.attempts` document that kernels, cold views and history read.
+  Every action first stops the current run (queued input is withdrawn), asking for confirmation while work is
+  running. Workspace files are never reverted, and the latest model and thinking choice carries over.
+  - Retry: a small Retry button on the error row of the last turn, only when that turn failed and the chat is
+    idle. It forks just before the user message that started the turn and resends it, so the new run gets the
+    harness's usual bounded automatic retries (3, with backoff). It is always manual and never loops, and it
+    is offered for non-retryable errors too (quota, auth), since the user may have switched model or fixed them.
+  - Edit and Resend (user message context menu): forks just before the message and puts its text in the
+    composer to change and send. Editing the first message starts an empty conversation.
+  - Restore to Here (agent reply context menu): forks at the end of that turn, before the next user message,
+    so no tool call is left without its result.
+  - A toolbar chip ("Attempt 2 of 3") lists the original and every attempt, and switches between them. An attempt
+    that holds nothing but failed or stopped turns is hidden once left, so repeated retries of an overloaded
+    provider do not pile up. The list is bounded.
+  - pilotd holds the configuration lock throughout, then replaces the retired kernel with one that opens the new
+    attempt and reattaches every viewer. The left attempt's outcome and errors are cleared.
 - Task and chat composers accept native clipboard images with Command-V, showing removable previews
   above the text input. Save app-owned PNG copies in Application Support and include their absolute
   paths in the message for pi's read tool. Image-only messages are supported; sent files are retained
@@ -848,6 +866,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/projects/:id/branches?mode=ask` or `?mode=build&workspace=clone` | List origin heads even for projects whose default Build policy is direct |
 | `POST /api/update/prepare` | Atomically grant a bounded admission pause if agents and queued admissions are idle (`{ ready }`, done) |
 | `PATCH /api/sessions/:id/queue/:submissionId`, `DELETE /api/sessions/:id/queue/:submissionId` | Edit or remove a still-queued user message without resubmitting or interrupting the active run (done) |
+| `POST /api/sessions/:id/rewind`, `POST /api/sessions/:id/attempts/:attemptId/activate`, `SessionSummary.attempts` | Retry, edit or restore into a new conversation attempt, and switch attempts; stops current work first and never reverts files (done) |
 | `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |
 | `GET /api/sessions/:id/artifacts/:artifactId?revision=N` | Read a pinned revision (latest when omitted) |
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
