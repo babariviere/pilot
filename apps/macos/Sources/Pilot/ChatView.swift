@@ -148,7 +148,6 @@ final class SessionFeed: ObservableObject {
 
 struct ChatView: View {
     let session: SessionSummary
-    @EnvironmentObject private var model: AppModel
     @StateObject private var feed: SessionFeed
     @StateObject private var composerOwner: ChatComposerOwner
     @StateObject private var scroll = TranscriptScrollState()
@@ -159,6 +158,8 @@ struct ChatView: View {
     @StateObject private var slashCommands = SlashCommandSource()
     @StateObject private var rewind = TranscriptRewind()
     private let bottomPadding: CGFloat = 8
+    /// Offline performance checks report this, so redundant transcript invalidations are countable.
+    static var bodyEvaluations = 0
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
         self.session = session
@@ -167,8 +168,12 @@ struct ChatView: View {
     }
 
     private var composer: ComposerState { composerOwner.state }
+    /// Actions only. Observing the app model would re-evaluate the transcript for unrelated
+    /// changes such as sidebar search or selection elsewhere.
+    private var model: AppModel { AppModel.shared }
 
     var body: some View {
+        let _ = Self.bodyEvaluations &+= 1
         let transcript = feed.presentation
         ScrollViewReader { proxy in
             ScrollView {

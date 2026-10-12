@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import Testing
 @testable import Pilot
@@ -72,6 +73,37 @@ private func findObserver(_ view: NSView) -> ScrollObserverView? {
     scroll.contentView.scroll(to: bottom)
     center.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
     #expect(state.follow.shouldScrollToBottom)
+}
+
+/// The chat observes this state for its lifetime. Publishing per live-scroll frame re-evaluated
+/// the whole transcript, composer and todos on every frame of a scroll gesture.
+@Test @MainActor func liveScrollingDoesNotInvalidateTheTranscript() throws {
+    let window = testWindow()
+    defer { window.close() }
+    let state = TranscriptScrollState()
+    var changes = 0
+    let observation = state.objectWillChange.sink { changes += 1 }
+    defer { observation.cancel() }
+    let hosting = NSHostingView(rootView: ScrollTestChat(state: state))
+    window.contentView = hosting
+    hosting.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+    hosting.layoutSubtreeIfNeeded()
+    let observer = try #require(findObserver(hosting))
+    let scroll = try #require(observer.enclosingScrollView)
+    let center = NotificationCenter.default
+
+    center.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+    let bottom = scroll.contentView.bounds.origin
+    for offset in stride(from: 40.0, through: 400, by: 40) {
+        scroll.contentView.scroll(to: NSPoint(x: bottom.x, y: bottom.y - offset))
+        center.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+    }
+    center.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+    state.messageToggled()
+
+    #expect(!state.follow.shouldScrollToBottom)
+    #expect(changes == 0)
 }
 
 private final class FlippedScrollDocument: NSView {

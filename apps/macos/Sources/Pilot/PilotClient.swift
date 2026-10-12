@@ -831,10 +831,16 @@ final class PilotClient: ObservableObject {
     }
 
     private func update(_ session: SessionSummary) {
-        if self.session(session.id)?.updatedAt != session.updatedAt { summaryCache.invalidate(session.id) }
-        sessions.removeAll { $0.id == session.id }
-        sessions.append(session)
-        sessions.sort(by: SessionSummary.listPrecedes)
+        let current = self.session(session.id)
+        if current?.updatedAt != session.updatedAt { summaryCache.invalidate(session.id) }
+        // An unchanged summary must not invalidate every view observing the session list.
+        guard current != session else { return }
+        // Publish once, rather than once per removal, insertion and sort.
+        var next = sessions
+        next.removeAll { $0.id == session.id }
+        next.append(session)
+        next.sort(by: SessionSummary.listPrecedes)
+        sessions = next
         onSessionsChanged?([session], false)
     }
 
