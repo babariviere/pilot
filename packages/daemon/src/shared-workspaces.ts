@@ -59,6 +59,8 @@ const recoverableInput = (path: string) =>
 	localConfigs.includes(path) || /^\.pi\/todos\/[a-zA-Z0-9_-]+\.(md|json)$/.test(path);
 const fullCommit = /^[0-9a-f]{40}$/;
 const maintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false"];
+const baseRefs = "refs/pilot/origin/";
+const baseRemote = "pilot-base";
 const networkEnvironment = new Set([
 	"GIT_ASKPASS",
 	"GIT_SSH",
@@ -78,9 +80,12 @@ function workspaceEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.Proc
 			Object.entries(env).filter(([key]) => !key.startsWith("GIT_") || networkEnvironment.has(key)),
 		),
 		// jj may invoke Git too. This is command-scoped, never a change to the source's config.
-		GIT_CONFIG_COUNT: "1",
+		GIT_CONFIG_COUNT: "2",
 		GIT_CONFIG_KEY_0: "core.hooksPath",
 		GIT_CONFIG_VALUE_0: "/dev/null",
+		// Global pruneTags can add an implicit tags refspec even when fetching only a private base.
+		GIT_CONFIG_KEY_1: "fetch.pruneTags",
+		GIT_CONFIG_VALUE_1: "false",
 	};
 }
 
@@ -204,6 +209,13 @@ export class SharedWorkspaceStore {
 			".jj/repo",
 			".jj/repo/store",
 			".jj/pilot-workspaces",
+			".jj/pilot-base.git",
+			".jj/pilot-base.git/objects",
+			".jj/pilot-base.git/objects/info",
+			".jj/pilot-base.git/refs",
+			".jj/pilot-base.git/refs/heads",
+			".jj/pilot-control",
+			".jj/pilot-control/.jj",
 		]) {
 			const entry = await stat(join(repository, directory));
 			if (
@@ -291,13 +303,8 @@ export class SharedWorkspaceStore {
 	}
 
 	private async child(cwd: string, shared: SharedWorkspace) {
-		const registered = await this.registered(shared);
-		if (!registered || registered.path !== cwd) throw new Error("jj workspace path binding mismatch");
-		if (!(await safeFile(cwd, ".jj/repo")) || !(await safeFile(cwd, ".git")))
-			throw new Error("Unsafe child workspace metadata");
-		const repository = (await readFile(join(cwd, ".jj/repo"), "utf8")).trim();
-		if ((await realpath(resolve(cwd, ".jj", repository))) !== join(shared.repository, ".jj", "repo"))
-			throw new Error("Child points to a different jj repository");
+		await this.jjChild(cwd, shared);
+		if (!(await safeFile(cwd, ".git"))) throw new Error("Unsafe child workspace metadata");
 		const common = await this.runner("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], cwd);
 		if ((await realpath(common)) !== join(shared.repository, ".git"))
 			throw new Error("Child points to a different Git repository");
@@ -311,6 +318,59 @@ export class SharedWorkspaceStore {
 			throw new Error("Git worktree path binding mismatch");
 	}
 
+	private async jjChild(cwd: string, shared: SharedWorkspace) {
+		const registered = await this.registered(shared);
+		if (!registered || registered.path !== cwd) throw new Error("jj workspace path binding mismatch");
+		if (!(await safeFile(cwd, ".jj/repo"))) throw new Error("Unsafe child workspace metadata");
+		const repository = (await readFile(join(cwd, ".jj/repo"), "utf8")).trim();
+		if ((await realpath(resolve(cwd, ".jj", repository))) !== join(shared.repository, ".jj", "repo"))
+			throw new Error("Child points to a different jj repository");
+	}
+
+	private async materialize(cwd: string, shared: SharedWorkspace, signal?: AbortSignal) {
+		await this.jjChild(cwd, shared);
+		if (!(await stat(join(cwd, ".git")))) {
+			// update-stale imports Git refs too, so only run it before colocation is enabled.
+			await this.jj(["workspace", "update-stale"], cwd, signal);
+		} else await this.child(cwd, shared);
+	}
+
+	private async colocate(cwd: string, shared: SharedWorkspace, signal?: AbortSignal) {
+		if (!(await stat(join(cwd, ".git"))))
+			await this.jj(["--ignore-working-copy", "git", "colocation", "enable"], cwd, signal);
+		await this.child(cwd, shared);
+	}
+
+	/** A retained, empty non-colocated command workspace. Never snapshot/import the default workspace. */
+	private async control(repository: string, signal?: AbortSignal) {
+		const shared = { repository, name: "pilot-control" };
+		const path = join(repository, ".jj/pilot-control");
+		if (!(await this.registered(shared))) {
+			if (await stat(path)) throw new Error("Unowned partial control workspace requires review");
+			await this.jj(
+				[
+					"--ignore-working-copy",
+					"workspace",
+					"add",
+					"--no-colocate",
+					"--sparse-patterns=full",
+					"--name",
+					shared.name,
+					"-r",
+					"root()",
+					path,
+				],
+				repository,
+				signal,
+			);
+		}
+		await this.jjChild(path, shared);
+		if (await stat(join(path, ".git"))) throw new Error("Control workspace must not be colocated");
+		// Also resumes a crash after adding the control workspace but before its empty checkout.
+		await this.jj(["workspace", "update-stale"], path, signal);
+		return path;
+	}
+
 	private async optional(file: string, args: string[], cwd: string, runner = this.runner) {
 		try {
 			return await runner(file, args, cwd);
@@ -320,8 +380,8 @@ export class SharedWorkspaceStore {
 	}
 
 	/**
-	 * Seed remote-tracking refs from the source checkout's view of origin, which may be days old. Only missing refs
-	 * are created and existing ones fast-forwarded, so a stale source never rewinds a tip another session fetched.
+	 * Seed the daemon's private base cache from the source's possibly stale origin view. Never write agent-owned
+	 * refs/remotes/origin. Only missing refs and fast-forwards are accepted, including a CAS for missing refs.
 	 */
 	private async seedRemoteRefs(source: string, repository: string, runner: Runner) {
 		const staging = "refs/pilot/source-origin/";
@@ -333,6 +393,7 @@ export class SharedWorkspaceStore {
 				"--quiet",
 				"--no-tags",
 				"--no-write-fetch-head",
+				"--refmap=",
 				"--prune",
 				source,
 				`+refs/remotes/origin/*:${staging}*`,
@@ -348,7 +409,7 @@ export class SharedWorkspaceStore {
 			}
 			return map;
 		};
-		const [seeded, current] = await Promise.all([refs(staging), refs("refs/remotes/origin/")]);
+		const [seeded, current] = await Promise.all([refs(staging), refs(baseRefs)]);
 		for (const [name, commit] of seeded) {
 			// origin/HEAD is a symbolic ref. Updating it would move whichever branch it points to.
 			if (name === "HEAD") continue;
@@ -363,7 +424,7 @@ export class SharedWorkspaceStore {
 			// The old value guards against a concurrent fetch. Losing that race keeps the newer ref.
 			await this.optional(
 				"git",
-				["update-ref", `refs/remotes/origin/${name}`, commit, ...(existing ? [existing] : [])],
+				["update-ref", `${baseRefs}${name}`, commit, existing ?? "0".repeat(40)],
 				repository,
 				runner,
 			);
@@ -377,6 +438,7 @@ export class SharedWorkspaceStore {
 			throw new Error("Cannot select baseBranch: project has no origin remote");
 		await runner("git", ["remote", "set-url", "origin", upstream ?? source], repository);
 		let branch: string | undefined;
+		let fetched = false;
 		if (baseBranch !== undefined) {
 			try {
 				await runner(
@@ -387,8 +449,9 @@ export class SharedWorkspaceStore {
 						"--quiet",
 						"--no-tags",
 						"--no-write-fetch-head",
+						"--refmap=",
 						"origin",
-						`+refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`,
+						`+refs/heads/${baseBranch}:${baseRefs}${baseBranch}`,
 					],
 					repository,
 				);
@@ -407,13 +470,29 @@ export class SharedWorkspaceStore {
 						"--quiet",
 						"--no-tags",
 						"--no-write-fetch-head",
+						"--refmap=",
 						source,
-						"+refs/heads/*:refs/remotes/origin/*",
+						`+refs/heads/*:${baseRefs}*`,
 					],
 					repository,
 				);
 			if (upstream) {
-				await this.optional("git", [...maintenance, "fetch", "--quiet", "origin"], repository, runner);
+				fetched =
+					(await this.optional(
+						"git",
+						[
+							...maintenance,
+							"fetch",
+							"--quiet",
+							"--no-tags",
+							"--no-write-fetch-head",
+							"--refmap=",
+							"origin",
+							`+refs/heads/*:${baseRefs}*`,
+						],
+						repository,
+						runner,
+					)) !== undefined;
 				const head =
 					(await this.optional(
 						"git",
@@ -432,7 +511,7 @@ export class SharedWorkspaceStore {
 						candidate?.startsWith("origin/") &&
 						(await this.optional(
 							"git",
-							["rev-parse", "--verify", "--quiet", `${candidate}^{commit}`],
+							["rev-parse", "--verify", "--quiet", `${baseRefs}${candidate.slice(7)}^{commit}`],
 							repository,
 							runner,
 						))
@@ -443,19 +522,94 @@ export class SharedWorkspaceStore {
 				}
 			}
 		}
-		const commitId =
+		let commitId =
 			branch !== undefined
-				? await runner("git", ["rev-parse", "--verify", `refs/remotes/origin/${branch}^{commit}`], repository)
+				? await runner("git", ["rev-parse", "--verify", `${baseRefs}${branch}^{commit}`], repository)
 				: await runner("git", ["rev-parse", "--verify", "HEAD^{commit}"], source);
+		if (branch !== undefined && baseBranch === undefined && !fetched) {
+			// Existing repositories and agents may have a fresher jj view than the source or our cache.
+			const cached = await this.optional(
+				"jj",
+				[
+					"--ignore-working-copy",
+					"log",
+					"--no-graph",
+					"-r",
+					`remote_bookmarks(exact:${JSON.stringify(branch)}, remote=exact:"origin")`,
+					"-T",
+					"commit_id",
+				],
+				repository,
+				runner,
+			);
+			if (
+				cached &&
+				fullCommit.test(cached) &&
+				(await this.optional("git", ["merge-base", "--is-ancestor", commitId, cached], repository, runner)) !==
+					undefined
+			)
+				commitId = cached;
+		}
 		// A local-only source may have new commits since the one-time independent clone.
 		if (branch === undefined)
 			await runner(
 				"git",
-				[...maintenance, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", source, commitId],
+				[...maintenance, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--refmap=", source, commitId],
 				repository,
 			);
 		if (!fullCommit.test(commitId)) throw new Error("Invalid shared base commit");
 		return { commitId, branch, upstream };
+	}
+
+	/**
+	 * jj cannot resolve a previously unseen Git hash without indexing it. Give it a private, immutable base ref
+	 * via a tiny local remote borrowing only this owned repository's objects. A filtered jj fetch imports that
+	 * hash alone, not stale/deleted Git refs belonging to agents. Never prune or rewrite these base refs.
+	 */
+	private async importBase(repository: string, control: string, commitId: string, signal?: AbortSignal) {
+		// Repeated launches normally reuse an indexed base. Avoid a local fetch and extra ref metadata then.
+		if (
+			(await this.optional(
+				"jj",
+				["--ignore-working-copy", "log", "--no-graph", "-r", commitId, "-T", "commit_id"],
+				control,
+			)) === commitId
+		)
+			return;
+		const directory = join(repository, ".jj/pilot-base.git");
+		for (const file of ["config", "HEAD", "packed-refs", "objects/info/alternates", `refs/heads/${commitId}`]) {
+			const entry = await stat(join(directory, file));
+			if (entry && (!entry.isFile() || entry.isSymbolicLink())) throw new Error("Unsafe base import metadata");
+		}
+		await this.runner("git", ["init", "--bare", "--quiet", "--template=", directory], repository);
+		const alternates = join(directory, "objects/info/alternates");
+		if ((await stat(alternates))?.isSymbolicLink()) throw new Error("Unsafe base import alternates file");
+		await writeFile(alternates, `${join(repository, ".git/objects")}\n`);
+		const args = [`--git-dir=${directory}`];
+		const ref = `refs/heads/${commitId}`;
+		if (!(await this.optional("git", [...args, "rev-parse", "--verify", ref], repository)))
+			await this.runner("git", [...args, "update-ref", ref, commitId, "0".repeat(40)], repository);
+		if ((await this.runner("git", [...args, "rev-parse", "--verify", ref], repository)) !== commitId)
+			throw new Error("Base import ref mismatch");
+		const url = await this.optional("git", ["remote", "get-url", baseRemote], repository);
+		if (url === undefined) await this.runner("git", ["remote", "add", baseRemote, directory], repository);
+		else if (url !== directory) throw new Error("Base import remote mismatch");
+		await this.jj(
+			[
+				"--ignore-working-copy",
+				"--config=git.abandon-unreachable-commits=false",
+				"--config=git.record-synthetic-predecessors=false",
+				`--config=remotes.${baseRemote}.auto-track-bookmarks="glob:* ~ glob:*"`,
+				"git",
+				"fetch",
+				"--remote",
+				`exact:${baseRemote}`,
+				"--branch",
+				`exact:${commitId}`,
+			],
+			control,
+			signal,
+		);
 	}
 
 	async create(source: string, destination: string, signal?: AbortSignal, baseBranch?: string): Promise<Workspace> {
@@ -490,17 +644,18 @@ export class SharedWorkspaceStore {
 			const binding: Binding = { path: destination, state: "creating" };
 			await atomicJson(this.bindingPath(shared), binding);
 			await this.owned(shared, destination);
+			const control = await this.control(repository, signal);
 			const base = await this.base(source, repository, baseBranch, runner);
 			binding.creationBaseId = base.commitId;
 			await atomicJson(this.bindingPath(shared), binding);
 			await runner("git", ["update-ref", `refs/pilot/base/${name}`, base.commitId], repository);
-			await this.jj(["git", "import"], repository, signal);
+			await this.importBase(repository, control, base.commitId, signal);
 			await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
 			await this.jj(
 				[
 					"workspace",
 					"add",
-					"--colocate",
+					"--no-colocate",
 					"--sparse-patterns=full",
 					"--name",
 					name,
@@ -508,10 +663,12 @@ export class SharedWorkspaceStore {
 					base.commitId,
 					destination,
 				],
-				repository,
+				control,
 				signal,
 			);
-			await this.child(destination, shared);
+			// Both source and child are non-colocated here: checkout once, without any Git import.
+			await this.jjChild(destination, shared);
+			await this.colocate(destination, shared, signal);
 			binding.initialCommitId = (await this.ids(destination)).commitId;
 			await atomicJson(this.bindingPath(shared), binding);
 			// Only the bounded local inputs come from the source, never its dirty tracked files.
@@ -710,7 +867,7 @@ export class SharedWorkspaceStore {
 				throw new Error("Local inputs changed since recovery snapshot");
 			binding.state = "removing";
 			await atomicJson(this.bindingPath(shared), binding);
-			await this.jj(["workspace", "remove", shared.name], shared.repository);
+			await this.jj(["workspace", "remove", shared.name], await this.control(shared.repository));
 			if (await stat(cwd))
 				throw new Error("jj did not remove the workspace directory; partial removal needs review");
 			binding.state = "removed";
@@ -739,7 +896,8 @@ export class SharedWorkspaceStore {
 					throw new Error(`Missing or unsafe recovery input: ${path}`);
 			}
 			if (await this.registered(shared)) {
-				await this.child(cwd, shared);
+				if (binding.state === "restoring") await this.materialize(cwd, shared);
+				else await this.child(cwd, shared);
 				await this.jj(["status"], cwd);
 				const current = await this.ids(cwd);
 				if (current.commitId !== recovery.commitId) {
@@ -756,6 +914,12 @@ export class SharedWorkspaceStore {
 						))
 					)
 						throw new Error("Existing workspace differs from recovery; refusing to overwrite edits");
+					if (!(await stat(join(cwd, ".git")))) {
+						// A crash after workspace add leaves a non-colocated child with the saved tree.
+						// Restore its exact change before enabling Git for the ignored-input inspection.
+						await this.jj(["edit", recovery.commitId], cwd);
+						await this.colocate(cwd, shared);
+					}
 					await this.inspect(cwd);
 				}
 			} else {
@@ -764,11 +928,12 @@ export class SharedWorkspaceStore {
 				binding.restoreCommitId = recovery.commitId;
 				await atomicJson(this.bindingPath(shared), binding);
 				await mkdir(dirname(cwd), { recursive: true, mode: 0o700 });
+				const control = await this.control(shared.repository);
 				await this.jj(
 					[
 						"workspace",
 						"add",
-						"--colocate",
+						"--no-colocate",
 						"--sparse-patterns=full",
 						"--name",
 						shared.name,
@@ -776,12 +941,13 @@ export class SharedWorkspaceStore {
 						recovery.commitId,
 						cwd,
 					],
-					shared.repository,
+					control,
 				);
-				await this.child(cwd, shared);
+				await this.jjChild(cwd, shared);
 			}
 			// workspace add -r creates a *child*; edit restores the exact saved change, including conflicts.
 			if ((await this.ids(cwd)).commitId !== recovery.commitId) await this.jj(["edit", recovery.commitId], cwd);
+			await this.colocate(cwd, shared);
 			const exclude = await this.runner("git", ["rev-parse", "--git-path", "info/exclude"], cwd);
 			await appendFile(
 				resolve(cwd, exclude),
@@ -879,10 +1045,20 @@ export class SharedWorkspaceStore {
 				throw new Error(
 					"Partial workspace was unregistered but its directory remains; partial removal needs review",
 				);
-			await this.child(cwd, shared);
+			if (binding.state === "creating") {
+				await this.materialize(cwd, shared);
+			} else await this.child(cwd, shared);
 			if (binding.state !== "creating" && binding.state !== "ready")
 				throw new Error("Workspace is not a partial creation");
-			await this.jj(["status"], cwd);
+			// Cancellation cleanup is part of launch too. Snapshot this child's edits without importing
+			// stale shared Git refs, then restore Git access for the read-only ignored-input inspection.
+			if (await stat(join(cwd, ".git")))
+				await this.jj(["--ignore-working-copy", "git", "colocation", "disable"], cwd);
+			try {
+				await this.jj(["status"], cwd);
+			} finally {
+				await this.colocate(cwd, shared);
+			}
 			const configs = await this.inspect(cwd);
 			if (binding.state === "ready") {
 				if (
@@ -907,7 +1083,13 @@ export class SharedWorkspaceStore {
 						throw new Error("Partial local inputs may contain edits; refusing cleanup");
 				}
 			}
-			await this.jj(["workspace", "remove", shared.name], repository);
+			await this.jj(["--ignore-working-copy", "git", "colocation", "disable"], cwd);
+			try {
+				await this.jj(["workspace", "remove", shared.name], await this.control(repository));
+			} catch (error) {
+				if ((await stat(cwd)) && (await this.registered(shared))) await this.colocate(cwd, shared);
+				throw error;
+			}
 			if (await stat(cwd))
 				throw new Error("jj did not remove the partial workspace directory; partial removal needs review");
 			binding.state = "removed";
