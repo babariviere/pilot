@@ -8,10 +8,10 @@ public enum ArtifactPreviewDocument {
             // and before author styles so intentional custom layouts still take precedence.
             return ArtifactSandboxPolicy.document(centeredLayout + revision.html + (inline ? chatLayout : ""))
         }
-        // SwiftUI snapshots represent the renderer's default 800 × 600 logical viewport.
-        // Images use intrinsic dimensions. Both shrink proportionally, never enlarge.
-        let maxWidth = revision.kind == .swiftui ? "min(100vw,800px)" : "100vw"
-        let maxHeight = revision.kind == .swiftui ? "min(100vh,600px)" : "100vh"
+        // New SwiftUI PNGs carry their logical content size; old snapshots retain their
+        // 800 × 600 viewport. Images use intrinsic dimensions. Never enlarge either.
+        let maxWidth = revision.kind == .swiftui ? "min(100vw,var(--pilot-image-width,800px))" : "100vw"
+        let maxHeight = revision.kind == .swiftui ? "min(100vh,var(--pilot-image-height,600px))" : "100vh"
         // Important rules override the old full-viewport image CSS in saved revisions.
         let sizing = """
         <style id="pilot-artifact-preview-sizing">

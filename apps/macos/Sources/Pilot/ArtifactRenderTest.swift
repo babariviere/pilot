@@ -138,6 +138,7 @@ enum ArtifactRenderTest {
             try await renderContentGrowth(directory: directory, client: client)
             try await renderMermaidLayout(directory: directory, client: client)
             try await renderChatLayout(directory: directory, client: client)
+            try await renderCompactContent(directory: directory, client: client)
             if let reactPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_REACT"] {
                 try await renderReact(htmlURL: URL(filePath: reactPath), directory: directory, client: client, server: server)
             }
@@ -188,6 +189,82 @@ enum ArtifactRenderTest {
                 try await state.snapshotPNG().write(to: directory.appending(path: "artifact-chat-\(kind.rawValue)-\(width).png"))
             }
             print("artifact-render-test passed: inline \(kind.rawValue), transparent shell, leading alignment, narrow/wide")
+        }
+    }
+
+    private static func renderCompactContent(directory: URL, client: PilotClient) async throws {
+        for kind in [ArtifactKind.html, .react] {
+            // React starts with an empty mount root. Install/update its subtree after navigation
+            // to exercise the same asynchronous layout path without a runtime dependency.
+            let content = "<section id='content' style='width:240px;height:120px;background:#ecf7f7'>Compact card</section>"
+            let html = "<style>body{margin:0;padding:16px;background:white}</style>"
+                + (kind == .react ? "<div id='artifact-root'></div>" : content)
+            let values: [String: Any] = ["id": "compact", "sessionId": "test", "title": "Compact", "kind": kind.rawValue,
+                "revision": 1, "createdAt": 1, "updatedAt": 1, "source": "", "html": html, "libraries": []]
+            let revision = try JSONDecoder().decode(ArtifactRevision.self, from: JSONSerialization.data(withJSONObject: values))
+            let state = ArtifactRenderState()
+            let coordinator = ArtifactWebView.Coordinator(state: state)
+            coordinator.measurementKind = kind
+            let view = ArtifactWebView.makeSandboxView(coordinator: coordinator,
+                libraries: ArtifactLibraryHandler(libraries: [], client: client), inline: true)
+            view.frame = CGRect(x: 0, y: 0, width: 760, height: 570)
+            let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            window.orderFront(nil)
+            defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator); window.close() }
+            coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: true))
+            try await wait("Compact \(kind) load") { !state.loading || state.error != nil }
+            if let error = state.error { throw ClientError(error) }
+            if kind == .react {
+                _ = try await view.evaluateJavaScript("document.getElementById('artifact-root').innerHTML=\(jsString(content))")
+            }
+            try await waitForContentHeight(view, state: state, height: 120, label: "Compact \(kind) natural height")
+            // The old document scrollHeight reports 570 here even though content is only 120.
+            let viewportFloor = try await view.evaluateJavaScript("document.documentElement.scrollHeight >= innerHeight") as? Bool
+            guard viewportFloor == true else { throw ClientError("Compact fixture has no document viewport floor") }
+            for width: CGFloat in [320, 760] {
+                view.setFrameSize(CGSize(width: width, height: 570))
+                for height in [120, 900, 24, 0] {
+                    _ = try await view.evaluateJavaScript("(() => {const c=document.getElementById('content');c.style.height='\(height)px';c.textContent=\(height) ? 'Compact card' : '';})()")
+                    try await waitForContentHeight(view, state: state, height: CGFloat(max(1, height)), label: "Compact \(kind) update to \(height)")
+                    let fitted = ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: state.contentSize)
+                    guard fitted == CGSize(width: width, height: CGFloat(max(48, height))) else {
+                        throw ClientError("Compact \(kind) did not hug content: \(fitted)")
+                    }
+                    view.setFrameSize(fitted)
+                    try await Task.sleep(for: .milliseconds(600))
+                    guard state.contentSize?.height == CGFloat(max(1, height)) else {
+                        throw ClientError("Compact \(kind) host resize changed content measurement")
+                    }
+                    if height == 120 || height == 24 {
+                        try await state.snapshotPNG().write(to: directory.appending(path: "artifact-compact-\(kind.rawValue)-\(Int(width))-\(height).png"))
+                    }
+                }
+            }
+            // No layout boxes around direct text, and no in-flow height for positioned content.
+            // Visible overflow must still reserve space, without reintroducing a viewport floor.
+            for (name, markup, height) in [
+                ("direct-text", "Direct body text", 32),
+                ("positioned", "<div style='position:absolute;top:200px;height:40px;width:240px'>Positioned content</div>", 240),
+                ("nested-overflow", "<div style='height:0'><div style='height:120px'>Visible overflow</div></div>", 120),
+                ("nested-positioned", "<div style='position:relative;height:0'><div style='position:absolute;top:200px;height:40px;width:240px'>Nested positioned content</div></div>", 240),
+            ] {
+                view.setFrameSize(CGSize(width: 760, height: 570))
+                _ = try await view.evaluateJavaScript("document.body.style.cssText='margin:0;padding:0;font:16px/32px system-ui';document.body.innerHTML=\(jsString(markup))")
+                try await waitForContentHeight(view, state: state, height: CGFloat(height), label: "Compact \(kind) \(name)")
+                let fitted = ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: state.contentSize)
+                guard fitted == CGSize(width: 760, height: CGFloat(max(48, height))) else {
+                    throw ClientError("Compact \(kind) missed \(name): \(fitted)")
+                }
+            }
+            ArtifactWebView.dismantleNSView(view, coordinator: coordinator)
+            let previous = state.contentSize
+            try await Task.sleep(for: .milliseconds(600))
+            guard state.contentSize == previous, state.webView == nil, coordinator.measurementTask?.isCancelled == true else {
+                throw ClientError("Compact offscreen renderer continued measuring")
+            }
+            print("artifact-render-test passed: compact \(kind), natural height, asynchronous grow/shrink, 48pt minimum, fixed width, no feedback, teardown")
         }
     }
 
@@ -321,21 +398,31 @@ enum ArtifactRenderTest {
     }
 
     private static func renderImageDefaults(directory: URL, client: PilotClient) async throws {
-        for (kind, size) in [(ArtifactKind.image, CGSize(width: 240, height: 120)),
-                             (.swiftui, CGSize(width: 800, height: 600))] {
-            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width),
-                                                 pixelsHigh: Int(size.height), bitsPerSample: 8, samplesPerPixel: 4,
+        let fixtures: [(String, ArtifactKind, CGSize, CGSize, Bool)] = [
+            ("image", .image, CGSize(width: 240, height: 120), CGSize(width: 240, height: 120), false),
+            ("swiftui", .swiftui, CGSize(width: 800, height: 600), CGSize(width: 800, height: 600), false),
+            ("swiftui-legacy-2x", .swiftui, CGSize(width: 1600, height: 1200), CGSize(width: 800, height: 600), false),
+            ("swiftui-legacy-small", .swiftui, CGSize(width: 480, height: 240), CGSize(width: 480, height: 240), false),
+            ("swiftui-compact-2x", .swiftui, CGSize(width: 480, height: 240), CGSize(width: 240, height: 120), true),
+            ("swiftui-wide-2x", .swiftui, CGSize(width: 2000, height: 600), CGSize(width: 1000, height: 300), true),
+        ]
+        for (name, kind, pixels, size, contentSized) in fixtures {
+            guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(pixels.width),
+                                                 pixelsHigh: Int(pixels.height), bitsPerSample: 8, samplesPerPixel: 4,
                                                  hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                                  bytesPerRow: 0, bitsPerPixel: 0),
                   let context = NSGraphicsContext(bitmapImageRep: bitmap) else { throw ClientError("Image fixture unavailable") }
             NSGraphicsContext.saveGraphicsState()
             NSGraphicsContext.current = context
             NSColor.systemTeal.setFill()
-            NSBezierPath(rect: CGRect(origin: .zero, size: size)).fill()
+            NSBezierPath(rect: CGRect(origin: .zero, size: pixels)).fill()
             NSGraphicsContext.restoreGraphicsState()
             guard let png = bitmap.representation(using: .png, properties: [:]) else { throw ClientError("Image fixture unavailable") }
             let source = "data:image/png;base64,\(png.base64EncodedString())"
-            let html = "<style>body{margin:0;padding:0}img{width:100%;height:100vh;object-fit:contain}</style><img src='\(source)'>"
+            let attributes = contentSized
+                ? "data-pilot-scale='2' style='--pilot-image-width:\(Int(size.width))px;--pilot-image-height:\(Int(size.height))px'"
+                : ""
+            let html = "<style>body{margin:0;padding:0}img{width:100%;height:100vh;object-fit:contain}</style><img \(attributes) src='\(source)'>"
             let values: [String: Any] = ["id": "image", "sessionId": "test", "title": "Image", "kind": kind.rawValue,
                                        "revision": 1, "createdAt": 1, "updatedAt": 1, "source": source,
                                        "html": html, "libraries": []]
@@ -355,6 +442,7 @@ enum ArtifactRenderTest {
             try await wait("Image load") { !state.loading || state.error != nil }
             if let error = state.error { throw ClientError(error) }
             try await waitJS(view, label: "Image decode") { "document.images[0].complete && document.images[0].naturalWidth > 0" }
+            try await wait("\(name) logical measurement") { state.contentSize == size }
             for viewport in [CGSize(width: 1000, height: 700), CGSize(width: 320, height: 240)] {
                 view.frame.size = viewport
                 try await Task.sleep(for: .milliseconds(150))
@@ -367,9 +455,10 @@ enum ArtifactRenderTest {
                     throw ClientError("\(kind) preview sizing incorrect: \(dimensions), expected \(expected)")
                 }
                 let screenshot = try await state.snapshotPNG()
-                try screenshot.write(to: directory.appending(path: "artifact-\(kind.rawValue)-\(Int(viewport.width)).png"))
+                try screenshot.write(to: directory.appending(path: "artifact-\(name)-\(Int(viewport.width)).png"))
             }
-            print("artifact-render-test passed: saved \(kind.rawValue), natural-size cap, proportional fit, PNG screenshot export")
+            guard state.contentSize == size else { throw ClientError("\(name) logical size followed viewport resize") }
+            print("artifact-render-test passed: saved \(name), logical measurement, natural-size cap, proportional fit, PNG screenshot export")
         }
     }
 
@@ -516,6 +605,23 @@ enum ArtifactRenderTest {
 
     private static func jsString(_ value: String) -> String {
         String(decoding: try! JSONEncoder().encode(value), as: UTF8.self)
+    }
+
+    private static func waitForContentHeight(_ view: WKWebView, state: ArtifactRenderState, height: CGFloat, label: String) async throws {
+        do {
+            try await wait(label) { state.contentSize?.height == height }
+        } catch {
+            let diagnostic = try? await view.evaluateJavaScript("""
+            (() => {const b=document.body, r=document.documentElement, c=getComputedStyle(b), box=b.getBoundingClientRect();
+              const range=document.createRange();range.selectNodeContents(b);const content=range.getBoundingClientRect();
+              return JSON.stringify({mode:document.compatMode,viewport:[innerWidth,innerHeight],scrollY,
+                documentScrollHeight:r.scrollHeight,bodyScrollHeight:b.scrollHeight,bodyOffsetHeight:b.offsetHeight,
+                bodyBounds:[box.top,box.bottom],rangeBounds:[content.top,content.bottom],
+                padding:[c.paddingTop,c.paddingBottom],margins:[c.marginTop,c.marginBottom],
+                borders:[c.borderTopWidth,c.borderBottomWidth],bodyHTML:b.innerHTML.slice(0,1000)});})()
+            """)
+            throw ClientError("\(error), expectedHeight=\(height), measured=\(String(describing: state.contentSize)), DOM=\(diagnostic ?? "unavailable")")
+        }
     }
 
     private static func wait(_ label: String, condition: () -> Bool) async throws {

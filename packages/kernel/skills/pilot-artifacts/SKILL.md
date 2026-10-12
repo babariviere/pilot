@@ -114,10 +114,19 @@ Use `kind: "swiftui"` with self-contained Swift defining `struct ArtifactView: V
 
 Requires macOS 14+ and an installed Swift Command Line Tools toolchain, independently of Chromium. Compilation and rendering run in a disposable sandbox without network or workspace/credential access. Cold SDK compilation can take minutes; do not set short codemode deadlines.
 
-`create` and `update` save editable Swift source and an embedded **800×600 PNG**. This is a **static screenshot**, not an interactive app or validation of actual project views. Say so when presenting a prototype. Offscreen ImageRenderer does not capture embedded AppKit/WebKit views. Use SwiftUI layout primitives and inspect screenshots for unsupported controls. Compiler diagnostics are reported on failure; fix native compiler/render errors before publishing.
+`create` and `update` save editable Swift source and a **content-sized PNG at 2× resolution**.
+The default layout is bounded to 760 points wide and 1600 points tall, but smaller content hugs its
+natural size. Draft preview `width` and `height` specify maximum logical layout dimensions, not a
+fixed canvas. Returned screenshot dimensions are physical pixels; `contentHeight` is logical points.
+This is a **static screenshot**, not an interactive app or validation of actual project views.
+Say so when presenting a prototype. Offscreen ImageRenderer does not capture embedded AppKit/WebKit views.
+Use SwiftUI layout primitives and inspect screenshots for unsupported controls. Give charts and
+other flexible content an explicit height instead of relying on an unlimited canvas.
+Compiler diagnostics are reported on failure; fix native compiler/render errors before publishing.
 
 The native renderer places content at the top left on a transparent canvas. Add a background inside
-`ArtifactView` when it is part of the design. Existing snapshots retain any baked-in background.
+`ArtifactView` when it is part of the design. Existing snapshots retain their old canvas and density
+until re-rendered. Resizing a saved bitmap scales it; reflow requires rendering the source at a new width.
 
 ```js
 await tools.artifact({
@@ -137,7 +146,7 @@ await tools.artifact({
 
 ## Optional preview
 
-When available, `preview` renders a draft without saving or publishing. Pass the same write fields as `create`; it returns a PNG `screenshot`, `consoleMessages`, and `contentHeight`. Optional viewport `width` is 240–1600 CSS pixels (default 800); `height` is 200–1600 (default 600).
+When available, `preview` renders a draft without saving or publishing. Pass the same write fields as `create`; it returns a PNG `screenshot`, `consoleMessages`, and `contentHeight`. Optional `width` is 240–1600 logical pixels; `height` is 200–1600. HTML, React, and image viewports default to 800×600. SwiftUI defaults to 760×1600 layout ceilings, with a content-sized 2× bitmap.
 
 HTML, React, and image previews need installed Chromium. SwiftUI rendering needs the installed macOS Swift toolchain, independently of browser availability. Preview is **not required before publishing**. If unavailable or failing, publish without preview and explain that visual verification was not performed. Do not install or request a browser. SwiftUI publication itself also renders, so native compilation/render failures still need fixing.
 
