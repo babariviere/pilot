@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.14.0](https://github.com/babariviere/pilot/compare/v1.13.0...v1.14.0) (2026-10-12)
+
+
+### Features
+
+* **macos:** fold long project chat lists in the sidebar ([b89355f](https://github.com/babariviere/pilot/commit/b89355f9e2beefcf23a4df3c4c35ff09c2b5116e))
+
 ## [1.13.0](https://github.com/babariviere/pilot/compare/v1.12.2...v1.13.0) (2026-10-12)
 
 
