@@ -19,6 +19,18 @@ export interface PilotContext {
 	ask?: AskContext;
 	/** Project delivery policy, read when the worker starts. Omitted means PR delivery for private clones. */
 	requirePullRequest?: boolean;
+	/** Pilot removed files from this workspace while the chat was archived. */
+	workspaceReset?: WorkspaceReset;
+}
+
+/**
+ * Archive maintenance freed disk space. With IDs, the whole working directory was removed and later recreated from
+ * that jj snapshot; without them, only ignored dependency and build directories were deleted in place.
+ */
+export interface WorkspaceReset {
+	at: number;
+	changeId?: string;
+	commitId?: string;
 }
 
 /** What a mission chat needs in every prompt. Kept small and stable to preserve prompt caching. */
@@ -178,6 +190,14 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 				"- If a new branch is needed, create it with `git switch -c <name>`. Commit on the chosen branch and push it with `git push -u origin <name>`.",
 			);
 		}
+	}
+	if (!context.ask && workspace && context.workspaceReset) {
+		const reset = context.workspaceReset;
+		lines.push(
+			reset.changeId
+				? `- While this chat was archived, Pilot removed its working directory to free disk space, then recreated it from the saved jj change \`${reset.changeId}\`${reset.commitId ? ` (commit \`${reset.commitId}\`)` : ""}. History, tracked files, the working-copy change and local configuration are intact, but ignored dependency and build directories (such as \`node_modules\`, \`dist\`, \`build\` and \`.build\`) are gone. Reinstall or rebuild them before running builds or tests.`
+				: "- While this chat was archived, Pilot deleted ignored dependency and build directories (such as `node_modules`, `dist`, `build` and `.build`) from this workspace to free disk space. History and all other files are intact. Reinstall or rebuild them before running builds or tests.",
+		);
 	}
 	if (!context.ask && (workspace || context.requirePullRequest !== undefined)) {
 		if (requirePullRequest) {

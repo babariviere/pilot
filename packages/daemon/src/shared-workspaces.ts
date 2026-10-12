@@ -20,6 +20,7 @@ import {
 	copyLocalConfigs,
 	dissociateWorkspace,
 	localConfigs,
+	regenerableDirectories as regenerable,
 	run,
 	type Runner,
 	type Workspace,
@@ -54,7 +55,6 @@ interface Binding {
 
 const queues = new Map<string, Promise<unknown>>();
 const hash = (input: string | Buffer) => createHash("sha256").update(input).digest("hex");
-const regenerable = new Set(["node_modules", "dist", "build", ".build", "coverage", ".next", ".nuxt", ".svelte-kit"]);
 const recoverableInput = (path: string) =>
 	localConfigs.includes(path) || /^\.pi\/todos\/[a-zA-Z0-9_-]+\.(md|json)$/.test(path);
 const fullCommit = /^[0-9a-f]{40}$/;
