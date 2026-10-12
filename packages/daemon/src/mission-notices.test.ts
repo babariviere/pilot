@@ -33,6 +33,59 @@ function completion(outcome: SessionSummary["outcome"], outcomeAt: number): Sess
 	};
 }
 
+test("acknowledged states stay consumed across restart, even with newer snapshot versions", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-notice-dedupe-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const file = join(home, "missions.sqlite");
+	const f = setup(new MissionStore(file));
+	f.store.recordMemberCompletion(completion("done", 50));
+	const now = Date.now() + 30_000;
+	f.store.acknowledgeNotice(f.store.prepareNotice(f.id, "lead", now)!, now);
+	f.store.close();
+	const store = new MissionStore(file);
+	try {
+		store.recordMemberCompletion(completion("done", 50), true);
+		store.recordMemberCompletion(completion("done", 51));
+		assert.deepEqual(store.noticeDeadlines(now), []);
+		store.recordMemberCompletion({ ...completion("done", 52), outcomeReason: "New question" });
+		assert.match(store.prepareNotice(f.id, "lead", now + 30_000)!.content, /New question/);
+	} finally {
+		store.close();
+	}
+});
+
+test("startup baselines outcomes predating membership instead of announcing old work", () => {
+	const { store, id } = setup();
+	try {
+		store.recordMemberCompletion(completion("done", 1), true);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+		store.recordMemberCompletion(completion("done", 2));
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+		store.recordMemberCompletion(completion("failed", 3));
+		assert.match(store.prepareNotice(id, "lead", Date.now() + 30_000)!.content, /failed/);
+	} finally {
+		store.close();
+	}
+});
+
+test("later outcomes do not re-report an old merged PR", () => {
+	const { store, id } = setup();
+	try {
+		store.recordMemberCompletion(completion("done", 50));
+		const now = Date.now() + 30_000;
+		store.acknowledgeNotice(store.prepareNotice(id, "lead", now)!, now);
+		store.recordMemberCompletion({
+			...completion("failed", 60),
+			pullRequest: { ...completion("done", 50).pullRequest!, state: "merged", mergedAt: 40 },
+		});
+		const notice = store.prepareNotice(id, "lead", now + 30_000)!;
+		assert.match(notice.content, /failed/);
+		assert.doesNotMatch(notice.content, /PR #12 merged/);
+	} finally {
+		store.close();
+	}
+});
+
 test("only settlements, newly blocked tasks and relevant comments create durable pending events", () => {
 	const { store, id } = setup();
 	try {

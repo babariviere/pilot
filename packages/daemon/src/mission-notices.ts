@@ -22,11 +22,11 @@ export class MissionNotices {
 	start(): void {
 		this.stopped = false;
 		// Recover completions that were saved before a crash, but not yet recorded in missions.sqlite.
-		for (const session of this.sessions.list({ archived: "all" })) this.observe(session);
+		for (const session of this.sessions.list({ archived: "all" })) this.observe(session, true);
 		this.schedule();
 	}
 
-	private observe(session: SessionSummary): void {
+	private observe(session: SessionSummary, recovering = false): void {
 		if (this.stopped) return;
 		if (!session.missionId) {
 			this.seen.delete(session.id);
@@ -35,7 +35,7 @@ export class MissionNotices {
 		const key = `${session.state}:${session.outcomeAt}:${session.archivedAt}:${session.missionId}`;
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
-		if (session.missionId && session.outcome) this.store.recordMemberCompletion(session);
+		if (session.missionId && session.outcome) this.store.recordMemberCompletion(session, recovering);
 		this.schedule();
 	}
 
