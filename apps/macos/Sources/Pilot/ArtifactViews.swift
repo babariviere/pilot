@@ -107,12 +107,12 @@ struct ArtifactCard: View {
                         ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
                                         state: state, render: render)
                     } else {
-                        Theme.background
+                        Color.clear
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                // Images and SwiftUI snapshots hug their fitted size; center them in the chat column.
-                .frame(maxWidth: .infinity, alignment: .center)
+                .clipped()
+                // Share prose's leading edge. Small images keep their natural size, without a card.
+                .frame(maxWidth: .infinity, alignment: .leading)
             } else {
                 Button("Show \(reference.title)") { state.preview = true }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
@@ -234,7 +234,7 @@ private struct ArtifactContent: View {
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let revision = state.revision {
-                ArtifactPreview(revision: revision, state: render).id("\(revision.id)-\(revision.revision)")
+                ArtifactPreview(revision: revision, inline: inline, state: render).id("\(revision.id)-\(revision.revision)")
                     .allowsHitTesting(!inline)
                     .accessibilityHidden(inline)
                     .overlay {
@@ -254,7 +254,7 @@ private struct ArtifactContent: View {
             render.contentSize = inline ? ArtifactInlineCache.contentSize(for: reference) : nil
             await state.load(reference, latest: latest)
         }
-        .background(Theme.background)
+        .background(inline ? Color.clear : Theme.background)
     }
 }
 
@@ -328,14 +328,16 @@ private struct ArtifactShareMenu: View {
 
 private struct ArtifactPreview: View {
     let revision: ArtifactRevision
+    var inline = false
     @ObservedObject var state: ArtifactRenderState
 
     var body: some View {
-        ArtifactWebView(revision: revision, state: state)
+        ArtifactWebView(revision: revision, inline: inline, state: state)
             .overlay {
                 if let error = state.error {
                     Text(error).font(.callout).foregroundStyle(.secondary).padding()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity).background(Theme.background)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(inline ? Color.clear : Theme.background)
                 } else if state.loading { ProgressView("Starting sandbox…") }
             }
     }

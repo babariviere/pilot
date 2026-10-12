@@ -43,6 +43,9 @@ Source must be self-contained and at most **512 KiB UTF-8**. Tailwind is not ava
 
 Pilot supplies a light palette and system font. Use these CSS variables for consistent styling; your styles may override them:
 
+In chat, previews share the prose column and are left-aligned with a transparent, unpadded page shell.
+Use inner elements for intentional panels or backgrounds. Expanded previews retain their page layout.
+
 `--pilot-background`, `--pilot-foreground`, `--pilot-muted`, `--pilot-muted-foreground`, `--pilot-border`, `--pilot-primary`, `--pilot-radius`.
 
 Bundled, pinned offline libraries are `react`, `react-dom`, `mermaid`, `echarts`, `motion`, `d3`, and `three`. No downloads are needed.
@@ -112,6 +115,9 @@ Use `kind: "swiftui"` with self-contained Swift defining `struct ArtifactView: V
 Requires macOS 14+ and an installed Swift Command Line Tools toolchain, independently of Chromium. Compilation and rendering run in a disposable sandbox without network or workspace/credential access. Cold SDK compilation can take minutes; do not set short codemode deadlines.
 
 `create` and `update` save editable Swift source and an embedded **800×600 PNG**. This is a **static screenshot**, not an interactive app or validation of actual project views. Say so when presenting a prototype. Offscreen ImageRenderer does not capture embedded AppKit/WebKit views. Use SwiftUI layout primitives and inspect screenshots for unsupported controls. Compiler diagnostics are reported on failure; fix native compiler/render errors before publishing.
+
+The native renderer places content at the top left on a transparent canvas. Add a background inside
+`ArtifactView` when it is part of the design. Existing snapshots retain any baked-in background.
 
 ```js
 await tools.artifact({

@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { inflateSync } from "node:zlib";
 import { previewArtifact } from "./preview.ts";
 import { validateArtifact } from "./render.ts";
 import { ArtifactStore } from "./store.ts";
@@ -84,6 +85,41 @@ struct ArtifactView: View {
 		await rm(directory, { recursive: true, force: true });
 		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
 	}
+});
+
+test("SwiftUI renders top-leading content on a transparent canvas", { skip: !native }, async () => {
+	const result = await previewArtifact(
+		{
+			...document,
+			source:
+				"struct ArtifactView: View { var body: some View { Color(red:1,green:0,blue:0).frame(width:20,height:20) } }",
+		},
+		{ width: 400, height: 300 },
+	);
+	const png = Buffer.from(result.screenshot.data, "base64");
+	assert.equal(png[24], 8, "8-bit PNG");
+	assert.equal(png[25], 6, "RGBA PNG preserves transparency");
+	const chunks: Buffer[] = [];
+	for (let offset = 8; offset < png.length; ) {
+		const length = png.readUInt32BE(offset);
+		if (png.toString("ascii", offset + 4, offset + 8) === "IDAT")
+			chunks.push(png.subarray(offset + 8, offset + 8 + length));
+		offset += length + 12;
+	}
+	const rows = inflateSync(Buffer.concat(chunks));
+	// Decode only the first pixel of each scanline. Its left and upper-left predictors are zero.
+	let previous = [0, 0, 0, 0];
+	for (let y = 0; y < 300; y++) {
+		const offset = y * (400 * 4 + 1);
+		const filter = rows[offset];
+		assert.ok(filter !== undefined && filter <= 4);
+		previous = previous.map((above, channel) => {
+			const predictor = filter === 2 || filter === 4 ? above : filter === 3 ? Math.floor(above / 2) : 0;
+			return (rows[offset + 1 + channel]! + predictor) & 255;
+		});
+		if (y === 0) assert.deepEqual(previous, [255, 0, 0, 255], "content starts at the top left");
+	}
+	assert.equal(previous[3], 0, "unused canvas is transparent");
 });
 
 test("SwiftUI publishes editable source and durable screenshots, and failed updates preserve latest", {

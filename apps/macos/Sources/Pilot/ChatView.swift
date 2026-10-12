@@ -423,18 +423,9 @@ struct RowView: View, Equatable {
             && lhs.streamingGeneration == rhs.streamingGeneration
     }
 
-    private var maximumWidth: CGFloat {
-        switch row {
-        case .artifact: return .infinity
-        case let .tools(_, items) where items.contains(where: { $0.artifact != nil }):
-            return .infinity
-        default: return Theme.column
-        }
-    }
-
     var body: some View {
         content
-            .frame(maxWidth: maximumWidth, alignment: .leading)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
     }
 

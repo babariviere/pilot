@@ -137,6 +137,7 @@ enum ArtifactRenderTest {
             try await renderViewerHeader(directory: directory)
             try await renderContentGrowth(directory: directory, client: client)
             try await renderMermaidLayout(directory: directory, client: client)
+            try await renderChatLayout(directory: directory, client: client)
             if let reactPath = ProcessInfo.processInfo.environment["PILOT_ARTIFACT_TEST_REACT"] {
                 try await renderReact(htmlURL: URL(filePath: reactPath), directory: directory, client: client, server: server)
             }
@@ -144,6 +145,49 @@ enum ArtifactRenderTest {
         } catch {
             print("artifact-render-test failed: \(error)")
             exit(1)
+        }
+    }
+
+    private static func renderChatLayout(directory: URL, client: PilotClient) async throws {
+        for kind in [ArtifactKind.html, .react, .image, .swiftui] {
+            let image = kind == .image || kind == .swiftui
+            let html = image
+                ? "<style>body{background:white;display:grid;place-items:center;min-height:100vh}</style><img src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22240%22 height=%22120%22%3E%3Crect width=%22240%22 height=%22120%22 fill=%22teal%22/%3E%3C/svg%3E'>"
+                : "<style>body{background:white;padding:16px;text-align:center}:where(body, #artifact-root) > :where(*){margin-inline:auto}</style><div id='artifact-root'><section style='width:240px;background:rgb(240,240,240)'>Left-aligned content</section></div>"
+            let values: [String: Any] = ["id": "chat", "sessionId": "test", "title": "Chat", "kind": kind.rawValue,
+                "revision": 1, "createdAt": 1, "updatedAt": 1, "source": "", "html": html, "libraries": []]
+            let revision = try JSONDecoder().decode(ArtifactRevision.self, from: JSONSerialization.data(withJSONObject: values))
+            let state = ArtifactRenderState()
+            let coordinator = ArtifactWebView.Coordinator(state: state)
+            let view = ArtifactWebView.makeSandboxView(coordinator: coordinator,
+                libraries: ArtifactLibraryHandler(libraries: [], client: client), inline: true)
+            view.frame = CGRect(x: 0, y: 0, width: 760, height: 570)
+            let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.contentView = view
+            window.orderFront(nil)
+            defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator); window.close() }
+            coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: true))
+            try await wait("Chat preview") { !state.loading || state.error != nil }
+            if let error = state.error { throw ClientError(error) }
+            if image {
+                try await waitJS(view, label: "Chat image") { "document.images[0].complete && document.images[0].naturalWidth > 0" }
+            }
+            for width in [320, 760] {
+                view.setFrameSize(CGSize(width: width, height: 570))
+                let valid = try await view.evaluateJavaScript("""
+                (()=>{const css=getComputedStyle(document.body);
+                  const content=document.querySelector('img,section').getBoundingClientRect();
+                  return css.backgroundColor==='rgba(0, 0, 0, 0)' && css.paddingLeft==='0px' &&
+                    css.textAlign==='left' && content.x===0 && content.y===0 &&
+                    content.width===240 && content.right<=innerWidth;})()
+                """) as? Bool
+                guard valid == true, view.value(forKey: "drawsBackground") as? Bool == false else {
+                    throw ClientError("\(kind) chat preview is not transparent and leading-aligned at \(width)")
+                }
+                try await state.snapshotPNG().write(to: directory.appending(path: "artifact-chat-\(kind.rawValue)-\(width).png"))
+            }
+            print("artifact-render-test passed: inline \(kind.rawValue), transparent shell, leading alignment, narrow/wide")
         }
     }
 
@@ -411,7 +455,8 @@ enum ArtifactRenderTest {
             try await Task.sleep(for: .milliseconds(100))
             let requests = Array(server.paths.dropFirst(before))
             let allowed = kind == .mermaid ? ["/api/artifact-libraries/mermaid"] : []
-            guard requests == allowed else { throw ClientError("Inline network escaped: \(name), \(requests)") }
+            // A warm shared library cache needs no HTTP request; only unexpected requests escape.
+            guard requests.isEmpty || requests == allowed else { throw ClientError("Inline network escaped: \(name), \(requests)") }
             print("artifact-render-test passed: inline \(name), \(valid ? "image and layout" : "source fallback"), no source scripts/network")
         }
     }

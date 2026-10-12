@@ -25,3 +25,16 @@ import Testing
     view.layoutSubtreeIfNeeded()
     #expect(view.fittingSize == CGSize(width: 1800, height: 1400))
 }
+
+@Test @MainActor func artifactRowsUseTheSameReadableColumnAsText() {
+    _ = NSApplication.shared
+    let reference = ArtifactReference(id: "column-test", sessionId: "test", title: "Column", revision: 1)
+    for width: CGFloat in [320, 760, 1000, 1400] {
+        // The offscreen card reserves its viewport without needing a renderer or a daemon.
+        let view = NSHostingView(rootView: RowView(row: .artifact(id: "artifact", reference: reference))
+            .fixedSize(horizontal: false, vertical: true).frame(width: width))
+        view.frame = NSRect(x: 0, y: 0, width: width, height: 900)
+        view.layoutSubtreeIfNeeded()
+        #expect(view.fittingSize.height == ArtifactViewerLayout.inlineSize(availableWidth: min(width, Theme.column)).height)
+    }
+}
