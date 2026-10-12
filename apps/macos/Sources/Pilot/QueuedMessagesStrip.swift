@@ -110,7 +110,7 @@ private struct QueuedMessageRow: View {
     let onSave: (DeliveryMode) -> Void
     let onRemove: () -> Void
     let onNavigate: (QueueNavigationDirection) -> Bool
-    @StateObject private var hover = HoverState()
+    @State private var isHovered = false
 
     private var editing: Bool { state.queueEditing.selected?.id == message.id }
     private var removing: Bool { state.removingQueuedMessage == message.id }
@@ -139,7 +139,7 @@ private struct QueuedMessageRow: View {
             QueueModeSymbol(mode: message.mode)
             Text(message.text.replacingOccurrences(of: "\n", with: " "))
                 .font(fonts.body)
-                .foregroundStyle(hover.isHovered ? Theme.foreground : Theme.mutedForeground)
+                .foregroundStyle(isHovered ? Theme.foreground : Theme.mutedForeground)
                 .lineLimit(1)
                 .truncationMode(.tail)
             if state.queueEditing.hasUnsavedEdit(message) {
@@ -150,7 +150,7 @@ private struct QueuedMessageRow: View {
             Spacer(minLength: 4)
             if removing {
                 ProgressView().controlSize(.mini)
-            } else if hover.isHovered {
+            } else if isHovered {
                 HStack(spacing: 0) {
                     Button { state.selectQueuedMessage(message) } label: { Image(systemName: "pencil") }
                         .buttonStyle(QuietIconButtonStyle())
@@ -168,12 +168,12 @@ private struct QueuedMessageRow: View {
         }
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, minHeight: QueuedMessagesStrip.rowHeight, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hover.isHovered ? Theme.selected : .clear))
+        .background(RoundedRectangle(cornerRadius: 6).fill(isHovered ? Theme.selected : .clear))
         .contentShape(RoundedRectangle(cornerRadius: 6))
         .opacity(removing ? 0.5 : 1)
         .onTapGesture { state.selectQueuedMessage(message) }
-        .onHover { hover.isHovered = $0 }
-        .animation(Theme.Motion.quick, value: hover.isHovered)
+        .onHover { isHovered = $0 }
+        .animation(Theme.Motion.quick, value: isHovered)
         // Hover-only buttons stay reachable for VoiceOver through named actions.
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(message.mode == .steer ? "Steering" : "Follow-up"): \(message.text)")

@@ -1,23 +1,16 @@
 import PilotCore
 import SwiftUI
 
-@MainActor
-private final class TodosPanelState: ObservableObject {
-    @Published var expanded: Bool
-
-    init(expanded: Bool) { self.expanded = expanded }
-}
-
 /// Live checklist above the reply box, inspired by Berth's compact task card.
 struct TodosPanel: View {
     let todos: [SessionTodo]
     let sessionId: String
-    @StateObject private var expansion: TodosPanelState
+    @State private var expanded: Bool
 
     init(todos: [SessionTodo], sessionId: String) {
         self.todos = todos
         self.sessionId = sessionId
-        _expansion = StateObject(wrappedValue: TodosPanelState(expanded: todos.contains { !$0.isClosed }))
+        _expanded = State(initialValue: todos.contains { !$0.isClosed })
     }
 
     var body: some View {
@@ -27,7 +20,7 @@ struct TodosPanel: View {
         let active = ordered.first { $0.isWorking(in: sessionId) }
         VStack(alignment: .leading, spacing: 0) {
             Button {
-                expansion.expanded.toggle()
+                expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "checklist")
@@ -45,11 +38,11 @@ struct TodosPanel: View {
                     }
                     .frame(width: 48, height: 4)
                     .accessibilityHidden(true)
-                    if !expansion.expanded, let active {
+                    if !expanded, let active {
                         Text(active.title).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
-                    Image(systemName: expansion.expanded ? "chevron.up" : "chevron.down")
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 12)
@@ -59,9 +52,9 @@ struct TodosPanel: View {
             .buttonStyle(.plain)
             .font(.system(size: 13, weight: .medium))
             .accessibilityLabel("Tasks, \(done) of \(todos.count) completed")
-            .accessibilityValue(expansion.expanded ? "Expanded" : "Collapsed")
+            .accessibilityValue(expanded ? "Expanded" : "Collapsed")
 
-            if expansion.expanded {
+            if expanded {
                 Divider().opacity(0.5)
                 ScrollView {
                     taskRows(ordered)
@@ -77,7 +70,7 @@ struct TodosPanel: View {
         .padding(.vertical, 8)
         .frame(maxWidth: Theme.column + 56)
         .frame(maxWidth: .infinity)
-        .onChange(of: allDone) { _, value in expansion.expanded = !value }
+        .onChange(of: allDone) { _, value in expanded = !value }
     }
 
     private func taskRows(_ items: [SessionTodo]) -> some View {
@@ -91,7 +84,7 @@ struct TodosPanel: View {
                         .strikethrough(todo.isClosed)
                         .foregroundStyle(todo.isClosed ? .secondary : .primary)
                         .fontWeight(working ? .medium : .regular)
-                        .lineLimit(expansion.expanded ? nil : 1)
+                        .lineLimit(expanded ? nil : 1)
                     Spacer(minLength: 8)
                     if todo.assignedToSession != nil, !working, !todo.isClosed {
                         Text("Assigned elsewhere").foregroundStyle(.secondary)

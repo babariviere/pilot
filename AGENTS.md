@@ -19,7 +19,11 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - The Harness owns history and the model loop. The native SDK session never runs its own loop.
 - Native tools are replay-unsafe: a crash during a tool yields an interrupted result.
 - Keep the daemon bound to loopback until authentication exists.
-- Swift: no `@State` (its macro plugin is missing from Command Line Tools); use `@StateObject` holders.
+- Swift state: use `@State` with plain values for view-local UI state (hover, expansion, form fields, busy
+  flags). Keep `@StateObject` for models that own work, subscriptions or a lifetime, and for holders a parent
+  shares with children, because `@State` re-evaluates its initial value on every view init.
+- Build Swift through `apps/macos/scripts/{build,test,bundle}.sh`. With Command Line Tools only, the macOS 27
+  SDK's `@State` macro has no plugin, so `scripts/swift-env.sh` falls back to an older installed SDK.
 - For user-visible UI changes, use the `artifact` tool to show the result. Prefer `kind: "swiftui"`
   for native layout previews: supply a self-contained `struct ArtifactView: View` with mock data,
   inspect it with `action: "preview"` when available, then publish with `action: "create"` (or update an existing
@@ -63,7 +67,7 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - Biome: tabs, width 120. `npm run fmt` / `npm run fmt:check`.
 - Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
 - Before finishing a change: `npm run typecheck` and `npm test`; for Swift changes also
-  `apps/macos/scripts/test.sh` and `swift build --package-path apps/macos`.
+  `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`.
 
 ## Repository safety
 

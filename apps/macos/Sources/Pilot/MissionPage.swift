@@ -2,15 +2,14 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Free text for small add/edit forms, held outside the view per AGENTS.md (no @State).
-@MainActor
-final class MissionInput: ObservableObject {
-    @Published var text = ""
-    @Published var secondary = ""
-    @Published var option: String?
-    @Published var busy = false
-    @Published var editingId: String?
-    @Published var confirming = false
+/// Free text for small add/edit forms, held in each view's @State.
+struct MissionInput {
+    var text = ""
+    var secondary = ""
+    var option: String?
+    var busy = false
+    var editingId: String?
+    var confirming = false
 
     func trimmed(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
 }
@@ -20,13 +19,13 @@ struct MissionPage: View {
     let missionId: String
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var deletion = MissionInput()
+    @State private var confirmingDeletion = false
 
     var body: some View {
         Group {
             if let mission = client.mission(missionId) {
                 VStack(spacing: 0) {
-                    MissionHeader(mission: mission, deletion: deletion)
+                    MissionHeader(mission: mission, confirmingDeletion: $confirmingDeletion)
                     MissionTabBar(mission: mission)
                     Rectangle().fill(Theme.border).frame(height: 1)
                     content(mission, detail: client.missionDetails[missionId])
@@ -44,7 +43,7 @@ struct MissionPage: View {
         }
         .background(Theme.background)
         .missionSubscription(missionId, client: client)
-        .confirmationDialog("Delete this mission?", isPresented: $deletion.confirming) {
+        .confirmationDialog("Delete this mission?", isPresented: $confirmingDeletion) {
             Button("Delete Mission", role: .destructive) {
                 model.missionAction { [client, missionId, model] in
                     try await client.deleteMission(missionId)
@@ -75,7 +74,7 @@ struct MissionPage: View {
 
 private struct MissionHeader: View {
     let mission: Mission
-    @ObservedObject var deletion: MissionInput
+    @Binding var confirmingDeletion: Bool
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
@@ -125,7 +124,7 @@ private struct MissionHeader: View {
                     Button { setStatus(.archived) } label: { Label("Archive", systemImage: "archivebox") }
                 }
                 Divider()
-                Button(role: .destructive) { deletion.confirming = true } label: {
+                Button(role: .destructive) { confirmingDeletion = true } label: {
                     Label("Delete mission…", systemImage: "trash")
                 }
             } label: {
@@ -263,7 +262,7 @@ struct MissionOverviewTab: View {
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var resource = MissionInput()
+    @State private var resource = MissionInput()
 
     var body: some View {
         let progress = detail.progress
@@ -357,7 +356,7 @@ struct MissionOverviewTab: View {
         guard !resource.busy, URL(string: url)?.scheme != nil else { return }
         let title = resource.trimmed(resource.secondary)
         resource.busy = true
-        model.missionAction { [client, resource, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             defer { resource.busy = false }
             try await client.addMissionResource(id, MissionResourceWrite(url: url, title: title.isEmpty ? nil : title))
             resource.text = ""

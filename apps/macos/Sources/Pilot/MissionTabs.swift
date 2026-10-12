@@ -69,8 +69,8 @@ struct MissionBriefTab: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var editor = BriefEditorState()
-    @StateObject private var decision = MissionInput()
-    @StateObject private var comment = MissionInput()
+    @State private var decision = MissionInput()
+    @State private var comment = MissionInput()
 
     var body: some View {
         ScrollView {
@@ -256,7 +256,7 @@ struct MissionBriefTab: View {
         let text = decision.trimmed(decision.text)
         guard !text.isEmpty, !decision.busy else { return }
         decision.busy = true
-        model.missionAction { [client, decision, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             defer { decision.busy = false }
             try await client.addMissionDecision(id, text: text)
             decision.text = ""
@@ -266,7 +266,7 @@ struct MissionBriefTab: View {
     private func saveDecision(_ item: MissionDecision) {
         let text = decision.trimmed(decision.secondary)
         guard !text.isEmpty else { return }
-        model.missionAction { [client, decision, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             try await client.updateMissionDecision(id, decisionId: item.id, text: text)
             decision.editingId = nil
         }
@@ -278,7 +278,7 @@ struct MissionBriefTab: View {
         let anchor = comment.trimmed(comment.secondary)
         let target = comment.option
         comment.busy = true
-        model.missionAction { [client, comment, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             defer { comment.busy = false }
             try await client.addMissionComment(id, MissionCommentWrite(text: text, anchor: anchor.isEmpty ? nil : anchor,
                                                                        targetSessionId: target))
@@ -380,7 +380,7 @@ struct MissionTasksTab: View {
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var input = MissionInput()
+    @State private var input = MissionInput()
 
     var body: some View {
         let groups = MissionTaskOrdering.groups(detail.tasks)
@@ -415,7 +415,7 @@ struct MissionTasksTab: View {
         guard !title.isEmpty, !input.busy else { return }
         input.busy = true
         let order = MissionTaskOrdering.nextOrder(after: detail.tasks)
-        model.missionAction { [client, input, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             defer { input.busy = false }
             try await client.createMissionTask(id, MissionTaskWrite(title: title, order: order))
             input.text = ""
@@ -437,7 +437,7 @@ struct MissionTaskRow: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
-    @StateObject private var resource = MissionInput()
+    @State private var resource = MissionInput()
     @StateObject private var artifacts = MissionArtifactsState()
 
     init(task: MissionTask, mission: Mission, siblings: [MissionTask]) {
@@ -541,7 +541,7 @@ struct MissionTaskRow: View {
         guard !resource.busy, URL(string: url)?.scheme != nil else { return }
         let value = resource.trimmed(resource.secondary)
         resource.busy = true
-        model.missionAction { [client, resource, id = mission.id, taskId = task.id] in
+        model.missionAction { [client, id = mission.id, taskId = task.id] in
             defer { resource.busy = false }
             try await client.addMissionResource(id, MissionResourceWrite(url: url, title: value.isEmpty ? nil : value, taskId: taskId))
             resource.text = ""
@@ -850,13 +850,12 @@ struct MissionArtifactsTab: View {
 
 // MARK: Activity
 
-@MainActor
-private final class MissionActivityState: ObservableObject {
-    @Published var older: [MissionEvent] = []
-    @Published var exhausted = false
-    @Published var loading = false
-    @Published var kind: MissionEventWriteKind = .update
-    @Published var health: MissionHealth?
+private struct MissionActivityState {
+    var older: [MissionEvent] = []
+    var exhausted = false
+    var loading = false
+    var kind: MissionEventWriteKind = .update
+    var health: MissionHealth?
 }
 
 struct MissionActivityTab: View {
@@ -864,8 +863,8 @@ struct MissionActivityTab: View {
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var input = MissionInput()
-    @StateObject private var state = MissionActivityState()
+    @State private var input = MissionInput()
+    @State private var state = MissionActivityState()
 
     var body: some View {
         let recentIds = Set(detail.events.map(\.id))
@@ -920,7 +919,7 @@ struct MissionActivityTab: View {
         guard !text.isEmpty, !input.busy else { return }
         input.busy = true
         let write = MissionEventWrite(text: text, kind: state.kind, health: state.health)
-        model.missionAction { [client, input, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             defer { input.busy = false }
             try await client.postMissionEvent(id, write)
             input.text = ""
@@ -930,7 +929,7 @@ struct MissionActivityTab: View {
     private func loadOlder(before: Int?) {
         guard let before else { return }
         state.loading = true
-        model.missionAction { [client, state, id = mission.id] in
+        model.missionAction { [client, id = mission.id] in
             defer { state.loading = false }
             let page = try await client.missionEvents(id, before: before)
             if page.isEmpty { state.exhausted = true }

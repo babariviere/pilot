@@ -341,12 +341,6 @@ extension Theme {
     }
 }
 
-/// Pointer hover for views that need it, as a holder object because SwiftUI's State macro is unavailable.
-@MainActor
-final class HoverState: ObservableObject {
-    @Published var isHovered = false
-}
-
 /// Keyboard shortcut hint: a key cap followed by a short action, such as "⌥↩ follow up".
 struct KeyHint: View {
     let key: String
@@ -380,10 +374,10 @@ struct QuietIconButtonStyle: ButtonStyle {
         let configuration: ButtonStyleConfiguration
         let hoverTint: Color
         @Environment(\.isEnabled) private var isEnabled
-        @StateObject private var hover = HoverState()
+        @State private var isHovered = false
 
         var body: some View {
-            let active = hover.isHovered && isEnabled
+            let active = isHovered && isEnabled
             configuration.label
                 .font(.pilot(.caption, weight: .semibold))
                 .foregroundStyle(active ? hoverTint : Theme.mutedForeground)
@@ -391,8 +385,8 @@ struct QuietIconButtonStyle: ButtonStyle {
                 .background(RoundedRectangle(cornerRadius: 5).fill(active ? Theme.selected : .clear))
                 .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
                 .contentShape(RoundedRectangle(cornerRadius: 5))
-                .onHover { hover.isHovered = $0 }
-                .animation(Theme.Motion.quick, value: hover.isHovered)
+                .onHover { isHovered = $0 }
+                .animation(Theme.Motion.quick, value: isHovered)
         }
     }
 }

@@ -7,7 +7,7 @@ struct WorkingIndicator: View {
     let retry: String?
     var compacting = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @StateObject private var visibility = WorkingHighlightVisibility()
+    @State private var visible = false
 
     var label: String { retry.map { "Retrying: \($0)" } ?? (compacting ? "Compacting context…" : "Working…") }
     private static let muted = Color(hex: 0x989898)
@@ -24,7 +24,7 @@ struct WorkingIndicator: View {
             .foregroundStyle(reduceMotion ? Self.muted : .clear)
             .overlay {
                 if !reduceMotion {
-                    WorkingHighlight(visible: visibility.visible)
+                    WorkingHighlight(visible: visible)
                         .mask(Text(label).foregroundStyle(.white).frame(maxWidth: .infinity, alignment: .leading))
                         .accessibilityHidden(true)
                 }
@@ -33,8 +33,8 @@ struct WorkingIndicator: View {
             .lineLimit(1)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(label)
-            .onAppear { visibility.visible = true }
-            .onDisappear { visibility.visible = false }
+            .onAppear { visible = true }
+            .onDisappear { visible = false }
     }
 }
 
@@ -45,11 +45,6 @@ private struct WorkingHighlight: NSViewRepresentable {
     func makeNSView(context: Context) -> WorkingHighlightView { WorkingHighlightView() }
     func updateNSView(_ view: WorkingHighlightView, context: Context) { view.setVisible(visible) }
     static func dismantleNSView(_ view: WorkingHighlightView, coordinator: ()) { view.dispose() }
-}
-
-@MainActor
-private final class WorkingHighlightVisibility: ObservableObject {
-    @Published var visible = false
 }
 
 final class WorkingHighlightView: NSView {

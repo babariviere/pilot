@@ -1,17 +1,16 @@
 import PilotCore
 import SwiftUI
 
-@MainActor
-final class MissionFormState: ObservableObject {
-    @Published var title = ""
-    @Published var goal = ""
-    @Published var projectId: String?
-    @Published var coordinator = true
-    @Published var draft = true
-    @Published var missionId: String?
-    @Published var taskId: String?
-    @Published var saving = false
-    @Published var error: String?
+struct MissionForm {
+    var title = ""
+    var goal = ""
+    var projectId: String?
+    var coordinator = true
+    var draft = true
+    var missionId: String?
+    var taskId: String?
+    var saving = false
+    var error: String?
     var prepared = false
 }
 
@@ -35,7 +34,7 @@ struct CreateMissionSheet: View {
     let sourceSessionId: String?
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var form = MissionFormState()
+    @State private var form = MissionForm()
     @Environment(\.dismiss) private var dismiss
 
     private var source: SessionSummary? { sourceSessionId.flatMap { client.session($0) } }
@@ -132,7 +131,7 @@ struct CreateMissionSheet: View {
 struct AddToMissionSheet: View {
     let sessionId: String
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var form = MissionFormState()
+    @State private var form = MissionForm()
     @Environment(\.dismiss) private var dismiss
 
     private var session: SessionSummary? { client.session(sessionId) }
@@ -202,7 +201,7 @@ struct AddToMissionSheet: View {
 struct EditMissionSheet: View {
     let missionId: String
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var form = MissionFormState()
+    @State private var form = MissionForm()
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
