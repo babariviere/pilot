@@ -209,3 +209,102 @@ private final class FlippedScrollDocument: NSView {
     center.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
     #expect(state.follow.shouldScrollToBottom)
 }
+
+/// Markdown preparation can move a marker without changing either its immediate host's
+/// frame or the document size. These native movements must all preserve the reading position.
+@Test @MainActor func transcriptAnchoringObservesNestedNativeGeometryChanges() async throws {
+    for flipped in [true, false] {
+        for movement in 0..<3 {
+            let window = testWindow()
+            defer { window.close() }
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+            let document = flipped ? FlippedScrollDocument() : NSView()
+            document.frame = NSRect(x: 0, y: 0, width: 600, height: 1600)
+            scroll.documentView = document
+            let ancestor = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 1200))
+            let host = NSView(frame: NSRect(x: 0, y: 600, width: 600, height: 90))
+            let marker = TranscriptRowAnchorView(frame: NSRect(x: 0, y: 0, width: 600, height: 90))
+            marker.rowID = "nested-\(flipped)-\(movement)"
+            host.addSubview(marker)
+            ancestor.addSubview(host)
+            document.addSubview(ancestor)
+            let state = TranscriptScrollState()
+            state.follow.pauseFollowing()
+            let observer = ScrollObserverView(frame: document.bounds)
+            observer.state = state
+            document.addSubview(observer)
+            window.contentView = scroll
+            scroll.layoutSubtreeIfNeeded()
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+            observer.captureAnchor()
+            // Drain initial layout/bounds notifications before the mutation, so an unrelated
+            // pending settle cannot accidentally make the regression pass.
+            try await Task.sleep(for: .milliseconds(30))
+            #expect(marker.isAnchored)
+            let before = marker.convert(marker.bounds, to: nil).minY
+            let documentSize = document.frame.size
+            switch movement {
+            case 0: marker.setFrameOrigin(NSPoint(x: 0, y: 7))
+            case 1: host.setBoundsOrigin(NSPoint(x: 0, y: 7))
+            default: ancestor.setFrameOrigin(NSPoint(x: 0, y: 7))
+            }
+            try await Task.sleep(for: .milliseconds(30))
+            let after = marker.convert(marker.bounds, to: nil).minY
+            #expect(abs(after - before) <= 0.5, "movement \(movement), flipped \(flipped)")
+            #expect(document.frame.size == documentSize)
+            #expect(!state.follow.shouldScrollToBottom)
+            observer.stopObserving()
+        }
+    }
+}
+
+@MainActor
+private final class AnchorMovementCounter: NSObject {
+    var count = 0
+    @objc func moved(_ notification: Notification) { count += 1 }
+}
+
+@Test @MainActor func transcriptAnchorGeometryObservationIsQuietAndStopsWithItsLifetime() async throws {
+    let window = testWindow()
+    defer { window.close() }
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    let document = FlippedScrollDocument(frame: NSRect(x: 0, y: 0, width: 600, height: 1600))
+    scroll.documentView = document
+    let host = NSView(frame: NSRect(x: 0, y: 600, width: 600, height: 90))
+    let marker = TranscriptRowAnchorView(frame: NSRect(x: 0, y: 0, width: 600, height: 90))
+    marker.rowID = "lifetime"
+    host.addSubview(marker)
+    document.addSubview(host)
+    let state = TranscriptScrollState()
+    state.follow.pauseFollowing()
+    let observer = ScrollObserverView(frame: document.bounds)
+    observer.state = state
+    document.addSubview(observer)
+    window.contentView = scroll
+    scroll.layoutSubtreeIfNeeded()
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+    observer.captureAnchor()
+    try await Task.sleep(for: .milliseconds(30))
+    let counter = AnchorMovementCounter()
+    let center = NotificationCenter.default
+    center.addObserver(counter, selector: #selector(AnchorMovementCounter.moved), name: TranscriptRowAnchorView.didMove, object: marker)
+    defer { center.removeObserver(counter) }
+
+    marker.setFrameOrigin(NSPoint(x: 0, y: 7))
+    #expect(counter.count == 1)
+    for _ in 0..<5 { observer.captureAnchor() }
+    center.post(name: NSView.frameDidChangeNotification, object: host)
+    center.post(name: NSView.boundsDidChangeNotification, object: host)
+    #expect(counter.count == 1, "Unchanged geometry and recapture must not create notifications")
+
+    marker.isAnchored = false
+    marker.setFrameOrigin(NSPoint(x: 0, y: 14))
+    #expect(counter.count == 1)
+    observer.captureAnchor()
+    marker.setFrameOrigin(NSPoint(x: 0, y: 21))
+    #expect(counter.count == 2)
+    observer.stopObserving()
+    marker.setFrameOrigin(NSPoint(x: 0, y: 28))
+    #expect(counter.count == 2)
+    #expect(!marker.isAnchored)
+}

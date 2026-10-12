@@ -40,6 +40,14 @@ export function isSwiftUIPreviewAvailable(): boolean {
 	);
 }
 
+/** Extra dependency of the selected full-Xcode compiler, absent from Command Line Tools. */
+export function swiftUICompilerFrameworkPaths(toolchainRoot: string): string[] {
+	// The full Xcode driver links llbuild outside its toolchain. Permit just that
+	// dependency from the selected app, not the whole Xcode bundle or user paths.
+	const contents = toolchainRoot.match(/^(.*\.app\/Contents)\/Developer\/Toolchains\/[^/]+\/usr$/)?.[1];
+	return contents ? [join(contents, "SharedFrameworks", "llbuild.framework")] : [];
+}
+
 /** Fixed paths are quoted as Scheme strings, never interpolated as sandbox rules. */
 function profile(directory: string, toolchain: string, sdk: string, compiling: boolean): string {
 	return `(version 1)
@@ -47,7 +55,7 @@ function profile(directory: string, toolchain: string, sdk: string, compiling: b
 (allow sysctl-read)
 (allow process-info* (target self))
 (allow file-read-metadata)
-(allow file-read* ${["/System/Library", "/System/Cryptexes", "/System/Volumes/Preboot", "/usr/lib", "/usr/share", "/usr/bin", "/usr/include", "/bin", "/sbin", "/private/preboot", "/private/var/db/dyld", "/Library/Developer", "/Library/Fonts", "/Library/Preferences", directory, toolchain, sdk].map((path) => `(subpath ${JSON.stringify(path)})`).join(" ")}
+(allow file-read* ${["/System/Library", "/System/Cryptexes", "/System/Volumes/Preboot", "/usr/lib", "/usr/share", "/usr/bin", "/usr/include", "/bin", "/sbin", "/private/preboot", "/private/var/db/dyld", "/Library/Developer", "/Library/Fonts", "/Library/Preferences", directory, toolchain, sdk, ...(compiling ? swiftUICompilerFrameworkPaths(toolchain) : [])].map((path) => `(subpath ${JSON.stringify(path)})`).join(" ")}
   (literal "/")
   (literal "/dev/null") (literal "/dev/random") (literal "/dev/urandom") (literal "/private/etc/localtime"))
 (allow file-write* (subpath ${JSON.stringify(directory)}) (literal "/dev/null"))
@@ -327,7 +335,9 @@ export async function previewSwiftUI(
 		let sdk: string;
 		try {
 			compiler = (await execute("/usr/bin/xcrun", ["--find", "swiftc"])).stdout.trim();
-			sdk = (await execute("/usr/bin/xcrun", ["--sdk", "macosx", "--show-sdk-path"])).stdout.trim();
+			// Full Xcode exposes SDK aliases outside /Library/Developer. Sandbox paths
+			// must name the canonical target, just like the compiler's toolchain root.
+			sdk = await realpath((await execute("/usr/bin/xcrun", ["--sdk", "macosx", "--show-sdk-path"])).stdout.trim());
 		} catch (error) {
 			options.signal?.throwIfAborted();
 			throw new Error(
