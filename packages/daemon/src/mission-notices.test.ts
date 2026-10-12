@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
 import { MissionNotices } from "./mission-notices.ts";
-import { MissionStore, NOTICE_WINDOW_MS } from "./missions.ts";
+import { MissionStore, NOTICE_MAX_DELAY_MS, NOTICE_WINDOW_MS } from "./missions.ts";
 import type { SessionManager } from "./sessions.ts";
 
 function setup(store = new MissionStore(":memory:")) {
@@ -106,10 +107,8 @@ test("only settlements, newly blocked tasks and relevant comments create durable
 		}
 		store.recordMemberCompletion(completion("done", 1));
 		const notice = store.prepareNotice(id, "lead", Date.now() + 30_000)!;
-		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 6);
-		assert.match(notice.content, /#1 Pagination blocked: Need API access/);
-		assert.match(notice.content, /chat finished, PR #12 open/);
-		assert.match(notice.content, /chat failed/);
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 3);
+		assert.doesNotMatch(notice.content, /blocked: Need API access|chat finished|chat failed/);
 		assert.match(notice.content, /chat stopped/);
 		assert.match(notice.content, /Read the mission with get for details/);
 		assert.doesNotMatch(notice.content, /own comment|someone else|Still blocked/);
@@ -118,7 +117,7 @@ test("only settlements, newly blocked tasks and relevant comments create durable
 	}
 });
 
-test("30-second trailing debounce merges bursts and a continuous burst hits the two-minute cap", (t) => {
+test("30-second settle merges bursts, with a single 30-minute safety cap", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	try {
@@ -129,11 +128,14 @@ test("30-second trailing debounce merges bursts and a continuous burst hits the 
 			t.mock.timers.tick(20_000);
 			store.addComment(id, { text: `at ${second}` });
 		}
-		assert.equal(store.noticeDeadlines(101_000)[0]!.at, 121_000);
-		assert.equal(store.prepareNotice(id, "lead", 120_999), undefined);
-		const notice = store.prepareNotice(id, "lead", 121_000)!;
+		assert.equal(store.noticeDeadlines(101_000)[0]!.at, 131_000);
+		assert.equal(store.prepareNotice(id, "lead", 130_999), undefined);
+		store.setNoticeActivity(id, true, 101_000);
+		assert.equal(store.noticeDeadlines(101_000)[0]!.at, 1_000 + NOTICE_MAX_DELAY_MS);
+		assert.equal(store.prepareNotice(id, "lead", 1_000 + NOTICE_MAX_DELAY_MS - 1), undefined);
+		const notice = store.prepareNotice(id, "lead", 1_000 + NOTICE_MAX_DELAY_MS)!;
 		assert.ok(notice);
-		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 6);
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
 		store.acknowledgeNotice(notice, 121_000);
 		assert.deepEqual(store.noticeDeadlines(121_000), []);
 	} finally {
@@ -284,17 +286,15 @@ test("deleting a mission removes its pending batch and completion dedupe state",
 	}
 });
 
-test("large bursts produce bounded batches without dropping the remainder", () => {
+test("large bursts collapse to one latest note without repeated delivery", () => {
 	const { store, id } = setup();
 	try {
 		for (let index = 0; index < 250; index++) store.addComment(id, { text: `comment ${index}` });
 		const now = Date.now() + 30_000;
-		for (const count of [100, 100, 50]) {
-			const notice = store.prepareNotice(id, "lead", now)!;
-			assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, count);
-			assert.ok(notice.content.length < 51_000);
-			store.acknowledgeNotice(notice, now);
-		}
+		const notice = store.prepareNotice(id, "lead", now)!;
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
+		assert.match(notice.content, /comment 249/);
+		store.acknowledgeNotice(notice, now);
 		assert.deepEqual(store.noticeDeadlines(now), []);
 	} finally {
 		store.close();
@@ -370,6 +370,192 @@ test("the timer delivers at debounce and shutdown drains admission before storag
 	} finally {
 		release();
 		await delivery.stop();
+		store.close();
+	}
+});
+
+test("one working or starting member holds all notices, and the last settlement starts a fresh settle delay", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id } = setup();
+	store.join("second", id);
+	store.join("parked", id);
+	store.join("archived", id);
+	store.addTask(id, { title: "Second" });
+	store.claimTask(id, "2", "second");
+	const chats = new Map<string, SessionSummary>([
+		["lead", { ...completion(undefined, 0), id: "lead", missionId: id }],
+		["member", { ...completion(undefined, 0), missionId: id, state: "working" }],
+		["second", { ...completion(undefined, 0), id: "second", missionId: id, state: "starting" }],
+		["outsider", { ...completion(undefined, 0), id: "outsider", state: "working" }],
+		["parked", { ...completion(undefined, 0), id: "parked", missionId: id, state: "parked" }],
+		["archived", { ...completion(undefined, 0), id: "archived", missionId: id, state: "starting", archivedAt: 1 }],
+	]);
+	let observe!: (session: SessionSummary) => void;
+	const notices: string[] = [];
+	const sessions = {
+		list: () => [...chats.values()],
+		get: (id: string) => chats.get(id),
+		onChange: (listener: typeof observe) => {
+			observe = listener;
+			return () => {};
+		},
+		canSendNotice: () => chats.get("lead")!.state === "idle",
+		sendNotice: async (_id: string, content: string) => {
+			notices.push(content);
+			return true;
+		},
+	} as unknown as SessionManager;
+	const delivery = new MissionNotices(store, sessions);
+	const change = (id: string, state: SessionSummary["state"], outcome?: SessionSummary["outcome"]) => {
+		const chat = { ...chats.get(id)!, state, outcome, outcomeAt: Date.now() };
+		chats.set(id, chat);
+		observe(chat);
+	};
+	delivery.start();
+	try {
+		change("member", "idle", "done");
+		t.mock.timers.tick(120_000);
+		await delivery.flush();
+		assert.equal(notices.length, 0);
+		change("second", "failed", "failed");
+		t.mock.timers.tick(29_000);
+		await delivery.flush();
+		assert.equal(notices.length, 0);
+		change("second", "working");
+		t.mock.timers.tick(2_000);
+		await delivery.flush();
+		assert.equal(notices.length, 0, "an immediate resume cancels settlement");
+		change("second", "idle", "done");
+		change("lead", "working");
+		t.mock.timers.tick(30_000);
+		await delivery.flush();
+		assert.equal(notices.length, 0, "lead must also be idle, but does not reset member settlement");
+		change("lead", "idle");
+		await delivery.flush();
+		assert.equal(notices.length, 1);
+		assert.match(notices[0]!, /#1 Pagination: chat finished/);
+		assert.match(notices[0]!, /#2 Second: chat finished/);
+		assert.doesNotMatch(notices[0]!, /chat failed/);
+		assert.equal(notices[0]!.split("\n").filter((line) => line.startsWith("- ")).length, 2);
+		await delivery.flush();
+		assert.equal(notices.length, 1);
+	} finally {
+		await delivery.stop();
+		store.close();
+	}
+});
+
+test("repeated failures collapse with a count, and a later finish supersedes them", () => {
+	const { store, id } = setup();
+	try {
+		store.recordMemberCompletion(completion("failed", 1));
+		store.recordMemberCompletion(completion("failed", 2));
+		const now = Date.now() + 30_000;
+		const failed = store.prepareNotice(id, "lead", now)!;
+		assert.match(failed.content, /chat failed twice/);
+		assert.equal(failed.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
+		store.acknowledgeNotice(failed, now);
+		store.recordMemberCompletion(completion("failed", 3));
+		store.recordMemberCompletion(completion("done", 4));
+		const done = store.prepareNotice(id, "lead", now + 30_000)!;
+		assert.match(done.content, /chat finished/);
+		assert.doesNotMatch(done.content, /failed/);
+	} finally {
+		store.close();
+	}
+});
+
+test("the cap delivers during sustained member work but never during lead work", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id } = setup();
+	const lead = { ...completion(undefined, 0), id: "lead", missionId: id };
+	const member = { ...completion(undefined, 0), missionId: id, state: "working" as const };
+	let sent = 0;
+	const sessions = {
+		list: () => [lead, member],
+		get: (id: string) => (id === "lead" ? lead : member),
+		onChange: () => () => {},
+		canSendNotice: () => lead.state === "idle",
+		sendNotice: async () => {
+			sent++;
+			return true;
+		},
+	} as unknown as SessionManager;
+	const delivery = new MissionNotices(store, sessions);
+	delivery.start();
+	try {
+		store.addComment(id, { text: "failure needs attention" });
+		t.mock.timers.tick(NOTICE_MAX_DELAY_MS - 1);
+		await delivery.flush();
+		assert.equal(sent, 0);
+		lead.state = "working";
+		t.mock.timers.tick(1);
+		await delivery.flush();
+		assert.equal(sent, 0);
+		lead.state = "idle";
+		await delivery.flush();
+		assert.equal(sent, 1);
+	} finally {
+		await delivery.stop();
+		store.close();
+	}
+});
+
+test("very large sets of distinct groups produce one bounded notice with an overflow summary", () => {
+	const { store, id } = setup();
+	try {
+		for (let index = 0; index < 250; index++) store.addTask(id, { title: `Blocked ${index}`, status: "blocked" });
+		const now = Date.now() + 30_000;
+		const notice = store.prepareNotice(id, "lead", now)!;
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 101);
+		assert.match(notice.content, /150 additional groups/);
+		assert.ok(notice.content.length < 51_000);
+		store.acknowledgeNotice(notice, now);
+		assert.deepEqual(store.noticeDeadlines(now), []);
+	} finally {
+		store.close();
+	}
+});
+
+test("10,000 failed outcomes retain one bounded summary, without loading raw events into JavaScript", (t) => {
+	const { store, id } = setup();
+	try {
+		for (let index = 1; index <= 10_000; index++) store.recordMemberCompletion(completion("failed", index));
+		const start = performance.now();
+		const now = Date.now() + 30_000;
+		const notice = store.prepareNotice(id, "lead", now)!;
+		t.diagnostic(`Grouped 10,000 events in ${(performance.now() - start).toFixed(1)} ms`);
+		assert.match(notice.content, /chat failed 10000 times/);
+		assert.ok(notice.content.length < 1_000);
+		store.acknowledgeNotice(notice, now);
+		assert.deepEqual(store.noticeDeadlines(now), []);
+	} finally {
+		store.close();
+	}
+});
+
+test("legacy queued events migrate into groups, and legacy consumed states do not repeat", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-notice-migration-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const file = join(home, "missions.sqlite");
+	const f = setup(new MissionStore(file));
+	f.store.recordMemberCompletion(completion("failed", 1));
+	f.store.recordMemberCompletion(completion("done", 2));
+	f.store.close();
+	const legacy = new DatabaseSync(file);
+	legacy.exec("DROP TABLE pending_notice_summaries; ALTER TABLE member_completions DROP COLUMN signature");
+	legacy.close();
+	const store = new MissionStore(file);
+	try {
+		const now = Date.now() + 30_000;
+		const notice = store.prepareNotice(f.id, "lead", now)!;
+		assert.equal(notice.content.split("\n").filter((line) => line.startsWith("- ")).length, 1);
+		assert.match(notice.content, /chat finished/);
+		assert.doesNotMatch(notice.content, /failed/);
+		store.acknowledgeNotice(notice, now);
+		store.recordMemberCompletion(completion("done", 3));
+		assert.deepEqual(store.noticeDeadlines(now), []);
+	} finally {
 		store.close();
 	}
 });

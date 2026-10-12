@@ -312,15 +312,23 @@ unblocked tasks on its own.
 
 Wake-ups are pending events in `missions.sqlite`: member completions (done, failed, stopped), tasks
 becoming blocked and comments addressed to the coordinator or nobody. Self-caused events never wake
-the coordinator. Bursts use a 30-second trailing debounce, capped at two minutes from the first event.
-Delivery waits for idle (including an empty durable inbox), with an atomic kernel idle guard, and uses
-an ordinary follow-up with request ID `mission-notice:<lastEventId>`. The cutoff and short event-summary
-payload are frozen before delivery, so a lost acknowledgement retries the same notice once. Events
+the coordinator. Pending events accumulate while any other member of that mission is working or
+starting. Once all members are inactive (idle, parked, failed or archived), delivery waits 30 seconds
+to settle; an immediate resume resets that window. The coordinator's state and chats outside the
+mission do not affect member activity. A single 30-minute safety cap, `NOTICE_MAX_DELAY_MS`, measured
+from the oldest pending event allows delivery even when members remain busy.
+Delivery still waits for the coordinator to be idle (including an empty durable inbox), with an atomic
+kernel idle guard, and uses an ordinary follow-up with request ID `mission-notice:<lastEventId>`.
+The cutoff and short event-summary payload are frozen before delivery, so a lost acknowledgement
+retries the same notice once.
 Completion versions and semantic state fingerprints are durable: startup does not announce outcomes
 predating membership, unchanged successful states are suppressed, and later outcomes omit old merges. Events
 stay pending while the mission is inactive, lacks a coordinator, or its coordinator is archived.
 Each mission has a rolling cap of 20 notices per hour; excess events wait for the next window.
-Notices contain at most 100 one-line summaries (500 characters each); larger backlogs drain in batches.
+Notices group by task, or chat for unassigned work: only the latest state is shown, superseded failures
+are omitted, and repeated failures carry a count. Comments collapse to the latest note per author.
+Each backlog produces one notice with at most 100 one-line summaries (500 characters each), plus an
+overflow count linking readers to activity for additional groups. All raw events remain in activity.
 Waiting-on-user triggers remain deferred until that lifecycle signal exists. Autopilot is not enabled.
 
 Every wake-up adds to the coordinator's context, so pilotd compacts it while idle. After five minutes
