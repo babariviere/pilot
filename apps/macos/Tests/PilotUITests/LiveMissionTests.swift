@@ -281,19 +281,14 @@ import WebKit
     throw ClientError("Live artifact image did not finish rendering")
 }
 
-@MainActor func liveClick(_ host: NSView, x: CGFloat, top: CGFloat) throws {
+@MainActor private func liveClick(_ host: NSView, x: CGFloat, top: CGFloat) throws {
     let window = try #require(host.window)
     let point = NSPoint(x: x, y: host.isFlipped ? top : host.bounds.height - top)
     let location = host.convert(point, to: nil)
-    let event = { (type: NSEvent.EventType) in
-        try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+        let event = try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
             timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1,
             clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-    }
-    // Native buttons can track mouseDown until they dequeue mouseUp. Always queue it first.
-    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
-    window.sendEvent(try event(.leftMouseDown))
-    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
-        window.sendEvent(up)
+        window.sendEvent(event)
     }
 }
