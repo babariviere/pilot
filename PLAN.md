@@ -137,9 +137,13 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   They never switch or modify the user's checkout, and reopening keeps the pinned revision. Branch
   snapshots exclude local changes. A refresh of the branch menu lists current origin heads; missing
   branches fail preparation rather than silently falling back to another source.
-- Ask workers load only host-owned read/search tools and session-local artifact tools. User and project
-  extensions, MCP, shell tools, jobs, and repository-write tools are not loaded, not merely hidden or
-  blocked. Repository read-only access is a capability boundary, not a prompt convention. Ask sessions
+- Ask workers load only host-owned read/search tools, session-local artifact tools and the `web` tool
+  borrowed from the user's own pi extensions. To find `web`, Ask evaluates user-level packages and
+  extensions (never project ones, explicit paths or inline factories) and keeps only that tool definition;
+  extension hooks, commands and other tools are never attached. Web search and fetch (including its
+  clone and browser fallbacks) are allowed in every Ask chat. MCP, shell tools, jobs, and
+  repository-write tools are not loaded, not merely hidden or blocked. Repository read-only access is a
+  capability boundary, not a prompt convention. Ask sessions
   cannot open a terminal or publish repository changes. They can create, update and preview their own
   artifacts using the isolated offline renderers, without arbitrary image-file reads. Codemode can only
   call this restricted tool set; artifacts and completion reporting are session-local capabilities.

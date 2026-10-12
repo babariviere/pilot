@@ -61,6 +61,7 @@ import type { DeliveryMode, SessionCommand } from "@pilot/protocol";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
+import { loadAskExtensionTools } from "./ask-extension-tools.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
@@ -84,6 +85,8 @@ export interface NativeAdapterOptions {
 	askArtifacts?: ArtifactToolOptions;
 	/** Additional host-owned tools for Ask sessions, allowed by ASK_TOOL_NAMES. */
 	askTools?: ToolDefinition[];
+	/** Ask tools borrowed from user-level extensions (ASK_EXTENSION_TOOL_NAMES). Defaults to loading them. */
+	askExtensionTools?: ToolDefinition[];
 	/** Host tools registered through the native extension API, so their declarations can change live. */
 	hostTools?: ToolDefinition[];
 	/** Working directory for tools, context files and project configuration. */
@@ -302,6 +305,16 @@ export class NativeAdapter {
 		const agentDir = options.agentDir ?? getAgentDir();
 		const originalSettings = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 		const settingsManager = options.ask ? askSettings(originalSettings) : originalSettings;
+		// Before the Ask overrides below; reads the user's own packages, never project resources.
+		const askExtensionTools = options.ask
+			? (options.askExtensionTools ??
+				(await loadAskExtensionTools({
+					cwd,
+					agentDir,
+					settingsManager: originalSettings,
+					onError: (message) => console.error(message),
+				})))
+			: [];
 		const projectTrusted = options.ask
 			? false
 			: (options.projectTrusted ?? resolveProjectTrust(options.trustDirectory ?? cwd, agentDir, settingsManager));
@@ -355,7 +368,7 @@ export class NativeAdapter {
 						noContextFiles: true,
 						// Do not spread loaderOptions: explicit CLI paths and inline factories bypass noExtensions.
 						systemPrompt:
-							"You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use the provided read, find, grep and ls tools, safe codemode batches, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
+							"You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use the provided read, find, grep and ls tools, the web tool when available, safe codemode batches, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
 						appendSystemPrompt: [],
 						extensionFactories: [createCodemodeExtension({ models: false, mode: "on" }), capture],
 					}
@@ -388,6 +401,7 @@ export class NativeAdapter {
 							...(await createAskTools(options.ask, { artifactSkill: hasArtifacts })),
 							...(options.askArtifacts ? createArtifactTools({ ...options.askArtifacts, ask: true }) : []),
 							...(options.askTools ?? []),
+							...askExtensionTools,
 						],
 					}
 				: {}),

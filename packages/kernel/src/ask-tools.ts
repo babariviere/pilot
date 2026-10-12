@@ -9,6 +9,7 @@ import { Type } from "@earendil-works/pi-ai";
 import { createReadToolDefinition, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { AskContext } from "./policy.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { ASK_EXTENSION_TOOL_NAMES } from "./ask-extension-tools.ts";
 
 const run = promisify(execFile);
 const MAX_FILE_BYTES = 16 * 1024 * 1024;
@@ -19,7 +20,16 @@ const SHA = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
 const UUID_PNG = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.png$/i;
 class ReadLimitError extends Error {}
 export const ASK_ATTACHMENTS = join(homedir(), "Library", "Application Support", "Pilot", "Attachments");
-export const ASK_TOOL_NAMES = ["read", "find", "grep", "ls", "codemode", "artifact", "mission"];
+export const ASK_TOOL_NAMES = [
+	"read",
+	"find",
+	"grep",
+	"ls",
+	"codemode",
+	"artifact",
+	"mission",
+	...ASK_EXTENSION_TOOL_NAMES,
+];
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 
 function contained(root: string, path: string): boolean {
