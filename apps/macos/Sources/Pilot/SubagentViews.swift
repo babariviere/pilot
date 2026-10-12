@@ -174,16 +174,11 @@ extension SubagentDisplayState {
 
 // MARK: - Strip above the composer
 
-@MainActor
-private final class SubagentStripState: ObservableObject {
-    @Published var shown: String?
-}
-
 /// Compact row of subagent chips above the composer. A chip opens live activity and actions.
 struct SubagentsStrip: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
-    @StateObject private var state = SubagentStripState()
+    @State private var shown: String?
 
     var body: some View {
         let subagents = session.subagents ?? []
@@ -216,29 +211,29 @@ struct SubagentsStrip: View {
 
     private func chip(_ subagent: SessionSubagent) -> some View {
         let display = SubagentDisplayState(subagent, unread: model.isUnread(subagent, in: session.id))
-        let shown = state.shown == subagent.name
-        return Button { state.shown = shown ? nil : subagent.name } label: {
+        let isShown = shown == subagent.name
+        return Button { shown = isShown ? nil : subagent.name } label: {
             HStack(spacing: 5) {
                 SubagentStatusGlyph(state: display)
                 Text(subagent.name)
-                    .font(.pilot(.caption, weight: shown ? .semibold : .regular))
+                    .font(.pilot(.caption, weight: isShown ? .semibold : .regular))
                     .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Capsule().fill(shown ? Theme.selected : Theme.muted))
-            .overlay(Capsule().strokeBorder(shown ? Theme.border : .clear))
+            .background(Capsule().fill(isShown ? Theme.selected : Theme.muted))
+            .overlay(Capsule().strokeBorder(isShown ? Theme.border : .clear))
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .help("\(subagent.name): \(display.label)")
         .accessibilityLabel("\(subagent.name), \(display.label)")
         .popover(isPresented: Binding(
-            get: { state.shown == subagent.name },
-            set: { if !$0, state.shown == subagent.name { state.shown = nil } }
+            get: { shown == subagent.name },
+            set: { if !$0, shown == subagent.name { shown = nil } }
         ), arrowEdge: .top) {
-            SubagentPopover(session: session, subagent: subagent) { state.shown = nil }
+            SubagentPopover(session: session, subagent: subagent) { shown = nil }
                 .environmentObject(model)
         }
     }
@@ -437,11 +432,10 @@ struct SubagentsPane: View {
     }
 }
 
-@MainActor
-private final class SubagentDraft: ObservableObject {
-    @Published var text = ""
-    @Published var sending = false
-    @Published var error: String?
+private struct SubagentDraft {
+    var text = ""
+    var sending = false
+    var error: String?
 }
 
 private struct SubagentDetail: View {
@@ -449,7 +443,7 @@ private struct SubagentDetail: View {
     let subagent: SessionSubagent
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var feed: SubagentFeed
-    @StateObject private var draft = SubagentDraft()
+    @State private var draft = SubagentDraft()
 
     init(session: SessionSummary, subagent: SessionSubagent) {
         self.session = session
