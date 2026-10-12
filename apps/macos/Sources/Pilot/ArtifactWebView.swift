@@ -29,20 +29,21 @@ final class ArtifactRenderState: ObservableObject {
 /// The HTML is not loaded until WebKit has installed the fail-closed request blocker.
 struct ArtifactWebView: NSViewRepresentable {
     let revision: ArtifactRevision
+    var inline = false
     @ObservedObject var state: ArtifactRenderState
 
     func makeCoordinator() -> Coordinator { Coordinator(state: state) }
 
     func makeNSView(context: Context) -> WKWebView {
         let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: AppModel.shared.client)
-        let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries)
+        let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline)
         context.coordinator.measurementKind = revision.kind
-        context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision))
+        context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
         return view
     }
 
     /// Also used by the native integration test, so it exercises the real configuration.
-    static func makeSandboxView(coordinator: Coordinator, libraries: ArtifactLibraryHandler) -> WKWebView {
+    static func makeSandboxView(coordinator: Coordinator, libraries: ArtifactLibraryHandler, inline: Bool = false) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.userContentController = WKUserContentController()
@@ -54,6 +55,7 @@ struct ArtifactWebView: NSViewRepresentable {
         configuration.mediaTypesRequiringUserActionForPlayback = .all
         configuration.setURLSchemeHandler(libraries, forURLScheme: "pilot-artifact")
         let view = WKWebView(frame: .zero, configuration: configuration)
+        if inline { view.setValue(false, forKey: "drawsBackground") }
         view.navigationDelegate = coordinator
         view.uiDelegate = coordinator
         view.allowsBackForwardNavigationGestures = false

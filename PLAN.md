@@ -753,11 +753,13 @@ reports), producing a morning summary in the app and Slack.
   The right-hand inspector's Artifacts tab lists every artifact in the current chat, updates live,
   and opens the latest revision on click. Project-wide browsing remains in the navigation sidebar.
   Plain PNG, JPEG, GIF and WebP files (or data URLs) are embedded with their revisions, up to 16 MiB.
-  Chat previews are borderless embedded content. They begin with a viewport up to 1200 points wide
-  and 360 to 720 points tall, then grow to fit measured content, up to the chat's full available width
-  and 1600 points tall. Image previews use intrinsic aspect ratio; HTML/React measurements update
+  Chat previews are borderless, transparent embedded content in the same readable column as prose,
+  aligned to its leading edge. Their viewport begins at 360 to 720 points tall, then grows to fit
+  measured content up to 1600 points tall. Small images keep their natural size, aligned left;
+  page-shell backgrounds and padding are removed inline, but authored inner surfaces are preserved.
+  Image previews use intrinsic aspect ratio; HTML/React measurements update
   after rendering, responsive reflow and asynchronous content changes. Viewport-relative CSS cannot
-  cause unbounded resize feedback. Prose keeps its readable column. Expanded viewers start at 90% of
+  cause unbounded resize feedback. Expanded viewers start at 90% of
   the usable screen and can grow for content to a 16-point screen margin, without going offscreen.
   Clicking opens images and diagrams at a larger size,
   or an interactive sandbox for apps. Expanded artifact viewers always show the preview, with no

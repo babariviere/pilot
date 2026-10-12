@@ -82,6 +82,24 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     }
 }
 
+@Test func chatArtifactsOverrideOnlyThePageShellWithoutChangingPinnedRevisions() {
+    for kind in [ArtifactKind.html, .react, .image, .swiftui] {
+        let html = "<style>body{padding:16px;background:white;text-align:center}</style><div style='background:red'>Content</div>"
+        let revision = ArtifactRevision(id: "a", sessionId: "s", projectId: nil, title: "Inline", kind: kind,
+                                        revision: 1, createdAt: 1, updatedAt: 1, source: "source", html: html, libraries: [])
+        let document = ArtifactPreviewDocument.document(revision, inline: true)
+        #expect(document.contains("background:transparent!important;margin:0!important;padding:0!important;text-align:left!important"))
+        #expect(document.contains("place-items:start!important"))
+        #expect(document.contains(":where(.mermaid) > svg{margin-inline:0}"))
+        #expect(document.contains(":where(body, #artifact-root) > :where(*){margin-inline:0}"))
+        #expect(document.range(of: html)!.lowerBound < document.range(of: "pilot-artifact-chat-layout")!.lowerBound)
+        #expect(document.contains("connect-src 'none'"))
+        #expect(document.contains("<div style='background:red'>Content</div>"))
+        #expect(revision.html == html)
+        #expect(!ArtifactPreviewDocument.document(revision).contains("pilot-artifact-chat-layout"))
+    }
+}
+
 @Test func inlineArtifactPreviewsGrowWithChatWidthAndStayBounded() {
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760) == CGSize(width: 760, height: 570))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 1200) == CGSize(width: 1200, height: 720))

@@ -12,8 +12,7 @@ struct PilotArtifactRenderer {
         let height = Double(arguments[2])!
         let view = ArtifactView()
             .environment(\.colorScheme, .light)
-            .frame(width: width, height: height)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .frame(width: width, height: height, alignment: .topLeading)
         let renderer = ImageRenderer(content: view)
         renderer.proposedSize = ProposedViewSize(width: width, height: height)
         renderer.scale = 1
