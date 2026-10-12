@@ -117,7 +117,34 @@ struct Composer: View {
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
     var onSlashCommandsNeeded: (() -> Void)? = nil
-    @StateObject private var modelPicker = ChatModelPickerState()
+    @StateObject private var modelPicker: ChatModelPickerState
+
+    init(
+        state: ComposerState,
+        working: Bool,
+        queuedMessages: [QueuedMessage],
+        completionDirectory: String?,
+        onSend: @escaping (String, DeliveryMode) -> Void,
+        onStop: @escaping () -> Void,
+        onEditQueuedMessage: @escaping (Int, String, DeliveryMode) async throws -> Void,
+        onRemoveQueuedMessage: @escaping (Int) async throws -> Void,
+        session: SessionSummary? = nil,
+        slashCommands: [SlashCommand]? = nil,
+        onSlashCommandsNeeded: (() -> Void)? = nil
+    ) {
+        self.state = state
+        self.working = working
+        self.queuedMessages = queuedMessages
+        self.completionDirectory = completionDirectory
+        self.onSend = onSend
+        self.onStop = onStop
+        self.onEditQueuedMessage = onEditQueuedMessage
+        self.onRemoveQueuedMessage = onRemoveQueuedMessage
+        self.session = session
+        self.slashCommands = slashCommands
+        self.onSlashCommandsNeeded = onSlashCommandsNeeded
+        _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd))
+    }
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
 
