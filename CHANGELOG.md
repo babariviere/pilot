@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.15.0](https://github.com/babariviere/pilot/compare/v1.14.0...v1.15.0) (2026-10-12)
+
+
+### Features
+
+* compact idle lead chats before their next wake-up ([3c6c2fa](https://github.com/babariviere/pilot/commit/3c6c2fa43a8a1ff0a4bc90e1a585fe8e264f37b6))
+* **daemon:** prune archived legacy clones and tell agents about workspace resets ([066db87](https://github.com/babariviere/pilot/commit/066db87e6a8ac51b8837cce56d50bb5230cc5d1e))
+* **kernel:** allow the user's web tool in Ask sessions ([bf993de](https://github.com/babariviere/pilot/commit/bf993de8afbfa5cb5b0b94853f8c5c7854b26a52))
+* show chat history from before compaction ([ff80929](https://github.com/babariviere/pilot/commit/ff80929ff560e68a0c2dd17bad9096fa232a8682))
+
+
+### Bug Fixes
+
+* center artifacts in chat cards and documents ([332c032](https://github.com/babariviere/pilot/commit/332c032f0d30807fb19d85cf64e5c990daaa0fe0))
+
 ## [1.14.0](https://github.com/babariviere/pilot/compare/v1.13.0...v1.14.0) (2026-10-12)
 
 
