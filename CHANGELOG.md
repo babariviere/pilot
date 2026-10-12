@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.16.0](https://github.com/babariviere/pilot/compare/v1.15.0...v1.16.0) (2026-10-12)
+
+
+### Features
+
+* **chats:** persist reference materials across starts ([dcc8f53](https://github.com/babariviere/pilot/commit/dcc8f53fe28e21765c1fadbac67f152bb4e0e801))
+* **daemon:** gate grouped notices on aggregate idle state ([8f14363](https://github.com/babariviere/pilot/commit/8f14363fee4419b82f703ab0c942ce0ca887f143))
+* **macos:** add scoped archive filters ([8c04b82](https://github.com/babariviere/pilot/commit/8c04b82a5e89c44e36dc0fb8f6ad4aaeef09419e))
+
+
+### Bug Fixes
+
+* **chats:** reject starts under inactive goals ([c3f3412](https://github.com/babariviere/pilot/commit/c3f34120fb0a1042ff7e3d63a4098c115853f058))
+* **daemon:** stabilize task reference ordering ([1765e24](https://github.com/babariviere/pilot/commit/1765e24baec6008af86c107ce7c192843943077a))
+* **daemon:** suppress repeated event notice states ([2ee03ed](https://github.com/babariviere/pilot/commit/2ee03edc08ff959a8bdcde61ad39fd128c3fa316))
+* keep automatic input out of the queue and label it in the transcript ([13d507c](https://github.com/babariviere/pilot/commit/13d507c9b916676e1994f511affece5b17bb8cd0))
+* **kernel:** group job notices after Harness settlement ([1c1dd19](https://github.com/babariviere/pilot/commit/1c1dd1988f899d8e89b9a340d3ba4837210b4992))
+* **macos:** auto-dismiss queued message removal warnings ([88882d2](https://github.com/babariviere/pilot/commit/88882d206dc9e2777a26c94e2e96eb0749e4aec1))
+* **macos:** prevent model picker flicker when switching chats ([2daebc7](https://github.com/babariviere/pilot/commit/2daebc76f28fa4468d56fe2cc9a0e1564b803e06))
+* **macos:** skip animations when restoring a chat's state ([1df7eb6](https://github.com/babariviere/pilot/commit/1df7eb63dd624525480f9f76f70546e10999288d))
+* **workspaces:** isolate base imports from shared agent refs ([dfc044b](https://github.com/babariviere/pilot/commit/dfc044befe4a70605a1480950ec460854cbf6ea9))
+
 ## [1.15.0](https://github.com/babariviere/pilot/compare/v1.14.0...v1.15.0) (2026-10-12)
 
 
