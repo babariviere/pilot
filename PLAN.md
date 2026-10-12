@@ -317,6 +317,14 @@ Each mission has a rolling cap of 20 notices per hour; excess events wait for th
 Notices contain at most 100 one-line summaries (500 characters each); larger backlogs drain in batches.
 Waiting-on-user triggers remain deferred until that lifecycle signal exists. Autopilot is not enabled.
 
+Every wake-up adds to the coordinator's context, so pilotd compacts it while idle. After five minutes
+idle (the prompt-cache lifetime, before the ten-minute park), it queues a manual compaction when the
+context is at least 40% of the window or 100k tokens, whichever is lower. It skips chats with a pending
+wake-up, chats that are archived, parked or not safely idle, and chats whose usage is unknown. It tries
+at most once per idle stretch. Summary instructions keep open requests, commitments, started chats and
+unrecorded agreements, and leave out what the mission already records. History from before the
+compaction stays viewable in the app.
+
 **Agent tool.** One `mission({ action, ... })` tool, registered only for chats in a mission (including Ask
 chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 

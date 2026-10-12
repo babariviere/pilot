@@ -11,6 +11,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
+import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
 import type { MissionActor, MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -52,6 +53,7 @@ function outline(markdown: string): string[] {
 
 export class MissionService {
 	readonly notices: MissionNotices;
+	readonly compaction: CoordinatorCompaction;
 	private readonly store: MissionStore;
 	private readonly sessions: SessionManager;
 	private readonly projects: ProjectStore;
@@ -63,6 +65,7 @@ export class MissionService {
 		this.sessions = sessions;
 		this.projects = projects;
 		this.notices = new MissionNotices(store, sessions);
+		this.compaction = new CoordinatorCompaction(store, sessions);
 		sessions.setMissionBridge({
 			noticeAllowed: (sessionId, requestId) => store.noticeAllowed(sessionId, requestId),
 			spawnProject: (missionId) => {
