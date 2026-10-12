@@ -71,6 +71,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let pullRequestError: String?
     /// Conversation attempts from retry, edit and restore, oldest first. Omitted while there is only the original.
     public let attempts: [SessionAttempt]?
+    /// The workspace has work no PR carries, so terminal-PR rules do not apply. Omitted when none, or by older daemons.
+    public let unpublishedWork: Bool?
 
     public var isWorking: Bool { state == "working" || state == "starting" }
     public var effectiveMode: ChatMode { mode ?? .build }
@@ -109,6 +111,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var isArchived: Bool { archivedAt != nil }
     public var isPinned: Bool { pinned ?? false }
     public var isActiveMissionCoordinator: Bool { activeMissionCoordinator ?? false }
+    public var hasUnpublishedWork: Bool { unpublishedWork ?? false }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
     public var canArchive: Bool { !isArchived && !isWorking }
 
@@ -123,7 +126,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         lastUserMessageAt: Double? = nil,
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
-        branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil
+        branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
+        unpublishedWork: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -159,6 +163,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.branches = branches
         self.pullRequestError = pullRequestError
         self.attempts = attempts
+        self.unpublishedWork = unpublishedWork
     }
 }
 

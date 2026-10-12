@@ -73,12 +73,15 @@ import {
 	subscriptionProvider,
 } from "./subscription-usage.ts";
 import { UpdateGate } from "./update-gate.ts";
+import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { WorkerActivity } from "./worker-activity.ts";
 import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
 import {
 	createWorkspace,
 	dissociateWorkspace,
 	pruneRegenerable,
+	type Runner,
+	run,
 	validateBaseBranch,
 	type Workspace,
 	workspaceBorrowsObjects,
@@ -217,6 +220,11 @@ interface SessionMeta extends OutcomeMeta {
 	restoredAt?: number;
 	/** Remember successful merge archives so restoring a chat survives polling and restarts. */
 	autoArchivedPullRequest?: string;
+	/**
+	 * Last known check: the workspace has work no PR carries (uncommitted edits, commits without a PR, or new
+	 * commits after a merge). Keeps the chat active: no automatic archiving and no terminal-PR presentation.
+	 */
+	unpublishedWork?: boolean;
 	model?: string;
 	thinking?: string;
 	/** Cleared only after initialization and durable input admission. */
@@ -282,8 +290,16 @@ function followUpState(meta: SessionMeta): string {
 function hasActivePullRequest(meta: SessionMeta): boolean {
 	return sessionPullRequests(meta).some((pr) => pr.state === "open" || pr.state === "draft");
 }
+
+/** Every linked PR is merged or closed, so only unpublished work can keep the chat presented as active. */
+function hasSettledPullRequests(meta: SessionMeta): boolean {
+	const prs = sessionPullRequests(meta);
+	return prs.length > 0 && prs.every(isTerminalPullRequest);
+}
 const WEEK_MS = 7 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
+/** Archive sweeps recheck a chat kept active by unpublished work at most this often. */
+const UNPUBLISHED_CHECK_MS = 30 * 60_000;
 const COLD_SNAPSHOT_TTL_MS = 5_000;
 const KERNEL_BACKOFF_MAX_MS = 10 * 60_000;
 /** Consecutive kernel failures further apart than this start a fresh backoff. */
@@ -647,6 +663,9 @@ export class SessionManager {
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
 	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
+	private readonly runner: Runner;
+	/** Last unpublished-work check per session, and the one in flight. */
+	private readonly unpublishedChecks = new Map<string, { at: number; promise?: Promise<boolean> }>();
 	private readonly pool?: WorkerPool;
 	private readonly subscriptionUsage?: SubscriptionUsageSource;
 	private readonly idleParkMs: number;
@@ -718,6 +737,7 @@ export class SessionManager {
 		this.agentDir = agentDir;
 		this.factories = factories;
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
+		this.runner = pullRequests.runner ?? run;
 		this.pullRequests = new PullRequestSync<SessionMeta, FollowUpContext>(
 			{
 				sessions: () => this.metas.values(),
@@ -1345,6 +1365,14 @@ export class SessionManager {
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				// Work outside every PR keeps the chat active until it is published or discarded. Checked first,
+				// so the rechecks below see any activity, pin or restoration that arrived meanwhile.
+				if (
+					archived &&
+					(staleBefore !== undefined || autoArchivedPullRequest !== undefined) &&
+					(await this.unpublishedWork(meta).catch(() => meta.unpublishedWork === true))
+				)
+					return this.summary(meta);
 				// Activity or restoration may have arrived after the sweep selected this chat.
 				if (meta.pinned && (staleBefore !== undefined || autoArchivedPullRequest !== undefined))
 					return this.summary(meta);
@@ -2841,6 +2869,8 @@ export class SessionManager {
 				void this.save(meta);
 			}
 			if (!packet.working && (wasWorking || (changed && packet.completion))) void this.pullRequests.refresh(meta);
+			// A finished turn may have added work after a merge, or published it.
+			if (!packet.working && wasWorking && hasSettledPullRequests(meta)) this.checkUnpublishedWork(meta, 0);
 		} else if (packet.type === "error" && !packet.requestId && worker.state === "failed" && !this.closing) {
 			this.fail(meta, packet.message);
 		}
@@ -2894,6 +2924,7 @@ export class SessionManager {
 			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
+			...(meta.unpublishedWork ? { unpublishedWork: true } : {}),
 			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
 				? { error: meta.failure || meta.inputError || worker?.error || this.kernelErrors.get(meta.id) }
 				: {}),
@@ -3045,6 +3076,8 @@ export class SessionManager {
 		// Health was looked up by the sync before this result was applied. Stale lookups are dropped here.
 		if (!result.error && healthFresh && health.checks.length)
 			await this.followUpPullRequests(meta, health.context.branch, health.context.generation, health.checks);
+		// A merge or close makes unpublished work the only reason to keep the chat active.
+		if (hasSettledPullRequests(meta)) this.checkUnpublishedWork(meta, changed ? 0 : UNPUBLISHED_CHECK_MS);
 		await this.archiveMergedPullRequest(meta);
 	}
 
@@ -3088,6 +3121,45 @@ export class SessionManager {
 				if (!(error instanceof Conflict)) throw error;
 			}
 		}
+	}
+
+	private checkUnpublishedWork(meta: SessionMeta, maxAgeMs: number): void {
+		void this.unpublishedWork(meta, maxAgeMs).catch((error: unknown) =>
+			console.warn(`pilotd: could not check unpublished work of ${meta.id}: ${error}`),
+		);
+	}
+
+	/**
+	 * Whether the workspace has work outside its base and every PR head. Checking snapshots the jj working copy,
+	 * so it runs only for idle, unarchived sessions; otherwise, or when the check fails, the last known result holds.
+	 */
+	private unpublishedWork(meta: SessionMeta, maxAgeMs = UNPUBLISHED_CHECK_MS): Promise<boolean> {
+		const known = () => meta.unpublishedWork === true;
+		const previous = this.unpublishedChecks.get(meta.id);
+		if (previous?.promise) return previous.promise;
+		const worker = this.workers.get(meta.id);
+		if (
+			this.closing ||
+			!meta.workspace ||
+			meta.workspaceRecovery ||
+			meta.archivedAt !== undefined ||
+			meta.working ||
+			worker?.state === "working" ||
+			worker?.busy ||
+			(previous && Date.now() - previous.at < maxAgeMs)
+		)
+			return Promise.resolve(known());
+		const promise = (async () => {
+			const found = await hasUnpublishedWork(meta, this.runner);
+			if (found === undefined || found === known() || this.closing) return known();
+			if (found) meta.unpublishedWork = true;
+			else delete meta.unpublishedWork;
+			await this.save(meta);
+			this.emit(meta);
+			return found;
+		})().finally(() => this.unpublishedChecks.set(meta.id, { at: Date.now() }));
+		this.unpublishedChecks.set(meta.id, { at: previous?.at ?? 0, promise });
+		return promise;
 	}
 
 	/** `prs` defaults to the session's known PRs; health planning passes fresh ones not yet applied. */

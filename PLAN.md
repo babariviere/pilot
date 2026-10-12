@@ -614,6 +614,14 @@ reports), producing a morning summary in the app and Slack.
   may become unread again on reopening). Last-known terminal PR states obey the same rule.
   An active mission's coordinator is exempt: it sorts with active work, keeps unread indicators and
   completion notifications, and shows the coordinator indicator rather than a done state.
+- Chats whose isolated workspace holds work no PR carries stay active: uncommitted edits, commits or
+  bookmarks without a PR, and new commits after a merge (`unpublishedWork`). They are exempt from
+  inactivity and merge archiving and from terminal-PR presentation until the work is published or
+  discarded. A commit is published when it is an ancestor of the base, the default branch or a linked
+  PR's head (local or origin bookmark/branch); empty jj changes are ignored. The daemon checks idle
+  chats only, because jj snapshots the working copy: after a finished turn and on PR settlement when
+  every linked PR is merged or closed, and before an automatic archive (at most every 30 minutes per
+  blocked chat). Failed checks keep the last known result.
 - The chat transcript shows an activity indicator while the agent is working, but no settled
   status icon or outcome-reason footer. Reaching the transcript end in the active window still
   marks the latest settled outcome as reviewed; status icons remain elsewhere in the app.

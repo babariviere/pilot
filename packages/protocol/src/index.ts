@@ -142,6 +142,11 @@ export interface SessionSummary {
 	branches?: string[];
 	/** A lookup failed; pull requests, if present, are the last known status, not a fresh result. */
 	pullRequestError?: string;
+	/**
+	 * The workspace has work no PR carries: uncommitted edits, commits without a PR, or new commits after a merge.
+	 * Such chats stay active: no automatic archiving and no terminal-PR presentation. Omitted when none or unknown.
+	 */
+	unpublishedWork?: boolean;
 	/** Resolved "provider/modelId", once the kernel has started. */
 	model?: string;
 	/** Effective thinking level, once the kernel has started. */
