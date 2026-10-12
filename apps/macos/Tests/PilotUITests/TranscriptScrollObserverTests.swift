@@ -308,3 +308,49 @@ private final class AnchorMovementCounter: NSObject {
     #expect(counter.count == 2)
     #expect(!marker.isAnchored)
 }
+
+/// Mimics AppKit during a live scroll, which posts the live-scroll notification synchronously
+/// from every clip view scroll, including the one anchor compensation performs.
+@MainActor
+private final class LiveScrollRelay: NSObject {
+    let scroll: NSScrollView
+    init(_ scroll: NSScrollView) { self.scroll = scroll }
+    @objc func boundsChanged(_ notification: Notification) {
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+    }
+}
+
+@Test @MainActor func liveScrollCompensationDoesNotReenterItself() async throws {
+    let window = testWindow()
+    defer { window.close() }
+    let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 600, height: 400))
+    let document = FlippedScrollDocument(frame: NSRect(x: 0, y: 0, width: 600, height: 4000))
+    scroll.documentView = document
+    let marker = TranscriptRowAnchorView(frame: NSRect(x: 0, y: 600, width: 600, height: 90))
+    marker.rowID = "reentry"
+    document.addSubview(marker)
+    let state = TranscriptScrollState()
+    let observer = ScrollObserverView(frame: document.bounds)
+    observer.state = state
+    document.addSubview(observer)
+    window.contentView = scroll
+    scroll.layoutSubtreeIfNeeded()
+    let center = NotificationCenter.default
+    center.post(name: NSScrollView.willStartLiveScrollNotification, object: scroll)
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 500))
+    observer.captureAnchor()
+    try await Task.sleep(for: .milliseconds(30))
+    #expect(marker.isAnchored)
+
+    let relay = LiveScrollRelay(scroll)
+    center.addObserver(relay, selector: #selector(LiveScrollRelay.boundsChanged), name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+    defer { center.removeObserver(relay) }
+    // A lazy row realized above the anchor while the user scrolls by 20 points.
+    marker.isAnchored = false
+    marker.setFrameOrigin(NSPoint(x: 0, y: 607))
+    marker.isAnchored = true
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: 520))
+    #expect(abs(scroll.contentView.bounds.minY - 527) <= 0.5)
+    center.post(name: NSScrollView.didEndLiveScrollNotification, object: scroll)
+    observer.stopObserving()
+}

@@ -318,6 +318,10 @@ final class ScrollObserverView: NSView {
     }
 
     @objc private func scrolled(_ notification: Notification) {
+        // During a live scroll, AppKit posts this notification synchronously from the clip view
+        // scroll that compensation itself performs. The anchor is not recaptured until that
+        // scroll returns, so a nested pass would apply the same shift again, without end.
+        guard !restoringAnchor else { return }
         state?.follow.userScrolled(distanceToBottom: distanceToBottom)
         compensateDuringScroll()
         captureAnchor()
