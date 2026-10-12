@@ -9,10 +9,13 @@ import Testing
     let sizes = [CGSize(width: 60, height: 10), CGSize(width: 40, height: 20)]
     let wide = ResponsiveControlsLayout.Plan(sizes: sizes, width: 108, horizontalSpacing: 8, verticalSpacing: 6)
     #expect(wide.size == CGSize(width: 108, height: 20))
-    #expect(wide.origins == [CGPoint.zero, CGPoint(x: 68, y: 0)])
+    // Items are vertically centered within their row.
+    #expect(wide.origins == [CGPoint(x: 0, y: 5), CGPoint(x: 68, y: 0)])
+    #expect(wide.firstRowHeight == 20)
     let narrow = ResponsiveControlsLayout.Plan(sizes: sizes, width: 107, horizontalSpacing: 8, verticalSpacing: 6)
     #expect(narrow.size == CGSize(width: 60, height: 36))
     #expect(narrow.origins == [CGPoint.zero, CGPoint(x: 0, y: 16)])
+    #expect(narrow.firstRowHeight == 10)
     let empty = ResponsiveControlsLayout.Plan(sizes: [], width: 0, horizontalSpacing: 8, verticalSpacing: 6)
     #expect(empty.size == .zero)
 }
@@ -60,7 +63,9 @@ import Testing
     let state = UsageFooterState()
     let window = SubscriptionWindow(label: "Weekly", usedPercent: 42, resetsAt: "2026-01-01T00:00:00Z")
     let context = ContextUsage(tokens: 1000, contextWindow: 10000)
-    let subscription = SubscriptionUsage(fetchedAt: 1000, provider: .anthropic, windows: [window])
+    // A recent snapshot: stale ones add an age note to the help (covered by UsageTests).
+    let subscription = SubscriptionUsage(fetchedAt: Date().timeIntervalSince1970 * 1_000, provider: .anthropic,
+                                         windows: [window])
     let usage = SessionUsage(context: context, subscription: subscription)
     for _ in 0..<3 {
         let display = state.display(usage: usage, model: "anthropic/model")
