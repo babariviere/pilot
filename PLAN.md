@@ -154,6 +154,12 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   in `$PILOT_HOME/repositories`. The working-copy change starts on the selected base. Workspace edits
   leave the user's own checkout untouched, but bookmarks and repository history are shared with sibling
   sessions. Existing clones are not migrated; Git-only projects, direct Build checkouts, and Ask remain unchanged.
+- Shared workspace launch fetches into daemon-only `refs/pilot/*`, never agent-owned Git heads or origin refs.
+  A local `pilot-base` import remote indexes only the selected immutable base hash through a filtered jj fetch,
+  with abandonment and synthetic rewrites disabled. An empty non-colocated control workspace creates children
+  with one checkout, avoiding the default workspace's automatic Git import. The new child is materialized
+  before enabling colocation; existing workspaces are never relocated.
+  Normal agent jj commands retain Git synchronization semantics; launching a chat is not repository-wide sync.
 - Legacy and Git-only private clones live in the session directory (`$PILOT_HOME/sessions/<id>/workspace`), cloned from the project's
   checkout, with `origin` pointed at the project's real remote and fetched. The clone first borrows the
   checkout's objects through Git alternates (no copying or hardlinking, which takes minutes for a jj checkout with
