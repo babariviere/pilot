@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.18.0](https://github.com/babariviere/pilot/compare/v1.17.0...v1.18.0) (2026-10-12)
+
+
+### Features
+
+* **macos:** fade inline artifacts clipped at the height limit ([da3d062](https://github.com/babariviere/pilot/commit/da3d062b6a200f0d898e19af308f16db59f82124))
+
+
+### Bug Fixes
+
+* **macos:** stop live-scroll anchor compensation from re-entering ([af6d8c1](https://github.com/babariviere/pilot/commit/af6d8c18b8ca83078924f97a05f3c8cd9b89d389))
+
 ## [1.17.0](https://github.com/babariviere/pilot/compare/v1.16.0...v1.17.0) (2026-10-12)
 
 
