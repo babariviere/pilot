@@ -398,8 +398,8 @@ the isolated working copy is ready.
   (hundreds of milliseconds on a saturated machine), so a small bounded worker-thread pool
   (`packages/daemon/src/subprocess.ts`) owns these processes and keeps admission, kernel IPC and
   WebSocket delivery responsive while sidebar summaries and PR syncs run.
-- Kernel workers and their inherited build subprocesses run below normal scheduling priority when
-  supported. macOS build/test helpers default to two Swift jobs (`PILOT_SWIFT_JOBS` overrides this;
+- Kernel workers and their build subprocesses run at normal scheduling priority, so a chat starts
+  promptly on a busy machine. macOS build/test helpers default to two Swift jobs (`PILOT_SWIFT_JOBS` overrides this;
   explicit test `--jobs` also overrides it), so concurrent agents leave capacity for the UI.
 
 ### 6.2 GitHub: PR follow-ups, CI failures and review comments (M3)
