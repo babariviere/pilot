@@ -6,9 +6,12 @@ import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import {
 	AgentDoc,
+	type AgentChange,
 	type AgentEventStream,
 	type Conversation,
 	ConversationBusy,
+	type ConversationId,
+	type ConversationInit,
 	configure,
 	createRegistry,
 	type DocumentWatch,
@@ -23,10 +26,27 @@ import {
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
-import type { AgentEvent, DeliveryMode, SessionCommand, SessionCompletion } from "@pilot/protocol";
+import type {
+	AgentEvent,
+	DeliveryMode,
+	RewindAction,
+	SessionAttempt,
+	SessionCommand,
+	SessionCompletion,
+} from "@pilot/protocol";
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion } from "./attention.ts";
+import {
+	type AttemptsState,
+	AttemptsDoc,
+	activeConversation,
+	holdsOnlyFailedTurns,
+	lineage,
+	PREVIEW_LENGTH,
+	planRewind,
+	publicAttempts,
+} from "./attempts.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
@@ -52,12 +72,13 @@ function replayUnsafe(extension: Extension): Extension {
 	};
 }
 
-/** The model a session was created with, read before the native kernel opens with host defaults. */
+/** The model the active conversation uses, read before the native kernel opens with host defaults. */
 async function pinnedAgent(
 	storage: Storage,
+	conversationId: ConversationId,
 ): Promise<{ model: ModelRef; thinkingLevel?: ModelThinkingLevel } | undefined> {
 	const record = await storage.findDocument(
-		{ kind: AgentDoc.definition.kind, scope: { kind: "conversation", conversationId: ROOT_CONVERSATION_ID } },
+		{ kind: AgentDoc.definition.kind, scope: { kind: "conversation", conversationId } },
 		"current",
 		context,
 	);
@@ -94,6 +115,13 @@ export class KernelSession {
 	#closing?: Promise<void>;
 	#changingModel = false;
 	#admissions = 0;
+	/** Retry, edit, restore or an attempt switch is stopping work and moving the session to another conversation. */
+	#switching = false;
+	/** The session moved to another conversation. This kernel is replaced and accepts no more work. */
+	#retired = false;
+	#cwd = "";
+	#storage!: Storage;
+	#attempts?: SessionAttempt[];
 
 	readonly harness: Harness;
 	readonly conversation: Conversation;
@@ -156,7 +184,8 @@ export class KernelSession {
 				spec.pilot?.workspace && !spec.pilot.ask && hooks.onRefsChanged
 					? refActivity(hooks.onRefsChanged)
 					: undefined;
-			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage), detectGhStack(spec.cwd)]);
+			const active = await activeConversation(owned.storage, context);
+			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage, active), detectGhStack(spec.cwd)]);
 			const pilot = { ...spec.pilot, ghStack };
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
@@ -219,15 +248,20 @@ export class KernelSession {
 				context,
 			);
 			// The agent applies only on first creation; a reopened session keeps its pinned choices.
-			const conversation = await harness.root(context, {
-				agent: {
-					model: adapter.model,
-					thinkingLevel: adapter.thinkingLevel,
-					cwd: spec.cwd,
-					extensions: [adapter.extension],
-					tools: null,
-				},
-			});
+			const root = () =>
+				harness!.root(context, {
+					agent: {
+						model: adapter!.model,
+						thinkingLevel: adapter!.thinkingLevel,
+						cwd: spec.cwd,
+						extensions: [adapter!.extension],
+						tools: null,
+					},
+				});
+			const conversation =
+				active === ROOT_CONVERSATION_ID
+					? await root()
+					: ((await harness.conversation(active, context)) ?? (await root()));
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			artifactConversation = conversation;
 			if (provenance) {
@@ -250,7 +284,14 @@ export class KernelSession {
 				hooks.callMission,
 			);
 			session.#reportedWorking = status.snapshot.run !== undefined;
-			session.#origins = new InputOrigins(owned.storage, conversation.id, context);
+			session.#origins = new InputOrigins(
+				owned.storage,
+				await lineage(owned.storage, conversation.id, context),
+				context,
+			);
+			session.#cwd = spec.cwd;
+			session.#storage = owned.storage;
+			session.#attempts = publicAttempts(await harness.snapshot(AttemptsDoc, context));
 			if (!session.#reportedWorking) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
 			}
@@ -335,7 +376,8 @@ export class KernelSession {
 
 	/** Configure on the durable mutation line, with the same busy/inbox barrier as input admission. */
 	async changeModel(model: string, thinking?: string): Promise<void> {
-		if (this.#closing || this.#changingModel || this.#admissions) throw new ConversationBusy(this.conversation.id);
+		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
+			throw new ConversationBusy(this.conversation.id);
 		if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 		this.#changingModel = true;
 		const previous = this.adapter.session.model!;
@@ -419,7 +461,7 @@ export class KernelSession {
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
 	async submit(requestId: string, content: string, mode: DeliveryMode, onlyIfIdle = false): Promise<void> {
-		if (this.#closing || this.#changingModel || (onlyIfIdle && this.#admissions))
+		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			throw new ConversationBusy(this.conversation.id);
 		this.#admissions++;
 		try {
@@ -437,12 +479,14 @@ export class KernelSession {
 
 	/** Edit in place only if the input is still queued when the commit runs. */
 	async editQueuedMessage(submissionId: number, content: string, mode?: DeliveryMode): Promise<void> {
+		if (this.#moving) throw new ConversationBusy(this.conversation.id);
 		const prepared = await this.adapter.prepareInput(content);
 		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context, mode);
 	}
 
 	/** Withdraw one queued input without stopping the active run. */
 	async removeQueuedMessage(submissionId: number): Promise<void> {
+		if (this.#moving) throw new ConversationBusy(this.conversation.id);
 		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context);
 	}
 
@@ -456,7 +500,7 @@ export class KernelSession {
 	 * turn boundary, and `abort()` cancels it.
 	 */
 	async compact(instructions?: string): Promise<void> {
-		if (this.#closing || this.#changingModel) throw new ConversationBusy(this.conversation.id);
+		if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
 		const trimmed = instructions?.trim();
 		await this.conversation.compact(trimmed || undefined, context);
 	}
@@ -464,6 +508,108 @@ export class KernelSession {
 	/** Withdraw queued input and abort the current run. The conversation stays usable. */
 	async abort(): Promise<void> {
 		await this.conversation.abort(context, { background: true });
+	}
+
+	get #moving(): boolean {
+		return this.#switching || this.#retired;
+	}
+
+	/** Retry, edit and restore attempts, and the attempt switcher. Undefined while there is only the original. */
+	get attempts(): SessionAttempt[] | undefined {
+		return this.#attempts;
+	}
+
+	/**
+	 * Stop all work, then continue from an earlier point in a new attempt that becomes active. The kernel retires: pilotd
+	 * replaces it with one that opens the new attempt. Returns the message retry should resend or edit should restore.
+	 */
+	async rewind(
+		action: RewindAction,
+		entryId: number,
+	): Promise<{ content?: string; attempts?: SessionAttempt[]; switched: boolean }> {
+		return this.#move(async () => {
+			const plan = await planRewind(this.#storage, this.conversation.id, action, entryId, context);
+			// Keep the current model choice, which may have changed after the fork point, e.g. to escape an overload.
+			const agent: AgentChange = { model: this.adapter.model, thinkingLevel: this.adapter.thinkingLevel };
+			const pullRequests = (await this.harness.snapshot(PullRequestsDoc, this.conversation.id, context))?.urls ?? [];
+			const leaving = await this.#leaving();
+			const init: ConversationInit = async (tx, id) => {
+				const state = await tx.doc(AttemptsDoc);
+				leaving(state);
+				state.attempts.push({
+					id,
+					reason: action,
+					createdAt: Date.now(),
+					...(plan.content ? { preview: plan.content.trim().slice(0, PREVIEW_LENGTH) } : {}),
+				});
+				state.active = id;
+				// Provenance is per conversation. Earlier PRs still belong to this session.
+				if (pullRequests.length) (await tx.doc(PullRequestsDoc, id)).urls.push(...pullRequests);
+			};
+			const source = plan.from === undefined ? undefined : await this.harness.conversation(plan.from, context);
+			if (plan.at !== undefined && source)
+				await source.fork(plan.at, { ownership: { kind: "ownerless" }, agent, init }, context);
+			else
+				await this.harness.createConversation(
+					{
+						ownership: { kind: "ownerless" },
+						agent: { ...agent, cwd: this.#cwd, extensions: [this.adapter.extension], tools: null },
+						init,
+					},
+					context,
+				);
+			return plan.content === undefined ? {} : { content: plan.content };
+		});
+	}
+
+	/** Stop all work and continue another existing attempt. The kernel retires like rewind does. */
+	async activateAttempt(attemptId: number): Promise<{ attempts?: SessionAttempt[]; switched: boolean }> {
+		return this.#move(async () => {
+			const state = await this.harness.snapshot(AttemptsDoc, context);
+			if (attemptId !== ROOT_CONVERSATION_ID && !state?.attempts.some((attempt) => attempt.id === attemptId))
+				throw new Error("Unknown attempt");
+			if (attemptId === this.conversation.id) return {};
+			const leaving = await this.#leaving();
+			await this.harness.commit(async (tx) => {
+				const state = await tx.doc(AttemptsDoc);
+				leaving(state);
+				state.active = attemptId;
+			}, context);
+			return {};
+		});
+	}
+
+	/** Records whether the attempt being left only holds failed turns, which hides it from the switcher. */
+	async #leaving(): Promise<(state: AttemptsState) => void> {
+		const id = this.conversation.id;
+		const hidden = await holdsOnlyFailedTurns(this.#storage, id, context);
+		return (state) => {
+			const attempt = state.attempts.find((attempt) => attempt.id === id);
+			if (!attempt) return;
+			if (hidden) attempt.hidden = true;
+			else delete attempt.hidden;
+		};
+	}
+
+	async #move<T extends object>(
+		change: () => Promise<T>,
+	): Promise<T & { attempts?: SessionAttempt[]; switched: boolean }> {
+		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)
+			throw new ConversationBusy(this.conversation.id);
+		this.#switching = true;
+		try {
+			// Stop first: queued input is withdrawn and running work, compaction included, is aborted.
+			await this.conversation.abort(context, { background: true });
+			const before = (await this.harness.snapshot(AttemptsDoc, context))?.active ?? ROOT_CONVERSATION_ID;
+			const result = await change();
+			const state = await this.harness.snapshot(AttemptsDoc, context);
+			this.#attempts = publicAttempts(state);
+			const switched = (state?.active ?? ROOT_CONVERSATION_ID) !== before;
+			if (switched) this.#retired = true;
+			return { ...result, switched, ...(this.#attempts ? { attempts: this.#attempts } : {}) };
+		} finally {
+			this.#switching = false;
+		}
 	}
 
 	hasChildren(): Promise<boolean> {

@@ -138,6 +138,26 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/compact", body: CompactRequest(instructions: instructions))
     }
 
+    /// Stops current work and continues from an earlier point in a new attempt. Workspace files are not reverted.
+    /// Returns the edited message's text for `.edit`, which belongs in the composer.
+    func rewind(_ sessionId: String, action: RewindAction, entryId: Int) async throws -> String? {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat first.") }
+        let response: RewindResponse = try await call(
+            "api/sessions/\(sessionId)/rewind", body: RewindRequest(action: action, entryId: entryId)
+        )
+        update(response.session)
+        return response.draft
+    }
+
+    /// Stops current work and continues another attempt of the chat.
+    func activateAttempt(_ sessionId: String, attemptId: String) async throws {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat first.") }
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/attempts/\(attemptId)/activate", body: [String: String]()
+        )
+        update(session)
+    }
+
     /// One page of entries hidden from the transcript by compaction or reset (`SessionHistoryPage`), decoded off the
     /// main actor. Never wakes a parked chat.
     func history(_ sessionId: String, before: Int, limit: Int = 100) async throws -> JSONValue {

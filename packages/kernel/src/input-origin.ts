@@ -29,33 +29,35 @@ export class InputOrigins {
 	readonly #known = new Set<number>();
 	#scanning?: Promise<void>;
 	readonly #storage: Pick<Storage, "scanSubmissions">;
-	readonly #conversationId: ConversationId;
+	/** A fork inherits entries placed by its ancestors' submissions. */
+	readonly #conversationIds: readonly ConversationId[];
 	readonly #context: Context;
 
-	constructor(storage: Pick<Storage, "scanSubmissions">, conversationId: ConversationId, context: Context) {
+	constructor(
+		storage: Pick<Storage, "scanSubmissions">,
+		conversationIds: ConversationId | readonly ConversationId[],
+		context: Context,
+	) {
 		this.#storage = storage;
-		this.#conversationId = conversationId;
+		this.#conversationIds = Array.isArray(conversationIds) ? conversationIds : [conversationIds as ConversationId];
 		this.#context = context;
 	}
 
 	async #scan(): Promise<void> {
-		let cursor: Cursor | undefined;
-		do {
-			const page = await this.#storage.scanSubmissions(
-				{ conversationId: this.#conversationId },
-				256,
-				cursor,
-				this.#context,
-			);
-			for (const submission of page.items) {
-				if (submission.type !== "input" || submission.entry === undefined) continue;
-				const entry = Number(submission.entry);
-				this.#known.add(entry);
-				const origin = inputOrigin(submission.requestId);
-				if (origin) this.#origins.set(entry, origin);
-			}
-			cursor = page.next;
-		} while (cursor !== undefined);
+		for (const conversationId of this.#conversationIds) {
+			let cursor: Cursor | undefined;
+			do {
+				const page = await this.#storage.scanSubmissions({ conversationId }, 256, cursor, this.#context);
+				for (const submission of page.items) {
+					if (submission.type !== "input" || submission.entry === undefined) continue;
+					const entry = Number(submission.entry);
+					this.#known.add(entry);
+					const origin = inputOrigin(submission.requestId);
+					if (origin) this.#origins.set(entry, origin);
+				}
+				cursor = page.next;
+			} while (cursor !== undefined);
+		}
 	}
 
 	async #ensure(entries: readonly EntryRecord[]): Promise<void> {

@@ -157,6 +157,7 @@ struct ChatView: View {
     @StateObject private var messageExpansions = TranscriptExpansions()
     @StateObject private var messageTimestamps = MessageTimestampSelection()
     @StateObject private var slashCommands = SlashCommandSource()
+    @StateObject private var rewind = TranscriptRewind()
     private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
@@ -219,6 +220,7 @@ struct ChatView: View {
             }
             .environment(\.transcriptContentPrepared, preparedAction.callback)
             .environment(\.transcriptMessageToggled, scroll.messageToggled)
+            .environment(\.transcriptRewind, session.isArchived ? nil : rewind)
             .onChange(of: transcript.revision) { _, _ in
                 guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
@@ -290,11 +292,47 @@ struct ChatView: View {
         .onAppear {
             feed.onEventsApplied = { [messageExpansions] in messageExpansions.applyMessageEvents($0) }
             feed.start()
+            rewind.isWorking = { [feed] in feed.presentation.working }
+            rewind.perform = { [sessionId = session.id, composer] request in
+                await Self.rewind(request, sessionId: sessionId, composer: composer)
+            }
+        }
+        .onChange(of: session.isArchived ? nil : transcript.retryEntryID, initial: true) { _, id in
+            rewind.retryEntryID = id
+        }
+        .confirmationDialog(
+            rewind.confirmation.map { TranscriptRewind.confirmationTitle($0.action) } ?? "",
+            isPresented: Binding(
+                get: { rewind.confirmation != nil },
+                set: { if !$0 { rewind.confirmation = nil } }
+            )
+        ) {
+            Button("Stop and Continue") {
+                if let request = rewind.confirmation { rewind.run(request) }
+            }
+        } message: {
+            Text("The previous attempt stays available. Workspace files stay as they are.")
         }
         .onDisappear {
             messageTimestamps.dismiss()
             feed.onEventsApplied = nil
             feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
+            rewind.perform = nil
+        }
+    }
+
+    /// Retry resends from the daemon; edit puts the message back in the composer to change and send.
+    private static func rewind(_ request: TranscriptRewind.Request, sessionId: String, composer: ComposerState) async {
+        composer.error = nil
+        do {
+            let draft = try await AppModel.shared.client.rewind(
+                sessionId, action: request.action, entryId: request.entryID
+            )
+            guard request.action == .edit, let draft else { return }
+            composer.draft = [draft, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            composer.composerFocus = UUID()
+        } catch {
+            composer.error = error.localizedDescription
         }
     }
 
@@ -435,6 +473,7 @@ struct RowView: View, Equatable {
             } else {
                 UserMessage(text: text, expansion: messageExpansions?.state(for: id),
                             messageID: id, timestamp: timestamp)
+                    .rewindMenu(for: row)
             }
         case let .automatic(id, text, origin, timestamp):
             if let notification = SubagentNotification(message: text) {
@@ -447,6 +486,7 @@ struct RowView: View, Equatable {
         case let .text(id, text, timestamp):
             // Agent replies are always shown in full. Only user bubbles fold.
             MessageTimestamp(rowID: id, milliseconds: timestamp) { MarkdownView(text: text) }
+                .rewindMenu(for: row)
         case let .thinking(_, text, streaming):
             ThinkingRow(text: text, streaming: streaming)
         case let .tools(_, items):
@@ -454,7 +494,7 @@ struct RowView: View, Equatable {
         case let .artifact(_, reference):
             ArtifactCard(reference: reference)
         case let .error(_, text):
-            ErrorRow(text: text)
+            ErrorRow(text: text, entryID: row.entryID)
         case let .notice(_, text):
             HStack {
                 VStack { Divider() }
@@ -563,15 +603,23 @@ private struct EarlierMessagesRow: View {
 
 private struct ErrorRow: View {
     let text: String
+    var entryID: Int? = nil
+    @Environment(\.transcriptRewind) private var rewind
 
     var body: some View {
-        Label {
-            Text(text).textSelection(.enabled)
-        } icon: {
-            Image(systemName: "exclamationmark.triangle.fill")
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Label {
+                Text(text).textSelection(.enabled)
+            } icon: {
+                Image(systemName: "exclamationmark.triangle.fill")
+            }
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if let entryID, let rewind {
+                RetryButton(entryID: entryID, rewind: rewind)
+            }
         }
         .font(.callout)
-        .foregroundStyle(.red)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.08)))

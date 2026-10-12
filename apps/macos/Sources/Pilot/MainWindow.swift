@@ -103,10 +103,12 @@ struct SessionDetail: View {
 
     @ToolbarContentBuilder
     private var contextToolbarItem: some ToolbarContent {
-        if model.isUnread(session) || session.isAsk || session.missionId != nil {
+        if model.isUnread(session) || session.isAsk || session.missionId != nil
+            || AttemptsMenu.label(for: session.attempts ?? []) != nil {
             ToolbarItem(placement: .primaryAction) {
                 HStack(spacing: 8) {
                     if model.isUnread(session) { UnreadBadge() }
+                    AttemptsMenu(session: session)
                     if let missionId = session.missionId { MissionChip(missionId: missionId) }
                     // Ask has no Changes pane, so its read-only boundary stays visible here.
                     if session.isAsk { SessionContextBadge(session: session) }

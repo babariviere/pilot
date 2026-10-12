@@ -26,6 +26,9 @@ import type {
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
+	RewindAction,
+	RewindResponse,
+	SessionAttempt,
 	SessionCommand,
 	SessionHistoryPage,
 	SessionListQuery,
@@ -55,7 +58,13 @@ import {
 } from "./pull-requests.ts";
 import type { PullRequestProblems } from "./github.ts";
 import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
-import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
+import {
+	applyActivity,
+	applyFailure,
+	clearOutcome,
+	normalizeLegacyOutcome,
+	type OutcomeMeta,
+} from "./session-outcomes.ts";
 import {
 	modelProvider,
 	type SubscriptionProvider,
@@ -179,6 +188,8 @@ export interface SessionFactories {
 interface SessionMeta extends OutcomeMeta {
 	id: string;
 	title: string;
+	/** Latest attempt list reported by the kernel, kept while it is parked. */
+	attempts?: SessionAttempt[];
 	/** Best-effort title generation resumes after a daemon restart. */
 	titlePending?: { cwd: string; message: string };
 	cwd: string;
@@ -434,6 +445,8 @@ export class Worker implements SessionWorker {
 			} else if (packet.type === "modelChanged") {
 				this.usage = packet.usage;
 				this.settle(packet.requestId);
+			} else if (packet.type === "rewound") {
+				this.settle(packet.requestId);
 			} else if (packet.type === "children") {
 				this.children = packet.hasChildren !== false;
 				this.settle(packet.requestId);
@@ -612,8 +625,13 @@ export class SessionManager {
 	private readonly updateGate = new UpdateGate();
 	/** Admissions waiting for acknowledgement must not race archiving. */
 	private readonly sending = new Map<string, number>();
-	/** Held synchronously through catalog lookup, worker reopen and durable model acknowledgement. */
+	/**
+	 * Held synchronously through catalog lookup, worker reopen and durable model acknowledgement, and through attempt
+	 * changes (rewind, activate) until the replacement kernel is ready.
+	 */
 	private readonly changingModels = new Map<string, Promise<void>>();
+	/** Kernel answers to rewind and attempt switches, read once their request settles. */
+	private readonly rewindResults = new Map<string, { switched: boolean; content?: string }>();
 	private readonly modelCatalog: ModelCatalog;
 	/** Same-target retries share the durable result; opposite transitions execute in order. */
 	private readonly archiveTransitions = new Map<
@@ -1777,7 +1795,7 @@ export class SessionManager {
 		const transition = this.archiveTransitions.get(id);
 		if (transition) await transition.promise;
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before sending a message");
-		if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
+		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
@@ -1813,7 +1831,7 @@ export class SessionManager {
 
 	async stop(id: string): Promise<void> {
 		const meta = this.require(id);
-		if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
+		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return;
 		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length) return;
@@ -1840,7 +1858,7 @@ export class SessionManager {
 			const transition = this.archiveTransitions.get(id);
 			if (transition) await transition.promise;
 			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before editing messages");
-			if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 			if (!Number.isSafeInteger(submissionId) || submissionId <= 0) throw new Error("Invalid queued message ID");
 			if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 			if (mode !== undefined && mode !== "steer" && mode !== "followUp")
@@ -1912,7 +1930,7 @@ export class SessionManager {
 			const transition = this.archiveTransitions.get(id);
 			if (transition) await transition.promise;
 			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before compacting it");
-			if (this.changingModels.has(id)) throw new Conflict("Session model is changing");
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 			if (meta.preparing) throw new Conflict("Session workspace is still preparing");
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.failure) throw new Error(meta.failure);
@@ -1971,6 +1989,116 @@ export class SessionManager {
 			}
 			end();
 		}
+	}
+
+	/**
+	 * Stop current work and continue from an earlier point in a new attempt: retry resends the message that started a
+	 * failed turn, edit returns a sent message for the composer, restore continues from the end of an agent turn. The
+	 * previous attempt stays available. Workspace files are not reverted.
+	 */
+	async rewind(id: string, action: RewindAction, entryId: number): Promise<RewindResponse> {
+		if (action !== "retry" && action !== "edit" && action !== "restore")
+			throw new Error("action must be retry, edit or restore");
+		if (!Number.isSafeInteger(entryId) || entryId <= 0) throw new Error("Invalid entry ID");
+		const result = await this.moveAttempt(id, { type: "rewind", requestId: randomUUID(), action, entryId });
+		// The fork never saw the message. Resending it is an ordinary, durable admission.
+		if (action === "retry" && result.switched && result.content) await this.send(id, result.content, "followUp");
+		return {
+			session: this.summary(this.require(id)),
+			...(action === "edit" && result.content !== undefined ? { draft: result.content } : {}),
+		};
+	}
+
+	/** Stop current work and continue another attempt of the session. */
+	async activateAttempt(id: string, attemptId: string): Promise<SessionSummary> {
+		if (!/^[1-9]\d*$/.test(attemptId) || !Number.isSafeInteger(Number(attemptId)))
+			throw new Error("Invalid attempt ID");
+		await this.moveAttempt(id, { type: "activateAttempt", requestId: randomUUID(), attemptId: Number(attemptId) });
+		return this.summary(this.require(id));
+	}
+
+	/**
+	 * The kernel stops work and records the new active attempt, then retires. Its replacement opens that attempt and
+	 * reattaches every viewer, which receives a fresh snapshot. Holds the configuration lock throughout, so sends,
+	 * model changes, compaction and archiving wait or reject instead of reaching the attempt being left.
+	 */
+	private async moveAttempt(
+		id: string,
+		command: Extract<KernelCommand, { type: "rewind" | "activateAttempt" }>,
+	): Promise<{ switched: boolean; content?: string }> {
+		const end = this.updateGate.begin();
+		let locked = false;
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		try {
+			const meta = this.require(id);
+			if (this.closing) throw new Error("pilotd is shutting down");
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined)
+				throw new Conflict("Restore the archived session before changing its conversation");
+			if (meta.preparing) throw new Conflict("Session workspace is still preparing");
+			if (meta.failure) throw new Conflict(meta.failure);
+			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
+				throw new Conflict("Session is changing configuration");
+			this.changingModels.set(id, settled);
+			locked = true;
+			// Messages still on their way reach the attempt being left, where the kernel withdraws or stops them.
+			await this.starting.get(id)?.catch(() => undefined);
+			if (meta.pending?.length) throw new Conflict("Session is still delivering a message. Try again shortly.");
+			await this.unparked(id);
+			if (this.closing) throw new Error("pilotd is shutting down");
+			let worker = this.ensureWorker(id);
+			await worker.ready;
+			let result: { switched: boolean; content?: string } | undefined;
+			try {
+				await worker.request(command);
+			} catch (error) {
+				if (error instanceof CommandRejected && error.code === "busy") throw new Conflict(error.message);
+				throw error;
+			} finally {
+				result = this.rewindResults.get(command.requestId);
+				this.rewindResults.delete(command.requestId);
+			}
+			if (!result) throw new Error("The kernel did not report the new attempt");
+			if (result.switched) {
+				if (this.workers.get(id) === worker) {
+					this.workers.delete(id);
+					this.parked.add(worker);
+					const closing: Promise<void> = worker.close().finally(() => {
+						if (this.parking.get(id) === closing) this.parking.delete(id);
+					});
+					this.parking.set(id, closing);
+				}
+				// The outcome and errors described the conversation that was left.
+				clearOutcome(meta);
+				delete meta.inputError;
+				this.kernelErrors.delete(id);
+				meta.updatedAt = Date.now();
+				await this.save(meta);
+				await this.unparked(id);
+				if (this.closing) throw new Error("pilotd is shutting down");
+				worker = this.ensureWorker(id);
+				await worker.ready;
+			}
+			this.lastUse.set(id, Date.now());
+			this.emit(meta);
+			return result;
+		} finally {
+			if (locked) this.changingModels.delete(id);
+			release();
+			end();
+		}
+	}
+
+	/** Returns true when the persisted list changed. */
+	private applyAttempts(meta: SessionMeta, attempts: SessionAttempt[] | undefined): boolean {
+		if (JSON.stringify(attempts ?? []) === JSON.stringify(meta.attempts ?? [])) return false;
+		if (attempts?.length) meta.attempts = attempts;
+		else delete meta.attempts;
+		return true;
 	}
 
 	/** Read-only transcript of one subagent, without waking the kernel. */
@@ -2682,6 +2810,13 @@ export class SessionManager {
 		if (packet.type === "modelChanged") {
 			meta.model = packet.model;
 			meta.thinking = packet.thinking;
+		} else if (packet.type === "rewound") {
+			if (this.workers.get(meta.id) !== worker) return;
+			this.rewindResults.set(packet.requestId, {
+				switched: packet.switched,
+				...(packet.content !== undefined ? { content: packet.content } : {}),
+			});
+			if (this.applyAttempts(meta, packet.attempts)) void this.save(meta);
 		} else if (packet.type === "ready" || packet.type === "working") {
 			const wasWorking = Boolean(meta.working);
 			const changed = applyActivity(meta, packet.working, packet.completion);
@@ -2694,6 +2829,7 @@ export class SessionManager {
 				if (!meta.pending?.length) delete meta.inputError;
 				if (packet.commands && this.workers.get(meta.id) === worker)
 					this.commandLists.set(meta.id, packet.commands);
+				if (this.workers.get(meta.id) === worker) this.applyAttempts(meta, packet.attempts);
 				void this.save(meta);
 			} else if (wasWorking !== packet.working || (changed && packet.completion)) {
 				meta.updatedAt = Date.now();
@@ -2757,6 +2893,7 @@ export class SessionManager {
 			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
 			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
+			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
 			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
 				? { error: meta.failure || meta.inputError || worker?.error || this.kernelErrors.get(meta.id) }
 				: {}),

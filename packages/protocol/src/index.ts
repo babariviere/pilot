@@ -154,7 +154,28 @@ export interface SessionSummary {
 	missionId?: string;
 	/** Current coordinator of an active mission. Exempt from terminal-PR treatment and merge auto-archiving. */
 	activeMissionCoordinator?: boolean;
+	/**
+	 * Conversation attempts created by retry, edit and restore, oldest first, the original included. Omitted while the
+	 * session has a single attempt. Attempts that only hold a failed turn are left out.
+	 */
+	attempts?: SessionAttempt[];
 	error?: string;
+}
+
+/** How an attempt was started: retrying a failed turn, editing a sent message, or restoring an earlier point. */
+export type RewindAction = "retry" | "edit" | "restore";
+
+/** One conversation of a session. The session shows and continues exactly one, its active attempt. */
+export interface SessionAttempt {
+	/** Durable conversation ID. */
+	id: string;
+	/** Omitted for the original conversation. */
+	reason?: RewindAction;
+	/** Epoch milliseconds. Omitted for the original conversation. */
+	createdAt?: number;
+	/** Start of the message this attempt resent, when it resent one. */
+	preview?: string;
+	active?: boolean;
 }
 
 export interface ContextUsage {
@@ -678,6 +699,24 @@ export interface SessionHistoryPage {
 	entries: EntryRecord[];
 	/** True when older entries may remain: request again with the oldest returned entry ID as `before`. */
 	more: boolean;
+}
+
+/**
+ * POST /api/sessions/:id/rewind. Stops current work, then continues the session from an earlier point in a new
+ * attempt. The previous attempt stays available. Workspace files are not reverted.
+ * - `retry`: `entryId` is a failed assistant entry. Resends the user message that started its turn.
+ * - `edit`: `entryId` is a user entry. Continues from just before it and returns its text as `draft`.
+ * - `restore`: `entryId` is an assistant entry. Continues from the end of its turn.
+ */
+export interface RewindRequest {
+	action: RewindAction;
+	entryId: number;
+}
+
+export interface RewindResponse {
+	session: SessionSummary;
+	/** Text of the edited message, for the composer. */
+	draft?: string;
 }
 
 /**
