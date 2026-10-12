@@ -217,6 +217,48 @@ enum Snapshot {
             exit(0)
         }
         // Missions: sidebar section and mission page tabs, from static fixtures.
+        if CommandLine.arguments.contains("--archive-only") {
+            let project = Project(id: "archive-project", name: "Repository with a deliberately long project name",
+                                  path: "/projects/archive", createdAt: 1)
+            let json = #"""
+            [{"mission":{"id":"archive-mission","projectId":"archive-project",
+              "title":"A completed goal with a deliberately long title for archive browsing",
+              "goal":"","status":"done","briefRevision":1,"createdAt":1,"updatedAt":1},
+              "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]},
+             {"mission":{"id":"empty-mission","projectId":"archive-project",
+              "title":"An archived goal with no archived chats",
+              "goal":"","status":"archived","briefRevision":1,"createdAt":1,"updatedAt":1},
+              "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]}]
+            """#
+            let details = try! JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8))
+            let sessions = [
+                SessionSummary(id: "archive-long", title: "A retained chat with a long title that should wrap without hiding the Restore action",
+                               cwd: project.path, projectId: project.id, createdAt: 1, updatedAt: 2, state: "idle",
+                               archivedAt: Fixtures.now, missionId: "archive-mission"),
+                SessionSummary(id: "archive-short", title: "Earlier implementation", cwd: project.path,
+                               projectId: project.id, createdAt: 1, updatedAt: 2, state: "idle",
+                               archivedAt: Fixtures.now - 86_400_000, missionId: "archive-mission"),
+                SessionSummary(id: "archive-unrelated", title: "An unrelated archived chat", cwd: project.path,
+                               projectId: project.id, createdAt: 1, updatedAt: 2, state: "idle", archivedAt: Fixtures.now),
+            ]
+            model.client.loadFixture(projects: [project], sessions: sessions)
+            model.client.loadMissionFixture(details)
+            for width in [460.0, 900.0] {
+                model.showArchive(missionId: "archive-mission")
+                await render(ArchiveView(), size: CGSize(width: width, height: 600),
+                             to: directory.appending(path: "archive-filter-\(Int(width)).png"))
+                model.pendingSessionActions = ["archive-long"]
+                await render(ArchiveView(), size: CGSize(width: width, height: 600),
+                             to: directory.appending(path: "archive-restoring-\(Int(width)).png"))
+                model.pendingSessionActions = []
+                model.showArchive(missionId: "empty-mission")
+                await render(ArchiveView(), size: CGSize(width: width, height: 600),
+                             to: directory.appending(path: "archive-empty-\(Int(width)).png"))
+            }
+            print("snapshots written to \(directory.path)")
+            exit(0)
+        }
+
         if CommandLine.arguments.contains("--missions-only") {
             let now = Fixtures.now
             func member(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,

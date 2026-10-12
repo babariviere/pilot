@@ -61,6 +61,8 @@ final class AppModel: ObservableObject {
     @Published var showingArchive = false
     /// nil browses every project's archived chats.
     @Published var archiveProjectId: String?
+    /// nil includes chats from every mission, as well as chats without one.
+    @Published var archiveMissionId: String?
     @Published var sessionActionError: String?
     @Published var pendingSessionActions: Set<String> = []
     /// Subagent shown in the Agents tab, per session.
@@ -338,8 +340,24 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func showArchive(in projectId: String? = nil) {
+    var archiveFilter: ArchiveFilter {
+        ArchiveFilter(projectId: archiveProjectId, missionId: archiveMissionId)
+    }
+
+    func chooseArchiveProject(_ id: String?) {
+        archiveProjectId = id
+        if let id, let missionId = archiveMissionId, client.mission(missionId)?.projectId != id { archiveMissionId = nil }
+    }
+
+    func chooseArchiveMission(_ id: String?) {
+        let mission = client.mission(id)
+        archiveMissionId = mission?.id
+        if let mission { archiveProjectId = mission.projectId }
+    }
+
+    func showArchive(in projectId: String? = nil, missionId: String? = nil) {
         archiveProjectId = projectId
+        chooseArchiveMission(missionId)
         showingArchive = true
         selectedSessionId = nil
         selectedMissionId = nil

@@ -111,6 +111,9 @@ private struct MissionHeader: View {
                 Button { model.missionSheet = .edit(missionId: mission.id) } label: {
                     Label("Edit title and goal…", systemImage: "pencil")
                 }
+                Button { model.showArchive(in: mission.projectId, missionId: mission.id) } label: {
+                    Label("Browse Archived Chats", systemImage: "archivebox")
+                }
                 Divider()
                 if mission.status != .done {
                     Button { setStatus(.done) } label: { Label("Mark as done", systemImage: "checkmark.circle") }
