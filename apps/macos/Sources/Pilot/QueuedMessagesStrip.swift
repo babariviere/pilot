@@ -27,8 +27,9 @@ struct QueuedMessagesStrip: View {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill").font(.pilot(.caption))
                     Text(error).font(.pilot(.caption)).textSelection(.enabled).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
-                    Button { state.queueRemovalError = nil } label: { Image(systemName: "xmark") }
+                    Button { state.dismissQueueRemovalError() } label: { Image(systemName: "xmark") }
                         .buttonStyle(QuietIconButtonStyle())
                         .help("Dismiss removal error")
                         .accessibilityLabel("Dismiss removal error")

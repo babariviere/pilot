@@ -52,6 +52,45 @@ private func removalMessage(_ id: Int) -> QueuedMessage {
     #expect(state.remainingQueuedMessages([removalMessage(1)]).isEmpty)
 }
 
+@Test @MainActor func removalErrorExpiresWithoutChangingDraftsOrQueue() async {
+    let state = ComposerState()
+    state.draft = "Keep composer draft"
+    state.selectQueuedMessage(removalMessage(1))
+    state.queueEditing.draft = "Keep queued edit"
+    let focus = state.composerFocus
+    await state.removeQueuedMessage(1) { _ in throw ClientError("Message is no longer queued.") }
+
+    await state.dismissQueueRemovalError(after: .zero)
+
+    #expect(state.queueRemovalError == nil)
+    #expect(state.draft == "Keep composer draft")
+    #expect(state.queueEditing.selected?.id == 1)
+    #expect(state.queueEditing.draft == "Keep queued edit")
+    #expect(state.composerFocus == focus)
+    #expect(state.remainingQueuedMessages([removalMessage(1)]).map(\.id) == [1])
+}
+
+@Test @MainActor func cancelledRemovalErrorExpiryDoesNotDismissNewFailure() async {
+    let state = ComposerState()
+    await state.removeQueuedMessage(1) { _ in throw ClientError("First failure") }
+    let expiry = Task { await state.dismissQueueRemovalError(after: .seconds(60)) }
+    // Matches cancellation of the view's task when its error ID changes.
+    expiry.cancel()
+    await state.removeQueuedMessage(1) { _ in throw ClientError("New failure") }
+    await expiry.value
+    #expect(state.queueRemovalError == "New failure")
+}
+
+@Test @MainActor func removalErrorCanBeDismissedImmediately() async {
+    let state = ComposerState()
+    await state.removeQueuedMessage(1) { _ in throw ClientError("Removal failed") }
+    state.dismissQueueRemovalError()
+    #expect(state.queueRemovalError == nil)
+    // No pending error means no delay, even if a view task starts after dismissal.
+    await state.dismissQueueRemovalError(after: .seconds(60))
+    #expect(state.queueRemovalError == nil)
+}
+
 @Test @MainActor func removingAnotherRowPreservesActiveEditorAndSerializesQueueMutations() async {
     let state = ComposerState()
     state.selectQueuedMessage(removalMessage(1))

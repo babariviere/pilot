@@ -613,7 +613,8 @@ reports), producing a morning summary in the app and Slack.
   Saving keeps the message's queue position. Preserve drafts while navigating and reject edits
   after consumption without resubmitting. Remove individual queued messages before delivery without
   stopping the active run; Command-Delete removes the selected row only from its focused inline
-  editor. Reject removal once a message has been consumed.
+  editor. Reject removal once a message has been consumed. Removal errors are dismissible inline
+  warnings that clear after five seconds or when leaving the chat, without changing drafts.
 - Message times: user bubbles and assistant text reveal a muted date/time footer only on click.
   Click again or elsewhere in the window to dismiss. Use the original pi-ai epoch-millisecond
   timestamp in local time, with exact date, seconds and timezone in the tooltip and accessibility

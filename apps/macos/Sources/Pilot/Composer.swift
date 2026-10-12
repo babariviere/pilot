@@ -79,6 +79,20 @@ final class ComposerState: ObservableObject {
         composerFocus = UUID()
     }
 
+    func dismissQueueRemovalError() {
+        queueRemovalError = nil
+    }
+
+    /// The view owns the delay task, cancelling it on replacement or disappearance.
+    /// Never let an obsolete task dismiss a newer failure or change an unsent draft.
+    func dismissQueueRemovalError(after delay: Duration) async {
+        guard let error = queueRemovalError else { return }
+        do { try await Task.sleep(for: delay) }
+        catch { return }
+        guard !Task.isCancelled, queueRemovalError == error else { return }
+        dismissQueueRemovalError()
+    }
+
     func removeQueuedMessage(_ id: Int, perform: (Int) async throws -> Void) async {
         guard !mutatingQueue else { return }
         removingQueuedMessage = id
@@ -156,6 +170,10 @@ struct Composer: View {
         .padding(.bottom, 16)
         .padding(.top, 6)
         .frame(maxWidth: .infinity)
+        .task(id: state.queueRemovalError) {
+            await state.dismissQueueRemovalError(after: .seconds(5))
+        }
+        .onDisappear { state.dismissQueueRemovalError() }
         .task(id: session?.cwd) {
             if let session { await modelPicker.loadModels(cwd: session.cwd) }
         }
