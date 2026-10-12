@@ -488,9 +488,7 @@ struct MissionTaskRow: View {
             Spacer(minLength: 8)
             owner
             if task.sessionId == nil, !task.status.isClosed {
-                Button("Start chat") { model.startChat(for: task, missionId: mission.id) }
-                    .controlSize(.small)
-                    .help("Start a new chat in this project that joins the mission and claims this task")
+                MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
             }
             Button { move(-1) } label: { Image(systemName: "chevron.up") }
                 .buttonStyle(.borderless).disabled(index == 0).help("Move up")
@@ -574,6 +572,20 @@ struct MissionTaskRow: View {
                 try await client.updateMissionTask(id, taskId: update.taskId, MissionTaskWrite(order: update.order))
             }
         }
+    }
+}
+
+struct MissionTaskStartButton: View {
+    let status: MissionStatus
+    let action: () -> Void
+
+    var body: some View {
+        Button("Start chat", action: action)
+            .controlSize(.small)
+            .disabled(status != .active)
+            .help(status == .active
+                  ? "Start a new chat in this project that joins the mission and claims this task"
+                  : "Reopen the mission before starting a new chat")
     }
 }
 

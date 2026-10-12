@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -999,6 +999,73 @@ test("opening message cap includes task body, extra instructions and inherited r
 	assert.equal(input.type === "input" ? input.content.length : 0, 4000);
 });
 
+for (const status of ["done", "archived"] as const) {
+	test(`Start chat rejects ${status} missions before spawning and requires reopening`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.tasks(mission.id)[0]!;
+		const spawn = t.mock.method(f.sessions, "spawn");
+		f.store.update(mission.id, { status });
+		await assert.rejects(f.service.startTask(mission.id, task.id), /Reopen the mission/);
+		assert.equal(spawn.mock.callCount(), 0);
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+		f.store.update(mission.id, { status: "active" });
+		const session = await f.service.startTask(mission.id, task.id);
+		assert.equal(session.missionId, mission.id);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, session.id);
+	});
+
+	test(`Start chat rejects a mission that becomes ${status} during model selection`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.tasks(mission.id)[0]!;
+		const selectTaskModel = f.sessions.selectTaskModel.bind(f.sessions);
+		t.mock.method(f.sessions, "selectTaskModel", async (...args: Parameters<typeof selectTaskModel>) => {
+			const selection = await selectTaskModel(...args);
+			f.store.update(mission.id, { status });
+			return selection;
+		});
+		await assert.rejects(f.service.startTask(mission.id, task.id), /Reopen the mission/);
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+	});
+
+	test(`Start chat cleans up when the mission becomes ${status} during async spawn preparation`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.tasks(mission.id)[0]!;
+		const joinSpawn = t.mock.method(f.sessions["missions"]!, "joinSpawn");
+		let prepared!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			prepared = resolve;
+		});
+		const spawnProject = f.sessions["missions"]!.spawnProject;
+		t.mock.method(f.sessions["missions"]!, "spawnProject", (missionId: string) => {
+			const projectId = spawnProject(missionId);
+			prepared();
+			return projectId;
+		});
+		const pending = f.service.startTask(mission.id, task.id);
+		await preparing;
+		// spawn has checked the active status, then yielded to async directory/metadata preparation.
+		f.store.update(mission.id, { status });
+		await assert.rejects(pending, /Reopen the mission/);
+		assert.equal(joinSpawn.mock.callCount(), 1, "the final admission guard ran after metadata was saved");
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), [], "no orphan survives restart");
+	});
+}
+
 test("Start chat spawns a member chat that owns the task; leaving releases it", async (t) => {
 	const f = await fixture(t);
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
@@ -1009,6 +1076,12 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 	assert.equal(f.store.task(mission.id, task.id).sessionId, session.id);
 	await assert.rejects(f.service.startTask(mission.id, task.id), /already claimed/);
 	const worker = await until(() => f.workers.get(session.id));
+	assert.equal(worker.spec.mission?.id, mission.id);
+	assert.ok(
+		worker.sent.some(
+			(command) => command.type === "mission.context" && command.context?.tasks[0]?.number === task.number,
+		),
+	);
 	const input = await until(() => worker.requests.find((command) => command.type === "input"));
 	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Focus on login/);
 	const left = f.service.leave(session.id);
@@ -1612,15 +1685,45 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	});
 	assert.equal(unknownSpawn.status, 404);
 	await unknownSpawn.arrayBuffer();
+	const unassigned = f.store.addTask(id, { title: "Reopen before starting" });
+	const beforeSessions = f.sessions.list({ archived: "all" }).map((session) => session.id);
+	const beforeMembers = f.store.members(id);
+	const beforeFiles = (await readdir(join(f.home, "data", "sessions"))).sort();
+	const spawn = t.mock.method(f.sessions, "spawn");
 	for (const status of ["done", "archived"] as const) {
-		f.store.update(id, { status });
+		const inactive = await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
+		assert.equal(inactive.status, 200);
+		await inactive.arrayBuffer();
 		const inactiveSpawn = await api("/sessions", {
 			method: "POST",
 			body: JSON.stringify({ missionId: id, message: "hello" }),
 		});
 		assert.equal(inactiveSpawn.status, 409);
 		await inactiveSpawn.arrayBuffer();
+		const spawnCalls = spawn.mock.callCount();
+		const inactiveStart = await api(`/missions/${id}/tasks/${unassigned.id}/start`, {
+			method: "POST",
+			body: "{}",
+		});
+		assert.equal(inactiveStart.status, 409);
+		assert.match(await inactiveStart.text(), /Reopen the mission/);
+		assert.equal(spawn.mock.callCount(), spawnCalls, "REST rejects before spawning");
+		assert.deepEqual(
+			f.sessions.list({ archived: "all" }).map((session) => session.id),
+			beforeSessions,
+		);
+		assert.deepEqual(f.store.members(id), beforeMembers);
+		assert.equal(f.store.task(id, unassigned.id).sessionId, undefined);
+		assert.deepEqual((await readdir(join(f.home, "data", "sessions"))).sort(), beforeFiles);
 	}
+	const reopened = await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ status: "active" }) });
+	assert.equal(reopened.status, 200);
+	await reopened.arrayBuffer();
+	const restarted = await api(`/missions/${id}/tasks/${unassigned.id}/start`, { method: "POST", body: "{}" });
+	assert.equal(restarted.status, 201);
+	const restartedChat = (await restarted.json()) as SessionSummary;
+	assert.equal(restartedChat.missionId, id);
+	assert.equal(f.store.task(id, unassigned.id).sessionId, restartedChat.id);
 	const missing = await api("/missions/nope");
 	assert.equal(missing.status, 404);
 	await missing.arrayBuffer();

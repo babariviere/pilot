@@ -111,6 +111,34 @@ import WebKit
         _ = try await client.updateMissionTask(id, taskId: task.id, MissionTaskWrite(status: status))
         #expect(try await client.missionDetail(id).tasks.first { $0.id == task.id }?.status == status)
     }
+    let inactiveTask = try await client.createMissionTask(id, MissionTaskWrite(title: "Reopen before starting"))
+    let sessionsBefore = Set(client.sessions.map(\.id))
+    let membersBefore = Set(model.members(of: try #require(client.mission(id))).map(\.id))
+    for status in [MissionStatus.done, .archived] {
+        _ = try await client.updateMission(id, UpdateMissionRequest(status: status))
+        try await liveUntil { client.mission(id)?.status == status }
+        let inactive = try #require(client.mission(id))
+        try await liveCapture(MissionTaskRow(task: inactiveTask, mission: inactive, siblings: [inactiveTask])
+            .environmentObject(model), name: "start-chat-\(status.rawValue)")
+        do {
+            _ = try await client.startMissionTask(id, taskId: inactiveTask.id)
+            Issue.record("Start chat must reject an inactive mission")
+        } catch let error as ClientError {
+            #expect(error.status == 409)
+            #expect(error.message.contains("Reopen the mission"))
+        }
+        #expect(Set(client.sessions.map(\.id)) == sessionsBefore)
+        #expect(Set(model.members(of: inactive).map(\.id)) == membersBefore)
+        #expect(try await client.missionDetail(id).tasks.first { $0.id == inactiveTask.id }?.sessionId == nil)
+    }
+    _ = try await client.updateMission(id, UpdateMissionRequest(status: .active))
+    try await liveUntil { client.mission(id)?.status == .active }
+    let reopened = try #require(client.mission(id))
+    try await liveCapture(MissionTaskRow(task: inactiveTask, mission: reopened, siblings: [inactiveTask])
+        .environmentObject(model), name: "start-chat-reopened")
+    let reopenedChat = try await client.startMissionTask(id, taskId: inactiveTask.id)
+    try await liveUntil { client.session(reopenedChat.id)?.outcome == .done }
+    #expect(try await client.missionDetail(id).tasks.first { $0.id == inactiveTask.id }?.sessionId == reopenedChat.id)
     let resource = try await client.addMissionResource(id, MissionResourceWrite(url: "https://github.com/octo/repo/pull/42", title: "Review"))
     #expect(resource.kind == .githubPullRequest && resource.externalId == "octo/repo#42")
     try await client.deleteMissionResource(id, resourceId: resource.id)
@@ -136,6 +164,7 @@ import WebKit
     try await liveUntil { !client.connected }
     _ = try await restart.value
     try await liveUntil { client.connected && client.missionDetails[id]?.artifacts.count == 1 }
+    #expect(Set(client.sessions.map(\.id)) == sessionsBefore.union([reopenedChat.id]))
     _ = try await client.postMissionEvent(id, MissionEventWrite(text: "After reconnect"))
     try await liveUntil { client.missionDetails[id]?.events.first?.text == "After reconnect" }
     #expect(client.session(source.id)?.missionId == id)
@@ -176,6 +205,9 @@ import WebKit
                                            selected: true, isExpanded: .constant(true)).environmentObject(model).frame(width: 260),
                           name: "sidebar")
     #expect(client.mission(empty.mission.id) != nil)
+    let directory = try #require(ProcessInfo.processInfo.environment["PILOT_LIVE_CAPTURE_DIR"])
+    try "completed".write(to: URL(filePath: directory).appendingPathComponent("live-mission-complete"),
+                         atomically: true, encoding: .utf8)
 }
 
 @MainActor private func liveUntil(_ check: () -> Bool) async throws {
@@ -249,14 +281,19 @@ import WebKit
     throw ClientError("Live artifact image did not finish rendering")
 }
 
-@MainActor private func liveClick(_ host: NSView, x: CGFloat, top: CGFloat) throws {
+@MainActor func liveClick(_ host: NSView, x: CGFloat, top: CGFloat) throws {
     let window = try #require(host.window)
     let point = NSPoint(x: x, y: host.isFlipped ? top : host.bounds.height - top)
     let location = host.convert(point, to: nil)
-    for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
-        let event = try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+    let event = { (type: NSEvent.EventType) in
+        try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
             timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1,
             clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
-        window.sendEvent(event)
+    }
+    // Native buttons can track mouseDown until they dequeue mouseUp. Always queue it first.
+    NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+    window.sendEvent(try event(.leftMouseDown))
+    if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+        window.sendEvent(up)
     }
 }

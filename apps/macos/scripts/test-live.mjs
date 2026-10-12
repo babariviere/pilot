@@ -2,7 +2,7 @@
 // Real pilotd, real workers, native views. No credentials, model spend, or user daemon changes.
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as tcpServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -100,6 +100,7 @@ await writeFile(join(agent, "models.json"), JSON.stringify({
 }));
 await writeFile(join(agent, "settings.json"), JSON.stringify({
 	defaultProvider: "live-test", defaultModel: "deterministic", enabledModels: ["live-test/deterministic"],
+	defaultTools: ["+codemode"],
 }));
 try {
 	startDaemon();
@@ -109,7 +110,8 @@ try {
 		body: JSON.stringify({ name: "Live verification", path: project, workspace: "direct" }),
 	});
 	if (!response.ok) throw new Error(await response.text());
-	const test = spawn("apps/macos/scripts/test.sh", ["--filter", "liveMissionFlows"], {
+	// Forward Swift test flags, e.g. --skip-build after a full native test run.
+	const test = spawn("apps/macos/scripts/test.sh", ["--filter", "liveMissionFlows", ...process.argv.slice(2)], {
 		cwd: repo,
 		env: { ...process.env, PILOT_LIVE_TEST_URL: daemonURL, PILOT_LIVE_CONTROL_URL: providerURL,
 			PILOT_LIVE_CAPTURE_DIR: home },
@@ -117,6 +119,8 @@ try {
 	});
 	const [code] = await once(test, "exit");
 	process.exitCode = code ?? 1;
+	if (code === 0 && await readFile(join(home, "live-mission-complete"), "utf8").catch(() => "") !== "completed")
+		throw new Error("Native live test exited without completing its assertions");
 } finally {
 	stopping = true;
 	await stopDaemon();

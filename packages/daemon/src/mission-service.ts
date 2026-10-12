@@ -245,6 +245,7 @@ export class MissionService {
 	/** A new chat in the mission's project that joins and claims the task before its first turn. */
 	async startTask(missionId: string, taskId: string, request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
+		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 		let task = this.store.resolveTask(missionId, taskId);
 		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by a chat`);
 		if (request.message !== undefined && typeof request.message !== "string")
@@ -323,13 +324,13 @@ export class MissionService {
 		this.store.attachTaskReferences(missionId, task.id, artifacts, newLinks);
 		const session = await this.sessions.spawn({
 			projectId: mission.projectId,
+			missionId,
 			message,
 			title: task.title,
 			...selection,
 			...(request.mode ? { mode: request.mode } : {}),
 			...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
 		});
-		this.store.join(session.id, missionId);
 		this.store.claimTask(missionId, task.id, session.id, {});
 		this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
