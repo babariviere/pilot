@@ -21,7 +21,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): DaemonConfig {
 	if (idleParkMs !== undefined && !(idleParkMs > 0))
 		throw new Error(`Invalid PILOT_IDLE_PARK_MS: ${env.PILOT_IDLE_PARK_MS}`);
 	const retentionDays =
-		env.PILOT_WORKSPACE_RETENTION_DAYS === undefined ? 30 : Number(env.PILOT_WORKSPACE_RETENTION_DAYS);
+		env.PILOT_WORKSPACE_RETENTION_DAYS === undefined ? 1 : Number(env.PILOT_WORKSPACE_RETENTION_DAYS);
 	if (
 		env.PILOT_WORKSPACE_RETENTION_DAYS === "" ||
 		!Number.isFinite(retentionDays) ||

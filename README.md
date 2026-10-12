@@ -24,7 +24,7 @@ keep direct default-branch delivery after reconciling upstream, without force-pu
 clones, Git-only projects, direct checkouts, and Ask sessions keep their current behavior.
 
 Archiving retains chat history, not a guarantee that its working directory stays on disk. Archived
-shared jj workspaces are eligible for cleanup after 30 days, configurable with
+shared jj workspaces are eligible for cleanup after 1 day, configurable with
 `PILOT_WORKSPACE_RETENTION_DAYS` (`0` disables cleanup). Safe cleanup pins the exact commit and change
 IDs plus the base for recovery, preserves the known ignored mise local configs (`mise.local.toml`,
 `.mise.local.toml`, `mise/config.local.toml`, `.mise/config.local.toml`) and bounded `.pi/todos` files,
@@ -123,7 +123,7 @@ See [the one-time setup](apps/macos/UPDATES.md) for signing keys, GitHub access 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PILOT_HOME` | `~/.local/share/pilot` | Session metadata and durable storage |
-| `PILOT_WORKSPACE_RETENTION_DAYS` | `30` | Archived workspace retention before cleanup (shared jj reclaim, legacy clone pruning); `0` disables it |
+| `PILOT_WORKSPACE_RETENTION_DAYS` | `1` | Archived workspace retention before cleanup (shared jj reclaim, legacy clone pruning); `0` disables it |
 | `PILOT_PORT` | `4319` | Daemon port |
 | `PILOT_AGENT_DIR` | pi's agent dir | Pi settings, packages and auth to load |
 
