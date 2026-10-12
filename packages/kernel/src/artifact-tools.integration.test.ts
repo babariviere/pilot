@@ -353,7 +353,10 @@ for (const mode of ["on", "only"] as const) {
 
 for (const skillWasAdvertised of [true, false]) {
 	test(`budget-omitted artifacts remain discoverable after restart (skill advertised before: ${skillWasAdvertised})`, {
-		timeout: 20_000,
+		// Two durable runtimes and multiple codemode workers need cold-start headroom
+		// when the complete suite runs in parallel. Keep the same bounded deadline
+		// as the other multi-runtime integration test above.
+		timeout: 45_000,
 	}, async (t) => {
 		// A zero inline budget deterministically reproduces the omitted declaration, regardless
 		// of how many user extension/MCP tools compete for the normal 3000-token budget.

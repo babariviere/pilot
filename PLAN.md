@@ -712,6 +712,9 @@ reports), producing a morning summary in the app and Slack.
   reads pages on its snapshot reader threads, never waking a parked kernel; the app reduces each page in
   order with the live stream, and scroll anchoring keeps the visible rows in place. Loaded pages survive
   reconnect snapshots for the same compaction and are dropped when the chat is closed.
+  Anchored native row markers observe their own and ancestor frame/bounds changes, excluding the
+  clip view's user-scroll offsets. Observation ends when a marker is unanchored or detached;
+  recapture preserves subscriptions for overlapping visible rows, without polling or forced layout.
 - Conversation attempts let a chat continue from an earlier point without losing what happened after it.
   The durable conversation is never truncated: Pilot forks it (pi-durable `fork`) and switches the session to
   the fork, recorded in a session-scoped `pilot.attempts` document that kernels, cold views and history read.
@@ -819,7 +822,9 @@ reports), producing a morning summary in the app and Slack.
   `pilot-artifacts` skill, advertised on session open/reopen and read on demand. Ask loads only this host
   skill (not user/project skills); its reader permits the exact bundled document, never sibling files.
   SwiftUI artifacts define `ArtifactView` and compile/render in disposable macOS `sandbox-exec`
-  processes using the installed Swift Command Line Tools. Source remains editable; publication embeds
+  processes using the installed Swift toolchain (Command Line Tools or Xcode). SDK aliases are resolved
+  before sandboxing; full Xcode compilation also permits its selected llbuild framework, not the whole
+  application bundle. Source remains editable; publication embeds
   a content-sized, transparent PNG at 2x density for offline viewing without recompilation. Layout
   defaults to at most 760 points wide and 1600 points tall; smaller content hugs its natural size.
   Saved HTML carries the logical image dimensions and density, while older revisions retain their

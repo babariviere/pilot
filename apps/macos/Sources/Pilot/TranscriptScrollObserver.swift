@@ -196,6 +196,7 @@ final class ScrollObserverView: NSView {
     /// and the rows below it do not move. Later rows are fallbacks, should the first leave the
     /// window. After an explicit expansion, the straddling row keeps its top, so it expands downward.
     func captureAnchor(containing: Bool = false) {
+        guard !following else { replaceAnchors([]); return }
         guard let scroll = scrollView, let document = scroll.documentView else { return }
         let top = viewportTop(scroll, document)
         let bottom = top + scroll.contentView.bounds.height
@@ -213,7 +214,12 @@ final class ScrollObserverView: NSView {
 
     /// Only anchored rows report their moves, so streaming layout does not post per-row notifications.
     private func replaceAnchors(_ new: [RowAnchor]) {
-        for anchor in anchors { anchor.row?.isAnchored = false }
+        // Keep subscriptions for overlapping rows instead of tearing them down on every
+        // live-scroll step. Only newly visible/removed markers change observation lifetime.
+        let retained = Set(new.compactMap { $0.row.map(ObjectIdentifier.init) })
+        for anchor in anchors {
+            if let row = anchor.row, !retained.contains(ObjectIdentifier(row)) { row.isAnchored = false }
+        }
         anchors = new
         for anchor in anchors { anchor.row?.isAnchored = true }
     }
@@ -274,6 +280,7 @@ final class ScrollObserverView: NSView {
     /// lazy rows may then be realized, producing another pass, rather than a timed retry.
     private func scheduleLayoutScroll() {
         guard layoutScroll == nil, state?.follow.shouldScrollToBottom == true else { return }
+        replaceAnchors([])
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.layoutScroll = nil
@@ -342,8 +349,15 @@ final class TranscriptRowAnchorView: NSView {
     /// Realized rows only; lazy rows that leave the screen are removed from their window.
     static let rows = NSHashTable<TranscriptRowAnchorView>.weakObjects()
     var rowID = ""
-    var isAnchored = false
-    private weak var host: NSView?
+    var isAnchored = false {
+        didSet {
+            guard isAnchored != oldValue else { return }
+            observeGeometry()
+        }
+    }
+    private struct GeometrySource { weak var view: NSView? }
+    private var sources: [GeometrySource] = []
+    private var previousGeometry: NSRect?
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }
@@ -351,20 +365,50 @@ final class TranscriptRowAnchorView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil { Self.rows.remove(self) } else { Self.rows.add(self) }
+        observeGeometry()
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
-        let center = NotificationCenter.default
-        if let host { center.removeObserver(self, name: NSView.frameDidChangeNotification, object: host) }
-        host = superview
-        guard let superview else { return }
-        superview.postsFrameChangedNotifications = true
-        center.addObserver(self, selector: #selector(hostMoved), name: NSView.frameDidChangeNotification, object: superview)
+        observeGeometry()
     }
 
-    @objc private func hostMoved(_ notification: Notification) {
+    /// SwiftUI can move the marker, a host's bounds, or an ancestor without changing the
+    /// immediate host's frame. Watch only anchored ancestry; never observe clip bounds,
+    /// which represent the user's scrolling rather than changes in document geometry.
+    private func observeGeometry() {
+        let center = NotificationCenter.default
+        for source in sources {
+            guard let view = source.view else { continue }
+            center.removeObserver(self, name: NSView.frameDidChangeNotification, object: view)
+            center.removeObserver(self, name: NSView.boundsDidChangeNotification, object: view)
+        }
+        sources.removeAll(keepingCapacity: true)
+        previousGeometry = nil
+        guard isAnchored, window != nil, enclosingScrollView != nil else { return }
+        previousGeometry = documentGeometry()
+        var ancestor: NSView? = self
+        while let view = ancestor, !(view is NSClipView) {
+            sources.append(GeometrySource(view: view))
+            view.postsFrameChangedNotifications = true
+            view.postsBoundsChangedNotifications = true
+            center.addObserver(self, selector: #selector(geometryChanged), name: NSView.frameDidChangeNotification, object: view)
+            center.addObserver(self, selector: #selector(geometryChanged), name: NSView.boundsDidChangeNotification, object: view)
+            ancestor = view.superview
+        }
+    }
+
+    private func documentGeometry() -> NSRect? {
+        guard let document = enclosingScrollView?.documentView else { return nil }
+        let rect = convert(bounds, to: document)
+        let top = document.isFlipped ? rect.minY - document.bounds.minY : document.bounds.maxY - rect.maxY
+        return NSRect(x: rect.minX, y: top, width: rect.width, height: rect.height)
+    }
+
+    @objc private func geometryChanged(_ notification: Notification) {
         guard isAnchored, window != nil else { return }
+        guard let geometry = documentGeometry(), geometry != previousGeometry else { return }
+        previousGeometry = geometry
         NotificationCenter.default.post(name: Self.didMove, object: self)
     }
 }

@@ -9,12 +9,26 @@ import { inflateSync } from "node:zlib";
 import { previewArtifact } from "./preview.ts";
 import { validateArtifact } from "./render.ts";
 import { ArtifactStore } from "./store.ts";
+import { swiftUICompilerFrameworkPaths } from "./swiftui.ts";
 
 const source =
 	'struct ArtifactView: View { var body: some View { VStack { Text("Native preview").font(.title); Button("Continue") {} }.padding(24) } }';
 const document = { title: "Native card", kind: "swiftui" as const, source };
 const native =
 	process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec") && process.env.PILOT_SWIFTUI_TESTS === "1";
+
+test("SwiftUI compiler allows only the selected Xcode llbuild framework outside its toolchain", () => {
+	for (const app of ["Xcode.app", "Xcode Beta.app"]) {
+		assert.deepEqual(
+			swiftUICompilerFrameworkPaths(
+				`/Applications/${app}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr`,
+			),
+			[`/Applications/${app}/Contents/SharedFrameworks/llbuild.framework`],
+		);
+	}
+	assert.deepEqual(swiftUICompilerFrameworkPaths("/Library/Developer/CommandLineTools/usr"), []);
+	assert.deepEqual(swiftUICompilerFrameworkPaths("/Library/Developer/Toolchains/Custom.xctoolchain/usr"), []);
+});
 
 test("SwiftUI validates source, libraries and cancellation before running native commands", async () => {
 	assert.deepEqual(validateArtifact(document), { ...document, libraries: [] });
