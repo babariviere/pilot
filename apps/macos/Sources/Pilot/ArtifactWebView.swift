@@ -155,16 +155,29 @@ struct ArtifactWebView: NSViewRepresentable {
                         if (image) {
                           const img = document.images[0];
                           if (!img || !img.naturalWidth || !img.naturalHeight) return null;
-                          const scale = swiftui ? Math.min(1, 800 / img.naturalWidth, 600 / img.naturalHeight) : 1;
+                          const scale = swiftui ? (img.dataset.pilotScale === '2' ? 0.5 :
+                            Math.min(1, 800 / img.naturalWidth, 600 / img.naturalHeight)) : 1;
                           return [img.naturalWidth * scale, img.naturalHeight * scale];
                         }
                         const body = document.body, root = document.documentElement;
                         if (!body || !root) return null;
                         let width = Math.max(body.scrollWidth, root.scrollWidth);
-                        let height = Math.max(body.scrollHeight, root.scrollHeight);
                         const css = getComputedStyle(body);
+                        // document scrollHeight is at least the viewport height, so it cannot
+                        // shrink a short inline card. The sandbox uses standards mode, where
+                        // the body's own scrollHeight includes nested flow overflow without the
+                        // document's viewport floor. Range bounds also catch absolute content
+                        // whose containing block is outside body, without a JavaScript DOM walk.
+                        const bounds = body.getBoundingClientRect();
+                        const range = document.createRange();
+                        range.selectNodeContents(body);
+                        const contentBounds = range.getBoundingClientRect();
                         const paddingX = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight);
                         const paddingBottom = parseFloat(css.paddingBottom);
+                        const height = Math.max(1,
+                          bounds.bottom + scrollY + parseFloat(css.marginBottom),
+                          bounds.top + scrollY + body.scrollHeight + parseFloat(css.borderTopWidth) + parseFloat(css.marginBottom),
+                          contentBounds.bottom + scrollY + paddingBottom);
                         let preferredWidth = width, preferredHeight = height;
                         // Mermaid and inline SVGs often shrink to max-width:100%. Preserve their
                         // natural drawing size as a width request, with a height fitted to this viewport.

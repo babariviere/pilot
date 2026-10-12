@@ -300,8 +300,9 @@ export async function previewSwiftUI(
 ): Promise<ArtifactPreview> {
 	options.signal?.throwIfAborted();
 	if (process.platform !== "darwin") throw new Error("SwiftUI artifacts require macOS and Swift Command Line Tools");
-	const width = options.width ?? 800;
-	const height = options.height ?? 600;
+	// Logical layout ceilings, not a fixed canvas. Match the chat column by default.
+	const width = options.width ?? 760;
+	const height = options.height ?? 1600;
 	if (
 		!Number.isInteger(width) ||
 		width < 240 ||
@@ -403,10 +404,14 @@ export async function previewSwiftUI(
 			png.length > 16 * 1024 * 1024 ||
 			png.length < 24 ||
 			!png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ||
-			png.readUInt32BE(16) !== width ||
-			png.readUInt32BE(20) !== height
+			png.readUInt32BE(16) < 2 ||
+			png.readUInt32BE(20) < 2 ||
+			png.readUInt32BE(16) > width * 2 ||
+			png.readUInt32BE(20) > height * 2 ||
+			png.readUInt32BE(16) % 2 !== 0 ||
+			png.readUInt32BE(20) % 2 !== 0
 		)
-			throw new Error("SwiftUI renderer did not produce a valid viewport PNG");
+			throw new Error("SwiftUI renderer did not produce a valid content-sized Retina PNG");
 		const consoleMessages = [
 			...compiled.stderr
 				.split("\n")
@@ -424,9 +429,14 @@ export async function previewSwiftUI(
 			.slice(0, 100)
 			.map((message) => ({ ...message, text: message.text.slice(0, 2000) }));
 		const preview: ArtifactPreview = {
-			screenshot: { mimeType: "image/png", data: png.toString("base64"), width, height },
+			screenshot: {
+				mimeType: "image/png",
+				data: png.toString("base64"),
+				width: png.readUInt32BE(16),
+				height: png.readUInt32BE(20),
+			},
 			consoleMessages,
-			contentHeight: height,
+			contentHeight: png.readUInt32BE(20) / 2,
 		};
 		results.set(resultKey, copyPreview(preview));
 		while (results.size > RESULT_CACHE_LIMIT) results.delete(results.keys().next().value!);

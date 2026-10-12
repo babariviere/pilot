@@ -63,7 +63,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
                                     html: "<img src='data:image/png;base64,test'>", libraries: [])
     let document = ArtifactPreviewDocument.document(revision)
     #expect(document.contains("width:auto!important;height:auto!important"))
-    #expect(document.contains("max-width:min(100vw,800px)!important;max-height:min(100vh,600px)!important"))
+    #expect(document.contains("max-width:min(100vw,var(--pilot-image-width,800px))!important;max-height:min(100vh,var(--pilot-image-height,600px))!important"))
     #expect(!document.contains(revision.source))
 }
 
@@ -117,6 +117,33 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
             == CGSize(width: 760, height: 1600))
     #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: CGSize(width: CGFloat.infinity, height: CGFloat.nan))
             == ArtifactViewerLayout.inlineSize(availableWidth: 760))
+}
+
+@Test func measuredInlineArtifactsCanShrinkBelowThePlaceholderWithoutNarrowingTheProseColumn() {
+    for width: CGFloat in [320, 760, 1200, 1800] {
+        let fallback = ArtifactViewerLayout.inlineSize(availableWidth: width)
+        #expect(fallback.height >= 360)
+        for height: CGFloat in [1, 48, 120, 240, 1600, 9000] {
+            let measured = ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: CGSize(width: 240, height: height))
+            #expect(measured.width == fallback.width)
+            #expect(measured.height == min(1600, max(48, height)))
+        }
+        for invalid in [CGSize.zero, CGSize(width: 240, height: -1), CGSize(width: CGFloat.nan, height: 120)] {
+            #expect(ArtifactViewerLayout.inlineSize(availableWidth: width, contentSize: invalid) == fallback)
+        }
+    }
+}
+
+@Test func compactMeasurementsAcceptShrinkingContentAndIgnoreHostOnlyChanges() {
+    var measurement = ArtifactContentMeasurement()
+    #expect(measurement.record(content: CGSize(width: 760, height: 120), viewport: CGSize(width: 760, height: 570))
+            == CGSize(width: 760, height: 120))
+    #expect(measurement.record(content: CGSize(width: 760, height: 120), viewport: CGSize(width: 760, height: 120))
+            == CGSize(width: 760, height: 120))
+    #expect(measurement.record(content: CGSize(width: 760, height: 24), viewport: CGSize(width: 760, height: 120))
+            == CGSize(width: 760, height: 24))
+    #expect(ArtifactViewerLayout.inlineSize(availableWidth: 760, contentSize: measurement.preferredSize)
+            == CGSize(width: 760, height: 48))
 }
 
 @Test func inlineImagesHugTheirAspectFittedSizeWithoutEnlarging() {

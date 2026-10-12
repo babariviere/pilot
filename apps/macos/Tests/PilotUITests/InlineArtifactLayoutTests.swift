@@ -38,3 +38,18 @@ import Testing
         #expect(view.fittingSize.height == ArtifactViewerLayout.inlineSize(availableWidth: min(width, Theme.column)).height)
     }
 }
+
+@Test @MainActor func measuredInlineArtifactLayoutHugsShortContentAtNarrowAndWideWidths() {
+    _ = NSApplication.shared
+    for width: CGFloat in [320, 760, 1200] {
+        for height: CGFloat in [1, 120, 240, 2000] {
+            let content = CGSize(width: 240, height: height)
+            let view = NSHostingView(rootView: InlineArtifactLayout(contentSize: content) {
+                Color.blue
+            }.fixedSize(horizontal: false, vertical: true).frame(width: width))
+            view.frame = NSRect(x: 0, y: 0, width: width, height: 1800)
+            view.layoutSubtreeIfNeeded()
+            #expect(view.fittingSize == CGSize(width: width, height: min(1600, max(48, height))))
+        }
+    }
+}

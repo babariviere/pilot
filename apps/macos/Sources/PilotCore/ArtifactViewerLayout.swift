@@ -4,13 +4,15 @@ import Foundation
 public enum ArtifactViewerLayout {
     public static let inlineDefaultMaxWidth: CGFloat = 1200
     public static let inlineMaxHeight: CGFloat = 1600
+    /// Keep compact HTML/React previews usable without imposing a viewport-sized floor.
+    public static let inlineMinHeight: CGFloat = 48
     /// Images are scaled to fit, so a tall screenshot stays readable at a glance instead of
     /// filling several screens. The full-size image remains available in the viewer.
     public static let inlineImageMaxHeight: CGFloat = 720
     /// Keeps tiny images large enough to click without letterboxing typical ones.
     public static let inlineImageMinSide: CGFloat = 48
 
-    /// A 4:3 fallback that can grow for content, bounded by chat width and a tall-preview ceiling.
+    /// A bounded 4:3 fallback until measurement, then hug content height within the limits.
     /// Measured images instead hug their aspect-fitted size, so the card has no empty bands.
     public static func inlineSize(availableWidth: CGFloat, contentSize: CGSize? = nil, image: Bool = false) -> CGSize {
         let available = availableWidth.isFinite ? max(0, availableWidth) : inlineDefaultMaxWidth
@@ -25,7 +27,8 @@ public enum ArtifactViewerLayout {
         }
         let width = min(available, max(inlineDefaultMaxWidth, content?.width ?? 0))
         let defaultHeight = min(720, max(360, width * 0.75))
-        return CGSize(width: width, height: min(inlineMaxHeight, max(defaultHeight, content?.height ?? 0)))
+        let height = content.map { max(inlineMinHeight, $0.height) } ?? defaultHeight
+        return CGSize(width: width, height: min(inlineMaxHeight, height))
     }
 
     public static func size(available: CGSize, contentSize: CGSize? = nil) -> CGSize {

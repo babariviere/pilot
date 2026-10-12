@@ -26,7 +26,7 @@ test("SwiftUI validates source, libraries and cancellation before running native
 	if (process.platform !== "darwin") await assert.rejects(previewArtifact(document), /require macOS/);
 });
 
-test("SwiftUI natively renders a viewport and denies user files, environment, network and subprocesses", {
+test("SwiftUI natively fits content and denies user files, environment, network and subprocesses", {
 	skip: !native,
 }, async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pilot-swiftui-test-"));
@@ -69,9 +69,11 @@ struct ArtifactView: View {
 		const result = await previewArtifact({ ...document, source: probe }, { width: 400, height: 300 });
 		const png = Buffer.from(result.screenshot.data, "base64");
 		assert.ok(png.length > 1000);
-		assert.equal(png.readUInt32BE(16), 400);
-		assert.equal(png.readUInt32BE(20), 300);
-		assert.equal(result.contentHeight, 300);
+		assert.equal(png.readUInt32BE(16), result.screenshot.width);
+		assert.equal(png.readUInt32BE(20), result.screenshot.height);
+		assert.ok(result.screenshot.width > 0 && result.screenshot.width <= 800);
+		assert.ok(result.contentHeight > 0 && result.contentHeight < 300);
+		assert.equal(result.screenshot.height, result.contentHeight * 2);
 		for (const capability of ["file", "write", "environment", "network", "process"])
 			assert.ok(
 				result.consoleMessages.some((message) => message.text === `${capability} blocked`),
@@ -92,11 +94,14 @@ test("SwiftUI renders top-leading content on a transparent canvas", { skip: !nat
 		{
 			...document,
 			source:
-				"struct ArtifactView: View { var body: some View { Color(red:1,green:0,blue:0).frame(width:20,height:20) } }",
+				"struct ArtifactView: View { var body: some View { Color(red:1,green:0,blue:0).frame(width:20,height:20).padding(.bottom,10) } }",
 		},
 		{ width: 400, height: 300 },
 	);
 	const png = Buffer.from(result.screenshot.data, "base64");
+	assert.equal(result.screenshot.width, 40, "hug 20 logical points at Retina density");
+	assert.equal(result.screenshot.height, 60, "include only content and authored padding");
+	assert.equal(result.contentHeight, 30);
 	assert.equal(png[24], 8, "8-bit PNG");
 	assert.equal(png[25], 6, "RGBA PNG preserves transparency");
 	const chunks: Buffer[] = [];
@@ -109,8 +114,8 @@ test("SwiftUI renders top-leading content on a transparent canvas", { skip: !nat
 	const rows = inflateSync(Buffer.concat(chunks));
 	// Decode only the first pixel of each scanline. Its left and upper-left predictors are zero.
 	let previous = [0, 0, 0, 0];
-	for (let y = 0; y < 300; y++) {
-		const offset = y * (400 * 4 + 1);
+	for (let y = 0; y < result.screenshot.height; y++) {
+		const offset = y * (result.screenshot.width * 4 + 1);
 		const filter = rows[offset];
 		assert.ok(filter !== undefined && filter <= 4);
 		previous = previous.map((above, channel) => {
@@ -120,6 +125,30 @@ test("SwiftUI renders top-leading content on a transparent canvas", { skip: !nat
 		if (y === 0) assert.deepEqual(previous, [255, 0, 0, 255], "content starts at the top left");
 	}
 	assert.equal(previous[3], 0, "unused canvas is transparent");
+});
+
+test("SwiftUI wraps at the requested width and bounds oversized views before rasterizing", {
+	skip: !native,
+}, async () => {
+	const wrapped = {
+		...document,
+		source: `struct ArtifactView: View { var body: some View { Text("${"A paragraph that wraps with the chat column. ".repeat(12)}").font(.system(size:16)) } }`,
+	};
+	const wide = await previewArtifact(wrapped, { width: 400 });
+	const narrow = await previewArtifact(wrapped, { width: 240 });
+	assert.ok(wide.screenshot.width <= 800);
+	assert.ok(narrow.screenshot.width <= 480);
+	assert.ok(narrow.contentHeight > wide.contentHeight, "re-rendering at a narrower width reflows text");
+	const capped = await previewArtifact(
+		{
+			...document,
+			source: "struct ArtifactView: View { var body: some View { Color.blue.frame(width:10000,height:10000) } }",
+		},
+		{ width: 320, height: 240 },
+	);
+	assert.equal(capped.screenshot.width, 640);
+	assert.equal(capped.screenshot.height, 480);
+	assert.equal(capped.contentHeight, 240);
 });
 
 test("SwiftUI publishes editable source and durable screenshots, and failed updates preserve latest", {
@@ -133,7 +162,12 @@ test("SwiftUI publishes editable source and durable screenshots, and failed upda
 		assert.equal(first.source, source);
 		assert.deepEqual(first.libraries, []);
 		assert.match(first.html, /data:image\/png;base64,/);
-		assert.match(first.html, /width:auto;height:auto;max-width:min\(100vw,800px\);max-height:min\(100vh,600px\)/);
+		assert.match(first.html, /data-pilot-scale="2"/);
+		assert.match(first.html, /--pilot-image-width:\d+px;--pilot-image-height:\d+px/);
+		assert.match(
+			first.html,
+			/max-width:min\(100vw,var\(--pilot-image-width\)\);max-height:min\(100vh,var\(--pilot-image-height\)\)/,
+		);
 		assert.doesNotMatch(first.html, /struct ArtifactView/);
 		const reopened = new ArtifactStore(directory, { sessionId: "native" });
 		assert.deepEqual(await reopened.get(first.id), first);

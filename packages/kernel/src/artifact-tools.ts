@@ -196,14 +196,14 @@ Get the current source before updating, and pass its revision as expectedRevisio
 								Type.Integer({
 									minimum: 240,
 									maximum: 1600,
-									description: "Preview width in CSS pixels, default 800.",
+									description: "Preview width in logical pixels, default 800 (SwiftUI layout ceiling: 760).",
 								}),
 							),
 							height: Type.Optional(
 								Type.Integer({
 									minimum: 200,
 									maximum: 1600,
-									description: "Preview height in CSS pixels, default 600.",
+									description: "Preview height in logical pixels, default 600 (SwiftUI layout ceiling: 1600).",
 								}),
 							),
 						}

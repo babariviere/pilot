@@ -262,11 +262,15 @@ export async function prepareArtifact(
 			...write.libraries.filter((name) => name !== "react" && name !== "react-dom"),
 		];
 	let imageSource = write.kind === "image" ? write.source : undefined;
+	let nativeImageAttributes = "";
 	if (write.kind === "swiftui") {
 		const preview = await previewSwiftUI(write.source, options);
 		// Retain SwiftUI source/kind in the stored revision;
 		// opening it later never executes Swift or requires the original toolchain.
 		imageSource = `data:image/png;base64,${preview.screenshot.data}`;
+		// PNG dimensions are physical pixels. Persist logical size so both new and saved
+		// previews display at 1× layout size while retaining 2× pixels for Retina screens.
+		nativeImageAttributes = ` data-pilot-scale="2" style="--pilot-image-width:${preview.screenshot.width / 2}px;--pilot-image-height:${preview.screenshot.height / 2}px"`;
 	}
 	// The policy is the first node, before any untrusted source. Nested full HTML documents are parsed
 	// as body content, which is intentional: generated source cannot precede the policy in the head.
@@ -277,7 +281,7 @@ export async function prepareArtifact(
 		write.kind === "react"
 			? `<div id="artifact-root"></div>${compiledScript(await compileReact(write.source))}`
 			: imageSource !== undefined
-				? `<style>body{padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:${write.kind === "swiftui" ? "min(100vw,800px)" : "100vw"};max-height:${write.kind === "swiftui" ? "min(100vh,600px)" : "100vh"};object-fit:contain}</style><img alt="Artifact image" src="${imageSource}">`
+				? `<style>body{padding:0;min-height:100vh;display:grid;place-items:center}img{display:block;width:auto;height:auto;max-width:${write.kind === "swiftui" ? "min(100vw,var(--pilot-image-width))" : "100vw"};max-height:${write.kind === "swiftui" ? "min(100vh,var(--pilot-image-height))" : "100vh"};object-fit:contain}</style><img alt="Artifact image"${nativeImageAttributes} src="${imageSource}">`
 				: write.source;
 	const html = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta http-equiv="x-dns-prefetch-control" content="off"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><script>${ARTIFACT_RUNTIME_GUARD}</script><style>${styles}</style>${libraries}</head><body>${body}</body></html>`;
 	if (Buffer.byteLength(html) > 25 * 1024 * 1024) throw new Error("Prepared artifact exceeds 25 MiB");

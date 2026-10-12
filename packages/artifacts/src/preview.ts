@@ -6,8 +6,10 @@ import { ARTIFACT_RUNTIME_GUARD, getLibrary, isArtifactLibrary, prepareArtifact,
 import { isSwiftUIPreviewAvailable, previewSwiftUI } from "./swiftui.ts";
 
 export interface ArtifactPreview {
+	/** Actual bitmap pixels. Native previews render at 2× their logical content size. */
 	screenshot: { mimeType: "image/png"; data: string; width: number; height: number };
 	consoleMessages: Array<{ level: string; text: string }>;
+	/** Logical layout height, independent of bitmap density. */
 	contentHeight: number;
 }
 
