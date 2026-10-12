@@ -99,6 +99,12 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
     #expect(retained.helpText.contains("5h: 0% used"))
 }
 
+@Test func extraUsageFooterLabelShowsOnlySpentAmount() {
+    #expect(SubscriptionWindow(label: "Extra [on] 0.00/200.00", usedPercent: 0).footerLabel == "Extra $0.00")
+    #expect(SubscriptionWindow(label: "Extra [active] 12.50", usedPercent: 6).footerLabel == "Extra $12.50")
+    #expect(SubscriptionWindow(label: "Week", usedPercent: 26).footerLabel == "Week 26%")
+}
+
 @Test func parsesResetTimesAndDisplaysSnapshotFreshness() throws {
     let whole = try #require(UsageFormatting.resetDate("2024-03-09T18:00:00Z"))
     let fractional = try #require(UsageFormatting.resetDate("2024-03-09T18:00:00.123Z"))
