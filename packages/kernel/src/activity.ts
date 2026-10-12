@@ -1,5 +1,5 @@
 /** Small, commit-consistent run/inbox monitor. Never hydrates transcript history. */
-import type { Context } from "@earendil-works/chord";
+import { copyJson, type Context } from "@earendil-works/chord";
 import { execFile } from "node:child_process";
 import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
 import {
@@ -108,7 +108,9 @@ function snapshot(live: Readonly<LiveState> | null, inbox: Readonly<InboxState> 
 		entries: [],
 		tools: [],
 		// Manual compactions run without a run; an idle kernel must not be parked under them.
-		compactions: [...(live?.compactions ?? [])],
+		// tx.doc returns drafts. Spreading the array retains element/retry Proxies that
+		// Node's advanced IPC cannot clone, and leaks them beyond the transaction.
+		compactions: copyJson(live?.compactions ?? []) as unknown as SnapshotEvent["compactions"],
 		agent: {},
 		usage: { models: {}, tools: {} },
 		...(live?.run ? { run: { inputs: [...live.run.inputs] } } : {}),
@@ -178,7 +180,7 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 					if (change.record.kind === LiveDoc.definition.kind) {
 						const live = change.value as Readonly<LiveState> | null;
 						run = live?.run ? { inputs: [...live.run.inputs] } : undefined;
-						compactions = [...(live?.compactions ?? [])];
+						compactions = copyJson(live?.compactions ?? []) as unknown as SnapshotEvent["compactions"];
 						touched = true;
 					} else if (change.record.kind === InboxDoc.definition.kind) {
 						const inbox = change.value as Readonly<InboxState> | null;
