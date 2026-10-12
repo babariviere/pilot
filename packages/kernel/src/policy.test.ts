@@ -30,6 +30,11 @@ test("mission prompt explains the shared state, the chat's tasks, decisions and 
 	assert.match(prompt, /Never mention the mission/);
 	assert.match(prompt, /Linear issue IDs are fine/);
 	assert.match(missionPrompt({ ...mission, coordinator: "self" }), /You coordinate this mission/);
+	assert.match(
+		missionPrompt({ ...mission, coordinator: "self" }),
+		/cheaper models for small tasks.*strongest allowed model for hard ones/,
+	);
+	assert.doesNotMatch(prompt, /Choose cheaper models/);
 	assert.match(missionPrompt({ ...mission, status: "done" }), /This mission is done/);
 });
 

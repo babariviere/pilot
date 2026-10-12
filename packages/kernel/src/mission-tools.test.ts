@@ -78,17 +78,23 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		calls.push([action, args]);
 		return { ok: true };
 	}, true);
-	const schema = tool.parameters as { properties: { action: { enum: string[] }; message: unknown } };
+	const schema = tool.parameters as {
+		properties: { action: { enum: string[] }; message: unknown; model: unknown; thinking: unknown };
+	};
 	assert.deepEqual(schema.properties.action.enum.slice(-3), ["start", "send", "status"]);
 	assert.ok(schema.properties.message);
 	assert.equal(tool.annotations?.destructiveHint, true);
 	assert.match(tool.description, /batch is atomic/);
 	assert.match(tool.description, /ties sort by task number/);
+	assert.ok(schema.properties.model);
+	assert.ok(schema.properties.thinking);
+	assert.match(tool.description, /validation errors list allowed model IDs, prices and supported thinking levels/);
+	assert.match(tool.description, /cheaper models for small tasks.*strongest allowed model for hard ones/);
 	for (const params of [
 		{ action: "delete", id: "#3" },
 		{ action: "group", ids: ["1-5", 8], milestone: "Next" },
 		{ action: "task", id: "#3", order: 1.5 },
-		{ action: "start", id: "#3", message: "Focus on tests" },
+		{ action: "start", id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" },
 		{ action: "send", targetSessionId: "member", message: "Please clarify" },
 		{ action: "status" },
 	])
@@ -97,7 +103,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		["delete", { id: "#3" }],
 		["group", { ids: ["1-5", 8], milestone: "Next" }],
 		["task", { id: "#3", order: 1.5 }],
-		["start", { id: "#3", message: "Focus on tests" }],
+		["start", { id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" }],
 		["send", { targetSessionId: "member", message: "Please clarify" }],
 		["status", {}],
 	]);
@@ -111,7 +117,9 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 
 test("ordinary member declarations omit privileged actions and their guidance", () => {
 	const tool = createMissionTool(async () => null);
-	const schema = tool.parameters as { properties: { action: { enum: string[] }; message?: unknown } };
+	const schema = tool.parameters as {
+		properties: { action: { enum: string[] }; message?: unknown; model?: unknown; thinking?: unknown };
+	};
 	for (const action of ["delete", "group", "start", "send", "status"]) {
 		assert.ok(!schema.properties.action.enum.includes(action));
 		assert.ok(!tool.description.includes(`- ${action} (`));
@@ -121,6 +129,8 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.ok(!("order" in schema.properties));
 	assert.doesNotMatch(tool.description, /task order|For claim or group/);
 	assert.match(tool.description, /status "dropped"/);
+	assert.equal(schema.properties.model, undefined);
+	assert.equal(schema.properties.thinking, undefined);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /claim, start|comment or send|Opening instructions/);
 	assert.match(tool.description, /- claim:/);
 	assert.ok(schema.properties.action.enum.includes("get"));
@@ -314,13 +324,22 @@ for (const ask of [false, true]) {
 				);
 				assert.equal(!!declared, role !== undefined);
 				assert.equal(adapter.session.getCallableToolNames().includes(MISSION_TOOL), role !== undefined);
-				const schema = native.parameters as { properties: { action: { enum: string[] }; message?: unknown } };
+				const schema = native.parameters as {
+					properties: {
+						action: { enum: string[] };
+						message?: unknown;
+						model?: unknown;
+						thinking?: unknown;
+					};
+				};
 				for (const action of ["delete", "group", "start", "send", "status"]) {
 					assert.equal(schema.properties.action.enum.includes(action), coordinator);
 					assert.equal(native.description.includes(`- ${action} (`), coordinator);
 				}
 				assert.equal(!!schema.properties.message, coordinator);
 				assert.equal("order" in schema.properties, coordinator);
+				assert.equal(!!schema.properties.model, coordinator);
+				assert.equal(!!schema.properties.thinking, coordinator);
 				const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
 				const result = await codemode.execute(
 					`describe-${requests}`,
@@ -344,7 +363,7 @@ for (const ask of [false, true]) {
 							assert.equal(!!tool, role !== undefined);
 							if (tool) assert.deepEqual(tool.parameters, native.parameters);
 							const prompt = getCurrentSystemPrompt(context.messages);
-							assert.equal(prompt.includes('mission({action: "start", id})'), coordinator);
+							assert.equal(prompt.includes('mission({action: "start", id, model, thinking})'), coordinator);
 							assert.equal(prompt.includes('mission({action: "delete", id})'), coordinator);
 							assert.equal(prompt.includes('mission({action: "group", ids:'), coordinator);
 							requestChecked = true;

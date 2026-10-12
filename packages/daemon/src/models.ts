@@ -1,12 +1,15 @@
 /** Models offered to clients: the user's pi model scope (`enabledModels`), else every authenticated model. */
 import { join } from "node:path";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import type { ModelList, ModelOption } from "@pilot/protocol";
 import { readModelSettings } from "./model-settings.ts";
 import { TtlCache } from "./ttl-cache.ts";
 
 const TTL_MS = 60_000;
+
+/** Model IDs, independent of provider, whose scoped prices bound new task chats. */
+export const TASK_START_REFERENCE_MODELS = ["claude-opus-5-5", "gpt-6.1-sol"] as const;
 
 export class ModelCatalog {
 	private runtime?: Promise<ModelRuntime>;
@@ -41,6 +44,58 @@ export class ModelCatalog {
 	/** Scope and default follow pi's settings for `cwd` (global plus project settings). */
 	list(cwd: string): Promise<ModelList> {
 		return this.cache.get(cwd, () => this.load(cwd));
+	}
+
+	/** Validate before spawning, including the default, so neither HTTP nor tool calls bypass the cap. */
+	async selectTaskModel(cwd: string, model?: string, thinking?: string): Promise<{ model: string; thinking: string }> {
+		const [list, runtime, settings] = await Promise.all([
+			this.list(cwd),
+			this.getRuntime(),
+			readModelSettings(cwd, this.agentDir),
+		]);
+		const scoped = list.models.map((option) => ({
+			option,
+			model: runtime.getModel(option.provider, option.id.slice(option.provider.length + 1)),
+		}));
+		const price = (model: ChatModel) => model.cost.input + model.cost.output;
+		const references = scoped.filter(
+			({ model }) => model && TASK_START_REFERENCE_MODELS.some((id) => id === model.id),
+		);
+		const cap = references.length ? Math.max(...references.map(({ model }) => price(model!))) : undefined;
+		if (cap === undefined)
+			console.warn(
+				`pilotd: no task-start reference models in scope for ${cwd}; using the scope without a price cap`,
+			);
+		const allowed = scoped.filter(({ model }) => model && (cap === undefined || price(model) <= cap));
+		const choices = () =>
+			`Allowed models: ${
+				allowed
+					.map(
+						({ option, model }) =>
+							`${option.id} ($${price(model!)}/M input+output; thinking: ${option.thinkingLevels?.join(", ") ?? "none"})`,
+					)
+					.join("; ") || "none"
+			}`;
+		if (model !== undefined && (typeof model !== "string" || !model.trim()))
+			throw new Error(`model must be a non-empty provider/modelId string. ${choices()}`);
+		const name = model?.trim() ?? list.defaultModel ?? allowed[0]?.option.id;
+		const choice = allowed.find(({ option }) => option.id === name);
+		if (!choice) {
+			const reason = scoped.some(({ option }) => option.id === name)
+				? `exceeds the task-start price cap ($${cap}/M input+output)`
+				: "is not available in the project's scope";
+			throw new Error(`Model ${name ?? "(default)"} ${reason}. ${choices()}`);
+		}
+		if (thinking !== undefined && (typeof thinking !== "string" || !choice.option.thinkingLevels?.includes(thinking)))
+			throw new Error(`Thinking level is not supported by ${name}: ${thinking}. ${choices()}`);
+		const configured =
+			choice.option.thinking ??
+			settings.getModelThinkingLevel(choice.model!.provider, choice.model!.id) ??
+			settings.getDefaultThinkingLevel() ??
+			"medium";
+		const level =
+			thinking ?? clampThinkingLevel(choice.model!, configured as Parameters<typeof clampThinkingLevel>[1]);
+		return { model: choice.option.id, thinking: level };
 	}
 
 	private getRuntime(): Promise<ModelRuntime> {

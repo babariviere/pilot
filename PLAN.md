@@ -324,7 +324,7 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 | `attach`, `link` | Link an artifact; link an external resource |
 | `log` | Post a handoff or status update |
 | `update` | Change the mission title or goal |
-| `start`, `send`, `status` | Coordinator only: start a chat for an unclaimed task (`id`, optional `message`), send a follow-up to a member (`targetSessionId`, `message`), summarise all member states (including archived chats) |
+| `start`, `send`, `status` | Coordinator only: start a chat for an unclaimed task (`id`, optional `message`, `model`, `thinking`), send a follow-up to a member (`targetSessionId`, `message`), summarise all member states (including archived chats) |
 
 The tool is registered for every Build and Ask chat but declared to the model only while the chat is a
 member, so other chats pay no prompt cost. pilotd pushes membership and context changes to a live
@@ -332,8 +332,15 @@ kernel, which applies them from the next model request; tool calls travel over t
 and pilotd checks membership on every call and the current coordinator role for these three actions.
 These three actions and their guidance are declared only to the coordinator. Changes to membership
 or coordinator role refresh the tool in place, including codemode discovery. `start` reuses Start chat
-and requires an active mission. `send` queues a follow-up if the member is busy and requires restoring
-an archived chat first. `status` reads summaries without waking workers,
+and requires an active mission. Start model choices use the project's `ModelCatalog.list` scope,
+capped at the highest scoped Claude Opus 5.5 or GPT-6.1 Sol input plus output price per million tokens.
+The reference model IDs live in one constant. If neither reference is scoped, starts use the scope
+without a cap and log the fallback. The omitted model uses the project default, which is validated
+too; thinking must be supported by the selected model. Omitted thinking follows scope, per-model
+and project defaults, clamped to supported levels. Validation errors list allowed models, prices and
+thinking levels. Coordinator guidance prefers cheaper models for small tasks and the strongest
+allowed for hard ones. Start activity records the model and thinking level. `send` queues a follow-up
+if the member is busy and requires restoring an archived chat first. `status` reads summaries without waking workers,
 including lifecycle state, latest outcome, archive status and assigned tasks. Mission chats receive a
 compact mission header in Pilot's prompt section (goal, coordinator, own open tasks, decisions and how
 to use the tool), not the whole brief. The header only changes when those fields change, preserving
