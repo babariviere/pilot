@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "node:test";
+import { type TestContext, test } from "node:test";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ServiceUnavailable } from "./errors.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
@@ -226,4 +226,131 @@ test("model catalog offers only levels supported by each model, including mapped
 			{ id: "test/plain", thinkingLevels: ["off"] },
 		],
 	);
+});
+
+async function taskCatalog(t: TestContext, settings: Record<string, unknown> = {}) {
+	const root = await mkdtemp(join(tmpdir(), "pilot-task-models-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const models = [
+		model("claude-opus-5-5", 4, 20),
+		model("gpt-6.1-sol", 5, 25),
+		cheap,
+		model("at-cap", 1, 29),
+		model("frontier", 2, 29),
+		{ ...model("plain", 0.1, 0.2), reasoning: false },
+	];
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				getAvailable: async () => models,
+				getModel: (provider: string, id: string) =>
+					models.find((model) => model.provider === provider && model.id === id),
+			}) as unknown as ModelRuntime,
+	);
+	await writeFile(
+		join(root, "settings.json"),
+		JSON.stringify({
+			defaultProvider: "test",
+			defaultModel: "small",
+			defaultThinkingLevel: "low",
+			...settings,
+		}),
+	);
+	return { root, catalog: new ModelCatalog(root) };
+}
+
+test("task starts use the project scope, not every authenticated model", async (t) => {
+	const { root, catalog } = await taskCatalog(t);
+	await mkdir(join(root, ".pi"));
+	await writeFile(
+		join(root, ".pi", "settings.json"),
+		JSON.stringify({
+			enabledModels: ["test/claude-opus-5-5", "test/small:high"],
+		}),
+	);
+	assert.deepEqual(await catalog.selectTaskModel(root), { model: "test/small", thinking: "high" });
+	await assert.rejects(
+		catalog.selectTaskModel(root, "test/plain"),
+		/not available in the project's scope.*Allowed models: test\/claude-opus-5-5.*test\/small/,
+	);
+	await assert.rejects(catalog.selectTaskModel(root, "test/at-cap"), /not available in the project's scope/);
+});
+
+test("unscoped task starts cap combined input+output at the highest scoped reference price, inclusive", async (t) => {
+	const { root, catalog } = await taskCatalog(t);
+	assert.deepEqual(await catalog.selectTaskModel(root, "test/at-cap", "high"), {
+		model: "test/at-cap",
+		thinking: "high",
+	});
+	await assert.rejects(catalog.selectTaskModel(root, "test/frontier"), (error: unknown) => {
+		assert.match(String(error), /exceeds the task-start price cap \(\$30\/M input\+output\)/);
+		assert.match(String(error), /Allowed models:.*test\/at-cap.*thinking: off, minimal, low, medium, high/);
+		assert.doesNotMatch(String(error).split("Allowed models:")[1]!, /test\/frontier/);
+		return true;
+	});
+});
+
+test("one scoped reference sets the cap; neither reference falls back to the scope and logs", async (t) => {
+	const one = await taskCatalog(t, { enabledModels: ["test/claude-opus-5-5", "test/at-cap"] });
+	await assert.rejects(one.catalog.selectTaskModel(one.root, "test/at-cap"), /price cap \(\$24\/M/);
+	const fallback = await taskCatalog(t, { enabledModels: ["test/frontier"] });
+	const warn = t.mock.method(console, "warn", () => {});
+	assert.deepEqual(await fallback.catalog.selectTaskModel(fallback.root, "test/frontier"), {
+		model: "test/frontier",
+		thinking: "low",
+	});
+	assert.match(
+		String(warn.mock.calls[0]?.arguments[0]),
+		/no task-start reference models in scope.*without a price cap/,
+	);
+	await assert.rejects(
+		fallback.catalog.selectTaskModel(fallback.root, "test/small"),
+		/not available in the project's scope/,
+	);
+});
+
+test("task starts validate thinking against the chosen model and use supported configured defaults", async (t) => {
+	const { root, catalog } = await taskCatalog(t);
+	assert.deepEqual(await catalog.selectTaskModel(root), { model: "test/small", thinking: "low" });
+	assert.deepEqual(await catalog.selectTaskModel(root, "test/plain"), { model: "test/plain", thinking: "off" });
+	assert.deepEqual(await catalog.selectTaskModel(root, "test/small", "off"), { model: "test/small", thinking: "off" });
+	for (const thinking of ["high", "", "bogus"])
+		await assert.rejects(
+			catalog.selectTaskModel(root, "test/plain", thinking),
+			/Thinking level is not supported.*Allowed models:/,
+		);
+	await assert.rejects(catalog.selectTaskModel(root, "test/small", "xhigh"), /Thinking level is not supported/);
+	for (const invalid of ["", " ", 42, null])
+		await assert.rejects(
+			catalog.selectTaskModel(root, invalid as string),
+			/model must be a non-empty.*Allowed models:/,
+		);
+	await assert.rejects(
+		catalog.selectTaskModel(root, "test/small", 42 as unknown as string),
+		/Thinking level is not supported/,
+	);
+});
+
+test("the default cannot bypass scope or price validation", async (t) => {
+	const capped = await taskCatalog(t, { defaultModel: "frontier" });
+	await assert.rejects(capped.catalog.selectTaskModel(capped.root), /Model test\/frontier exceeds.*Allowed models:/);
+	const unscoped = await taskCatalog(t, { defaultModel: "plain", enabledModels: ["test/small"] });
+	t.mock.method(console, "warn", () => {});
+	await assert.rejects(
+		unscoped.catalog.selectTaskModel(unscoped.root),
+		/Model test\/plain is not available.*Allowed models:/,
+	);
+});
+
+test("omitted thinking preserves per-model preferences and scope thinking takes precedence", async (t) => {
+	const perModel = await taskCatalog(t, { modelThinkingLevels: { "test/small": "high" } });
+	assert.equal((await perModel.catalog.selectTaskModel(perModel.root)).thinking, "high");
+	const scope = await taskCatalog(t, {
+		enabledModels: ["test/small:off"],
+		modelThinkingLevels: { "test/small": "high" },
+	});
+	t.mock.method(console, "warn", () => {});
+	assert.equal((await scope.catalog.selectTaskModel(scope.root)).thinking, "off");
 });

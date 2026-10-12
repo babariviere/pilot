@@ -1320,6 +1320,16 @@ export class MissionStore {
 		return event;
 	}
 
+	/** Automatic start activity is task activity, not an authored user note. */
+	recordTaskStart(id: string, taskId: string, model: string, thinking: string): MissionEvent {
+		const task = this.task(id, taskId);
+		const event = this.transaction(() =>
+			this.event(id, "task", `Started #${task.number} on ${model}, thinking ${thinking}`, USER, { taskId }),
+		);
+		this.changed(id);
+		return event;
+	}
+
 	// Membership
 
 	missionOf(sessionId: string): string | undefined {

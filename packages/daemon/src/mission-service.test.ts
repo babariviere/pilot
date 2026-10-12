@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
@@ -85,6 +86,10 @@ async function fixture(
 		{ ...pullRequests, ...(pullRequests.runner ? { runner: legacyGitHub(pullRequests.runner) } : {}) },
 	);
 	const store = new MissionStore(":memory:");
+	t.mock.method(sessions, "selectTaskModel", async (_cwd: string, model?: string, thinking?: string) => ({
+		model: model ?? "test/model",
+		thinking: thinking ?? "medium",
+	}));
 	const service = new MissionService(store, sessions, projects);
 	await sessions.load();
 	t.after(async () => {
@@ -807,6 +812,93 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 	assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
 });
 
+test("task starts reject invalid model/thinking before spawning, and record explicit and default choices", async (t) => {
+	const f = await fixture(t);
+	const models = [
+		["claude-opus-5-5", 4, 20, true],
+		["small", 0.1, 0.4, false],
+		["frontier", 10, 50, true],
+		["outside", 0, 0, true],
+	].map(([id, input, output, reasoning]) => ({
+		id,
+		name: id,
+		provider: "test",
+		api: "openai-completions",
+		baseUrl: "http://unused",
+		input: ["text"],
+		reasoning,
+		contextWindow: 32000,
+		maxTokens: 4096,
+		cost: { input, output, cacheRead: 0, cacheWrite: 0 },
+	}));
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				getAvailable: async () => models,
+				getModel: (_provider: string, id: string) => models.find((model) => model.id === id),
+			}) as unknown as ModelRuntime,
+	);
+	await mkdir(join(f.project.path, ".pi"));
+	await writeFile(
+		join(f.project.path, ".pi", "settings.json"),
+		JSON.stringify({
+			defaultProvider: "test",
+			defaultModel: "small",
+			defaultThinkingLevel: "low",
+			enabledModels: ["test/claude-opus-5-5", "test/small", "test/frontier"],
+		}),
+	);
+	const catalog = new ModelCatalog(f.home);
+	const select = t.mock.method(f.sessions, "selectTaskModel", catalog.selectTaskModel.bind(catalog));
+	const coordinator = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "Explicit" }, { title: "Default" }],
+	});
+	for (const [args, error] of [
+		[{ model: "test/outside" }, /not available.*Allowed models:/],
+		[{ model: "test/frontier" }, /price cap.*Allowed models:/],
+		[{ model: "test/small", thinking: "high" }, /not supported.*Allowed models:/],
+		[{ model: 42 }, /model must be a non-empty/],
+	] as const) {
+		await assert.rejects(f.service.call(coordinator.id, "start", { id: "1", ...args }), error);
+		assert.equal(f.sessions.list().length, 1);
+		assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+		assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+	}
+	const explicit = (await f.service.call(coordinator.id, "start", {
+		id: "1",
+		model: "test/claude-opus-5-5",
+		thinking: "high",
+	})) as SessionSummary;
+	assert.deepEqual(select.mock.calls.at(-1)?.arguments, [f.project.path, "test/claude-opus-5-5", "high"]);
+	const worker = await until(() => f.workers.get(explicit.id));
+	assert.equal(worker.spec.model, "test/claude-opus-5-5");
+	assert.equal(worker.spec.thinking, "high");
+	// The HTTP start path shares the same validated default selection.
+	const defaultSession = await f.service.startTask(mission.id, "2");
+	const defaultWorker = await until(() => f.workers.get(defaultSession.id));
+	assert.equal(defaultWorker.spec.model, "test/small");
+	assert.equal(defaultWorker.spec.thinking, "off");
+	const startEvent = f.store.events(mission.id).find((event) => event.text.startsWith("Started #2"))!;
+	assert.equal(startEvent.kind, "task");
+	assert.equal(startEvent.taskId, f.store.resolveTask(mission.id, "2").id);
+	assert.deepEqual(f.store.userNotes(mission.id, 15), [], "automatic start activity is not an authored user note");
+	assert.deepEqual(
+		f.store
+			.events(mission.id)
+			.filter((event) => event.text.startsWith("Started #"))
+			.map((event) => event.text)
+			.sort(),
+		["Started #1 on test/claude-opus-5-5, thinking high", "Started #2 on test/small, thinking off"],
+	);
+});
+
 test("coordinator actions check the current role on every call before causing side effects", async (t) => {
 	const f = await fixture(t);
 	const coordinator = await f.spawn();
@@ -974,14 +1066,23 @@ test("coordinator start reuses Start chat with task IDs or numbers and validates
 	const first = (await f.service.call(coordinator.id, "start", {
 		id: "#1",
 		message: "Focus on login",
+		model: "test/model",
+		thinking: "high",
 	})) as SessionSummary;
-	assert.deepEqual(startTask.mock.calls.at(-1)?.arguments, [mission.id, "#1", { message: "Focus on login" }]);
+	assert.deepEqual(startTask.mock.calls.at(-1)?.arguments, [
+		mission.id,
+		"#1",
+		{ message: "Focus on login", model: "test/model", thinking: "high" },
+	]);
+	assert.ok(f.store.events(mission.id).some((event) => event.text === "Started #1 on test/model, thinking high"));
 	assert.equal(first.missionId, mission.id);
 	assert.equal(first.projectId, f.project.id);
 	assert.equal(first.title, "Auth");
 	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, first.id);
 	assert.equal(f.store.resolveTask(mission.id, "1").status, "in_progress");
 	const worker = await until(() => f.workers.get(first.id));
+	assert.equal(worker.spec.model, "test/model");
+	assert.equal(worker.spec.thinking, "high");
 	const input = await until(() => worker.requests.find((command) => command.type === "input"));
 	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Add login[\s\S]*Focus on login/);
 	assert.equal(f.service.context(first.id)?.tasks[0]?.number, 1);

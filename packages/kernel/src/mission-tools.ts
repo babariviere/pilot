@@ -48,7 +48,7 @@ Actions:
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
-- start (coordinator only): start a new chat for an unclaimed task (id or number, optional message). Start chats only when the user asks.
+- start (coordinator only): start a new chat for an unclaimed task (id or number, optional message, model, thinking). Model defaults to the project's default. Allowed models are the project's scoped models within the price cap; start validation errors list allowed model IDs, prices and supported thinking levels. Choose cheaper models for small tasks and the strongest allowed model for hard ones. Thinking must be supported by the chosen model. Start chats only when the user asks.
 - send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
 - status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`
 				: ""
@@ -99,6 +99,20 @@ Actions:
 						order: Type.Optional(
 							Type.Number({
 								description: "Task sort key (task): lower first, ties by task number. Fractions allowed.",
+							}),
+						),
+						model: Type.Optional(
+							Type.String({
+								maxLength: 256,
+								description:
+									"For start: scoped provider/modelId within the price cap. Omit for the project's default. Errors list allowed models.",
+							}),
+						),
+						thinking: Type.Optional(
+							Type.String({
+								maxLength: 32,
+								description:
+									"For start: a thinking level supported by the chosen model. Omit for its configured default.",
 							}),
 						),
 						message: Type.Optional(

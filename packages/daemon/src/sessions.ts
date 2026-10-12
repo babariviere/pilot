@@ -1242,6 +1242,11 @@ export class SessionManager {
 		return meta && this.summary(meta);
 	}
 
+	/** Task starts use the same agent directory/catalog as other session model operations. */
+	selectTaskModel(cwd: string, model?: string, thinking?: string): Promise<{ model: string; thinking: string }> {
+		return this.modelCatalog.selectTaskModel(cwd, model, thinking);
+	}
+
 	/** A parked idle conversation may reopen; configuration changes never interrupt or queue behind work. */
 	async changeModel(
 		id: string,

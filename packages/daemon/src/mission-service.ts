@@ -219,17 +219,25 @@ export class MissionService {
 		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by a chat`);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
+		const selection = await this.sessions.selectTaskModel(
+			this.projects.require(mission.projectId).path,
+			request.model,
+			request.thinking,
+		);
+		// Recheck claims after model/settings I/O.
+		if (this.store.resolveTask(missionId, taskId).sessionId)
+			throw new Conflict(`Task #${task.number} is already claimed by a chat`);
 		const session = await this.sessions.spawn({
 			projectId: mission.projectId,
 			message: taskMessage(task, request.message),
 			title: task.title,
-			...(request.model ? { model: request.model } : {}),
-			...(request.thinking ? { thinking: request.thinking } : {}),
+			...selection,
 			...(request.mode ? { mode: request.mode } : {}),
 			...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
 		});
 		this.store.join(session.id, missionId);
 		this.store.claimTask(missionId, task.id, session.id, {});
+		this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
 	}
 
@@ -289,6 +297,8 @@ export class MissionService {
 				if (typeof args.id !== "string" || !args.id.trim()) throw new Error("start requires the task id or number");
 				return this.startTask(missionId, args.id, {
 					...(args.message !== undefined ? { message: args.message as string } : {}),
+					...(args.model !== undefined ? { model: args.model as string } : {}),
+					...(args.thinking !== undefined ? { thinking: args.thinking as string } : {}),
 				});
 			case "send": {
 				if (typeof args.targetSessionId !== "string" || !args.targetSessionId.trim())
