@@ -223,6 +223,7 @@ test("member settlements wake only an idle lead with a guarded follow-up and no 
 	memberWorker.onPacket({ type: "working", working: true });
 	memberWorker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: 1 } });
 	const now = Date.now() + 120_000;
+	t.mock.method(Date, "now", () => now);
 	await f.service.notices.flush(now);
 	assert.equal(f.store.pendingNotice(mission.mission.id), undefined);
 	assert.equal(meta.pending?.length ?? 0, 0);
@@ -466,6 +467,48 @@ test("user input wins while notice persistence is in flight, without acknowledgi
 		release();
 		await flushing;
 	}
+});
+
+test("a member resuming during notice persistence revokes admission until a new settle window", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const detail = await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
+	f.service.join(member.id, { missionId: detail.mission.id });
+	f.service.notices.start();
+	f.store.addComment(detail.mission.id, { text: "pending event" });
+	const save = f.sessions["save"].bind(f.sessions);
+	let once = true;
+	t.mock.method(f.sessions, "save" as never, async (meta: Parameters<typeof save>[0]) => {
+		await save(meta);
+		if (once && meta.pending?.some((command) => command.requestId.startsWith("mission-notice:"))) {
+			once = false;
+			f.workers.get(member.id)!.state = "working";
+			f.workers.get(member.id)!.onPacket({ type: "working", working: true });
+		}
+	});
+	const now = Date.now() + 30_000;
+	t.mock.method(Date, "now", () => now);
+	await f.service.notices.flush(now);
+	const requests = f.workers.get(lead.id)!.requests;
+	assert.equal(
+		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
+		0,
+	);
+	assert.ok(f.store.pendingNotice(detail.mission.id));
+	f.workers.get(member.id)!.state = "idle";
+	f.workers.get(member.id)!.onPacket({ type: "working", working: false });
+	await f.service.notices.flush(now + 29_999);
+	assert.equal(
+		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
+		0,
+	);
+	t.mock.method(Date, "now", () => now + 30_000);
+	await f.service.notices.flush(now + 30_000);
+	assert.equal(
+		requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:")).length,
+		1,
+	);
 });
 
 test("a user reset during an in-flight linked PR lookup wins over its merge result", async (t) => {

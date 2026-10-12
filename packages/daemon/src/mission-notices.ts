@@ -22,7 +22,12 @@ export class MissionNotices {
 	start(): void {
 		this.stopped = false;
 		// Recover completions that were saved before a crash, but not yet recorded in missions.sqlite.
-		for (const session of this.sessions.list({ archived: "all" })) this.observe(session, true);
+		const missions = new Set<string>();
+		for (const session of this.sessions.list({ archived: "all" })) {
+			this.observe(session, true);
+			if (session.missionId) missions.add(session.missionId);
+		}
+		for (const id of missions) this.refreshActivity(id);
 		this.schedule();
 	}
 
@@ -36,7 +41,33 @@ export class MissionNotices {
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
 		if (session.missionId && session.outcome) this.store.recordMemberCompletion(session, recovering);
+		if (!recovering) this.refreshActivity(session.missionId);
 		this.schedule();
+	}
+
+	private refreshActivity(missionId: string): void {
+		const mission = this.store.get(missionId);
+		if (!mission) return;
+		const busy = this.store.members(missionId).some((id) => {
+			if (id === mission.coordinatorSessionId) return false;
+			const chat = this.sessions.get(id);
+			return chat?.archivedAt === undefined && (chat?.state === "working" || chat?.state === "starting");
+		});
+		this.store.setNoticeActivity(missionId, busy, Date.now());
+	}
+
+	private deadlines(now: number) {
+		const pending = this.store.noticeDeadlines(now);
+		for (const { missionId } of pending) this.refreshActivity(missionId);
+		return pending.length ? this.store.noticeDeadlines(now) : [];
+	}
+
+	/** Recheck member activity at IPC admission, including after asynchronous persistence. */
+	allowed(sessionId: string, requestId: string): boolean {
+		if (!this.store.noticeAllowed(sessionId, requestId)) return false;
+		const missionId = this.store.missionOf(sessionId)!;
+		this.refreshActivity(missionId);
+		return this.store.noticeDeadlines(Date.now(), missionId).some(({ at }) => at <= Date.now());
 	}
 
 	private schedule(): void {
@@ -51,7 +82,7 @@ export class MissionNotices {
 		clearTimeout(this.timer);
 		if (this.stopped || this.running) return;
 		const now = Date.now();
-		const deadlines = this.store.noticeDeadlines(now).filter(({ missionId }) => {
+		const deadlines = this.deadlines(now).filter(({ missionId }) => {
 			const mission = this.store.get(missionId);
 			const chat = mission?.coordinatorSessionId ? this.sessions.get(mission.coordinatorSessionId) : undefined;
 			return (
@@ -80,7 +111,7 @@ export class MissionNotices {
 
 	/** Also callable with a virtual clock by focused delivery tests. */
 	async flush(now = Date.now()): Promise<void> {
-		for (const { missionId, at } of this.store.noticeDeadlines(now)) {
+		for (const { missionId, at } of this.deadlines(now)) {
 			if (this.stopped || at > now) continue;
 			const mission = this.store.require(missionId);
 			const id = mission.coordinatorSessionId;

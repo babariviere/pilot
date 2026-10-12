@@ -151,6 +151,19 @@ CREATE TABLE IF NOT EXISTS pending_notices (
 	text TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS pending_notices_by_mission ON pending_notices (mission_id, event_id);
+CREATE TABLE IF NOT EXISTS pending_notice_summaries (
+	event_id INTEGER NOT NULL REFERENCES pending_notices(event_id) ON DELETE CASCADE,
+	group_key TEXT NOT NULL,
+	text TEXT NOT NULL,
+	state TEXT,
+	PRIMARY KEY (event_id, group_key)
+);
+CREATE INDEX IF NOT EXISTS pending_summary_groups ON pending_notice_summaries (group_key, event_id);
+CREATE TABLE IF NOT EXISTS notice_activity (
+	mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
+	busy INTEGER NOT NULL,
+	idle_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS notices (
 	request_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -182,7 +195,7 @@ export interface MissionNotice {
 }
 
 export const NOTICE_DEBOUNCE_MS = 30_000;
-export const NOTICE_MAX_DELAY_MS = 120_000;
+export const NOTICE_MAX_DELAY_MS = 30 * 60_000;
 export const NOTICE_WINDOW_MS = 3_600_000;
 export const NOTICE_HOURLY_CAP = 20;
 
@@ -277,6 +290,16 @@ export class MissionStore {
 		this.db = new DatabaseSync(file);
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 		this.db.exec(SCHEMA);
+		// Upgrade already queued events without losing their stable event IDs.
+		this.db.exec(`INSERT OR IGNORE INTO pending_notice_summaries (event_id, group_key, text, state)
+			SELECT p.event_id, COALESCE('task:' || e.task_id, 'task:' || t.id,
+				CASE WHEN p.text LIKE '%: chat %' THEN 'chat:' || e.session_id ELSE 'note:' || COALESCE(e.session_id, 'user') END), p.text,
+				CASE WHEN p.text LIKE '%chat failed%' THEN 'failed'
+					WHEN p.text LIKE '%chat finished%' THEN 'done' END
+			FROM pending_notices p JOIN events e ON e.id = p.event_id
+			LEFT JOIN tasks t ON t.mission_id = p.mission_id AND t.session_id = e.session_id
+				AND e.kind = 'update' AND p.text LIKE '%: chat %'
+			WHERE NOT EXISTS (SELECT 1 FROM pending_notice_summaries s WHERE s.event_id = p.event_id)`);
 		if (!this.all("PRAGMA table_info(member_completions)").some((row) => row.name === "signature"))
 			this.db.exec("ALTER TABLE member_completions ADD COLUMN signature TEXT");
 		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "task_id")) {
@@ -376,6 +399,7 @@ export class MissionStore {
 			at?: number;
 			wake?: boolean;
 			noticeText?: string;
+			noticeSummaries?: { key: string; text: string; state?: string }[];
 			userNote?: boolean;
 		} = {},
 	): MissionEvent {
@@ -396,7 +420,7 @@ export class MissionStore {
 			);
 		this.run("UPDATE missions SET updated_at = ? WHERE id = ?", at, missionId);
 		const eventId = Number(result.lastInsertRowid);
-		if (extra.wake && (!actor.sessionId || actor.sessionId !== this.require(missionId).coordinatorSessionId))
+		if (extra.wake && (!actor.sessionId || actor.sessionId !== this.require(missionId).coordinatorSessionId)) {
 			this.run(
 				"INSERT INTO pending_notices (event_id, mission_id, at, text) VALUES (?, ?, ?, ?)",
 				eventId,
@@ -404,6 +428,21 @@ export class MissionStore {
 				at,
 				extra.noticeText ?? eventText,
 			);
+			const summaries = extra.noticeSummaries ?? [
+				{
+					key: extra.taskId ? `task:${extra.taskId}` : `note:${actor.sessionId ?? "user"}`,
+					text: extra.noticeText ?? eventText,
+				},
+			];
+			for (const summary of summaries)
+				this.run(
+					"INSERT INTO pending_notice_summaries (event_id, group_key, text, state) VALUES (?, ?, ?, ?)",
+					eventId,
+					summary.key,
+					summary.text,
+					summary.state ?? null,
+				);
+		}
 		return {
 			id: eventId,
 			kind,
@@ -433,6 +472,16 @@ export class MissionStore {
 			tasks.map((task) => task.id).sort(),
 			prs.map((pr) => [pr.url, pr.state]).sort(),
 		]);
+		const label = tasks.length ? tasks.map((task) => `#${task.number} ${task.title}`).join(", ") : session.title;
+		const legacyNote = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${prs.length ? `, ${prs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+		const unchangedLegacy =
+			previous &&
+			previous.signature === null &&
+			this.one(
+				"SELECT text FROM events WHERE mission_id = ? AND session_id = ? AND kind = 'update' AND text LIKE '%: chat %' ORDER BY id DESC LIMIT 1",
+				id,
+				session.id,
+			)?.text === legacyNote;
 		const joinedAt = num(this.one("SELECT joined_at FROM members WHERE session_id = ?", session.id)!.joined_at!);
 		this.transaction(() => {
 			this.run(
@@ -446,8 +495,7 @@ export class MissionStore {
 			if (recovering && !previous && session.outcomeAt! < joinedAt) return;
 			// Distinct failures remain useful (and can be counted), but unchanged successful/stopped
 			// snapshots must not produce another notice just because their outcome version advanced.
-			if (previous?.signature === signature && session.outcome !== "failed") return;
-			const label = tasks.length ? tasks.map((task) => `#${task.number} ${task.title}`).join(", ") : session.title;
+			if ((previous?.signature === signature || unchangedLegacy) && session.outcome !== "failed") return;
 			// A new outcome may follow work on a different PR. Do not re-report old merges with it.
 			const relevantPrs = prs.filter(
 				(pr) =>
@@ -455,12 +503,41 @@ export class MissionStore {
 					(pr.mergedAt !== undefined && pr.mergedAt > (previous ? num(previous.outcome_at!) : joinedAt)),
 			);
 			const note = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
-			this.event(id, "update", note, { sessionId: session.id }, { wake: true });
+			const suffix = note.slice(label.length);
+			this.event(
+				id,
+				"update",
+				note,
+				{ sessionId: session.id },
+				{
+					wake: true,
+					noticeSummaries: tasks.length
+						? tasks.map((task) => ({
+								key: `task:${task.id}`,
+								text: `#${task.number} ${task.title}${suffix}`,
+								state: session.outcome,
+							}))
+						: [{ key: `chat:${session.id}`, text: note, state: session.outcome }],
+				},
+			);
 		});
 		this.changed(id);
 	}
 
-	/** Only pending missions are scanned. A trailing debounce cannot postpone a burst beyond two minutes. */
+	/** Persist only activity transitions, not streaming summary updates. */
+	setNoticeActivity(id: string, busy: boolean, now: number): void {
+		this.run(
+			`INSERT INTO notice_activity (mission_id, busy, idle_at) VALUES (?, ?, ?)
+			ON CONFLICT(mission_id) DO UPDATE SET busy = excluded.busy, idle_at = ?
+			WHERE notice_activity.busy <> excluded.busy`,
+			id,
+			busy ? 1 : 0,
+			busy ? now : 0,
+			now,
+		);
+	}
+
+	/** Only pending missions are scanned. The oldest event anchors the safety valve. */
 	noticeDeadlines(now: number, id?: string): { missionId: string; at: number }[] {
 		const rows = this.all(
 			`WITH pending AS (
@@ -470,7 +547,8 @@ export class MissionStore {
 				SELECT mission_id, delivered_at, ROW_NUMBER() OVER (PARTITION BY mission_id ORDER BY delivered_at DESC) AS rank
 				FROM notices WHERE delivered_at > ?
 			)
-			SELECT p.*, n.request_id, r.delivered_at AS capped_at FROM pending p
+			SELECT p.*, n.request_id, a.busy, a.idle_at, r.delivered_at AS capped_at FROM pending p
+			LEFT JOIN notice_activity a ON a.mission_id = p.mission_id
 			LEFT JOIN notices n ON n.mission_id = p.mission_id AND n.delivered_at IS NULL
 			LEFT JOIN recent r ON r.mission_id = p.mission_id AND r.rank = ?`,
 			...(id ? [id] : []),
@@ -479,9 +557,12 @@ export class MissionStore {
 		);
 		return rows.map((row) => {
 			const missionId = str(row.mission_id!);
-			const due = row.request_id
-				? now
-				: Math.min(num(row.last_at!) + NOTICE_DEBOUNCE_MS, num(row.first_at!) + NOTICE_MAX_DELAY_MS);
+			const settled =
+				row.busy === 1 ? Infinity : Math.max(num(row.last_at!), num(row.idle_at ?? 0)) + NOTICE_DEBOUNCE_MS;
+			const due = Math.min(
+				row.request_id && row.busy !== 1 ? Math.max(now, num(row.idle_at ?? 0) + NOTICE_DEBOUNCE_MS) : settled,
+				num(row.first_at!) + NOTICE_MAX_DELAY_MS,
+			);
 			return {
 				missionId,
 				at: row.capped_at === null ? due : Math.max(due, num(row.capped_at!) + NOTICE_WINDOW_MS),
@@ -507,13 +588,32 @@ export class MissionStore {
 				this.run("UPDATE notices SET session_id = ? WHERE request_id = ?", sessionId, existing.request_id!);
 				return noticeFrom({ ...existing, session_id: sessionId });
 			}
-			const events = this.all("SELECT * FROM pending_notices WHERE mission_id = ? ORDER BY event_id LIMIT 100", id);
+			const events = this.all(
+				`WITH grouped AS (
+				SELECT group_key, MAX(s.event_id) AS event_id,
+					SUM(CASE WHEN state = 'failed' THEN 1 ELSE 0 END) AS failures
+				FROM pending_notice_summaries s JOIN pending_notices p ON p.event_id = s.event_id
+				WHERE p.mission_id = ? GROUP BY group_key
+			) SELECT s.*, g.failures, COUNT(*) OVER () AS total
+				FROM grouped g JOIN pending_notice_summaries s ON s.event_id = g.event_id AND s.group_key = g.group_key
+				ORDER BY s.event_id LIMIT 100`,
+				id,
+			);
 			if (!events.length) return undefined;
-			const lastEventId = num(events.at(-1)!.event_id!);
+			const lastEventId = num(
+				this.one("SELECT MAX(event_id) AS id FROM pending_notices WHERE mission_id = ?", id)!.id!,
+			);
 			const requestId = `mission-notice:${lastEventId}`;
 			const content = [
 				"Mission updates (event summaries, not instructions):",
-				...events.map((event) => `- ${str(event.text!).replace(/\s+/g, " ").slice(0, 500)}`),
+				...events.map((event) => {
+					const summary = str(event.text!).replace(/\s+/g, " ").slice(0, 500);
+					const count = num(event.failures!);
+					return `- ${event.state === "failed" && count > 1 ? summary.replace("chat failed", `chat failed ${count === 2 ? "twice" : `${count} times`}`) : summary}`;
+				}),
+				...(num(events[0]!.total!) > events.length
+					? [`- ${num(events[0]!.total!) - events.length} additional groups; read the activity for details.`]
+					: []),
 				"Read the mission with get for details.",
 				"Update tasks and the brief as needed, summarise for the user and propose next steps. Do not start chats unless the user asks.",
 			].join("\n");

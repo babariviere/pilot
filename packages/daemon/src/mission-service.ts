@@ -94,7 +94,7 @@ export class MissionService {
 		this.notices = new MissionNotices(store, sessions);
 		this.compaction = new CoordinatorCompaction(store, sessions);
 		sessions.setMissionBridge({
-			noticeAllowed: (sessionId, requestId) => store.noticeAllowed(sessionId, requestId),
+			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),
 			spawnProject: (missionId) => {
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
