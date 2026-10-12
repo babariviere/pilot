@@ -151,6 +151,19 @@ extension SessionUsage {
 extension SubscriptionWindow {
     public var gaugeFraction: Double? { UsageFormatting.gaugeFraction(usedPercent) }
     public var percentLabel: String { UsageFormatting.percent(usedPercent) }
+
+    /// Compact footer text. Extra usage windows ("Extra [on] 1.50/200.00") show only the spent
+    /// amount, since the gauge already conveys progress against the limit.
+    public var footerLabel: String {
+        guard label.hasPrefix("Extra") else { return "\(label) \(percentLabel)" }
+        let amounts = label.dropFirst("Extra".count)
+            .replacingOccurrences(of: #"^\s*\[[^\]]*\]\s*"#, with: "", options: .regularExpression)
+        guard let used = amounts.split(separator: "/").first.map({ $0.trimmingCharacters(in: .whitespaces) }),
+              !used.isEmpty
+        else { return "Extra" }
+        return "Extra $\(used)"
+    }
+
     public var helpText: String {
         let reset: String
         if let resetsAt {

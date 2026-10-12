@@ -47,7 +47,7 @@ final class UsageFooterState: ObservableObject {
         }
         display.windows = (usage.subscription?.windows ?? []).map {
             Indicator(fraction: $0.gaugeFraction, percent: $0.usedPercent,
-                      label: "\($0.label) \($0.percentLabel)", help: $0.helpText)
+                      label: $0.footerLabel, help: $0.helpText)
         }
         display.hasSubscription = usage.subscription?.hasDisplayData == true || fallback != nil
         display.subscriptionHelp = usage.subscription?.displayHelpText() ?? fallback?.unavailableHelpText ?? ""
