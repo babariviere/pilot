@@ -3,10 +3,9 @@
  * only for PRs with more than one page of checks or review threads. Lookup failures must not masquerade as
  * a healthy PR.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { failedChecks, githubRepository, type PullRequestProblems } from "./github.ts";
+import { execFileOffThread } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
 export type { PullRequestProblems } from "./github.ts";
@@ -15,15 +14,14 @@ const maxOutputBytes = 1024 * 1024;
 const commandTimeoutMs = 10_000;
 const maxPages = 20;
 const pageSize = 100;
-const exec = promisify(execFile);
 const run: Runner = async (file, args, cwd, timeoutMs, signal, env) => {
-	const { stdout } = await exec(file, args, {
+	const stdout = await execFileOffThread(file, args, {
 		cwd,
-		timeout: timeoutMs,
-		maxBuffer: maxOutputBytes,
+		...(timeoutMs !== undefined ? { timeoutMs } : {}),
+		maxBytes: maxOutputBytes,
 		killSignal: "SIGKILL",
-		signal,
-		env,
+		...(signal ? { signal } : {}),
+		...(env ? { env } : {}),
 	});
 	return stdout.trim();
 };
