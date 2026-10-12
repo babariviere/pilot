@@ -17,6 +17,7 @@ import {
 	type SubagentTranscriptRead,
 	subagentStorageSignature,
 	type WorkspaceContext,
+	type WorkspaceReset,
 	workerEntry,
 } from "@pilot/kernel";
 import type {
@@ -66,6 +67,7 @@ import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspace
 import {
 	createWorkspace,
 	dissociateWorkspace,
+	pruneRegenerable,
 	validateBaseBranch,
 	type Workspace,
 	workspaceBorrowsObjects,
@@ -141,7 +143,7 @@ export interface SessionManagerOptions {
 	subscriptionUsage?: (onChange: (provider: SubscriptionProvider) => void) => SubscriptionUsageSource;
 	startupTimeoutMs?: number;
 	commandTimeoutMs?: number;
-	/** Reclaim shared workspaces this long after archival. Defaults to 30 days; Infinity disables. */
+	/** Reclaim shared workspaces, and prune legacy clones, this long after archival. Defaults to 30 days; Infinity disables. */
 	workspaceRetentionMs?: number;
 	/**
 	 * Automatic work (mission notices, PR follow-ups) waits this long after a kernel crash or IPC failure,
@@ -185,6 +187,10 @@ interface SessionMeta extends OutcomeMeta {
 	workspaceRecovery?: WorkspaceRecovery & { phase: "removing" | "reclaimed" | "restoring" };
 	workspaceReclaimedAt?: number;
 	workspaceCleanupError?: string;
+	/** Regenerable outputs of a legacy clone were deleted during this archival. Cleared on restore. */
+	workspacePrunedAt?: number;
+	/** Told to the next kernel so the agent does not assume dependencies or build output exist. */
+	workspaceReset?: WorkspaceReset;
 	createdAt: number;
 	updatedAt: number;
 	/** User-submission time, separate from worker lifecycle and metadata changes. */
@@ -890,6 +896,24 @@ export class SessionManager {
 		for (const meta of this.metas.values()) {
 			if (this.closing) break;
 			if (
+				meta.workspace &&
+				!meta.workspace.shared &&
+				meta.mode !== "ask" &&
+				meta.cwd === join(this.dir(meta.id), "workspace") &&
+				meta.archivedAt !== undefined &&
+				meta.archivedAt <= staleBefore &&
+				meta.workspacePrunedAt === undefined &&
+				!hasActivePullRequest(meta)
+			) {
+				try {
+					await this.pruneWorkspace(meta.id, staleBefore);
+				} catch (error) {
+					if (!(error instanceof Conflict))
+						console.warn(`pilotd: could not prune workspace for ${meta.id}: ${error}`);
+				}
+				continue;
+			}
+			if (
 				!meta.workspace?.shared ||
 				meta.archivedAt === undefined ||
 				meta.archivedAt > staleBefore ||
@@ -959,6 +983,73 @@ export class SessionManager {
 						meta.workspaceReclaimedAt ??= Date.now();
 						delete meta.workspaceCleanupError;
 						this.coldSnapshots.delete(id);
+						await this.save(meta);
+						this.emit(meta);
+						return this.summary(meta);
+					} catch (error) {
+						meta.workspaceCleanupError = (error instanceof Error ? error.message : String(error)).slice(0, 512);
+						await this.save(meta);
+						this.emit(meta);
+						throw error;
+					}
+				});
+			const held = promise.finally(releaseWorkspace);
+			this.archiveTransitions.set(id, { archived: "reclaim", promise: held });
+			const clear = () => {
+				if (this.archiveTransitions.get(id)?.promise === held) this.archiveTransitions.delete(id);
+			};
+			void held.then(clear, clear);
+			return await held;
+		} finally {
+			end();
+		}
+	}
+
+	/**
+	 * Legacy private clones have no restore recipe, so keep the clone and its history in place and delete only
+	 * ignored regenerable outputs. Uses the same serialization and quiescence rules as reclamation.
+	 */
+	private async pruneWorkspace(id: string, staleBefore: number): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			this.require(id);
+			const previous = this.archiveTransitions.get(id);
+			if (previous?.archived === "reclaim") return await previous.promise;
+			const releaseWorkspace = this.holdWorkspace(id);
+			const promise = (previous?.promise ?? Promise.resolve())
+				.catch(() => undefined)
+				.then(async () => {
+					const meta = this.require(id);
+					if (this.closing) throw new Conflict("pilotd is shutting down");
+					if (
+						meta.archivedAt === undefined ||
+						meta.archivedAt > staleBefore ||
+						meta.workspacePrunedAt !== undefined ||
+						!meta.workspace ||
+						meta.workspace.shared ||
+						hasActivePullRequest(meta)
+					)
+						return this.summary(meta);
+					this.assertOwnedWorkspace(meta);
+					this.assertWorkspaceQuiescent(meta);
+					try {
+						const worker = this.workers.get(id);
+						if (worker && ((await worker.hasChildren?.()) ?? true))
+							throw new Conflict("Session has live subprocesses; stop them before pruning its workspace");
+						this.assertWorkspaceQuiescent(meta);
+						await this.unparked(id);
+						if (worker) {
+							// The next kernel must start with the reset notice in its prompt.
+							this.workers.delete(id);
+							this.lastUse.delete(id);
+							this.parked.add(worker);
+							await worker.close();
+						}
+						this.assertWorkspaceQuiescent(meta);
+						const removed = existsSync(meta.cwd) ? await pruneRegenerable(meta.cwd) : [];
+						meta.workspacePrunedAt = Date.now();
+						if (removed.length) meta.workspaceReset = { at: meta.workspacePrunedAt };
+						delete meta.workspaceCleanupError;
 						await this.save(meta);
 						this.emit(meta);
 						return this.summary(meta);
@@ -1053,12 +1144,14 @@ export class SessionManager {
 		delete meta.workspaceRecovery;
 		delete meta.workspaceReclaimedAt;
 		delete meta.workspaceCleanupError;
+		meta.workspaceReset = { at: Date.now(), changeId: recovery.changeId, commitId: recovery.commitId };
 		this.coldSnapshots.delete(meta.id);
 		try {
 			await this.save(meta);
 		} catch (error) {
 			// Retry restoration idempotently if committing its final state failed.
 			meta.workspaceRecovery = { ...recovery, phase: "restoring" };
+			delete meta.workspaceReset;
 			throw error;
 		}
 	}
@@ -1268,6 +1361,9 @@ export class SessionManager {
 						this.sending.has(id))
 				)
 					throw new Conflict("Stop the session before archiving it");
+				// A new archival starts a new cleanup cycle; an older reset notice no longer describes the workspace.
+				if (archived) delete meta.workspaceReset;
+				else delete meta.workspacePrunedAt;
 				// Stage only this write. Concurrent lifecycle saves and summaries keep the committed state.
 				await this.save(meta, {
 					timestamp: archived ? Date.now() : undefined,
@@ -2416,6 +2512,7 @@ export class SessionManager {
 					...(meta.projectId
 						? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
 						: {}),
+					...(meta.workspaceReset ? { workspaceReset: meta.workspaceReset } : {}),
 				},
 				...(mission ? { mission } : {}),
 			},

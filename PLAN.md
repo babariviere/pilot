@@ -178,8 +178,13 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   or run an after-push command. The policy is read when a session worker starts (new sessions or kernel restart).
 - Archiving retains history with recoverable jj snapshots, not a guarantee that the working directory
   remains on disk. Archived shared jj workspaces are eligible for cleanup after 30 days, configurable
-  with `PILOT_WORKSPACE_RETENTION_DAYS`; `0` disables cleanup. Legacy clones and direct/Ask sources are
-  not reclaimed by this policy. Never delete while a PR is open.
+  with `PILOT_WORKSPACE_RETENTION_DAYS`; `0` disables cleanup. Legacy private clones have no restore
+  recipe, so after the same retention they are pruned in place instead: only ignored, untracked regenerable
+  dependency and build directories are deleted, never history, tracked or other ignored files, and a later
+  archival may prune again. Direct/Ask sources are never touched. Never delete while a PR is open.
+- After restoration or pruning, the next kernel's Pilot prompt says the workspace was reset (with the
+  restored jj change and commit, when recreated) and that dependencies and build output must be rebuilt.
+  The notice clears on the next archival.
 - Safe cleanup pins the exact commit and change IDs plus the base before removing a workspace. Preserve
   the known ignored mise configs (`mise.local.toml`, `.mise.local.toml`, `mise/config.local.toml`,
   `.mise/config.local.toml`) and bounded `.pi/todos` files for restoration, with content-addressed

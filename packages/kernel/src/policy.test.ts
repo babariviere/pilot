@@ -260,6 +260,22 @@ test("prompt describes the workspace and delivery", () => {
 	assert.match(pilotPrompt({}), /Never post on GitHub/);
 });
 
+test("prompt tells the agent when archive maintenance reset its workspace", () => {
+	const workspace = { source: "/src/app", base: "origin/main", jj: true };
+	assert.doesNotMatch(pilotPrompt({ workspace }), /While this chat was archived/);
+	const restored = pilotPrompt({ workspace, workspaceReset: { at: 1, changeId: "kxyz", commitId: "abc123" } });
+	assert.match(restored, /recreated it from the saved jj change `kxyz` \(commit `abc123`\)/);
+	assert.match(restored, /Reinstall or rebuild/);
+	assert.match(
+		pilotPrompt({ workspace, workspaceReset: { at: 1 } }),
+		/deleted ignored dependency and build directories/,
+	);
+	assert.doesNotMatch(
+		pilotPrompt({ ask: { source: "/src/app" }, workspace, workspaceReset: { at: 1 } }),
+		/While this chat was archived/,
+	);
+});
+
 test("new Git branches and jj bookmarks require conventional task prefixes", () => {
 	for (const jj of [false, true]) {
 		const prompt = pilotPrompt({ workspace: { source: "/src/app", base: "origin/main", jj } });

@@ -31,7 +31,10 @@ IDs plus the base for recovery, preserves the known ignored mise local configs (
 and blocks deletion when unknown files would be lost. Live workers/subprocesses, viewers, terminals,
 open/draft pull requests, non-default sparse checkouts and submodules prevent reclamation. Ignored
 dependency/build output is regenerated rather than backed up. Resuming restores a reclaimed workspace
-from its recoverable jj snapshot without fetching origin.
+from its recoverable jj snapshot without fetching origin. Legacy private clones are pruned in place
+after the same retention: only ignored dependency and build directories (`node_modules`, `dist`,
+`build`, `.build`, ...) are deleted. After either cleanup, the agent is told its workspace was reset
+and that dependencies and build output need rebuilding.
 
 Agents can create **Artifacts**: plain images or interactive HTML/JavaScript and React/JSX previews,
 including diagrams, graphs and animations. Revisions persist with their originating session and project.
@@ -120,7 +123,7 @@ See [the one-time setup](apps/macos/UPDATES.md) for signing keys, GitHub access 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `PILOT_HOME` | `~/.local/share/pilot` | Session metadata and durable storage |
-| `PILOT_WORKSPACE_RETENTION_DAYS` | `30` | Archived shared jj workspace retention; `0` disables cleanup |
+| `PILOT_WORKSPACE_RETENTION_DAYS` | `30` | Archived workspace retention before cleanup (shared jj reclaim, legacy clone pruning); `0` disables it |
 | `PILOT_PORT` | `4319` | Daemon port |
 | `PILOT_AGENT_DIR` | pi's agent dir | Pi settings, packages and auth to load |
 

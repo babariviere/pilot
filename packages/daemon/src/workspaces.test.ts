@@ -19,6 +19,7 @@ import {
 	createWorkspace,
 	dissociateWorkspace,
 	listRemoteBranches,
+	pruneRegenerable,
 	workspaceBorrowsObjects,
 	workspaceBranch,
 } from "./workspaces.ts";
@@ -561,6 +562,50 @@ esac
 		signal.abort();
 		await preparing.catch(() => undefined);
 		process.env.PATH = oldPath;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("prune deletes only ignored regenerable directories without tracked files or symlinks", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-"));
+	try {
+		git(root, "init", "--quiet");
+		writeFileSync(join(root, ".gitignore"), "node_modules/\napps/*/.build/\ndist/\nsecret/\nvendor/\n");
+		mkdirSync(join(root, "dist"));
+		writeFileSync(join(root, "dist", "keep.js"), "tracked output\n");
+		git(root, "add", ".");
+		git(root, "add", "-f", "dist/keep.js");
+		git(root, "commit", "--quiet", "-m", "base");
+		mkdirSync(join(root, "node_modules", "pkg"), { recursive: true });
+		writeFileSync(join(root, "node_modules", "pkg", "index.js"), "dep\n");
+		mkdirSync(join(root, "apps", "mac", ".build"), { recursive: true });
+		writeFileSync(join(root, "apps", "mac", ".build", "out"), "binary\n");
+		writeFileSync(join(root, "dist", "extra.js"), "ignored next to tracked\n");
+		mkdirSync(join(root, "secret"));
+		writeFileSync(join(root, "secret", "token"), "keep\n");
+		mkdirSync(join(root, "build"));
+		writeFileSync(join(root, "build", "notes.txt"), "unignored build directory\n");
+		const outside = mkdtempSync(join(tmpdir(), "pilot-prune-outside-"));
+		mkdirSync(join(outside, "node_modules"));
+		writeFileSync(join(outside, "node_modules", "kept"), "outside\n");
+		mkdirSync(join(root, "vendor"));
+		symlinkSync(join(outside, "node_modules"), join(root, "vendor", "node_modules"));
+		try {
+			assert.deepEqual((await pruneRegenerable(root)).sort(), ["apps/mac/.build", "node_modules"]);
+			assert.equal(existsSync(join(root, "node_modules")), false);
+			assert.equal(existsSync(join(root, "apps", "mac", ".build")), false);
+			assert.ok(existsSync(join(root, "apps", "mac")));
+			assert.equal(readFileSync(join(root, "dist", "keep.js"), "utf8"), "tracked output\n");
+			assert.ok(existsSync(join(root, "dist", "extra.js")), "directories with tracked files are kept");
+			assert.ok(existsSync(join(root, "secret", "token")), "other ignored inputs are kept");
+			assert.ok(existsSync(join(root, "build", "notes.txt")), "unignored directories are kept");
+			assert.ok(existsSync(join(outside, "node_modules", "kept")), "symlinks are never followed");
+			assert.equal(git(root, "status", "--porcelain", "--untracked-files=no"), "", "tracked files are untouched");
+			assert.deepEqual(await pruneRegenerable(root), [], "pruning is idempotent");
+		} finally {
+			rmSync(outside, { recursive: true, force: true });
+		}
+	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
 });

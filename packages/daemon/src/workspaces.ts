@@ -1,7 +1,7 @@
 /** Private working copies: each project session works in its own clone. */
 import { constants, existsSync } from "node:fs";
-import { appendFile, copyFile, lstat, mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { appendFile, copyFile, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 import type { RemoteBranchList } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import type { SharedWorkspace } from "./shared-workspaces.ts";
@@ -109,6 +109,48 @@ async function statIfExists(path: string) {
 		if (error.code !== "ENOENT") throw error;
 		return undefined;
 	});
+}
+
+/** Ignored dependency and build output directories that tracked inputs can regenerate. */
+export const regenerableDirectories: ReadonlySet<string> = new Set([
+	"node_modules",
+	"dist",
+	"build",
+	".build",
+	"coverage",
+	".next",
+	".nuxt",
+	".svelte-kit",
+]);
+
+/**
+ * Free disk space without losing work: delete only ignored regenerable directories that contain no tracked files.
+ * History, tracked and untracked files and other ignored inputs stay. Returns the removed paths, relative to cwd.
+ */
+export async function pruneRegenerable(cwd: string, runner: Runner = run): Promise<string[]> {
+	const root = await realpath(cwd);
+	// --directory collapses wholly ignored trees, so dependency contents never fill the output buffer.
+	const ignored = (
+		await runner("git", ["ls-files", "--others", "--ignored", "--directory", "--exclude-standard", "-z"], root)
+	)
+		.split("\0")
+		.filter((entry) => entry.endsWith("/"));
+	const removed: string[] = [];
+	for (const entry of ignored) {
+		const path = entry.slice(0, -1);
+		const parts = path.split("/");
+		if (!regenerableDirectories.has(basename(path)) || parts.some((part) => !part || part === "." || part === ".."))
+			continue;
+		if (parts[0] === ".git" || parts[0] === ".jj") continue;
+		const target = join(root, path);
+		// Never follow a symlinked directory or parent out of the workspace.
+		if (!(await statIfExists(target))?.isDirectory()) continue;
+		if ((await realpath(dirname(target))) !== dirname(target)) continue;
+		if (await runner("git", ["ls-files", "-z", "--", `${path}/`], root)) continue;
+		await rm(target, { recursive: true, force: true });
+		removed.push(path);
+	}
+	return removed;
 }
 
 export async function copyLocalConfigs(source: string, destination: string, runner: Runner): Promise<void> {

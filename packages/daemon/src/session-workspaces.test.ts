@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -131,7 +131,9 @@ async function fixture(t: TestContext, options: SessionManagerOptions = {}) {
 	await projects.load();
 	const project = await projects.create({ path: source });
 	const workers: FakeWorker[] = [];
-	const worker: SessionFactories["worker"] = (_spec, onPacket, onExit) => {
+	const specs: Parameters<SessionFactories["worker"] & {}>[0][] = [];
+	const worker: SessionFactories["worker"] = (spec, onPacket, onExit) => {
+		specs.push(spec);
 		const value = new FakeWorker(onPacket, onExit);
 		workers.push(value);
 		return value;
@@ -167,7 +169,20 @@ async function fixture(t: TestContext, options: SessionManagerOptions = {}) {
 		assert.deepEqual(sourceState(), originalSource);
 		assert.equal(await readFile(join(source, "tracked.txt"), "utf8"), "source dirty, never touch\n");
 	};
-	return { root, home, source, projects, project, sessions, workers, manager, spawn, stored, assertSourceUnchanged };
+	return {
+		root,
+		home,
+		source,
+		projects,
+		project,
+		sessions,
+		workers,
+		specs,
+		manager,
+		spawn,
+		stored,
+		assertSourceUnchanged,
+	};
 }
 
 async function seedHistory(directory: string) {
@@ -707,4 +722,55 @@ test("HTTP reclaim-workspace enforces method, origin and active-session guards, 
 		terminals.shutdown();
 		await new Promise<void>((done, reject) => server.close((error) => (error ? reject(error) : done())));
 	}
+});
+
+test("restoring a reclaimed workspace tells the next kernel which jj change it was recreated from", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	await f.sessions.archive(created.id);
+	await f.sessions.reclaimWorkspace(created.id);
+	const recovery = (await f.stored(created.id)).workspaceRecovery!;
+	await f.sessions.restore(created.id);
+	const reset = (await f.stored(created.id)).workspaceReset;
+	assert.equal(reset?.changeId, recovery.changeId);
+	assert.equal(reset?.commitId, recovery.commitId);
+	await f.sessions.send(created.id, "continue after restore");
+	assert.deepEqual(f.specs.at(-1)?.pilot?.workspaceReset, reset);
+	await f.sessions.stop(created.id);
+	await f.sessions.archive(created.id);
+	assert.equal((await f.stored(created.id)).workspaceReset, undefined, "a new archival clears the old notice");
+});
+
+test("archived legacy clones keep history and inputs but lose regenerable outputs after retention", async (t) => {
+	const f = await fixture(t);
+	const legacy = await f.spawn();
+	const recent = await f.spawn();
+	for (const created of [legacy, recent]) {
+		await writeFile(join(created.cwd, ".gitignore"), "ignored-secret\nnode_modules/\n");
+		await mkdir(join(created.cwd, "node_modules", "dep"), { recursive: true });
+		await writeFile(join(created.cwd, "node_modules", "dep", "index.js"), "dependency\n");
+		await writeFile(join(created.cwd, "ignored-secret"), "irreplaceable\n");
+		await writeFile(join(created.cwd, "tracked.txt"), "uncommitted work\n");
+		await f.sessions.archive(created.id);
+		delete f.sessions["metas"].get(created.id)!.workspace!.shared;
+	}
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	f.sessions["metas"].get(legacy.id)!.archivedAt = now - 30 * DAY;
+	f.sessions["metas"].get(recent.id)!.archivedAt = now - 30 * DAY + 1;
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(existsSync(join(legacy.cwd, "node_modules")), false);
+	assert.ok(existsSync(join(recent.cwd, "node_modules")), "recently archived clones are untouched");
+	for (const file of ["ignored-secret", "tracked.txt", ".jj"]) assert.ok(existsSync(join(legacy.cwd, file)), file);
+	assert.equal(await readFile(join(legacy.cwd, "tracked.txt"), "utf8"), "uncommitted work\n");
+	const pruned = await f.stored(legacy.id);
+	assert.equal(pruned.workspacePrunedAt, now);
+	assert.deepEqual(pruned.workspaceReset, { at: now });
+	assert.equal(pruned.workspaceRecovery, undefined, "legacy clones are never removed");
+	assert.equal(pruned.workspaceCleanupError, undefined);
+	await f.sessions.restore(legacy.id);
+	assert.equal((await f.stored(legacy.id)).workspacePrunedAt, undefined, "a later archival may prune again");
+	await f.sessions.send(legacy.id, "continue after pruning");
+	assert.deepEqual(f.specs.at(-1)?.pilot?.workspaceReset, { at: now });
+	await f.assertSourceUnchanged();
 });
