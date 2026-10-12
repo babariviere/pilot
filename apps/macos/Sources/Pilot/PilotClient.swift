@@ -18,6 +18,7 @@ final class PilotClient: ObservableObject {
     /// Subscription reference counts for views displaying mission detail.
     private var missionRefs: [String: Int] = [:]
     private var fixtureMissions = false
+    private var fixtureSessions = false
     @Published private(set) var connected = false
 
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
@@ -61,6 +62,7 @@ final class PilotClient: ObservableObject {
     }
 
     func connect(to baseURL: URL) {
+        fixtureSessions = false
         self.baseURL = baseURL
         open()
     }
@@ -79,6 +81,7 @@ final class PilotClient: ObservableObject {
 
     /// Static data for snapshots and previews.
     func loadFixture(projects: [Project], sessions: [SessionSummary]) {
+        fixtureSessions = true
         self.projects = projects
         hasProjectSnapshot = true
         self.sessions = sessions.sorted(by: SessionSummary.listPrecedes)
@@ -93,6 +96,15 @@ final class PilotClient: ObservableObject {
     }
 
     // MARK: Commands
+
+    /// A bounded, cancellable request on filter changes. Live updates still come from the list stream.
+    func archivedSessions(filter: ArchiveFilter) async throws -> [SessionSummary] {
+        if fixtureSessions { return filter.apply(to: sessions) }
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        var components = URLComponents(url: baseURL.appending(path: "api/sessions"), resolvingAgainstBaseURL: false)!
+        components.queryItems = filter.queryItems
+        return try await get(components.url!)
+    }
 
     func spawn(_ request: SpawnRequest) async throws -> SessionSummary {
         let session: SessionSummary = try await call("api/sessions", body: request)

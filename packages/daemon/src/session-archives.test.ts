@@ -853,6 +853,63 @@ for (const archived of [true, false]) {
 	});
 }
 
+test("HTTP archive browsing narrows by mission and project, including inactive missions", async () => {
+	const { home, projects, first, second, sessions, ids, cleanup } = await fixture();
+	const store = new MissionStore(":memory:");
+	const missions = new MissionService(store, sessions, projects);
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog(join(home, "agent")),
+		terminals,
+		{ service: missions, store },
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const archived = async (missionId: string, projectId?: string) => {
+		const query = new URLSearchParams({ archived: "true", missionId });
+		if (projectId) query.set("projectId", projectId);
+		const response = await fetch(`${base}/api/sessions?${query}`);
+		assert.equal(response.status, 200);
+		return ((await response.json()) as SessionSummary[]).map((session) => session.id).sort();
+	};
+	try {
+		const target = store.create({ projectId: first.id, title: "Target" });
+		const unrelated = store.create({ projectId: second.id, title: "Unrelated" });
+		const [active, other, member] = ids as [string, string, string];
+		sessions["metas"].get(member)!.projectId = first.id;
+		await sessions["save"](sessions["metas"].get(member)!);
+		store.join(active, target.id);
+		store.join(member, target.id);
+		store.join(other, unrelated.id);
+		await sessions.archive(member);
+		await sessions.archive(other);
+		assert.deepEqual(await archived(target.id), [member]);
+		assert.deepEqual(await archived(target.id, first.id), [member]);
+		assert.deepEqual(await archived(target.id, second.id), []);
+		assert.deepEqual(await archived(unrelated.id), [other]);
+		assert.deepEqual(await archived(randomUUID()), []);
+		await sessions.archive(active);
+		for (const status of ["active", "done", "archived"] as const) {
+			store.update(target.id, { status });
+			assert.deepEqual(await archived(target.id), [active, member].sort());
+		}
+		await sessions.restore(member);
+		assert.deepEqual(await archived(target.id), [active]);
+		store.leave(active);
+		assert.deepEqual(await archived(target.id), []);
+		assert.equal(sessions.list({ archived: "true" }).length, 2, "detached chats stay in the global archive");
+	} finally {
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		terminals.shutdown();
+		await cleanup();
+		store.close();
+	}
+});
+
 test("HTTP archive browsing works globally and per project; WebSocket sync includes archives", async () => {
 	const { home, projects, first, second, sessions, ids, cleanup } = await fixture();
 	const terminals = new TerminalManager();

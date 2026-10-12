@@ -844,7 +844,7 @@ reports), producing a morning summary in the app and Slack.
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history with recoverable jj snapshots (done) |
 | `POST /api/sessions/:id/pin`, `POST /api/sessions/:id/unpin`, `SessionSummary.pinned` | Persist a user pin, sort pinned chats first, and prevent automatic archival until unpinned (done) |
 | `POST /api/sessions/:id/reclaim-workspace` | Manually reclaim an eligible archived shared jj workspace using the same snapshot/config preservation and unknown-file safety checks |
-| `GET /api/sessions?archived=true&projectId=…&missionId=…` | Browse archives globally, per project (done) or per mission; default lists exclude archives, `archived=all` includes both |
+| `GET /api/sessions?archived=true&projectId=…&missionId=…` | Browse archives globally, per project or per mission (done); default lists exclude archives, `archived=all` includes both |
 | `SessionSummary.archivedAt`, WS `sessions` / `session` | Persist archive timestamp; WS includes active and archived chats for local filtering (done) |
 | `SessionSummary.lastUserMessageAt` | Stable latest user-submission time for completion-aware session ordering and elapsed indicators (done) |
 | `SessionSummary.workspaceStorage`, `.workspaceReclaimedAt`, `.workspaceCleanupError` | Shared jj storage marker (absent for legacy/direct), reclamation timestamp, and safe-cleanup failure metadata; Swift labels shared/reclaimed workspaces |

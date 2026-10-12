@@ -179,7 +179,7 @@ struct SessionMoreActions: View {
             Divider()
             SessionArchiveAction(session: session)
             if session.isArchived {
-                Button { model.showArchive(in: model.archiveProjectId) } label: {
+                Button { model.showArchive(in: model.archiveProjectId, missionId: model.archiveMissionId) } label: {
                     Label("Archived chats", systemImage: "archivebox")
                 }
             }
