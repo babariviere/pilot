@@ -292,47 +292,15 @@ struct ChatView: View {
         .onAppear {
             feed.onEventsApplied = { [messageExpansions] in messageExpansions.applyMessageEvents($0) }
             feed.start()
-            rewind.isWorking = { [feed] in feed.presentation.working }
-            rewind.perform = { [sessionId = session.id, composer] request in
-                await Self.rewind(request, sessionId: sessionId, composer: composer)
-            }
         }
-        .onChange(of: session.isArchived ? nil : transcript.retryEntryID, initial: true) { _, id in
-            rewind.retryEntryID = id
-        }
-        .confirmationDialog(
-            rewind.confirmation.map { TranscriptRewind.confirmationTitle($0.action) } ?? "",
-            isPresented: Binding(
-                get: { rewind.confirmation != nil },
-                set: { if !$0 { rewind.confirmation = nil } }
-            )
-        ) {
-            Button("Stop and Continue") {
-                if let request = rewind.confirmation { rewind.run(request) }
-            }
-        } message: {
-            Text("The previous attempt stays available. Workspace files stay as they are.")
-        }
+        .modifier(TranscriptRewindHost(
+            rewind: rewind, feed: feed, composer: composer, sessionId: session.id,
+            retryEntryID: session.isArchived ? nil : transcript.retryEntryID
+        ))
         .onDisappear {
             messageTimestamps.dismiss()
             feed.onEventsApplied = nil
             feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
-            rewind.perform = nil
-        }
-    }
-
-    /// Retry resends from the daemon; edit puts the message back in the composer to change and send.
-    private static func rewind(_ request: TranscriptRewind.Request, sessionId: String, composer: ComposerState) async {
-        composer.error = nil
-        do {
-            let draft = try await AppModel.shared.client.rewind(
-                sessionId, action: request.action, entryId: request.entryID
-            )
-            guard request.action == .edit, let draft else { return }
-            composer.draft = [draft, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            composer.composerFocus = UUID()
-        } catch {
-            composer.error = error.localizedDescription
         }
     }
 
