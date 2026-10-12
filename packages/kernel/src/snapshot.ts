@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-durable";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
+import { InputOrigins } from "./input-origin.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
@@ -58,7 +59,9 @@ async function conversationView(
 		]);
 		const snapshot: AgentEvent = {
 			type: "snapshot",
-			entries: head ? [head, ...range.filter((entry) => entry.head === undefined)] : range,
+			entries: await new InputOrigins(storage, id, context).entries(
+				head ? [head, ...range.filter((entry) => entry.head === undefined)] : range,
+			),
 			...(live?.run ? { run: { inputs: live.run.inputs } } : {}),
 			...(live?.generation ? { generation: live.generation } : {}),
 			tools: live?.tools ?? [],
@@ -194,6 +197,11 @@ export async function readEarlierEntries(
 			}
 			cursor = page.next;
 		} while (cursor !== undefined && !more);
+		entries.splice(
+			0,
+			entries.length,
+			...(await new InputOrigins(storage, ROOT_CONVERSATION_ID, context).entries(entries)),
+		);
 	} finally {
 		await storage.close(context);
 	}

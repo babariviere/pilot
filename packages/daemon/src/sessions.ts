@@ -3037,7 +3037,7 @@ export class SessionManager {
 		} catch {
 			return;
 		}
-		const requestId = randomUUID();
+		const requestId = `pr-follow-up:${randomUUID()}`;
 		const previous = meta.prFollowUp;
 		const attempt = (previous?.attempts ?? 0) + 1;
 		const reports = issues.flatMap(({ pr, problems }) => [

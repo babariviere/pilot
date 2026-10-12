@@ -69,6 +69,8 @@ public struct Entry: Identifiable, Equatable, Sendable {
     public let head: Int?
     public let messages: [ChatMessage]
     public let artifact: ArtifactReference?
+    /// Set on user entries that were automatic input. Unknown future origins read as extension input.
+    public let origin: InputOrigin?
 
     public init?(json: JSONValue) {
         guard let id = json["id"]?.int else { return nil }
@@ -77,6 +79,7 @@ public struct Entry: Identifiable, Equatable, Sendable {
         head = json["head"]?.int
         messages = (json["model"]?.array ?? []).map(ChatMessage.init(json:))
         artifact = kind == "pilot.artifact" ? ArtifactReference.fromToolResult(.object(["details": json["data"] ?? .null])) : nil
+        origin = json["origin"]?.string.map { InputOrigin(rawValue: $0) ?? .extension }
     }
 }
 

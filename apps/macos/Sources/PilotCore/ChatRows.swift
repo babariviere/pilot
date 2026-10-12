@@ -39,6 +39,8 @@ public struct ToolItem: Identifiable, Equatable, Sendable {
 /// One visual row of the chat. Consecutive tool calls are grouped.
 public enum ChatRow: Identifiable, Equatable, Sendable {
     case user(id: String, text: String, timestamp: Double? = nil)
+    /// Input the user did not type, such as mission messages, job results and PR follow-ups.
+    case automatic(id: String, text: String, origin: InputOrigin, timestamp: Double? = nil)
     case text(id: String, text: String, timestamp: Double? = nil)
     case thinking(id: String, text: String, streaming: Bool)
     case tools(id: String, items: [ToolItem])
@@ -49,7 +51,7 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
     public var id: String {
         switch self {
         case let .user(id, _, _), let .text(id, _, _), let .thinking(id, _, _), let .tools(id, _), let .error(id, _),
-             let .notice(id, _), let .artifact(id, _):
+             let .notice(id, _), let .artifact(id, _), let .automatic(id, _, _, _):
             id
         }
     }
@@ -129,7 +131,12 @@ extension Transcript {
                 for (index, message) in entry.messages.enumerated() {
                     let id = "\(entry.id)-\(index)"
                     switch message.role {
-                    case "user": append(.user(id: id, text: message.text, timestamp: message.timestamp))
+                    case "user":
+                        if let origin = entry.origin {
+                            append(.automatic(id: id, text: message.text, origin: origin, timestamp: message.timestamp))
+                        } else {
+                            append(.user(id: id, text: message.text, timestamp: message.timestamp))
+                        }
                     case "assistant": appendAssistant(message, id: id, streaming: false)
                     default: break
                     }

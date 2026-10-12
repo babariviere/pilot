@@ -73,7 +73,7 @@ test("a retired inbox clears the displayed queue", () => {
 	assert.deepEqual(queueUpdate(null), { type: "queue_update", items: [] });
 });
 
-test("display queue hides only job notifications, without changing durable input or matching user text", async () => {
+test("display queue shows only user input, without changing durable input or matching user text", async () => {
 	const storage = new MemoryStorage();
 	const session = createSession(storage);
 	try {
@@ -86,6 +86,10 @@ test("display queue hides only job notifications, without changing durable input
 				["native:subagent.result:def", "followUp", "Subagent result"],
 				["native:user:ghi", "steer", "User steering"],
 				["native:jobs.result:jkl", "steer", "Job steering"],
+				["mission:send:mno", "followUp", "Coordinator message"],
+				["mission-notice:7", "followUp", "Mission notice"],
+				["pr-follow-up:pqr", "followUp", "PR follow-up"],
+				["client-request", "followUp", "User follow-up"],
 			] as const) {
 				const input = await tx.createSubmission({
 					conversationId: conversation.id,
@@ -103,7 +107,7 @@ test("display queue hides only job notifications, without changing durable input
 		const displayed = await queueUpdateForDisplay(watch.value, readSubmission);
 		assert.deepEqual(
 			displayed.items.map((item) => item.content),
-			["Background job tests finished. Output: logs", "Subagent result", "User steering"],
+			["Background job tests finished. Output: logs", "User steering", "User follow-up"],
 		);
 		assert.deepEqual(watch.value, original, "filtering never withdraws or edits input");
 		await watch.stop();
