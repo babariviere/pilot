@@ -96,7 +96,12 @@ async function fixture(
 		{
 			...options,
 			runner: legacyGitHub(async (file, args, ...rest) =>
-				file === "git" && args[0] === "branch" ? currentBranch(args) : options.runner!(file, args, ...rest),
+				file === "git" && args[0] === "branch"
+					? currentBranch(args)
+					: // The unpublished-work check sees no repository here, so it never blocks or counts as a lookup.
+						file === "git" && args[0] === "rev-parse"
+						? ""
+						: options.runner!(file, args, ...rest),
 			),
 		},
 	);
@@ -451,6 +456,8 @@ test("persisted merge archives locally at its 24-hour deadline without polling, 
 	let calls = 0;
 	t.mock.method(Date, "now", () => now);
 	const runner: Runner = async (file, args) => {
+		// No repository: the unpublished-work check is unknown and is not a GitHub lookup.
+		if (file === "git" && args[0] === "rev-parse") return "";
 		calls++;
 		if (file === "git" && args[0] === "branch") return "";
 		return args.includes("--state=open")

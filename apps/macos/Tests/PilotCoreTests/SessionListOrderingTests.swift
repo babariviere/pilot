@@ -6,14 +6,14 @@ private func listSession(
     _ id: String, state: String = "idle", updatedAt: Double = 1_000,
     userAt: Double? = nil, outcome: SessionOutcome? = .done, finishAt: Double? = 500,
     prState: PullRequestState? = nil, prError: String? = nil, pinned: Bool? = nil,
-    coordinator: Bool? = nil
+    coordinator: Bool? = nil, unpublished: Bool? = nil
 ) -> SessionSummary {
     SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: updatedAt, state: state,
                    outcome: outcome, outcomeAt: finishAt,
                    pullRequest: prState.map { SessionPullRequest(number: 1, url: "https://github.com/a/b/pull/1",
                                                                 title: "PR", state: $0, checkedAt: 1) },
                    pullRequestError: prError, lastUserMessageAt: userAt, pinned: pinned,
-                   activeMissionCoordinator: coordinator)
+                   activeMissionCoordinator: coordinator, unpublishedWork: unpublished)
 }
 
 @Test func pinnedSessionsPrecedeTerminalPRAndActivityGroups() throws {
@@ -143,6 +143,24 @@ private func listSession(
             #expect(attention.observe([released], snapshot: false).isEmpty)
             #expect([released, open].sorted(by: SessionSummary.listPrecedes).map(\.id) == [open.id, released.id])
         }
+    }
+}
+
+@Test func unpublishedWorkKeepsSettledPullRequestsActive() throws {
+    let suite = "UnpublishedWorkAttentionTests.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let attention = SessionAttention(defaults: defaults)
+    _ = attention.observe([], snapshot: true)
+    let open = listSession("open", finishAt: 1_000, prState: .open)
+    for prState in [PullRequestState.merged, .closed] {
+        let active = listSession(prState.rawValue, finishAt: 2_000, prState: prState, unpublished: true)
+        #expect(!active.hasTerminalPullRequest)
+        #expect(attention.isUnread(active))
+        #expect([open, active].sorted(by: SessionSummary.listPrecedes).map(\.id) == [active.id, open.id])
+        #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(active)) == active)
+        let published = listSession(prState.rawValue, finishAt: 2_000, prState: prState, unpublished: false)
+        #expect(published.hasTerminalPullRequest)
     }
 }
 

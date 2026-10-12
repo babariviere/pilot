@@ -1,9 +1,10 @@
 import Foundation
 
 extension SessionSummary {
-    /// The current branch's PR and every earlier one have settled, and active coordination has ended.
+    /// The current branch's PR and every earlier one have settled, active coordination has ended, and no work
+    /// remains outside those PRs.
     public var hasTerminalPullRequest: Bool {
-        guard !isActiveMissionCoordinator, pullRequest?.isTerminal == true else { return false }
+        guard !isActiveMissionCoordinator, !hasUnpublishedWork, pullRequest?.isTerminal == true else { return false }
         return linkedPullRequests.allSatisfy(\.isTerminal)
     }
 

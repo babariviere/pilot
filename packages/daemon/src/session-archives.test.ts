@@ -49,7 +49,8 @@ class FakeWorker implements SessionWorker {
 	}
 }
 
-async function fixture() {
+/** `git` answers the archive tests' non-repository workspaces unless a test emulates one. */
+async function fixture(gitRunner?: (args: string[]) => string | undefined) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-archives-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
@@ -107,7 +108,13 @@ async function fixture() {
 					throw new Error("Archive tests must not launch a kernel");
 				},
 			},
-			{ runner: legacyGitHub(async (file, args) => (file === "git" && args[0] === "branch" ? "" : "[]")) },
+			{
+				runner: legacyGitHub(async (file, args) => {
+					const answer = file === "git" ? gitRunner?.(args) : undefined;
+					if (answer !== undefined) return answer;
+					return file === "git" && args[0] === "branch" ? "" : "[]";
+				}),
+			},
 		);
 		managers.push(sessions);
 		if (bridge) sessions.setMissionBridge(bridge);
@@ -989,6 +996,76 @@ test("HTTP archive browsing works globally and per project; WebSocket sync inclu
 		}
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		terminals.shutdown();
+		await cleanup();
+	}
+});
+
+test("unpublished work keeps merged and inactive chats active until it is published", async (t) => {
+	const now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	let dirty = true;
+	let checks = 0;
+	const { sessions, ids, cleanup } = await fixture((args) => {
+		if (args[0] === "rev-parse") return "true";
+		if (args[0] === "status") {
+			checks++;
+			return dirty ? "?? scratch.txt\0" : "";
+		}
+		if (args[0] === "for-each-ref" || args[0] === "rev-list") return "";
+		return undefined;
+	});
+	try {
+		const [merged, inactive] = ids as [string, string];
+		const mergedMeta = sessions["metas"].get(merged)!;
+		mergedMeta.pullRequest!.state = "merged";
+		mergedMeta.pullRequest!.mergedAt = now - 2 * 86_400_000;
+		mergedMeta.pullRequestMergedAt = mergedMeta.pullRequest!.mergedAt;
+		delete mergedMeta.pullRequestError;
+		sessions["metas"].get(inactive)!.updatedAt = now - 8 * 86_400_000;
+
+		await sessions["archiveInactiveSessions"]();
+		for (const id of [merged, inactive]) {
+			assert.equal(sessions.get(id)?.archivedAt, undefined);
+			assert.equal(sessions.get(id)?.unpublishedWork, true);
+		}
+		const counted = checks;
+		await sessions["archiveInactiveSessions"]();
+		assert.equal(checks, counted, "blocked chats are not rechecked every sweep");
+
+		dirty = false;
+		t.mock.method(Date, "now", () => now + 31 * 60_000);
+		await sessions["archiveInactiveSessions"]();
+		for (const id of [merged, inactive]) {
+			assert.ok(sessions.get(id)?.archivedAt, "published work archives normally");
+			assert.equal(sessions.get(id)?.unpublishedWork, undefined);
+		}
+	} finally {
+		await cleanup();
+	}
+});
+
+test("settled PRs check unpublished work after a finished turn and keep the last result while working", async () => {
+	let dirty = false;
+	const { sessions, ids, cleanup } = await fixture((args) => {
+		if (args[0] === "rev-parse") return "true";
+		if (args[0] === "status") return dirty ? " M work.txt\0" : "";
+		if (args[0] === "for-each-ref" || args[0] === "rev-list") return "";
+		return undefined;
+	});
+	try {
+		const meta = sessions["metas"].get(ids[0]!)!;
+		meta.pullRequest!.state = "merged";
+		dirty = true;
+		meta.working = true;
+		assert.equal(await sessions["unpublishedWork"](meta, 0), false, "working sessions are not snapshotted");
+		meta.working = false;
+		assert.equal(await sessions["unpublishedWork"](meta, 0), true);
+		assert.equal(sessions.get(ids[0]!)?.unpublishedWork, true);
+		dirty = false;
+		assert.equal(await sessions["unpublishedWork"](meta), true, "fresh results are reused");
+		assert.equal(await sessions["unpublishedWork"](meta, 0), false);
+		assert.equal(sessions.get(ids[0]!)?.unpublishedWork, undefined);
+	} finally {
 		await cleanup();
 	}
 });
