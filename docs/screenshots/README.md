@@ -5,7 +5,7 @@
 Render the production message views with synthetic crash-report and assistant fixtures:
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-long-messages --long-messages-only
 ```
 
@@ -21,7 +21,7 @@ origin branch fixtures, defaulting to `main` and explicitly selecting `feat/bill
 private-clone projects offer the selector. Regenerate without a live daemon:
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-branch-screenshots --branches-only
 cp /tmp/pilot-branch-screenshots/branch-{default,selected}.png docs/screenshots/
 ```
@@ -38,7 +38,7 @@ toolbar is represented by the snapshot renderer's stand-in header.
 Regenerate on macOS:
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-debug-screenshots
 cp /tmp/pilot-debug-screenshots/session-debug-{button,draft}.png docs/screenshots/
 ```
@@ -54,7 +54,7 @@ uses deterministic fixture sessions, not live conversations.
 Regenerate on macOS:
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-status-screenshots
 cp /tmp/pilot-status-screenshots/status-icons.png docs/screenshots/
 ```
@@ -76,7 +76,7 @@ They show PR state separately from agent outcome and unread indicators.
 Regenerate on macOS:
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-pr-screenshots
 cp /tmp/pilot-pr-screenshots/pr-{open,merged,dashboard,stale}.png docs/screenshots/
 ```
@@ -92,7 +92,7 @@ deterministic fixture data, not a live conversation.
 Regenerate on macOS:
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-todos-screenshots
 cp /tmp/pilot-todos-screenshots/session.png docs/screenshots/tasks-chat.png
 ```
@@ -116,7 +116,7 @@ deterministic home-screen fixture.
 Regenerate on macOS (with ImageMagick installed):
 
 ```sh
-swift build --package-path apps/macos
+apps/macos/scripts/build.sh
 apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-artifacts-screenshots
 magick /tmp/pilot-artifacts-screenshots/home.png -crop 280x430+0+0 +repage docs/screenshots/artifacts-sidebar.png
 ```

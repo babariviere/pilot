@@ -17,6 +17,8 @@ if [ "$runtime" = 1 ]; then
 	: "${SPARKLE_PUBLIC_KEY:?Set SPARKLE_PUBLIC_KEY to the Sparkle public key}"
 fi
 
+# shellcheck source=swift-env.sh
+source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
 swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product Pilot \
 	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \

@@ -121,6 +121,7 @@ Requires macOS 14+ and Swift 6.2+. Command Line Tools are enough:
 scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from the repo root)
 scripts/check-app.sh build/Pilot.app  # relocated app: packaged resources and terminal initialization
 scripts/test.sh              # PilotCore tests
+scripts/build.sh             # swift build with an SDK where @State compiles (see below)
 node apps/macos/scripts/test-live.mjs  # from repo root: isolated pilotd + real workers + native mission flows
 .build/debug/Pilot --queue-edit-test  # native queue editing/removal keys, focus, drafts, failed/stale requests
 swift run Pilot              # unbundled dev run (no notifications)
@@ -152,8 +153,10 @@ apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
 ```
 
 Command Line Tools quirks handled here: libghostty-spm's `.xcstrings` catalog needs Xcode's
-`xcstringstool`, so the vendoring script drops it; SwiftUI's `@State` macro plugin is missing, so views keep
-local state in small `ObservableObject`s; Ghostty's resource lookup is patched to use the signed app's
+`xcstringstool`, so the vendoring script drops it; SwiftUI's `@State` is a macro from the macOS 27 SDK on,
+and its plugin only ships with Xcode, so `scripts/swift-env.sh` (sourced by `build.sh`, `test.sh` and
+`bundle.sh`) selects the newest installed SDK that still declares it as a property wrapper, unless `SDKROOT`
+is set or Xcode provides the plugin; Ghostty's resource lookup is patched to use the signed app's
 `Contents/Resources` (native SwiftPM's generated accessor only checks the app root and build directory);
 every bundle build smoke-tests terminal initialization from a temporary location without a daemon.
 Swift Testing's macro plugin lives outside the default plugin

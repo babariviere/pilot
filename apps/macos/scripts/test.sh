@@ -2,6 +2,8 @@
 # Command Line Tools ship Swift Testing's macro plugin outside the default plugin path.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=swift-env.sh
+source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
 plugins="$(dirname "$(xcrun --find swift)")/../lib/swift/host/plugins/testing"
 # Multiple agents can verify concurrently. Avoid each one consuming every available CPU.
