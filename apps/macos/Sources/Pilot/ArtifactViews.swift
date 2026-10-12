@@ -99,10 +99,11 @@ struct ArtifactCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if state.preview {
+                let image = state.revision?.kind == .image || state.revision?.kind == .swiftui
+                let clipped = ArtifactViewerLayout.inlineClipsHeight(contentSize: render.contentSize, image: image)
                 // Reserve the measured size while offscreen, so the web view coming and going
                 // never changes the row height under the user's scroll position.
-                InlineArtifactLayout(contentSize: render.contentSize,
-                                     image: state.revision?.kind == .image || state.revision?.kind == .swiftui) {
+                InlineArtifactLayout(contentSize: render.contentSize, image: image) {
                     if state.visible {
                         ArtifactContent(reference: reference, latest: false, inline: true, onOpen: { state.viewer = true },
                                         state: state, render: render)
@@ -111,6 +112,20 @@ struct ArtifactCard: View {
                     }
                 }
                 .clipped()
+                // Like a folded message: content taller than the inline ceiling fades out over a
+                // soft shadow, so the cut reads as "more inside" (click opens the full viewer).
+                // Overlays only, so the web view keeps its identity when measurement changes.
+                .overlay(alignment: .bottom) {
+                    if clipped {
+                        LinearGradient(colors: [Theme.background.opacity(0), Theme.background],
+                                       startPoint: .top, endPoint: .bottom)
+                            .frame(height: 96)
+                            .allowsHitTesting(false)
+                    }
+                }
+                .background(alignment: .bottom) {
+                    if clipped { Rectangle().fill(Theme.background).frame(height: 1).foldedShadow() }
+                }
                 // Share prose's leading edge. Small images keep their natural size, without a card.
                 .frame(maxWidth: .infinity, alignment: .leading)
             } else {

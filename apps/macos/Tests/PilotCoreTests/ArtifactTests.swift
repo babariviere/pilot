@@ -134,6 +134,14 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     }
 }
 
+@Test func onlyMeasuredHTMLTallerThanTheInlineCeilingIsClipped() {
+    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: nil))
+    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: 1600)))
+    #expect(ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: 1601)))
+    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: CGFloat.nan)))
+    #expect(!ArtifactViewerLayout.inlineClipsHeight(contentSize: CGSize(width: 760, height: 9000), image: true))
+}
+
 @Test func compactMeasurementsAcceptShrinkingContentAndIgnoreHostOnlyChanges() {
     var measurement = ArtifactContentMeasurement()
     #expect(measurement.record(content: CGSize(width: 760, height: 120), viewport: CGSize(width: 760, height: 570))

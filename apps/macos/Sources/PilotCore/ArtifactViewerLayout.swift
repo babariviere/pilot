@@ -31,6 +31,13 @@ public enum ArtifactViewerLayout {
         return CGSize(width: width, height: min(inlineMaxHeight, height))
     }
 
+    /// Measured HTML/React content taller than the inline ceiling is cut off at the card's
+    /// bottom edge. Images and SwiftUI snapshots scale to fit instead, so they never are.
+    public static func inlineClipsHeight(contentSize: CGSize?, image: Bool = false) -> Bool {
+        guard !image, let height = contentSize?.height, height.isFinite else { return false }
+        return height > inlineMaxHeight
+    }
+
     public static func size(available: CGSize, contentSize: CGSize? = nil) -> CGSize {
         let baseline = CGSize(width: available.width * 0.9, height: available.height * 0.9)
         guard let contentSize, contentSize.width.isFinite, contentSize.height.isFinite,

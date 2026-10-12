@@ -114,6 +114,12 @@ extension View {
         )
         .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(Theme.border))
     }
+
+    /// Soft shadow below folded content, such as collapsed messages and clipped inline
+    /// artifacts, signalling that there is more to read. Cast it from an opaque shape.
+    func foldedShadow() -> some View {
+        shadow(color: .black.opacity(0.065), radius: 8, x: 0, y: 6)
+    }
 }
 
 /// Circular icon button used by composers. Dark by default, like Berth's primary buttons.
