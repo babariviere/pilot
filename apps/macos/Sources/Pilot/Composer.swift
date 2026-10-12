@@ -189,13 +189,12 @@ struct Composer: View {
     }
 
     private var controls: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .controlsFirstRow, spacing: 10) {
             if let session {
                 ResponsiveControlsLayout(horizontalSpacing: 16, verticalSpacing: 8) {
                     modelControls(session)
                     UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
                 }
-                .padding(.top, 5)
             }
             Spacer(minLength: 8)
             ComposerSendButtons(state: state, draft: state.draftState, modelPicker: modelPicker,

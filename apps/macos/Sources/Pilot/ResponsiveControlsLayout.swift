@@ -1,7 +1,18 @@
 import SwiftUI
 
+extension VerticalAlignment {
+    private enum ControlsFirstRow: AlignmentID {
+        static func defaultValue(in context: ViewDimensions) -> CGFloat { context[VerticalAlignment.center] }
+    }
+
+    /// Center of the first row of a ResponsiveControlsLayout, or the center of any other view.
+    /// Lets trailing buttons line up with wrapped controls without centering on the whole block.
+    static let controlsFirstRow = VerticalAlignment(ControlsFirstRow.self)
+}
+
 /// Wrap controls without constructing competing horizontal and vertical view trees.
 /// Nested groups receive the available width, so they can wrap independently.
+/// Items are vertically centered within their row, so controls of different heights line up.
 struct ResponsiveControlsLayout: Layout {
     var horizontalSpacing: CGFloat = 12
     var verticalSpacing: CGFloat = 6
@@ -15,9 +26,12 @@ struct ResponsiveControlsLayout: Layout {
     struct Plan {
         var size: CGSize
         var origins: [CGPoint]
+        var firstRowHeight: CGFloat
 
         init(sizes: [CGSize], width: CGFloat, horizontalSpacing: CGFloat, verticalSpacing: CGFloat) {
             var origins: [CGPoint] = []
+            var rows: [Int] = []
+            var rowHeights: [CGFloat] = []
             var x: CGFloat = 0
             var y: CGFloat = 0
             var rowHeight: CGFloat = 0
@@ -26,12 +40,19 @@ struct ResponsiveControlsLayout: Layout {
                 if x > 0, x + size.width > width {
                     x = 0
                     y += rowHeight + verticalSpacing
+                    rowHeights.append(rowHeight)
                     rowHeight = 0
                 }
                 origins.append(CGPoint(x: x, y: y))
+                rows.append(rowHeights.count)
                 usedWidth = max(usedWidth, x + size.width)
                 x += size.width + horizontalSpacing
                 rowHeight = max(rowHeight, size.height)
+            }
+            rowHeights.append(rowHeight)
+            firstRowHeight = rowHeights[0]
+            for index in origins.indices {
+                origins[index].y += (rowHeights[rows[index]] - sizes[index].height) / 2
             }
             self.origins = origins
             self.size = CGSize(width: usedWidth, height: y + rowHeight)
@@ -63,6 +84,12 @@ struct ResponsiveControlsLayout: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
         plan(width: proposal.width, subviews: subviews, cache: &cache).size
+    }
+
+    func explicitAlignment(of guide: VerticalAlignment, in bounds: CGRect, proposal: ProposedViewSize,
+                           subviews: Subviews, cache: inout Cache) -> CGFloat? {
+        guard guide == .controlsFirstRow else { return nil }
+        return bounds.minY + plan(width: bounds.width, subviews: subviews, cache: &cache).firstRowHeight / 2
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
