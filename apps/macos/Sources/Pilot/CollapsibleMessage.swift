@@ -152,7 +152,7 @@ struct CollapsibleMessage<Content: View>: View {
                                 // Theme.muted is translucent: cast the shadow from an opaque
                                 // backing so it remains visible without darkening the bubble.
                                 RoundedRectangle(cornerRadius: 12).fill(Theme.background)
-                                    .shadow(color: .black.opacity(0.065), radius: 8, x: 0, y: 6)
+                                    .foldedShadow()
                             }
                         }
                 }
@@ -161,8 +161,7 @@ struct CollapsibleMessage<Content: View>: View {
             body()
                 .background(alignment: .bottom) {
                     if folded {
-                        Rectangle().fill(Theme.background).frame(height: 1)
-                            .shadow(color: .black.opacity(0.065), radius: 8, x: 0, y: 6)
+                        Rectangle().fill(Theme.background).frame(height: 1).foldedShadow()
                     }
                 }
         }
