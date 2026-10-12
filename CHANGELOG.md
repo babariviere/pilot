@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.13.0](https://github.com/babariviere/pilot/compare/v1.12.2...v1.13.0) (2026-10-12)
+
+
+### Features
+
+* add task deletion, ordering and bulk grouping ([609c6d2](https://github.com/babariviere/pilot/commit/609c6d255e25dc3600a0fd67ee5bc66b9b387cf3))
+* **chat:** add slash commands for compact, prompts and skills ([14b593d](https://github.com/babariviere/pilot/commit/14b593d5197f134157729a42aaf1514af010e473))
+* **daemon:** validate chat start model and thinking choices ([71fa8c2](https://github.com/babariviere/pilot/commit/71fa8c2b5f135df3b61a1eff4744224838269b73))
+* track pull request stack positions ([20aadd3](https://github.com/babariviere/pilot/commit/20aadd344d9092d884f04732a555366f183cd655))
+
+
+### Bug Fixes
+
+* **daemon:** preserve user activity notes in agent context ([d4dd5b6](https://github.com/babariviere/pilot/commit/d4dd5b6f3f3d88184b8f7d896764308cf3a6a22d))
+* **daemon:** recover from kernel IPC failures without crashing or looping ([0da0884](https://github.com/babariviere/pilot/commit/0da08846a7e4ef4306311b2f59330a16346a5b95))
+* **macos:** align composer controls row ([7326107](https://github.com/babariviere/pilot/commit/7326107a80ff1d93527764a620b55386a656f240))
+
+
+### Performance Improvements
+
+* cache the model catalog across folders and in the app ([259b677](https://github.com/babariviere/pilot/commit/259b677a38213a62af366114fc7986819e3b88d0))
+* **daemon:** spawn git, jj and gh off the event loop ([cc79b75](https://github.com/babariviere/pilot/commit/cc79b7548643b65b7adc5aed2ac49efa4e16cd6f))
+* **kernel:** run workers at normal scheduling priority ([5a31f1f](https://github.com/babariviere/pilot/commit/5a31f1fe111e840eb663879ffed8c8b3e455bcc2))
+
 ## [1.12.2](https://github.com/babariviere/pilot/compare/v1.12.1...v1.12.2) (2026-10-11)
 
 
