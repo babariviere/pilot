@@ -29,6 +29,73 @@ test("task links are scoped, validated and preserved when a task is deleted", ()
 	}
 });
 
+test("bulk milestones publish one committed update, deduplicate aliases and skip no-op writes", () => {
+	const missions = new MissionStore(":memory:");
+	try {
+		const { id } = missions.create({
+			projectId: "p",
+			title: "M",
+			tasks: Array.from({ length: 1000 }, (_, i) => ({ title: `Task ${i}` })),
+		});
+		missions.join("agent", id);
+		missions.claimTask(id, "1", "agent");
+		missions.claimTask(id, "2", "agent");
+		const refs = missions.tasks(id).map((task) => task.id);
+		const eventId = missions.events(id)[0]!.id;
+		let changes = 0;
+		let members = 0;
+		missions.onChange(() => {
+			changes++;
+			assert.ok(
+				missions.tasks(id).every((task) => task.milestone === "Next"),
+				"observers see the complete batch",
+			);
+		});
+		missions.onMembershipChange(() => members++);
+		const grouped = missions.groupTasks(id, [...refs, "#1"], "Next", { sessionId: "agent" });
+		assert.equal(grouped.length, 1000);
+		assert.equal(changes, 1);
+		assert.equal(members, 1, "one refresh per affected owner");
+		assert.equal(missions.events(id)[0]!.id, eventId + 1);
+		assert.deepEqual(missions.groupTasks(id, refs, "Next"), grouped);
+		assert.equal(changes, 1);
+		assert.equal(missions.events(id)[0]!.id, eventId + 1);
+		assert.throws(() => missions.groupTasks(id, [refs[0]!, "missing"], "Bad"), /Unknown task/);
+		assert.deepEqual(missions.tasks(id), grouped);
+		assert.equal(changes, 1);
+	} finally {
+		missions.close();
+	}
+});
+
+test("task ordering, regrouping and deletion survive restart", () => {
+	const home = mkdtempSync(join(tmpdir(), "pilot-task-management-"));
+	const path = join(home, "missions.sqlite");
+	let missions = new MissionStore(path);
+	try {
+		const { id } = missions.create({
+			projectId: "p",
+			title: "M",
+			tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+		});
+		missions.updateTask(id, "2", { order: 0.5, dependsOn: ["1"] });
+		missions.groupTasks(id, ["1", "2"], "Next");
+		missions.removeTask(id, "3");
+		const tasks = missions.tasks(id);
+		missions.close();
+		missions = new MissionStore(path);
+		assert.deepEqual(missions.tasks(id), tasks);
+		assert.deepEqual(
+			tasks.map((task) => task.number),
+			[2, 1],
+		);
+		assert.ok(tasks.every((task) => task.milestone === "Next"));
+	} finally {
+		missions.close();
+		rmSync(home, { recursive: true, force: true });
+	}
+});
+
 function store() {
 	return new MissionStore(":memory:");
 }

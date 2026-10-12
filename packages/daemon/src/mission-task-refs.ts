@@ -1,12 +1,12 @@
-/** Expand claim selectors before any writes. Opaque task IDs (including UUIDs) stay intact. */
-export function parseTaskRefs(input: unknown): string[] {
+/** Expand task selectors before any writes. Opaque task IDs (including UUIDs) stay intact. */
+export function parseTaskRefs(input: unknown, action = "claim"): string[] {
 	const values = Array.isArray(input) ? input : [input];
 	const refs = new Set<string>();
 	let expanded = 0;
 	const limit = 1000;
-	if (!values.length || values.length > limit) throw new Error(`claim requires 1-${limit} task selectors`);
+	if (!values.length || values.length > limit) throw new Error(`${action} requires 1-${limit} task selectors`);
 	const add = (ref: string) => {
-		if (++expanded > limit) throw new Error(`claim accepts at most ${limit} expanded task references`);
+		if (++expanded > limit) throw new Error(`${action} accepts at most ${limit} expanded task references`);
 		refs.add(ref);
 	};
 	const number = (value: string) => {
@@ -31,7 +31,7 @@ export function parseTaskRefs(input: unknown): string[] {
 				const end = number(range[2]!);
 				if (end < start) throw new Error("task range must be ascending");
 				if (end - start + 1 > limit - expanded)
-					throw new Error(`claim accepts at most ${limit} expanded task references`);
+					throw new Error(`${action} accepts at most ${limit} expanded task references`);
 				for (let n = start; n <= end; n++) add(String(n));
 			} else {
 				add(/^#?\d+$/.test(ref) ? String(number(ref)) : ref);

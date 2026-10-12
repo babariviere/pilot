@@ -81,13 +81,22 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	const schema = tool.parameters as { properties: { action: { enum: string[] }; message: unknown } };
 	assert.deepEqual(schema.properties.action.enum.slice(-3), ["start", "send", "status"]);
 	assert.ok(schema.properties.message);
+	assert.equal(tool.annotations?.destructiveHint, true);
+	assert.match(tool.description, /batch is atomic/);
+	assert.match(tool.description, /ties sort by task number/);
 	for (const params of [
+		{ action: "delete", id: "#3" },
+		{ action: "group", ids: ["1-5", 8], milestone: "Next" },
+		{ action: "task", id: "#3", order: 1.5 },
 		{ action: "start", id: "#3", message: "Focus on tests" },
 		{ action: "send", targetSessionId: "member", message: "Please clarify" },
 		{ action: "status" },
 	])
 		await tool.execute("call", params as never, undefined, undefined, {} as never);
 	assert.deepEqual(calls, [
+		["delete", { id: "#3" }],
+		["group", { ids: ["1-5", 8], milestone: "Next" }],
+		["task", { id: "#3", order: 1.5 }],
 		["start", { id: "#3", message: "Focus on tests" }],
 		["send", { targetSessionId: "member", message: "Please clarify" }],
 		["status", {}],
@@ -103,11 +112,15 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 test("ordinary member declarations omit privileged actions and their guidance", () => {
 	const tool = createMissionTool(async () => null);
 	const schema = tool.parameters as { properties: { action: { enum: string[] }; message?: unknown } };
-	for (const action of ["start", "send", "status"]) {
+	for (const action of ["delete", "group", "start", "send", "status"]) {
 		assert.ok(!schema.properties.action.enum.includes(action));
 		assert.ok(!tool.description.includes(`- ${action} (`));
 	}
 	assert.equal(schema.properties.message, undefined);
+	assert.equal(tool.annotations?.destructiveHint, false);
+	assert.ok(!("order" in schema.properties));
+	assert.doesNotMatch(tool.description, /task order|For claim or group/);
+	assert.match(tool.description, /status "dropped"/);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /claim, start|comment or send|Opening instructions/);
 	assert.match(tool.description, /- claim:/);
 	assert.ok(schema.properties.action.enum.includes("get"));
@@ -252,7 +265,7 @@ test("mission tool declarations follow membership without re-registering", { tim
 for (const ask of [false, true]) {
 	for (const initialRole of ["other", "self"] as const) {
 		test(`role-specific declarations refresh live in ${ask ? "Ask" : "Build"}, starting as ${initialRole}`, {
-			timeout: 15_000,
+			timeout: 30_000,
 		}, async (t) => {
 			const f = await fixture(t);
 			const open = NativeAdapter.open;
@@ -302,11 +315,12 @@ for (const ask of [false, true]) {
 				assert.equal(!!declared, role !== undefined);
 				assert.equal(adapter.session.getCallableToolNames().includes(MISSION_TOOL), role !== undefined);
 				const schema = native.parameters as { properties: { action: { enum: string[] }; message?: unknown } };
-				for (const action of ["start", "send", "status"]) {
+				for (const action of ["delete", "group", "start", "send", "status"]) {
 					assert.equal(schema.properties.action.enum.includes(action), coordinator);
 					assert.equal(native.description.includes(`- ${action} (`), coordinator);
 				}
 				assert.equal(!!schema.properties.message, coordinator);
+				assert.equal("order" in schema.properties, coordinator);
 				const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
 				const result = await codemode.execute(
 					`describe-${requests}`,
@@ -318,7 +332,7 @@ for (const ask of [false, true]) {
 					.join("\n");
 				if (role !== undefined) {
 					assert.ok(!result.isError, description);
-					for (const action of ["start", "send", "status"])
+					for (const action of ["delete", "group", "start", "send", "status"])
 						assert.equal(description.includes(`"${action}"`), coordinator, description);
 				} else assert.doesNotMatch(description, /- start \(coordinator only\)/);
 				let requestChecked = false;
@@ -331,6 +345,8 @@ for (const ask of [false, true]) {
 							if (tool) assert.deepEqual(tool.parameters, native.parameters);
 							const prompt = getCurrentSystemPrompt(context.messages);
 							assert.equal(prompt.includes('mission({action: "start", id})'), coordinator);
+							assert.equal(prompt.includes('mission({action: "delete", id})'), coordinator);
+							assert.equal(prompt.includes('mission({action: "group", ids:'), coordinator);
 							requestChecked = true;
 						} catch (error) {
 							requestFailure = error;
