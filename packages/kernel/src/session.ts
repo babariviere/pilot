@@ -247,12 +247,12 @@ export class KernelSession {
 				hooks.callMission,
 			);
 			session.#working = status.snapshot.run !== undefined;
+			await adapter.setWorking(session.#working);
 			if (!session.#working) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
 			}
 			status.start(async (events, deliveryContext) => {
 				let working = session.#working;
-				let completion = session.#completion;
 				for (const event of events) {
 					working =
 						event.type === "snapshot"
@@ -262,6 +262,13 @@ export class KernelSession {
 								: event.type === "run_end"
 									? false
 									: working;
+				}
+				// Forward settlement only after reducing the whole batch. A queued
+				// follow-up's run_end/run_start must not release job notifications.
+				if (events.some((event) => ["snapshot", "run_start", "run_end"].includes(event.type)))
+					await session.adapter.setWorking(working);
+				let completion = session.#completion;
+				for (const event of events) {
 					if (event.type === "run_end" || (event.type === "snapshot" && !working)) {
 						completion = await reconcileCompletion(
 							owned.storage,

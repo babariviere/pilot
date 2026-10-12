@@ -225,6 +225,7 @@ export class NativeAdapter {
 	#harness?: Harness;
 	#conversationId?: ConversationId;
 	#closed = false;
+	#working = false;
 	#renderPrompt?: () => string;
 	#forcedPrompt?: string;
 	#startMessages: Message[] = [];
@@ -419,6 +420,12 @@ export class NativeAdapter {
 				})
 			: (await createAgentSession(sessionConfig)).session;
 		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure);
+		// The SDK loop never runs here. Its default getter would report idle throughout
+		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
+		// bindExtensions reads this getter dynamically, including from retained contexts.
+		Object.defineProperty(session, "isIdle", {
+			get: () => !adapter.#working && !adapter.#closed && !session.isCompacting,
+		});
 		// SDK reload replaces the extension API. Keep the latest definitions and registration handle.
 		adapter.#registerHostTool = (tool) => registerHostTool!(tool);
 		adapter.#renderPrompt = () => renderPrompt?.() ?? session.systemPrompt;
@@ -528,6 +535,12 @@ export class NativeAdapter {
 		this.#harness = harness;
 		this.#conversationId = conversationId;
 	}
+	/** Mirror the final committed run state, not intermediate end/start events. */
+	async setWorking(working: boolean): Promise<void> {
+		if (this.#closed || this.#working === working) return;
+		this.#working = working;
+		if (!working) await this.session.extensionRunner.emit({ type: "agent_settled" });
+	}
 	/** Read committed context without rebuilding the live native session while tools are executing. */
 	async refreshUsage(context: TaskContext): Promise<void> {
 		if (this.#closed || !this.#harness || !this.#conversationId) return;
@@ -604,6 +617,9 @@ export class NativeAdapter {
 			}, context);
 	}
 	private async preparePrompt(context: TaskContext): Promise<string> {
+		// Model preparation can race asynchronous watch delivery. Extensions must see
+		// busy even before the committed run_start reaches the lifecycle monitor.
+		this.#working = true;
 		const messages = structuredClone([...(await this.sync(context))]);
 		const cached = (await this.#harness!.snapshot(NativeState, this.#conversationId!, context))?.prompt;
 		if (cached?.key === this.#inputKey) {
