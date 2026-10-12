@@ -272,6 +272,15 @@ public enum DeliveryMode: String, Codable, Hashable, Sendable {
     case followUp
 }
 
+/// Source of input the user did not type. Automatic user entries carry it; typed ones omit it.
+public enum InputOrigin: String, Codable, Hashable, Sendable {
+    case job
+    case subagent
+    case `extension`
+    case mission
+    case pullRequest
+}
+
 /// One selectable model from the user's pi scope.
 public struct ModelOption: Codable, Identifiable, Hashable, Sendable {
     /// "provider/modelId".

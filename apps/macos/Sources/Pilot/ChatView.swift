@@ -436,6 +436,14 @@ struct RowView: View, Equatable {
                 UserMessage(text: text, expansion: messageExpansions?.state(for: id),
                             messageID: id, timestamp: timestamp)
             }
+        case let .automatic(id, text, origin, timestamp):
+            if let notification = SubagentNotification(message: text) {
+                SubagentAnswerRow(notification: notification)
+            } else {
+                MessageTimestamp(rowID: id, milliseconds: timestamp) {
+                    AutomaticMessageRow(text: text, origin: origin, expansion: messageExpansions?.state(for: id))
+                }
+            }
         case let .text(id, text, timestamp):
             // Agent replies are always shown in full. Only user bubbles fold.
             MessageTimestamp(rowID: id, milliseconds: timestamp) { MarkdownView(text: text) }

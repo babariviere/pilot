@@ -601,44 +601,18 @@ struct SubagentAnswerRow: View {
     @StateObject private var expansion = ExpansionState()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: notification.failed ? "exclamationmark.triangle" : "person.2")
+        NotificationCard(
+            icon: notification.failed ? "exclamationmark.triangle" : "person.2",
+            title: notification.failed ? "\(notification.name) failed" : "\(notification.name) answered",
+            text: notification.text,
+            tint: notification.failed ? Theme.destructive : Theme.mutedForeground,
+            expansion: expansion
+        ) {
+            if let sessionId = model.selectedSessionId {
+                Button("Open") { model.openSubagent(notification.name, in: sessionId) }
+                    .buttonStyle(.link)
                     .font(.pilot(.caption))
-                    .foregroundStyle(notification.failed ? Theme.destructive : Theme.mutedForeground)
-                Text(notification.failed ? "\(notification.name) failed" : "\(notification.name) answered")
-                    .font(.pilot(.label, weight: .semibold))
-                Spacer()
-                if let sessionId = model.selectedSessionId {
-                    Button("Open") { model.openSubagent(notification.name, in: sessionId) }
-                        .buttonStyle(.link)
-                        .font(.pilot(.caption))
-                }
-                Button {
-                    withAnimation(.easeOut(duration: 0.15)) { expansion.expanded.toggle() }
-                } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.pilot(.micro, weight: .semibold))
-                        .rotationEffect(.degrees(expansion.expanded ? 90 : 0))
-                        .foregroundStyle(Theme.mutedForeground)
-                        .frame(width: 16, height: 16)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(expansion.expanded ? "Collapse answer" : "Expand answer")
-            }
-            if expansion.expanded {
-                MarkdownView(text: notification.text)
-            } else {
-                Text(notification.text)
-                    .font(.pilot(.label))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .lineLimit(2)
             }
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.border))
     }
 }

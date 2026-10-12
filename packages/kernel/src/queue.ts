@@ -8,6 +8,7 @@ import {
 	type SubmissionId,
 } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
+import { inputOrigin } from "./input-origin.ts";
 
 export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEvent {
 	return {
@@ -18,7 +19,10 @@ export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEven
 	};
 }
 
-/** Job notifications still reach the agent, but are not user-editable composer drafts. */
+/**
+ * Automatic input (job and extension notifications, mission messages and notices, PR follow-ups) still reaches the
+ * agent, but the queue only shows the user's own editable messages.
+ */
 export async function queueUpdateForDisplay(
 	inbox: Readonly<InboxState> | null,
 	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
@@ -27,7 +31,7 @@ export async function queueUpdateForDisplay(
 	const visible = await Promise.all(
 		event.items.map(async (item) => {
 			const submission = await readSubmission(item.id as SubmissionId);
-			return !submission?.requestId?.startsWith("native:jobs.result:");
+			return inputOrigin(submission?.requestId) === undefined;
 		}),
 	);
 	return { ...event, items: event.items.filter((_, index) => visible[index]) };

@@ -52,6 +52,12 @@ export interface PullRequestStack {
 /** How a message joins a busy session: steer the current run, or queue a follow-up run. */
 export type DeliveryMode = "steer" | "followUp";
 
+/**
+ * Source of automatic input, which is not typed by the user. Such `pi.user` entries carry `origin` in transcript
+ * events and history, and are left out of `queue_update`. Entries the user typed omit it.
+ */
+export type InputOrigin = "job" | "subagent" | "extension" | "mission" | "pullRequest";
+
 /** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
 export interface QueuedMessage {
 	id: number;

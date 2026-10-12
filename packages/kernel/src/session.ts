@@ -36,6 +36,7 @@ import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenanc
 import { refActivity } from "./ref-activity.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQueue } from "./queue.ts";
+import { InputOrigins } from "./input-origin.ts";
 import { openSessionStorage } from "./storage.ts";
 import { type SubagentCommand, SubagentBridge } from "./subagents.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
@@ -84,6 +85,7 @@ export interface KernelSessionHooks {
 export class KernelSession {
 	readonly #ask: boolean;
 	readonly #watches = new Map<string, () => Promise<void>>();
+	#origins!: InputOrigins;
 	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
 	readonly #mission: { current?: MissionContext };
 	#working = false;
@@ -248,6 +250,7 @@ export class KernelSession {
 			);
 			session.#working = status.snapshot.run !== undefined;
 			await adapter.setWorking(session.#working);
+			session.#origins = new InputOrigins(owned.storage, conversation.id, context);
 			if (!session.#working) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
 			}
@@ -508,7 +511,7 @@ export class KernelSession {
 			throw error;
 		}
 		try {
-			await listener([stream.snapshot, await displayQueue(queue.value)]);
+			await listener([...(await this.#origins.events([stream.snapshot])), await displayQueue(queue.value)]);
 			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
 			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
 		} catch (error) {
@@ -528,7 +531,7 @@ export class KernelSession {
 			await Promise.all([stream.stop(), queue.stop()]);
 		});
 		stream.start(async (events) => {
-			await listener([...events]);
+			await listener(await this.#origins.events(events));
 		});
 		queue.start(async (inbox) => {
 			await listener([await displayQueue(inbox)]);

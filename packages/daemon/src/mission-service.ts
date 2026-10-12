@@ -1,4 +1,5 @@
 /** Mission orchestration: validation against projects and sessions, agent tool calls and kernel contexts. */
+import { randomUUID } from "node:crypto";
 import type { MissionAction, MissionContext } from "@pilot/kernel";
 import type {
 	CreateMissionRequest,
@@ -214,7 +215,7 @@ export class MissionService {
 			// The mission exists either way; a chat that cannot take input now can still be asked later.
 			if (request.draft !== false)
 				await this.sessions
-					.send(from, draftMessage(mission.title), "followUp")
+					.send(from, draftMessage(mission.title), "followUp", `mission:draft:${randomUUID()}`)
 					.catch((error: unknown) => console.warn(`pilotd: could not ask ${from} to draft its mission: ${error}`));
 		}
 		return this.store.detail(mission.id);
@@ -404,7 +405,8 @@ export class MissionService {
 				if (this.store.missionOf(args.targetSessionId) !== missionId)
 					throw new Conflict("That chat is not in this mission");
 				if (typeof args.message !== "string" || !args.message.trim()) throw new Error("send requires message");
-				await this.sessions.send(args.targetSessionId, args.message, "followUp");
+				// Coordinator messages reach the chat without appearing as the user's queued messages.
+				await this.sessions.send(args.targetSessionId, args.message, "followUp", `mission:send:${randomUUID()}`);
 				return { sessionId: args.targetSessionId, sent: true };
 			}
 			case "status": {
