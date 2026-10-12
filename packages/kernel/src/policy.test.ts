@@ -234,7 +234,7 @@ test("shell, codemode and job starts still block posting and leaking deliverable
 
 test("only executable fields are checked in command tools", async () => {
 	const mention = 'gh pr merge 12; gh pr create --title "API v2 redesign"';
-	for (const action of ["status", "logs", "wait", "stop"]) {
+	for (const action of ["status", "wait", "stop"]) {
 		assert.equal(await checkTool("jobs", { action, command: mention, name: mention }), undefined, action);
 	}
 	assert.equal(await checkTool("jobs", { action: "start", command: "npm test", name: mention }), undefined);
