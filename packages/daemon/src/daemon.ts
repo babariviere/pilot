@@ -34,6 +34,7 @@ const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionService = new MissionService(missionStore, sessions, projects);
 await sessions.load();
 missionService.notices.start();
+missionService.compaction.start();
 const terminals = new TerminalManager();
 const server = createDaemonServer(config, sessions, projects, models, terminals, {
 	service: missionService,
@@ -51,6 +52,7 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	server.close();
 	await missionService.notices.stop();
+	await missionService.compaction.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
 	missionStore.close();
 	process.exit(0);
