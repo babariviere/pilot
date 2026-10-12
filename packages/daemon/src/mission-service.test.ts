@@ -780,11 +780,16 @@ test("coordinator actions check the current role on every call before causing si
 	});
 	f.service.join(member.id, { missionId: mission.id });
 	const actions = [
+		["delete", { id: "1" }],
+		["group", { ids: ["1"], milestone: "Next" }],
+		["task", { id: "1", order: 0 }],
+		["task", { title: "Not admitted", order: 0 }],
 		["start", { id: "1" }],
 		["send", { targetSessionId: coordinator.id, message: "Continue" }],
 		["status", {}],
 	] as const;
 	const before = f.workers.get(coordinator.id)!.requests.length;
+	const tasks = f.store.tasks(mission.id);
 	for (const [action, args] of actions) {
 		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
 		await assert.rejects(f.service.call(outsider.id, action, args), /not part of a mission/);
@@ -792,6 +797,7 @@ test("coordinator actions check the current role on every call before causing si
 	assert.equal(f.sessions.list().length, 3);
 	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
 	assert.equal(f.workers.get(coordinator.id)!.requests.length, before);
+	assert.deepEqual(f.store.tasks(mission.id), tasks);
 	f.store.update(mission.id, { coordinatorSessionId: member.id });
 	for (const [action, args] of actions)
 		await assert.rejects(f.service.call(coordinator.id, action, args), /Only the mission coordinator/);
@@ -799,6 +805,114 @@ test("coordinator actions check the current role on every call before causing si
 	f.store.update(mission.id, { coordinatorSessionId: null });
 	for (const [action, args] of actions)
 		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
+	assert.deepEqual(f.store.tasks(mission.id), tasks);
+});
+
+test("task deletion, ordering and grouping validate inputs and preserve unrelated state", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "A", body: "Keep" }, { title: "B" }, { title: "C" }],
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const [a, b, c] = f.store.tasks(mission.id);
+	f.store.updateTask(mission.id, a!.id, { milestone: "Old" });
+	f.store.updateTask(mission.id, b!.id, { dependsOn: [a!.id] });
+	await f.service.call(member.id, "claim", { id: "1" });
+	const link = f.store.addResource(mission.id, { taskId: a!.id, url: "https://example.com/work" });
+	await f.service.call(member.id, "task", { id: "#3", status: "dropped" });
+	assert.equal(f.store.task(mission.id, c!.id).status, "dropped");
+
+	for (const order of ["0", null, Number.NaN, Number.POSITIVE_INFINITY])
+		await assert.rejects(f.service.call(coordinator.id, "task", { id: "1", order }), /order must be a number/);
+	await f.service.call(coordinator.id, "task", { id: b!.id, order: a!.order - 0.5 });
+	assert.deepEqual(
+		f.store.tasks(mission.id).map((task) => task.number),
+		[2, 1, 3],
+	);
+	assert.deepEqual(f.store.task(mission.id, b!.id).dependsOn, [a!.id]);
+	await f.service.call(coordinator.id, "task", { id: "#2", order: a!.order });
+	assert.deepEqual(
+		f.store.tasks(mission.id).map((task) => task.number),
+		[1, 2, 3],
+		"ties use task number",
+	);
+	const created = await f.service.call(coordinator.id, "task", { title: "First", order: -1 });
+	assert.equal((created as { order: number }).order, -1);
+	assert.equal(f.store.tasks(mission.id)[0]!.title, "First");
+	assert.ok(
+		f.store
+			.detail(mission.id)
+			.events.some((event) => event.text.includes("reordered") && event.sessionId === coordinator.id),
+	);
+
+	const before = f.store.tasks(mission.id);
+	const invalid = [
+		{},
+		{ ids: "1-2", milestone: "New" },
+		{ ids: [], milestone: "New" },
+		{ id: "1", ids: ["2"], milestone: "New" },
+		{ ids: ["1"] },
+		{ ids: ["1"], milestone: null },
+		{ ids: ["1"], milestone: "x".repeat(201) },
+		{ ids: ["1-1001"], milestone: "New" },
+		{ ids: ["1", "unknown"], milestone: "New" },
+	];
+	for (const args of invalid) {
+		await assert.rejects(f.service.call(coordinator.id, "group", args));
+		assert.deepEqual(f.store.tasks(mission.id), before, "invalid grouping never partly writes");
+	}
+	const grouped = await f.service.call(coordinator.id, "group", { ids: ["#1-2", a!.id, 3], milestone: " Next " });
+	assert.deepEqual(
+		grouped,
+		{
+			tasks: [a, b, c].map((task) => ({ id: task!.id, number: task!.number, milestone: "Next" })),
+		},
+		"duplicates are deduplicated and batch results do not repeat task bodies",
+	);
+	assert.deepEqual(
+		f.store
+			.tasks(mission.id)
+			.filter((task) => task.milestone === "Next")
+			.map((task) => task.number),
+		[1, 2, 3],
+	);
+	assert.equal(f.store.task(mission.id, a!.id).body, "Keep");
+	assert.equal(f.store.task(mission.id, a!.id).sessionId, member.id);
+	assert.equal(f.store.task(mission.id, c!.id).status, "dropped");
+	await f.service.call(coordinator.id, "group", { ids: ["1-2"], milestone: "" });
+	assert.equal(f.store.task(mission.id, a!.id).milestone, undefined);
+	assert.equal(f.store.task(mission.id, b!.id).milestone, undefined);
+	assert.equal(f.store.task(mission.id, c!.id).milestone, "Next");
+
+	for (const args of [{}, { id: "" }, { id: 1 }, { id: "unknown" }])
+		await assert.rejects(f.service.call(coordinator.id, "delete", args));
+	const deleted = await f.service.call(coordinator.id, "delete", { id: "#1" });
+	assert.deepEqual(deleted, { id: a!.id, number: 1, deleted: true });
+	assert.throws(() => f.store.task(mission.id, a!.id), /Unknown task/);
+	assert.equal(f.store.task(mission.id, b!.id).dependsOn, undefined);
+	assert.equal(f.store.detail(mission.id).resources.find((resource) => resource.id === link.id)?.taskId, undefined);
+	assert.deepEqual(f.service.context(member.id)?.tasks, []);
+	assert.ok(
+		f.store
+			.detail(mission.id)
+			.events.some((event) => event.text.includes("removed") && event.sessionId === coordinator.id),
+	);
+	const other = f.store.create({ projectId: f.project.id, title: "Other", tasks: [{ title: "Outside" }] });
+	const foreign = f.store.tasks(other.id)[0]!;
+	await assert.rejects(f.service.call(coordinator.id, "delete", { id: foreign.id }), /Unknown task/);
+	await assert.rejects(
+		f.service.call(coordinator.id, "group", { ids: [b!.id, foreign.id], milestone: "Wrong" }),
+		/Unknown task/,
+	);
+	assert.equal(f.store.task(mission.id, b!.id).milestone, undefined);
+	await f.service.call(coordinator.id, "delete", { id: c!.id });
+	assert.throws(() => f.store.task(mission.id, c!.id), /Unknown task/);
 });
 
 test("coordinator start reuses Start chat with task IDs or numbers and validates admission", async (t) => {

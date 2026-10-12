@@ -33,6 +33,20 @@ test("mission prompt explains the shared state, the chat's tasks, decisions and 
 	assert.match(missionPrompt({ ...mission, status: "done" }), /This mission is done/);
 });
 
+test("task management guidance is restricted to the coordinator", () => {
+	for (const coordinator of ["self", "other", "user"] as const) {
+		const prompt = missionPrompt({ ...mission, coordinator });
+		assert.equal(prompt.includes('mission({action: "delete", id})'), coordinator === "self");
+		assert.equal(prompt.includes('mission({action: "task", id, order})'), coordinator === "self");
+		assert.equal(prompt.includes('mission({action: "group", ids: ["1-5"], milestone})'), coordinator === "self");
+		assert.match(prompt, /Retire tasks with status "dropped"/);
+		assert.match(prompt, /Only the coordinator can permanently delete tasks/);
+	}
+	const prompt = missionPrompt({ ...mission, coordinator: "self" });
+	assert.match(prompt, /milestone "" clears the group/);
+	assert.match(prompt, /reordering never changes task numbers or dependencies/);
+});
+
 test("multi-task guidance claims requested tasks, orders work, maintains statuses and separates PRs", () => {
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator, tasks: [] });

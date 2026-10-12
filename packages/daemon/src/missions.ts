@@ -816,6 +816,19 @@ export class MissionStore {
 				});
 			else if (title !== before.title)
 				this.event(id, "task", `Task #${before.number} renamed: ${title}`, actor, { taskId: before.id, at: now });
+			if (fields.order !== undefined && fields.order !== before.order)
+				this.event(id, "task", `Task #${before.number} reordered: ${title}`, actor, { taskId: before.id, at: now });
+			if (fields.milestone !== undefined && fields.milestone !== (before.milestone ?? ""))
+				this.event(
+					id,
+					"task",
+					`Task #${before.number} milestone ${fields.milestone || "cleared"}: ${title}`,
+					actor,
+					{
+						taskId: before.id,
+						at: now,
+					},
+				);
 			if (owner !== (before.sessionId ?? null))
 				this.event(
 					id,
@@ -827,6 +840,34 @@ export class MissionStore {
 		});
 		this.changed(id, [...new Set([before.sessionId, owner].filter((value): value is string => !!value))]);
 		return this.task(id, before.id);
+	}
+
+	/** Validate the whole selection before writing, then publish one update rather than one per task. */
+	groupTasks(id: string, refs: string[], milestone: string, actor: MissionActor = USER): MissionTask[] {
+		this.require(id);
+		const group = text(milestone, "milestone", MAX_TITLE, { empty: true })!;
+		const tasks = [
+			...new Map(
+				refs.map((ref) => {
+					const task = this.resolveTask(id, ref);
+					return [task.id, task] as const;
+				}),
+			).values(),
+		];
+		const changed = tasks.filter((task) => (task.milestone ?? "") !== group);
+		if (!changed.length) return tasks;
+		const now = Date.now();
+		this.transaction(() => {
+			const update = this.db.prepare("UPDATE tasks SET milestone = ?, updated_at = ? WHERE id = ?");
+			for (const task of changed) update.run(group || null, now, task.id);
+			this.event(id, "task", `${changed.length} task milestones ${group ? `set to ${group}` : "cleared"}`, actor, {
+				at: now,
+			});
+		});
+		this.changed(id, [...new Set(changed.flatMap((task) => (task.sessionId ? [task.sessionId] : [])))]);
+		return tasks.map((task) =>
+			(task.milestone ?? "") !== group ? { ...task, milestone: group || undefined, updatedAt: now } : task,
+		);
 	}
 
 	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {

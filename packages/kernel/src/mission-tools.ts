@@ -19,7 +19,7 @@ const MEMBER_ACTIONS = [
 	"link",
 	"log",
 ] as const;
-export const MISSION_ACTIONS = [...MEMBER_ACTIONS, "start", "send", "status"] as const;
+export const MISSION_ACTIONS = [...MEMBER_ACTIONS, "delete", "group", "start", "send", "status"] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
 /** Sends one call to pilotd and resolves with its JSON result. */
@@ -36,7 +36,7 @@ Actions:
 - get: goal, decisions, your tasks, open tasks, open comments, links, artifacts, recent activity and the brief's revision and outline. Call it before starting work and before handing off.
 - brief: read the brief (optionally an older revision). With markdown and expectedRevision, replace the whole brief; a stale expectedRevision fails, so re-read and reapply your change.
 - update: change the mission title or goal.
-- tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3).
+- tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
 - claim: take tasks for this chat. Use id for one task or ids for several IDs, numbers or ranges (for example ["1-5", "#8"]). A range or comma-separated list also works in id. Batch results contain claimed tasks and skipped tasks with reasons (owned by another chat or not found); other chats' tasks are never taken. Claim requested tasks, then work on them one at a time in dependency order and keep each status current.
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
@@ -45,6 +45,9 @@ Actions:
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
 			coordinator
 				? `
+- delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
+- group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
+- task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
 - start (coordinator only): start a new chat for an unclaimed task (id or number, optional message). Start chats only when the user asks.
 - send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
 - status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`
@@ -52,14 +55,14 @@ Actions:
 		}`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
 		executionMode: "sequential",
-		annotations: { openWorldHint: false, destructiveHint: false },
+		annotations: { openWorldHint: false, destructiveHint: coordinator },
 		parameters: Type.Object({
 			action: StringEnum(coordinator ? MISSION_ACTIONS : MEMBER_ACTIONS),
 			id: Type.Optional(
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number (task, claim, start), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both."
+						? "Task ID or number (task, claim, delete, start), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both."
 						: "Task ID or number (task, claim), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
 				}),
 			),
@@ -67,8 +70,9 @@ Actions:
 				Type.Array(Type.Union([Type.String({ maxLength: 128 }), Type.Integer({ minimum: 1 })]), {
 					minItems: 1,
 					maxItems: 1000,
-					description:
-						"For claim only: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed and skipped. Use instead of id.",
+					description: coordinator
+						? "For claim or group: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Claim returns claimed and skipped; group requires every task to exist. Use instead of id."
+						: "For claim only: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed and skipped. Use instead of id.",
 				}),
 			),
 			markdown: Type.Optional(Type.String({ maxLength: 262144, description: "Complete replacement brief." })),
@@ -92,6 +96,11 @@ Actions:
 			),
 			...(coordinator
 				? {
+						order: Type.Optional(
+							Type.Number({
+								description: "Task sort key (task): lower first, ties by task number. Fractions allowed.",
+							}),
+						),
 						message: Type.Optional(
 							Type.String({
 								maxLength: 8000,

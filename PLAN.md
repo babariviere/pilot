@@ -243,6 +243,11 @@ the brief into the repository is an explicit user action.
   or inclusive ascending ranges such as `1-5`, at most 1000 expanded references). Batch claims return
   `claimed` and `skipped` with reasons, leaving other chats' claims untouched. The single `id` form
   keeps its task result and conflict error; a range or comma-separated list in `id` uses batch results.
+  The coordinator can permanently remove a task with `delete`, reorder it with the `task` action's
+  numeric `order` sort key (lower first, ties by task number), and atomically set or clear milestones
+  on several tasks with `group` (`ids` selectors and `milestone`, empty to clear). Only the coordinator
+  sees these controls; the daemon checks the current role on every call. Other chats retire work with
+  status `dropped`. Deletion removes dependency references and preserves links at mission level.
   Chats claim the requested tasks, work through them one at a time in dependency order, keep queued
   tasks `todo` and each working/review/blocked status current, and skip or report unfinished dependencies.
   Open dependency PRs can support dependent work as a stack: one PR per task, based on the dependency's

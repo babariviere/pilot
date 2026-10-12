@@ -255,12 +255,34 @@ export class MissionService {
 		const missionId = this.store.missionOf(sessionId);
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
-		if (["start", "send", "status"].includes(action) && mission.coordinatorSessionId !== sessionId)
+		if (
+			(["delete", "group", "start", "send", "status"].includes(action) ||
+				(action === "task" && args.order !== undefined)) &&
+			mission.coordinatorSessionId !== sessionId
+		)
 			throw new Conflict(`Only the mission coordinator can use ${action}`);
 		const actor = { sessionId };
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "delete": {
+				if (typeof args.id !== "string" || !args.id.trim())
+					throw new Error("delete requires the task id or number");
+				const task = this.store.resolveTask(missionId, args.id);
+				this.store.removeTask(missionId, task.id, actor);
+				return { id: task.id, number: task.number, deleted: true };
+			}
+			case "group": {
+				if (args.id !== undefined) throw new Error("group requires ids, not id");
+				if (!Array.isArray(args.ids)) throw new Error("group requires an ids array");
+				if (typeof args.milestone !== "string")
+					throw new Error("group requires milestone (use an empty string to clear)");
+				return {
+					tasks: this.store
+						.groupTasks(missionId, parseTaskRefs(args.ids, "group"), args.milestone, actor)
+						.map((task) => ({ id: task.id, number: task.number, milestone: task.milestone ?? "" })),
+				};
+			}
 			case "start":
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				if (typeof args.id !== "string" || !args.id.trim()) throw new Error("start requires the task id or number");
@@ -394,6 +416,7 @@ export class MissionService {
 					...(args.title !== undefined ? { title: args.title } : {}),
 					...(args.body !== undefined ? { body: args.body } : {}),
 					...(args.status !== undefined ? { status: args.status } : {}),
+					...(args.order !== undefined ? { order: args.order } : {}),
 					...(args.milestone !== undefined ? { milestone: args.milestone } : {}),
 					...(args.dependsOn !== undefined ? { dependsOn: args.dependsOn } : {}),
 				} as Parameters<MissionStore["addTask"]>[1];
