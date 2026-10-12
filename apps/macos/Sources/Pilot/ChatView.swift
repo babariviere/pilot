@@ -81,17 +81,23 @@ final class SessionFeed: ObservableObject {
                 }
                 guard !Task.isCancelled, self.generation == generation else { return }
                 self.onEventsApplied?(events)
-                if presentation.revision != self.processorRevision {
-                    self.processorRevision = presentation.revision
-                    presentation.revision = self.presentation.revision + 1
-                    self.presentation = presentation
-                    self.onPresentationChanged?()
-                }
-                if events.contains(where: { $0["type"]?.string == "snapshot" }) {
-                    self.hasSnapshot = true
-                }
-                if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
-                    self.loading = false
+                // Restoring a session's state on open is not a live change: without this, the queue
+                // strip, todos and composer hints animate in as if they had just appeared.
+                var transaction = Transaction()
+                transaction.disablesAnimations = !self.hasSnapshot
+                withTransaction(transaction) {
+                    if presentation.revision != self.processorRevision {
+                        self.processorRevision = presentation.revision
+                        presentation.revision = self.presentation.revision + 1
+                        self.presentation = presentation
+                        self.onPresentationChanged?()
+                    }
+                    if events.contains(where: { $0["type"]?.string == "snapshot" }) {
+                        self.hasSnapshot = true
+                    }
+                    if events.contains(where: { ["snapshot", "task_failed"].contains($0["type"]?.string ?? "") }) {
+                        self.loading = false
+                    }
                 }
             }
             if let self, self.generation == generation { self.processing = nil }
