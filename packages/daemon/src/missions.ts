@@ -273,6 +273,16 @@ export class MissionStore {
 			this.db.exec("ALTER TABLE resources ADD COLUMN pull_request TEXT");
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
+		if (!this.all("PRAGMA table_info(events)").some((row) => row.name === "is_user_note"))
+			this.transaction(() => {
+				this.db.exec("ALTER TABLE events ADD COLUMN is_user_note INTEGER NOT NULL DEFAULT 0");
+				// Legacy updates mix authored notes with automatic goal/title edits. Exclude that known
+				// automatic text; new writes use the marker so even identically worded notes are distinct.
+				this.db.exec(`UPDATE events SET is_user_note = 1 WHERE session_id IS NULL AND
+					(kind = 'handoff' OR (kind = 'update' AND (text <> 'Mission title or goal changed' OR health IS NOT NULL)))`);
+			});
+		this.db.exec(`CREATE INDEX IF NOT EXISTS user_notes_by_mission ON events (mission_id, id)
+			WHERE is_user_note = 1`);
 	}
 
 	close(): void {
@@ -325,14 +335,30 @@ export class MissionStore {
 		kind: MissionEventKind,
 		eventText: string,
 		actor: MissionActor,
-		extra: { taskId?: string; health?: MissionHealth; at?: number; wake?: boolean; noticeText?: string } = {},
+		extra: {
+			taskId?: string;
+			health?: MissionHealth;
+			at?: number;
+			wake?: boolean;
+			noticeText?: string;
+			userNote?: boolean;
+		} = {},
 	): MissionEvent {
 		const at = extra.at ?? Date.now();
 		const result = this.db
 			.prepare(
-				"INSERT INTO events (mission_id, kind, text, session_id, task_id, health, at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO events (mission_id, kind, text, session_id, task_id, health, at, is_user_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 			)
-			.run(missionId, kind, eventText, actor.sessionId ?? null, extra.taskId ?? null, extra.health ?? null, at);
+			.run(
+				missionId,
+				kind,
+				eventText,
+				actor.sessionId ?? null,
+				extra.taskId ?? null,
+				extra.health ?? null,
+				at,
+				extra.userNote ? 1 : 0,
+			);
 		this.run("UPDATE missions SET updated_at = ? WHERE id = ?", at, missionId);
 		const eventId = Number(result.lastInsertRowid);
 		if (extra.wake && (!actor.sessionId || actor.sessionId !== this.require(missionId).coordinatorSessionId))
@@ -1210,6 +1236,17 @@ export class MissionStore {
 
 	// Activity
 
+	/** User-authored notes have their own bounded window, independent of automatic and agent activity. */
+	userNotes(id: string, limit: number): MissionEvent[] {
+		this.require(id);
+		return this.all(
+			`SELECT * FROM events WHERE mission_id = ? AND is_user_note = 1
+			 ORDER BY id DESC LIMIT ?`,
+			id,
+			limit,
+		).map(eventFrom);
+	}
+
 	events(id: string, before?: number, limit = DETAIL_EVENTS): MissionEvent[] {
 		this.require(id);
 		const rows =
@@ -1233,7 +1270,10 @@ export class MissionStore {
 		if (write.health !== undefined && !HEALTH.includes(write.health))
 			throw new Error("health must be on_track, at_risk or off_track");
 		const event = this.transaction(() =>
-			this.event(id, kind, eventText, actor, write.health ? { health: write.health } : {}),
+			this.event(id, kind, eventText, actor, {
+				userNote: actor.sessionId === undefined,
+				...(write.health ? { health: write.health } : {}),
+			}),
 		);
 		this.changed(id);
 		return event;
