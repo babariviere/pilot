@@ -60,6 +60,9 @@ native macOS app, or from wherever the work came from.
   unknown children still prevent parking. One pre-forked spare with its modules loaded keeps reopening fast.
   pi-durable owns the transcript and model loop;
   the native pi kernel provides tools, prompts, extension hooks and provider auth from `~/.pi/agent`.
+  Native extension idle checks reflect Harness work, not the dormant SDK loop. The kernel forwards
+  `agent_settled` only when the final committed run state becomes idle, so jobs finishing during a
+  run remain pending for the extension's grouped notification. Queued end/start boundaries do not settle.
 - **Pilot.app** (`apps/macos`): session list, native chat, per-session terminal, menu bar, notifications.
   Installs and supervises the launch agent. Closing or quitting the app never stops agents.
   Terminal rendering retains the visible surface plus five inactive surfaces, detaching without killing

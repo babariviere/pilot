@@ -9,8 +9,15 @@ import {
 	fauxProvider,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
+	Type,
 } from "@earendil-works/pi-ai";
-import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import {
+	createEventBus,
+	type ExtensionContext,
+	type ExtensionFactory,
+	ModelRuntime,
+	SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
@@ -116,6 +123,174 @@ async function fixture(
 	};
 	return { open, a, b, bus, changes, adapters };
 }
+
+test("jobs-style completions stay pending while Harness works and wake it once after settling", {
+	timeout: 15_000,
+}, async (t) => {
+	let ctx!: ExtensionContext;
+	let complete!: (name: string) => void;
+	const pending: string[] = [];
+	const notifications: string[] = [];
+	const settled = deferred();
+	const entered = deferred();
+	const followUpEntered = deferred();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	// Unblock the faux stream even if a pre-fix assertion fails.
+	t.after(() => response.resolve(fauxAssistantMessage("Finished work.")));
+	const f = await fixture(t, [
+		(pi) => {
+			const flush = () => {
+				if (!ctx.isIdle() || !pending.length) return;
+				const content = `Finished background jobs: ${pending.splice(0).join(", ")}`;
+				notifications.push(content);
+				pi.sendMessage(
+					{ customType: "jobs.result", content, display: true },
+					{
+						deliverAs: "followUp",
+						triggerTurn: true,
+					},
+				);
+			};
+			pi.on("session_start", (_event, context) => {
+				ctx = context;
+				complete = (name) => {
+					pending.push(name);
+					flush();
+				};
+			});
+			pi.on("agent_settled", () => {
+				flush();
+				if (notifications.length && !pending.length) settled.resolve();
+			});
+		},
+	]);
+	f.a.setResponses([
+		() => {
+			entered.resolve();
+			return response.promise;
+		},
+		() => {
+			followUpEntered.resolve();
+			return fauxAssistantMessage("Both jobs noted.");
+		},
+	]);
+	const session = await f.open();
+	assert.equal(ctx.isIdle(), true);
+	await session.submit("work", "Do other work", "followUp");
+	await entered.promise;
+	assert.equal(ctx.isIdle(), false, "the dormant SDK loop must not report Harness as idle");
+	complete("tests");
+	complete("lint");
+	assert.deepEqual(notifications, [], "busy completions must not create separate durable follow-ups");
+	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))?.items.length, 0);
+	response.resolve(fauxAssistantMessage("Finished work."));
+	await settled.promise;
+	await followUpEntered.promise;
+	await session.conversation.waitForIdle(context);
+	assert.deepEqual(notifications, ["Finished background jobs: tests, lint"]);
+	assert.equal(f.a.state.callCount, 2, "one follow-up model turn for the whole batch");
+	const view = await session.conversation.context(context);
+	assert.deepEqual(
+		view.messages.filter((message) => message.role === "user").map((message) => message.content),
+		["Do other work", "Finished background jobs: tests, lint"],
+	);
+});
+
+test("native settlement skips queued run boundaries and idle snapshots, and stops on close", {
+	timeout: 15_000,
+}, async (t) => {
+	let settlements = 0;
+	let ctx!: ExtensionContext;
+	const settled = deferred();
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("session_start", (_event, context) => {
+				ctx = context;
+			});
+			pi.on("agent_settled", () => {
+				assert.equal(ctx.isIdle(), true);
+				settlements++;
+				settled.resolve();
+			});
+		},
+	]);
+	const entered = deferred();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => response.resolve(fauxAssistantMessage("First done.")));
+	f.a.setResponses([
+		() => {
+			entered.resolve();
+			return response.promise;
+		},
+		fauxAssistantMessage("Second done."),
+	]);
+	const session = await f.open();
+	assert.equal(settlements, 0, "opening an idle session does not settle a nonexistent run");
+	await session.submit("first", "First", "followUp");
+	await entered.promise;
+	await session.submit("second", "Second", "followUp");
+	response.resolve(fauxAssistantMessage("First done."));
+	await settled.promise;
+	await session.conversation.waitForIdle(context);
+	assert.equal(settlements, 1, "queued end/start in the same commit is not an idle boundary");
+	assert.equal(ctx.isIdle(), true);
+	await session.close();
+	assert.equal(settlements, 1, "shutdown does not release pending job notifications");
+	const restored = await f.open();
+	assert.equal(ctx.isIdle(), true);
+	assert.equal(settlements, 1, "reopening idle history does not emit a duplicate settlement");
+	await restored.close();
+});
+
+test("native extensions remain busy through tool execution and multiple model rounds", {
+	timeout: 15_000,
+}, async (t) => {
+	const busy: boolean[] = [];
+	let settlements = 0;
+	const settled = deferred();
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("before_agent_start", (_event, ctx) => {
+				busy.push(!ctx.isIdle());
+			});
+			pi.on("tool_call", (_event, ctx) => {
+				busy.push(!ctx.isIdle());
+			});
+			pi.on("tool_result", (_event, ctx) => {
+				busy.push(!ctx.isIdle());
+			});
+			pi.on("agent_settled", () => {
+				settlements++;
+				settled.resolve();
+			});
+			pi.registerTool({
+				name: "probe",
+				label: "Probe",
+				description: "Check native idle state during a Harness tool.",
+				parameters: Type.Object({}),
+				execute: async (_id, _args, _signal, _update, ctx) => {
+					busy.push(!ctx.isIdle());
+					return { content: [{ type: "text", text: "Checked" }], details: undefined };
+				},
+			});
+		},
+	]);
+	f.a.setResponses([
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "probe-call", name: "probe", arguments: {} },
+			{
+				stopReason: "toolUse",
+			},
+		),
+		fauxAssistantMessage("Done."),
+	]);
+	const session = await f.open();
+	await session.submit("probe", "Run the probe", "followUp");
+	await settled.promise;
+	assert.deepEqual(busy, [true, true, true, true]);
+	assert.equal(f.a.state.callCount, 2);
+	assert.equal(settlements, 1, "an intermediate tool-use round is not a settlement");
+});
 
 test("model selection updates native and durable choices, context usage and thinking, and survives reopen", {
 	timeout: 15_000,
