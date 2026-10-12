@@ -148,6 +148,8 @@ export interface SessionManagerOptions {
 	 * 0 disables.
 	 */
 	kernelRestartBackoffMs?: number;
+	/** Shared with the HTTP API so model lists, model changes and titles reuse one runtime and cache. */
+	models?: ModelCatalog;
 }
 
 export interface SessionFactories {
@@ -595,7 +597,6 @@ export class SessionManager {
 	/** Workspaces start by borrowing their project's objects. Copy them in the background, one at a time. */
 	private dissociation: Promise<void> = Promise.resolve();
 	private readonly titleTasks = new Set<Promise<void>>();
-	private readonly titleCatalog: ModelCatalog;
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
 	/** Admissions waiting for acknowledgement must not race archiving. */
@@ -685,8 +686,7 @@ export class SessionManager {
 		this.projects = projects;
 		this.agentDir = agentDir;
 		this.factories = factories;
-		this.modelCatalog = new ModelCatalog(agentDir);
-		this.titleCatalog = new ModelCatalog(agentDir);
+		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.pullRequests = new PullRequestSync<SessionMeta, FollowUpContext>(
 			{
 				sessions: () => this.metas.values(),
@@ -1564,7 +1564,7 @@ export class SessionManager {
 			try {
 				signal.throwIfAborted();
 				const title = await Promise.race([
-					(this.factories.title ?? this.titleCatalog.generateTitle.bind(this.titleCatalog))(
+					(this.factories.title ?? this.modelCatalog.generateTitle.bind(this.modelCatalog))(
 						pending.cwd,
 						pending.message,
 						signal,

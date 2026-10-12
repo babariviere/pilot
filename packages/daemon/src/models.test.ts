@@ -134,7 +134,7 @@ test("title generation follows project model scope, ignores its thinking suffix 
 	assert.equal(calls.length, 1);
 });
 
-test("model catalog coalesces loads, revalidates settings on expiry and retries failed results", async (t) => {
+test("model catalog shares availability across directories and applies settings immediately", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-model-cache-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	t.mock.timers.enable({ apis: ["Date"], now: 1000 });
@@ -157,19 +157,60 @@ test("model catalog coalesces loads, revalidates settings on expiry and retries 
 	assert.equal(catalog.list(root), first);
 	await first;
 	assert.equal(calls, 1);
+	// Distinct workspaces with the same credentials reuse the same availability check.
+	await Promise.all([catalog.list(join(root, "a")), catalog.list(join(root, "b"))]);
+	assert.equal(calls, 1);
+	// Settings are read on every request and never wait for a TTL.
 	await writeFile(join(root, "settings.json"), JSON.stringify({ defaultProvider: "test", defaultModel: "small" }));
-	assert.equal((await catalog.list(root)).defaultModel, undefined);
-	t.mock.timers.tick(60_000);
 	assert.equal((await catalog.list(root)).defaultModel, "test/small");
+	assert.equal(calls, 1);
+	// Credential changes invalidate availability.
+	await writeFile(join(root, "auth.json"), "{}");
+	await catalog.list(root);
 	assert.equal(calls, 2);
+	// A backstop TTL covers credential sources outside auth.json.
+	t.mock.timers.tick(5 * 60_000 - 1);
+	await catalog.list(root);
+	assert.equal(calls, 2);
+	t.mock.timers.tick(1);
 	failed = true;
-	t.mock.timers.tick(60_000);
 	await assert.rejects(catalog.list(root), /models failed/);
 	failed = false;
 	assert.equal((await catalog.list(root)).models[0]?.id, "test/small");
+	assert.equal(calls, 4);
 });
 
-test("model catalog bounds pending loads and cached directories", async (t) => {
+test("model catalog reloads model definitions when models.json changes", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-definitions-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	let models = [cheap];
+	let refreshes = 0;
+	let creates = 0;
+	t.mock.method(ModelRuntime, "create", async () => {
+		creates++;
+		return {
+			getAvailable: async () => models,
+			refresh: async (options: { allowNetwork?: boolean }) => {
+				assert.equal(options.allowNetwork, false);
+				refreshes++;
+				models = [cheap, expensive];
+			},
+		} as unknown as ModelRuntime;
+	});
+	const catalog = new ModelCatalog(root);
+	assert.equal((await catalog.list(root)).models.length, 1);
+	await writeFile(join(root, "models.json"), "{}");
+	assert.deepEqual(
+		(await catalog.list(root)).models.map((entry) => entry.id),
+		["test/small", "test/large"],
+	);
+	assert.equal(refreshes, 1);
+	await catalog.list(root);
+	assert.equal(refreshes, 1);
+	assert.equal(creates, 1);
+});
+
+test("model catalog bounds pending loads and keeps no per-directory state", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-model-cache-bounds-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
 	let calls = 0;
@@ -196,9 +237,7 @@ test("model catalog bounds pending loads and cached directories", async (t) => {
 	finish();
 	await Promise.all(pending);
 	for (let i = 4; i < 65; i++) await catalog.list(join(root, String(i)));
-	assert.equal(calls, 65);
-	await catalog.list(join(root, "1"));
-	assert.equal(calls, 66, "the oldest untouched directory must have been evicted");
+	assert.equal(calls, 1);
 });
 
 test("model catalog offers only levels supported by each model, including mapped extended levels", async (t) => {

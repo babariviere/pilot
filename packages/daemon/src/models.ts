@@ -1,26 +1,39 @@
-/** Models offered to clients: the user's pi model scope (`enabledModels`), else every authenticated model. */
+/**
+ * Models offered to clients: the user's pi model scope (`enabledModels`), else every authenticated model.
+ *
+ * The expensive part, checking credentials for every provider, is shared by all directories and reused until
+ * `auth.json`, `models.json` or `models-store.json` changes (with a backstop TTL for credential sources
+ * outside those files). Settings are re-read on every request, so scope and default changes apply immediately.
+ */
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
 import type { ModelList, ModelOption } from "@pilot/protocol";
+import { ServiceUnavailable } from "./errors.ts";
 import { readModelSettings } from "./model-settings.ts";
-import { TtlCache } from "./ttl-cache.ts";
 
-const TTL_MS = 60_000;
+/** Re-check credentials at least this often, for sources the file signature cannot see (env, external CLIs). */
+const AVAILABLE_TTL_MS = 5 * 60_000;
+const MAX_PENDING_LISTS = 4;
+
+interface Availability {
+	signature: string;
+	promise: Promise<readonly ChatModel[]>;
+	loadedAt: number;
+	pending: boolean;
+}
 
 /** Model IDs, independent of provider, whose scoped prices bound new task chats. */
 export const TASK_START_REFERENCE_MODELS = ["claude-opus-5-5", "gpt-6.1-sol"] as const;
 
 export class ModelCatalog {
 	private runtime?: Promise<ModelRuntime>;
-	private readonly cache = new TtlCache<ModelList>({
-		ttlMs: TTL_MS,
-		maxEntries: 64,
-		maxBytes: 4 * 1024 * 1024,
-		maxPending: 4,
-		busyMessage: "Model catalog is busy. Retry shortly.",
-		weight: (list) => Buffer.byteLength(JSON.stringify(list)),
-	});
+	/** Signature of the model definitions the runtime last loaded. */
+	private runtimeModels?: string;
+	private availability?: Availability;
+	/** Concurrent requests for one directory share a settings read. */
+	private readonly lists = new Map<string, Promise<ModelList>>();
 
 	private readonly agentDir: string;
 
@@ -32,7 +45,7 @@ export class ModelCatalog {
 	async generateTitle(cwd: string, message: string, signal?: AbortSignal): Promise<string | undefined> {
 		const runtime = await this.getRuntime();
 		signal?.throwIfAborted();
-		const { models } = await this.scoped(cwd, runtime, signal);
+		const { models } = await this.scoped(cwd, signal);
 		return generateChatTitle(
 			runtime,
 			models.map(({ model }) => model),
@@ -43,7 +56,13 @@ export class ModelCatalog {
 
 	/** Scope and default follow pi's settings for `cwd` (global plus project settings). */
 	list(cwd: string): Promise<ModelList> {
-		return this.cache.get(cwd, () => this.load(cwd));
+		const existing = this.lists.get(cwd);
+		if (existing) return existing;
+		if (this.lists.size >= MAX_PENDING_LISTS)
+			return Promise.reject(new ServiceUnavailable("Model catalog is busy. Retry shortly."));
+		const promise = this.load(cwd).finally(() => this.lists.delete(cwd));
+		this.lists.set(cwd, promise);
+		return promise;
 	}
 
 	/** Validate before spawning, including the default, so neither HTTP nor tool calls bypass the cap. */
@@ -99,26 +118,86 @@ export class ModelCatalog {
 	}
 
 	private getRuntime(): Promise<ModelRuntime> {
-		this.runtime ??= ModelRuntime.create({
-			authPath: join(this.agentDir, "auth.json"),
-			modelsPath: join(this.agentDir, "models.json"),
-			allowModelNetwork: false,
+		if (this.runtime) return this.runtime;
+		const runtime = (async () => {
+			// Taken before loading, so a concurrent edit is seen as a change and reloaded.
+			const definitions = await this.definitionsSignature();
+			const created = await ModelRuntime.create({
+				authPath: join(this.agentDir, "auth.json"),
+				modelsPath: join(this.agentDir, "models.json"),
+				allowModelNetwork: false,
+			});
+			this.runtimeModels = definitions;
+			return created;
+		})();
+		this.runtime = runtime;
+		// A failed start (for example a malformed models.json) must not poison every later request.
+		runtime.catch(() => {
+			if (this.runtime === runtime) this.runtime = undefined;
 		});
-		return this.runtime;
+		return runtime;
 	}
 
-	private async scoped(cwd: string, runtime: ModelRuntime, signal?: AbortSignal) {
-		const settings = await readModelSettings(cwd, this.agentDir, signal);
+	private async definitionsSignature(): Promise<string> {
+		const [models, store] = await Promise.all([
+			fileSignature(join(this.agentDir, "models.json")),
+			fileSignature(join(this.agentDir, "models-store.json")),
+		]);
+		return `${models}|${store}`;
+	}
+
+	/** Authenticated models, shared across directories and reloaded only when their sources change. */
+	private async available(signal?: AbortSignal): Promise<readonly ChatModel[]> {
+		const [auth, definitions] = await Promise.all([
+			fileSignature(join(this.agentDir, "auth.json")),
+			this.definitionsSignature(),
+		]);
+		const signature = `${auth}|${definitions}`;
+		signal?.throwIfAborted();
+		const current = this.availability;
+		if (current?.signature === signature && (current.pending || Date.now() - current.loadedAt < AVAILABLE_TTL_MS))
+			return current.promise;
+		// The shared load ignores any one caller's signal so an aborted request cannot fail the others.
+		const entry: Availability = { signature, promise: undefined!, loadedAt: 0, pending: true };
+		entry.promise = (async () => {
+			const runtime = await this.getRuntime();
+			if (this.runtimeModels !== definitions) {
+				await runtime.refresh({ allowNetwork: false });
+				this.runtimeModels = definitions;
+			}
+			return [...(await runtime.getAvailable())];
+		})().then(
+			(models) => {
+				entry.loadedAt = Date.now();
+				entry.pending = false;
+				return models;
+			},
+			(error: unknown) => {
+				if (this.availability === entry) this.availability = undefined;
+				throw error;
+			},
+		);
+		this.availability = entry;
+		return entry.promise;
+	}
+
+	private async scoped(cwd: string, signal?: AbortSignal) {
+		const [settings, available] = await Promise.all([
+			readModelSettings(cwd, this.agentDir, signal),
+			this.available(signal),
+		]);
+		signal?.throwIfAborted();
 		const patterns = settings.getEnabledModels();
+		// Scope resolution only needs the available models, so it reuses the shared result.
+		const source = { getAvailable: async () => available } as unknown as ModelRuntime;
 		const models = patterns?.length
-			? (await resolveModelScopeWithDiagnostics(patterns, runtime, { signal })).scopedModels
-			: (await runtime.getAvailable(undefined, { signal })).map((model) => ({ model, thinkingLevel: undefined }));
+			? (await resolveModelScopeWithDiagnostics(patterns, source)).scopedModels
+			: available.map((model) => ({ model, thinkingLevel: undefined }));
 		return { settings, models };
 	}
 
 	private async load(cwd: string): Promise<ModelList> {
-		const runtime = await this.getRuntime();
-		const { settings, models: scoped } = await this.scoped(cwd, runtime);
+		const { settings, models: scoped } = await this.scoped(cwd);
 		const provider = settings.getDefaultProvider();
 		const model = settings.getDefaultModel();
 		const defaultModel = provider && model ? `${provider}/${model}` : model;
@@ -130,6 +209,16 @@ export class ModelCatalog {
 }
 
 type ChatModel = Awaited<ReturnType<ModelRuntime["getAvailable"]>>[number];
+
+/** Changes when a file is replaced, rewritten or removed. Unreadable files fall back to the backstop TTL. */
+async function fileSignature(path: string): Promise<string> {
+	try {
+		const info = await stat(path, { bigint: true });
+		return `${info.ino}:${info.size}:${info.mtimeNs}`;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT" ? "-" : "?";
+	}
+}
 
 /** Compare uncached input plus output prices per million tokens, with stable scope-order ties. */
 export function cheapestTitleModel(models: readonly ChatModel[]): ChatModel | undefined {

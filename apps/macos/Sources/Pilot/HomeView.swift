@@ -348,7 +348,16 @@ struct TaskComposer: View {
             // Remember the effective default project too, not just explicit picker selections.
             app.draftProjectId = project.id
         }
-        form.models = (try? await client.models(projectId: project?.id, cwd: project == nil ? form.folder : nil)) ?? ModelList(models: [])
+        let projectId = project?.id
+        let cwd = project == nil ? form.folder : nil
+        // Show the last known list at once, then revalidate. Equal results never re-render the form.
+        let cached = client.cachedModels(projectId: projectId, cwd: cwd)
+        if let cached, form.models != cached { form.models = cached }
+        let fresh = try? await client.models(projectId: projectId, cwd: cwd)
+        guard !Task.isCancelled else { return }
+        // A failed refresh keeps the cached list; with nothing cached the scope has no known models.
+        let next = fresh ?? cached ?? ModelList(models: [])
+        if form.models != next { form.models = next }
     }
 
     private func start() {
