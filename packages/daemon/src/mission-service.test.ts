@@ -795,6 +795,167 @@ test("spawn rechecks mission admission after async preparation and never starts 
 	assert.deepEqual(f.store.members(mission.id), []);
 });
 
+test("start saves member and already-linked artifacts and parsed links before spawn; later chats inherit them", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const author = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Auth" }],
+	});
+	f.service.join(author.id, { missionId: mission.id });
+	const first = await f.sessions["artifactStore"](lead.id).create({
+		title: "Design",
+		kind: "html",
+		source: "<p>PRIVATE DESIGN CONTENT</p>",
+	});
+	const second = await f.sessions["artifactStore"](author.id).create({
+		title: "Diagram",
+		kind: "html",
+		source: "<p>PRIVATE DIAGRAM CONTENT</p>",
+	});
+	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: second.id });
+	f.service.leave(author.id); // An existing mission link remains a valid reference.
+	const task = f.store.resolveTask(mission.id, "1");
+	const spawn = f.sessions.spawn.bind(f.sessions);
+	t.mock.method(f.sessions, "spawn", async (request: Parameters<SessionManager["spawn"]>[0]) => {
+		const detail = f.store.detail(mission.id);
+		assert.equal(detail.artifacts.filter((ref) => ref.taskId === task.id).length, 2);
+		assert.equal(detail.resources.filter((ref) => ref.taskId === task.id).length, 2);
+		return spawn(request);
+	});
+	const session = (await f.service.call(lead.id, "start", {
+		id: "#1",
+		artifacts: [{ artifactId: first.id, revision: 1 }, { artifactId: second.id }],
+		links: [
+			{ url: "https://github.com/octo/repo/issues/42?x=1#fragment", title: "Issue" },
+			{ url: "https://linear.app/acme/issue/ENG-12/design" },
+		],
+	})) as SessionSummary;
+	const content = async (id: string) => {
+		const worker = await until(() => f.workers.get(id));
+		const input = await until(() => worker.requests.find((command) => command.type === "input"));
+		return input.type === "input" ? input.content : "";
+	};
+	const message = await content(session.id);
+	assert.match(message, /Read them as needed/);
+	assert.ok(message.includes(`Design (html): ${first.id}, revision 1`));
+	assert.ok(message.includes(`Diagram (html): ${second.id}`));
+	assert.match(message, /Issue \(github.issue\): https:\/\/github.com\/octo\/repo\/issues\/42/);
+	assert.doesNotMatch(message, /PRIVATE.*CONTENT/);
+	const detail = f.store.detail(mission.id);
+	assert.deepEqual(detail.resources.map((ref) => [ref.kind, ref.externalId]).sort(), [
+		["github.issue", "octo/repo#42"],
+		["linear.issue", "ENG-12"],
+	]);
+	assert.equal(
+		detail.artifacts.filter((ref) => ref.artifactId === second.id).length,
+		2,
+		"mission-level link is preserved",
+	);
+	for (const action of ["get", "tasks"] as const) {
+		const result = (await f.service.call(session.id, action, {})) as {
+			tasks: Array<{ artifacts: unknown[]; resources: unknown[] }>;
+		};
+		assert.equal(result.tasks[0]!.artifacts.length, 2);
+		assert.equal(result.tasks[0]!.resources.length, 2);
+	}
+	f.service.leave(session.id);
+	const later = await f.service.startTask(mission.id, task.id);
+	assert.equal(await content(later.id), message);
+});
+
+test("start rejects foreign artifacts, invalid revisions and malformed links without writes or spawn", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const outsider = await f.spawn();
+	const other = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "A" }],
+	});
+	const valid = await f.sessions["artifactStore"](lead.id).create({ title: "Valid", kind: "html", source: "ok" });
+	const foreign = await f.sessions["artifactStore"](outsider.id).create({
+		title: "Foreign",
+		kind: "html",
+		source: "no",
+	});
+	const otherArtifact = await f.sessions["artifactStore"](other.id).create({
+		title: "Other",
+		kind: "html",
+		source: "no",
+	});
+	const cases = [
+		{ artifacts: [{ artifactId: foreign.id }] },
+		{ artifacts: [{ artifactId: otherArtifact.id }] },
+		{ artifacts: [{ artifactId: "missing" }] },
+		{ artifacts: [{ artifactId: valid.id, revision: 2 }] },
+		{ artifacts: [{ artifactId: valid.id, revision: 0 }] },
+		{ artifacts: [{ artifactId: valid.id, revision: 1.5 }] },
+		{ artifacts: [null] },
+		{ artifacts: {} },
+		{ links: {} },
+		{ links: [null] },
+		{ links: [{ url: "relative" }] },
+		{ links: [{ url: "file:///tmp/read" }] },
+		{ links: [{ url: "https://example.com", title: 4 }] },
+		{ links: [{ url: "https://example.com", title: "x".repeat(201) }] },
+		{ links: Array.from({ length: 41 }, () => ({ url: "https://example.com" })) },
+	];
+	const before = f.store.detail(mission.id);
+	for (const args of cases) {
+		await assert.rejects(f.service.call(lead.id, "start", { id: "1", ...args }));
+		assert.deepEqual(f.store.detail(mission.id), before);
+		assert.equal(f.sessions.list().length, 3);
+	}
+	await assert.rejects(
+		f.service.call(lead.id, "start", {
+			id: "1",
+			artifacts: [{ artifactId: valid.id }, { artifactId: foreign.id }],
+			links: [{ url: "https://example.com" }],
+		}),
+		/must already be linked/,
+	);
+	assert.deepEqual(f.store.detail(mission.id), before);
+});
+
+test("opening message cap includes task body, extra instructions and inherited references", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B", body: "x".repeat(4000) }],
+	});
+	const before = f.store.detail(mission.id);
+	for (const args of [
+		{ message: "x".repeat(4000) },
+		{ links: Array.from({ length: 20 }, (_, i) => ({ url: `https://example.com/${i}`, title: "x".repeat(200) })) },
+	]) {
+		await assert.rejects(f.service.startTask(mission.id, "1", args), /Opening message is too long.*max 4000/);
+		assert.deepEqual(f.store.detail(mission.id), before);
+	}
+	await assert.rejects(f.service.startTask(mission.id, "2"), /Opening message is too long/);
+	for (let i = 0; i < 20; i++)
+		f.store.addResource(mission.id, { taskId: "1", url: `https://example.com/${i}`, title: "x".repeat(200) });
+	await assert.rejects(f.service.startTask(mission.id, "1"), /Opening message is too long/);
+	assert.equal(f.sessions.list().length, 0);
+	// A message exactly at the cap is accepted; one character above is rejected.
+	const plain = f.store.addTask(mission.id, { title: "C" });
+	const base = `Work on mission task #${plain.number}: C\n\nThis task is already claimed for this chat. Start by reading the mission with the mission tool.`;
+	const extra = "x".repeat(4000 - base.length - 2);
+	await assert.rejects(f.service.startTask(mission.id, plain.id, { message: `${extra}x` }), /max 4000/);
+	const session = await f.service.startTask(mission.id, plain.id, { message: extra });
+	const worker = await until(() => f.workers.get(session.id));
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(input.type === "input" ? input.content.length : 0, 4000);
+});
+
 test("Start chat spawns a member chat that owns the task; leaving releases it", async (t) => {
 	const f = await fixture(t);
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });

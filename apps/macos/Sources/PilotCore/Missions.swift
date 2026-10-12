@@ -249,6 +249,7 @@ public struct MissionTaskWrite: Encodable, Sendable {
 }
 
 public struct MissionArtifactLink: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let taskId: String?
     public let artifactId: String
     public let sessionId: String
     public let title: String
@@ -259,7 +260,7 @@ public struct MissionArtifactLink: Codable, Identifiable, Equatable, Hashable, S
     public let linkedBySessionId: String?
     public let linkedAt: Double
 
-    public var id: String { artifactId }
+    public var id: String { "\(artifactId)/\(taskId ?? "mission")" }
 }
 
 public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -316,11 +317,13 @@ public struct MissionCommentWrite: Codable, Sendable {
 
 /// POST /api/missions/:id/artifacts. The artifact must belong to a member chat.
 public struct MissionArtifactLinkWrite: Codable, Sendable {
+    public let taskId: String?
     public let sessionId: String
     public let artifactId: String
     public let revision: Int?
 
-    public init(sessionId: String, artifactId: String, revision: Int? = nil) {
+    public init(sessionId: String, artifactId: String, revision: Int? = nil, taskId: String? = nil) {
+        self.taskId = taskId
         self.sessionId = sessionId
         self.artifactId = artifactId
         self.revision = revision
@@ -447,8 +450,31 @@ public struct UpdateMissionRequest: Encodable, Sendable {
     }
 }
 
+/// A read reference to an existing artifact. Omitted revision follows the latest.
+public struct MissionArtifactReference: Codable, Sendable {
+    public let artifactId: String
+    public let revision: Int?
+
+    public init(artifactId: String, revision: Int? = nil) {
+        self.artifactId = artifactId
+        self.revision = revision
+    }
+}
+
+public struct MissionLinkReference: Codable, Sendable {
+    public let url: String
+    public let title: String?
+
+    public init(url: String, title: String? = nil) {
+        self.url = url
+        self.title = title
+    }
+}
+
 /// POST /api/missions/:id/tasks/:taskId/start: a new chat in the mission's project that claims the task.
 public struct StartMissionTaskRequest: Codable, Sendable {
+    public var artifacts: [MissionArtifactReference]?
+    public var links: [MissionLinkReference]?
     public var message: String?
     public var model: String?
     public var thinking: String?
@@ -456,7 +482,10 @@ public struct StartMissionTaskRequest: Codable, Sendable {
     public var baseBranch: String?
 
     public init(message: String? = nil, model: String? = nil, thinking: String? = nil, mode: ChatMode? = nil,
-                baseBranch: String? = nil) {
+                baseBranch: String? = nil, artifacts: [MissionArtifactReference]? = nil,
+                links: [MissionLinkReference]? = nil) {
+        self.artifacts = artifacts
+        self.links = links
         self.message = message
         self.model = model
         self.thinking = thinking

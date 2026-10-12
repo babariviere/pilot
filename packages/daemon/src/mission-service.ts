@@ -4,6 +4,8 @@ import type {
 	CreateMissionRequest,
 	JoinMissionRequest,
 	MissionArtifactLinkWrite,
+	MissionArtifactLink,
+	MissionResource,
 	MissionDetail,
 	MissionTask,
 	SessionSummary,
@@ -13,7 +15,7 @@ import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
-import type { MissionActor, MissionStore } from "./missions.ts";
+import { type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -33,14 +35,38 @@ export function draftMessage(title: string): string {
 	].join("\n");
 }
 
-function taskMessage(task: MissionTask, extra?: string): string {
-	return [
+function taskMessage(
+	task: MissionTask,
+	extra?: string,
+	artifacts: MissionArtifactLink[] = [],
+	links: Pick<MissionResource, "url" | "kind" | "title" | "externalId">[] = [],
+): string {
+	const line = (value: string) => value.replace(/\s+/g, " ").trim();
+	const message = [
 		`Work on mission task #${task.number}: ${task.title}`,
 		...(task.body ? ["", task.body] : []),
 		...(extra?.trim() ? ["", extra.trim()] : []),
+		...(artifacts.length || links.length
+			? [
+					"",
+					"Task references. Read them as needed; their content is not included here:",
+					...artifacts
+						.toSorted((a, b) => a.artifactId.localeCompare(b.artifactId))
+						.map(
+							(item) =>
+								`- ${line(item.title)} (${item.kind}): ${item.artifactId}${item.revision === undefined ? "" : `, revision ${item.revision}`}`,
+						),
+					...links.map((item) => `- ${line(item.title ?? item.externalId ?? "Link")} (${item.kind}): ${item.url}`),
+				]
+			: []),
 		"",
 		"This task is already claimed for this chat. Start by reading the mission with the mission tool.",
 	].join("\n");
+	if (message.length > 4000)
+		throw new Error(
+			`Opening message is too long (${message.length} characters; max 4000). Shorten the task body, message or references. Put durable context in the brief, decisions or task links.`,
+		);
+	return message;
 }
 
 function outline(markdown: string): string[] {
@@ -218,7 +244,7 @@ export class MissionService {
 	/** A new chat in the mission's project that joins and claims the task before its first turn. */
 	async startTask(missionId: string, taskId: string, request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
-		const task = this.store.resolveTask(missionId, taskId);
+		let task = this.store.resolveTask(missionId, taskId);
 		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by a chat`);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
@@ -230,9 +256,73 @@ export class MissionService {
 		// Recheck claims after model/settings I/O.
 		if (this.store.resolveTask(missionId, taskId).sessionId)
 			throw new Conflict(`Task #${task.number} is already claimed by a chat`);
+		for (const key of ["artifacts", "links"] as const)
+			if (request[key] !== undefined && (!Array.isArray(request[key]) || request[key].length > 40))
+				throw new Error(`${key} must be an array of at most 40 references`);
+		// Validate everything before saving anything or spawning. Member artifact discovery reads
+		// metadata only, in bounded batches, and never wakes workers or scans other projects.
+		const links = (request.links ?? []).map(normalizeResourceWrite);
+		const artifacts: MissionArtifactLink[] = [];
+		const linked = this.store.detail(missionId).artifacts;
+		const owners = new Map(linked.map((item) => [item.artifactId, item.sessionId]));
+		const wanted = new Set<string>();
+		for (const ref of request.artifacts ?? []) {
+			if (!ref || typeof ref.artifactId !== "string" || !ref.artifactId.trim() || ref.artifactId.length > 128)
+				throw new Error("artifacts require artifactId");
+			if (ref.revision !== undefined && (!Number.isSafeInteger(ref.revision) || ref.revision < 1))
+				throw new Error("artifact revision must be a positive integer");
+			if (!owners.has(ref.artifactId)) wanted.add(ref.artifactId);
+		}
+		const members = this.store.members(missionId);
+		for (let i = 0; wanted.size && i < members.length; i += 4) {
+			const lists = await Promise.all(members.slice(i, i + 4).map((id) => this.sessions.artifacts(id)));
+			for (const items of lists)
+				for (const item of items) if (wanted.delete(item.id)) owners.set(item.id, item.sessionId);
+		}
+		for (const ref of request.artifacts ?? []) {
+			const owner = owners.get(ref.artifactId);
+			if (!owner)
+				throw new Conflict(
+					`Artifact ${ref.artifactId} must already be linked to this mission or owned by a member chat`,
+				);
+			const item = await this.sessions.artifact(owner, ref.artifactId, ref.revision);
+			const value: MissionArtifactLink = {
+				artifactId: item.id,
+				sessionId: owner,
+				title: item.title,
+				kind: item.kind,
+				...(ref.revision !== undefined ? { revision: item.revision } : {}),
+				taskId: task.id,
+				linkedAt: 0,
+			};
+			const previous = artifacts.findIndex((item) => item.artifactId === value.artifactId);
+			if (previous < 0) artifacts.push(value);
+			else artifacts[previous] = value;
+		}
+		const detail = this.store.detail(missionId);
+		task = this.store.resolveTask(missionId, task.id);
+		const taskArtifacts = detail.artifacts
+			.filter((item) => item.taskId === task.id && !artifacts.some((ref) => ref.artifactId === item.artifactId))
+			.concat(artifacts);
+		const taskLinks = detail.resources.filter((item) => item.taskId === task.id);
+		const newLinks = links.filter(
+			(item, index) =>
+				!taskLinks.some((ref) => ref.url === item.url) && links.findIndex((ref) => ref.url === item.url) === index,
+		);
+		const message = taskMessage(task, request.message, taskArtifacts, [...taskLinks, ...newLinks]);
+		// Async artifact reads may race a claim or membership change. Recheck before writes.
+		if (this.store.resolveTask(missionId, task.id).sessionId)
+			throw new Conflict(`Task #${task.number} is already claimed by a chat`);
+		for (const item of artifacts)
+			if (
+				this.store.missionOf(item.sessionId) !== missionId &&
+				!detail.artifacts.some((ref) => ref.artifactId === item.artifactId && ref.sessionId === item.sessionId)
+			)
+				throw new Conflict("That artifact's chat is no longer in this mission");
+		this.store.attachTaskReferences(missionId, task.id, artifacts, newLinks);
 		const session = await this.sessions.spawn({
 			projectId: mission.projectId,
-			message: taskMessage(task, request.message),
+			message,
 			title: task.title,
 			...selection,
 			...(request.mode ? { mode: request.mode } : {}),
@@ -256,6 +346,7 @@ export class MissionService {
 				artifactId: artifact.id,
 				title: artifact.title,
 				kind: artifact.kind,
+				...(write.taskId !== undefined ? { taskId: write.taskId } : {}),
 				...(write.revision !== undefined ? { revision: artifact.revision } : {}),
 			},
 			actor,
@@ -302,6 +393,10 @@ export class MissionService {
 					...(args.message !== undefined ? { message: args.message as string } : {}),
 					...(args.model !== undefined ? { model: args.model as string } : {}),
 					...(args.thinking !== undefined ? { thinking: args.thinking as string } : {}),
+					...(args.artifacts !== undefined
+						? { artifacts: args.artifacts as StartMissionTaskRequest["artifacts"] }
+						: {}),
+					...(args.links !== undefined ? { links: args.links as StartMissionTaskRequest["links"] } : {}),
 				});
 			case "send": {
 				if (typeof args.targetSessionId !== "string" || !args.targetSessionId.trim())
@@ -353,6 +448,7 @@ export class MissionService {
 							title: task.title,
 							status: task.status,
 							resources: detail.resources.filter((resource) => resource.taskId === task.id),
+							artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
 							...(task.sessionId ? { owner: who(task.sessionId) } : {}),
 							...(task.milestone ? { milestone: task.milestone } : {}),
 							...(task.dependsOn?.length
@@ -381,6 +477,8 @@ export class MissionService {
 						title: artifact.title,
 						kind: artifact.kind,
 						artifactId: artifact.artifactId,
+						...(artifact.taskId ? { taskId: artifact.taskId } : {}),
+						...(artifact.revision !== undefined ? { revision: artifact.revision } : {}),
 						chat: who(artifact.sessionId),
 					})),
 					recentUserNotes: this.store.userNotes(missionId, RECENT_USER_NOTES).map((event) => ({
@@ -424,14 +522,17 @@ export class MissionService {
 				);
 				return { title: mission.title, goal: mission.goal };
 			}
-			case "tasks":
+			case "tasks": {
+				const detail = this.store.detail(missionId);
 				return {
-					tasks: this.store.tasks(missionId).map((task) => ({
+					tasks: detail.tasks.map((task) => ({
 						...task,
-						resources: this.store.detail(missionId).resources.filter((resource) => resource.taskId === task.id),
+						resources: detail.resources.filter((resource) => resource.taskId === task.id),
+						artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
 						...(task.sessionId ? { sessionId: undefined, owner: who(task.sessionId) } : {}),
 					})),
 				};
+			}
 			case "task": {
 				const write = {
 					...(args.title !== undefined ? { title: args.title } : {}),
@@ -481,6 +582,7 @@ export class MissionService {
 					{
 						sessionId,
 						artifactId: args.artifactId,
+						...(args.taskId !== undefined ? { taskId: args.taskId as string } : {}),
 						...(typeof args.artifactRevision === "number" ? { revision: args.artifactRevision } : {}),
 					},
 					actor,
