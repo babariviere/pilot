@@ -181,6 +181,6 @@ private let askProject = Project(id: "ask-project", name: "Code", path: "/tmp/co
     let copied = editor.string
     #expect(copied == "Copied context @/tmp/")
     editor.complete(nil)
-    #expect(editor.string == copied && editor.pathPicker == nil)
+    #expect(editor.string == copied && editor.completionPicker == nil)
     #expect(editor.completionDirectory == nil)
 }

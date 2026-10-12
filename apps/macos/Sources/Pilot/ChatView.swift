@@ -49,6 +49,7 @@ final class SessionFeed: ObservableObject {
         cached.working = false
         cached.streaming = false
         cached.retry = nil
+        cached.compacting = false
         cached.error = nil
         presentation = cached
         token = client.subscribe(sessionId) { [weak self] events in
@@ -117,6 +118,7 @@ struct ChatView: View {
     @StateObject private var toolExpansions = TranscriptExpansions()
     @StateObject private var messageExpansions = TranscriptExpansions()
     @StateObject private var messageTimestamps = MessageTimestampSelection()
+    @StateObject private var slashCommands = SlashCommandSource()
     private let bottomPadding: CGFloat = 8
 
     init(session: SessionSummary, feed: SessionFeed? = nil, composer: ComposerState? = nil) {
@@ -149,7 +151,7 @@ struct ChatView: View {
                             messageExpansions: messageExpansions).equatable()
                     }
                     if showsWorkingIndicator(transcript) {
-                        WorkingIndicator(retry: transcript.retry)
+                        WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
@@ -231,7 +233,11 @@ struct ChatView: View {
                         onRemoveQueuedMessage: { id in
                             try await AppModel.shared.client.removeQueuedMessage(session.id, submissionId: id)
                         },
-                        session: session
+                        session: session,
+                        slashCommands: slashCommands.commands,
+                        onSlashCommandsNeeded: { [sessionId = session.id] in
+                            slashCommands.load(sessionId: sessionId, client: AppModel.shared.client)
+                        }
                     )
                 }
             }
@@ -257,6 +263,8 @@ struct ChatView: View {
     /// A running tool row already shows its own spinner, so the transcript needs no second
     /// "Working…" line under it. Retries always show, since they explain the wait.
     private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
+        // A manual compaction can run while idle, and explains a pause while working.
+        if transcript.compacting && !transcript.streaming { return true }
         guard transcript.working else { return false }
         if transcript.retry != nil { return true }
         let last = transcript.liveRows.last ?? transcript.historyRows.last
@@ -267,6 +275,10 @@ struct ChatView: View {
     private func send(_ message: String, _ mode: DeliveryMode) {
         guard !session.isArchived else { return }
         composer.error = nil
+        if let instructions = SlashCommands.compactInstructions(composer.trimmed) {
+            compact(instructions)
+            return
+        }
         let previous = composer.draft
         do { try composer.attachments.retainForHistory() }
         catch {
@@ -282,6 +294,24 @@ struct ChatView: View {
             } catch {
                 composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.attachments.items.insert(contentsOf: previousAttachments.items, at: 0)
+                composer.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// `/compact [instructions]` is handled by Pilot, never sent to the agent as a message.
+    private func compact(_ instructions: String) {
+        guard composer.attachments.items.isEmpty else {
+            composer.error = "Remove attached images to run /compact."
+            return
+        }
+        let previous = composer.draft
+        composer.draft = ""
+        Task {
+            do {
+                try await AppModel.shared.client.compact(session.id, instructions: instructions.isEmpty ? nil : instructions)
+            } catch {
+                composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.error = error.localizedDescription
             }
         }

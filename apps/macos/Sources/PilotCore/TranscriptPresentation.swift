@@ -41,6 +41,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public var retry: String? {
         didSet { updateMetadataByteCount() }
     }
+    public var compacting = false
     public var error: String? {
         didSet { updateMetadataByteCount() }
     }
@@ -73,6 +74,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         queuedMessages = transcript.queuedMessages
         todos = transcript.todos
         retry = transcript.retry
+        compacting = transcript.compacting
         error = transcript.error
         updateMetadataByteCount()
     }
@@ -81,7 +83,8 @@ public struct TranscriptPresentation: Equatable, Sendable {
         // Accounting and subtree invalidation keys are rendering caches, not transcript value.
         lhs.hasSameRows(as: rhs) && lhs.working == rhs.working && lhs.streaming == rhs.streaming
             && lhs.queuedMessages == rhs.queuedMessages && lhs.todos == rhs.todos
-            && lhs.retry == rhs.retry && lhs.error == rhs.error && lhs.revision == rhs.revision
+            && lhs.retry == rhs.retry && lhs.compacting == rhs.compacting && lhs.error == rhs.error
+            && lhs.revision == rhs.revision
     }
 
     func hasSameRows(as other: Self) -> Bool {
@@ -259,7 +262,7 @@ public actor TranscriptProcessor {
         if let last,
            result.working == last.working, result.streaming == last.streaming,
            result.queuedMessages == last.queuedMessages, result.todos == last.todos,
-           result.retry == last.retry, result.error == last.error,
+           result.retry == last.retry, result.compacting == last.compacting, result.error == last.error,
            !rowsDiffer { return last }
         revision += 1
         result.revision = revision

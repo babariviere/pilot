@@ -114,6 +114,9 @@ struct Composer: View {
     let onEditQueuedMessage: (Int, String, DeliveryMode) async throws -> Void
     let onRemoveQueuedMessage: (Int) async throws -> Void
     var session: SessionSummary? = nil
+    /// Slash command menu entries; nil disables the menu.
+    var slashCommands: [SlashCommand]? = nil
+    var onSlashCommandsNeeded: (() -> Void)? = nil
     @StateObject private var modelPicker = ChatModelPickerState()
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
@@ -173,7 +176,9 @@ struct Composer: View {
                 onNavigateQueue: { state.navigateQueue($0, messages: remainingQueuedMessages) },
                 onCancel: cancelQueueEditAction,
                 onPasteImages: { state.attachments.paste(from: $0) },
-                completionDirectory: completionDirectory
+                completionDirectory: completionDirectory,
+                slashCommands: slashCommands,
+                onSlashCommandsNeeded: onSlashCommandsNeeded
             ) { flags in
                 send(flags.contains(.option) ? .followUp : .steer)
             }
@@ -250,6 +255,8 @@ private struct ComposerDraftEditor: View {
     let onCancel: (() -> Void)?
     let onPasteImages: (NSPasteboard) -> Bool
     let completionDirectory: String?
+    let slashCommands: [SlashCommand]?
+    let onSlashCommandsNeeded: (() -> Void)?
     let onSubmit: (NSEvent.ModifierFlags) -> Void
     @Environment(\.pilotFonts) private var fonts
 
@@ -264,6 +271,7 @@ private struct ComposerDraftEditor: View {
             ChatTextEditor(text: $state.draft, height: $state.height, font: fonts.nsBody,
                            focusToken: focusToken, onNavigateQueue: onNavigateQueue, onCancel: onCancel,
                            onPasteImages: onPasteImages, completionDirectory: completionDirectory,
+                           slashCommands: slashCommands, onSlashCommandsNeeded: onSlashCommandsNeeded,
                            onSubmit: onSubmit)
                 .frame(height: state.height)
         }

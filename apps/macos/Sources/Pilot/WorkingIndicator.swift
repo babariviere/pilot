@@ -5,10 +5,11 @@ import SwiftUI
 /// A stationary label with a soft left-to-right highlight, followed by a short pause.
 struct WorkingIndicator: View {
     let retry: String?
+    var compacting = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var visibility = WorkingHighlightVisibility()
 
-    var label: String { retry.map { "Retrying: \($0)" } ?? "Working…" }
+    var label: String { retry.map { "Retrying: \($0)" } ?? (compacting ? "Compacting context…" : "Working…") }
     private static let muted = Color(hex: 0x989898)
     static let cycleDuration: TimeInterval = 2.2
 

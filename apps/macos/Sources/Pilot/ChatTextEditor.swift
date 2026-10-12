@@ -18,6 +18,10 @@ struct ChatTextEditor: NSViewRepresentable {
     var onRemoveQueuedMessage: (() -> Void)?
     var onPasteImages: ((NSPasteboard) -> Bool)?
     var completionDirectory: String? = FileManager.default.homeDirectoryForCurrentUser.path
+    /// Slash command menu entries; nil disables the menu.
+    var slashCommands: [SlashCommand]?
+    /// Called when the menu opens, so the owner can load the session's commands lazily.
+    var onSlashCommandsNeeded: (() -> Void)?
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -50,6 +54,10 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.isAutomaticTextReplacementEnabled = false
         textView.string = text
         textView.completionDirectory = completionDirectory
+        textView.slashCommands = slashCommands
+        textView.onSlashCommandsNeeded = { [weak coordinator = context.coordinator] in
+            coordinator?.parent.onSlashCommandsNeeded?()
+        }
         textView.onSubmit = { [weak coordinator = context.coordinator] flags in coordinator?.parent.onSubmit(flags) }
         textView.onNavigateQueue = { [weak coordinator = context.coordinator] direction in
             coordinator?.parent.onNavigateQueue?(direction) ?? false
@@ -85,10 +93,11 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.completionDirectory = completionDirectory
         var changed = false
         if textView.string != text {
-            textView.dismissPathPicker()
+            textView.dismissCompletionPicker()
             textView.string = text
             changed = true
         }
+        textView.slashCommands = slashCommands
         if textView.font != font {
             textView.font = font
             changed = true
@@ -101,7 +110,7 @@ struct ChatTextEditor: NSViewRepresentable {
         guard let textView = scroll.documentView as? SubmitTextView else { return }
         textView.onLayoutWidthChange = nil
         textView.delegate = nil
-        textView.dismissPathPicker()
+        textView.dismissCompletionPicker()
     }
 
     @MainActor
@@ -205,14 +214,14 @@ final class SubmitTextView: NSTextView {
 
     override func paste(_ sender: Any?) {
         guard isEditable else { return }
-        dismissPathPicker()
+        dismissCompletionPicker()
         if onPasteImages?(NSPasteboard.general) == true { return }
         super.paste(sender)
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         guard isEditable else { return }
-        dismissPathPicker()
+        dismissCompletionPicker()
         if onPasteImages?(NSPasteboard.general) == true { return }
         super.pasteAsPlainText(sender)
     }
@@ -220,7 +229,7 @@ final class SubmitTextView: NSTextView {
     override func readSelection(from pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
         guard isEditable else { return false }
         if onPasteImages?(pasteboard) == true {
-            dismissPathPicker()
+            dismissCompletionPicker()
             return true
         }
         if type == .fileURL, onPasteImages != nil, pasteboard.availableType(from: [.string]) != nil {
@@ -229,9 +238,19 @@ final class SubmitTextView: NSTextView {
         return super.readSelection(from: pasteboard, type: type)
     }
     var completionDirectory: String? = FileManager.default.homeDirectoryForCurrentUser.path {
-        didSet { if oldValue != completionDirectory { dismissPathPicker() } }
+        didSet { if oldValue != completionDirectory, pickerMode == .path { dismissCompletionPicker() } }
     }
-    private(set) var pathPicker: PathCompletionPicker?
+    var slashCommands: [SlashCommand]? {
+        didSet { if oldValue != slashCommands, pickerMode == .slash || slashCommands == nil { updateSlashPicker() } }
+    }
+    var onSlashCommandsNeeded: (() -> Void)?
+    private enum PickerMode { case path, slash }
+    private(set) var completionPicker: CompletionPicker?
+    private var pickerMode: PickerMode?
+    /// The slash command token the open menu completes, and its matching commands.
+    private var slashRange: NSRange?
+    private var slashMatches: [SlashCommand] = []
+    private var insertingCompletion = false
     private var keyFlags: NSEvent.ModifierFlags?
 
     private var inputFlags: NSEvent.ModifierFlags {
@@ -242,17 +261,23 @@ final class SubmitTextView: NSTextView {
         keyFlags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         defer { keyFlags = nil }
         let navigation = inputFlags.intersection([.command, .control, .option]).isEmpty
-        if let picker = pathPicker, !hasMarkedText() {
+        if let picker = completionPicker, !hasMarkedText() {
+            let slash = pickerMode == .slash
             switch event.keyCode {
             case 125 where navigation: picker.model.move(1); return
             case 126 where navigation: picker.model.move(-1); return
             case 48 where navigation && inputFlags.contains(.shift): picker.model.move(-1); return
             case 48 where navigation: picker.model.choose?(picker.model.selected); return
-            case 36, 76: picker.model.choose?(picker.model.selected); return
-            case 53: dismissPathPicker(); return
-            default: dismissPathPicker()
+            case 36 where slash && !inputFlags.contains(.shift), 76 where slash && !inputFlags.contains(.shift):
+                if runSlashCommand(picker.model.selected) { onSubmit?(inputFlags) }
+                return
+            case 36 where !slash, 76 where !slash: picker.model.choose?(picker.model.selected); return
+            case 53: dismissCompletionPicker(); return
+            // Typing refines the slash menu; didChangeText or the caret check below updates it.
+            default: if !slash { dismissCompletionPicker() }
             }
         }
+        defer { if pickerMode == .slash { updateSlashPicker() } }
         // Picker navigation and Escape take precedence over queue editing shortcuts.
         if !hasMarkedText() {
             if event.keyCode == 51, inputFlags.intersection([.command, .control, .option, .shift]) == .command,
@@ -294,36 +319,105 @@ final class SubmitTextView: NSTextView {
     }
 
     override func didChangeText() {
-        dismissPathPicker()
+        if pickerMode == .path { dismissCompletionPicker() }
         super.didChangeText()
+        updateSlashPicker()
     }
 
     override func resignFirstResponder() -> Bool {
-        dismissPathPicker()
+        dismissCompletionPicker()
         return super.resignFirstResponder()
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
-        dismissPathPicker()
+        dismissCompletionPicker()
         super.viewWillMove(toWindow: newWindow)
     }
 
-    func dismissPathPicker() {
-        pathPicker?.close()
-        pathPicker = nil
+    func dismissCompletionPicker() {
+        completionPicker?.close()
+        completionPicker = nil
+        pickerMode = nil
+        slashRange = nil
+        slashMatches = []
     }
 
     private func showPathPicker(candidates: [String], range: NSRange) {
-        dismissPathPicker()
+        dismissCompletionPicker()
         let original = string
         let selection = selectedRange()
-        let picker = PathCompletionPicker(candidates: candidates) { [weak self] index in
+        let picker = CompletionPicker(items: candidates.map(CompletionItem.path)) { [weak self] index in
             guard let self else { return }
-            self.dismissPathPicker()
+            self.dismissCompletionPicker()
             guard self.string == original, self.selectedRange() == selection else { return }
             self.insertText(candidates[index], replacementRange: range)
-        } onDismiss: { [weak self] in self?.dismissPathPicker() }
-        pathPicker = picker
+        } onDismiss: { [weak self] in self?.dismissCompletionPicker() }
+        completionPicker = picker
+        pickerMode = .path
         picker.show(for: self)
+    }
+
+    /// Open, refine or close the slash command menu for the token at the caret. Cheap enough to run per keystroke:
+    /// filtering is bounded, and the open panel is updated in place rather than recreated.
+    private func updateSlashPicker() {
+        guard !insertingCompletion, pickerMode != .path else { return }
+        guard let commands = slashCommands, isEditable, !hasMarkedText(),
+              let range = SlashCommands.range(in: string, selection: selectedRange()) else {
+            if pickerMode == .slash { dismissCompletionPicker() }
+            return
+        }
+        if pickerMode == nil { onSlashCommandsNeeded?() }
+        let query = (string as NSString).substring(with: NSRange(location: 1, length: range.length - 1))
+        let matches = SlashCommands.matches(query, in: commands)
+        guard !matches.isEmpty else {
+            if pickerMode == .slash { dismissCompletionPicker() }
+            return
+        }
+        slashRange = range
+        slashMatches = matches
+        let items = matches.map(CompletionItem.command)
+        if let picker = completionPicker {
+            picker.update(items, for: self)
+            return
+        }
+        let picker = CompletionPicker(
+            items: items, width: 440,
+            hints: [CompletionPicker.Hint(key: "⇥", label: "complete"), CompletionPicker.Hint(key: "↩", label: "run")]
+        ) { [weak self] index in
+            self?.insertSlashCommand(index, trailingSpace: true)
+        } onDismiss: { [weak self] in self?.dismissCompletionPicker() }
+        picker.anchor = range.location
+        completionPicker = picker
+        pickerMode = .slash
+        picker.show(for: self)
+    }
+
+    /// Replace the typed token with the chosen command. Returns false when the menu is stale.
+    @discardableResult
+    private func insertSlashCommand(_ index: Int, trailingSpace: Bool) -> Bool {
+        guard let range = slashRange, slashMatches.indices.contains(index),
+              range.upperBound <= (string as NSString).length else {
+            dismissCompletionPicker()
+            return false
+        }
+        let command = slashMatches[index]
+        dismissCompletionPicker()
+        let replacement = command.invocation + (trailingSpace ? " " : "")
+        if (string as NSString).substring(with: range) != replacement {
+            insertingCompletion = true
+            defer { insertingCompletion = false }
+            insertText(replacement, replacementRange: range)
+        }
+        return true
+    }
+
+    /// Return runs the chosen command, except a prompt template expecting arguments, which is completed instead.
+    private func runSlashCommand(_ index: Int) -> Bool {
+        guard slashMatches.indices.contains(index) else {
+            dismissCompletionPicker()
+            return false
+        }
+        let needsArguments = slashMatches[index].kind == .prompt && slashMatches[index].argumentHint != nil
+        return insertSlashCommand(index, trailingSpace: needsArguments) && !needsArguments
     }
 }

@@ -30,6 +30,22 @@ private func json(_ text: String) -> JSONValue {
     #expect(!transcript.working)
 }
 
+
+@Test func tracksRunningCompactionsFromSnapshotsAndEvents() {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"snapshot","entries":[],"tools":[],"compactions":[{"taskId":4,"reason":"manual","blocking":false,"attempt":1}],"inbox":[],"agent":{},"usage":{}}"#))
+    #expect(transcript.compacting)
+    #expect(!transcript.working, "a manual compaction runs without a run")
+    transcript.apply([
+        json(#"{"type":"compaction_start","taskId":9,"reason":"threshold","blocking":true}"#),
+        json(#"{"type":"compaction_end","taskId":4,"reason":"manual"}"#),
+    ])
+    #expect(transcript.compacting)
+    transcript.apply(json(#"{"type":"compaction_end","taskId":9,"reason":"threshold"}"#))
+    #expect(!transcript.compacting)
+    #expect(TranscriptPresentation(transcript: transcript).compacting == false)
+}
+
 @Test func tracksToolOutputWindowsAndResults() {
     var transcript = Transcript()
     transcript.apply([

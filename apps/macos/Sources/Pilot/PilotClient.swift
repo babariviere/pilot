@@ -114,6 +114,18 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())
     }
 
+    /// Prompt templates and skills the session's kernel expands. Reopens a parked chat only when pilotd has no list yet.
+    func commands(_ sessionId: String) async throws -> [SessionCommand] {
+        let response: SessionCommandsResponse = try await call("api/sessions/\(sessionId)/commands", method: "GET")
+        return response.commands
+    }
+
+    /// Starts a manual compaction; returns once it is queued, not when the summary is placed.
+    func compact(_ sessionId: String, instructions: String?) async throws {
+        guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before compacting it.") }
+        let _: Ack = try await call("api/sessions/\(sessionId)/compact", body: CompactRequest(instructions: instructions))
+    }
+
     // MARK: Subagents
 
     /// Static transcripts for snapshots and previews, keyed by subagent name.

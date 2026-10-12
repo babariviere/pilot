@@ -639,6 +639,15 @@ reports), producing a morning summary in the app and Slack.
 - Task and chat composers complete local file and folder paths on Tab, relative to the selected project
   or session working directory; absolute paths and `~/` work too. A compact floating path picker shows
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
+- Typing `/` at the start of a chat message opens a slash command menu in the same floating picker style:
+  Pilot's built-in `/compact [instructions]`, then the session's prompt templates (`/name`) and skills
+  (`/skill:name`). Tab completes, Return runs (a template with an `argument-hint` is completed instead).
+  Templates and skills are sent as ordinary messages and expanded by the kernel on admission. `/compact`
+  is handled by Pilot (`POST /api/sessions/:id/compact`): it queues a durable manual compaction that runs
+  alongside work and shows "Compacting context…" until the summary is placed. The list
+  (`GET /api/sessions/:id/commands`) is loaded the first time the menu opens and cached by pilotd from
+  each kernel's ready packet, so it reopens a parked chat at most once. Extension commands and the
+  new-task composer are not covered yet.
 - Task and chat composers accept native clipboard images with Command-V, showing removable previews
   above the text input. Save app-owned PNG copies in Application Support and include their absolute
   paths in the message for pi's read tool. Image-only messages are supported; sent files are retained
