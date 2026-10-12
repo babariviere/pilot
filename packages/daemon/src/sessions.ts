@@ -35,6 +35,7 @@ import type {
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { operations } from "./event-loop-watchdog.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { type SubagentWatchListener, SubagentWatches, type SubagentWatchStarter } from "./subagent-watches.ts";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
@@ -141,6 +142,12 @@ export interface SessionManagerOptions {
 	commandTimeoutMs?: number;
 	/** Reclaim shared workspaces this long after archival. Defaults to 30 days; Infinity disables. */
 	workspaceRetentionMs?: number;
+	/**
+	 * Automatic work (mission notices, PR follow-ups) waits this long after a kernel crash or IPC failure,
+	 * doubling per consecutive failure up to 10 minutes. User actions are never delayed. Defaults to 15 seconds;
+	 * 0 disables.
+	 */
+	kernelRestartBackoffMs?: number;
 }
 
 export interface SessionFactories {
@@ -254,6 +261,9 @@ function hasActivePullRequest(meta: SessionMeta): boolean {
 const WEEK_MS = 7 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
 const COLD_SNAPSHOT_TTL_MS = 5_000;
+const KERNEL_BACKOFF_MAX_MS = 10 * 60_000;
+/** Consecutive kernel failures further apart than this start a fresh backoff. */
+const KERNEL_FAILURE_RESET_MS = 30 * 60_000;
 const COLD_SNAPSHOT_MAX_ENTRIES = 16;
 const COLD_SNAPSHOT_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -391,7 +401,7 @@ export class Worker implements SessionWorker {
 			options.startupTimeoutMs ?? 120_000,
 		);
 		this.startupTimer.unref();
-		this.child.on("message", (message) => {
+		const handle = (message: unknown) => {
 			if (this.unavailable || this.exited) return;
 			const packet = message as KernelPacket;
 			if (packet.type === "events" && packet.watchId === this.activityWatchId) {
@@ -432,7 +442,15 @@ export class Worker implements SessionWorker {
 			}
 			if ((packet.type === "ready" || packet.type === "working") && packet.working) this.error = undefined;
 			this.onPacket(packet);
-		});
+		};
+		// Large snapshots and their listeners run synchronously here. Attribute them if the event loop stalls.
+		this.child.on("message", (message) =>
+			operations.time(
+				() => `kernel ${(message as KernelPacket).type} packet for ${spec.sessionId}`,
+				() => handle(message),
+				250,
+			),
+		);
 		this.child.on("error", (error) => {
 			this.failTransport(new WorkerUnavailable(error.message, { cause: error }));
 		});
@@ -631,6 +649,13 @@ export class SessionManager {
 	private readonly workerGenerations = new Map<string, number>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
 	private missions?: SessionMissionBridge;
+	/** Consecutive kernel crashes per session, so automatic work cannot restart a failing kernel in a loop. */
+	private readonly kernelFailures = new Map<string, { failures: number; at: number; until: number }>();
+	/** A transport failure is counted when detected, before its exit, and only once. */
+	private readonly countedFailures = new WeakSet<SessionWorker>();
+	/** Last kernel crash or IPC failure, shown until the next kernel is ready. Not uncertain admission. */
+	private readonly kernelErrors = new Map<string, string>();
+	private readonly kernelRestartBackoffMs: number;
 
 	private readonly home: string;
 	private readonly projects: ProjectStore;
@@ -647,6 +672,7 @@ export class SessionManager {
 	) {
 		this.idleParkMs = options.idleParkMs ?? 10 * 60_000;
 		this.prFollowUpCooldownMs = options.prFollowUpCooldownMs ?? 5 * 60_000;
+		this.kernelRestartBackoffMs = options.kernelRestartBackoffMs ?? 15_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? 30 * DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
@@ -775,6 +801,25 @@ export class SessionManager {
 	/** Wait for an inactivity close, so the next worker can take the session's storage lease. */
 	private async unparked(id: string): Promise<void> {
 		for (let closing = this.parking.get(id); closing; closing = this.parking.get(id)) await closing;
+	}
+
+	/** Doubling per consecutive crash, capped; a quiet period starts over. */
+	private recordKernelFailure(id: string, worker: SessionWorker): void {
+		if (this.kernelRestartBackoffMs <= 0 || this.countedFailures.has(worker)) return;
+		this.countedFailures.add(worker);
+		const now = Date.now();
+		const previous = this.kernelFailures.get(id);
+		const failures = previous && now - previous.at < KERNEL_FAILURE_RESET_MS ? previous.failures + 1 : 1;
+		const delay = Math.min(KERNEL_BACKOFF_MAX_MS, this.kernelRestartBackoffMs * 2 ** Math.min(failures - 1, 16));
+		this.kernelFailures.set(id, { failures, at: now, until: now + delay });
+		if (failures > 1)
+			console.warn(`pilotd: kernel for ${id} failed ${failures} times; automatic restarts wait ${delay}ms`);
+	}
+
+	/** Automatic work must not reopen a recently crashed kernel. Explicit user actions still can. */
+	private kernelBackingOff(id: string): boolean {
+		const backoff = this.kernelFailures.get(id);
+		return backoff !== undefined && Date.now() < backoff.until;
 	}
 
 	private dissociate(meta: SessionMeta): void {
@@ -1553,6 +1598,7 @@ export class SessionManager {
 			!this.closing &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
+			!this.kernelBackingOff(id) &&
 			!meta.working &&
 			!meta.initializing &&
 			!meta.preparing &&
@@ -2243,7 +2289,9 @@ export class SessionManager {
 				if (this.closing) return;
 				if (error instanceof WorkerUnavailable) {
 					// Startup may have committed state before its acknowledgement was lost. Keep stable IDs.
-					meta.inputError = error.message;
+					// Without queued commands nothing is uncertain: the kernel failed, the session is still usable.
+					if (meta.pending?.length) meta.inputError = error.message;
+					else this.kernelErrors.set(id, error.message);
 					delete meta.initializing;
 					await this.save(meta);
 					this.emit(meta);
@@ -2322,11 +2370,16 @@ export class SessionManager {
 		if (this.workers.get(meta.id) === exited) this.workers.delete(meta.id);
 		// An inactivity close is not a failure, even if a slow shutdown had to be forced.
 		if (!this.closing && !this.parked.has(exited)) {
+			if (exited.state === "failed" || code !== 0 || signal !== null) this.recordKernelFailure(meta.id, exited);
 			if (exited.state === "failed") {
 				// Preserve performance recovery: transport failures do not permanently disable the session.
-				meta.inputError =
+				const reason =
 					exited.error ?? (signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
-				void this.save(meta);
+				// Only queued commands make admission uncertain. Otherwise the next send simply reopens the kernel.
+				if (meta.pending?.length) {
+					meta.inputError = reason;
+					void this.save(meta);
+				} else if (!meta.inputError) this.kernelErrors.set(meta.id, reason);
 			}
 			if (code !== 0 || signal !== null || exited.state === "working" || exited.state === "starting") {
 				const reason =
@@ -2367,7 +2420,10 @@ export class SessionManager {
 				if (this.parking.get(meta.id) === closing) this.parking.delete(meta.id);
 			});
 			this.parking.set(meta.id, closing);
-			meta.inputError = packet.message;
+			// Count it now: a viewer or notice may retry before the old kernel has finished exiting.
+			this.recordKernelFailure(meta.id, worker);
+			if (meta.pending?.length) meta.inputError = packet.message;
+			else this.kernelErrors.set(meta.id, packet.message);
 		}
 		// Display-only background refreshes must not keep an unwatched idle kernel resident.
 		if (
@@ -2449,6 +2505,9 @@ export class SessionManager {
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
 				if (packet.thinking !== undefined) meta.thinking = packet.thinking;
+				// A fresh kernel recovers from an earlier crash. Queued commands keep their error until admitted.
+				this.kernelErrors.delete(meta.id);
+				if (!meta.pending?.length) delete meta.inputError;
 				void this.save(meta);
 			} else if (wasWorking !== packet.working || (changed && packet.completion)) {
 				meta.updatedAt = Date.now();
@@ -2512,8 +2571,8 @@ export class SessionManager {
 			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
 			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
-			...(meta.failure || meta.inputError || worker?.error
-				? { error: meta.failure || meta.inputError || worker?.error }
+			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
+				? { error: meta.failure || meta.inputError || worker?.error || this.kernelErrors.get(meta.id) }
 				: {}),
 		};
 	}
@@ -2722,6 +2781,7 @@ export class SessionManager {
 				meta.archivedAt === undefined &&
 				!meta.failure &&
 				!meta.inputError &&
+				!this.kernelBackingOff(meta.id) &&
 				!meta.working &&
 				!meta.initializing &&
 				!meta.preparing &&
