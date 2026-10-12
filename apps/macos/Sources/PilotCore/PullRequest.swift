@@ -30,9 +30,10 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
     public let mergedAt: Double?
     /// Last successful lookup, epoch milliseconds.
     public let checkedAt: Double
+    public let stack: PullRequestStack?
 
     public init(number: Int, url: String, title: String, state: PullRequestState, checkedAt: Double,
-                branch: String? = nil, mergedAt: Double? = nil) {
+                branch: String? = nil, mergedAt: Double? = nil, stack: PullRequestStack? = nil) {
         self.number = number
         self.url = url
         self.title = title
@@ -40,12 +41,15 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
         self.branch = branch
         self.mergedAt = mergedAt
         self.checkedAt = checkedAt
+        self.stack = stack
     }
 
     public var isTerminal: Bool { state == .merged || state == .closed }
 
     public var label: String { "\(state.label) #\(number)" }
     public var compactLabel: String { "\(state.compactLabel) #\(number)" }
+    /// Task links retain state/number and add stack order without adding another action.
+    public var taskLinkLabel: String { stack.map { "\(label) · \($0.label)" } ?? label }
 
     /// Allow GitHub Enterprise hosts too, but never launch arbitrary URL schemes.
     public var browserURL: URL? {
@@ -59,6 +63,26 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
 
     public var checkedDate: Date? {
         checkedAt.isFinite ? Date(timeIntervalSince1970: checkedAt / 1000) : nil
+    }
+}
+
+/// Mirrors the protocol's read-only GitHub stack membership. Position 1 is nearest the base.
+public struct PullRequestStack: Codable, Equatable, Hashable, Sendable {
+    public let number: Int
+    public let position: Int
+    public let size: Int
+    public let baseBranch: String
+
+    public init(number: Int, position: Int, size: Int, baseBranch: String) {
+        self.number = number
+        self.position = position
+        self.size = size
+        self.baseBranch = baseBranch
+    }
+
+    public var label: String { "Stack \(position)/\(size)" }
+    public var helpText: String {
+        "Stack #\(number), position \(position) of \(size) (bottom to top). Base: \(baseBranch)."
     }
 }
 

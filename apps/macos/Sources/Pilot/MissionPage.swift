@@ -505,8 +505,15 @@ struct ResourceRow: View {
             Image(systemName: resource.kind.symbol).foregroundStyle(Theme.mutedForeground).frame(width: 16)
             if let url = URL(string: resource.url) {
                 let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
-                Link(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle, destination: url)
-                    .lineLimit(1).help(resource.url)
+                Link(destination: url) {
+                    HStack(spacing: 8) {
+                        Text(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle).lineLimit(1)
+                        if let stack = pr?.stack {
+                            Text(stack.label).font(.caption).foregroundStyle(Theme.mutedForeground).fixedSize()
+                        }
+                    }
+                }
+                .help([resource.url, pr?.stack?.helpText].compactMap { $0 }.joined(separator: "\n"))
             } else {
                 Text(resource.displayTitle).lineLimit(1)
             }

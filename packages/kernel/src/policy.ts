@@ -13,6 +13,8 @@ export interface WorkspaceContext {
 }
 
 export interface PilotContext {
+	/** Local github/gh-stack extension detected at worker open. Undefined on older workers. */
+	ghStack?: boolean;
 	workspace?: WorkspaceContext;
 	ask?: AskContext;
 	/** Project delivery policy, read when the worker starts. Omitted means PR delivery for private clones. */
@@ -72,7 +74,7 @@ export function missionLeak(arguments_: unknown, mission: MissionContext | undef
 	return match ? `"${match[0]}"` : undefined;
 }
 
-export function missionPrompt(mission: MissionContext): string {
+export function missionPrompt(mission: MissionContext, ghStack?: boolean): string {
 	const lines = [
 		`- This chat is part of the mission ${JSON.stringify(mission.title)}${mission.goal ? `, whose goal is: ${mission.goal}` : ""}. Several chats share its brief (the spec), tasks, decisions, comments, links, artifacts and activity through the \`mission\` tool. Call \`mission({action: "get"})\` before starting work and when you need the current state; read the full brief with \`mission({action: "brief"})\` when the task depends on it.`,
 		mission.coordinator === "self"
@@ -81,6 +83,12 @@ export function missionPrompt(mission: MissionContext): string {
 		"- Claim a task before working on it and keep its status current: in_progress while working, blocked with a comment explaining why, in_review once a pull request is open, done when finished. Edit the brief directly when the design changes, passing expectedRevision; on a conflict, re-read and reapply. Record agreed decisions with decide. Before stopping with unfinished work, post a handoff with log.",
 		'- When the user requests several tasks (for example "tackle tasks 1 to 5"), claim the requested tasks with mission({action: "claim", ids: ["1-5"]}), report any skipped claims, and work on your claimed tasks one at a time in dependency order. Keep each status current with the task action: set queued tasks back to todo after claiming, in_progress only while working, and blocked with a comment explaining unfinished dependencies. Read tasks to check dependencies; skip or report blocked tasks instead of working past unfinished dependencies. An open dependency PR may be used as the base for dependent work, as described in the brief; otherwise wait for the dependency to finish.',
 		"- Open one pull request per task, not one combined pull request for several tasks. For dependent work, base each PR on the dependency's branch or bookmark and link the PRs bottom-to-top with gh stack link. If stacking is unavailable, use plain PRs based on the dependency's branch. Never rewrite or push another chat's branches. Link each PR to its intended task with the link action and taskId.",
+		"- Before editing a dependent task, base only its own change on the dependency's bookmark (or its open PR head, including another chat's PR). Create and push only your own bookmark, open the PR with gh pr create --base <dependency-head> --head <own-head>, then run gh stack link <bottom-pr-url> … <top-pr-url>. Use existing PR URLs, never branch arguments: gh stack link pushes branch arguments itself. Preserve existing stack order and members when adding your PR. Only link and view are used, never stack commands that merge, push or rewrite branches. If the repository rejects stacks, keep the plain chained PRs and report the fallback, without installing anything or retrying branch-pushing commands.",
+		ghStack === true
+			? "- Worker-start check: github/gh-stack is installed. Use gh stack link for dependent PRs; installation does not guarantee that the repository supports stacks."
+			: ghStack === false
+				? "- Worker-start check: github/gh-stack is unavailable. Fall back to plain chained PRs with the dependency's head as --base; do not install the extension."
+				: "- Check gh extension list for github/gh-stack before linking dependent PRs; when unavailable, keep plain chained PRs.",
 		"- The mission is internal coordination. Never mention the mission, its tasks, the coordinator, other chats or Pilot in commit messages, branch or bookmark names, pull request titles or descriptions. Describe the change itself. External tracker references such as Linear issue IDs are fine.",
 	];
 	if (mission.status !== "active")
@@ -214,7 +222,7 @@ export function withPilotPolicy(
 			section("pilot", () => {
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable());
-				return current ? `${prompt}\n${missionPrompt(current)}` : prompt;
+				return current ? `${prompt}\n${missionPrompt(current, context.ghStack)}` : prompt;
 			}),
 		],
 		hooks: [

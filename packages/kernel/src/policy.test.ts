@@ -62,6 +62,23 @@ test("the coordinator prompt explains chat controls without enabling autonomous 
 		assert.doesNotMatch(missionPrompt({ ...mission, coordinator }), /action: "(?:start|send|status)"/);
 });
 
+test("stack guidance uses existing PR URLs, preserves sibling work and explains detected fallback", () => {
+	for (const available of [true, false, undefined]) {
+		const prompt = missionPrompt(mission, available);
+		assert.match(prompt, /Before editing a dependent task, base only its own change on the dependency's bookmark/);
+		assert.match(prompt, /including another chat's PR/);
+		assert.match(prompt, /--base <dependency-head> --head <own-head>/);
+		assert.match(prompt, /gh stack link <bottom-pr-url> … <top-pr-url>/);
+		assert.match(prompt, /Use existing PR URLs, never branch arguments/);
+		assert.match(prompt, /Preserve existing stack order and members/);
+		assert.match(prompt, /If the repository rejects stacks, keep the plain chained PRs/);
+		assert.match(prompt, /Only link and view are used/);
+		if (available === true) assert.match(prompt, /github\/gh-stack is installed/);
+		else if (available === false) assert.match(prompt, /github\/gh-stack is unavailable/);
+		else assert.match(prompt, /Check gh extension list/);
+	}
+});
+
 test("deliverable guard blocks mission references in commits, bookmarks and pull requests only", () => {
 	assert.ok(missionLeak({ command: 'gh pr create --title "API v2 redesign: auth"' }, mission));
 	assert.ok(missionLeak({ command: 'jj describe -m "feat: auth (mission task #2)"' }, mission));

@@ -111,6 +111,7 @@ export interface Candidate {
 	createdAt: string;
 	mergedAt: string | null;
 	checks?: ChecksState;
+	stack?: SessionPullRequest["stack"];
 }
 
 function invalid(what = "pull request"): never {
@@ -178,6 +179,27 @@ function candidate(row: unknown, repo: Repository): Candidate {
 		| undefined;
 	const state = commits?.nodes?.[0]?.commit?.statusCheckRollup?.state;
 	if (typeof state === "string" && rollupStates[state]) result.checks = rollupStates[state];
+	// Stack fields are nullable during the preview and absent on older GitHub servers.
+	const metadata = row as {
+		stack?: { number?: number; size?: number; baseRefName?: string } | null;
+		stackEntry?: { position?: number } | null;
+	};
+	const stack = metadata.stack;
+	const position = metadata.stackEntry?.position;
+	if (
+		stack &&
+		Number.isSafeInteger(stack.number) &&
+		stack.number! > 0 &&
+		Number.isSafeInteger(stack.size) &&
+		stack.size! > 0 &&
+		Number.isSafeInteger(position) &&
+		position! > 0 &&
+		position! <= stack.size! &&
+		typeof stack.baseRefName === "string" &&
+		stack.baseRefName
+	) {
+		result.stack = { number: stack.number!, size: stack.size!, position: position!, baseBranch: stack.baseRefName };
+	}
 	return result;
 }
 
@@ -211,11 +233,14 @@ export function toSessionPullRequest(pr: Candidate, now = Date.now()): SessionPu
 		branch: pr.headRefName,
 		...(pr.state === "MERGED" ? { mergedAt: Date.parse(pr.mergedAt!) } : {}),
 		checkedAt: now,
+		...(pr.stack ? { stack: pr.stack } : {}),
 	};
 }
 
 /** Per-host GraphQL budget. GitHub's limit is per user, so every lookup reports into one tracker. */
 export class RateLimits {
+	/** Schema capability only, not repository enablement. Re-probed after daemon restart. */
+	readonly unsupportedStacks = new Set<string>();
 	private readonly hosts = new Map<string, { remaining: number; resetAt: number }>();
 	/** Leave headroom for the user's own gh usage. */
 	private readonly reserve: number;
@@ -267,14 +292,31 @@ async function graphql(
 	);
 	if (Buffer.byteLength(output, "utf8") > maxOutputBytes) throw new Error("GitHub response exceeded 4 MiB");
 	const response = object(JSON.parse(output));
-	const data = object(response.data);
-	limits?.observe(repo.host, data.rateLimit);
+	if (response.data && typeof response.data === "object")
+		limits?.observe(repo.host, (response.data as Record<string, unknown>).rateLimit);
 	// GraphQL can return partial data alongside errors, even with a successful exit status.
-	if (response.errors !== undefined && (!Array.isArray(response.errors) || response.errors.length)) invalid();
+	if (response.errors !== undefined && (!Array.isArray(response.errors) || response.errors.length)) {
+		const errors = Array.isArray(response.errors)
+			? response.errors
+					.map((error) => (typeof error?.message === "string" ? error.message : JSON.stringify(error)))
+					.join("; ")
+			: JSON.stringify(response.errors);
+		throw new Error(`Invalid GitHub response: ${errors}`);
+	}
+	const data = object(response.data);
 	return object(data.repository);
 }
 
 const fields = "number url title state isDraft headRefName isCrossRepository createdAt mergedAt";
+const stackFields = "stack { number size baseRefName } stackEntry { position }";
+
+/** Fall back only for schema absence, never hide network, permission or other lookup errors. */
+function unsupportedStackFields(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /(?:Field ['"](?:stack|stackEntry)['"] doesn't exist on type ['"]PullRequest['"]|Cannot query field ['"](?:stack|stackEntry)['"] on type ['"]PullRequest['"])/i.test(
+		message,
+	);
+}
 const order = "orderBy: { field: CREATED_AT, direction: DESC }";
 
 export interface PullRequestLookup {
@@ -321,20 +363,21 @@ async function lookupChunk(
 		...selections,
 		"}",
 		"}",
-		`fragment Fields on PullRequest { ${fields} }`,
+		`fragment Fields on PullRequest { ${fields} ${limits?.unsupportedStacks.has(repo.host) ? "" : stackFields} }`,
 		"fragment Open on PullRequest { ...Fields commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }",
 	].join("\n");
-	const repository = await graphql(
-		repo,
-		query,
-		[
-			...heads.map((head, i): ["-f", string, string] => ["-f", `h${i}`, head]),
-			...numbers.map((number, i): ["-F", string, string] => ["-F", `n${i}`, String(number)]),
-		],
-		cwd,
-		runner,
-		limits,
-	);
+	const variables: ["-f" | "-F", string, string][] = [
+		...heads.map((head, i): ["-f", string, string] => ["-f", `h${i}`, head]),
+		...numbers.map((number, i): ["-F", string, string] => ["-F", `n${i}`, String(number)]),
+	];
+	let repository: Record<string, unknown>;
+	try {
+		repository = await graphql(repo, query, variables, cwd, runner, limits);
+	} catch (error) {
+		if (!query.includes(stackFields) || !unsupportedStackFields(error)) throw error;
+		limits?.unsupportedStacks.add(repo.host);
+		repository = await graphql(repo, query.replace(stackFields, ""), variables, cwd, runner, limits);
+	}
 	const result: PullRequestLookup = { heads: new Map(), numbers: new Map() };
 	heads.forEach((head, i) => {
 		const open = selectCandidate(object(repository[`o${i}`]).nodes, head, repo);

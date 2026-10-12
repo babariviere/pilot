@@ -276,7 +276,7 @@ public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Senda
     public var displayTitle: String { title ?? externalId ?? url }
 
     public var badgeTitle: String {
-        if let pullRequest { return pullRequest.label }
+        if let pullRequest { return pullRequest.taskLinkLabel }
         if kind == .githubPullRequest, let number = externalId?.split(separator: "#").last { return "PR #\(number)" }
         return externalId ?? displayTitle
     }

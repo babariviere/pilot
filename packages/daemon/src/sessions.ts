@@ -2580,7 +2580,7 @@ export class SessionManager {
 
 		const fingerprint = (prs: (SessionPullRequest | undefined)[], names: string[] | undefined) =>
 			JSON.stringify([
-				prs.map((pr) => pr && [pr.number, pr.url, pr.title, pr.state, pr.branch, pr.mergedAt]),
+				prs.map((pr) => pr && [pr.number, pr.url, pr.title, pr.state, pr.branch, pr.mergedAt, pr.stack]),
 				names ?? [],
 			]);
 		const changed =

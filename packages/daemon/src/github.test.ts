@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { githubRepository, lookupHealth, lookupPullRequests, RateLimits } from "./github.ts";
+import { githubRepository, lookupHealth, lookupPullRequests, RateLimits, toSessionPullRequest } from "./github.ts";
 import type { Runner } from "./workspaces.ts";
 
 const repo = githubRepository("git@github.com:octo/repo.git");
@@ -150,6 +150,83 @@ test("one unreadable linked PR is isolated, while head lookup failures fail the 
 	);
 });
 
+test("batched PR lookups carry one-based stack membership and clear it when unlinked", async () => {
+	let stacked = true;
+	let calls = 0;
+	const runner: Runner = async (_file, args) => {
+		calls++;
+		assert.match(variables(args).get("query")!, /stack \{ number size baseRefName \} stackEntry \{ position \}/);
+		return respond({
+			n0: pr(42, "feat/top", {
+				stack: stacked ? { number: 9, size: 3, baseRefName: "main" } : null,
+				stackEntry: stacked ? { position: 2 } : null,
+			}),
+		});
+	};
+	const lookup = async () =>
+		toSessionPullRequest((await lookupPullRequests(repo, { numbers: [42] }, "/workspace", runner)).numbers.get(42)!);
+	assert.deepEqual((await lookup()).stack, { number: 9, size: 3, position: 2, baseBranch: "main" });
+	stacked = false;
+	assert.equal((await lookup()).stack, undefined);
+	assert.equal(calls, 2, "no per-PR or per-stack process is needed");
+});
+
+test("servers without stack schema retry normal PR metadata and remember the host capability", async () => {
+	for (const message of [
+		"Field 'stack' doesn't exist on type 'PullRequest'",
+		'Cannot query field "stackEntry" on type "PullRequest".',
+	]) {
+		const limits = new RateLimits();
+		let calls = 0;
+		const runner: Runner = async (_file, args) => {
+			calls++;
+			if (variables(args).get("query")!.includes("stackEntry")) throw new Error(message);
+			return respond({ n0: pr(42, "feat/top") });
+		};
+		for (let i = 0; i < 2; i++) {
+			const result = await lookupPullRequests(repo, { numbers: [42] }, "/workspace", runner, limits);
+			assert.equal(result.numbers.get(42)?.number, 42);
+			assert.equal(result.numbers.get(42)?.stack, undefined);
+		}
+		assert.equal(calls, 3);
+	}
+});
+
+test("malformed optional stack data never creates a misleading position", async () => {
+	for (const position of [0, -1, 4, 1.5, "2", null]) {
+		const result = await lookupPullRequests(repo, { numbers: [42] }, "/workspace", async () =>
+			respond({
+				n0: pr(42, "feat/top", { stack: { number: 9, size: 3, baseRefName: "main" }, stackEntry: { position } }),
+			}),
+		);
+		assert.equal(result.numbers.get(42)?.stack, undefined);
+	}
+});
+
+test("partial GraphQL schema errors fall back, but permissions and network errors do not", async () => {
+	let calls = 0;
+	const runner: Runner = async (_file, args) => {
+		calls++;
+		return variables(args).get("query")!.includes("stackEntry")
+			? JSON.stringify({
+					data: null,
+					errors: [{ message: 'Cannot query field "stack" on type "PullRequest".' }],
+				})
+			: respond({ n0: pr(42, "feat/top") });
+	};
+	assert.equal((await lookupPullRequests(repo, { numbers: [42] }, "/workspace", runner)).numbers.get(42)?.number, 42);
+	assert.equal(calls, 2);
+	for (const message of ["Resource not accessible by integration", "network unavailable"]) {
+		calls = 0;
+		const result = await lookupPullRequests(repo, { numbers: [42] }, "/workspace", async () => {
+			calls++;
+			throw new Error(message);
+		});
+		assert.equal(calls, 1);
+		assert.equal(result.numberErrors.get(42)?.message, message);
+	}
+});
+
 test("health reports failed checks, live review threads and conflicts, and flags very busy PRs", async () => {
 	const runner: Runner = async () =>
 		respond({
@@ -227,4 +304,36 @@ test("rate limits pause a host near exhaustion until the reset, capped at an hou
 	assert.equal(limits.blockedUntil("github.com", now), 0);
 	limits.observe("github.com", { remaining: "lots" });
 	assert.equal(limits.blockedUntil("github.com", now), 0, "malformed limits are ignored");
+});
+
+test("large stacked-PR discovery retains the existing bounded batch count", async () => {
+	let calls = 0;
+	const heads = Array.from({ length: 100 }, (_, i) => `feat/${i}`);
+	const numbers = Array.from({ length: 100 }, (_, i) => i + 1);
+	const runner: Runner = async (_file, args) => {
+		calls++;
+		const repository: Record<string, unknown> = {};
+		const stacked = (number: number, head: string, position: number) =>
+			pr(number, head, {
+				stack: { number: 101, size: 100, baseRefName: "main" },
+				stackEntry: { position },
+			});
+		for (const [key, value] of variables(args)) {
+			if (/^h\d+$/.test(key)) {
+				const position = Number(value.split("/")[1]) + 1;
+				repository[`o${key.slice(1)}`] = { nodes: [] };
+				repository[`a${key.slice(1)}`] = {
+					nodes: Array.from({ length: 20 }, (_, i) => stacked(1000 + position * 20 + i, value, position)),
+				};
+			} else if (/^n\d+$/.test(key))
+				repository[key] = stacked(Number(value), `feat/${Number(value) - 1}`, Number(value));
+		}
+		return respond(repository);
+	};
+	const result = await lookupPullRequests(repo, { heads, numbers }, "/workspace", runner);
+	assert.equal(calls, 5, "100 heads and 100 hand-linked PRs need five existing batches, not per-stack requests");
+	assert.equal(result.heads.size, 100);
+	assert.equal(result.numbers.size, 100);
+	assert.equal(result.heads.get("feat/99")?.stack?.position, 100);
+	assert.equal(result.numbers.get(1)?.stack?.position, 1);
 });

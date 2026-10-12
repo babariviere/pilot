@@ -113,6 +113,26 @@ const pr = (number: number, state: SessionPullRequest["state"]): SessionPullRequ
 	checkedAt: Date.now(),
 });
 
+test("task links cache stack changes and clear membership without duplicating activity", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
+		missions.addResource(id, { taskId: "1", url: pr(1, "open").url });
+		const stack = { number: 9, position: 1, size: 2, baseBranch: "main" };
+		missions.updatePullRequest({ ...pr(1, "open"), stack });
+		assert.deepEqual(missions.detail(id).resources[0]?.pullRequest?.stack, stack);
+		const count = missions.detail(id).events.length;
+		const updated = { ...stack, position: 2, size: 3 };
+		missions.updatePullRequest({ ...pr(1, "open"), stack: updated });
+		assert.deepEqual(missions.detail(id).resources[0]?.pullRequest?.stack, updated);
+		missions.updatePullRequest(pr(1, "open"));
+		assert.equal(missions.detail(id).resources[0]?.pullRequest?.stack, undefined);
+		assert.equal(missions.detail(id).events.length, count);
+	} finally {
+		missions.close();
+	}
+});
+
 test("linked PRs enter review and finish only with a merge and no open or unknown links", () => {
 	const missions = store();
 	try {

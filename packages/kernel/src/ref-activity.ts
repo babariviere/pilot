@@ -7,7 +7,7 @@ import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import type { Extension } from "@earendil-works/pi-durable";
 
 const REF_CHANGE =
-	/(?:^|[\s;&|(])(?:jj\s+(?:bookmark|b)\s+(?:create|c|set|s|move|m|rename|r|track|t|delete|d|forget|f)\b|jj\s+git\s+push\b|git\s+push\b|git\s+(?:checkout|switch)\s+-[bcBC]\b|git\s+branch\s+\S|gh\s+pr\s+(?:create|ready|edit|reopen)\b)/;
+	/(?:^|[\s;&|(])(?:jj\s+(?:bookmark|b)\s+(?:create|c|set|s|move|m|rename|r|track|t|delete|d|forget|f)\b|jj\s+git\s+push\b|git\s+push\b|git\s+(?:checkout|switch)\s+-[bcBC]\b|git\s+branch\s+\S|gh\s+(?:pr\s+(?:create|ready|edit|reopen)|stack\s+link)\b)/;
 
 export function changesRefs(toolName: string, input: unknown): boolean {
 	if (toolName !== "bash") return false;
