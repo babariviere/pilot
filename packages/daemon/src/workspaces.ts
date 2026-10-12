@@ -1,11 +1,11 @@
 /** Private working copies: each project session works in its own clone. */
-import { spawn } from "node:child_process";
 import { constants, existsSync } from "node:fs";
 import { appendFile, copyFile, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type { RemoteBranchList } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import type { SharedWorkspace } from "./shared-workspaces.ts";
+import { subprocesses } from "./subprocess.ts";
 
 export interface Workspace {
 	path: string;
@@ -32,68 +32,25 @@ export type Runner = (
 	env?: NodeJS.ProcessEnv,
 ) => Promise<string>;
 
-export const run: Runner = (file, args, cwd, timeoutMs = 120_000, signal, env) =>
-	new Promise((resolve, reject) => {
-		let failure: Error | undefined;
-		let output = "";
-		let stderr = "";
-		let bytes = 0;
-		let forceKill: ReturnType<typeof setTimeout> | undefined;
-		const child = spawn(file, args, {
-			cwd,
-			env,
-			detached: process.platform !== "win32",
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		const kill = (killSignal: NodeJS.Signals) => {
-			try {
-				// Git can spawn fetch/SSH helpers. Stop the whole private process group on Unix.
-				if (process.platform !== "win32" && child.pid) process.kill(-child.pid, killSignal);
-				else child.kill(killSignal);
-			} catch (error) {
-				if ((error as NodeJS.ErrnoException).code !== "ESRCH") child.kill(killSignal);
-			}
-		};
-		const abort = () => {
-			failure ??= new Error("Workspace preparation aborted");
-			kill("SIGTERM");
-			forceKill = setTimeout(() => kill("SIGKILL"), 1_000);
-		};
-		const timeout = setTimeout(() => {
-			failure = new Error(`Workspace command timed out: ${file} ${args.join(" ")}`);
-			abort();
-		}, timeoutMs);
-		for (const [stream, isError] of [
-			[child.stdout, false],
-			[child.stderr, true],
-		] as const) {
-			stream.on("data", (chunk: Buffer) => {
-				bytes += chunk.length;
-				if (bytes > 16 * 1024 * 1024) {
-					if (!failure) {
-						failure = new Error("Workspace command output exceeded 16 MiB");
-						abort();
-					}
-					return;
-				}
-				if (isError) stderr += chunk.toString();
-				else output += chunk.toString();
-			});
-		}
-		child.once("error", (error) => {
-			failure = error;
-		});
-		signal?.addEventListener("abort", abort, { once: true });
-		if (signal?.aborted) abort();
-		// Wait for process and stdio closure before clone cleanup/restart, not just an abort notification.
-		child.once("close", (code) => {
-			signal?.removeEventListener("abort", abort);
-			clearTimeout(timeout);
-			clearTimeout(forceKill);
-			if (code !== 0) failure ??= new Error(`${file} ${args.join(" ")} failed: ${stderr.trim() || code}`);
-			failure ? reject(failure) : resolve(output.trim());
-		});
+export const run: Runner = async (file, args, cwd, timeoutMs = 120_000, signal, env) => {
+	if (signal?.aborted) throw new Error("Workspace preparation aborted");
+	// Git can spawn fetch/SSH helpers. Detached children own a process group, which timeouts and aborts stop.
+	const result = await subprocesses.run(file, args, {
+		cwd,
+		...(env ? { env } : {}),
+		...(signal ? { signal } : {}),
+		timeoutMs,
+		detached: process.platform !== "win32",
+		maxBytes: 16 * 1024 * 1024,
+		overflow: "fail",
+		maxStderrBytes: 1024 * 1024,
 	});
+	if (result.aborted) throw new Error("Workspace preparation aborted");
+	if (result.timedOut) throw new Error(`Workspace command timed out: ${file} ${args.join(" ")}`);
+	if (result.overflowed) throw new Error("Workspace command output exceeded 16 MiB");
+	if (result.code !== 0) throw new Error(`${file} ${args.join(" ")} failed: ${result.stderr.trim() || result.code}`);
+	return result.stdout.toString("utf8").trim();
+};
 
 async function attempt(runner: Runner, file: string, args: string[], cwd: string): Promise<string | undefined> {
 	try {

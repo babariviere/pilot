@@ -3,21 +3,19 @@
  * discovery and one for PR health, instead of one or two per branch and three or more per PR.
  * Never fetch comment bodies or perform mutations.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { SessionPullRequest } from "@pilot/protocol";
+import { execFileOffThread } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
-const exec = promisify(execFile);
 const maxOutputBytes = 4 * 1024 * 1024;
 export const run: Runner = async (file, args, cwd, timeoutMs, signal, env) => {
-	const { stdout } = await exec(file, args, {
+	const stdout = await execFileOffThread(file, args, {
 		cwd,
-		timeout: timeoutMs,
-		maxBuffer: maxOutputBytes,
+		...(timeoutMs !== undefined ? { timeoutMs } : {}),
+		maxBytes: maxOutputBytes,
 		killSignal: "SIGKILL",
-		signal,
-		env,
+		...(signal ? { signal } : {}),
+		...(env ? { env } : {}),
 	});
 	return stdout.trim();
 };

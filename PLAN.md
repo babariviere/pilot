@@ -394,6 +394,10 @@ the isolated working copy is ready.
   the daemon. The SDK retains ownership of settings parsing, migrations and global/project merging.
 - Slow WebSocket clients are disconnected explicitly and resynchronize from snapshots, never silently
   lose arbitrary deltas. Internal worker activity watches project only run/inbox state, not history.
+- pilotd never spawns Git, jj or gh on its event loop. `spawn` blocks its thread until the child starts
+  (hundreds of milliseconds on a saturated machine), so a small bounded worker-thread pool
+  (`packages/daemon/src/subprocess.ts`) owns these processes and keeps admission, kernel IPC and
+  WebSocket delivery responsive while sidebar summaries and PR syncs run.
 - Kernel workers and their inherited build subprocesses run below normal scheduling priority when
   supported. macOS build/test helpers default to two Swift jobs (`PILOT_SWIFT_JOBS` overrides this;
   explicit test `--jobs` also overrides it), so concurrent agents leave capacity for the UI.

@@ -1,11 +1,9 @@
 /** What a session changed: its working copy against the point it branched from. */
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
 import type { ChangedFile, SessionChangeSummary, SessionChanges } from "@pilot/protocol";
+import { ProcessFailed, subprocesses } from "./subprocess.ts";
 import { TtlCache } from "./ttl-cache.ts";
 import { workspaceBranch } from "./workspaces.ts";
 
-const exec = promisify(execFile);
 const MAX_DIFF = 1024 * 1024;
 // The client's unified-diff parser expects a/ and b/, regardless of the user's Git config.
 const PATCH_ARGS = ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/"];
@@ -48,45 +46,17 @@ function completePatchPrefix(diff: string): string {
 
 /** Bound both retained output and Git's lifetime, not just the final concatenated string. */
 async function gitPatch(cwd: string, args: string[], maxBytes: number, allowExitOne = false) {
-	return new Promise<{ patch: Buffer; truncated: boolean }>((resolve, reject) => {
-		const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-		const chunks: Buffer[] = [];
-		let size = 0;
-		let stderr = "";
-		let truncated = false;
-		let timedOut = false;
-		const timer = setTimeout(() => {
-			timedOut = true;
-			child.kill("SIGKILL");
-		}, 30_000);
-		child.stdout.on("data", (chunk: Buffer) => {
-			if (truncated) return;
-			const remaining = maxBytes - size;
-			if (chunk.length > remaining) {
-				chunks.push(chunk.subarray(0, remaining));
-				size += remaining;
-				truncated = true;
-				child.kill("SIGKILL");
-			} else {
-				chunks.push(chunk);
-				size += chunk.length;
-			}
-		});
-		child.stderr.on("data", (chunk: Buffer) => {
-			if (stderr.length < 64 * 1024) stderr += chunk.toString("utf8").slice(0, 64 * 1024 - stderr.length);
-		});
-		child.on("error", (error) => {
-			clearTimeout(timer);
-			reject(error);
-		});
-		child.on("close", (code) => {
-			clearTimeout(timer);
-			if (timedOut) reject(new Error("Git diff timed out"));
-			else if (truncated || code === 0 || (allowExitOne && code === 1))
-				resolve({ patch: Buffer.concat(chunks, size), truncated });
-			else reject(new Error(stderr.trim() || `Git diff exited ${code}`));
-		});
+	const result = await subprocesses.run("git", args, {
+		cwd,
+		timeoutMs: 30_000,
+		killSignal: "SIGKILL",
+		maxBytes,
+		overflow: "truncate",
 	});
+	if (result.timedOut) throw new Error("Git diff timed out");
+	if (result.truncated || result.code === 0 || (allowExitOne && result.code === 1))
+		return { patch: result.stdout, truncated: result.truncated };
+	throw new Error(result.stderr.trim() || `Git diff exited ${result.code}`);
 }
 
 /** TTL revalidation intentionally runs Git again, so external editors, commits and refs remain visible. */
@@ -118,15 +88,17 @@ export class RepositoryChanges {
 }
 
 async function git(cwd: string, args: string[], allowExitOne = false): Promise<string> {
-	try {
-		const { stdout } = await exec("git", args, { cwd, maxBuffer: 32 * 1024 * 1024, timeout: 30_000 });
-		return stdout;
-	} catch (error) {
-		// `git diff --no-index` exits 1 when files differ.
-		const failure = error as { code?: number; stdout?: string };
-		if (allowExitOne && failure.code === 1 && typeof failure.stdout === "string") return failure.stdout;
-		throw error;
-	}
+	const result = await subprocesses.run("git", args, {
+		cwd,
+		timeoutMs: 30_000,
+		maxBytes: 32 * 1024 * 1024,
+		overflow: "fail",
+	});
+	if (result.overflowed) throw new ProcessFailed("stdout maxBuffer length exceeded", result);
+	if (result.timedOut) throw new ProcessFailed(`git ${args.join(" ")} timed out`, result);
+	// `git diff --no-index` exits 1 when files differ.
+	if (result.code === 0 || (allowExitOne && result.code === 1)) return result.stdout.toString("utf8");
+	throw new ProcessFailed(result.stderr.trim() || `git ${args.join(" ")} exited ${result.code}`, result);
 }
 
 const STATUS: Record<string, ChangedFile["status"]> = {
