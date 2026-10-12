@@ -57,7 +57,10 @@ function taskMessage(
 							(item) =>
 								`- ${line(item.title)} (${item.kind}): ${item.artifactId}${item.revision === undefined ? "" : `, revision ${item.revision}`}`,
 						),
-					...links.map((item) => `- ${line(item.title ?? item.externalId ?? "Link")} (${item.kind}): ${item.url}`),
+					// New links use request order; persisted links can tie on timestamp and sort by random IDs.
+					...links
+						.toSorted((a, b) => a.url.localeCompare(b.url))
+						.map((item) => `- ${line(item.title ?? item.externalId ?? "Link")} (${item.kind}): ${item.url}`),
 				]
 			: []),
 		"",

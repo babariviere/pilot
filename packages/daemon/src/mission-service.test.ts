@@ -874,8 +874,8 @@ test("start saves member and already-linked artifacts and parsed links before sp
 		id: "#1",
 		artifacts: [{ artifactId: first.id, revision: 1 }, { artifactId: second.id }],
 		links: [
-			{ url: "https://github.com/octo/repo/issues/42?x=1#fragment", title: "Issue" },
 			{ url: "https://linear.app/acme/issue/ENG-12/design" },
+			{ url: "https://github.com/octo/repo/issues/42?x=1#fragment", title: "Issue" },
 		],
 	})) as SessionSummary;
 	const content = async (id: string) => {
@@ -888,6 +888,10 @@ test("start saves member and already-linked artifacts and parsed links before sp
 	assert.ok(message.includes(`Design (html): ${first.id}, revision 1`));
 	assert.ok(message.includes(`Diagram (html): ${second.id}`));
 	assert.match(message, /Issue \(github.issue\): https:\/\/github.com\/octo\/repo\/issues\/42/);
+	assert.ok(
+		message.indexOf("Issue (github.issue)") < message.indexOf("ENG-12 (linear.issue)"),
+		"references use canonical URL order, not request or persistence order",
+	);
 	assert.doesNotMatch(message, /PRIVATE.*CONTENT/);
 	const detail = f.store.detail(mission.id);
 	assert.deepEqual(detail.resources.map((ref) => [ref.kind, ref.externalId]).sort(), [
