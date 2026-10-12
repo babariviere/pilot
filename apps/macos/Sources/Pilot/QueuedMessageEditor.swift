@@ -3,19 +3,17 @@ import SwiftUI
 
 /// Edits the selected queue row in place, keeping the main composer draft separate.
 /// Like the composer, Return saves it as steering and Option-Return as a follow-up.
+/// An empty draft is removed instead, with the primary action and hint reflecting that intent.
 struct QueuedMessageEditor: View {
     @ObservedObject var state: ComposerState
     let available: Bool
     let completionDirectory: String?
     let onSave: (DeliveryMode) -> Void
-    let onRemove: () -> Void
     let onNavigate: (QueueNavigationDirection) -> Bool
     @Environment(\.pilotFonts) private var fonts
 
-    private var canSave: Bool {
-        !state.mutatingQueue && available
-            && !state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    }
+    private var empty: Bool { state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var canSave: Bool { !state.mutatingQueue && available }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -26,10 +24,6 @@ struct QueuedMessageEditor: View {
                 focusToken: state.queueFocus,
                 onNavigateQueue: onNavigate,
                 onCancel: state.cancelQueueEdit,
-                onRemoveQueuedMessage: {
-                    guard available, !state.mutatingQueue else { return }
-                    onRemove()
-                },
                 completionDirectory: completionDirectory
             ) { flags in onSave(flags.contains(.option) ? .followUp : .steer) }
             .frame(height: state.queueEditorHeight)
@@ -47,29 +41,30 @@ struct QueuedMessageEditor: View {
                 // Hints drop out at narrow widths; the buttons always stay.
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 10) {
-                        KeyHint(key: "↩", label: "steer")
-                        KeyHint(key: "⌥↩", label: "follow up")
+                        KeyHint(key: "↩", label: empty ? "remove" : "steer")
+                        if !empty { KeyHint(key: "⌥↩", label: "follow up") }
                         KeyHint(key: "esc", label: "cancel")
-                        KeyHint(key: "⌘⌫", label: "remove")
                     }
                     HStack(spacing: 10) {
-                        KeyHint(key: "↩", label: "steer")
-                        KeyHint(key: "⌥↩", label: "follow up")
+                        KeyHint(key: "↩", label: empty ? "remove" : "steer")
+                        if !empty { KeyHint(key: "⌥↩", label: "follow up") }
                     }
                     Color.clear.frame(width: 0, height: 0)
                 }
                 Spacer(minLength: 4)
-                if state.savingQueueEdit { ProgressView().controlSize(.mini) }
+                if state.mutatingQueue { ProgressView().controlSize(.mini) }
                 Button("Cancel", action: state.cancelQueueEdit)
                     .keyboardShortcut(.cancelAction)
                     .disabled(state.mutatingQueue)
-                Button("Follow up") { onSave(.followUp) }
-                    .disabled(!canSave)
-                    .help("Save and send after the current run (⌥↩)")
-                Button("Steer") { onSave(.steer) }
+                if !empty {
+                    Button("Follow up") { onSave(.followUp) }
+                        .disabled(!canSave)
+                        .help("Save and send after the current run (⌥↩)")
+                }
+                Button(empty ? "Remove" : "Steer") { onSave(.steer) }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canSave)
-                    .help("Save and deliver during the current run (↩)")
+                    .help(empty ? "Remove this queued message (↩)" : "Save and deliver during the current run (↩)")
             }
             .controlSize(.small)
         }

@@ -33,9 +33,10 @@ enum QueueEditingTest {
             return editor
         }
         func press(_ code: UInt16, _ flags: NSEvent.ModifierFlags = []) {
+            let characters = code == 36 ? "\r" : code == 51 ? "\u{7f}" : ""
             let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags,
                                         timestamp: 0, windowNumber: window.windowNumber, context: nil,
-                                        characters: code == 36 ? "\r" : code == 51 ? "\u{7f}" : "", charactersIgnoringModifiers: "",
+                                        characters: characters, charactersIgnoringModifiers: characters,
                                         isARepeat: false, keyCode: code)!
             window.sendEvent(event)
         }
@@ -81,7 +82,7 @@ enum QueueEditingTest {
         await settle()
         check(model.saves.count == 1 && model.saves[0].0 == 10 && model.saves[0].1 == "Edited first"
               && model.saves[0].2 == .steer, "Enter saves selected follow-up once, as steering")
-        check(model.removals.isEmpty, "Command-Delete cannot remove during save")
+        check(model.removals.isEmpty, "busy edit cannot remove")
         check(state.queueEditing.selected == nil && editor() === composerEditor, "successful save restores composer focus")
         press(125, .option)
         await settle()
@@ -106,9 +107,11 @@ enum QueueEditingTest {
         check(editor().string == "Retain failed draft", "consumption retains active editor")
         press(36)
         check(model.saves.count == 2 && state.queueEditError?.contains("no longer queued") == true, "consumed message cannot be saved")
-        press(51, .command)
+        type("")
+        press(36)
         await settle()
-        check(model.removals.isEmpty && editor().string == "Retain failed draft", "consumed message cannot be removed or its draft deleted")
+        check(model.removals.isEmpty && state.queueEditError?.contains("no longer queued") == true,
+              "empty edit cannot remove consumed message")
         press(53)
         await settle()
         press(126, .option)
@@ -122,13 +125,23 @@ enum QueueEditingTest {
         check(model.removals.isEmpty && state.queueEditing.selected?.id == removalId, "Command-Delete in composer does not remove selected queue row")
         type("Keep my composer draft")
         window.makeFirstResponder(queueEditor)
-        model.rejectRemove = true
+        queueEditor.setSelectedRange(NSRange(location: queueEditor.string.utf16.count, length: 0))
         press(51, .command)
         await settle()
-        check(state.queueRemovalError != nil && state.queueEditing.draft == "Keep failed removal draft", "failed shortcut removal keeps edit")
+        check(model.removals.isEmpty && state.queueEditing.draft.isEmpty,
+              "Command-Delete only clears the inline text, without removing the row (draft: \(state.queueEditing.draft.debugDescription))")
+        press(36, .shift)
+        await settle()
+        check(state.queueEditing.draft == "\n" && model.removals.isEmpty, "Shift-Enter in empty edit only inserts newline")
+        type("")
+        model.rejectRemove = true
+        press(36)
+        await settle()
+        check(state.queueRemovalError != nil && state.queueEditing.draft.isEmpty && editor() === queueEditor,
+              "failed empty-edit removal keeps edit and focus for retry")
         try? await Task.sleep(for: .seconds(5))
         await settle()
-        check(state.queueRemovalError == nil && state.queueEditing.draft == "Keep failed removal draft"
+        check(state.queueRemovalError == nil && state.queueEditing.draft.isEmpty
               && editor() === queueEditor, "removal warning expires without losing draft or focus")
         // Exercise the real warning button with no queued rows, the formerly sticky state.
         // Use known fixture bounds: offscreen SwiftUI does not expose its virtual AX buttons.
@@ -157,23 +170,28 @@ enum QueueEditingTest {
         dismissWindow.orderOut(nil)
         window.makeFirstResponder(queueEditor)
         model.rejectRemove = false
-        press(51, .command)
-        press(51, .command)
+        press(36)
+        try? await Task.sleep(for: .milliseconds(10))
+        check(state.removingQueuedMessage == removalId, "empty Enter begins removal")
+        press(36)
         press(125, .option)
+        press(53)
+        check(state.queueEditing.selected?.id == removalId, "selection is frozen during removal")
         await settle()
-        check(model.removals == [removalId] && !model.messages.contains(where: { $0.id == removalId }), "Command-Delete removes selected follow-up only once")
-        check(state.queueEditing.selected == nil && editor() === composerEditor, "shortcut removal restores composer focus")
-        check(state.draft == "Keep my composer draft" && model.saves.count == 2, "shortcut removal does not save or modify composer draft")
+        check(model.removals == [removalId] && !model.messages.contains(where: { $0.id == removalId }), "empty Enter removes selected follow-up only once")
+        check(state.queueEditing.selected == nil && editor() === composerEditor, "empty Enter removal restores composer focus")
+        check(state.draft == "Keep my composer draft" && model.saves.count == 2, "removal does not save or modify composer draft")
         press(125, .option)
         await settle()
         let steeringId = state.queueEditing.selected!.id
-        press(51, .command)
+        type(" \n\t ")
+        press(36, .option)
         await settle()
-        check(model.removals == [removalId, steeringId] && editor() === composerEditor, "Alt-Down and Command-Delete remove steering too")
+        check(model.removals == [removalId, steeringId] && editor() === composerEditor, "whitespace-only Option-Enter removes steering too")
         press(36)
         press(36, .option)
         check(model.sends == [.steer, .followUp] && state.draft == "Keep my composer draft", "main composer and send shortcuts are unchanged")
-        print("queue-edit-test passed: inline focus, arrows, drafts, Enter/Option-Enter modes, Escape, Shift-Enter, Command-Delete, failed/stale saves and removals")
+        print("queue-edit-test passed: inline focus, arrows, drafts, Enter/Option-Enter modes and empty removal, Escape, Shift-Enter, native Command-Delete, failed/stale saves and removals")
         window.orderOut(nil)
         exit(0)
     }

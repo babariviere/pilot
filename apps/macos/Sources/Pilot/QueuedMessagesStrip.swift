@@ -124,7 +124,6 @@ private struct QueuedMessageRow: View {
                     available: available,
                     completionDirectory: completionDirectory,
                     onSave: onSave,
-                    onRemove: onRemove,
                     onNavigate: onNavigate
                 )
             }
