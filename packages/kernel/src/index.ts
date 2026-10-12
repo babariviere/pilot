@@ -1,7 +1,7 @@
 export type { AskContext, MissionContext, PilotContext, WorkspaceContext, WorkspaceReset } from "./policy.ts";
 export type { MissionAction } from "./mission-tools.ts";
 export type { KernelCommand, KernelPacket, KernelSpec, KernelSubagent, KernelUsage } from "./protocol.ts";
-export type { PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";
+export type { EarlierEntriesRead, PersistedSessionView, SubagentTranscriptRead } from "./snapshot.ts";
 export { subagentStorageSignature } from "./subagent-watch.ts";
 
 /** Absolute path of the worker entry, for `child_process.fork`. Plain Node runs it: no loader is needed. */

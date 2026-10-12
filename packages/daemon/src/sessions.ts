@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
+	type EarlierEntriesRead,
 	type KernelCommand,
 	type KernelPacket,
 	type KernelSubagent,
@@ -26,6 +27,7 @@ import type {
 	ArtifactSummary,
 	DeliveryMode,
 	SessionCommand,
+	SessionHistoryPage,
 	SessionListQuery,
 	SessionPullRequest,
 	SessionState,
@@ -160,6 +162,8 @@ export interface SessionFactories {
 	snapshot?: (directory: string, cwd: string, includeTodos?: boolean) => Promise<PersistedSessionView>;
 	/** Read-only subagent transcript events from a child's private storage directory. */
 	subagentRead?: (directory: string, conversationId: string, after?: number) => Promise<SubagentTranscriptRead>;
+	/** Read-only page of a session's entries hidden by compaction. */
+	historyRead?: (directory: string, before: number, limit: number) => Promise<EarlierEntriesRead>;
 	/** Starts a live transcript watcher. Defaults to a long-lived reader thread. */
 	subagentWatch?: SubagentWatchStarter;
 	title?: (cwd: string, message: string, signal: AbortSignal) => Promise<string | undefined>;
@@ -1878,6 +1882,20 @@ export class SessionManager {
 		} finally {
 			end();
 		}
+	}
+
+	/**
+	 * Entries older than the active transcript (hidden by compaction or reset), read from storage without waking a
+	 * parked kernel. Readers do not block the live writer, so this works while the session runs.
+	 */
+	async history(id: string, before: number, limit: number): Promise<SessionHistoryPage> {
+		const meta = this.require(id);
+		this.validateMode(meta);
+		const directory = join(this.dir(id), "durable");
+		const read = this.factories.historyRead
+			? await this.factories.historyRead(directory, before, limit)
+			: await this.coldReader.readEarlier(directory, before, limit);
+		return { entries: read.entries, more: read.more };
 	}
 
 	/**

@@ -42,6 +42,8 @@ public struct TranscriptPresentation: Equatable, Sendable {
         didSet { updateMetadataByteCount() }
     }
     public var compacting = false
+    /// The `before` cursor of the next older page hidden by compaction, or nil when there is none.
+    public var earlierCursor: Int?
     public var error: String? {
         didSet { updateMetadataByteCount() }
     }
@@ -75,6 +77,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         todos = transcript.todos
         retry = transcript.retry
         compacting = transcript.compacting
+        earlierCursor = transcript.earlierCursor
         error = transcript.error
         updateMetadataByteCount()
     }
@@ -84,7 +87,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         lhs.hasSameRows(as: rhs) && lhs.working == rhs.working && lhs.streaming == rhs.streaming
             && lhs.queuedMessages == rhs.queuedMessages && lhs.todos == rhs.todos
             && lhs.retry == rhs.retry && lhs.compacting == rhs.compacting && lhs.error == rhs.error
-            && lhs.revision == rhs.revision
+            && lhs.earlierCursor == rhs.earlierCursor && lhs.revision == rhs.revision
     }
 
     func hasSameRows(as other: Self) -> Bool {
@@ -263,7 +266,7 @@ public actor TranscriptProcessor {
            result.working == last.working, result.streaming == last.streaming,
            result.queuedMessages == last.queuedMessages, result.todos == last.todos,
            result.retry == last.retry, result.compacting == last.compacting, result.error == last.error,
-           !rowsDiffer { return last }
+           result.earlierCursor == last.earlierCursor, !rowsDiffer { return last }
         revision += 1
         result.revision = revision
         last = result

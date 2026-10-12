@@ -1,6 +1,11 @@
 /** Keep SQLite scans and snapshot construction off the daemon's WebSocket event loop. */
 import { Worker } from "node:worker_threads";
-import { type PersistedSessionView, type SubagentTranscriptRead, snapshotWorkerEntry } from "@pilot/kernel";
+import {
+	type EarlierEntriesRead,
+	type PersistedSessionView,
+	type SubagentTranscriptRead,
+	snapshotWorkerEntry,
+} from "@pilot/kernel";
 import { ServiceUnavailable } from "./errors.ts";
 
 const MAX_QUEUED_READS = 32;
@@ -15,6 +20,8 @@ type Job = {
 	/** Read a pi-extensions subagent conversation from `runs.sqlite` instead of the session. */
 	subagentConversation?: string;
 	after?: number;
+	/** Read a page of entries hidden by compaction instead of the active view. */
+	earlier?: { before: number; limit: number };
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -79,6 +86,24 @@ export class ColdViewReader {
 		}).then(({ bytes: _bytes, ...view }) => view as unknown as SubagentTranscriptRead);
 	}
 
+	/** One-shot read of the session's entries below `before`, hidden from the active view by compaction. */
+	readEarlier(directory: string, before: number, limit: number): Promise<EarlierEntriesRead> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
+		return new Promise<SizedSessionView>((resolve, reject) => {
+			this.waiting.push({
+				directory,
+				cwd: directory,
+				includeTodos: false,
+				earlier: { before, limit },
+				resolve,
+				reject,
+			});
+			this.drain();
+		}).then(({ bytes: _bytes, ...view }) => view as unknown as EarlierEntriesRead);
+	}
+
 	private drain(): void {
 		while (!this.closed && this.active.size < 2 && this.waiting.length) {
 			const job = this.waiting.shift()!;
@@ -92,6 +117,7 @@ export class ColdViewReader {
 						includeTodos: job.includeTodos,
 						...(job.subagentConversation === undefined ? {} : { subagentConversation: job.subagentConversation }),
 						...(job.after === undefined ? {} : { after: job.after }),
+						...(job.earlier === undefined ? {} : { earlier: job.earlier }),
 					},
 					execArgv: [],
 				});

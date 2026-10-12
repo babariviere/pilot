@@ -1224,6 +1224,24 @@ test("worker context updates reach summaries and are dropped when the worker exi
 	assert.equal(changes.at(-1)?.usage, undefined);
 });
 
+test("history reads entries hidden by compaction from the session's durable storage", async (t) => {
+	const f = await fixture(t);
+	const reads: Array<[string, number, number]> = [];
+	const entry = { id: 3, conversationId: 0, kind: "pi.user", createdAt: 1 } as never;
+	const sessions = await f.manager({
+		historyRead: async (directory, before, limit) => {
+			reads.push([directory, before, limit]);
+			return { entries: [entry], more: true };
+		},
+	});
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	assert.deepEqual(await sessions.history(created.id, 9, 50), { entries: [entry], more: true });
+	assert.deepEqual(reads, [[join(created.sessionPath!, "durable"), 9, 50]]);
+	assert.equal(f.workers.length, 1, "reading history never starts another worker");
+	await assert.rejects(sessions.history("missing", 9, 50), /Unknown session|not found/i);
+});
+
 test("subagent reports reach summaries without private paths, survive parking, and route reads and commands", async (t) => {
 	const f = await fixture(t);
 	const reads: Array<[string, string, number | undefined]> = [];

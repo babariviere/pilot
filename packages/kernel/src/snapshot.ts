@@ -146,6 +146,61 @@ export async function readSubagentTranscript(
 	return { full: true, events, ...(ids.length ? { cursor: Math.max(...ids) } : {}) };
 }
 
+/** One page of retained entries from before the active transcript (hidden by compaction or reset). */
+export interface EarlierEntriesRead {
+	/** Oldest first. */
+	entries: EntryRecord[];
+	/** True when older entries may remain; pass the oldest returned ID as the next `before`. */
+	more: boolean;
+}
+
+/** Stop a page early once its JSON passes this size, so a few huge tool results cannot build an unbounded reply. */
+export const EARLIER_ENTRIES_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Read-only page of the session's entries with IDs below `before`, newest first from storage and returned oldest
+ * first. Includes older compaction and reset markers. At least one entry is returned when any exists.
+ */
+export async function readEarlierEntries(
+	directory: string,
+	before: number,
+	limit: number,
+): Promise<EarlierEntriesRead> {
+	if (!Number.isSafeInteger(before) || before < 0) throw new Error(`Invalid cursor: ${before}`);
+	if (!Number.isSafeInteger(limit) || limit < 1) throw new Error(`Invalid limit: ${limit}`);
+	if (before <= 1) return { entries: [], more: false };
+	const storage = await openSessionReader(directory);
+	if (!storage) return { entries: [], more: false };
+	const entries: EntryRecord[] = [];
+	let bytes = 0;
+	let more = false;
+	try {
+		let cursor: Cursor | undefined;
+		do {
+			const page = await storage.scanEntries(
+				{ conversationId: ROOT_CONVERSATION_ID, maxEntryId: (before - 1) as EntryRecord["id"] },
+				64,
+				cursor,
+				context,
+			);
+			for (const entry of page.items) {
+				// The first entry is always included, whatever its size.
+				if (entries.length >= limit || bytes >= EARLIER_ENTRIES_MAX_BYTES) {
+					more = true;
+					break;
+				}
+				entries.push(entry);
+				bytes += Buffer.byteLength(JSON.stringify(entry));
+			}
+			cursor = page.next;
+		} while (cursor !== undefined && !more);
+	} finally {
+		await storage.close(context);
+	}
+	entries.sort((a, b) => Number(a.id) - Number(b.id));
+	return { entries, more };
+}
+
 export async function readSessionSnapshot(
 	directory: string,
 	cwd: string,

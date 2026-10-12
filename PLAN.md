@@ -653,6 +653,12 @@ reports), producing a morning summary in the app and Slack.
   (`GET /api/sessions/:id/commands`) is loaded the first time the menu opens and cached by pilotd from
   each kernel's ready packet, so it reopens a parked chat at most once. Extension commands and the
   new-task composer are not covered yet.
+- Compaction and reset hide older entries from the snapshot, but storage keeps them. A compacted chat
+  shows "Show earlier messages" at the top of its transcript, which loads them a page at a time
+  (`GET /api/sessions/:id/history?before=<entryId>`, 100 entries by default, cut short past 4 MiB). pilotd
+  reads pages on its snapshot reader threads, never waking a parked kernel; the app reduces each page in
+  order with the live stream, and scroll anchoring keeps the visible rows in place. Loaded pages survive
+  reconnect snapshots for the same compaction and are dropped when the chat is closed.
 - Task and chat composers accept native clipboard images with Command-V, showing removable previews
   above the text input. Save app-owned PNG copies in Application Support and include their absolute
   paths in the message for pi's read tool. Image-only messages are supported; sent files are retained

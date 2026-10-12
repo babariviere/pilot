@@ -21,7 +21,12 @@ import {
 } from "@earendil-works/pi-durable";
 import { AttentionDoc } from "./attention.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { readSessionSnapshot, readSubagentTranscript } from "./snapshot.ts";
+import {
+	EARLIER_ENTRIES_MAX_BYTES,
+	readEarlierEntries,
+	readSessionSnapshot,
+	readSubagentTranscript,
+} from "./snapshot.ts";
 import { subagentStorageSignature } from "./subagent-watch.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
 import { TodosWatch } from "./todos.ts";
@@ -270,5 +275,76 @@ test("subagent transcripts read fully, then incrementally, and fall back to full
 		await assert.rejects(readSubagentTranscript(child, String(root.id), -1), /Invalid cursor/);
 	} finally {
 		await harness.close(context);
+	}
+});
+
+test("earlier entries page backwards through history hidden by compaction, under a writer lease", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-earlier-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const durable = join(dir, "durable");
+	assert.deepEqual(await readEarlierEntries(durable, 10, 5), { entries: [], more: false }, "no storage yet");
+	const owned = await openSessionStorage(durable);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		const ids = await root.commit(async (tx) => {
+			const ids: number[] = [];
+			for (let index = 0; index < 5; index++)
+				ids.push(Number((await tx.appendEntry(root.id, { kind: "note", data: { index } })).id));
+			return ids;
+		}, context);
+		const kept = ids[3]!;
+		await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, { kind: "pi.compaction", head: kept as never, data: { summary: "summary" } });
+		}, context);
+		const [snapshot] = (await readSessionSnapshot(durable, dir, false)).events;
+		assert.ok(snapshot?.type === "snapshot");
+		assert.ok(
+			snapshot.entries.every((entry) => Number(entry.id) >= kept || entry.head !== undefined),
+			"the active view hides entries before the head",
+		);
+
+		const first = await readEarlierEntries(durable, kept, 2);
+		assert.deepEqual(
+			first.entries.map((entry) => entry.data),
+			[{ index: 1 }, { index: 2 }],
+			"newest page first, returned oldest first",
+		);
+		assert.equal(first.more, true);
+		const second = await readEarlierEntries(durable, Number(first.entries[0]!.id), 2);
+		assert.deepEqual(
+			second.entries.map((entry) => entry.data),
+			[{ index: 0 }],
+		);
+		assert.equal(second.more, false);
+		assert.deepEqual(await readEarlierEntries(durable, ids[0]!, 2), { entries: [], more: false });
+		await assert.rejects(readEarlierEntries(durable, -1, 2), /Invalid cursor/);
+		await assert.rejects(readEarlierEntries(durable, kept, 0), /Invalid limit/);
+	} finally {
+		await harness.close(context);
+		owned.release();
+	}
+});
+
+test("an earlier-entries page ends early once it is large, but always returns one entry", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-earlier-large-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const durable = join(dir, "durable");
+	const owned = await openSessionStorage(durable);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	try {
+		const root = await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
+		const big = "x".repeat(EARLIER_ENTRIES_MAX_BYTES);
+		const last = await root.commit(async (tx) => {
+			await tx.appendEntry(root.id, { kind: "note", data: { text: big } });
+			await tx.appendEntry(root.id, { kind: "note", data: { text: big } });
+			return Number((await tx.appendEntry(root.id, { kind: "note", data: { text: "tail" } })).id);
+		}, context);
+		const page = await readEarlierEntries(durable, last, 100);
+		assert.equal(page.entries.length, 1, "one oversized entry fills the page");
+		assert.equal(page.more, true);
+	} finally {
+		await harness.close(context);
+		owned.release();
 	}
 });

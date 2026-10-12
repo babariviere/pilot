@@ -46,6 +46,80 @@ private func json(_ text: String) -> JSONValue {
     #expect(TranscriptPresentation(transcript: transcript).compacting == false)
 }
 
+private func user(_ id: Int, _ text: String) -> String {
+    #"{"id":\#(id),"kind":"pi.user","model":[{"role":"user","content":"\#(text)"}]}"#
+}
+
+private func compactedSnapshot(head: Int, marker: Int, after: [Int] = []) -> JSONValue {
+    let kept = ([head] + after).map { user($0, "m\($0)") }
+    let entries = [#"{"id":\#(marker),"kind":"pi.compaction","head":\#(head),"data":{"summary":"s"}}"#] + kept
+    return json(#"{"type":"snapshot","entries":[\#(entries.joined(separator: ","))],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}"#)
+}
+
+private func page(before: Int, ids: [Int], more: Bool) -> JSONValue {
+    let entries = ids.map { user($0, "m\($0)") }.joined(separator: ",")
+    return Transcript.earlierEntries(before: before, page: json(#"{"entries":[\#(entries)],"more":\#(more)}"#))
+}
+
+@Test func onlyCompactedOrResetTranscriptsOfferEarlierMessages() {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"snapshot","entries":[\#(user(1, "a"))],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}"#))
+    #expect(transcript.earlierCursor == nil)
+    transcript.apply(compactedSnapshot(head: 6, marker: 9))
+    #expect(transcript.earlierCursor == 6, "the cursor starts at the first kept entry")
+    #expect(TranscriptPresentation(transcript: transcript).earlierCursor == 6)
+}
+
+@Test func earlierPagesPrependInOrderAndIgnoreStaleCursors() {
+    var transcript = Transcript()
+    transcript.apply(compactedSnapshot(head: 6, marker: 9, after: [10]))
+    transcript.apply(page(before: 99, ids: [1], more: false))
+    #expect(transcript.entries.map(\.id) == [6, 9, 10], "a page for another cursor is ignored")
+
+    transcript.apply(page(before: 6, ids: [4, 5], more: true))
+    #expect(transcript.entries.map(\.id) == [4, 5, 6, 9, 10])
+    #expect(transcript.earlierCursor == 4)
+    transcript.apply(page(before: 6, ids: [4, 5], more: true))
+    #expect(transcript.entries.map(\.id) == [4, 5, 6, 9, 10], "a duplicate page is applied once")
+
+    transcript.apply(page(before: 4, ids: [2, 3], more: false))
+    #expect(transcript.entries.map(\.id) == [2, 3, 4, 5, 6, 9, 10])
+    #expect(transcript.earlierCursor == nil, "the last page clears the cursor")
+    #expect(transcript.rows.first?.id == "2-0", "earlier messages render before the kept ones")
+}
+
+@Test func processorPublishesEarlierPagesAndTheirCursor() async throws {
+    let processor = TranscriptProcessor()
+    let first = try await processor.apply([compactedSnapshot(head: 6, marker: 9)])
+    #expect(first.earlierCursor == 6)
+    let loaded = try await processor.apply([page(before: 6, ids: [5], more: false)])
+    #expect(loaded.earlierCursor == nil)
+    #expect(loaded.revision != first.revision)
+    #expect(loaded.rows.first?.id == "5-0")
+    let empty = try await processor.apply([page(before: 6, ids: [], more: false)])
+    #expect(empty == loaded, "a stale page publishes nothing new")
+}
+
+@Test func emptyEarlierPageEndsPaging() {
+    var transcript = Transcript()
+    transcript.apply(compactedSnapshot(head: 6, marker: 9))
+    transcript.apply(page(before: 6, ids: [], more: true))
+    #expect(transcript.earlierCursor == nil)
+}
+
+@Test func replacementSnapshotsKeepEarlierPagesOnlyForTheSameHead() {
+    var transcript = Transcript()
+    transcript.apply(compactedSnapshot(head: 6, marker: 9))
+    transcript.apply(page(before: 6, ids: [4, 5], more: true))
+    transcript.apply(compactedSnapshot(head: 6, marker: 9, after: [10]))
+    #expect(transcript.entries.map(\.id) == [4, 5, 6, 9, 10], "a reconnect keeps loaded pages")
+    #expect(transcript.earlierCursor == 4)
+
+    transcript.apply(compactedSnapshot(head: 10, marker: 11))
+    #expect(transcript.entries.map(\.id) == [10, 11], "a new compaction starts paging again from its head")
+    #expect(transcript.earlierCursor == 10)
+}
+
 @Test func tracksToolOutputWindowsAndResults() {
     var transcript = Transcript()
     transcript.apply([
