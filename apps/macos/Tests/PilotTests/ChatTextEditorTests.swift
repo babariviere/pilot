@@ -14,31 +14,22 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
                                  characters: characters, charactersIgnoringModifiers: characters, isARepeat: repeatKey, keyCode: code))
 }
 
-@Test @MainActor func commandDeleteOnlyRemovesFromAnEditableQueueEditor() throws {
+@Test @MainActor func commandDeleteEditsTextWithoutSubmitting() throws {
     _ = NSApplication.shared
     let editor = SubmitTextView()
-    var removals = 0
-    editor.onRemoveQueuedMessage = { removals += 1 }
+    var submissions = 0
+    editor.onSubmit = { _ in submissions += 1 }
     editor.string = "Keep queue draft"
     editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
     editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: .command))
-    #expect(removals == 1)
-    #expect(editor.string == "Keep queue draft")
-    editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: .command, repeatKey: true))
+    #expect(submissions == 0)
+    #expect(editor.string.isEmpty)
+    editor.string = "Keep queue draft"
+    editor.setSelectedRange(NSRange(location: editor.string.utf16.count, length: 0))
     editor.isEditable = false
     editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: .command))
-    #expect(removals == 1)
+    #expect(submissions == 0)
     #expect(editor.string == "Keep queue draft")
-    editor.isEditable = true
-    for flags: NSEvent.ModifierFlags in [[], .option, .control, [.command, .shift], [.command, .option], [.command, .control]] {
-        editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: flags))
-    }
-    editor.keyDown(with: try pickerKey(117, "\u{f728}", flags: .command))
-    #expect(removals == 1)
-    editor.setMarkedText("候", selectedRange: NSRange(location: 1, length: 0),
-                         replacementRange: NSRange(location: NSNotFound, length: 0))
-    editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: .command))
-    #expect(removals == 1)
 }
 
 @Test @MainActor func commandDeleteDismissesPathCompletionWithoutInsertingOrSaving() throws {
@@ -51,15 +42,12 @@ private func pickerKey(_ code: UInt16, _ characters: String, flags: NSEvent.Modi
     editor.completionDirectory = directory.path
     editor.string = "R"
     editor.setSelectedRange(NSRange(location: 1, length: 0))
-    var removals = 0
-    editor.onRemoveQueuedMessage = { removals += 1 }
-    editor.onSubmit = { _ in Issue.record("Removal must not save or send") }
+    editor.onSubmit = { _ in Issue.record("Text deletion must not save or send") }
     editor.insertTab(nil)
     #expect(editor.completionPicker != nil)
     editor.keyDown(with: try pickerKey(51, "\u{7f}", flags: .command))
     #expect(editor.completionPicker == nil)
-    #expect(editor.string == "R")
-    #expect(removals == 1)
+    #expect(editor.string.isEmpty)
 }
 
 @Test @MainActor func pickerKeysTakePrecedenceOverQueueSaveAndCancel() throws {

@@ -116,7 +116,8 @@ final class ComposerState: ObservableObject {
 /// Floating message box at the bottom of a chat.
 /// Return steers the current run (or starts one), Option-Return queues a follow-up,
 /// Shift-Return adds a line. Queued messages sit at the top of the same tray; editing one uses the
-/// same keys, so Return saves it as steering and Option-Return as a follow-up.
+/// same keys, so Return saves it as steering and Option-Return as a follow-up. Submitting an
+/// empty queue edit removes the message instead.
 struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var state: ComposerState
@@ -272,9 +273,13 @@ struct Composer: View {
     private func saveQueueEdit(_ mode: DeliveryMode) {
         guard let selected = state.queueEditing.selected, !state.mutatingQueue else { return }
         let text = state.queueEditing.draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
         guard remainingQueuedMessages.contains(where: { $0.id == selected.id }) else {
             state.queueEditError = "Message is no longer queued. Your edit has not been sent."
+            return
+        }
+        if text.isEmpty {
+            state.queueEditError = nil
+            Task { await state.removeQueuedMessage(selected.id, perform: onRemoveQueuedMessage) }
             return
         }
         state.savingQueueEdit = true
