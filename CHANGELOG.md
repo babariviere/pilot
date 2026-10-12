@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.17.0](https://github.com/babariviere/pilot/compare/v1.16.0...v1.17.0) (2026-10-12)
+
+
+### Features
+
+* **daemon:** keep chats with unpublished changes active ([93cc1d7](https://github.com/babariviere/pilot/commit/93cc1d73aca9ad734567160a36548b55e8cc85a7))
+* retry, edit and restore chats into conversation attempts ([d7646ee](https://github.com/babariviere/pilot/commit/d7646eed6365805f5d0e7be076e9beb8aa9fc6a4))
+
+
+### Bug Fixes
+
+* **artifacts:** fit previews to content at Retina resolution ([0415157](https://github.com/babariviere/pilot/commit/0415157f87efb60e2516f4f8c88264eb4002cbcf))
+* **daemon:** keep PR branch when only the base bookmark remains ([9edf617](https://github.com/babariviere/pilot/commit/9edf6176a3ec06e9a32cbee531b9223064bc6ba9))
+* **kernel:** detach compaction snapshots before IPC ([8a02714](https://github.com/babariviere/pilot/commit/8a02714ef22f65c5db67d1a61e2081fce254ce70))
+* **macos:** remove queued messages when submitting empty edits ([9ed3939](https://github.com/babariviere/pilot/commit/9ed3939bc7069796e4dff3654a9fadab2065b068))
+* **macos:** split attempt expressions that time out the Swift type checker ([3c4867d](https://github.com/babariviere/pilot/commit/3c4867db222b58ec281067afb0758ffb0b9e146e))
+* **macos:** stabilize scroll anchoring and Xcode SwiftUI previews ([c6ef015](https://github.com/babariviere/pilot/commit/c6ef0156779c1df372869c09e74b1f5c0f6e0ebd))
+
+
+### Performance Improvements
+
+* **macos:** stop redrawing the transcript on every scroll frame ([80b184d](https://github.com/babariviere/pilot/commit/80b184d5b86bcf56274429e89c1f6f837664fe9c))
+
 ## [1.16.0](https://github.com/babariviere/pilot/compare/v1.15.0...v1.16.0) (2026-10-12)
 
 
