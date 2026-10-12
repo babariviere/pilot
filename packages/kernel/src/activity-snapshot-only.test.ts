@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { serialize } from "node:v8";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import {
 	createSession,
+	type CompactionStatus,
 	InboxDoc,
 	LiveDoc,
 	MemoryStorage,
@@ -13,6 +18,68 @@ import {
 } from "@earendil-works/pi-durable";
 import { hasUnownedChildren, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 import type { McpTransportFactory } from "@earendil-works/pi-coding-agent";
+import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+
+test("reopened activity snapshots detach compactions and nested retries for advanced IPC", async (t) => {
+	const dir = await mkdtemp(join(tmpdir(), "pilot-activity-reopen-"));
+	t.after(() => rm(dir, { recursive: true, force: true }));
+	const file = join(dir, "harness.sqlite");
+	let session = createSession(await openNodeSqliteStorage(file));
+	const compaction: CompactionStatus = {
+		taskId: 100 as CompactionStatus["taskId"],
+		reason: "manual",
+		blocking: false,
+		attempt: 1,
+	};
+	const conversation = await session.commit(async (tx) => {
+		const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+		(await tx.doc(LiveDoc, conversation.id)).compactions = [compaction];
+		await tx.doc(InboxDoc, conversation.id);
+		return conversation;
+	}, context);
+	await session.close(context);
+	session = createSession(await openNodeSqliteStorage(file));
+	t.after(() => session.close(context));
+	const stream = await watchActivity(session, conversation.id, context);
+	t.after(() => stream.stop());
+	const checkIpc = (frame: SnapshotEvent) => {
+		const packet = { type: "events", watchId: "activity", events: [frame] };
+		assert.ok(serialize(packet).byteLength > 0, "Node advanced IPC must accept the entire packet");
+		assert.deepEqual(structuredClone(packet), packet);
+	};
+	checkIpc(stream.snapshot);
+	assert.deepEqual(stream.snapshot.compactions, [compaction]);
+	assert.equal(stream.idle, false, "a compaction without a run must prevent parking");
+	const frames: SnapshotEvent[] = [];
+	stream.start(async (events) => {
+		for (const event of events)
+			if (event.type === "snapshot") {
+				checkIpc(event);
+				frames.push(event);
+			}
+	});
+	await session.commit(async (tx) => {
+		const active = (await tx.doc(LiveDoc, conversation.id)).compactions![0]!;
+		active.attempt = 2;
+		active.retry = { at: 123, error: "retry later" };
+	}, context);
+	await delay(1);
+	assert.equal(frames.length, 1);
+	assert.deepEqual(stream.snapshot.compactions, [compaction], "later commits cannot mutate the captured snapshot");
+	assert.deepEqual(frames[0]!.compactions, [{ ...compaction, attempt: 2, retry: { at: 123, error: "retry later" } }]);
+	// Attachment during a persisted retry must detach the nested draft as well.
+	const retry = await watchActivity(session, conversation.id, context);
+	checkIpc(retry.snapshot);
+	assert.deepEqual(retry.snapshot.compactions, frames[0]!.compactions);
+	await retry.stop();
+	await session.commit(async (tx) => {
+		delete (await tx.doc(LiveDoc, conversation.id)).compactions;
+	}, context);
+	await delay(1);
+	assert.equal(frames.length, 2);
+	assert.equal(stream.idle, true);
+	assert.equal(stream.settledVersion, 1);
+});
 
 test("only exact idle MCP PIDs bypass child protection; active requests, unknown children and closed transports do not", async () => {
 	type Transport = ReturnType<McpTransportFactory>;
