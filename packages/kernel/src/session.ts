@@ -27,6 +27,7 @@ import type { AgentEvent, DeliveryMode, SessionCompletion } from "@pilot/protoco
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
 import { reconcileCompletion } from "./attention.ts";
+import { detectGhStack } from "./gh-stack.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
@@ -152,7 +153,8 @@ export class KernelSession {
 				spec.pilot?.workspace && !spec.pilot.ask && hooks.onRefsChanged
 					? refActivity(hooks.onRefsChanged)
 					: undefined;
-			const pinned = await pinnedAgent(owned.storage);
+			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage), detectGhStack(spec.cwd)]);
+			const pilot = { ...spec.pilot, ghStack };
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
@@ -196,7 +198,7 @@ export class KernelSession {
 				const prepared = replayUnsafe(
 					withPilotPolicy(
 						extension,
-						spec.pilot ?? {},
+						pilot,
 						() =>
 							adapter!.session.getCallableToolNames().includes("artifact") ||
 							adapter!.session.getActiveToolNames().includes("artifact"),

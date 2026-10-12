@@ -35,6 +35,18 @@ export interface SessionPullRequest {
 	mergedAt?: number;
 	/** Last successful GitHub lookup, epoch milliseconds. Cached across restarts. */
 	checkedAt: number;
+	/** Read-only GitHub stack membership. Absent for unstacked PRs or unsupported servers. */
+	stack?: PullRequestStack;
+}
+
+export interface PullRequestStack {
+	/** Stack number within the PR's repository. */
+	number: number;
+	/** One-based position, bottom to top. */
+	position: number;
+	size: number;
+	/** Ultimate base of the stack, not this PR's immediate base. */
+	baseBranch: string;
 }
 
 /** How a message joins a busy session: steer the current run, or queue a follow-up run. */

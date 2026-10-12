@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
-import type { AgentEvent, SessionCompletion, SessionState, SessionSummary } from "@pilot/protocol";
+import type { AgentEvent, SessionCompletion, SessionPullRequest, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -591,6 +591,36 @@ test("generated title updates and persists without delaying startup", async (t) 
 	assert.equal((await f.stored(created.id)).titlePending, undefined);
 });
 
+test("stack-only PR updates publish, persist and leave chat activity unchanged", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "initial" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	const meta = sessions["metas"].get(created.id)!;
+	const pr = {
+		number: 1,
+		url: "https://github.com/a/b/pull/1",
+		title: "PR",
+		state: "open" as const,
+		checkedAt: Date.now(),
+	};
+	await sessions["applyPullRequest"](meta, { pullRequest: pr });
+	const activity = sessions.get(created.id)!.updatedAt;
+	let changes = 0;
+	const off = sessions.onChange(() => changes++);
+	const stack = { number: 9, position: 2, size: 3, baseBranch: "main" };
+	await sessions["applyPullRequest"](meta, { pullRequest: { ...pr, stack } });
+	assert.equal(changes, 1);
+	assert.deepEqual(sessions.get(created.id)?.pullRequest?.stack, stack);
+	assert.deepEqual((await f.stored(created.id)).pullRequest?.stack, stack);
+	assert.equal(sessions.get(created.id)?.updatedAt, activity);
+	await sessions["applyPullRequest"](meta, { pullRequest: pr });
+	assert.equal(changes, 2);
+	assert.equal(sessions.get(created.id)?.pullRequest?.stack, undefined);
+	off();
+});
+
 test("explicit titles bypass generation and provider failures keep the fallback", async (t) => {
 	const f = await fixture(t);
 	let calls = 0;
@@ -696,6 +726,7 @@ async function fixture(t: TestContext) {
 		titlePending?: { cwd: string; message: string };
 		cwd: string;
 		lastUserMessageAt?: number;
+		pullRequest?: SessionPullRequest;
 		initializing?: boolean;
 		preparing?: { source: string; baseBranch?: string };
 		pending: Command[];

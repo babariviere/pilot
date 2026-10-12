@@ -251,7 +251,10 @@ the brief into the repository is an explicit user action.
   Chats claim the requested tasks, work through them one at a time in dependency order, keep queued
   tasks `todo` and each working/review/blocked status current, and skip or report unfinished dependencies.
   Open dependency PRs can support dependent work as a stack: one PR per task, based on the dependency's
-  branch, linked bottom-to-top with `gh stack link` (plain dependent-base PRs if unavailable).
+  bookmark before editing, linked bottom-to-top with `gh stack link` using existing PR URLs only
+  (branch arguments push implicitly). Never push or rewrite a dependency owned by another chat.
+  Workers detect github/gh-stack locally at open. Missing extensions or repository rejection use
+  plain dependent-base PRs, without installation or branch-pushing stack commands.
 - **Artifacts**: links to artifacts that stay owned by their session, optionally pinned to a revision.
 - **Resources**: external links (Linear project or issue, GitHub issue or PR, Slack thread, any URL).
   Links optionally belong to a task, appear on its row and in agent task views, and can be added or
@@ -263,6 +266,10 @@ the brief into the repository is an explicit user action.
   PRs are ignored. Automatic transitions are recorded in activity. Closed tasks never reopen, and
   moving a task backward by hand permanently disables automatic PR status changes for that task.
   The kind and external ID are parsed when saved so later automation needs no migration.
+  PR lookups include nullable GraphQL stack membership (number, one-based bottom-to-top position,
+  size and ultimate base), cached with the PR and shown on task links. The existing bounded batched
+  tracker fetches these scalar fields without extra processes or stack-entry pagination. Servers
+  without the preview schema retry without stack fields and remember that capability until restart.
 - **Activity**: append-only events: handoffs, status updates (optional health), claims, task changes,
   brief revisions, decisions, links and membership changes.
   The Activity composer lets the user post updates and handoffs for agents to read. Agent `get`

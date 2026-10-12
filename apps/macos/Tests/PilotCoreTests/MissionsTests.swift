@@ -16,6 +16,13 @@ import Testing
     #expect(resource.badgeTitle == "Merged #42")
 }
 
+@Test func taskResourceDecodesStackPositionAndRoundTrips() throws {
+    let resource = try JSONDecoder().decode(MissionResource.self, from: Data(#"{"id":"r","taskId":"t","url":"https://github.com/o/r/pull/42","kind":"github.pr","createdAt":1,"pullRequest":{"number":42,"url":"https://github.com/o/r/pull/42","title":"PR","state":"open","checkedAt":2,"stack":{"number":9,"position":2,"size":3,"baseBranch":"main"}}}"#.utf8))
+    #expect(resource.badgeTitle == "Open #42 · Stack 2/3")
+    #expect(resource.pullRequest?.stack?.helpText == "Stack #9, position 2 of 3 (bottom to top). Base: main.")
+    #expect(try JSONDecoder().decode(MissionResource.self, from: JSONEncoder().encode(resource)) == resource)
+}
+
 @Test func missionDetailDecodesAndToleratesNewerValues() throws {
     let detail = try JSONDecoder().decode(MissionDetail.self, from: Data(#"""
     {
