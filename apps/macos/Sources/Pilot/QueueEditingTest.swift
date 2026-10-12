@@ -126,6 +126,36 @@ enum QueueEditingTest {
         press(51, .command)
         await settle()
         check(state.queueRemovalError != nil && state.queueEditing.draft == "Keep failed removal draft", "failed shortcut removal keeps edit")
+        try? await Task.sleep(for: .seconds(5))
+        await settle()
+        check(state.queueRemovalError == nil && state.queueEditing.draft == "Keep failed removal draft"
+              && editor() === queueEditor, "removal warning expires without losing draft or focus")
+        // Exercise the real warning button with no queued rows, the formerly sticky state.
+        // Use known fixture bounds: offscreen SwiftUI does not expose its virtual AX buttons.
+        let dismissState = ComposerState()
+        dismissState.queueRemovalError = "Removal rejected"
+        let dismissHost = NSHostingView(rootView: QueuedMessagesStrip(
+            state: dismissState, messages: [], completionDirectory: nil, onSave: { _ in }, onRemove: { _ in }
+        ).frame(width: 400, height: 80, alignment: .top))
+        let dismissWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 80),
+                                     styleMask: [.titled], backing: .buffered, defer: false)
+        dismissWindow.contentView = dismissHost
+        dismissWindow.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+        dismissWindow.orderFrontRegardless()
+        dismissHost.layoutSubtreeIfNeeded()
+        try? await Task.sleep(for: .milliseconds(100))
+        let point = NSPoint(x: 378, y: dismissHost.isFlipped ? 17 : 63)
+        let location = dismissHost.convert(point, to: nil)
+        for eventType in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = NSEvent.mouseEvent(with: eventType, location: location, modifierFlags: [], timestamp: 0,
+                                          windowNumber: dismissWindow.windowNumber, context: nil, eventNumber: 1,
+                                          clickCount: 1, pressure: eventType == .leftMouseDown ? 1 : 0)!
+            dismissWindow.sendEvent(event)
+        }
+        await settle()
+        check(dismissState.queueRemovalError == nil, "clicking dismiss clears removal warning with an empty queue")
+        dismissWindow.orderOut(nil)
+        window.makeFirstResponder(queueEditor)
         model.rejectRemove = false
         press(51, .command)
         press(51, .command)
