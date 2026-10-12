@@ -193,7 +193,7 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   PR delivery uses task-specific bookmarks. It does not change workspace isolation
   or run an after-push command. The policy is read when a session worker starts (new sessions or kernel restart).
 - Archiving retains history with recoverable jj snapshots, not a guarantee that the working directory
-  remains on disk. Archived shared jj workspaces are eligible for cleanup after 30 days, configurable
+  remains on disk. Archived shared jj workspaces are eligible for cleanup after 1 day, configurable
   with `PILOT_WORKSPACE_RETENTION_DAYS`; `0` disables cleanup. Legacy private clones have no restore
   recipe, so after the same retention they are pruned in place instead: only ignored, untracked regenerable
   dependency and build directories are deleted, never history, tracked or other ignored files, and a later

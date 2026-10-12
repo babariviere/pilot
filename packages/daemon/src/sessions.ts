@@ -145,7 +145,7 @@ export interface SessionManagerOptions {
 	subscriptionUsage?: (onChange: (provider: SubscriptionProvider) => void) => SubscriptionUsageSource;
 	startupTimeoutMs?: number;
 	commandTimeoutMs?: number;
-	/** Reclaim shared workspaces, and prune legacy clones, this long after archival. Defaults to 30 days; Infinity disables. */
+	/** Reclaim shared workspaces, and prune legacy clones, this long after archival. Defaults to 1 day; Infinity disables. */
 	workspaceRetentionMs?: number;
 	/**
 	 * Automatic work (mission notices, PR follow-ups) waits this long after a kernel crash or IPC failure,
@@ -688,7 +688,7 @@ export class SessionManager {
 		this.prFollowUpCooldownMs = options.prFollowUpCooldownMs ?? 5 * 60_000;
 		this.kernelRestartBackoffMs = options.kernelRestartBackoffMs ?? 15_000;
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
-		this.workspaceRetentionMs = options.workspaceRetentionMs ?? 30 * DAY_MS;
+		this.workspaceRetentionMs = options.workspaceRetentionMs ?? DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
 		if (!factories.worker) this.pool = new WorkerPool();
 		const onUsage = (provider: SubscriptionProvider) => this.subscriptionUsageChanged(provider);

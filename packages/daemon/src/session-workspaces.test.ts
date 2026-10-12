@@ -301,7 +301,7 @@ test("an ignored file blocks reclamation, records the error and preserves every 
 	await f.assertSourceUnchanged();
 });
 
-test("private retention sweep includes exactly 30 days, skips recent, active, legacy and direct workspaces", async (t) => {
+test("private retention sweep includes exactly 1 day, skips recent, active, legacy and direct workspaces", async (t) => {
 	const f = await fixture(t);
 	const boundary = await f.spawn();
 	const recent = await f.spawn();
@@ -312,11 +312,11 @@ test("private retention sweep includes exactly 30 days, skips recent, active, le
 	const now = Date.now();
 	t.mock.method(Date, "now", () => now);
 	const metas = f.sessions["metas"];
-	metas.get(boundary.id)!.archivedAt = now - 30 * DAY;
-	metas.get(recent.id)!.archivedAt = now - 30 * DAY + 1;
-	metas.get(legacy.id)!.archivedAt = now - 31 * DAY;
+	metas.get(boundary.id)!.archivedAt = now - DAY;
+	metas.get(recent.id)!.archivedAt = now - DAY + 1;
+	metas.get(legacy.id)!.archivedAt = now - 2 * DAY;
 	delete metas.get(legacy.id)!.workspace!.shared;
-	metas.get(direct.id)!.archivedAt = now - 31 * DAY;
+	metas.get(direct.id)!.archivedAt = now - 2 * DAY;
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	assert.equal(existsSync(boundary.cwd), false, "exact retention boundary is eligible");
 	for (const created of [recent, active, legacy, direct]) assert.ok(existsSync(created.cwd), created.id);
@@ -756,8 +756,8 @@ test("archived legacy clones keep history and inputs but lose regenerable output
 	}
 	const now = Date.now();
 	t.mock.method(Date, "now", () => now);
-	f.sessions["metas"].get(legacy.id)!.archivedAt = now - 30 * DAY;
-	f.sessions["metas"].get(recent.id)!.archivedAt = now - 30 * DAY + 1;
+	f.sessions["metas"].get(legacy.id)!.archivedAt = now - DAY;
+	f.sessions["metas"].get(recent.id)!.archivedAt = now - DAY + 1;
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	assert.equal(existsSync(join(legacy.cwd, "node_modules")), false);
 	assert.ok(existsSync(join(recent.cwd, "node_modules")), "recently archived clones are untouched");
