@@ -10,6 +10,8 @@ final class ChatModelPickerState: ObservableObject {
     @Published var error: String?
 
     private let changeModel: (String, ChangeModelRequest) async throws -> Void
+    private let cachedModels: @MainActor (String) -> ModelList?
+    private let fetchModels: (String) async throws -> ModelList
     private(set) var providers: [String] = []
     private(set) var modelsByProvider: [String: [ModelOption]] = [:]
     private var namesByID: [String: String] = [:]
@@ -36,10 +38,20 @@ final class ChatModelPickerState: ObservableObject {
         return name
     }
 
-    init(changeModel: @escaping (String, ChangeModelRequest) async throws -> Void = { id, request in
-        try await AppModel.shared.client.changeModel(id, model: request.model, thinking: request.thinking)
-    }) {
+    init(
+        changeModel: @escaping (String, ChangeModelRequest) async throws -> Void = { id, request in
+            try await AppModel.shared.client.changeModel(id, model: request.model, thinking: request.thinking)
+        },
+        cachedModels: @escaping @MainActor (String) -> ModelList? = { cwd in
+            AppModel.shared.client.cachedModels(projectId: nil, cwd: cwd)
+        },
+        fetchModels: @escaping (String) async throws -> ModelList = { cwd in
+            try await AppModel.shared.client.models(projectId: nil, cwd: cwd)
+        }
+    ) {
         self.changeModel = changeModel
+        self.cachedModels = cachedModels
+        self.fetchModels = fetchModels
     }
 
     func canChange(session: SessionSummary, working: Bool) -> Bool {
@@ -79,11 +91,16 @@ final class ChatModelPickerState: ObservableObject {
         }
     }
 
+    /// Shows the cached list at once, then revalidates. Equal results never trigger a view update.
     func loadModels(cwd: String) async {
+        let cached = cachedModels(cwd)
+        if let cached, cached != models { models = cached }
         do {
-            models = try await AppModel.shared.client.models(projectId: nil, cwd: cwd)
+            let fresh = try await fetchModels(cwd)
+            if !Task.isCancelled, fresh != models { models = fresh }
         } catch {
-            if !Task.isCancelled { self.error = error.localizedDescription }
+            // A failed background refresh is not worth an alert while a usable list is showing.
+            if !Task.isCancelled, cached == nil { self.error = error.localizedDescription }
         }
     }
 }

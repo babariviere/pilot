@@ -267,9 +267,19 @@ final class PilotClient: ObservableObject {
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
         }
-        return try JSONDecoder().decode(ModelList.self, from: data)
+        let list = try JSONDecoder().decode(ModelList.self, from: data)
+        modelCache.store(list, for: ModelListCache.key(projectId: projectId, cwd: cwd))
+        return list
     }
 
+    /// The last list fetched for this scope, if any. Callers show it at once and then revalidate.
+    func cachedModels(projectId: String?, cwd: String?) -> ModelList? {
+        if let fixtureModels { return fixtureModels }
+        return modelCache.list(for: ModelListCache.key(projectId: projectId, cwd: cwd))
+    }
+
+    /// Not published: a cache write must never re-render views on its own.
+    private var modelCache = ModelListCache()
     var fixtureModels: ModelList?
     var fixtureBranches: RemoteBranchList?
 

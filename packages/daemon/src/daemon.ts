@@ -16,6 +16,7 @@ const watchdog = new EventLoopWatchdog();
 watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
+const models = new ModelCatalog(config.agentDir);
 const sessions = new SessionManager(
 	config.home,
 	projects,
@@ -25,6 +26,7 @@ const sessions = new SessionManager(
 	{
 		idleParkMs: config.idleParkMs,
 		workspaceRetentionMs: config.workspaceRetentionMs,
+		models,
 	},
 );
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
@@ -33,7 +35,7 @@ const missionService = new MissionService(missionStore, sessions, projects);
 await sessions.load();
 missionService.notices.start();
 const terminals = new TerminalManager();
-const server = createDaemonServer(config, sessions, projects, new ModelCatalog(config.agentDir), terminals, {
+const server = createDaemonServer(config, sessions, projects, models, terminals, {
 	service: missionService,
 	store: missionStore,
 });
