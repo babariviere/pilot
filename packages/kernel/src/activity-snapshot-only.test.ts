@@ -130,8 +130,11 @@ test("activity coalesces small committed snapshots while async delivery is block
 		await update(true);
 		await Promise.resolve();
 		await update(false);
+		assert.equal(stream.current?.run, undefined, "current state advances even while delivery is blocked");
+		assert.equal(stream.idle, true);
 		await update(true);
 		await update(false);
+		assert.equal(stream.settledVersion, 2, "coalescing preserves busy-to-idle boundaries");
 		assert.equal(frames.length, 1, "delivery awaits the listener rather than buffering every update");
 		release();
 		await Promise.resolve();
@@ -183,9 +186,13 @@ test("activity attachment reads no history, writes no existing docs and delivers
 			assert.equal(Boolean(frames.at(-1)?.inbox.length), queued);
 		};
 		await update(true, false);
+		assert.equal(stream.idle, false);
 		await update(false, true);
+		assert.equal(stream.idle, false, "a retained inbox is not settled");
 		await update(true, false);
 		await update(false, false);
+		assert.equal(stream.idle, true);
+		assert.equal(stream.settledVersion, 1, "queued end/start does not settle");
 		const count = frames.length;
 		await session.commit(async (tx) => {
 			(await tx.doc(LiveDoc, conversation.id)).tools = [
@@ -196,6 +203,8 @@ test("activity attachment reads no history, writes no existing docs and delivers
 		await delay(1);
 		assert.equal(frames.length, count, "output and transcript updates do not enlarge the activity stream");
 		await stream.stop();
+		assert.equal(stream.current, null);
+		assert.equal(stream.idle, false, "closed monitors never advertise idle");
 		await session.commit(async (tx) => {
 			(await tx.doc(InboxDoc, conversation.id)).items = [
 				{ id: 102 as SubmissionId, mode: "followUp", content: "after stop" },

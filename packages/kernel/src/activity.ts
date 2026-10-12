@@ -13,7 +13,14 @@ import {
 	type SnapshotEvent,
 } from "@earendil-works/pi-durable";
 
-export type ActivityStream = Pick<AgentEventStream, "snapshot" | "start"> & { stop(): Promise<void> };
+export type ActivityStream = Pick<AgentEventStream, "snapshot" | "start"> & {
+	/** Latest commit, updated synchronously even while notification delivery is blocked. */
+	readonly current: Readonly<SnapshotEvent> | null;
+	readonly idle: boolean;
+	/** Busy-to-idle boundary counter, retained when async frames are coalesced. */
+	readonly settledVersion: number;
+	stop(): Promise<void>;
+};
 
 /** Only exact, live SDK-owned transport PIDs with no outstanding requests are infrastructure. */
 export class InfrastructureChildren {
@@ -111,6 +118,9 @@ function snapshot(live: Readonly<LiveState> | null, inbox: Readonly<InboxState> 
 
 export async function watchActivity(session: Session, id: ConversationId, context: Context): Promise<ActivityStream> {
 	let initial!: SnapshotEvent;
+	let current!: SnapshotEvent;
+	let settledVersion = 0;
+	const isIdle = (frame: SnapshotEvent) => !frame.run && !frame.compactions.length && !frame.inbox.length;
 	let pending: SnapshotEvent | undefined;
 	let last: string;
 	let listener: Parameters<ActivityStream["start"]>[0] | undefined;
@@ -153,6 +163,7 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 		await session.commit(async (tx) => {
 			context.abortSignal?.throwIfAborted();
 			initial = snapshot(await tx.doc(LiveDoc, id), await tx.doc(InboxDoc, id));
+			current = initial;
 			last = JSON.stringify(initial);
 			// Keep only the small projection, not potentially large tool output or queued content.
 			let run = initial.run;
@@ -181,6 +192,8 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 				const key = JSON.stringify(frame);
 				if (key === last) return;
 				last = key;
+				if (!isIdle(current) && isIdle(frame)) settledVersion++;
+				current = frame;
 				pending = frame;
 				schedule();
 			});
@@ -194,6 +207,15 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 	}
 	return {
 		snapshot: initial,
+		get current() {
+			return stopped ? null : current;
+		},
+		get idle() {
+			return !stopped && isIdle(current);
+		},
+		get settledVersion() {
+			return settledVersion;
+		},
 		start(next) {
 			if (listener) throw new Error("Activity stream already started");
 			listener = next;

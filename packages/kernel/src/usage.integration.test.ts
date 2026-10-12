@@ -91,7 +91,7 @@ async function bindHarness(f: Awaited<ReturnType<typeof fixture>>, adapter: Nati
 	const conversation = await harness.root(context, {
 		agent: { model: adapter.model, extensions: [adapter.extension], tools: [] },
 	});
-	adapter.bindHarness(harness, conversation.id);
+	await adapter.bindHarness(harness, conversation.id);
 	return { harness, conversation };
 }
 
