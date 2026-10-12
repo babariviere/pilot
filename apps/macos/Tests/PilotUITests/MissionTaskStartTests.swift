@@ -19,7 +19,18 @@ import Testing
         window.orderFrontRegardless()
         host.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
-        try liveClick(host, x: 100, top: 50)
+        let location = host.convert(NSPoint(x: host.bounds.midX, y: host.bounds.midY), to: nil)
+        let event = { (type: NSEvent.EventType) in
+            try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
+                timestamp: 0, windowNumber: window.windowNumber, context: nil, eventNumber: 1,
+                clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0))
+        }
+        // The native button may track mouseDown until it dequeues mouseUp.
+        NSApp.postEvent(try event(.leftMouseUp), atStart: false)
+        window.sendEvent(try event(.leftMouseDown))
+        if let up = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
+            window.sendEvent(up)
+        }
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         #expect(starts == (status == .active ? 1 : 0))
     }
