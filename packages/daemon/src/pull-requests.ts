@@ -272,7 +272,10 @@ export async function inspectWorkspace(
 		};
 		validate(branch);
 		// Keep the recorded name if a merged/deleted branch no longer has a local ref.
-		branch = (await workspaceBranch(session.cwd, branch, runner)) ?? branch;
+		const resolved = await workspaceBranch(session.cwd, branch, runner);
+		// Also keep it when only the base bookmark remains: after a squash merge, a `jj git fetch` and a
+		// rebase onto the base leave the base bookmark as the nearest one, but the PR branch is unchanged.
+		if (resolved !== undefined && !(isBase(resolved) && branch !== undefined && !isBase(branch))) branch = resolved;
 		validate(branch);
 	} catch (error) {
 		return none({ ...(branch ? { branch } : {}), error: failure(error) });

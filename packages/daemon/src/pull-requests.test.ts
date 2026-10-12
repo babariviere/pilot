@@ -131,6 +131,18 @@ test("a shared workspace's pinned base branch preserves direct-delivery PR filte
 	assert.deepEqual(result, { branch: "trunk" });
 });
 
+test("a PR branch rebased onto the base keeps its recorded name instead of the base bookmark", async () => {
+	const target = session();
+	target.workspace = { base: "origin/trunk", branch, upstream: "git@github.com:octo/repo.git" };
+	const result = await discoverPullRequest(target, async (file, args) => {
+		if (file === "git" && args[0] === "branch") return args[1] === "--show-current" ? "trunk" : "";
+		assert.equal(file, "gh");
+		return JSON.stringify([candidate({ state: "MERGED" })]);
+	});
+	assert.equal(result.branch, branch);
+	assert.equal(result.pullRequest?.state, "merged");
+});
+
 test("reclaimed or restoring workspaces never run repository or GitHub commands", async () => {
 	for (const hasBranch of [true, false]) {
 		const target = session();
