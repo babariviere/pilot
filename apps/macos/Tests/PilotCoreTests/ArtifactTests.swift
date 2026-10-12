@@ -74,6 +74,8 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
                                         html: "<style>img{width:100%}</style><img><div id='artifact-root'></div>", libraries: [])
         let document = ArtifactPreviewDocument.document(revision)
         #expect(document.contains(":where(.mermaid) > svg{display:block;margin-inline:auto}"))
+        #expect(document.contains(":where(body, #artifact-root) > :where(*){margin-inline:auto}"))
+        #expect(document.contains(":where(body, #artifact-root) > :where(svg, canvas){display:block}"))
         #expect(document.range(of: "pilot-artifact-diagram-layout")!.lowerBound < document.range(of: revision.html)!.lowerBound)
         #expect(document.contains(revision.html))
         #expect(!document.contains("!important"))

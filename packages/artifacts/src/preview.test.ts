@@ -144,7 +144,7 @@ test("React interactions and Mermaid diagrams render in the preview", { skip: !b
 	assert.ok(!mermaid.consoleMessages.some((message) => message.level === "error"));
 });
 
-test("Mermaid centers in padded pre/div containers at narrow and wide widths, with author overrides", {
+test("Mermaid and top-level content center at narrow and wide widths, with author overrides", {
 	skip: !browserInstalled,
 }, async () => {
 	for (const width of [320, 1296]) {
@@ -156,12 +156,18 @@ test("Mermaid centers in padded pre/div containers at narrow and wide widths, wi
 				source: `<style>.mermaid{padding:16px;background:#fafafa}.custom > svg{margin-inline:0}</style>
 <pre class="mermaid">graph TD; A-->B</pre><div class="mermaid">graph TD; C-->D</div>
 <div class="mermaid custom">graph TD; E-->F</div><svg id="other" width="20" height="20"></svg>
+<div id="card" style="width:200px;height:10px"></div><p><svg id="nested" width="20" height="20"></svg></p>
 <script>mermaid.initialize({startOnLoad:false});mermaid.run().then(()=>{
   for(const host of document.querySelectorAll('.mermaid')){
     const svg=host.querySelector('svg'), box=svg.getBoundingClientRect(), parent=host.getBoundingClientRect();
     console.log(host.classList.contains('custom') ? 'override '+getComputedStyle(svg).marginLeft : 'center '+Math.abs((box.left+box.right-parent.left-parent.right)/2));
   }
   console.log('other '+getComputedStyle(document.getElementById('other')).display);
+  console.log('nested '+getComputedStyle(document.getElementById('nested')).display);
+  for(const id of ['other','card']){
+    const box=document.getElementById(id).getBoundingClientRect(), body=document.body.getBoundingClientRect();
+    console.log('top '+Math.abs((box.left+box.right-body.left-body.right)/2));
+  }
 });</script>`,
 			},
 			{ width, height: 900 },
@@ -170,7 +176,11 @@ test("Mermaid centers in padded pre/div containers at narrow and wide widths, wi
 		assert.equal(centered.length, 2, JSON.stringify(result.consoleMessages));
 		for (const message of centered) assert.ok(Number(message.text.slice(7)) < 1, message.text);
 		assert.ok(result.consoleMessages.some((message) => message.text === "override 0px"));
-		assert.ok(result.consoleMessages.some((message) => message.text === "other inline"));
+		assert.ok(result.consoleMessages.some((message) => message.text === "other block"));
+		assert.ok(result.consoleMessages.some((message) => message.text === "nested inline"));
+		const top = result.consoleMessages.filter((message) => message.text.startsWith("top "));
+		assert.equal(top.length, 2, JSON.stringify(result.consoleMessages));
+		for (const message of top) assert.ok(Number(message.text.slice(4)) < 1, message.text);
 	}
 });
 

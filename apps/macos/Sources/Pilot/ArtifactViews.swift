@@ -111,6 +111,8 @@ struct ArtifactCard: View {
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 6))
+                // Images and SwiftUI snapshots hug their fitted size; center them in the chat column.
+                .frame(maxWidth: .infinity, alignment: .center)
             } else {
                 Button("Show \(reference.title)") { state.preview = true }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
