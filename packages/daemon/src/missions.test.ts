@@ -535,6 +535,57 @@ test("parses tracker URLs", () => {
 	assert.equal(parseResourceUrl("https://example.com/x").kind, "url");
 });
 
+test("user notes survive reopening an existing database and use a bounded indexed query", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-user-notes-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M" });
+		const update = missions.log(id, { text: "User update" });
+		const note = missions.log(id, { text: "User handoff", kind: "handoff", health: "at_risk" });
+		missions.log(id, { text: "Agent handoff", kind: "handoff" }, { sessionId: "agent" });
+		missions.update(id, { goal: "Automatic title or goal update" });
+		missions.close();
+		const legacy = new DatabaseSync(file);
+		try {
+			legacy.exec("DROP INDEX user_notes_by_mission");
+			legacy.exec("ALTER TABLE events DROP COLUMN is_user_note");
+			// A large automatic-event backlog must not be scanned to find an older user note.
+			legacy
+				.prepare(`WITH RECURSIVE n(i) AS (VALUES(1) UNION ALL SELECT i + 1 FROM n WHERE i < 100000)
+				INSERT INTO events (mission_id, kind, text, at) SELECT ?, 'task', 'Automatic event', i FROM n`)
+				.run(id);
+		} finally {
+			legacy.close();
+		}
+		missions = new MissionStore(file);
+		assert.deepEqual(missions.userNotes(id, 15), [note, update]);
+		assert.equal(missions.events(id).length, 50);
+		assert.throws(() => missions.userNotes("missing", 15), /Unknown mission/);
+		const identical = missions.log(id, { text: "Mission title or goal changed" });
+		missions.update(id, { goal: "Another automatic update" });
+		assert.deepEqual(missions.userNotes(id, 15), [identical, note, update]);
+		missions.close();
+		missions = new MissionStore(file);
+		assert.deepEqual(missions.userNotes(id, 15), [identical, note, update]);
+		const db = new DatabaseSync(file);
+		try {
+			const plan = db
+				.prepare(`EXPLAIN QUERY PLAN SELECT * FROM events
+				WHERE mission_id = ? AND is_user_note = 1
+				ORDER BY id DESC LIMIT ?`)
+				.all(id, 15);
+			assert.match(JSON.stringify(plan), /USING INDEX user_notes_by_mission/);
+			assert.doesNotMatch(JSON.stringify(plan), /TEMP B-TREE|SCAN events/);
+		} finally {
+			db.close();
+		}
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("status updates, events paging and deletion detach members", () => {
 	const missions = store();
 	const { id } = missions.create({ projectId: "p", title: "M" });

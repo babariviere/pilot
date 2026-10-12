@@ -265,6 +265,11 @@ the brief into the repository is an explicit user action.
   The kind and external ID are parsed when saved so later automation needs no migration.
 - **Activity**: append-only events: handoffs, status updates (optional health), claims, task changes,
   brief revisions, decisions, links and membership changes.
+  The Activity composer lets the user post updates and handoffs for agents to read. Agent `get`
+  results include the latest 15 user-authored updates and handoffs in `recentUserNotes` (newest first,
+  with health when present), independently of the latest 15 events in `recentActivity`. Automatic
+  events and agent logs cannot push user notes out of this separate window. Posting does not send
+  a chat message; agents read these notes on their next `get`.
 
 **Membership.** A session has at most one mission and must belong to the mission's project; attaching
 a chat from another project is rejected. Chats join through **Make a mission…** (the chat drafts the
@@ -305,7 +310,7 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 
 | Action | Purpose |
 | --- | --- |
-| `get` | Goal, decisions, own tasks, open tasks, open comments, recent activity and the brief's revision and outline |
+| `get` | Goal, decisions, own tasks, open tasks, open comments, recent user updates and handoffs, recent activity and the brief's revision and outline |
 | `brief` | Read the brief (optionally a revision), or replace it with `markdown` and `expectedRevision` |
 | `tasks`, `task`, `claim` | List tasks; create or update one; claim one (`id`) or several (`ids`, including ranges) for this chat |
 | `decide`, `comment`, `resolve` | Record a decision; add or resolve a comment |

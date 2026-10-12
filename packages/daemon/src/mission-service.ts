@@ -17,6 +17,7 @@ import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
 const RECENT_ACTIVITY = 15;
+const RECENT_USER_NOTES = 15;
 
 /** Sent to a chat that just became a mission, so it drafts the shared state from its own conversation. */
 export function draftMessage(title: string): string {
@@ -368,6 +369,13 @@ export class MissionService {
 						kind: artifact.kind,
 						artifactId: artifact.artifactId,
 						chat: who(artifact.sessionId),
+					})),
+					recentUserNotes: this.store.userNotes(missionId, RECENT_USER_NOTES).map((event) => ({
+						kind: event.kind,
+						text: event.text,
+						by: "user",
+						at: new Date(event.at).toISOString(),
+						...(event.health ? { health: event.health } : {}),
 					})),
 					recentActivity: detail.events.slice(0, RECENT_ACTIVITY).map((event) => ({
 						kind: event.kind,

@@ -33,7 +33,7 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: goal, decisions, your tasks, open tasks, open comments, links, artifacts, recent activity and the brief's revision and outline. Call it before starting work and before handing off.
+- get: goal, decisions, your tasks, open tasks, open comments, links, artifacts, recent user updates and handoffs (separate from recent activity), and the brief's revision and outline. Call it before starting work and before handing off.
 - brief: read the brief (optionally an older revision). With markdown and expectedRevision, replace the whole brief; a stale expectedRevision fails, so re-read and reapply your change.
 - update: change the mission title or goal.
 - tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.

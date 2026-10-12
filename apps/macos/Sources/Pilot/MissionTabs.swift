@@ -840,7 +840,7 @@ struct MissionActivityTab: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 8) {
-                    TextField("Post an update or handoff", text: $input.text, axis: .vertical)
+                    TextField("Post an update or handoff for agents to read", text: $input.text, axis: .vertical)
                         .textFieldStyle(.roundedBorder).lineLimit(2 ... 6)
                     HStack(spacing: 10) {
                         Picker("", selection: $state.kind) {

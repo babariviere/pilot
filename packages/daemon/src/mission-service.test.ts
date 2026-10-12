@@ -103,6 +103,47 @@ async function fixture(
 	return { home, projects, project, other, sessions, store, service, workers, spawn };
 }
 
+test("get keeps recent user notes visible beyond the activity window for every member", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	type Note = { kind: string; text: string; by: string; at: string; health?: string };
+	const get = async (id: string) =>
+		(await f.service.call(id, "get", {})) as { recentUserNotes: Note[]; recentActivity: Note[] };
+	assert.deepEqual((await get(lead.id)).recentUserNotes, []);
+	const update = f.store.log(mission.id, { text: "Keep the composer", health: "on_track" });
+	const handoff = f.store.log(mission.id, { kind: "handoff", text: "Next: verify agent context" });
+	const other = f.store.create({ projectId: f.project.id, title: "Other" });
+	f.store.log(other.id, { text: "Not for this group" });
+	for (let i = 0; i < 60; i++) f.store.update(mission.id, { goal: `Goal ${i}` });
+	await f.service.call(member.id, "log", { text: "Agent update" });
+	await f.service.call(lead.id, "log", { kind: "handoff", text: "Agent handoff" });
+	const expected = [
+		{ kind: "handoff", text: handoff.text, by: "user", at: new Date(handoff.at).toISOString() },
+		{ kind: "update", text: update.text, by: "user", at: new Date(update.at).toISOString(), health: "on_track" },
+	];
+	for (const id of [lead.id, member.id]) {
+		const result = await get(id);
+		assert.deepEqual(result.recentUserNotes, expected);
+		assert.equal(result.recentActivity.length, 15);
+		assert.ok(result.recentActivity.every((event) => !expected.some((note) => note.text === event.text)));
+	}
+	for (let i = 0; i < 20; i++) f.store.log(mission.id, { text: `User note ${i}` });
+	assert.deepEqual(
+		(await get(member.id)).recentUserNotes.map((note) => note.text),
+		Array.from({ length: 15 }, (_, i) => `User note ${19 - i}`),
+	);
+	await assert.rejects(get(outsider.id), /not part of a mission/);
+});
+
 test("hand-linked PRs poll without a worker, finish after all settle, and respect a racing manual reset", async (t) => {
 	const states = new Map([
 		[1, "OPEN"],
