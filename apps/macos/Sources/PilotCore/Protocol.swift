@@ -437,7 +437,9 @@ public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendab
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(String.self, forKey: .id)
-        reason = (try? container.decodeIfPresent(String.self, forKey: .reason)).flatMap { $0.flatMap(RewindAction.init(rawValue:)) }
+        // Unknown actions from newer daemons decode as nil rather than failing the whole session.
+        let rawReason: String? = try container.decodeIfPresent(String.self, forKey: .reason)
+        reason = rawReason.flatMap { RewindAction(rawValue: $0) }
         createdAt = try container.decodeIfPresent(Double.self, forKey: .createdAt)
         preview = try container.decodeIfPresent(String.self, forKey: .preview)
         active = try container.decodeIfPresent(Bool.self, forKey: .active)
@@ -445,13 +447,15 @@ public struct SessionAttempt: Codable, Identifiable, Equatable, Hashable, Sendab
 
     /// Menu label, e.g. "Retry", "Edited: fix the login test".
     public var title: String {
-        let detail = preview.map { $0.split(whereSeparator: \.isNewline).first.map(String.init) ?? $0 }
-            .map { $0.count > 48 ? String($0.prefix(47)) + "…" : $0 }
         switch reason {
         case nil: return "Original"
         case .retry: return "Retry"
         case .restore: return "Restored"
-        case .edit: return detail.map { "Edited: \($0)" } ?? "Edited"
+        case .edit:
+            guard let preview else { return "Edited" }
+            let line: Substring = preview.split(whereSeparator: \.isNewline).first ?? Substring(preview)
+            let detail: String = line.count > 48 ? String(line.prefix(47)) + "…" : String(line)
+            return "Edited: " + detail
         }
     }
 }

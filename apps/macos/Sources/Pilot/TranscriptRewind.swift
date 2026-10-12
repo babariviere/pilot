@@ -51,6 +51,59 @@ final class TranscriptRewind: ObservableObject {
     }
 }
 
+/// Wires a chat's rewind actions to pilotd and its composer, and confirms stopping a running turn.
+struct TranscriptRewindHost: ViewModifier {
+    @ObservedObject var rewind: TranscriptRewind
+    let feed: SessionFeed
+    let composer: ComposerState
+    let sessionId: String
+    let retryEntryID: Int?
+
+    func body(content: Content) -> some View {
+        content
+            .onAppear {
+                rewind.isWorking = { [feed] in feed.presentation.working }
+                rewind.perform = { [sessionId, composer] request in
+                    await Self.perform(request, sessionId: sessionId, composer: composer)
+                }
+            }
+            .onDisappear { rewind.perform = nil }
+            .onChange(of: retryEntryID, initial: true) { _, id in rewind.retryEntryID = id }
+            .confirmationDialog(title, isPresented: confirming) {
+                Button("Stop and Continue") {
+                    if let request = rewind.confirmation { rewind.run(request) }
+                }
+            } message: {
+                Text("The previous attempt stays available. Workspace files stay as they are.")
+            }
+    }
+
+    private var title: String {
+        guard let request = rewind.confirmation else { return "" }
+        return TranscriptRewind.confirmationTitle(request.action)
+    }
+
+    private var confirming: Binding<Bool> {
+        Binding(get: { rewind.confirmation != nil }, set: { if !$0 { rewind.confirmation = nil } })
+    }
+
+    /// Retry resends from the daemon; edit puts the message back in the composer to change and send.
+    private static func perform(_ request: TranscriptRewind.Request, sessionId: String, composer: ComposerState) async {
+        composer.error = nil
+        do {
+            let draft = try await AppModel.shared.client.rewind(
+                sessionId, action: request.action, entryId: request.entryID
+            )
+            guard request.action == .edit, let draft else { return }
+            let current = composer.draft
+            composer.draft = current.isEmpty ? draft : draft + "\n\n" + current
+            composer.composerFocus = UUID()
+        } catch {
+            composer.error = error.localizedDescription
+        }
+    }
+}
+
 private struct TranscriptRewindKey: EnvironmentKey {
     static let defaultValue: TranscriptRewind? = nil
 }
@@ -184,4 +237,3 @@ struct AttemptsMenu: View {
         }
     }
 }
-
