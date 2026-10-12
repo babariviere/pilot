@@ -1,7 +1,26 @@
+import Combine
 import Foundation
 import PilotCore
 import Testing
 @testable import Pilot
+
+@Test @MainActor func sessionDeltasPublishOnceAndOnlyWhenChanged() {
+    let client = PilotClient()
+    let first = SessionSummary(id: "first", title: "First", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "working")
+    let second = SessionSummary(id: "second", title: "Second", cwd: "/tmp", createdAt: 1, updatedAt: 1, state: "working")
+    client.loadFixture(projects: [], sessions: [first, second])
+    var changes = 0
+    let observation = client.objectWillChange.sink { changes += 1 }
+    defer { observation.cancel() }
+
+    // Every observer of the session list (window, chat header) re-evaluates on each publication.
+    client.handle(.session(second))
+    #expect(changes == 0)
+    let updated = SessionSummary(id: "second", title: "Second", cwd: "/tmp", createdAt: 1, updatedAt: 3, state: "working")
+    client.handle(.session(updated))
+    #expect(changes == 1)
+    #expect(client.activeSessions.map(\.id) == ["second", "first"])
+}
 
 @Test @MainActor func clientFixtureListsUseSharedCompletionAndPROrdering() {
     let client = PilotClient()

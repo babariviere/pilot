@@ -4,7 +4,9 @@ import SwiftUI
 
 @MainActor
 final class TranscriptScrollState: ObservableObject {
-    @Published var follow = TranscriptScrollFollow()
+    /// Not published: live scrolling changes this on every frame, and the transcript only reads it
+    /// when deciding whether to scroll, so publishing would re-evaluate the whole chat per frame.
+    var follow = TranscriptScrollFollow()
     private var renderedScroll: Task<Void, Never>?
     /// Set by the native observer, so an expanding row keeps its own top edge in place.
     var onMessageToggled: (() -> Void)?
