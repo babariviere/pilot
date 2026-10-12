@@ -126,6 +126,27 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/compact", body: CompactRequest(instructions: instructions))
     }
 
+    /// One page of entries hidden from the transcript by compaction or reset (`SessionHistoryPage`), decoded off the
+    /// main actor. Never wakes a parked chat.
+    func history(_ sessionId: String, before: Int, limit: Int = 100) async throws -> JSONValue {
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        var components = URLComponents(url: baseURL.appending(path: "api/sessions/\(sessionId)/history"),
+                                       resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "before", value: String(before)),
+                                 URLQueryItem(name: "limit", value: String(limit))]
+        let (data, response) = try await URLSession.shared.data(from: components.url!)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200 ..< 300).contains(status) else {
+            let error = (try? JSONDecoder().decode(APIError.self, from: data))?.error
+            // An older running pilotd has no history route; restarting it would interrupt active agents.
+            if status == 404, error == "Not found" {
+                throw ClientError("Once agents are idle, restart pilotd from the Pilot menu to show earlier messages.", status: status)
+            }
+            throw ClientError(error ?? "HTTP \(status)", status: status)
+        }
+        return try await Task.detached(priority: .userInitiated) { try JSONValue.decode(data) }.value
+    }
+
     // MARK: Subagents
 
     /// Static transcripts for snapshots and previews, keyed by subagent name.

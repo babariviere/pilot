@@ -65,6 +65,8 @@ public struct ChatMessage: Equatable, Sendable {
 public struct Entry: Identifiable, Equatable, Sendable {
     public let id: Int
     public let kind: String
+    /// First entry still in context, on a compaction or reset marker. Earlier entries are hidden from the snapshot.
+    public let head: Int?
     public let messages: [ChatMessage]
     public let artifact: ArtifactReference?
 
@@ -72,6 +74,7 @@ public struct Entry: Identifiable, Equatable, Sendable {
         guard let id = json["id"]?.int else { return nil }
         self.id = id
         kind = json["kind"]?.string ?? ""
+        head = json["head"]?.int
         messages = (json["model"]?.array ?? []).map(ChatMessage.init(json:))
         artifact = kind == "pilot.artifact" ? ArtifactReference.fromToolResult(.object(["details": json["data"] ?? .null])) : nil
     }
@@ -139,17 +142,35 @@ public struct Transcript: Equatable, Sendable {
     /// Running compaction task IDs. Manual compactions can run while no run is active.
     private var compactionTasks: Set<Int> = []
     public var compacting: Bool { !compactionTasks.isEmpty }
+    /// Pass as `before` to load the next older page hidden by compaction or reset; nil when none remain.
+    public private(set) var earlierCursor: Int?
+    /// Where the snapshot's active transcript starts. Earlier pages stay valid only while this is unchanged.
+    private var activeStart: Int?
     public var error: String? {
         didSet { if error != oldValue { rowRevision &+= 1 } }
     }
 
     public init() {}
 
+    /// Client-side event carrying one page of `GET /api/sessions/:id/history` (`SessionHistoryPage`).
+    public static let earlierEntriesEvent = "pilot.earlier_entries"
+
+    /// Wraps a decoded history page so it is reduced in order with the live stream.
+    public static func earlierEntries(before: Int, page: JSONValue) -> JSONValue {
+        .object([
+            "type": .string(earlierEntriesEvent),
+            "before": .number(Double(before)),
+            "entries": page["entries"] ?? .array([]),
+            "more": page["more"] ?? .bool(false),
+        ])
+    }
+
     public static func == (lhs: Transcript, rhs: Transcript) -> Bool {
         lhs.entries == rhs.entries && lhs.streaming == rhs.streaming && lhs.tools == rhs.tools
             && lhs.working == rhs.working && lhs.queuedMessages == rhs.queuedMessages
             && lhs.todos == rhs.todos && lhs.retry == rhs.retry && lhs.error == rhs.error
             && lhs.compactionTasks == rhs.compactionTasks
+            && lhs.earlierCursor == rhs.earlierCursor
     }
 
     private mutating func invalidateCommittedRows() {
@@ -200,10 +221,24 @@ public struct Transcript: Equatable, Sendable {
             let savedTodos = todos
             let savedRowRevision = rowRevision
             let savedCommittedRevision = committedRowRevision
+            let savedActiveStart = activeStart
+            let savedEarlierCursor = earlierCursor
+            let savedEarlier = activeStart.map { start in storedEntries.filter { $0.id < start } } ?? []
             self = Transcript()
             queuedMessages = queue
             todos = savedTodos
-            entries = (event["entries"]?.array ?? []).compactMap(Entry.init(json:)).sorted { $0.id < $1.id }
+            let active = (event["entries"]?.array ?? []).compactMap(Entry.init(json:))
+            // Older entries are hidden only behind a compaction or reset marker.
+            let start = active.contains { $0.head != nil } ? active.map { $0.head ?? $0.id }.min() : nil
+            activeStart = start
+            if let start, start == savedActiveStart {
+                // A reconnect or overflow snapshot keeps pages already loaded above the same head.
+                entries = (savedEarlier + active).sorted { $0.id < $1.id }
+                earlierCursor = savedEarlierCursor
+            } else {
+                entries = active.sorted { $0.id < $1.id }
+                earlierCursor = start.flatMap { $0 > 1 ? $0 : nil }
+            }
             if let message = event["generation"]?["message"], !message.isNull { streaming = ChatMessage(json: message) }
             for tool in event["tools"]?.array ?? [] {
                 guard let id = tool["callId"]?.string else { continue }
@@ -221,6 +256,14 @@ public struct Transcript: Equatable, Sendable {
             // artifact lookups. Never reuse a previous snapshot's generation numbers.
             rowRevision = savedRowRevision &+ 1
             committedRowRevision = savedCommittedRevision &+ 1
+        case Transcript.earlierEntriesEvent:
+            // Only the page that was asked for: stale or duplicate pages are ignored.
+            guard let before = event["before"]?.int, before == earlierCursor else { return }
+            let page = (event["entries"]?.array ?? []).compactMap(Entry.init(json:))
+                .filter { $0.id < before && !entryIDs.contains($0.id) }
+            if !page.isEmpty { entries = (page + storedEntries).sorted { $0.id < $1.id } }
+            let oldest = page.map(\.id).min()
+            earlierCursor = event["more"]?.bool == true ? oldest.flatMap { $0 > 1 ? $0 : nil } : nil
         case "run_start":
             working = true
             error = nil

@@ -7,9 +7,12 @@ final class SessionFeed: ObservableObject {
     @Published private(set) var presentation: TranscriptPresentation
     @Published private(set) var loading = true
     @Published private(set) var hasSnapshot = false
+    @Published private(set) var loadingEarlier = false
+    @Published private(set) var earlierError: String?
     private let sessionId: String
     private let client: PilotClient?
     private var token: UUID?
+    private var earlierLoad: Task<Void, Never>?
     private var processor = TranscriptProcessor()
     private var pending: [[JSONValue]] = []
     private var processing: Task<Void, Never>?
@@ -101,10 +104,39 @@ final class SessionFeed: ObservableObject {
         generation = UUID()
         processing?.cancel()
         processing = nil
+        cancelEarlierLoad()
         pending.removeAll()
         // The cache retains prepared rows, not the reducer's duplicate history and tool state.
         processor = TranscriptProcessor()
         onPresentationChanged?()
+    }
+
+    /// Loads the next older page hidden by compaction. The page joins the event queue, so it is reduced
+    /// off the main actor and in order with live events; a page for a stale cursor is ignored there.
+    func loadEarlier() {
+        guard let client, token != nil, hasSnapshot, earlierLoad == nil, let before = presentation.earlierCursor else { return }
+        let generation = generation
+        loadingEarlier = true
+        earlierError = nil
+        earlierLoad = Task { [weak self, sessionId] in
+            let result: Result<JSONValue, Error>
+            do { result = .success(try await client.history(sessionId, before: before)) }
+            catch { result = .failure(error) }
+            guard let self, !Task.isCancelled, self.generation == generation else { return }
+            self.earlierLoad = nil
+            self.loadingEarlier = false
+            switch result {
+            case let .success(page): self.enqueue([Transcript.earlierEntries(before: before, page: page)])
+            case let .failure(error): self.earlierError = error.localizedDescription
+            }
+        }
+    }
+
+    private func cancelEarlierLoad() {
+        earlierLoad?.cancel()
+        earlierLoad = nil
+        loadingEarlier = false
+        earlierError = nil
     }
 }
 
@@ -139,6 +171,11 @@ struct ChatView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if feed.loading, session.state != "failed" {
                         ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
+                            .frame(maxWidth: .infinity)
+                    }
+                    if transcript.earlierCursor != nil, feed.hasSnapshot {
+                        EarlierMessagesRow(loading: feed.loadingEarlier, error: feed.earlierError, load: feed.loadEarlier)
+                            .frame(maxWidth: Theme.column)
                             .frame(maxWidth: .infinity)
                     }
                     if transcript.historyRowCount > 0 {
@@ -467,6 +504,46 @@ private struct ThinkingRow: View {
                     }
             }
         }
+    }
+}
+
+/// Top of a transcript whose older messages were compacted out of the agent's context. They stay in storage and
+/// load a page at a time; scroll anchoring keeps the rows the reader was looking at in place.
+private struct EarlierMessagesRow: View {
+    let loading: Bool
+    let error: String?
+    let load: () -> Void
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack {
+                VStack { Divider() }
+                if loading {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Loading earlier messages…")
+                    }
+                    .font(.pilot(.caption))
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                } else {
+                    Button(error == nil ? "Show earlier messages" : "Retry loading earlier messages", action: load)
+                        .buttonStyle(.link)
+                        .font(.pilot(.caption))
+                        .fixedSize()
+                        .help("Messages from before the context was compacted. The agent no longer sees them.")
+                }
+                VStack { Divider() }
+            }
+            if let error, !loading {
+                Text(error)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .textSelection(.enabled)
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 }
 

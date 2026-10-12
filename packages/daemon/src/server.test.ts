@@ -427,6 +427,41 @@ test("queued message DELETE forwards only the ID, reports stale removal, and rej
 	assert.equal(send.mock.callCount(), 0);
 });
 
+test("history route validates its cursor and limit and forwards the page request", async (t) => {
+	const projects = new ProjectStore("/tmp/pilot-server-test-unused");
+	const sessions = new SessionManager("/tmp/pilot-server-test-unused", projects);
+	const terminals = new TerminalManager();
+	const history = t.mock.method(sessions, "history", async () => ({ entries: [], more: false }));
+	const server = createDaemonServer(
+		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/tmp/pilot-server-test-unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions/session-1/history`;
+	const read = await fetch(`${base}?before=42`);
+	assert.equal(read.status, 200);
+	assert.deepEqual(await read.json(), { entries: [], more: false });
+	assert.deepEqual(history.mock.calls[0]?.arguments, ["session-1", 42, 100]);
+	const limited = await fetch(`${base}?before=42&limit=500`);
+	assert.equal(limited.status, 200);
+	await limited.arrayBuffer();
+	assert.deepEqual(history.mock.calls[1]?.arguments, ["session-1", 42, 500]);
+	for (const query of ["", "?before=-1", "?before=x", "?before=4&limit=0", "?before=4&limit=501"]) {
+		const bad = await fetch(base + query);
+		assert.equal(bad.status, 400, query);
+		await bad.arrayBuffer();
+	}
+	assert.equal(history.mock.callCount(), 2);
+});
+
 test("subagent routes decode names, validate bodies and forward transcript, message and stop requests", async (t) => {
 	const projects = new ProjectStore("/tmp/pilot-server-test-unused");
 	const sessions = new SessionManager("/tmp/pilot-server-test-unused", projects);

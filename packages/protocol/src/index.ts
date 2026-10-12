@@ -1,6 +1,6 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
 import type { UserMessage } from "@earendil-works/pi-ai";
-import type { AgentEvent as DurableAgentEvent } from "@earendil-works/pi-durable";
+import type { AgentEvent as DurableAgentEvent, EntryRecord } from "@earendil-works/pi-durable";
 
 export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 export type {
@@ -653,6 +653,18 @@ export interface SessionCommand {
 /** GET /api/sessions/:id/commands. Reopens a parked session only when no list is cached. */
 export interface SessionCommandsResponse {
 	commands: SessionCommand[];
+}
+
+/**
+ * GET /api/sessions/:id/history?before=<entryId>[&limit=<n>]: retained entries older than the active transcript,
+ * which compaction or reset hides from the snapshot. Read from storage without waking a parked session. Entries are
+ * oldest first and include older compaction and reset markers. `limit` defaults to 100 (at most 500); a page may
+ * end early when its entries are large.
+ */
+export interface SessionHistoryPage {
+	entries: EntryRecord[];
+	/** True when older entries may remain: request again with the oldest returned entry ID as `before`. */
+	more: boolean;
 }
 
 /**

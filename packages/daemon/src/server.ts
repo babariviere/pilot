@@ -20,6 +20,7 @@ import type {
 	SendRequest,
 	ServerMessage,
 	SessionCommandsResponse,
+	SessionHistoryPage,
 	SessionSummary,
 	SpawnRequest,
 	StartMissionTaskRequest,
@@ -41,6 +42,8 @@ import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
 
 const MAX_BODY = 1024 * 1024;
+const HISTORY_PAGE_DEFAULT = 100;
+const HISTORY_PAGE_MAX = 500;
 
 /** Telemetry and generated titles are not evidence of a changed working copy. */
 function repositoryVersion(session: SessionSummary): string {
@@ -237,6 +240,16 @@ export function createDaemonServer(
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "commands" && req.method === "GET") {
 			const response: SessionCommandsResponse = { commands: await sessions.commands(parts[2]!) };
 			return json(res, 200, response);
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "history" && req.method === "GET") {
+			const before = url.searchParams.get("before");
+			if (before === null || !/^\d+$/.test(before) || !Number.isSafeInteger(Number(before)))
+				throw new HttpError(400, "before must be a non-negative integer");
+			const limit = url.searchParams.get("limit") ?? String(HISTORY_PAGE_DEFAULT);
+			if (!/^\d+$/.test(limit) || Number(limit) < 1 || Number(limit) > HISTORY_PAGE_MAX)
+				throw new HttpError(400, `limit must be between 1 and ${HISTORY_PAGE_MAX}`);
+			const page: SessionHistoryPage = await sessions.history(parts[2]!, Number(before), Number(limit));
+			return json(res, 200, page);
 		}
 		if (
 			parts[1] === "sessions" &&
