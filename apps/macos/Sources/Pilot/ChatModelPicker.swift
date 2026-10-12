@@ -39,6 +39,7 @@ final class ChatModelPickerState: ObservableObject {
     }
 
     init(
+        cwd: String? = nil,
         changeModel: @escaping (String, ChangeModelRequest) async throws -> Void = { id, request in
             try await AppModel.shared.client.changeModel(id, model: request.model, thinking: request.thinking)
         },
@@ -52,6 +53,12 @@ final class ChatModelPickerState: ObservableObject {
         self.changeModel = changeModel
         self.cachedModels = cachedModels
         self.fetchModels = fetchModels
+        // A chat switch creates a new picker. Seed it before the first body evaluation,
+        // not in .task, or the chip briefly shows the raw ID and missing thinking choices.
+        if let cwd, let cached = cachedModels(cwd) {
+            _models = Published(initialValue: cached)
+            rebuildPresentation()
+        }
     }
 
     func canChange(session: SessionSummary, working: Bool) -> Bool {
