@@ -54,6 +54,9 @@ final class AppModel: ObservableObject {
     @Published var draftWorkspace: WorkspaceMode? { didSet { saveDrafts() } }
     @Published private(set) var draftRevision = 0
     @Published var collapsedProjects: Set<String> = []
+    /// Project session lists showing every chat instead of the first few. Keyed by project id,
+    /// or `SessionSidebar.otherListId` for chats outside any known project.
+    @Published var expandedSessionLists: Set<String> = []
     /// Sidebar-only grouping. Repository paths and daemon project records are unchanged.
     @Published var projectFolders: ProjectFolders {
         didSet { projectFolders.save(defaults: projectFolderDefaults) }

@@ -28,7 +28,7 @@ struct SessionSidebar: View {
                                     .padding(.leading, 12)
                                     .selectionDisabled(true)
                                 if isExpanded.wrappedValue {
-                                    projectSessions(sessions, indented: true)
+                                    projectSessions(sessions, listId: project.id, searching: searching, indented: true)
                                 }
                             }
                             if projects.isEmpty {
@@ -53,7 +53,7 @@ struct SessionSidebar: View {
                     // Custom disclosure buttons keep header actions from shifting on hover.
                     Section {
                         if isExpanded.wrappedValue {
-                            projectSessions(sessions)
+                            projectSessions(sessions, listId: project.id, searching: searching)
                         }
                     } header: {
                         projectHeader(project, sessions: sessions, isExpanded: isExpanded)
@@ -62,7 +62,7 @@ struct SessionSidebar: View {
             }
             if !unassigned.isEmpty {
                 Section(client.projects.isEmpty ? "Sessions" : "Other") {
-                    ForEach(unassigned) { SessionRow(session: $0).tag($0.id) }
+                    projectSessions(unassigned, listId: Self.otherListId, searching: searching)
                 }
             }
         }
@@ -160,17 +160,9 @@ struct SessionSidebar: View {
                 }
                 if !inactive.isEmpty {
                     let showing = searching || model.showingInactiveMissions
-                    Button { model.showingInactiveMissions.toggle() } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: showing ? "chevron.down" : "chevron.right")
-                                .font(.system(size: 9, weight: .semibold)).frame(width: 14)
-                            Text("Done and archived (\(inactive.count))").font(.caption)
-                            Spacer(minLength: 0)
-                        }
-                        .foregroundStyle(Theme.mutedForeground)
-                        .contentShape(Rectangle())
+                    SidebarDisclosureRow(title: "Done and archived (\(inactive.count))", expanded: showing) {
+                        model.showingInactiveMissions.toggle()
                     }
-                    .buttonStyle(.plain)
                     .selectionDisabled(true)
                     if showing {
                         ForEach(inactive) { mission in
@@ -230,8 +222,13 @@ struct SessionSidebar: View {
     }
 
     @ViewBuilder
-    private func projectSessions(_ sessions: [SessionSummary], indented: Bool = false) -> some View {
-        ForEach(sessions) { session in
+    private func projectSessions(_ sessions: [SessionSummary], listId: String, searching: Bool,
+                                 indented: Bool = false) -> some View {
+        let showingAll = searching || model.expandedSessionLists.contains(listId)
+        let list = showingAll ? (shown: sessions, hidden: 0) : SidebarSessionList.collapsed(sessions) { session in
+            session.id == model.selectedSessionId || session.isWorking || model.isUnread(session)
+        }
+        ForEach(list.shown) { session in
             SessionRow(session: session).padding(.leading, indented ? 20 : 0).tag(session.id)
         }
         if sessions.isEmpty {
@@ -239,7 +236,23 @@ struct SessionSidebar: View {
                 .padding(.leading, indented ? 20 : 0)
                 .selectionDisabled(true)
         }
+        if list.hidden > 0 {
+            SidebarDisclosureRow(title: "Show \(list.hidden) more", expanded: false) {
+                model.expandedSessionLists.insert(listId)
+            }
+            .padding(.leading, indented ? 20 : 0)
+            .selectionDisabled(true)
+        } else if !searching, model.expandedSessionLists.contains(listId),
+                  sessions.count > SidebarSessionList.defaultLimit + 1 {
+            SidebarDisclosureRow(title: "Show less", expanded: true) {
+                model.expandedSessionLists.remove(listId)
+            }
+            .padding(.leading, indented ? 20 : 0)
+            .selectionDisabled(true)
+        }
     }
+
+    static let otherListId = "pilot.sidebar.other"
 
     private func folderExpanded(_ id: String) -> Binding<Bool> {
         Binding(
@@ -263,6 +276,29 @@ struct SessionSidebar: View {
                 if open { model.collapsedProjects.remove(id) } else { model.collapsedProjects.insert(id) }
             }
         )
+    }
+}
+
+/// Quiet in-list toggle for secondary sidebar rows: folded chats or finished missions.
+/// Use it instead of one-off chevron buttons so every sidebar disclosure reads the same.
+struct SidebarDisclosureRow: View {
+    let title: String
+    let expanded: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                    .font(.system(size: 9, weight: .semibold)).frame(width: 14)
+                Text(title).font(.caption)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(Theme.mutedForeground)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
     }
 }
 
