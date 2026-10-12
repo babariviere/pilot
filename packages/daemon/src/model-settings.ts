@@ -9,8 +9,19 @@ import { CONFIG_DIR_NAME, SettingsManager } from "@earendil-works/pi-coding-agen
 
 // Use the SDK's own lock implementation/version, matching FileSettingsStorage's lock paths and stale handling.
 const lockfile = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"))("proper-lockfile") as {
-	lock(path: string, options: { realpath: false }): Promise<() => Promise<void>>;
+	lock(
+		path: string,
+		options: { realpath: false; onCompromised: (error: Error) => void },
+	): Promise<() => Promise<void>>;
 };
+
+/**
+ * proper-lockfile's default throws from a timer, which crashes pilotd whenever the event loop stalls past the
+ * stale threshold. This lock only guards a read snapshot, so losing it is harmless: log and continue.
+ */
+function onCompromised(error: Error): void {
+	console.warn(`pilotd: settings lock compromised during read: ${error.message}`);
+}
 
 function settingsPath(path: string): string {
 	if (path === "~") return homedir();
@@ -31,7 +42,7 @@ async function snapshot(path: string, signal?: AbortSignal): Promise<string | un
 		for (let attempt = 1; attempt <= 10; attempt++) {
 			signal?.throwIfAborted();
 			try {
-				release = await lockfile.lock(path, { realpath: false });
+				release = await lockfile.lock(path, { realpath: false, onCompromised });
 				break;
 			} catch (error) {
 				if ((error as NodeJS.ErrnoException).code !== "ELOCKED" || attempt === 10) throw error;
@@ -41,7 +52,8 @@ async function snapshot(path: string, signal?: AbortSignal): Promise<string | un
 		try {
 			return await readFile(path, { encoding: "utf8", signal });
 		} finally {
-			await release?.();
+			// A compromised lock is already released; its release error must not discard the snapshot.
+			await release?.().catch(() => undefined);
 		}
 	} catch (error) {
 		return error instanceof Error ? error : new Error(String(error));

@@ -33,6 +33,7 @@ import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
+import { operations } from "./event-loop-watchdog.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
@@ -348,6 +349,9 @@ export function createDaemonServer(
 	};
 
 	const server = createServer((req, res) => {
+		// Requests still open when the event loop stalls are reported with it. IDs stay local to the log.
+		const done = operations.begin(`${req.method} ${(req.url ?? "/").split("?")[0]}`);
+		res.once("close", done);
 		route(req, res).catch((error: unknown) => {
 			const status =
 				error instanceof HttpError

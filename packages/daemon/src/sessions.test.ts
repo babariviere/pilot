@@ -1658,6 +1658,45 @@ for (const recovery of ["restart", "demand"] as const) {
 	});
 }
 
+test("a kernel crash without queued work stays usable and backs off automatic restarts", async (t) => {
+	const f = await fixture(t);
+	const warning = mock.method(console, "warn", () => {});
+	t.after(() => warning.mock.restore());
+	const sessions = await f.manager({}, { kernelRestartBackoffMs: 100 });
+	const created = await sessions.spawn({ cwd: f.source, message: "before crash" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	f.workers[0]!.crash();
+	await until(() => sessions.get(created.id)?.state === "parked");
+	assert.equal(sessions.get(created.id)?.error, "IPC connection failed");
+	assert.equal((await f.stored(created.id)).inputError, undefined, "nothing was uncertain");
+	assert.equal(sessions.canSendNotice(created.id), false, "automatic work waits after a crash");
+	await until(() => sessions.canSendNotice(created.id));
+	// User input is never delayed, and a fresh kernel clears the crash.
+	await sessions.send(created.id, "after crash");
+	assert.equal(f.workers.length, 2);
+	assert.equal(sessions.get(created.id)?.state, "working");
+	assert.equal(sessions.get(created.id)?.error, undefined);
+	f.workers[1]!.crash();
+	const backoff = sessions["kernelFailures"].get(created.id)!;
+	assert.equal(backoff.failures, 2);
+	assert.ok(backoff.until - backoff.at >= 200, "consecutive failures double the wait");
+});
+
+test("a fresh kernel clears a stale input error when nothing is queued", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "hello" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.shutdown();
+	const file = join(f.home, "sessions", created.id, "meta.json");
+	await writeFile(file, JSON.stringify({ ...(await f.stored(created.id)), inputError: "Kernel IPC disconnected" }));
+	// Durable work resumes on load. Its ready kernel proves the old IPC failure no longer applies.
+	const reopened = await f.manager();
+	await until(() => reopened.get(created.id)?.state === "idle");
+	assert.equal(reopened.get(created.id)?.error, undefined);
+	await until(async () => (await f.stored(created.id)).inputError === undefined);
+});
+
 // Exercise supervision without forking a kernel or loading a model.
 type Meta = Parameters<SessionManager["save"]>[0];
 type Worker = Parameters<SessionManager["onPacket"]>[1];

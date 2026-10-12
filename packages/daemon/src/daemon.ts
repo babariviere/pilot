@@ -8,8 +8,12 @@ import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 
 const config = loadConfig();
+// Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
+const watchdog = new EventLoopWatchdog();
+watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
 const sessions = new SessionManager(
@@ -42,6 +46,7 @@ async function stop(): Promise<void> {
 	if (stopping) return;
 	stopping = true;
 	console.log("pilotd: pausing sessions");
+	watchdog.stop();
 	server.close();
 	await missionService.notices.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
