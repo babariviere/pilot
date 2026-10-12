@@ -40,7 +40,7 @@ npm run typecheck
 npm test
 npm run fmt:check
 apps/macos/scripts/test.sh
-swift build --package-path apps/macos --jobs 2
+apps/macos/scripts/build.sh
 
 xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-status.swift \
   apps/macos/Sources/Pilot/BrailleProgress.swift -o /tmp/pilot-status-bench
