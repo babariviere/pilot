@@ -325,6 +325,8 @@ the coordinator. Bursts use a 30-second trailing debounce, capped at two minutes
 Delivery waits for idle (including an empty durable inbox), with an atomic kernel idle guard, and uses
 an ordinary follow-up with request ID `mission-notice:<lastEventId>`. The cutoff and short event-summary
 payload are frozen before delivery, so a lost acknowledgement retries the same notice once. Events
+Completion versions and semantic state fingerprints are durable: startup does not announce outcomes
+predating membership, unchanged successful states are suppressed, and later outcomes omit old merges. Events
 stay pending while the mission is inactive, lacks a coordinator, or its coordinator is archived.
 Each mission has a rolling cap of 20 notices per hour; excess events wait for the next window.
 Notices contain at most 100 one-line summaries (500 characters each); larger backlogs drain in batches.

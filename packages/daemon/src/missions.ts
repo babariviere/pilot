@@ -277,6 +277,8 @@ export class MissionStore {
 		this.db = new DatabaseSync(file);
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 		this.db.exec(SCHEMA);
+		if (!this.all("PRAGMA table_info(member_completions)").some((row) => row.name === "signature"))
+			this.db.exec("ALTER TABLE member_completions ADD COLUMN signature TEXT");
 		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "task_id")) {
 			this.db.exec(`BEGIN;
 				ALTER TABLE artifact_links RENAME TO artifact_links_legacy;
@@ -416,23 +418,43 @@ export class MissionStore {
 	// Missions
 
 	/** Durable high-water mark prevents ready snapshots/restarts from announcing a completion twice. */
-	recordMemberCompletion(session: SessionSummary): void {
+	recordMemberCompletion(session: SessionSummary, recovering = false): void {
 		if (!session.outcome || session.outcomeAt === undefined) return;
 		const id = this.missionOf(session.id);
 		if (!id) return;
-		const previous = this.one("SELECT outcome_at FROM member_completions WHERE session_id = ?", session.id);
+		const previous = this.one("SELECT * FROM member_completions WHERE session_id = ?", session.id);
 		if (previous && num(previous.outcome_at!) >= session.outcomeAt) return;
+		const tasks = this.tasks(id).filter((task) => task.sessionId === session.id);
+		const prs = session.pullRequests ?? (session.pullRequest ? [session.pullRequest] : []);
+		// Poll timestamps, titles and stack positions do not change the state being announced.
+		const signature = JSON.stringify([
+			session.outcome,
+			session.outcomeReason ?? null,
+			tasks.map((task) => task.id).sort(),
+			prs.map((pr) => [pr.url, pr.state]).sort(),
+		]);
+		const joinedAt = num(this.one("SELECT joined_at FROM members WHERE session_id = ?", session.id)!.joined_at!);
 		this.transaction(() => {
 			this.run(
-				"INSERT INTO member_completions (session_id, mission_id, outcome_at) VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET mission_id = excluded.mission_id, outcome_at = excluded.outcome_at",
+				"INSERT INTO member_completions (session_id, mission_id, outcome_at, signature) VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET mission_id = excluded.mission_id, outcome_at = excluded.outcome_at, signature = excluded.signature",
 				session.id,
 				id,
 				session.outcomeAt!,
+				signature,
 			);
-			const tasks = this.tasks(id).filter((task) => task.sessionId === session.id);
+			// Startup is recovery, not a replay of all historical outcomes of newly attached chats.
+			if (recovering && !previous && session.outcomeAt! < joinedAt) return;
+			// Distinct failures remain useful (and can be counted), but unchanged successful/stopped
+			// snapshots must not produce another notice just because their outcome version advanced.
+			if (previous?.signature === signature && session.outcome !== "failed") return;
 			const label = tasks.length ? tasks.map((task) => `#${task.number} ${task.title}`).join(", ") : session.title;
-			const prs = session.pullRequests ?? (session.pullRequest ? [session.pullRequest] : []);
-			const note = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${prs.length ? `, ${prs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+			// A new outcome may follow work on a different PR. Do not re-report old merges with it.
+			const relevantPrs = prs.filter(
+				(pr) =>
+					pr.state !== "merged" ||
+					(pr.mergedAt !== undefined && pr.mergedAt > (previous ? num(previous.outcome_at!) : joinedAt)),
+			);
+			const note = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
 			this.event(id, "update", note, { sessionId: session.id }, { wake: true });
 		});
 		this.changed(id);
