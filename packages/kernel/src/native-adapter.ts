@@ -66,7 +66,7 @@ import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
-import { InfrastructureChildren, inspectChildren } from "./activity.ts";
+import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
@@ -225,7 +225,7 @@ export class NativeAdapter {
 	#harness?: Harness;
 	#conversationId?: ConversationId;
 	#closed = false;
-	#working = false;
+	#activity?: ActivityStream;
 	#renderPrompt?: () => string;
 	#forcedPrompt?: string;
 	#startMessages: Message[] = [];
@@ -422,9 +422,10 @@ export class NativeAdapter {
 		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
-		// bindExtensions reads this getter dynamically, including from retained contexts.
+		// bindExtensions reads the committed activity source dynamically, including
+		// from retained contexts. No second working flag or prompt-time override.
 		Object.defineProperty(session, "isIdle", {
-			get: () => !adapter.#working && !adapter.#closed && !session.isCompacting,
+			get: () => !adapter.#closed && (adapter.#activity?.idle ?? true) && !session.isCompacting,
 		});
 		// SDK reload replaces the extension API. Keep the latest definitions and registration handle.
 		adapter.#registerHostTool = (tool) => registerHostTool!(tool);
@@ -528,18 +529,26 @@ export class NativeAdapter {
 			throw new Error(`Model is not available in this session's scope: ${name}`);
 		return choice;
 	}
-	bindHarness(harness: Harness, conversationId: ConversationId): void {
+	async bindHarness(harness: Harness, conversationId: ConversationId): Promise<void> {
 		this.assertOpen();
 		if (this.#harness && (this.#harness !== harness || this.#conversationId !== conversationId))
 			throw new Error("Native worker cannot be shared between conversations");
+		if (this.#activity) return;
 		this.#harness = harness;
 		this.#conversationId = conversationId;
+		const activity = await watchActivity(harness, conversationId, BACKGROUND_CONTEXT);
+		this.#activity = activity;
+		let notifiedVersion = activity.settledVersion;
+		activity.start(async () => {
+			// Coalescing or a slow handler must not announce an obsolete idle frame.
+			// The cursor tracks notifications, not a separately mutable busy state.
+			if (this.#closed || !this.session.isIdle || notifiedVersion === activity.settledVersion) return;
+			notifiedVersion = activity.settledVersion;
+			await this.session.extensionRunner.emit({ type: "agent_settled" });
+		});
 	}
-	/** Mirror the final committed run state, not intermediate end/start events. */
-	async setWorking(working: boolean): Promise<void> {
-		if (this.#closed || this.#working === working) return;
-		this.#working = working;
-		if (!working) await this.session.extensionRunner.emit({ type: "agent_settled" });
+	get working(): boolean {
+		return !!this.#activity?.current?.run;
 	}
 	/** Read committed context without rebuilding the live native session while tools are executing. */
 	async refreshUsage(context: TaskContext): Promise<void> {
@@ -617,9 +626,6 @@ export class NativeAdapter {
 			}, context);
 	}
 	private async preparePrompt(context: TaskContext): Promise<string> {
-		// Model preparation can race asynchronous watch delivery. Extensions must see
-		// busy even before the committed run_start reaches the lifecycle monitor.
-		this.#working = true;
 		const messages = structuredClone([...(await this.sync(context))]);
 		const cached = (await this.#harness!.snapshot(NativeState, this.#conversationId!, context))?.prompt;
 		if (cached?.key === this.#inputKey) {
@@ -937,6 +943,7 @@ export class NativeAdapter {
 		if (this.#closed) return;
 		this.#closed = true;
 		try {
+			await this.#activity?.stop();
 			await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		} finally {
 			this.session.dispose();

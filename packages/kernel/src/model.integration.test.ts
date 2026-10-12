@@ -292,6 +292,110 @@ test("native extensions remain busy through tool execution and multiple model ro
 	assert.equal(settlements, 1, "an intermediate tool-use round is not a settlement");
 });
 
+test("native idle checks read committed compaction/inbox activity before async event delivery", {
+	timeout: 15_000,
+}, async (t) => {
+	let ctx!: ExtensionContext;
+	let settlements = 0;
+	const settled = deferred();
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("session_start", (_event, context) => {
+				ctx = context;
+			});
+			pi.on("agent_settled", () => {
+				settlements++;
+				settled.resolve();
+			});
+		},
+	]);
+	const session = await f.open();
+	const idleAtCommit: boolean[] = [];
+	const stop = session.harness.subscribeCommits((publication) => {
+		if (
+			publication.changes.some(
+				(change) =>
+					change.type === "document" &&
+					[LiveDoc.definition.kind, InboxDoc.definition.kind].includes(change.record.kind),
+			)
+		)
+			idleAtCommit.push(ctx.isIdle());
+	});
+	t.after(stop);
+	await session.conversation.commit(async (tx) => {
+		(await tx.doc(LiveDoc, session.conversation.id)).compactions = [
+			{ taskId: 999 as never, reason: "manual", blocking: false, attempt: 0 },
+		];
+	}, context);
+	assert.equal(ctx.isIdle(), false);
+	await session.conversation.commit(async (tx) => {
+		delete (await tx.doc(LiveDoc, session.conversation.id)).compactions;
+		(await tx.doc(InboxDoc, session.conversation.id)).items = [
+			{ id: 999 as never, mode: "followUp", content: "retained after failure" },
+		];
+	}, context);
+	assert.equal(ctx.isIdle(), false);
+	assert.equal(settlements, 0, "compaction ending with a queued continuation is not idle");
+	await session.conversation.commit(async (tx) => {
+		(await tx.doc(InboxDoc, session.conversation.id)).items = [];
+	}, context);
+	await settled.promise;
+	assert.deepEqual(idleAtCommit, [false, false, true], "no independently mutable adapter working flag");
+	assert.equal(settlements, 1);
+	assert.equal(f.a.state.callCount, 0, "checking activity never runs the dormant SDK loop");
+});
+
+test("current activity and later settlements advance while an earlier settlement handler is blocked", {
+	timeout: 15_000,
+}, async (t) => {
+	const firstSettled = deferred();
+	const laterSettled = deferred();
+	const releaseHandler = deferred();
+	const entered = deferred();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => {
+		releaseHandler.resolve();
+		response.resolve(fauxAssistantMessage("Second done."));
+	});
+	let ctx!: ExtensionContext;
+	let settlements = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("session_start", (_event, context) => {
+				ctx = context;
+			});
+			pi.on("agent_settled", async () => {
+				assert.equal(ctx.isIdle(), true);
+				if (++settlements === 1) {
+					firstSettled.resolve();
+					await releaseHandler.promise;
+				} else laterSettled.resolve();
+			});
+		},
+	]);
+	f.a.setResponses([
+		fauxAssistantMessage("First done."),
+		() => {
+			entered.resolve();
+			return response.promise;
+		},
+	]);
+	const session = await f.open();
+	await session.submit("first", "First", "followUp");
+	await firstSettled.promise;
+	await session.submit("second", "Second", "followUp");
+	assert.equal(session.working, true, "current activity must not wait for an extension handler");
+	assert.equal(ctx.isIdle(), false);
+	await entered.promise;
+	response.resolve(fauxAssistantMessage("Second done."));
+	await session.conversation.waitForIdle(context);
+	assert.equal(session.working, false);
+	assert.equal(ctx.isIdle(), true, "the source advances before coalesced notification delivery");
+	releaseHandler.resolve();
+	await laterSettled.promise;
+	assert.equal(settlements, 2, "the coalesced busy/idle interval still produces a later settlement");
+});
+
 test("model selection updates native and durable choices, context usage and thinking, and survives reopen", {
 	timeout: 15_000,
 }, async (t) => {

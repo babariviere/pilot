@@ -88,7 +88,8 @@ export class KernelSession {
 	#origins!: InputOrigins;
 	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
 	readonly #mission: { current?: MissionContext };
-	#working = false;
+	/** Last UI-published run state. Current work is read from the adapter's activity source. */
+	#reportedWorking = false;
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
 	#changingModel = false;
@@ -234,7 +235,7 @@ export class KernelSession {
 				for (const url of stored?.urls ?? []) hooks.onPullRequestCreated?.(url);
 			}
 			// Bind before resume(), so recovered tool calls cannot race binding.
-			adapter.bindHarness(harness, conversation.id);
+			await adapter.bindHarness(harness, conversation.id);
 			const status = await watchEvents(harness, conversation.id, context);
 			const session = new KernelSession(
 				harness,
@@ -248,14 +249,14 @@ export class KernelSession {
 				mission,
 				hooks.callMission,
 			);
-			session.#working = status.snapshot.run !== undefined;
-			await adapter.setWorking(session.#working);
+			session.#reportedWorking = status.snapshot.run !== undefined;
 			session.#origins = new InputOrigins(owned.storage, conversation.id, context);
-			if (!session.#working) {
+			if (!session.#reportedWorking) {
 				session.#completion = await reconcileCompletion(owned.storage, harness, conversation, context);
 			}
 			status.start(async (events, deliveryContext) => {
-				let working = session.#working;
+				let working = session.#reportedWorking;
+				let completion = session.#completion;
 				for (const event of events) {
 					working =
 						event.type === "snapshot"
@@ -265,13 +266,6 @@ export class KernelSession {
 								: event.type === "run_end"
 									? false
 									: working;
-				}
-				// Forward settlement only after reducing the whole batch. A queued
-				// follow-up's run_end/run_start must not release job notifications.
-				if (events.some((event) => ["snapshot", "run_start", "run_end"].includes(event.type)))
-					await session.adapter.setWorking(working);
-				let completion = session.#completion;
-				for (const event of events) {
 					if (event.type === "run_end" || (event.type === "snapshot" && !working)) {
 						completion = await reconcileCompletion(
 							owned.storage,
@@ -285,10 +279,10 @@ export class KernelSession {
 				// A queued follow-up may start in the same commit as the preceding run ends.
 				// Only publish attention when the session actually becomes idle.
 				if (
-					working !== session.#working ||
+					working !== session.#reportedWorking ||
 					(!working && completion?.outcomeAt !== session.#completion?.outcomeAt)
 				) {
-					session.#working = working;
+					session.#reportedWorking = working;
 					session.#completion = working ? undefined : completion;
 					hooks.onWorking(working, session.#completion);
 				}
@@ -332,7 +326,7 @@ export class KernelSession {
 	}
 
 	get working(): boolean {
-		return this.#working;
+		return this.adapter.working;
 	}
 
 	get thinkingLevel(): string {
