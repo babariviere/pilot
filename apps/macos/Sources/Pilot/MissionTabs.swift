@@ -438,6 +438,7 @@ struct MissionTaskRow: View {
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
     @StateObject private var resource = MissionInput()
+    @StateObject private var artifacts = MissionArtifactsState()
 
     init(task: MissionTask, mission: Mission, siblings: [MissionTask]) {
         self.task = task
@@ -458,6 +459,20 @@ struct MissionTaskRow: View {
                 MissionTaskDescription(task: task)
                 ForEach(client.missionDetails[mission.id]?.resources.filter { $0.taskId == task.id } ?? []) { item in
                     ResourceRow(resource: item, missionId: mission.id, compact: true)
+                }
+                ForEach(client.missionDetails[mission.id]?.artifacts.filter { $0.taskId == task.id } ?? []) { item in
+                    Button {
+                        artifacts.selected = MissionArtifactSelection(
+                            reference: ArtifactReference(id: item.artifactId, sessionId: item.sessionId,
+                                                         title: item.title, revision: item.revision ?? 0),
+                            latest: item.revision == nil)
+                    } label: {
+                        Label("\(item.title) · \(item.kind.uppercased()) · \(item.revision.map { "r\($0)" } ?? "latest")",
+                              systemImage: item.kind == "image" ? "photo" : "cube.transparent")
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.link).font(.caption)
+                    .help("Open \(item.title)")
                 }
                 Button("Add link…") { resource.editingId = task.id }
                     .buttonStyle(.link).font(.caption)
@@ -486,6 +501,9 @@ struct MissionTaskRow: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .onChange(of: task.title) { _, value in title.title = value }
+        .sheet(item: $artifacts.selected) { selection in
+            ArtifactViewer(reference: selection.reference, latest: selection.latest)
+        }
         .contextMenu {
             Button("Delete task", role: .destructive) {
                 model.missionAction { [client, id = mission.id] in try await client.deleteMissionTask(id, taskId: task.id) }
@@ -735,8 +753,9 @@ struct MissionArtifactsTab: View {
 
     var body: some View {
         let members = model.members(of: mission).filter { !$0.isArchived }
-        let linked = Set(detail.artifacts.map(\.artifactId))
+        let linked = Set(detail.artifacts.filter { $0.taskId == nil }.map(\.artifactId))
         let linkable = members.flatMap { client.artifacts[$0.id] ?? [] }.filter { !linked.contains($0.id) }
+        let taskNumbers = Dictionary(uniqueKeysWithValues: detail.tasks.map { ($0.id, $0.number) })
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
@@ -776,7 +795,9 @@ struct MissionArtifactsTab: View {
                                         .foregroundStyle(Theme.mutedForeground)
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(link.title).lineLimit(1)
-                                        Text(client.session(link.sessionId)?.title ?? "Chat")
+                                        Text([client.session(link.sessionId)?.title ?? "Chat",
+                                              link.taskId.flatMap { taskNumbers[$0] }.map { "Task #\($0)" }]
+                                            .compactMap { $0 }.joined(separator: " · "))
                                             .font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                                     }
                                     Spacer()
@@ -789,10 +810,10 @@ struct MissionArtifactsTab: View {
                             .help("Open \(link.title)")
                             Button {
                                 model.missionAction { [client, id = mission.id] in
-                                    try await client.unlinkMissionArtifact(id, artifactId: link.artifactId)
+                                    try await client.unlinkMissionArtifact(id, artifactId: link.artifactId, taskId: link.taskId)
                                 }
                             } label: { Image(systemName: "xmark") }
-                                .buttonStyle(.borderless).help("Unlink from mission")
+                                .buttonStyle(.borderless).help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
                         }
                         .font(.callout)
                         .padding(12)

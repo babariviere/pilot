@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS artifact_links (
 	revision INTEGER,
 	linked_by_session_id TEXT,
 	linked_at INTEGER NOT NULL,
-	PRIMARY KEY (mission_id, artifact_id)
+	task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
 );
 CREATE TABLE IF NOT EXISTS resources (
 	id TEXT PRIMARY KEY,
@@ -223,6 +223,14 @@ function optional<T>(value: SQLInputValue | undefined, map: (value: SQLInputValu
 const str = (value: SQLInputValue) => String(value);
 const num = (value: SQLInputValue) => Number(value);
 
+/** Shared validation for saved resources and start references, before any side effects. */
+export function normalizeResourceWrite(write: MissionResourceWrite) {
+	if (!write || typeof write !== "object") throw new Error("Expected a resource object");
+	const parsed = parseResourceUrl(text(write.url, "url", MAX_URL)!);
+	const title = text(write.title, "title", MAX_TITLE, { optional: true, empty: true }) || undefined;
+	return { ...parsed, ...(title ? { title } : {}) };
+}
+
 /** Recognize tracker links so later automation can act on them without a migration. */
 export function parseResourceUrl(raw: string): { url: string; kind: MissionResourceKind; externalId?: string } {
 	let url: URL;
@@ -260,6 +268,8 @@ export class MissionStore {
 	private readonly db: DatabaseSync;
 	private readonly listeners = new Set<(missionId: string) => void>();
 	private readonly memberListeners = new Set<(sessionId: string) => void>();
+	private writing = false;
+	private referenceBatch?: string;
 
 	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
@@ -267,6 +277,23 @@ export class MissionStore {
 		this.db = new DatabaseSync(file);
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 		this.db.exec(SCHEMA);
+		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "task_id")) {
+			this.db.exec(`BEGIN;
+				ALTER TABLE artifact_links RENAME TO artifact_links_legacy;
+				CREATE TABLE artifact_links (
+					mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+					artifact_id TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
+					kind TEXT NOT NULL, revision INTEGER, linked_by_session_id TEXT, linked_at INTEGER NOT NULL,
+					task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
+				);
+				INSERT INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at)
+					SELECT mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at FROM artifact_links_legacy;
+				DROP TABLE artifact_links_legacy;
+				COMMIT;`);
+		}
+		this.db.exec(
+			"CREATE UNIQUE INDEX IF NOT EXISTS artifact_link_scope ON artifact_links(mission_id, artifact_id, COALESCE(task_id, ''))",
+		);
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "task_id"))
 			this.db.exec("ALTER TABLE resources ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL");
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "pull_request"))
@@ -302,6 +329,7 @@ export class MissionStore {
 	}
 
 	private changed(missionId: string, sessions: string[] = []): void {
+		if (this.referenceBatch === missionId) return;
 		for (const listener of this.listeners) listener(missionId);
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
@@ -319,7 +347,10 @@ export class MissionStore {
 	}
 
 	private transaction<T>(work: () => T): T {
+		// Reference batches reuse the ordinary validators/writers inside one outer transaction.
+		if (this.writing) return work();
 		this.db.exec("BEGIN IMMEDIATE");
+		this.writing = true;
 		try {
 			const result = work();
 			this.db.exec("COMMIT");
@@ -327,6 +358,8 @@ export class MissionStore {
 		} catch (error) {
 			this.db.exec("ROLLBACK");
 			throw error;
+		} finally {
+			this.writing = false;
 		}
 	}
 
@@ -899,6 +932,14 @@ export class MissionStore {
 	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {
 		const task = this.resolveTask(id, taskId);
 		this.transaction(() => {
+			// Match resource-link deletion semantics without overwriting an existing mission pin.
+			this.run(
+				`INSERT OR IGNORE INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at)
+				 SELECT mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at
+				 FROM artifact_links WHERE mission_id = ? AND task_id = ?`,
+				id,
+				task.id,
+			);
 			this.run("DELETE FROM tasks WHERE id = ?", task.id);
 			for (const other of this.tasks(id))
 				if (other.dependsOn?.includes(task.id)) {
@@ -1099,12 +1140,31 @@ export class MissionStore {
 
 	// Resources and artifacts
 
+	/** One commit and one detail/context broadcast, rather than one per reference. */
+	attachTaskReferences(
+		id: string,
+		taskId: string,
+		artifacts: Omit<MissionArtifactLink, "linkedAt" | "linkedBySessionId">[],
+		links: MissionResourceWrite[],
+	): void {
+		if (!artifacts.length && !links.length) return;
+		if (this.referenceBatch) throw new Error("A reference batch is already active");
+		this.resolveTask(id, taskId);
+		this.referenceBatch = id;
+		try {
+			this.transaction(() => {
+				for (const item of artifacts) this.linkArtifact(id, { ...item, taskId });
+				for (const item of links) this.addResource(id, { ...item, taskId });
+			});
+		} finally {
+			this.referenceBatch = undefined;
+		}
+		this.changed(id);
+	}
+
 	addResource(id: string, write: MissionResourceWrite, actor: MissionActor = USER): MissionResource {
 		this.require(id);
-		if (!write || typeof write !== "object") throw new Error("Expected a resource object");
-		const raw = text(write.url, "url", MAX_URL)!;
-		const parsed = parseResourceUrl(raw);
-		const title = text(write.title, "title", MAX_TITLE, { optional: true, empty: true }) || undefined;
+		const { title, ...parsed } = normalizeResourceWrite(write);
 		const taskId = write.taskId === undefined ? undefined : this.resolveTask(id, write.taskId).id;
 		const existing = this.one(
 			"SELECT * FROM resources WHERE mission_id = ? AND url = ? AND task_id IS ?",
@@ -1233,12 +1293,30 @@ export class MissionStore {
 
 	linkArtifact(
 		id: string,
-		link: { sessionId: string; artifactId: string; title: string; kind: ArtifactKind; revision?: number },
+		link: {
+			sessionId: string;
+			artifactId: string;
+			title: string;
+			kind: ArtifactKind;
+			revision?: number;
+			taskId?: string;
+		},
 		actor: MissionActor = USER,
 	): MissionArtifactLink {
-		this.assertMember(id, link.sessionId);
+		this.require(id);
+		if (
+			!this.one(
+				"SELECT 1 FROM artifact_links WHERE mission_id = ? AND artifact_id = ? AND session_id = ?",
+				id,
+				link.artifactId,
+				link.sessionId,
+			)
+		)
+			this.assertMember(id, link.sessionId);
+		const taskId = link.taskId === undefined ? undefined : this.resolveTask(id, link.taskId).id;
 		const now = Date.now();
 		const value: MissionArtifactLink = {
+			...(taskId ? { taskId } : {}),
 			artifactId: link.artifactId,
 			sessionId: link.sessionId,
 			title: link.title,
@@ -1249,7 +1327,7 @@ export class MissionStore {
 		};
 		this.transaction(() => {
 			this.run(
-				"INSERT INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (mission_id, artifact_id) DO UPDATE SET title = excluded.title, kind = excluded.kind, revision = excluded.revision, linked_by_session_id = excluded.linked_by_session_id, linked_at = excluded.linked_at",
+				"INSERT INTO artifact_links (mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO UPDATE SET title = excluded.title, kind = excluded.kind, revision = excluded.revision, linked_by_session_id = excluded.linked_by_session_id, linked_at = excluded.linked_at",
 				id,
 				value.artifactId,
 				value.sessionId,
@@ -1258,18 +1336,30 @@ export class MissionStore {
 				value.revision ?? null,
 				actor.sessionId ?? null,
 				now,
+				taskId ?? null,
 			);
-			this.event(id, "artifact", `Artifact linked: ${value.title}`, actor, { at: now });
+			this.event(id, "artifact", `Artifact linked: ${value.title}`, actor, { at: now, taskId });
 		});
 		this.changed(id);
 		return value;
 	}
 
-	unlinkArtifact(id: string, artifactId: string, actor: MissionActor = USER): void {
-		const row = this.one("SELECT * FROM artifact_links WHERE mission_id = ? AND artifact_id = ?", id, artifactId);
+	unlinkArtifact(id: string, artifactId: string, actor: MissionActor = USER, taskRef?: string): void {
+		const taskId = taskRef === undefined ? null : this.resolveTask(id, taskRef).id;
+		const row = this.one(
+			"SELECT * FROM artifact_links WHERE mission_id = ? AND artifact_id = ? AND task_id IS ?",
+			id,
+			artifactId,
+			taskId,
+		);
 		if (!row) throw new NotFound(`Unknown artifact link: ${artifactId}`);
 		this.transaction(() => {
-			this.run("DELETE FROM artifact_links WHERE mission_id = ? AND artifact_id = ?", id, artifactId);
+			this.run(
+				"DELETE FROM artifact_links WHERE mission_id = ? AND artifact_id = ? AND task_id IS ?",
+				id,
+				artifactId,
+				taskId,
+			);
 			this.event(id, "artifact", `Artifact unlinked: ${str(row.title!)}`, actor);
 		});
 		this.changed(id);
@@ -1470,6 +1560,7 @@ function taskFrom(row: Row): MissionTask {
 
 function artifactFrom(row: Row): MissionArtifactLink {
 	return {
+		...(row.task_id ? { taskId: str(row.task_id) } : {}),
 		artifactId: str(row.artifact_id!),
 		sessionId: str(row.session_id!),
 		title: str(row.title!),

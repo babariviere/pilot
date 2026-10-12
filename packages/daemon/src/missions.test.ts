@@ -100,6 +100,122 @@ function store() {
 	return new MissionStore(":memory:");
 }
 
+test("artifact references preserve mission and multiple task scopes across restart and scoped unlink", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-artifact-scope-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		missions.join("author", id);
+		const link = { sessionId: "author", artifactId: "a", title: "Design", kind: "html" as const };
+		missions.linkArtifact(id, link);
+		missions.linkArtifact(id, { ...link, taskId: "1", revision: 1 });
+		missions.linkArtifact(id, { ...link, taskId: "2", revision: 2 });
+		missions.linkArtifact(id, { ...link, taskId: "1", revision: 3 });
+		assert.equal(missions.detail(id).artifacts.length, 3);
+		const firstTask = missions.resolveTask(id, "1").id;
+		assert.equal(missions.detail(id).artifacts.find((item) => item.taskId === firstTask)?.revision, 3);
+		assert.throws(() => missions.linkArtifact(id, { ...link, taskId: "missing" }), /Unknown task/);
+		missions.close();
+		missions = new MissionStore(file);
+		assert.equal(missions.detail(id).artifacts.length, 3);
+		missions.unlinkArtifact(id, "a", {}, "1");
+		assert.equal(missions.detail(id).artifacts.length, 2);
+		missions.unlinkArtifact(id, "a");
+		assert.equal(missions.detail(id).artifacts.length, 1);
+		missions.removeTask(id, missions.resolveTask(id, "2").id);
+		assert.equal(
+			missions.detail(id).artifacts.length,
+			1,
+			"deleting a task preserves its references at mission level",
+		);
+		assert.equal(missions.detail(id).artifacts[0]?.taskId, undefined);
+		assert.equal(missions.detail(id).artifacts[0]?.revision, 2);
+		missions.linkArtifact(id, { ...link, taskId: "1", revision: 4 });
+		missions.removeTask(id, firstTask);
+		assert.equal(
+			missions.detail(id).artifacts.length,
+			1,
+			"promotion deduplicates without overwriting an existing pin",
+		);
+		assert.equal(missions.detail(id).artifacts[0]?.revision, 2);
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("legacy artifact links migrate without losing metadata or pinning", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-artifact-migration-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
+		missions.join("author", id);
+		const before = missions.linkArtifact(id, {
+			sessionId: "author",
+			artifactId: "a",
+			title: "Design",
+			kind: "html",
+			revision: 2,
+		});
+		missions.close();
+		const db = new DatabaseSync(file);
+		db.exec(`ALTER TABLE artifact_links RENAME TO artifact_links_new;
+			CREATE TABLE artifact_links (
+				mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+				artifact_id TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
+				kind TEXT NOT NULL, revision INTEGER, linked_by_session_id TEXT, linked_at INTEGER NOT NULL,
+				PRIMARY KEY (mission_id, artifact_id));
+			INSERT INTO artifact_links SELECT mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at FROM artifact_links_new;
+			DROP TABLE artifact_links_new;`);
+		db.close();
+		missions = new MissionStore(file);
+		assert.deepEqual(missions.detail(id).artifacts, [before]);
+		missions.linkArtifact(id, { ...before, taskId: "1" });
+		assert.equal(missions.detail(id).artifacts.length, 2);
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reference batches commit atomically and broadcast once with a large task list", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({
+			projectId: "p",
+			title: "M",
+			tasks: Array.from({ length: 1000 }, (_, i) => ({ title: `Task ${i}` })),
+		});
+		const task = missions.resolveTask(id, "1");
+		missions.join("author", id);
+		let updates = 0;
+		missions.onChange(() => updates++);
+		const links = Array.from({ length: 40 }, (_, i) => ({ url: `https://example.com/${i}` }));
+		missions.attachTaskReferences(id, task.id, [], links);
+		assert.equal(updates, 1);
+		assert.equal(missions.detail(id).resources.length, 40);
+		const before = missions.detail(id);
+		assert.throws(
+			() =>
+				missions.attachTaskReferences(
+					id,
+					task.id,
+					[{ artifactId: "a", sessionId: "author", title: "Design", kind: "html" }],
+					[{ url: "bad" }],
+				),
+			/absolute http/,
+		);
+		assert.deepEqual(missions.detail(id), before);
+		assert.equal(updates, 1, "failed batches never broadcast partial state");
+		missions.addResource(id, { url: "https://example.com/after" });
+		assert.equal(updates, 2, "transaction state is reset after errors");
+	} finally {
+		missions.close();
+	}
+});
+
 test("summary attention counts track task and comment changes without loading detail", () => {
 	const missions = store();
 	try {

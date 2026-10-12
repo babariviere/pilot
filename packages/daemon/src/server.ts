@@ -717,7 +717,7 @@ async function missionRoute(
 		if (parts.length === 4 && method === "POST")
 			return json(res, 201, await service.linkArtifact(id, await readJson<MissionArtifactLinkWrite>(req))), true;
 		if (parts.length === 5 && method === "DELETE") {
-			store.unlinkArtifact(id, item!);
+			store.unlinkArtifact(id, item!, {}, url.searchParams.get("taskId") ?? undefined);
 			return json(res, 200, { ok: true }), true;
 		}
 		return false;

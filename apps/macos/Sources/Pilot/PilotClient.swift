@@ -617,8 +617,9 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["missions", id, "artifacts"], body: write)
     }
 
-    func unlinkMissionArtifact(_ id: String, artifactId: String) async throws {
-        let _: Ack = try await missionRequest(["missions", id, "artifacts", artifactId], method: "DELETE")
+    func unlinkMissionArtifact(_ id: String, artifactId: String, taskId: String? = nil) async throws {
+        let _: Ack = try await missionRequest(["missions", id, "artifacts", artifactId], method: "DELETE",
+                                               query: taskId.map { [URLQueryItem(name: "taskId", value: $0)] } ?? [])
     }
 
     /// Newest first.

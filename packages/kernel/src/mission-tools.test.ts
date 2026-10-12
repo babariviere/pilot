@@ -131,9 +131,31 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.match(tool.description, /status "dropped"/);
 	assert.equal(schema.properties.model, undefined);
 	assert.equal(schema.properties.thinking, undefined);
+	assert.equal((schema.properties as Record<string, unknown>).artifacts, undefined);
+	assert.equal((schema.properties as Record<string, unknown>).links, undefined);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /claim, start|comment or send|Opening instructions/);
 	assert.match(tool.description, /- claim:/);
 	assert.ok(schema.properties.action.enum.includes("get"));
+});
+
+test("coordinator declares bounded start references and forwards them unchanged", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return {};
+	}, true);
+	const { properties } = tool.parameters as { properties: Record<string, { maxItems?: number }> };
+	assert.equal(properties.artifacts?.maxItems, 40);
+	assert.equal(properties.links?.maxItems, 40);
+	assert.match(tool.description, /Durable context belongs in the brief, decisions or task links/);
+	assert.match(tool.description, /4000 characters including the task body/);
+	const args = {
+		id: "1",
+		artifacts: [{ artifactId: "a", revision: 2 }],
+		links: [{ url: "https://example.com", title: "Spec" }],
+	};
+	await tool.execute("call", { action: "start", ...args } as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [["start", args]]);
 });
 
 async function fixture(t: TestContext, mode: "on" | "only" = "on") {

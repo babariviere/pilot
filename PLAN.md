@@ -329,7 +329,7 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 | `attach`, `link` | Link an artifact; link an external resource |
 | `log` | Post a handoff or status update |
 | `update` | Change the mission title or goal |
-| `start`, `send`, `status` | Coordinator only: start a chat for an unclaimed task (`id`, optional `message`, `model`, `thinking`), send a follow-up to a member (`targetSessionId`, `message`), summarise all member states (including archived chats) |
+| `start`, `send`, `status` | Coordinator only: start a chat for an unclaimed task (`id`, optional `message`, `model`, `thinking`, `artifacts: [{artifactId, revision?}]`, `links: [{url, title?}]`), send a follow-up to a member (`targetSessionId`, `message`), summarise all member states (including archived chats) |
 
 The tool is registered for every Build and Ask chat but declared to the model only while the chat is a
 member, so other chats pay no prompt cost. pilotd pushes membership and context changes to a live
@@ -346,8 +346,17 @@ and project defaults, clamped to supported levels. Validation errors list allowe
 thinking levels. Coordinator guidance prefers cheaper models for small tasks and the strongest
 allowed for hard ones. Start activity records the model and thinking level. `send` queues a follow-up
 if the member is busy and requires restoring an archived chat first. `status` reads summaries without waking workers,
-including lifecycle state, latest outcome, archive status and assigned tasks. Mission chats receive a
-compact mission header in Pilot's prompt section (goal, coordinator, own open tasks, decisions and how
+including lifecycle state, latest outcome, archive status and assigned tasks. Start chat works
+with task-scoped references saved before spawning: artifacts must already be linked to the mission
+or owned by a member chat, and links use the normal resource parser. Artifact links can have a `taskId`
+(one artifact may be referenced by several tasks). Task rows and `get`/`tasks` include these references,
+and later chats for the task inherit them. Deleting a task preserves its artifact references at mission
+level, without overwriting an existing mission-level pin. Opening messages list title, kind and ID/URL, without pasting
+content, and reject messages over 4,000 characters including the task body and reference list. Durable
+context belongs in the brief, decisions or task links, not only in the opening message. Scoped artifact
+unlinking uses `DELETE /api/missions/:id/artifacts/:artifactId?taskId=…`; omission unlinks the mission-level
+reference. Mission chats receive a compact mission header in Pilot's prompt section (goal, coordinator,
+own open tasks, decisions and how
 to use the tool), not the whole brief. The header only changes when those fields change, preserving
 prompt caching.
 

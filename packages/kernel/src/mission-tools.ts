@@ -40,7 +40,7 @@ Actions:
 - claim: take tasks for this chat. Use id for one task or ids for several IDs, numbers or ranges (for example ["1-5", "#8"]). A range or comma-separated list also works in id. Batch results contain claimed tasks and skipped tasks with reasons (owned by another chat or not found); other chats' tasks are never taken. Claim requested tasks, then work on them one at a time in dependency order and keep each status current.
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
-- attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin).
+- attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
 - link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number).
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
 			coordinator
@@ -48,7 +48,7 @@ Actions:
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
-- start (coordinator only): start a new chat for an unclaimed task (id or number, optional message, model, thinking). Model defaults to the project's default. Allowed models are the project's scoped models within the price cap; start validation errors list allowed model IDs, prices and supported thinking levels. Choose cheaper models for small tasks and the strongest allowed model for hard ones. Thinking must be supported by the chosen model. Start chats only when the user asks.
+- start (coordinator only): start a new chat for an unclaimed task (id or number, optional message, model, thinking, artifacts [{artifactId, revision?}], links [{url, title?}]). Model defaults to the project's default. Allowed models are the project's scoped models within the price cap; start validation errors list allowed model IDs, prices and supported thinking levels. Choose cheaper models for small tasks and the strongest allowed model for hard ones. Thinking must be supported by the chosen model. Artifacts must already be linked to the mission or owned by a member chat. References are attached to the task before starting, so later chats see them too. The opening message lists references without pasting content and must fit 4000 characters including the task body. Durable context belongs in the brief, decisions or task links. Start chats only when the user asks.
 - send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
 - status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`
 				: ""
@@ -115,6 +115,24 @@ Actions:
 									"For start: a thinking level supported by the chosen model. Omit for its configured default.",
 							}),
 						),
+						artifacts: Type.Optional(
+							Type.Array(
+								Type.Object({
+									artifactId: Type.String({ maxLength: 128 }),
+									revision: Type.Optional(Type.Integer({ minimum: 1 })),
+								}),
+								{ maxItems: 40, description: "Artifact references for start, saved on the task." },
+							),
+						),
+						links: Type.Optional(
+							Type.Array(
+								Type.Object({
+									url: Type.String({ maxLength: 2048 }),
+									title: Type.Optional(Type.String({ maxLength: 200 })),
+								}),
+								{ maxItems: 40, description: "Link references for start, saved on the task." },
+							),
+						),
 						message: Type.Optional(
 							Type.String({
 								maxLength: 8000,
@@ -126,7 +144,7 @@ Actions:
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 			url: Type.Optional(Type.String({ maxLength: 2048 })),
-			taskId: Type.Optional(Type.String({ maxLength: 128, description: "Task ID or number for link." })),
+			taskId: Type.Optional(Type.String({ maxLength: 128, description: "Task ID or number for link or attach." })),
 			kind: Type.Optional(StringEnum(["update", "handoff"] as const)),
 			health: Type.Optional(StringEnum(["on_track", "at_risk", "off_track"] as const)),
 		}),

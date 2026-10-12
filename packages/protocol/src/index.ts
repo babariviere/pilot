@@ -424,6 +424,8 @@ export interface MissionTaskWrite {
 
 /** An artifact linked to a mission. It stays owned by its session. */
 export interface MissionArtifactLink {
+	/** Omitted for mission-level references. */
+	taskId?: string;
 	artifactId: string;
 	sessionId: string;
 	title: string;
@@ -471,6 +473,8 @@ export interface MissionCommentWrite {
 
 /** POST /api/missions/:id/artifacts. The artifact must belong to a member chat. */
 export interface MissionArtifactLinkWrite {
+	/** Task ID or display number. */
+	taskId?: string;
 	sessionId: string;
 	artifactId: string;
 	revision?: number;
@@ -543,6 +547,9 @@ export interface JoinMissionRequest {
 
 /** POST /api/missions/:id/tasks/:taskId/start: a new chat in the mission's project that claims the task. */
 export interface StartMissionTaskRequest {
+	/** References are saved on the task before the chat starts. */
+	artifacts?: Array<{ artifactId: string; revision?: number }>;
+	links?: Array<{ url: string; title?: string }>;
 	message?: string;
 	model?: string;
 	thinking?: string;

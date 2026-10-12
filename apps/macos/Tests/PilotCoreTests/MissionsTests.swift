@@ -10,6 +10,23 @@ import Testing
     #expect(String(decoding: encoded, as: UTF8.self).contains(#""taskId":"t""#))
 }
 
+@Test func taskArtifactReferencesRoundTripAndHaveScopedIdentity() throws {
+    let raw = #"{"artifactId":"a","sessionId":"s","title":"Design","kind":"html","revision":2,"linkedAt":1}"#
+    let mission = try JSONDecoder().decode(MissionArtifactLink.self, from: Data(raw.utf8))
+    let scoped = try JSONDecoder().decode(MissionArtifactLink.self, from: Data(raw.replacingOccurrences(of: "{", with: #"{"taskId":"t","#).utf8))
+    #expect(mission.taskId == nil)
+    #expect(scoped.taskId == "t")
+    #expect(mission.id != scoped.id)
+    let request = StartMissionTaskRequest(artifacts: [MissionArtifactReference(artifactId: "a", revision: 2)],
+                                          links: [MissionLinkReference(url: "https://example.com", title: "Spec")])
+    let encoded = try JSONEncoder().encode(request)
+    let decoded = try JSONDecoder().decode(StartMissionTaskRequest.self, from: encoded)
+    #expect(decoded.artifacts?.first?.revision == 2)
+    #expect(decoded.links?.first?.title == "Spec")
+    let write = MissionArtifactLinkWrite(sessionId: "s", artifactId: "a", taskId: "t")
+    #expect(String(decoding: try JSONEncoder().encode(write), as: UTF8.self).contains(#""taskId":"t""#))
+}
+
 @Test func taskResourceDecodesPullRequestState() throws {
     let resource = try JSONDecoder().decode(MissionResource.self, from: Data(#"{"id":"r","taskId":"t","url":"https://github.com/o/r/pull/42","kind":"github.pr","externalId":"o/r#42","createdAt":1,"pullRequest":{"number":42,"url":"https://github.com/o/r/pull/42","title":"PR","state":"merged","checkedAt":2,"mergedAt":2}}"#.utf8))
     #expect(resource.pullRequest?.state == .merged)
