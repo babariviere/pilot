@@ -21,10 +21,10 @@ private func persistenceDirectory() -> URL {
     return try #require(bitmap.representation(using: .png, properties: [:]))
 }
 
-@MainActor private func waitForDraftUI(_ condition: () -> Bool) throws {
-    let deadline = Date().addingTimeInterval(2)
-    while !condition(), Date() < deadline {
-        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+@MainActor private func waitForDraftUI(_ condition: () -> Bool) async throws {
+    for _ in 0..<200 {
+        if condition() { return }
+        try await Task.sleep(for: .milliseconds(10))
     }
     try #require(condition(), "Draft UI state did not settle")
 }
@@ -310,7 +310,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     app.flushDrafts()
 }
 
-@Test @MainActor func restoredBranchWaitsForProjectDiscoveryAndRemembersTheEffectiveDefaultProject() throws {
+@Test @MainActor func restoredBranchWaitsForProjectDiscoveryAndRemembersTheEffectiveDefaultProject() async throws {
     _ = NSApplication.shared
     let root = persistenceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -329,7 +329,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [Project(id: "project", name: "Project", path: "/tmp/project", createdAt: 1)], sessions: [])
-    try waitForDraftUI { app.draftProjectId == "project" }
+    try await waitForDraftUI { app.draftProjectId == "project" }
     hosting.layoutSubtreeIfNeeded()
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(app.draftProjectId == "project")
@@ -337,7 +337,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     #expect(try persistenceStore(root).load().newTask.projectId == "project")
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [], sessions: [])
-    try waitForDraftUI { app.newSessionForm.branches.selected == nil }
+    try await waitForDraftUI { app.newSessionForm.branches.selected == nil }
     #expect(app.newSessionForm.branches.selected == nil)
     app.flushDrafts()
 }
