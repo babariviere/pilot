@@ -552,7 +552,12 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				request = { repo: item.repo, cwd: item.session.cwd, prs: [] };
 				requests.set(item.repo.identity, request);
 			}
-			for (const pr of plan.prs) request.prs.push({ number: pr.number, branch: pr.branch ?? plan.branch });
+			for (const pr of plan.prs)
+				request.prs.push({
+					number: pr.number,
+					branch: pr.branch ?? plan.branch,
+					...(pr.stack ? { stacked: true } : {}),
+				});
 		}
 		const health = new Map<string, Map<number, HealthResult>>();
 		for (const [identity, request] of requests) {
@@ -568,7 +573,13 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 					const results = health.get(item.repo.identity);
 					for (const pr of plan.prs) {
 						const problems = await this.problems(item.session, pr, plan.branch, results?.get(pr.number));
-						if (problems && (problems.failedChecks.length || problems.reviewComments || problems.mergeConflicts))
+						if (
+							problems &&
+							(problems.failedChecks.length ||
+								problems.reviewComments ||
+								problems.mergeConflicts ||
+								problems.divergedFrom)
+						)
 							checks.push({ pr, problems });
 					}
 				}

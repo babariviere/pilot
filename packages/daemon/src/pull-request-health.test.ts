@@ -189,6 +189,39 @@ test("only failed terminal checks and legacy FAILURE/ERROR count, with stable un
 	});
 });
 
+test("stacked PRs report divergence from their base branch", async () => {
+	const target = session();
+	const stacked = {
+		...target,
+		pullRequest: { ...target.pullRequest, stack: { number: 1, position: 2, size: 2, baseBranch: "main" } },
+	};
+	for (const [position, behindBy, expected] of [
+		[2, 1, { ...healthy, divergedFrom: "feat/bottom" }],
+		[2, 0, healthy],
+		[1, 1, { ...healthy, divergedFrom: "feat/bottom" }],
+	] as const) {
+		stacked.pullRequest.stack.position = position;
+		const calls: string[][] = [];
+		const result = await discoverPullRequestProblems(stacked, async (_file, args) => {
+			calls.push(args);
+			if (args[0] === "pr") return JSON.stringify(view());
+			const query = args.find((arg) => arg.startsWith("query="))!;
+			if (query.includes("compare"))
+				return JSON.stringify({
+					data: {
+						repository: { pullRequest: { baseRefName: "feat/bottom", baseRef: { compare: { behindBy } } } },
+					},
+				});
+			return JSON.stringify(page());
+		});
+		assert.deepEqual(result, expected);
+		assert.equal(calls.length, 3);
+		assert.ok(calls[1]!.includes("head=refs/heads/fix-bug"));
+	}
+	// Unstacked PRs skip the comparison: a PR behind its base is only a problem inside a stack.
+	assert.deepEqual(await discoverPullRequestProblems(session(), responses()), healthy);
+});
+
 test("no checks and unknown mergeability are not problems", async () => {
 	for (const rollup of [[], null]) {
 		for (const mergeable of ["MERGEABLE", "UNKNOWN", "FUTURE_VALUE"])

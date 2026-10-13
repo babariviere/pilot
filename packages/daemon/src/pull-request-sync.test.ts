@@ -445,6 +445,64 @@ test("health for every eligible PR of a repository is one request, and problems 
 	}
 });
 
+test("a bottom-of-stack PR whose head no longer contains the stack base reaches the host as diverged", async () => {
+	const sessions = [session("a", "repo")];
+	const queries: string[] = [];
+	const runner: Runner = async (file, args) => {
+		if (file === "git") return "";
+		const value = (name: string) => args.find((arg) => arg.startsWith(`${name}=`))?.slice(name.length + 1);
+		const query = value("query")!;
+		queries.push(query);
+		const rateLimit = { remaining: 4_000, resetAt: "2100-01-01T00:00:00Z" };
+		if (query.startsWith("query PilotPullRequestHealth")) {
+			assert.equal(value("h0"), "refs/heads/feat/a");
+			return JSON.stringify({
+				data: {
+					rateLimit,
+					repository: {
+						p0: {
+							number: 1,
+							state: "OPEN",
+							headRefName: "feat/a",
+							mergeable: "MERGEABLE",
+							commits: { nodes: [] },
+							reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
+							baseRefName: "main",
+							baseRef: { compare: { behindBy: 1 } },
+						},
+					},
+				},
+			});
+		}
+		const pr = {
+			...row("repo", 1, "feat/a"),
+			stack: { number: 3, size: 2, baseRefName: "main" },
+			stackEntry: { position: 1 },
+		};
+		return JSON.stringify({ data: { rateLimit, repository: { o0: { nodes: [pr] }, a0: { nodes: [pr] } } } });
+	};
+	const reported: unknown[] = [];
+	const sync = new PullRequestSync<PullRequestSession, string>(
+		host(sessions, {
+			health: (_target, result) => (result.pullRequest ? { prs: [result.pullRequest], context: "ctx" } : undefined),
+			apply: async (_target, _result, checks) => {
+				reported.push(...(checks?.checks.map((check) => check.problems) ?? []));
+			},
+		}),
+		{ runner },
+	);
+	try {
+		sync.start();
+		await sync.settled();
+		assert.match(queries.at(-1)!, /compare\(headRef: \$h0\)/);
+		assert.deepEqual(reported, [
+			{ failedChecks: [], reviewComments: 0, mergeConflicts: false, divergedFrom: "main" },
+		]);
+	} finally {
+		await sync.stop();
+	}
+});
+
 test("shutdown persists in-flight results, skips queued work and ignores later requests", async () => {
 	const github = new FakeGitHub();
 	const sessions = [session("a", "a"), session("b", "b")];
