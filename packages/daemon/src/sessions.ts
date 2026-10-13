@@ -3422,6 +3422,11 @@ export class SessionManager {
 			...(problems.failedChecks.length ? [`Failed CI checks: ${JSON.stringify(problems.failedChecks)}.`] : []),
 			...(problems.reviewComments ? [`${problems.reviewComments} unresolved, non-outdated review thread(s).`] : []),
 			...(problems.mergeConflicts ? ["The PR has merge conflicts."] : []),
+			...(problems.divergedFrom
+				? [
+						`The PR has diverged from its stacked base branch ${JSON.stringify(problems.divergedFrom)} and must be rebased onto it.`,
+					]
+				: []),
 		]);
 		const content = [
 			`Pilot automatic PR follow-up (${attempt}/3) for ${issues.map(({ pr }) => pr.url).join(", ")}.`,

@@ -473,6 +473,12 @@ export interface PullRequestProblems {
 	/** Unresolved, current review threads with at least one comment, not individual comments. */
 	reviewComments: number;
 	mergeConflicts: boolean;
+	/**
+	 * Set for a stacked PR whose head no longer contains its base branch (the PR below it in the stack, or the
+	 * stack's base for the bottom PR), which GitHub reports as "Some branches in this stack have diverged and must
+	 * be rebased". Names that base branch.
+	 */
+	divergedFrom?: string;
 }
 
 const healthWhat = "pull request health";
@@ -517,6 +523,8 @@ export interface HealthRequest {
 	number: number;
 	/** Expected head branch. A different head means the PR is not the one this session tracks. */
 	branch?: string;
+	/** Part of a stack. Its head must contain its base branch, which needs the head branch. */
+	stacked?: boolean;
 }
 
 export type HealthResult =
@@ -534,6 +542,25 @@ const healthFields = [
 ].join(" ");
 
 export const noProblems = (): PullRequestProblems => ({ failedChecks: [], reviewComments: 0, mergeConflicts: false });
+
+/** GraphQL selection comparing a PR's base branch with its head, given a String! variable holding the head ref. */
+export const stackBaseFields = (variable: string) =>
+	`baseRefName baseRef { compare(headRef: ${variable}) { behindBy } }`;
+
+/**
+ * The base branch a stacked PR must be rebased onto, from {@link stackBaseFields}, or undefined when its head
+ * contains the base. A deleted base branch is not evidence of divergence.
+ */
+export function stackDivergence(pr: Record<string, unknown>, what = healthWhat): string | undefined {
+	if (pr.baseRef === null) return undefined;
+	const compare = object(object(pr.baseRef, what).compare, what);
+	if (!Number.isSafeInteger(compare.behindBy) || (compare.behindBy as number) < 0) invalid(what);
+	return (compare.behindBy as number) > 0 ? text(pr.baseRefName, what) : undefined;
+}
+
+function stackedHead(request: HealthRequest): string | undefined {
+	return request.stacked && request.branch ? `refs/heads/${request.branch}` : undefined;
+}
 
 function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 	const pr = object(value, healthWhat);
@@ -569,8 +596,16 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 		if (!Number.isSafeInteger(comments.totalCount) || (comments.totalCount as number) < 0) invalid(healthWhat);
 		if (!thread.isResolved && !thread.isOutdated && (comments.totalCount as number) > 0) reviewComments++;
 	}
+	const divergedFrom = stackedHead(request) ? stackDivergence(pr) : undefined;
 	// UNKNOWN (and future mergeability values) are not evidence of a conflict.
-	return { problems: { failedChecks: checks, reviewComments, mergeConflicts: pr.mergeable === "CONFLICTING" } };
+	return {
+		problems: {
+			failedChecks: checks,
+			reviewComments,
+			mergeConflicts: pr.mergeable === "CONFLICTING",
+			...(divergedFrom ? { divergedFrom } : {}),
+		},
+	};
 }
 
 /**
@@ -588,18 +623,27 @@ export async function lookupHealth(
 	const unique = [...new Map(requests.map((request) => [request.number, request])).values()];
 	const failure = (error: unknown) => ({ error: error instanceof Error ? error : new Error(String(error)) });
 	const lookup = async (chunk: HealthRequest[]) => {
+		const heads = chunk.map(stackedHead);
 		const query = [
-			`query PilotPullRequestHealth($owner: String!, $name: String!, ${chunk.map((_, i) => `$p${i}: Int!`).join(", ")}) {`,
+			`query PilotPullRequestHealth($owner: String!, $name: String!, ${chunk
+				.flatMap((_, i) => [`$p${i}: Int!`, ...(heads[i] ? [`$h${i}: String!`] : [])])
+				.join(", ")}) {`,
 			"rateLimit { remaining resetAt }",
 			"repository(owner: $owner, name: $name) {",
-			...chunk.map((_, i) => `p${i}: pullRequest(number: $p${i}) { ${healthFields} }`),
+			...chunk.map(
+				(_, i) =>
+					`p${i}: pullRequest(number: $p${i}) { ${healthFields}${heads[i] ? ` ${stackBaseFields(`$h${i}`)}` : ""} }`,
+			),
 			"}",
 			"}",
 		].join("\n");
 		const repository = await graphql(
 			repo,
 			query,
-			chunk.map((request, i) => ["-F", `p${i}`, String(request.number)]),
+			chunk.flatMap((request, i): [flag: "-f" | "-F", name: string, value: string][] => [
+				["-F", `p${i}`, String(request.number)],
+				...(heads[i] ? [["-f", `h${i}`, heads[i]!] as ["-f", string, string]] : []),
+			]),
 			cwd,
 			runner,
 			limits,

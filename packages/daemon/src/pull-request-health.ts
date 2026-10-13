@@ -4,7 +4,13 @@
  * a healthy PR.
  */
 import type { SessionPullRequest } from "@pilot/protocol";
-import { failedChecks, githubRepository, type PullRequestProblems } from "./github.ts";
+import {
+	failedChecks,
+	githubRepository,
+	type PullRequestProblems,
+	stackBaseFields,
+	stackDivergence,
+} from "./github.ts";
 import { execFileOffThread } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
@@ -53,6 +59,12 @@ const reviewQuery = `query($owner: String!, $name: String!, $number: Int!, $curs
 				pageInfo { hasNextPage endCursor }
 			}
 		}
+	}
+}`;
+
+const stackQuery = `query($owner: String!, $name: String!, $number: Int!, $head: String!) {
+	repository(owner: $owner, name: $name) {
+		pullRequest(number: $number) { ${stackBaseFields("$head")} }
 	}
 }`;
 
@@ -115,6 +127,34 @@ export async function discoverPullRequestProblems(
 	if (typeof view.mergeable !== "string") invalid();
 	// UNKNOWN (and future mergeability values) are not evidence of a conflict.
 	const mergeConflicts = view.mergeable === "CONFLICTING";
+	let divergedFrom: string | undefined;
+	if (pr.stack) {
+		const response = parse(
+			await command("gh", [
+				"api",
+				"graphql",
+				`--hostname=${repo.host}`,
+				"-f",
+				`query=${stackQuery}`,
+				"-f",
+				`owner=${repo.owner}`,
+				"-f",
+				`name=${repo.name}`,
+				"-F",
+				`number=${pr.number}`,
+				"-f",
+				`head=refs/heads/${head}`,
+			]),
+		);
+		if (response.errors !== undefined && (!Array.isArray(response.errors) || response.errors.length)) invalid();
+		divergedFrom = stackDivergence(object(object(object(response.data).repository).pullRequest));
+	}
+	const problems = (reviewComments: number): PullRequestProblems => ({
+		failedChecks: checks,
+		reviewComments,
+		mergeConflicts,
+		...(divergedFrom ? { divergedFrom } : {}),
+	});
 	let reviewComments = 0;
 	let cursor: string | undefined;
 	const cursors = new Set<string>();
@@ -153,7 +193,7 @@ export async function discoverPullRequestProblems(
 		const pageInfo = object(connection.pageInfo);
 		if (typeof pageInfo.hasNextPage !== "boolean") invalid();
 		if (pageInfo.endCursor !== null && typeof pageInfo.endCursor !== "string") invalid();
-		if (!pageInfo.hasNextPage) return { failedChecks: checks, reviewComments, mergeConflicts };
+		if (!pageInfo.hasNextPage) return problems(reviewComments);
 		cursor = text(pageInfo.endCursor);
 		if (!connection.nodes.length || cursors.has(cursor)) invalid();
 		cursors.add(cursor);

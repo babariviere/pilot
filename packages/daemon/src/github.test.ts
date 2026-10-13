@@ -279,6 +279,44 @@ test("health reports failed checks, live review threads and conflicts, and flags
 	assert.deepEqual(results.get(5), { problems: { failedChecks: [], reviewComments: 0, mergeConflicts: false } });
 });
 
+test("stacked PR health reports a head that no longer contains its base branch", async () => {
+	const seen: Map<string, string>[] = [];
+	const runner: Runner = async (_file, args) => {
+		seen.push(variables(args));
+		const compare = (behindBy: unknown) => ({ baseRefName: "feat/bottom", baseRef: { compare: { behindBy } } });
+		return respond({
+			p0: health(1, compare(1)),
+			p1: health(2, compare(0)),
+			p2: health(3, { baseRefName: "feat/gone", baseRef: null }),
+			p3: health(4),
+			p4: health(5, compare(-1)),
+		});
+	};
+	const results = await lookupHealth(
+		repo,
+		[
+			{ number: 1, branch: "feat/1", stacked: true },
+			{ number: 2, branch: "feat/2", stacked: true },
+			{ number: 3, branch: "feat/3", stacked: true },
+			{ number: 4, branch: "feat/4" },
+			{ number: 5, branch: "feat/5", stacked: true },
+		],
+		"/clone",
+		runner,
+	);
+	const healthy = { failedChecks: [], reviewComments: 0, mergeConflicts: false };
+	assert.deepEqual(results.get(1), { problems: { ...healthy, divergedFrom: "feat/bottom" } });
+	assert.deepEqual(results.get(2), { problems: healthy });
+	assert.deepEqual(results.get(3), { problems: healthy }, "a deleted base is not evidence of divergence");
+	assert.deepEqual(results.get(4), { problems: healthy });
+	assert.ok("error" in results.get(5)!, "an invalid comparison is never read as healthy");
+	const query = seen[0]!.get("query")!;
+	assert.match(query, /\$h0: String!/);
+	assert.match(query, /p0: pullRequest\(number: \$p0\) \{[^\n]*baseRef \{ compare\(headRef: \$h0\) \{ behindBy \} \}/);
+	assert.doesNotMatch(query, /\$h3/, "unstacked PRs skip the comparison");
+	assert.equal(seen[0]!.get("h0"), "refs/heads/feat/1");
+});
+
 test("a failing health request is retried per PR, and GraphQL errors are never read as healthy", async () => {
 	const runner: Runner = async (_file, args) => {
 		const numbers = [...variables(args)].filter(([key]) => /^p\d+$/.test(key));
