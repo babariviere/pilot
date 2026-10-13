@@ -118,8 +118,12 @@ import Testing
         }
         // The bubble stays flush with the column edge. The overlaid 8-point gap and
         // 20-point pencil slot sit outside it and never belong to the timestamp target.
-        #expect(bubbleContains(x: width - 2))
-        #expect(!bubbleContains(x: width + 4))
-        #expect(!bubbleContains(x: width + 18))
+        // Evaluate before macro expansion so every Testing version captures concrete Booleans.
+        let edgeIsInBubble = bubbleContains(x: width - 2)
+        let gapIsInBubble = bubbleContains(x: width + 4)
+        let pencilIsInBubble = bubbleContains(x: width + 18)
+        #expect(edgeIsInBubble)
+        #expect(gapIsInBubble == false)
+        #expect(pencilIsInBubble == false)
     }
 }
