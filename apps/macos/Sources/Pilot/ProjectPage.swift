@@ -622,7 +622,7 @@ struct PullRequestReadinessStyle: Equatable {
         }
     }
 
-    @ViewBuilder var icon: some View {
+    @MainActor @ViewBuilder var icon: some View {
         switch kind {
         case .ready: Image(systemName: "checkmark.circle.fill")
         case .pending: Image(systemName: "clock")
