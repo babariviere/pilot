@@ -17,6 +17,7 @@ spec.loader.exec_module(guard)
 FAILED = '✘ Test run with 1 test in 1 suite failed after 0.001 seconds with 1 issue.\n'
 PASSED = ('✔ Test run with 122 tests in 9 suites passed after 0.100 seconds.\n'
           '✔ Test run with 221 tests in 12 suites passed after 0.200 seconds.\n')
+STARTED = '◇ Test run started.\n'
 
 
 class TestOutputTests(unittest.TestCase):
@@ -65,6 +66,42 @@ class TestOutputTests(unittest.TestCase):
         self.assertFalse(continued)
         self.assertEqual(result.stdout, output)
         self.assertIn("native test target failed", result.stderr)
+
+    def test_started_runner_without_terminal_summary_stops_chain(self):
+        output = STARTED + '✘ Test restoredBranchWaitsForProjectDiscovery() recorded an issue: expectation failed\n'
+        result, continued, _ = self.run_wrapper(output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(continued)
+        self.assertEqual(result.stdout, output)
+        self.assertIn("started without a terminal summary", result.stderr)
+        self.assertIn("native test target failed", result.stderr)
+
+    def test_started_runner_needs_a_terminal_even_without_failure_text(self):
+        result, continued, _ = self.run_wrapper(STARTED)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(continued)
+        self.assertIn("started without a terminal summary", result.stderr)
+
+    def test_each_started_runner_needs_its_own_terminal_summary(self):
+        output = STARTED + PASSED.splitlines(keepends=True)[0] + STARTED
+        result, continued, _ = self.run_wrapper(output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(continued)
+        self.assertIn("1 native test runner(s) started without a terminal summary", result.stderr)
+
+    def test_expected_failure_is_not_a_recorded_failure(self):
+        output = STARTED + '✔ Test expectedFailure() passed with 1 known issue.\n'
+        output += '✔ Test run with 1 test in 1 suite passed after 0.100 seconds.\n'
+        result, continued, _ = self.run_wrapper(output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+
+    def test_xctest_started_runner_without_terminal_summary(self):
+        output = "Test Suite 'All tests' started at 2026-10-13 10:00:00.\n"
+        result, continued, _ = self.run_wrapper(output)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(continued)
+        self.assertIn("started without a terminal summary", result.stderr)
 
     def test_success_and_warning_continue_chain(self):
         output = 'warning: optional lookup failed\n' + PASSED

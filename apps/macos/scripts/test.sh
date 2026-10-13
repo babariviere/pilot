@@ -12,8 +12,9 @@ for argument in "$@"; do
 	case "$argument" in --jobs|--jobs=*|-j|-j[0-9]*) jobs=();; esac
 done
 # CLT 27 can return 0 when an earlier test target failed and a later one passed.
-# Inspect every runner summary, not just SwiftPM's aggregate exit status. pipefail
-# also preserves build failures, crashes and other nonzero driver exits.
+# The output guard checks each started runner's terminal summary and recorded
+# failures, not just SwiftPM's aggregate exit status. pipefail also preserves
+# build failures, crashes and other nonzero driver exits.
 # Bash 3.2 (macOS /bin/bash) treats an empty array as unset under nounset.
 swift test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
 	| python3 "$here/scripts/check-test-output.py"
