@@ -298,16 +298,16 @@ private struct ArtifactShareMenu: View {
             Divider()
             Button("Copy screenshot") { screenshot(revision, save: false) }
                 .disabled(render.loading || render.error != nil)
-                .help("Copy the visible preview as a PNG image")
+                .help("Copy the full preview as a PNG image")
             Button("Export screenshot…") { screenshot(revision, save: true) }
                 .disabled(render.loading || render.error != nil)
-                .help("Save the visible preview as a PNG image")
+                .help("Save the full preview as a PNG image")
         } label: {
             Label("Share", systemImage: "square.and.arrow.up")
         }
         .fixedSize()
         .disabled(state.exporting)
-        .help("Copy content or a local file path, save the source file, or capture the visible preview")
+        .help("Copy content or a local file path, save the source file, or capture the full preview")
     }
 
     private func performExport(_ operation: () throws -> String?) {
