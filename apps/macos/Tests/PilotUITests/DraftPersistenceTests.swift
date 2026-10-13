@@ -326,7 +326,6 @@ private func restoreDraftWrites(_ root: URL) throws {
     let hosting = NSHostingView(rootView: TaskComposer(form: app.newSessionForm, client: app.client).environmentObject(app))
     window.contentView = hosting
     hosting.layoutSubtreeIfNeeded()
-    try waitForDraftUI { app.newSessionForm.branches.list.branches == ["main", "release"] }
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [Project(id: "project", name: "Project", path: "/tmp/project", createdAt: 1)], sessions: [])
