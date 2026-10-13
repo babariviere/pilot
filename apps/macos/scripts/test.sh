@@ -14,5 +14,6 @@ done
 # CLT 27 can return 0 when an earlier test target failed and a later one passed.
 # Inspect every runner summary, not just SwiftPM's aggregate exit status. pipefail
 # also preserves build failures, crashes and other nonzero driver exits.
-swift test --package-path "$here" "${jobs[@]}" -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
+# Bash 3.2 (macOS /bin/bash) treats an empty array as unset under nounset.
+swift test --package-path "$here" ${jobs[@]+"${jobs[@]}"} -Xswiftc -plugin-path -Xswiftc "$plugins" "$@" 2>&1 \
 	| python3 "$here/scripts/check-test-output.py"
