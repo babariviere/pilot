@@ -481,13 +481,9 @@ struct UserMessage: View {
 
     var body: some View {
         HStack {
-            // Reserve the pencil's space even when hidden, without narrowing the message column.
+            // Reserve a right-hand action gutter even when hidden, without narrowing the bubble.
             Spacer(minLength: entryID != nil && rewind != nil ? 44 : 72)
             HStack(alignment: .top, spacing: 8) {
-                if let entryID, let rewind {
-                    MessageEditButton(entryID: entryID, rewind: rewind, isHovered: isHovered)
-                        .padding(.top, 10)
-                }
                 MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
                     CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
                         Text(text)
@@ -495,6 +491,10 @@ struct UserMessage: View {
                             .lineSpacing(3)
                             .textSelection(.enabled)
                     }
+                }
+                if let entryID, let rewind {
+                    MessageEditButton(entryID: entryID, rewind: rewind, isHovered: isHovered)
+                        .padding(.top, 10)
                 }
             }
             .contentShape(Rectangle())

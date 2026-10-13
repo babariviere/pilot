@@ -84,3 +84,37 @@ import Testing
         #expect(size(entryID: 42).height < 220)
     }
 }
+
+@Test @MainActor func messagePencilReservesTheRightMarginOutsideTheBubble() {
+    _ = NSApplication.shared
+    let rewind = TranscriptRewind()
+    let selection = MessageTimestampSelection()
+    for width in [300.0, 760.0] {
+        let key = MessageTimestampKey(rowID: "42-0", milliseconds: 1_700_000_000_000)
+        let host = NSHostingView(rootView:
+            UserMessage(text: "An editable message", messageID: key.rowID,
+                        timestamp: key.milliseconds, entryID: 42)
+                .environment(\.transcriptRewind, rewind)
+                .environment(\.messageTimestampSelection, selection)
+        )
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+        window.orderFrontRegardless()
+        host.layoutSubtreeIfNeeded()
+        func bubbleContains(x: CGFloat) -> Bool {
+            (0..<100).contains { y in
+                let point = host.convert(NSPoint(x: x, y: CGFloat(y)), to: nil)
+                return selection.target(at: point, in: window) == key
+            }
+        }
+        // The bubble ends before the 8-point gap and 20-point pencil slot. Neither the gap
+        // nor the button belongs to the timestamp's click target.
+        #expect(bubbleContains(x: width - 30))
+        #expect(!bubbleContains(x: width - 24))
+        #expect(!bubbleContains(x: width - 10))
+    }
+}
