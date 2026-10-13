@@ -58,11 +58,14 @@ Docs to use when the task touches them:
 
 ## Formatting and checks
 
-- Biome: tabs, width 120. `npm run fmt` / `npm run fmt:check`.
+- Dependencies use pnpm (`pnpm install`). Each workspace's `node_modules` clones files from the shared
+  pnpm store, so per-session installs cost little disk. Declare every imported package in the importing
+  package's `package.json`; pnpm does not expose undeclared transitive dependencies.
+- Biome: tabs, width 120. `pnpm fmt` / `pnpm fmt:check`.
 - Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
-  your change, fix failures it causes, and rerun them without asking: `npm run typecheck`, `npm test` (two
-  test files at a time; `PILOT_TEST_CONCURRENCY=4 npm test` when the machine has headroom), and for Swift
+  your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test` (two
+  test files at a time; `PILOT_TEST_CONCURRENCY=4 pnpm test` when the machine has headroom), and for Swift
   changes `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`.
 
 ## Repository safety

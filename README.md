@@ -46,7 +46,7 @@ an `artifacts` namespace that remains visible in codemode even when its full dec
 Pilot supplies the bundled `pilot-artifacts` skill for detailed libraries, examples and authoring rules,
 loaded only when needed, including in Ask. Use `describeTool("artifact")` for an omitted schema.
 For agent-side screenshots and runtime diagnostics, install the optional preview browser once with
-`npm run artifacts:browser`. A missing preview renderer does not prevent HTML, React or image publication.
+`pnpm artifacts:browser`. A missing preview renderer does not prevent HTML, React or image publication.
 
 The chat footer shows the session's context-window estimate. With pi-extensions' `usage` extension
 enabled, it also shows Claude or Codex subscription windows. Hover for reset times and snapshot freshness.
@@ -97,13 +97,17 @@ Tab or Return to choose, or Escape to dismiss. Quote paths containing spaces or 
 ## Development
 
 ```sh
-npm install
-npm run app:macos            # builds apps/macos/build/Pilot.app (Command Line Tools are enough)
+pnpm install
+pnpm app:macos               # builds apps/macos/build/Pilot.app (Command Line Tools are enough)
 open apps/macos/build/Pilot.app
 ```
 
-Daemon only, in the foreground: `npm run dev:daemon`. Checks: `npm run typecheck`, `npm test`,
+Daemon only, in the foreground: `pnpm dev:daemon`. Checks: `pnpm typecheck`, `pnpm test`,
 `apps/macos/scripts/test.sh`.
+
+Dependencies use [pnpm](https://pnpm.io) so that per-session workspaces clone packages from one shared store
+instead of each holding a full `node_modules`. The Swift scripts likewise share SwiftPM's binary artifacts
+(libghostty, Sparkle) between checkouts through APFS clones (`apps/macos/scripts/share-artifacts.sh`).
 
 Offline transcript-opening regression (cached history, session switches, width changes, and delayed snapshots):
 `apps/macos/.build/debug/Pilot --transcript-opening-check /tmp/pilot-opening-check`.

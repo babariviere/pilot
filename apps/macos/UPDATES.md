@@ -42,7 +42,7 @@ minutes and may incur charges. No App Store or Developer ID distribution is conf
    the default `GITHUB_TOKEN` creates PR workflow runs that require approval. Do not give this token
    access to other repositories. The macOS publishing job still uses only `GITHUB_TOKEN`.
 4. Merge the workflow changes, then merge the Release Please PR when ready to release. PRs changing
-   only `CHANGELOG.md`, `package.json`, `package-lock.json` and `.release-please-manifest.json` skip
+   only `CHANGELOG.md`, `package.json` and `.release-please-manifest.json` skip
    workflows, so release PRs need no workflow approval. Merging triggers full verification and
    publishing on `main`. Other PRs run verification only, without release secrets or publishing
    permissions. The release job fails with
@@ -58,7 +58,7 @@ only a draft, so incomplete uploads are not offered to the app. The tagged appli
 and tested even if `main` has advanced. After its tests, the workflow overlays the current release
 metadata and publisher helpers so old draft retries also use runtime cleanup and ZIP-only publishing.
 Application code, dependencies and vendor pins remain tagged. App versions come from root `package.json`; Release Please
-updates it, `package-lock.json`, `.release-please-manifest.json` and `CHANGELOG.md` in the release PR.
+updates it, `.release-please-manifest.json` and `CHANGELOG.md` in the release PR.
 The existing source plist is only a template; bundling writes the package version into the app.
 Before signing, isolated runtime staging removes source maps and TypeScript declarations while
 preserving executable code, resources, licenses and SDK documentation. This reduces archive size
@@ -140,7 +140,7 @@ it does not sign out of `gh` or disable automatic checks.
 
 ## Local development
 
-`npm run app:macos` still creates a development app using your source checkout and system Node.
+`pnpm app:macos` still creates a development app using your source checkout and system Node.
 It embeds Sparkle but leaves private updates disabled unless configured explicitly. The unbundled
 `swift run Pilot` path remains supported. Snapshot mode never starts the updater or accesses Keychain.
 

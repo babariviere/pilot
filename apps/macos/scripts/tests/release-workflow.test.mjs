@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-test("verification installs checksum-verified jj before npm test", () => {
+test("verification installs checksum-verified jj before pnpm test", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	assert.match(workflow, /JJ_VERSION: 0\.46\.0/);
 	assert.match(workflow, /JJ_SHA256: [a-f0-9]{64}/);
 	const job = workflow.split("\n  node:\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	const start = job.indexOf("- name: Install Jujutsu");
 	const end = job.indexOf("\n      -", start);
-	const test = job.indexOf("npm test");
+	const test = job.indexOf("pnpm test");
 	assert.ok(start >= 0 && end > start && test > end, "node must install jj before testing");
 	const installation = job.slice(start, end);
 	assert.match(installation, /releases\/download\/v\$JJ_VERSION\/jj-v\$JJ_VERSION-aarch64-apple-darwin\.tar\.gz/);

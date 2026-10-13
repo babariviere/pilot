@@ -171,7 +171,7 @@ previews require Chromium; native SwiftUI previews use the Swift toolchain indep
 Chromium, agents can still create, update and view browser artifacts, and should not ask for a browser
 installation to publish diagrams. After installing a renderer, reopen the session to enable its previews.
 
-To enable HTML, React and image draft previews, install Chromium once with `npm run artifacts:browser`.
+To enable HTML, React and image draft previews, install Chromium once with `pnpm artifacts:browser`.
 SwiftUI uses the native renderer instead. Installation is never triggered by a model tool.
 For an installed release app without npm, run its bundled Node explicitly:
 
@@ -193,7 +193,7 @@ publication. Updates without `expectedRevision` succeed, with a warning.
 
 ## Libraries
 
-Release bundles prebuild every library with `npm run artifacts:libraries` (run by
+Release bundles prebuild every library with `pnpm artifacts:libraries` (run by
 `apps/macos/scripts/bundle-runtime.sh`) into `dist/libraries`, with a manifest of library and esbuild
 versions and checksums. pilotd serves a prebuilt file only if its key and checksum match, and otherwise
 builds the library once per process. Library responses carry an `ETag` and `Cache-Control: no-cache`.

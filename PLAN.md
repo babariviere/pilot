@@ -1052,7 +1052,7 @@ reports), producing a morning summary in the app and Slack.
   offline previews, with no shell, filesystem, credential or daemon access. React, ReactDOM, Mermaid,
   ECharts and Motion are bundled; D3 and Three.js are opt-in bundled libraries. JSX compilation accepts
   only those libraries, not arbitrary package installs. Optional agent screenshots and console
-  diagnostics use an isolated Playwright browser (`npm run artifacts:browser` installs Chromium).
+  diagnostics use an isolated Playwright browser (`pnpm artifacts:browser` installs Chromium).
   The preview action is exposed only when Chromium or the native Swift toolchain is installed at session startup, and is never
   required before publishing. Pilot-only system guidance encourages useful explanatory diagrams,
   preferring simple Mermaid, only while the artifact tool is available (including through codemode).

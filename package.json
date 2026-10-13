@@ -6,22 +6,15 @@
 	"type": "module",
 	"license": "MIT",
 	"author": "babariviere",
-	"workspaces": [
-		"packages/*"
-	],
+	"packageManager": "pnpm@12.10.1",
 	"engines": {
 		"node": ">=24.0.0"
 	},
-	"overrides": {
-		"mermaid": {
-			"katex": "0.19.0"
-		}
-	},
 	"scripts": {
-		"dev:daemon": "npm run dev -w @pilot/daemon",
-		"start": "npm run start -w @pilot/daemon",
+		"dev:daemon": "pnpm --filter @pilot/daemon dev",
+		"start": "pnpm --filter @pilot/daemon start",
 		"app:macos": "apps/macos/scripts/bundle.sh",
-		"artifacts:browser": "playwright install chromium",
+		"artifacts:browser": "pnpm --filter @pilot/artifacts exec playwright install chromium",
 		"artifacts:libraries": "node packages/artifacts/scripts/build-libraries.ts",
 		"typecheck": "tsgo -p tsconfig.json",
 		"test": "node --import tsx --test --test-force-exit --test-concurrency=${PILOT_TEST_CONCURRENCY:-2} 'packages/*/src/**/*.test.ts'",

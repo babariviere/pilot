@@ -20,6 +20,7 @@ fi
 # shellcheck source=swift-env.sh
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
+"$here/scripts/share-artifacts.sh"
 swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product Pilot \
 	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
 	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"

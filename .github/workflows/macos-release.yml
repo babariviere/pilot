@@ -9,7 +9,6 @@ on:
     paths-ignore:
       - CHANGELOG.md
       - package.json
-      - package-lock.json
       - .release-please-manifest.json
   workflow_dispatch:
     inputs:
@@ -40,10 +39,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Installs the pnpm version pinned by package.json's packageManager field.
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
+          cache: pnpm
       - name: Install Jujutsu
         run: |
           install_dir="$RUNNER_TEMP/jj"
@@ -59,9 +60,9 @@ jobs:
           test "$(uname -m)" = arm64
           node --version
           jj --version
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm test
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
       - name: Packaging and release metadata tests
         run: |
           for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
@@ -148,6 +149,10 @@ jobs:
           persist-credentials: false
           # Build the immutable release commit, not a newer main during a retry.
           ref: ${{ inputs.release_tag || needs.release-please.outputs.sha || github.sha }}
+      # bundle-runtime.sh installs the production runtime with pnpm. Retried drafts from before the
+      # pnpm migration have no pnpm pin and still install with npm.
+      - uses: pnpm/action-setup@v4
+        if: hashFiles('pnpm-lock.yaml') != ''
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}

@@ -13,14 +13,16 @@
 	"dependencies": {
 		"@earendil-works/pi-ai": "1.0.4",
 		"@earendil-works/pi-coding-agent": "1.0.4",
-		"@pilot/artifacts": "^0.1.0",
-		"@pilot/kernel": "0.1.0",
-		"@pilot/protocol": "0.1.0",
+		"@pilot/artifacts": "workspace:*",
+		"@pilot/kernel": "workspace:*",
+		"@pilot/protocol": "workspace:*",
 		"node-pty": "^1.1.0",
 		"tsx": "^4.23.15",
 		"ws": "^8.22.0"
 	},
 	"devDependencies": {
+		"@earendil-works/chord": "1.0.4",
+		"@earendil-works/pi-durable": "1.0.4",
 		"@types/ws": "^8.18.1"
 	}
 }

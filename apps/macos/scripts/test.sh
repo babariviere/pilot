@@ -5,6 +5,7 @@ here="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=swift-env.sh
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
+"$here/scripts/share-artifacts.sh"
 plugins="$(dirname "$(xcrun --find swift)")/../lib/swift/host/plugins/testing"
 # Multiple agents can verify concurrently. Avoid each one consuming every available CPU.
 jobs=(--jobs "${PILOT_SWIFT_JOBS:-2}")
