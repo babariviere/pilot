@@ -134,6 +134,42 @@ struct MessageTextSelectionTests {
         #expect(view.measure(width: 320, unwrapped: false) == narrow)
     }
 
+    @Test func sizingProbesDoNotChangePlacedWrapping() {
+        let view = MessageSelectionTextView.make()
+        view.string = String(repeating: "Streaming text keeps its wrapping. ", count: 40)
+        view.setFrameSize(NSSize(width: 320, height: 200))
+        #expect(view.textContainer?.size.width == 320)
+        _ = view.measure(width: 760, unwrapped: false)
+        #expect(view.textContainer?.size.width == 320)
+        view.string += "More streamed text."
+        view.invalidateMeasurements()
+        _ = view.measure(width: 500, unwrapped: false)
+        #expect(view.textContainer?.size.width == 320)
+    }
+
+    @Test func regionsShareOneSelectionHighlight() {
+        let owner = MessageTextSelection()
+        let first = MessageSelectionTextView.make(), last = MessageSelectionTextView.make()
+        #expect(first.layoutManager is MessageSelectionLayoutManager)
+        for (index, view) in [first, last].enumerated() {
+            view.frame = NSRect(x: 0, y: CGFloat(index) * 40, width: 300, height: 30)
+            view.string = "Region \(index)"
+            view.selectionKey = .init(block: index)
+            view.selectionOwner = owner
+            owner.register(view)
+        }
+        #expect(!owner.isActive)
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 100),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 100))
+        window.contentView?.addSubview(first)
+        window.contentView?.addSubview(last)
+        window.makeFirstResponder(last)
+        // Activity depends on the message, not on which region AppKit made first responder.
+        #expect(owner.isActive == window.isKeyWindow)
+    }
+
     @Test func renderedReplyKeepsLayoutAndWholeMessageSelection() async throws {
         let source = """
         ## Selection across a full reply

@@ -30,6 +30,13 @@ final class MessageTextSelection: ObservableObject {
         didSet { if source != oldValue { entireMessage = false } }
     }
     private var entireMessage = false
+    /// Window key observers exist only while this message has a selection, so every region repaints
+    /// together when the window gains or loses focus.
+    private var focusObservers: [NSObjectProtocol] = []
+
+    deinit {
+        for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
+    }
 
     private var mounted: [MessageSelectionTextView] {
         regions.values.compactMap(\.view).sorted { $0.selectionKey < $1.selectionKey }
@@ -49,6 +56,7 @@ final class MessageTextSelection: ObservableObject {
         anchor = start
         end = finish
         for view in mounted { apply(to: view) }
+        observeFocus(start != finish)
     }
 
     func clear() {
@@ -56,6 +64,37 @@ final class MessageTextSelection: ObservableObject {
         anchor = nil
         end = nil
         for view in mounted { view.setSelectedRange(NSRange(location: 0, length: 0)) }
+        observeFocus(false)
+    }
+
+    /// One message is one selection, so its regions share one highlight color. AppKit would draw
+    /// the first responder's range as active and every other region as inactive.
+    var isActive: Bool {
+        regions.values.contains { region in
+            guard let view = region.view, let window = view.window else { return false }
+            return window.isKeyWindow && window.firstResponder === view
+        }
+    }
+
+    func focusChanged() {
+        for region in regions.values {
+            guard let view = region.view, view.selectedRange().length > 0 else { continue }
+            view.needsDisplay = true
+        }
+    }
+
+    private func observeFocus(_ enabled: Bool) {
+        guard enabled == focusObservers.isEmpty else { return }
+        guard enabled else {
+            for observer in focusObservers { NotificationCenter.default.removeObserver(observer) }
+            focusObservers = []
+            return
+        }
+        focusObservers = [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.focusChanged() }
+            }
+        }
     }
 
     func selectAll() {
@@ -150,10 +189,11 @@ struct SelectableMessageText: NSViewRepresentable {
     @Environment(\.messageSelectionColor) private var defaultColor
 
     func makeNSView(context: Context) -> MessageSelectionTextView {
-        let view = MessageSelectionTextView()
+        let view = MessageSelectionTextView.make()
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
+        view.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
         view.textContainer?.widthTracksTextView = false
@@ -168,6 +208,7 @@ struct SelectableMessageText: NSViewRepresentable {
     func updateNSView(_ view: MessageSelectionTextView, context: Context) {
         let key = MessageTextSelection.Key(block: block, item: item)
         view.copyPrefix = copyPrefix
+        view.unwrapped = unwrapped
         if view.selectionOwner !== selection || view.selectionKey != key {
             view.selectionOwner?.unregister(view)
             view.selectionOwner = selection
@@ -178,7 +219,7 @@ struct SelectableMessageText: NSViewRepresentable {
             view.content = text
             view.style = style
             view.textStorage?.setAttributedString(Self.attributed(text, style: style))
-            view.measuredWidth = nil
+            view.invalidateMeasurements()
             view.invalidateIntrinsicContentSize()
         }
         selection?.register(view)
@@ -227,18 +268,67 @@ final class MessageSelectionTextView: NSTextView {
     var content: AttributedString?
     var style: Style?
     var copyPrefix = ""
-    var measuredWidth: CGFloat?
-    private var measuredSize = CGSize.zero
+    var unwrapped = false
+    private var measuring = false
+    /// Sizes for the few widths SwiftUI probes per layout pass, so alternating probes do not relayout.
+    private var measurements: [(width: CGFloat, size: CGSize)] = []
+    /// The text view does not own a TextKit 1 stack it was given, so it retains the root here.
+    private var ownedStorage: NSTextStorage?
+
+    /// A TextKit 1 stack whose layout manager draws the message's shared selection highlight.
+    static func make() -> MessageSelectionTextView {
+        let storage = NSTextStorage()
+        let layout = MessageSelectionLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: .zero)
+        layout.addTextContainer(container)
+        let view = MessageSelectionTextView(frame: .zero, textContainer: container)
+        view.ownedStorage = storage
+        return view
+    }
+
+    func invalidateMeasurements() {
+        measurements.removeAll(keepingCapacity: true)
+    }
 
     func measure(width: CGFloat, unwrapped: Bool) -> CGSize {
-        if measuredWidth == width { return measuredSize }
+        if let cached = measurements.first(where: { $0.width == width }) { return cached.size }
         guard let container = textContainer, let layout = layoutManager else { return .zero }
+        // Resizable text views can resize themselves during layout. Keep the probe width meanwhile.
+        measuring = true
         container.size = CGSize(width: width, height: .greatestFiniteMagnitude)
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
-        measuredWidth = width
-        measuredSize = CGSize(width: unwrapped ? ceil(used.width) : width, height: ceil(used.height))
-        return measuredSize
+        measuring = false
+        let size = CGSize(width: unwrapped ? ceil(used.width) : width, height: ceil(used.height))
+        if measurements.count >= 4 { measurements.removeFirst() }
+        measurements.append((width, size))
+        // A sizing probe must not change how the placed text wraps. Otherwise the drawn text
+        // follows whichever width SwiftUI probed last and reflows on every streamed update.
+        if !unwrapped, frame.width > 0, frame.width != width { matchContainerToFrame() }
+        return size
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if !unwrapped, !measuring { matchContainerToFrame() }
+    }
+
+    private func matchContainerToFrame() {
+        guard let container = textContainer, container.size.width != frame.width else { return }
+        container.size = CGSize(width: frame.width, height: .greatestFiniteMagnitude)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { selectionOwner?.focusChanged() }
+        return accepted
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let accepted = super.resignFirstResponder()
+        if accepted { selectionOwner?.focusChanged() }
+        return accepted
     }
 
     func insertionIndex(atWindowPoint point: NSPoint) -> Int {
@@ -309,5 +399,26 @@ final class MessageSelectionTextView: NSTextView {
         let range = selectedRange()
         selectionOwner?.select(from: .init(key: selectionKey, offset: range.location),
                                to: .init(key: selectionKey, offset: NSMaxRange(range)))
+    }
+}
+
+/// Paints every selected region of a message in the same color: active while any of its regions
+/// is focused in the key window, inactive otherwise.
+final class MessageSelectionLayoutManager: NSLayoutManager {
+    override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
+                                          forCharacterRange charRange: NSRange, color: NSColor) {
+        // Text views draw on the main thread. Background attributes keep AppKit's color.
+        let active: Bool? = MainActor.assumeIsolated {
+            guard let view = firstTextView as? MessageSelectionTextView, let owner = view.selectionOwner,
+                  NSIntersectionRange(view.selectedRange(), charRange).length > 0 else { return nil }
+            return owner.isActive
+        }
+        guard let active else {
+            super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+            return
+        }
+        let shared: NSColor = active ? .selectedTextBackgroundColor : .unemphasizedSelectedTextBackgroundColor
+        shared.setFill()
+        super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: shared)
     }
 }
