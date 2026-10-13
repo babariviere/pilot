@@ -1,5 +1,38 @@
 # Changelog
 
+## [1.25.0](https://github.com/babariviere/pilot/compare/v1.24.0...v1.25.0) (2026-10-13)
+
+
+### Features
+
+* **daemon:** detect wake and reachability for scheduled work ([75fb0ca](https://github.com/babariviere/pilot/commit/75fb0ca8d2f6396e58cf48eaea5b2ded9ae9d01f))
+* **macos:** show pull request merge readiness ([b64fbbe](https://github.com/babariviere/pilot/commit/b64fbbed34d7634b5a4c2fe5f2b4053ce56f8c4d))
+* **macos:** show task dependencies in the Tasks tab ([2b84035](https://github.com/babariviere/pilot/commit/2b84035d752e28dd5777fd1285f87a06b4ab79b4))
+* **tracking:** classify Slack bug reports with cached Luna results ([006b45f](https://github.com/babariviere/pilot/commit/006b45f8cf140ebb0680006987c885b2952336f3))
+* **tracking:** sync personal Linear cycles and ticket prefill ([2a88ba6](https://github.com/babariviere/pilot/commit/2a88ba6fb61c087b36be27a8a0ca96df9a266fd2))
+
+
+### Bug Fixes
+
+* **chat:** restore queued messages to the composer on stop ([5b78615](https://github.com/babariviere/pilot/commit/5b786159c8ae5ec87c1c90631f6c9b7edfb511f1))
+* **ci:** keep native UI tests alive until completion ([8c2dc0a](https://github.com/babariviere/pilot/commit/8c2dc0af66dc848f07ec4a61f75752014a196ffd))
+* **daemon:** detect Git submodules before workspace cleanup ([9eabaa5](https://github.com/babariviere/pilot/commit/9eabaa58e87cd2af551aabd5dbb9688746f76076))
+* **daemon:** update stale workspaces before reclaiming them ([7225519](https://github.com/babariviere/pilot/commit/7225519250c8b5e965bfae6c1f763103b1f3af42))
+* **macos:** align readiness groups with page rows ([402bba8](https://github.com/babariviere/pilot/commit/402bba88f5555dc5c480f31cc0ab6e5ce2061e56))
+* **macos:** allow throwing folded-message test ([0cb2ba2](https://github.com/babariviere/pilot/commit/0cb2ba23fa137bae7b74f9480c2eb915ac8c4478))
+* **macos:** bound timestamp hit tests to the content viewport ([0d8f372](https://github.com/babariviere/pilot/commit/0d8f372034f25e92ded4f8350e9410c1ca217295))
+* **macos:** cap artifact viewer default width on ultrawide displays ([be6bdd8](https://github.com/babariviere/pilot/commit/be6bdd8e0d3d955aac69162a60660c3b59b5868c))
+* **macos:** keep user message edit button in the margin ([4eb47dd](https://github.com/babariviere/pilot/commit/4eb47dd4b72193418a83c387dd43b86f333ada67))
+* **macos:** label ready pull request badges ([b48d02d](https://github.com/babariviere/pilot/commit/b48d02dcd79773c609aa8b1cb6692a81523796ab))
+* **macos:** let Return insert a newline in mission sheet text fields ([b27d49c](https://github.com/babariviere/pilot/commit/b27d49c452e3a5e86179fcf2242dec97773c4b13))
+* **macos:** reject incomplete native test runners ([b3bb27b](https://github.com/babariviere/pilot/commit/b3bb27b6d64277e90b4cb3fadd74f8cf7e6b21c0))
+* **test:** evaluate native hit-test probes before expectations ([bd0bd74](https://github.com/babariviere/pilot/commit/bd0bd74a7df28f231bf8929c7656111ce2639317))
+
+
+### Performance Improvements
+
+* **io:** reduce repository and streaming I/O amplification ([3966a3d](https://github.com/babariviere/pilot/commit/3966a3dc0966a281c44e4eb0f9ef01a0e37d3fc5))
+
 ## [1.24.0](https://github.com/babariviere/pilot/compare/v1.23.0...v1.24.0) (2026-10-13)
 
 
