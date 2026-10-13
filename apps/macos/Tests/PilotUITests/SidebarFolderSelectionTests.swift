@@ -11,10 +11,10 @@ private func folderSidebarOutline(in view: NSView) -> NSOutlineView? {
 }
 
 @MainActor
-private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView) throws {
+private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView, x: CGFloat = 70) throws {
     let window = try #require(outline.window)
     // Hit the title area, not the project's chevron or action buttons.
-    let point = outline.convert(NSPoint(x: 70, y: outline.rect(ofRow: row).midY), to: nil)
+    let point = outline.convert(NSPoint(x: x, y: outline.rect(ofRow: row).midY), to: nil)
     let timestamp = ProcessInfo.processInfo.systemUptime
     let down = try #require(NSEvent.mouseEvent(
         with: .leftMouseDown, location: point, modifierFlags: [], timestamp: timestamp,
@@ -94,23 +94,24 @@ func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
     // A project header and two sessions, with an optional folder header.
     try #require(outline.numberOfRows == expandedRowCount)
 
-    try clickFolderSidebarRow(headerRow, in: outline)
+    // The project name navigates to the project page. Its trailing chevron is the
+    // independent control for folding the project's sessions.
+    try clickFolderSidebarRow(headerRow, in: outline, x: outline.bounds.width - 12)
     settleFolderSidebar(hosting)
     #expect(model.collapsedProjects.contains(project.id))
     #expect(outline.numberOfRows == expandedRowCount - 2)
     #expect(model.selectedSessionId == nil)
-    try clickFolderSidebarRow(headerRow, in: outline)
+    try clickFolderSidebarRow(headerRow, in: outline, x: outline.bounds.width - 12)
     settleFolderSidebar(hosting)
     #expect(!model.collapsedProjects.contains(project.id))
     #expect(outline.numberOfRows == expandedRowCount)
     #expect(model.selectedSessionId == nil)
+    try clickFolderSidebarRow(headerRow, in: outline)
+    settleFolderSidebar(hosting)
+    #expect(model.selectedProjectId == project.id)
+    #expect(model.selectedSessionId == nil)
+    #expect(!model.collapsedProjects.contains(project.id))
     try clickFolderSidebarRow(headerRow + 1, in: outline)
-    settleFolderSidebar(hosting)
-    #expect(model.selectedSessionId == first.id)
-    try clickFolderSidebarRow(headerRow, in: outline)
-    settleFolderSidebar(hosting)
-    #expect(model.selectedSessionId == first.id)
-    try clickFolderSidebarRow(headerRow, in: outline)
     settleFolderSidebar(hosting)
     #expect(model.selectedSessionId == first.id)
 
