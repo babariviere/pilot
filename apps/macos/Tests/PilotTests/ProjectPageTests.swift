@@ -40,22 +40,6 @@ private func pullRequest(_ state: DashboardPullRequestState = .open,
     #expect(!yesterday.contains("just now"))
 }
 
-@Test func reviewedResultsLeaveNeedsYouUntilPilotdKnowsAboutThem() {
-    let section = DashboardSection(total: 7, items: [
-        need(.failed, "failed", session: "f", outcome: .failed),
-        need(.question, "question", mission: "m", count: 2),
-        need(.unread, "seen", session: "seen", outcome: .done),
-        need(.unread, "new", session: "new", outcome: .done),
-        need(.scheduledFailed, "scheduled", session: "seen"),
-    ])
-    let visible = ProjectPageNeeds.visible(section) { $0 == "seen" || $0 == "f" }
-    #expect(visible.items.map(\.id) == ["question", "new", "scheduled"])
-    #expect(visible.total == 5)
-    #expect(visible.hiddenCount == 2)
-    let untouched = ProjectPageNeeds.visible(section) { _ in false }
-    #expect(untouched == section)
-}
-
 @Test func needsYouRowsExplainWhatHappenedAndOfferOneAction() {
     let failed = need(.failed, "f", session: "f", outcome: .failed, reason: "kernel exited with code 137")
     #expect(ProjectPageText.needsSubtitle(failed, now: now) == "Failed 12m ago: kernel exited with code 137")
@@ -127,4 +111,3 @@ private func pullRequest(_ state: DashboardPullRequestState = .open,
     app.newSession(in: "p")
     #expect(app.selectedProjectId == nil)
 }
-

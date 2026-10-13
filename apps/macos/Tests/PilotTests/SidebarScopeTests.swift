@@ -114,26 +114,13 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     #expect(restore(.archive(projectId: "gone", missionId: "gone"), nil) == .archive(projectId: nil, missionId: nil))
 }
 
-@Test func countsTakeOffResultsTheAppHasReviewed() {
-    let daemon = ProjectDashboardCounts(projects: [
-        "p1": ProjectDashboardCount(working: 2, needsYou: 3),
-        "p2": ProjectDashboardCount(working: 0, needsYou: 1),
-    ])
-    let sessions = [
-        chat("seen", project: "p1", outcome: .done),
-        chat("unread", project: "p1", outcome: .done),
-        chat("failed", project: "p1", outcome: .failed),
-        chat("running", project: "p1", outcome: .done, state: "working"),
-        chat("other", project: "p2", outcome: .done),
-    ]
-    let reviewed: Set<String> = ["seen", "running", "other"]
-    let counts = SidebarScopeCounts.corrected(daemon, activeSessions: sessions) { !reviewed.contains($0.id) }
-    // "running" has no visible result, so pilotd never counted it.
-    #expect(counts["p1"] == ProjectDashboardCount(working: 2, needsYou: 2))
-    // A project left with nothing working or waiting drops out.
-    #expect(counts["p2"] == nil)
-    #expect(SidebarScopeCounts.total(counts) == ProjectDashboardCount(working: 2, needsYou: 2))
-    #expect(SidebarScopeCounts.total(counts, excluding: "p1") == ProjectDashboardCount())
+@Test func scopeCountsUseDaemonTotalsWithoutSubtractingReviewsAgain() {
+    let counts = ProjectDashboardCounts(projects: [
+        "p1": ProjectDashboardCount(working: 2, needsYou: 2),
+        "p2": ProjectDashboardCount(needsYou: 1),
+    ]).projects
+    #expect(SidebarScopeCounts.total(counts) == ProjectDashboardCount(working: 2, needsYou: 3))
+    #expect(SidebarScopeCounts.total(counts, excluding: "p1") == ProjectDashboardCount(needsYou: 1))
 }
 
 @Test func elsewhereLineAppearsOnlyWithActivity() {

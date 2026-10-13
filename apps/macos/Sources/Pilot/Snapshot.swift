@@ -1011,8 +1011,7 @@ enum Snapshot {
         ]))
         model.collapsedProjects = ["p2", "p3"]
 
-        let counts = SidebarScopeCounts.corrected(model.client.projectCounts, activeSessions: model.client.activeSessions,
-                                                  isUnread: model.isUnread)
+        let counts = model.client.projectCounts.projects
         await render(SidebarScopeList(projects: model.orderedProjects, scope: nil, counts: counts,
                                       choose: { _ in }, addProject: {}, newFolder: {})
                         .background(Theme.background),

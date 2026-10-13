@@ -122,6 +122,12 @@ final class PilotClient: ObservableObject {
 
     // MARK: Commands
 
+    /// The daemon updates project dashboards and sidebar counts over the existing WebSocket.
+    func review(_ request: ReviewRequest) async throws {
+        guard request.marks.count <= ReviewRequest.maxMarks else { throw ClientError("Too many review marks") }
+        let _: Ack = try await call("api/reviews", body: request)
+    }
+
     /// A bounded, cancellable request on filter changes. Live updates still come from the list stream.
     func archivedSessions(filter: ArchiveFilter) async throws -> [SessionSummary] {
         if fixtureSessions { return filter.apply(to: sessions) }

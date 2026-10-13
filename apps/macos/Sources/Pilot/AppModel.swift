@@ -26,7 +26,11 @@ final class AppModel: ObservableObject {
     let settings = AppSettings.shared
     let terminals = TerminalStore()
     let notifier = Notifier()
-    let attention = SessionAttention()
+    let attention: SessionAttention
+    private lazy var reviewForwarder = SessionReviewForwarder { [weak self] request in
+        guard let self else { throw CancellationError() }
+        try await self.client.review(request)
+    }
     /// Drafts outlive their views and are saved locally by the production app.
     let newSessionForm = NewSessionForm()
     private var chatComposers: [String: ComposerState] = [:]
@@ -112,6 +116,7 @@ final class AppModel: ObservableObject {
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil) {
         self.projectFolderDefaults = projectFolderDefaults
+        attention = SessionAttention(defaults: projectFolderDefaults)
         self.draftStore = draftStore
         projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
         subagentReads = projectFolderDefaults.data(forKey: Self.subagentReadsKey)
@@ -120,6 +125,7 @@ final class AppModel: ObservableObject {
         newSessionForm.onDraftChanged = { [weak self] in self?.saveDrafts() }
         newSessionForm.branches.onSelectionChanged = { [weak self] in self?.saveDrafts() }
         restoringDrafts = false
+        attention.onReview = { [weak self] mark in self?.reviewForwarder.review(mark) }
     }
 
     var selectedSession: SessionSummary? {
@@ -232,6 +238,9 @@ final class AppModel: ObservableObject {
         restoreSidebarScope()
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }
+            if snapshot {
+                Task { await self.reviewForwarder.connected { await self.attention.reviewMarks() } }
+            }
             for notification in self.attention.observe(sessions, snapshot: snapshot) {
                 // Record completion versions for archives too, without surfacing old results.
                 guard self.client.session(notification.sessionId)?.isArchived != true else { continue }
