@@ -86,8 +86,14 @@ export class TrackedItemStore {
 	require(id: string): Promise<TrackedItem> {
 		return this.rpc("require", { id });
 	}
-	commit(projectId: string, kind: TrackedKind, items: TrackedInput[], checkpoint?: SourceCheckpoint): Promise<void> {
-		return this.rpc("commit", { projectId, kind, items, checkpoint });
+	commit(
+		projectId: string,
+		kind: TrackedKind,
+		items: TrackedInput[],
+		checkpoint?: SourceCheckpoint,
+		activeIds?: string[],
+	): Promise<void> {
+		return this.rpc("commit", { projectId, kind, items, checkpoint, activeIds });
 	}
 	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		return this.rpc("patch", { id, patch });

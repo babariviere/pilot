@@ -287,13 +287,21 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
     /// Source-specific label, for example a Linear state.
     public let status: String?
     public let updatedAt: Double?
+    public let externalId: String?
+    public let metadata: [String: JSONValue]?
+    public let sessionId: String?
+    public let missionId: String?
 
-    public init(id: String, title: String, url: String? = nil, status: String? = nil, updatedAt: Double? = nil) {
+    public init(id: String, title: String, url: String? = nil, status: String? = nil, updatedAt: Double? = nil,
+                externalId: String? = nil, metadata: [String: JSONValue]? = nil,
+                sessionId: String? = nil, missionId: String? = nil) {
         self.id = id
         self.title = title
         self.url = url
         self.status = status
         self.updatedAt = updatedAt
+        self.externalId = externalId; self.metadata = metadata
+        self.sessionId = sessionId; self.missionId = missionId
     }
 }
 
@@ -306,12 +314,13 @@ public struct DashboardTrackedSource: Codable, Identifiable, Equatable, Sendable
     public let error: String?
     public let total: Int
     public let items: [DashboardTrackedItem]
+    public let linear: LinearSourceSummary?
 
     public var id: String { source }
 
     public init(
         source: String, label: String, status: DashboardSourceStatus = .ok, error: String? = nil, total: Int = 0,
-        items: [DashboardTrackedItem] = []
+        items: [DashboardTrackedItem] = [], linear: LinearSourceSummary? = nil
     ) {
         self.source = source
         self.label = label
@@ -319,6 +328,7 @@ public struct DashboardTrackedSource: Codable, Identifiable, Equatable, Sendable
         self.error = error
         self.total = total
         self.items = items
+        self.linear = linear
     }
 }
 

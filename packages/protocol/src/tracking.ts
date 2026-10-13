@@ -34,6 +34,35 @@ export interface TrackedItemList {
 	total: number;
 }
 export type SourceStatus = "not_configured" | "idle" | "ok" | "syncing" | "sign_in_required" | "error";
+/** Progress covers only my issues, never the team's overall workload. */
+export interface LinearCycleSummary {
+	id: string;
+	name?: string;
+	number: number;
+	startsAt: string;
+	endsAt: string;
+	progress: number;
+	total: number;
+	done: number;
+	inProgress: number;
+	todo: number;
+}
+export interface LinearSourceSummary {
+	cycleStatus: "current" | "no_active_cycle";
+	currentCycle?: LinearCycleSummary;
+	statusMessage?: string;
+}
+/** GET /api/tracked-items/:id/prefill. Transient, never bulk-stored or broadcast. */
+export interface TrackedItemPrefill {
+	itemId: string;
+	identifier: string;
+	title: string;
+	url: string;
+	description: string;
+	gitBranchName?: string;
+	/** Explicitly quoted external content. User confirmation is required before starting work. */
+	prompt: string;
+}
 export interface TrackingSource {
 	/** Stable project-scoped identifier, <projectId>:<kind>. */
 	id: string;
@@ -45,4 +74,6 @@ export interface TrackingSource {
 	lastPolledAt?: number;
 	error?: string;
 	signInCommand?: string;
+	nextPollAt?: number;
+	linear?: LinearSourceSummary;
 }

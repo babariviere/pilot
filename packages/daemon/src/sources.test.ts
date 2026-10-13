@@ -124,6 +124,7 @@ test("legacy project overrides are discarded durably without losing opt-in setti
 test("single flight, cursor commit, failures and sign-in status are isolated per source", async (t) => {
 	const f = await fixture(t);
 	await f.projects.update(f.project.id, { tracking: { slackChannels: ["C1"], linearTeam: "ENG" } });
+	t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
 	let finish!: () => void,
 		polls = 0,
 		auth = false,
@@ -161,11 +162,13 @@ test("single flight, cursor commit, failures and sign-in status are isolated per
 	assert.deepEqual(f.items.checkpoint(id), checkpoint);
 	assert.equal(f.registry.dashboard(f.project.id)[0]?.total, 1, "errors retain last items");
 	auth = true;
+	t.mock.timers.tick(30_000);
 	await f.registry.poll(id);
 	assert.equal(f.registry.require(id).status, "sign_in_required");
 	assert.ok(!JSON.stringify(f.registry.list()).includes("secret"));
 	auth = false;
 	failure = false;
+	t.mock.timers.tick(300_000);
 	await f.registry.poll(id);
 	assert.equal(f.registry.require(id).status, "ok");
 });

@@ -1,0 +1,41 @@
+{
+	"cycles": [],
+	"pages": [
+		{
+			"issues": [
+				{
+					"id": "issue-open",
+					"identifier": "ENG-4",
+					"title": "Open issue without cycles",
+					"url": "https://linear.app/example/issue/ENG-4",
+					"status": "Backlog",
+					"statusType": "backlog",
+					"priority": 0,
+					"estimate": null,
+					"assigneeId": "user-me",
+					"teamId": "team-child",
+					"cycleId": null,
+					"gitBranchName": null,
+					"updatedAt": "2026-10-13T10:00:00.000Z"
+				},
+				{
+					"id": "issue-closed",
+					"identifier": "ENG-5",
+					"title": "Already finished",
+					"url": "https://linear.app/example/issue/ENG-5",
+					"status": "Canceled",
+					"statusType": "canceled",
+					"priority": 0,
+					"estimate": null,
+					"assigneeId": "user-me",
+					"teamId": "team-root",
+					"cycleId": null,
+					"gitBranchName": null,
+					"updatedAt": "2026-10-13T10:00:00.000Z"
+				}
+			],
+			"hasNextPage": false,
+			"cursor": null
+		}
+	]
+}

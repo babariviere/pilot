@@ -4,12 +4,62 @@ import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 /** Fixed read-only tools on the dedicated server named by kind. No overrides or fallback. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
 	if (kind === "linear" && tool === "issues") return "list_issues";
+	if (kind === "linear" && tool === "cycles") return "list_cycles";
+	if (kind === "linear" && tool === "issue") return "get_issue";
 	if (kind === "slack" && tool === "history") return "slack_read_channel";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
 	return undefined;
 }
 
 export class SourceSignInRequired extends Error {}
+export class SourceRateLimited extends Error {
+	readonly retryAfterMs: number;
+	constructor(retryAfterMs = 60_000) {
+		super("Source rate limited");
+		this.retryAfterMs = retryAfterMs;
+	}
+}
+/** Extract only safe retry timing, never forward provider error text or credentials. */
+export function sourceRateLimit(value: unknown): SourceRateLimited | undefined {
+	if (!value || typeof value !== "object") return;
+	const error = value as Record<string, unknown>;
+	const payload = error.structuredContent as Record<string, unknown> | undefined;
+	const detail =
+		payload?.error && typeof payload.error === "object" ? (payload.error as Record<string, unknown>) : payload;
+	const blocks = Array.isArray(error.content) ? error.content.slice(0, 2) : [];
+	const text = [
+		error.message,
+		error.error,
+		detail?.message,
+		detail?.error,
+		detail?.code,
+		...blocks.map((block) => block?.text),
+	]
+		.filter((value): value is string => typeof value === "string")
+		.map((value) => value.slice(0, 8192))
+		.join(" ")
+		.slice(0, 16_384);
+	if (
+		![error.status, error.statusCode, error.code, detail?.status, detail?.code].some(
+			(code) => code === 429 || code === "429",
+		) &&
+		!/rate[ _-]?limit|too many requests|\b429\b/i.test(text)
+	)
+		return;
+	const data = error.data as Record<string, unknown> | undefined;
+	const headers = error.headers as Record<string, unknown> | undefined;
+	const seconds = Number(
+		error.retryAfter ??
+			data?.retryAfter ??
+			detail?.retryAfter ??
+			headers?.["retry-after"] ??
+			text.match(/retry[ _-]?after["\s:=]+(\d+)/i)?.[1] ??
+			60,
+	);
+	return new SourceRateLimited(
+		Number.isFinite(seconds) ? Math.min(86_400_000, Math.max(1_000, seconds * 1000)) : 60_000,
+	);
+}
 export interface SourceMcpClient {
 	close?(): Promise<void>;
 	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson>;
@@ -38,14 +88,24 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			const abort = () => worker.postMessage("abort");
 			const timer = setTimeout(abort, 60_000);
 			signal.addEventListener("abort", abort, { once: true });
-			worker.once("message", (reply: { value?: TrackingJson; error?: string; signIn?: boolean }) => {
-				replied = true;
-				// Worker posts only after connection.close() and OAuth writes have settled.
-				this.running.delete(worker);
-				if (signal.aborted) reject(signal.reason);
-				else if (reply.error) reject(reply.signIn ? new SourceSignInRequired(reply.error) : new Error(reply.error));
-				else resolve(reply.value!);
-			});
+			worker.once(
+				"message",
+				(reply: { value?: TrackingJson; error?: string; signIn?: boolean; retryAfterMs?: number }) => {
+					replied = true;
+					// Worker posts only after connection.close() and OAuth writes have settled.
+					this.running.delete(worker);
+					if (signal.aborted) reject(signal.reason);
+					else if (reply.error)
+						reject(
+							reply.signIn
+								? new SourceSignInRequired(reply.error)
+								: reply.retryAfterMs
+									? new SourceRateLimited(reply.retryAfterMs)
+									: new Error(reply.error),
+						);
+					else resolve(reply.value!);
+				},
+			);
 			worker.once("error", reject);
 			worker.once("exit", () => {
 				clearTimeout(timer);
@@ -76,7 +136,7 @@ export function decodeMcpResult(result: {
 	content?: Array<{ type: string; text?: string }>;
 	isError?: boolean;
 }): TrackingJson {
-	if (result.isError) throw new Error("MCP tool returned an error");
+	if (result.isError) throw sourceRateLimit(result) ?? new Error("MCP tool returned an error");
 	const value =
 		result.structuredContent ??
 		(() => {

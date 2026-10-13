@@ -29,7 +29,7 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.require(args.id);
 				break;
 			case "commit":
-				disk.commit(args.projectId, args.kind, args.items, args.checkpoint);
+				disk.commit(args.projectId, args.kind, args.items, args.checkpoint, args.activeIds);
 				projectId = args.projectId;
 				break;
 			case "patch":

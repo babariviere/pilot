@@ -1,7 +1,14 @@
 /** Small, indexed daemon-owned SQLite store. No network or agent loop lives here. */
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { TrackedItem, TrackedItemList, TrackedItemPatch, TrackedKind, TrackingJson } from "@pilot/protocol";
+import type {
+	LinearSourceSummary,
+	TrackedItem,
+	TrackedItemList,
+	TrackedItemPatch,
+	TrackedKind,
+	TrackingJson,
+} from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt">;
@@ -9,6 +16,7 @@ export interface SourceCheckpoint {
 	configKey: string;
 	lastPolledAt: number;
 	cursor?: TrackingJson;
+	linear?: LinearSourceSummary;
 }
 type Row = {
 	id: string;
@@ -28,6 +36,8 @@ type Row = {
 export interface TrackedQuery {
 	projectId: string;
 	kind?: TrackedKind;
+	/** Internal scope guard for mixed-source lists. */
+	kinds?: TrackedKind[];
 	dismissed?: boolean;
 	limit?: number;
 	offset?: number;
@@ -50,6 +60,17 @@ export class TrackedItemDisk {
 			CREATE INDEX IF NOT EXISTS tracked_project_kind ON tracked_items(project_id, kind, dismissed, updated_at DESC, id);
 			CREATE INDEX IF NOT EXISTS tracked_project ON tracked_items(project_id, dismissed, updated_at DESC, id);
 			CREATE TABLE IF NOT EXISTS source_checkpoints (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+		`);
+		if (
+			!this.db
+				.prepare("PRAGMA table_info(tracked_items)")
+				.all()
+				.some((column) => column.name === "active")
+		)
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+		this.db.exec(`
+			CREATE INDEX IF NOT EXISTS tracked_active_project_kind ON tracked_items(project_id, kind, dismissed, updated_at DESC, id) WHERE active=1;
+			CREATE INDEX IF NOT EXISTS tracked_active_project ON tracked_items(project_id, dismissed, updated_at DESC, id) WHERE active=1;
 		`);
 	}
 	close(): void {
@@ -78,8 +99,11 @@ export class TrackedItemDisk {
 			throw new Error("limit must be 1..100 and offset 0..1000000");
 		if (query.kind !== undefined && query.kind !== "linear" && query.kind !== "slack")
 			throw new Error("Unknown tracking kind");
-		const filter = `project_id = ? AND dismissed = ?${query.kind ? " AND kind = ?" : ""}`;
-		const args = [query.projectId, query.dismissed ? 1 : 0, ...(query.kind ? [query.kind] : [])];
+		const kinds = query.kind ? [query.kind] : query.kinds;
+		if (kinds?.some((kind) => kind !== "linear" && kind !== "slack")) throw new Error("Unknown tracking kind");
+		if (kinds && !kinds.length) return { items: [], total: 0 };
+		const filter = `project_id = ? AND active = 1 AND dismissed = ?${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}`;
+		const args = [query.projectId, query.dismissed ? 1 : 0, ...(kinds ?? [])];
 		const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${filter}`).get(...args)!.n);
 		const items = (
 			this.db
@@ -100,14 +124,32 @@ export class TrackedItemDisk {
 			label: kind === "linear" ? "Linear" : "Slack",
 			status: "idle",
 			total: page.total,
-			items: page.items.map(({ id, title, url, status, updatedAt }) => ({ id, title, url, status, updatedAt })),
+			items: page.items.map(({ id, title, url, status, updatedAt, externalId, metadata, sessionId, missionId }) => ({
+				id,
+				title,
+				url,
+				status,
+				updatedAt,
+				externalId,
+				metadata,
+				...(sessionId ? { sessionId } : {}),
+				...(missionId ? { missionId } : {}),
+			})),
 		};
 	}
 	/** Bounded, atomic commit of a poll page and its cursor. Validate the whole page first. */
-	commit(projectId: string, kind: TrackedKind, items: TrackedInput[], checkpoint?: SourceCheckpoint): void {
-		if (items.length > 100) throw new Error("A poll page may contain at most 100 items");
+	commit(
+		projectId: string,
+		kind: TrackedKind,
+		items: TrackedInput[],
+		checkpoint?: SourceCheckpoint,
+		activeIds?: string[],
+	): void {
+		if (items.length > 500) throw new Error("A poll batch may contain at most 500 items");
 		for (const item of items) validateInput(item);
-		if (Buffer.byteLength(JSON.stringify(items)) > 256 * 1024) throw new Error("Poll page exceeds 256 KiB");
+		if (Buffer.byteLength(JSON.stringify(items)) > 1024 * 1024) throw new Error("Poll batch exceeds 1 MiB");
+		if (activeIds && (activeIds.length > 500 || activeIds.some((id) => typeof id !== "string" || id.length > 500)))
+			throw new Error("Invalid active issue set");
 		if (checkpoint && Buffer.byteLength(JSON.stringify(checkpoint)) > 16 * 1024)
 			throw new Error("Checkpoint too large");
 		const put = this.db.prepare(`INSERT INTO tracked_items
@@ -134,6 +176,19 @@ export class TrackedItemDisk {
 						Date.now(),
 						item.updatedAt,
 					).changes || changed;
+			if (activeIds) {
+				const ids = JSON.stringify(activeIds);
+				// Indexed active rows and bounded external IDs, not the whole retained history.
+				for (const [next, previous, operator] of [
+					[0, 1, "NOT IN"],
+					[1, 0, "IN"],
+				] as const)
+					changed =
+						!!this.db
+							.prepare(`UPDATE tracked_items SET active=? WHERE project_id=? AND kind=? AND active=?
+						AND external_id ${operator} (SELECT value FROM json_each(?))`)
+							.run(next, projectId, kind, previous, ids).changes || changed;
+			}
 			if (checkpoint)
 				this.db
 					.prepare(

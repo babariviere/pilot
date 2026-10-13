@@ -772,6 +772,10 @@ export interface DashboardTrackedItem {
 	/** Source-specific label, for example a Linear state or "bug report". */
 	status?: string;
 	updatedAt?: number;
+	externalId?: string;
+	metadata?: Record<string, import("./tracking.ts").TrackingJson>;
+	sessionId?: string;
+	missionId?: string;
 }
 
 /** Extension point for tracked items, one group per configured source. Empty until a source is configured. */
@@ -783,6 +787,7 @@ export interface DashboardTrackedSource {
 	error?: string;
 	total: number;
 	items: DashboardTrackedItem[];
+	linear?: import("./tracking.ts").LinearSourceSummary;
 }
 
 /** Counts for the headline sentence and the sidebar. */

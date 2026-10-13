@@ -2,6 +2,35 @@ import Foundation
 
 // Mirrors packages/protocol/src/tracking.ts.
 public enum TrackedKind: String, Codable, Hashable, Sendable { case linear, slack }
+public struct LinearCycleSummary: Codable, Equatable, Sendable {
+    public let id: String
+    public let name: String?
+    public let number: Int
+    public let startsAt: String
+    public let endsAt: String
+    /// Progress and counts cover only my issues.
+    public let progress: Double
+    public let total: Int
+    public let done: Int
+    public let inProgress: Int
+    public let todo: Int
+}
+public struct LinearSourceSummary: Codable, Equatable, Sendable {
+    public enum CycleStatus: String, Codable, Sendable { case current, noActiveCycle = "no_active_cycle" }
+    public let cycleStatus: CycleStatus
+    public let currentCycle: LinearCycleSummary?
+    public let statusMessage: String?
+}
+/// Transient, quoted external content. Starting work always requires user confirmation.
+public struct TrackedItemPrefill: Codable, Equatable, Sendable {
+    public let itemId: String
+    public let identifier: String
+    public let title: String
+    public let url: String
+    public let description: String
+    public let gitBranchName: String?
+    public let prompt: String
+}
 public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     public var slackChannels: [String]
     public var linearTeam: String?
@@ -67,11 +96,15 @@ public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let lastPolledAt: Double?
     public let error: String?
     public let signInCommand: String?
+    public let nextPollAt: Double?
+    public let linear: LinearSourceSummary?
     public init(id: String, projectId: String, kind: TrackedKind, label: String, configured: Bool,
                 status: DashboardSourceStatus, lastPolledAt: Double? = nil,
-                error: String? = nil, signInCommand: String? = nil) {
+                error: String? = nil, signInCommand: String? = nil,
+                nextPollAt: Double? = nil, linear: LinearSourceSummary? = nil) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.label = label; self.configured = configured
         self.status = status; self.lastPolledAt = lastPolledAt; self.error = error
         self.signInCommand = signInCommand
+        self.nextPollAt = nextPollAt; self.linear = linear
     }
 }

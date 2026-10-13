@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { DatabaseSync } from "node:sqlite";
 import { TrackedItemStore, type TrackedInput } from "./tracked-items.ts";
 
 export function trackedInput(externalId = "issue-1", updatedAt = 10): TrackedInput {
@@ -15,6 +16,33 @@ export function trackedInput(externalId = "issue-1", updatedAt = 10): TrackedInp
 		updatedAt,
 	};
 }
+test("active membership migration and retirement preserve legacy item identity and local links", async () => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-tracked-migration-")),
+		path = join(home, "items.sqlite");
+	const legacy = new DatabaseSync(path);
+	legacy.exec(`CREATE TABLE tracked_items (
+		id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, external_id TEXT NOT NULL,
+		title TEXT NOT NULL, url TEXT NOT NULL, status TEXT NOT NULL, metadata TEXT NOT NULL,
+		dismissed INTEGER NOT NULL DEFAULT 0, session_id TEXT, mission_id TEXT,
+		created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, UNIQUE(project_id,kind,external_id));
+		INSERT INTO tracked_items VALUES ('local-id','p','linear','issue-1','Bug','https://example.com','Todo','{}',1,'s','m',1,10);`);
+	legacy.close();
+	const store = new TrackedItemStore(path);
+	try {
+		await store.load(["p"]);
+		assert.equal((await store.list({ projectId: "p", dismissed: true })).total, 1);
+		await store.commit("p", "linear", [], { configKey: "team", lastPolledAt: 1 }, []);
+		assert.equal((await store.list({ projectId: "p", dismissed: true })).total, 0);
+		await store.commit("p", "linear", [trackedInput()], { configKey: "team", lastPolledAt: 2 }, ["issue-1"]);
+		const item = (await store.list({ projectId: "p", dismissed: true })).items[0]!;
+		assert.equal(item.id, "local-id");
+		assert.equal(item.sessionId, "s");
+		assert.equal(item.missionId, "m");
+	} finally {
+		await store.close();
+		await rm(home, { recursive: true, force: true });
+	}
+});
 test("durable, project-scoped dedupe preserves dismissals and links on refresh", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-tracked-"));
 	const path = join(home, "items.sqlite");
@@ -76,9 +104,9 @@ test("poll commits validate atomically, bound lists and preserve checkpoints on 
 			store.commit(
 				"p",
 				"linear",
-				Array.from({ length: 101 }, (_, i) => trackedInput(String(i))),
+				Array.from({ length: 501 }, (_, i) => trackedInput(String(i))),
 			),
-			/100/,
+			/500/,
 		);
 		await assert.rejects(
 			store.commit("p", "linear", [{ ...trackedInput(), metadata: { text: "x".repeat(17000) } }]),

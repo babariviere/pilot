@@ -50,3 +50,27 @@ import Testing
     #expect(json["missionId"] == nil)
     #expect(json["dismissed"] == .bool(true))
 }
+
+@Test func linearCycleSummaryAndTransientPrefillDecode() throws {
+    let json = Data(#"""
+    {"source":"linear","label":"Linear","status":"ok","total":2,"items":[],
+     "linear":{"cycleStatus":"current","currentCycle":{"id":"c1","name":"October","number":12,
+       "startsAt":"2026-10-05T00:00:00Z","endsAt":"2026-10-19T00:00:00Z",
+       "progress":0.5,"total":2,"done":1,"inProgress":1,"todo":0}}}
+    """#.utf8)
+    let source = try JSONDecoder().decode(DashboardTrackedSource.self, from: json)
+    #expect(source.linear?.currentCycle?.id == "c1")
+    #expect(source.linear?.currentCycle?.progress == 0.5)
+    #expect(source.linear?.currentCycle?.total == 2)
+    let fallback = try JSONDecoder().decode(LinearSourceSummary.self, from: Data(#"""
+    {"cycleStatus":"no_active_cycle","statusMessage":"Showing your open issues."}
+    """#.utf8))
+    #expect(fallback.cycleStatus == .noActiveCycle)
+    #expect(fallback.currentCycle == nil)
+    let prefill = try JSONDecoder().decode(TrackedItemPrefill.self, from: Data(#"""
+    {"itemId":"i","identifier":"ENG-1","title":"Bug","url":"https://example.com",
+     "description":"External text","gitBranchName":"eng-1-bug","prompt":"Quoted external text"}
+    """#.utf8))
+    #expect(prefill.gitBranchName == "eng-1-bug")
+    #expect(prefill.description == "External text")
+}
