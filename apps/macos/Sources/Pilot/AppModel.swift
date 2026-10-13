@@ -35,6 +35,7 @@ final class AppModel: ObservableObject {
     /// Drafts outlive their views and are saved locally by the production app.
     let newSessionForm = NewSessionForm()
     private var chatComposers: [String: ComposerState] = [:]
+    private var knownScheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var reviewRevision = 0
 
     @Published var selectedSessionId: String? {
@@ -238,6 +239,18 @@ final class AppModel: ObservableObject {
         }
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
+        client.onSchedulesChanged = { [weak self] items in
+            guard let self else { return }
+            // Only transitions seen while connected notify; the first list after launch sets the baseline.
+            for item in items {
+                let chatId = ScheduleText.chatId(item)
+                let chatTitle = chatId.flatMap { self.client.session($0)?.title }
+                guard let text = ScheduleText.notification(item, previous: self.knownScheduleStates[item.id],
+                                                           chatTitle: chatTitle) else { continue }
+                self.notifier.deliverScheduled(id: item.id, title: text.title, body: text.body, sessionId: chatId)
+            }
+            self.knownScheduleStates = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.state) })
+        }
         restoreSidebarScope()
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }

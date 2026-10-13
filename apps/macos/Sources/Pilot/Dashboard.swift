@@ -11,6 +11,7 @@ struct Dashboard: View {
             ActivityCard(sessions: client.activeSessions)
             ReadyToMergeCard(sessions: client.activeSessions)
             IdleCard(sessions: client.activeSessions.filter(\.isIdleAwaitingReview))
+            ScheduledCard(items: ScheduleText.listed(client.schedules, includeFailed: true))
             ProjectsCard(projects: client.projects, sessions: client.activeSessions)
         }
     }
@@ -75,6 +76,34 @@ private struct EmptyLine: View {
     let text: String
     var body: some View {
         Text(text).font(.pilot(.body)).foregroundStyle(Theme.faintForeground)
+    }
+}
+
+/// Scheduled chats and follow-ups across projects. Items that could not start come first, until dismissed.
+private struct ScheduledCard: View {
+    let items: [ScheduledItem]
+    @EnvironmentObject private var app: AppModel
+
+    var body: some View {
+        DashboardCard(title: "Scheduled", icon: "calendar.badge.clock", count: items.count) {
+            if items.isEmpty { EmptyLine(text: "Nothing scheduled. Use Send later to start work when you’re back.") }
+            ForEach(Array(items.prefix(5).enumerated()), id: \.element.id) { index, item in
+                if index > 0 { HairlineDivider(leading: 32) }
+                ScheduledItemRow(item: item, detail: detail(item), verticalPadding: 5, spacing: 8) {
+                    app.selectedSessionId = $0
+                }
+            }
+        }
+    }
+
+    private func detail(_ item: ScheduledItem) -> String {
+        switch item.target {
+        case let .chat(spawn):
+            let project = app.client.project(item.projectId ?? spawn.projectId)
+            return ScheduleText.detail(item, projectName: project?.name ?? spawn.cwd?.abbreviatingHome)
+        case let .message(sessionId, _):
+            return ScheduleText.detail(item, chatTitle: app.client.session(sessionId)?.title)
+        }
     }
 }
 

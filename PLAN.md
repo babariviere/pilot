@@ -808,7 +808,8 @@ reports), producing a morning summary in the app and Slack.
   "Show all N". Selecting it opens a full-list destination backed by a one-time bounded dashboard read
   (up to 100 rows); live updates on the page remain on the WebSocket, with no polling. First open shows a spinner; a lost connection or failed Retry keeps the last
   data under a banner. Until review marks reach pilotd, the app's own review state hides results the user
-  has already reviewed. Scheduled and Tracked sections are added with those features.
+  has already reviewed. Scheduled lists pending scheduled items after Missions; Tracked is added with
+  that feature.
 - Sidebar scope: a switcher at the top of the sidebar lists every project ("All projects", the default) or
   focuses on one project (View menu, ⌘0 for all and ⌘1…⌘9 for the first nine projects in sidebar order). The
   switcher shows working and needs-you counts per project from `dashboard.counts` (no polling), and its
@@ -1119,7 +1120,7 @@ reports), producing a morning summary in the app and Slack.
   `POST /api/update/prepare`, stops the launch agent, installs and relaunches. Terminal shells close,
   durable history remains. One-time key configuration and initial installation: [UPDATES.md](apps/macos/UPDATES.md).
 
-### Scheduled chats and follow-ups (store, dispatch and detection implemented)
+### Scheduled chats and follow-ups (store, dispatch, detection and app UI implemented)
 
 - `pilotd` owns `schedules.sqlite`. A new-chat target retains the complete `SpawnRequest`;
   a message target retains its chat ID and follow-up text. Triggers are `at` (epoch milliseconds),
@@ -1160,7 +1161,14 @@ reports), producing a morning summary in the app and Slack.
   rejects stale results, and releases its sampler worker. `ScheduleTriggerSource` and
   `ScheduleClock` provide fake-clock tests for drift, debounce, offline wake, cancellation and
   deadline catch-up. No app fast path or HTTP trigger endpoint is needed for correctness.
-  Composer/list UI and fired notifications remain separate work.
+- App UI: Send later is a quiet clock menu beside each composer's Send button (When I'm back,
+  When online, At a time… which opens a sheet with the trigger and time). A new chat schedules
+  the full spawn request; a chat's composer schedules a follow-up, listed as one-line rows at
+  the top of its tray like queued messages. Home's Scheduled card lists pending items with those
+  that could not start first; the project page lists pending items under Scheduled (5 rows plus
+  "Show all") and failures under Needs you. Pending rows edit or cancel; failures open their chat
+  or are dismissed. The app notifies when an item it saw pending starts or fails; the first list
+  after launch is a baseline, so restarts never replay notifications.
 - Incremental detector measurement: `node scripts/bench/schedule-detection.ts 65 all` on Apple
   Silicon, Node 24.21.0/macOS 27, with other builds/tests running. Idle: 3.8 ms process CPU
   (0.006%), zero samples/probes/timer callbacks. Online: 313.8 ms (0.475%), 3 samples, 3 probes,
@@ -1176,8 +1184,8 @@ reports), producing a morning summary in the app and Slack.
   without putting the shared development host to sleep).
 - The server registers `DashboardProviders.scheduled` and its change subscription, so pending
   items populate Scheduled and failures populate Needs you without app polling. Protocol and
-  PilotCore mirror CRUD payloads, targets, lifecycle and WS snapshots; the app retains the index
-  for the later scheduling UI.
+  PilotCore mirror CRUD payloads, targets, lifecycle and WS snapshots; the app keeps the index
+  for the scheduling UI.
 
 ## 8. API additions
 

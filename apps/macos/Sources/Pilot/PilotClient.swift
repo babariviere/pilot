@@ -37,6 +37,7 @@ final class PilotClient: ObservableObject {
 
     /// Includes full snapshots on initial connection and reconnect, not just deltas.
     var onSessionsChanged: (([SessionSummary], Bool) -> Void)?
+    var onSchedulesChanged: (([ScheduledItem]) -> Void)?
 
     // The WebSocket includes ALL sessions, including archives, for readable subscriptions.
     var activeSessions: [SessionSummary] { sessions.unarchivedSessions }
@@ -1027,6 +1028,7 @@ final class PilotClient: ObservableObject {
         switch message {
         case let .schedules(list):
             schedules = list
+            onSchedulesChanged?(list)
         case let .sources(list):
             if trackingSources != list { trackingSources = list }
         case let .trackedChanged(projectId):

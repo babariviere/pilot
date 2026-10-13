@@ -287,7 +287,8 @@ struct ChatView: View {
                         slashCommands: slashCommands.commands,
                         onSlashCommandsNeeded: { [sessionId = session.id] in
                             slashCommands.load(sessionId: sessionId, client: AppModel.shared.client)
-                        }
+                        },
+                        onSchedule: session.isArchived ? nil : schedule
                     )
                 }
             }
@@ -345,6 +346,34 @@ struct ChatView: View {
         Task {
             do {
                 try await AppModel.shared.client.send(session.id, message: message, mode: mode)
+            } catch {
+                composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                composer.attachments.items.insert(contentsOf: previousAttachments.items, at: 0)
+                composer.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Send later: clears the draft at once like send, and restores it if pilotd rejects the schedule.
+    private func schedule(_ message: String, _ trigger: ScheduleTrigger, _ at: Double?) {
+        guard !session.isArchived else { return }
+        composer.error = nil
+        let previous = composer.draft
+        do { try composer.attachments.retainForHistory() }
+        catch {
+            composer.error = "Could not retain attached images: \(error.localizedDescription)"
+            return
+        }
+        let previousAttachments = composer.attachments
+        composer.draft = ""
+        composer.attachments = ImageAttachments()
+        let request = ScheduleRequest(
+            title: ScheduleText.title(previous, fallback: "Follow-up message"), trigger: trigger, at: at,
+            target: .message(sessionId: session.id, message: message)
+        )
+        Task {
+            do {
+                _ = try await AppModel.shared.client.createSchedule(request)
             } catch {
                 composer.draft = [previous, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
                 composer.attachments.items.insert(contentsOf: previousAttachments.items, at: 0)

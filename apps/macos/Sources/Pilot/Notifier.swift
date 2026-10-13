@@ -40,6 +40,19 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         )
     }
 
+    /// A scheduled chat or follow-up started or could not start. Opens its chat when there is one.
+    func deliverScheduled(id: String, title: String, body: String, sessionId: String?) {
+        guard available else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        if let sessionId { content.userInfo = ["sessionId": sessionId] }
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "schedule-\(id)", content: content, trigger: nil)
+        )
+    }
+
     nonisolated func userNotificationCenter(
         _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,

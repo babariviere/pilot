@@ -325,6 +325,36 @@ struct UnreadBadge: View {
     }
 }
 
+/// Symbol and colour of each scheduled item state, used the same way on Home, the project page (including
+/// its Needs you row) and in the target chat. Only an item that could not start takes a signal colour.
+extension ScheduleState {
+    var symbolName: String {
+        switch self {
+        case .pending, .dispatching: "calendar.badge.clock"
+        case .fired: "checkmark"
+        case .failed: "calendar.badge.exclamationmark"
+        case .cancelled: "xmark"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .failed: Theme.blocked
+        case .pending, .dispatching, .fired, .cancelled: Theme.mutedForeground
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .pending: "Scheduled"
+        case .dispatching: "Starting"
+        case .fired: "Started"
+        case .failed: "Couldn’t start"
+        case .cancelled: "Cancelled"
+        }
+    }
+}
+
 // MARK: - Motion
 
 extension Theme {
@@ -374,16 +404,19 @@ struct KeyHint: View {
 
 /// Borderless icon button for secondary row actions: muted, with a soft fill under the pointer and an
 /// optional tint (for example destructive) that only appears on hover. Always add an accessibility label.
+/// The default 20 pt fits rows; use 26 pt beside the composers' 26 pt circular send button.
 struct QuietIconButtonStyle: ButtonStyle {
     var hoverTint: Color = Theme.foreground
+    var size: CGFloat = 20
 
     func makeBody(configuration: Configuration) -> some View {
-        QuietIconButton(configuration: configuration, hoverTint: hoverTint)
+        QuietIconButton(configuration: configuration, hoverTint: hoverTint, size: size)
     }
 
     private struct QuietIconButton: View {
         let configuration: ButtonStyleConfiguration
         let hoverTint: Color
+        let size: CGFloat
         @Environment(\.isEnabled) private var isEnabled
         @State private var isHovered = false
 
@@ -392,10 +425,10 @@ struct QuietIconButtonStyle: ButtonStyle {
             configuration.label
                 .font(.pilot(.caption, weight: .semibold))
                 .foregroundStyle(active ? hoverTint : Theme.mutedForeground)
-                .frame(width: 20, height: 20)
-                .background(RoundedRectangle(cornerRadius: 5).fill(active ? Theme.selected : .clear))
+                .frame(width: size, height: size)
+                .background(RoundedRectangle(cornerRadius: size > 20 ? 7 : 5).fill(active ? Theme.selected : .clear))
                 .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
-                .contentShape(RoundedRectangle(cornerRadius: 5))
+                .contentShape(RoundedRectangle(cornerRadius: size > 20 ? 7 : 5))
                 .onHover { isHovered = $0 }
                 .animation(Theme.Motion.quick, value: isHovered)
         }
