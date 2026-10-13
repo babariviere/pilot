@@ -7,7 +7,7 @@ import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 import type { ExtensionToolContext } from "@earendil-works/pi-coding-agent";
 import { createAskTools } from "./ask-tools.ts";
-import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { ARTIFACT_SKILL_PATH, ARTIFACT_SKILL_REFERENCES } from "./artifact-skill.ts";
 import type { AskContext } from "./policy.ts";
 
 const git = promisify(execFile);
@@ -118,9 +118,13 @@ for (const snapshot of [false, true]) {
 			text(await hostRead("read", { path: ARTIFACT_SKILL_PATH, limit: 1 })),
 			"---\n[More lines available; use offset=2.]",
 		);
+		for (const reference of ARTIFACT_SKILL_REFERENCES)
+			assert.match(text(await hostRead("read", { path: reference })), /^# .+ artifacts/);
 		for (const path of [
 			dirname(ARTIFACT_SKILL_PATH),
 			join(dirname(ARTIFACT_SKILL_PATH), "other.md"),
+			join(dirname(ARTIFACT_SKILL_PATH), "references"),
+			join(dirname(ARTIFACT_SKILL_PATH), "references", "other.md"),
 			`${dirname(ARTIFACT_SKILL_PATH)}/../pilot-artifacts/SKILL.md`,
 			`${ARTIFACT_SKILL_PATH}/other`,
 		])

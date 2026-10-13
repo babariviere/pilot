@@ -28,74 +28,72 @@ test("mission prompt explains the shared state, the chat's tasks, decisions and 
 	assert.match(prompt, /The user coordinates this mission/);
 	assert.match(prompt, /#2 Auth endpoints \(in progress\)/);
 	assert.match(prompt, /Decisions \(binding, they override the brief\): IDs are opaque strings/);
-	assert.match(prompt, /Never mention the mission/);
+	assert.match(prompt, /without mentioning the mission/);
 	assert.match(prompt, /Linear issue IDs are fine/);
 	assert.match(missionPrompt({ ...mission, coordinator: "self" }), /You coordinate this mission/);
 	assert.match(
 		missionPrompt({ ...mission, coordinator: "self" }),
 		/cheaper models for small tasks.*strongest allowed model for hard ones/,
 	);
-	assert.doesNotMatch(prompt, /Choose cheaper models/);
+	assert.doesNotMatch(prompt, /cheaper models/);
 	assert.match(missionPrompt({ ...mission, status: "done" }), /This mission is done/);
 });
 
-test("task management guidance is restricted to the coordinator", () => {
+test("coordinator actions are named only for the coordinator and detailed in the tool, not the prompt", () => {
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator });
-		assert.equal(prompt.includes('mission({action: "delete", id})'), coordinator === "self");
-		assert.equal(prompt.includes('mission({action: "task", id, order})'), coordinator === "self");
-		assert.equal(prompt.includes('mission({action: "group", ids: ["1-5"], milestone})'), coordinator === "self");
-		assert.match(prompt, /Retire tasks with status "dropped"/);
-		assert.match(prompt, /Only the coordinator can permanently delete tasks/);
+		assert.equal(
+			prompt.includes("coordinator actions (delete, group, task order, start, send, status)"),
+			coordinator === "self",
+		);
+		assert.match(prompt, /dropped when no longer needed/);
+		// Per-action recipes live in the mission tool description, which is only loaded when the tool is used.
+		assert.doesNotMatch(prompt, /mission\(\{action: "(?:delete|group|start|send|status)"/);
 	}
-	const prompt = missionPrompt({ ...mission, coordinator: "self" });
-	assert.match(prompt, /milestone "" clears the group/);
-	assert.match(prompt, /reordering never changes task numbers or dependencies/);
 });
 
 test("multi-task guidance claims requested tasks, orders work, maintains statuses and separates PRs", () => {
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator, tasks: [] });
-		assert.match(prompt, /tackle tasks 1 to 5/);
-		assert.match(prompt, /claim the requested tasks with mission\(\{action: "claim", ids: \["1-5"\]\}\)/);
-		assert.match(prompt, /report any skipped claims/);
+		assert.match(prompt, /claim them together \(ids such as \["1-5"\]\)/);
 		assert.match(prompt, /one at a time in dependency order/);
-		assert.match(prompt, /set queued tasks back to todo/);
-		assert.match(prompt, /in_progress only while working/);
-		assert.match(prompt, /blocked with a comment explaining unfinished dependencies/);
-		assert.match(prompt, /skip or report blocked tasks instead of working past unfinished dependencies/);
-		assert.match(prompt, /Open one pull request per task, not one combined/);
-		assert.match(prompt, /gh stack link/);
-		assert.match(prompt, /If stacking is unavailable, use plain PRs based on the dependency's branch/);
+		assert.match(prompt, /report skipped claims and unfinished dependencies instead of working past them/);
+		assert.match(
+			prompt,
+			/in_progress while working, blocked with a comment saying why, in_review once a pull request is open/,
+		);
+		assert.match(prompt, /Open one pull request per task/);
+		assert.match(prompt, /link it to the task with the link action and taskId/);
 		assert.match(prompt, /Never rewrite or push another chat's branches/);
-		assert.match(prompt, /Link each PR to its intended task.*taskId/);
+		assert.match(prompt, /post a handoff with log before stopping with unfinished work/);
 	}
 });
 
-test("the coordinator prompt explains chat controls without enabling autonomous starts", () => {
+test("the coordinator prompt allows chat starts only on request", () => {
 	const prompt = missionPrompt({ ...mission, coordinator: "self" });
-	for (const action of ["start", "send", "status"]) assert.ok(prompt.includes(`action: "${action}"`));
-	assert.match(prompt, /Do not start chats unless the user asks/);
+	assert.match(prompt, /Start chats only when the user asks/);
 	assert.match(prompt, /Autopilot is not enabled/);
-	assert.doesNotMatch(prompt, /Do not start chats or message other chats yourself/);
 	for (const coordinator of ["other", "user"] as const)
-		assert.doesNotMatch(missionPrompt({ ...mission, coordinator }), /action: "(?:start|send|status)"/);
+		assert.doesNotMatch(missionPrompt({ ...mission, coordinator }), /Start chats/);
 });
 
 test("stack guidance uses existing PR URLs, preserves sibling work and explains detected fallback", () => {
 	for (const available of [true, false, undefined]) {
 		const prompt = missionPrompt(mission, available);
-		assert.match(prompt, /Before editing a dependent task, base only its own change on the dependency's bookmark/);
-		assert.match(prompt, /including another chat's PR/);
+		assert.match(prompt, /base your own bookmark on the dependency's head/);
+		assert.match(prompt, /possibly another chat's/);
 		assert.match(prompt, /--base <dependency-head> --head <own-head>/);
+		if (available === false) {
+			assert.match(prompt, /github\/gh-stack is unavailable: keep plain chained PRs and do not install it/);
+			assert.doesNotMatch(prompt, /gh stack link/);
+			continue;
+		}
 		assert.match(prompt, /gh stack link <bottom-pr-url> … <top-pr-url>/);
-		assert.match(prompt, /Use existing PR URLs, never branch arguments/);
-		assert.match(prompt, /Preserve existing stack order and members/);
+		assert.match(prompt, /Pass existing PR URLs, not branch names/);
+		assert.match(prompt, /keep the existing stack order and members/);
+		assert.match(prompt, /use only link and view/);
 		assert.match(prompt, /If the repository rejects stacks, keep the plain chained PRs/);
-		assert.match(prompt, /Only link and view are used/);
-		if (available === true) assert.match(prompt, /github\/gh-stack is installed/);
-		else if (available === false) assert.match(prompt, /github\/gh-stack is unavailable/);
-		else assert.match(prompt, /Check gh extension list/);
+		assert.match(prompt, available ? /github\/gh-stack is installed/ : /If gh extension list shows github\/gh-stack/);
 	}
 });
 
@@ -125,22 +123,28 @@ test("deliverable guard blocks mission references in commits, bookmarks and pull
 
 test("Pilot diagram guidance is conditional on artifact availability", () => {
 	const enabled = pilotPrompt({}, true);
-	assert.match(enabled, /proactively publish a diagram with the artifact tool/);
-	assert.match(enabled, /without waiting for the user to request one/);
-	assert.match(enabled, /Prefer simple Mermaid diagrams/);
+	assert.match(enabled, /publish one with the artifact tool without being asked/);
+	assert.match(enabled, /simple Mermaid diagram/);
 	assert.match(enabled, /short explanation/);
-	assert.match(enabled, /skip diagrams for trivial answers/);
+	assert.match(enabled, /Skip it for simple answers/);
 	assert.match(enabled, /text only/);
-	assert.match(enabled, /preview is optional verification, never a prerequisite/);
-	assert.match(enabled, /Do not ask the user to install a browser/);
+	assert.match(enabled, /Artifact preview is optional\. If it is unavailable or fails, publish without it/);
 	for (const prompt of [pilotPrompt({}), pilotPrompt({}, false)])
 		assert.doesNotMatch(prompt, /artifact|diagram|Mermaid|preview/);
 });
 
+test("Build prompts define completion; Ask prompts do not", () => {
+	const build = pilotPrompt({});
+	assert.match(build, /finish with a working change/);
+	assert.match(build, /without pausing for review after a first pass/);
+	assert.match(build, /Ask only when a decision would materially change scope/);
+	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /finish with a working change/);
+});
+
 test("Ask permits proactive session-local diagrams and sandboxed previews without repository mutation", () => {
 	const prompt = pilotPrompt({ ask: { source: "/source" } }, true);
-	assert.match(prompt, /proactively publish/);
-	assert.match(prompt, /Prefer simple Mermaid/);
+	assert.match(prompt, /without being asked/);
+	assert.match(prompt, /simple Mermaid diagram/);
 	assert.match(prompt, /Creating, updating and previewing host-owned session-local artifacts is allowed/);
 	assert.match(prompt, /installed sandboxed renderers/);
 	assert.match(prompt, /artifacts do not modify the repository/);
@@ -270,11 +274,11 @@ test("prompt describes the workspace and delivery", () => {
 	});
 	assert.match(prompt, /private clone of \/src\/app/);
 	assert.match(prompt, /initially detached with no task branch or bookmark/);
-	assert.match(prompt, /Choose or create a descriptive branch or bookmark/);
-	assert.match(prompt, /Do not use a `pilot\/` prefix for new names/);
+	assert.match(prompt, /Name a new branch or bookmark/);
+	assert.match(prompt, /not `pilot\/`/);
 	assert.match(prompt, /jj git push --bookmark <name>/);
 	assert.match(prompt, /gh pr create/);
-	assert.match(pilotPrompt({}), /Never post on GitHub/);
+	assert.match(pilotPrompt({}), /Pilot does not post on GitHub/);
 });
 
 test("prompt tells the agent when archive maintenance reset its workspace", () => {
@@ -296,8 +300,8 @@ test("prompt tells the agent when archive maintenance reset its workspace", () =
 test("new Git branches and jj bookmarks require conventional task prefixes", () => {
 	for (const jj of [false, true]) {
 		const prompt = pilotPrompt({ workspace: { source: "/src/app", base: "origin/main", jj } });
-		assert.match(prompt, /New names must use `<type>\/<short-description>`/);
-		assert.match(prompt, /conventional prefix matching the task/);
+		assert.match(prompt, /Name a new branch or bookmark `<type>\/<short-description>`/);
+		assert.match(prompt, /conventional type that matches the task/);
 		for (const type of [
 			"feat",
 			"fix",
@@ -333,18 +337,18 @@ test("shared jj workspaces isolate checkout edits but not repository history or 
 		assert.match(prompt, /working-copy change starts on base `exact-base-commit` \(branch `trunk`\)/);
 		assert.match(prompt, /own checkout and its uncommitted changes are unaffected by your workspace edits/);
 		assert.match(prompt, /bookmarks and history are shared with sibling sessions/);
-		assert.match(prompt, /Do not rewrite other sessions' changes or task bookmarks/);
-		assert.match(prompt, /repository-wide `jj undo` or `jj op restore`/);
-		assert.match(prompt, /broad rebases, or `jj git push --all`/);
-		assert.match(prompt, /Restrict any rebase to this task's own changes/);
+		assert.match(prompt, /keep rebases, rewrites and pushes to this task's own changes and bookmark/);
+		assert.match(prompt, /Repository-wide operations \(`jj undo`, `jj op restore`/);
+		assert.match(prompt, /broad rebases, `jj git push --all`/);
+		assert.match(prompt, /would change other sessions' work/);
 		assert.doesNotMatch(
 			prompt,
 			/is a private clone|initially detached|The clone|git switch|nothing you do here touches it/,
 		);
 		if (requirePullRequest) {
-			assert.match(prompt, /Use task-specific bookmarks/);
-			assert.match(prompt, /Push only the chosen task bookmark with `jj git push --bookmark <name>`/);
-			assert.match(prompt, /New names must use `<type>\/<short-description>`/);
+			assert.match(prompt, /Work on one task bookmark/);
+			assert.match(prompt, /push it alone with `jj git push --bookmark <name>`/);
+			assert.match(prompt, /Name a new branch or bookmark `<type>\/<short-description>`/);
 			assert.match(prompt, /Never push the default branch/);
 		} else {
 			assert.match(prompt, /does not require a pull request/);
@@ -355,7 +359,7 @@ test("shared jj workspaces isolate checkout edits but not repository history or 
 			assert.match(prompt, /jj bookmark track <default-branch>@origin/);
 			assert.match(prompt, /move only that default-branch bookmark to your own completed, verified change/);
 			assert.match(prompt, /jj git push --bookmark <default-branch>/);
-			assert.doesNotMatch(prompt, /gh pr create|Use task-specific bookmarks|Never push the default branch/);
+			assert.doesNotMatch(prompt, /gh pr create|Work on one task bookmark|Never push the default branch/);
 		}
 		assert.doesNotMatch(prompt, /explicitly requested|user explicitly requests/);
 	}
@@ -431,7 +435,7 @@ test("opting out of PR delivery permits safe default-branch pushes for Git and j
 		assert.match(prompt, /branch protection or a conflict/);
 		assert.match(prompt, jj ? /jj git push --bookmark <default-branch>/ : /git push origin <default-branch>/);
 		if (jj) assert.match(prompt, /jj bookmark track <default-branch>@origin/);
-		assert.doesNotMatch(prompt, /Never push the default branch|gh pr create|Choose or create a descriptive/);
+		assert.doesNotMatch(prompt, /Never push the default branch|gh pr create|Name a new branch or bookmark/);
 	}
 });
 

@@ -385,9 +385,11 @@ for (const ask of [false, true]) {
 							assert.equal(!!tool, role !== undefined);
 							if (tool) assert.deepEqual(tool.parameters, native.parameters);
 							const prompt = getCurrentSystemPrompt(context.messages);
-							assert.equal(prompt.includes('mission({action: "start", id, model, thinking})'), coordinator);
-							assert.equal(prompt.includes('mission({action: "delete", id})'), coordinator);
-							assert.equal(prompt.includes('mission({action: "group", ids:'), coordinator);
+							assert.equal(prompt.includes("You coordinate this mission"), coordinator);
+							assert.equal(
+								prompt.includes("coordinator actions (delete, group, task order, start, send, status)"),
+								coordinator,
+							);
 							requestChecked = true;
 						} catch (error) {
 							requestFailure = error;

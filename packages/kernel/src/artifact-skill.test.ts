@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent";
 import { artifactLibraries } from "@pilot/artifacts";
-import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { ARTIFACT_SKILL_FILES, ARTIFACT_SKILL_PATH, ARTIFACT_SKILL_REFERENCES } from "./artifact-skill.ts";
 
 test("bundled artifact skill is valid and retains detailed authoring guidance outside the tool catalog", async () => {
 	const loaded = loadSkillsFromDir({ dir: dirname(ARTIFACT_SKILL_PATH), source: "pilot" });
@@ -15,8 +15,22 @@ test("bundled artifact skill is valid and retains detailed authoring guidance ou
 	assert.equal(loaded.skills[0]!.name, "pilot-artifacts");
 	assert.equal(loaded.skills[0]!.filePath, ARTIFACT_SKILL_PATH);
 	assert.match(loaded.skills[0]!.description, /HTML.*React.*image.*SwiftUI/);
+	assert.match(loaded.skills[0]!.description, /Use before creating, updating or previewing an artifact/);
 	assert.equal(loaded.skills[0]!.disableModelInvocation, false);
-	const source = await readFile(ARTIFACT_SKILL_PATH, "utf8");
+	const root = await readFile(ARTIFACT_SKILL_PATH, "utf8");
+	// The root routes to every per-kind reference, and every route exists.
+	for (const reference of ARTIFACT_SKILL_REFERENCES) {
+		const relative = `references/${reference.split("/").at(-1)}`;
+		assert.ok(root.includes(`](${relative})`), `SKILL.md does not route to ${relative}`);
+	}
+	// Rules that apply to every artifact stay in the root, not behind a route.
+	for (const guidance of [
+		"Ask image sources must be inline base64",
+		"Do not install or request a browser",
+		"expectedRevision",
+	])
+		assert.ok(root.includes(guidance), `SKILL.md is missing ${guidance}`);
+	const source = (await Promise.all(ARTIFACT_SKILL_FILES.map((path) => readFile(path, "utf8")))).join("\n");
 	for (const guidance of [
 		"512 KiB UTF-8",
 		"16 MiB",

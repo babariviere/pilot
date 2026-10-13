@@ -298,7 +298,7 @@ text(await tools.artifact({action:'list'}));
 	assert.equal(session.completion?.outcomeReason, undefined);
 	assert.match(prompt, /Ask mode, read-only/);
 	assert.doesNotMatch(prompt, /gh pr create|git switch/);
-	assert.match(prompt, /proactively publish|Prefer simple Mermaid/);
+	assert.match(prompt, /without being asked|simple Mermaid diagram/);
 	assert.match(prompt, /<name>pilot-artifacts<\/name>/);
 	assert.ok(prompt.includes(ARTIFACT_SKILL_PATH));
 	assert.doesNotMatch(prompt, /echarts\.init|mermaid\.initialize|@StateObject/);
