@@ -472,7 +472,8 @@ struct RowView: View, Equatable {
 struct UserMessage: View {
     @Environment(\.pilotFonts) private var fonts
     @Environment(\.transcriptRewind) private var rewind
-    @State private var isHovered = false
+    @State private var bubbleHovered = false
+    @State private var gutterHovered = false
     let text: String
     var expansion: ExpansionState? = nil
     var messageID: String = ""
@@ -481,24 +482,29 @@ struct UserMessage: View {
 
     var body: some View {
         HStack {
-            // Reserve a right-hand action gutter even when hidden, without narrowing the bubble.
-            Spacer(minLength: entryID != nil && rewind != nil ? 44 : 72)
-            HStack(alignment: .top, spacing: 8) {
-                MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
-                    CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
-                        Text(text)
-                            .font(fonts.body)
-                            .lineSpacing(3)
-                            .textSelection(.enabled)
-                    }
-                }
-                if let entryID, let rewind {
-                    MessageEditButton(entryID: entryID, rewind: rewind, isHovered: isHovered)
-                        .padding(.top, 10)
+            Spacer(minLength: 72)
+            MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
+                CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
+                    Text(text)
+                        .font(fonts.body)
+                        .lineSpacing(3)
+                        .textSelection(.enabled)
                 }
             }
             .contentShape(Rectangle())
-            .onHover { isHovered = $0 }
+            .onHover { bubbleHovered = $0 }
+            .overlay(alignment: .topTrailing) {
+                // The edit action hangs in the transcript margin so the bubble stays flush with the column edge.
+                if let entryID, let rewind {
+                    MessageEditButton(entryID: entryID, rewind: rewind, isHovered: bubbleHovered || gutterHovered)
+                        .padding(.top, 10)
+                        .padding(.leading, 8)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                        .contentShape(Rectangle())
+                        .onHover { gutterHovered = $0 }
+                        .alignmentGuide(.trailing) { $0[.leading] }
+                }
+            }
         }
         .padding(.top, 6)
     }
