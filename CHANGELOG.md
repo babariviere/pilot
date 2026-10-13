@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.21.0](https://github.com/babariviere/pilot/compare/v1.20.0...v1.21.0) (2026-10-13)
+
+
+### Features
+
+* **daemon:** project dashboard aggregate endpoint ([32e99c7](https://github.com/babariviere/pilot/commit/32e99c738732907edd07a7fd98c8d36d64c6a7e2))
+* **macos:** project page ([59b39cb](https://github.com/babariviere/pilot/commit/59b39cbac24d63b6299dc4056813a82af5f034c7))
+
 ## [1.20.0](https://github.com/babariviere/pilot/compare/v1.19.0...v1.20.0) (2026-10-13)
 
 
