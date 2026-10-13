@@ -154,13 +154,11 @@ private struct RewindMenu: ViewModifier {
     }
 }
 
-/// Secondary action beside a user's bubble. Its reserved slot prevents hover from reflowing text.
-/// Keyboard focus reveals it too; RewindMenu exposes the action to VoiceOver without hover.
+/// Edit action in a user message's hover footer (MessageActionBar), which reveals and focuses it.
+/// RewindMenu exposes the same action to VoiceOver without hover.
 struct MessageEditButton: View {
     let entryID: Int
     @ObservedObject var rewind: TranscriptRewind
-    let isHovered: Bool
-    @FocusState private var isFocused: Bool
 
     var body: some View {
         Button {
@@ -170,9 +168,6 @@ struct MessageEditButton: View {
         }
         .buttonStyle(QuietIconButtonStyle())
         .disabled(rewind.pending)
-        .focused($isFocused)
-        .opacity(isHovered || isFocused ? 1 : 0)
-        .allowsHitTesting(isHovered || isFocused)
         .help("Edit and resend this message. Files are not reverted.")
         .accessibilityLabel("Edit and Resend")
         .accessibilityIdentifier("message-edit-\(entryID)")
