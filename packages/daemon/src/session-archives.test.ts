@@ -971,19 +971,27 @@ test("HTTP archive browsing works globally and per project; WebSocket sync inclu
 		assert.equal(initial.sessions.length, 3);
 		assert.ok(initial.sessions.every((session) => session.archivedAt !== undefined));
 		assert.equal(initial.sessions.find((session) => session.id === id)?.pinned, true);
-		const unpinUpdate = once(ws, "message");
+		const nextSessionUpdate = (matches: (session: SessionSummary) => boolean) =>
+			new Promise<Extract<ServerMessage, { type: "session" }>>((resolve) => {
+				const onMessage = (raw: unknown) => {
+					const message = JSON.parse(String(raw)) as ServerMessage;
+					if (message.type !== "session" || !matches(message.session)) return;
+					ws!.off("message", onMessage);
+					resolve(message);
+				};
+				ws!.on("message", onMessage);
+			});
+		const unpinUpdate = nextSessionUpdate((session) => session.id === id && session.pinned === undefined);
 		const unpinned = await request(`/${id}/unpin`, "POST");
 		assert.equal(unpinned.status, 200);
 		assert.equal(((await unpinned.json()) as SessionSummary).pinned, undefined);
-		const [unpinRaw] = await unpinUpdate;
-		const pinMessage = JSON.parse(String(unpinRaw)) as Extract<ServerMessage, { type: "session" }>;
+		const pinMessage = await unpinUpdate;
 		assert.equal(pinMessage.session.id, id);
 		assert.equal(pinMessage.session.pinned, undefined);
-		const update = once(ws, "message");
+		const update = nextSessionUpdate((session) => session.id === id && session.archivedAt === undefined);
 		const restored = await request(`/${id}/restore`, "POST");
 		assert.equal(restored.status, 200);
-		const [raw] = await update;
-		const message = JSON.parse(String(raw)) as Extract<ServerMessage, { type: "session" }>;
+		const message = await update;
 		assert.equal(message.type, "session");
 		assert.equal(message.session.id, id);
 		assert.equal(message.session.archivedAt, undefined);
