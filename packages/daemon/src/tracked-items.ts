@@ -9,6 +9,8 @@ import type {
 } from "@pilot/protocol";
 import { NotFound, ServiceUnavailable } from "./errors.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
+import type { SlackCache, SlackReservation } from "./tracked-items-disk.ts";
+import type { SlackClassification } from "./slack-classifier.ts";
 export { validatePatch } from "./tracked-items-disk.ts";
 export type { SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
 type Snapshot = {
@@ -82,6 +84,15 @@ export class TrackedItemStore {
 	}
 	list(query: TrackedQuery): Promise<TrackedItemList> {
 		return this.rpc("list", query);
+	}
+	slackCached(channel: string, ts: string): Promise<SlackCache | undefined> {
+		return this.rpc("slackCached", { channel, ts });
+	}
+	reserveSlack(channel: string, ts: string, now: number): Promise<SlackReservation> {
+		return this.rpc("reserveSlack", { channel, ts, now });
+	}
+	finishSlack(channel: string, ts: string, result?: SlackClassification): Promise<void> {
+		return this.rpc("finishSlack", { channel, ts, result });
 	}
 	require(id: string): Promise<TrackedItem> {
 		return this.rpc("require", { id });

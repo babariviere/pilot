@@ -17,6 +17,7 @@ import { TrackedItemStore } from "./tracked-items.ts";
 import { SourceRegistry } from "./sources.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { pollLinear } from "./linear-source.ts";
+import { createSlackPoller } from "./slack-source.ts";
 
 const config = loadConfig();
 // Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
@@ -30,6 +31,8 @@ const tracking = new SourceRegistry(projects, trackedItems, new PiSourceMcpClien
 tracking.register("linear", pollLinear);
 tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
+tracking.register("slack", createSlackPoller(trackedItems, models));
+tracking.startPolling("slack");
 const memory = new ProjectMemoryService(config.home, (prompt, signal) => models.summarizeMemory(prompt, signal));
 // Load metadata and resume pending compaction, but a damaged/busy memory store cannot stop pilotd.
 const knownMemoryProjects = new Set<string>();

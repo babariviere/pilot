@@ -25,6 +25,15 @@ parentPort!.on("message", ({ id, method, args }) => {
 			case "list":
 				value = disk.list(args);
 				break;
+			case "slackCached":
+				value = disk.slackCached(args.channel, args.ts);
+				break;
+			case "reserveSlack":
+				value = disk.reserveSlack(args.channel, args.ts, args.now);
+				break;
+			case "finishSlack":
+				disk.finishSlack(args.channel, args.ts, args.result);
+				break;
 			case "require":
 				value = disk.require(args.id);
 				break;

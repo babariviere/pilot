@@ -14,6 +14,8 @@ import type { ProjectStore } from "./projects.ts";
 import { SourceRateLimited, SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
 import { linearPrefill } from "./linear-source.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
+import { SlackFormatChanged } from "./slack-format.ts";
+import { SlackModelUnavailable } from "./slack-classifier.ts";
 
 export interface SourcePollContext {
 	project: Project;
@@ -29,6 +31,7 @@ export interface SourcePollResult {
 	linear?: LinearSourceSummary;
 	/** Full scoped membership, for removing stale rows without losing local links. */
 	activeIds?: string[];
+	issue?: "slack_classification" | "slack_budget";
 }
 export type SourcePoller = (context: SourcePollContext) => Promise<SourcePollResult>;
 export type TrackingChange = { type: "sources" | "items"; projectId: string };
@@ -180,7 +183,24 @@ export class SourceRegistry {
 					...(result.linear ? { linear: result.linear } : {}),
 				};
 				await this.items.commit(project.id, source.kind, result.items, checkpoint, result.activeIds);
-				this.health.set(id, { key, status: "ok", failures: 0, nextPollAt: Date.now() + 300_000 });
+				const nextPollAt =
+					result.issue === "slack_budget"
+						? (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000
+						: Date.now() + 300_000;
+				this.health.set(id, {
+					key,
+					failures: 0,
+					nextPollAt,
+					status: result.issue ? "error" : "ok",
+					...(result.issue
+						? {
+								error:
+									result.issue === "slack_budget"
+										? "Slack classification daily budget reached. Remaining threads will resume tomorrow."
+										: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
+							}
+						: {}),
+				});
 			})
 			.catch((error) => this.failed(id, key, error))
 			.finally(() => {
@@ -303,7 +323,9 @@ export class SourceRegistry {
 					? "Sign in required"
 					: error instanceof SourceRateLimited
 						? "Rate limited. Sync will retry after a pause."
-						: "Could not sync this source. Check pi mcp list and retry.",
+						: error instanceof SlackFormatChanged || error instanceof SlackModelUnavailable
+							? error.message
+							: "Could not sync this source. Check pi mcp list and retry.",
 		});
 	}
 	private describe(project: Project, kind: TrackedKind): TrackingSource {
