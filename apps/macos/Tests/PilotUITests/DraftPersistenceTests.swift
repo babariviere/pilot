@@ -21,6 +21,14 @@ private func persistenceDirectory() -> URL {
     return try #require(bitmap.representation(using: .png, properties: [:]))
 }
 
+@MainActor private func waitForDraftUI(_ condition: () -> Bool) throws {
+    let deadline = Date().addingTimeInterval(2)
+    while !condition(), Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    }
+    try #require(condition(), "Draft UI state did not settle")
+}
+
 @Test @MainActor func draftTextQueueEditsAndTaskSelectionsPersistWithoutWaitingForAppShutdown() async throws {
     let root = persistenceDirectory()
     defer { try? FileManager.default.removeItem(at: root) }
@@ -318,11 +326,11 @@ private func restoreDraftWrites(_ root: URL) throws {
     let hosting = NSHostingView(rootView: TaskComposer(form: app.newSessionForm, client: app.client).environmentObject(app))
     window.contentView = hosting
     hosting.layoutSubtreeIfNeeded()
-    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    try waitForDraftUI { app.newSessionForm.branches.list.branches == ["main", "release"] }
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [Project(id: "project", name: "Project", path: "/tmp/project", createdAt: 1)], sessions: [])
-    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    try waitForDraftUI { app.draftProjectId == "project" }
     hosting.layoutSubtreeIfNeeded()
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(app.draftProjectId == "project")
@@ -330,7 +338,7 @@ private func restoreDraftWrites(_ root: URL) throws {
     #expect(try persistenceStore(root).load().newTask.projectId == "project")
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [], sessions: [])
-    RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+    try waitForDraftUI { app.newSessionForm.branches.selected == nil }
     #expect(app.newSessionForm.branches.selected == nil)
     app.flushDrafts()
 }
