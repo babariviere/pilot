@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.23.0](https://github.com/babariviere/pilot/compare/v1.22.0...v1.23.0) (2026-10-13)
+
+
+### Features
+
+* **daemon:** add durable project memory ([7dbf550](https://github.com/babariviere/pilot/commit/7dbf5506a6f82bd85edcc1aef8787531b6e035eb))
+* **kernel:** add project memory tools and wake context ([2f2384f](https://github.com/babariviere/pilot/commit/2f2384f0ebb5e46256a2a3d3370ee22e95c571e7))
+
+
+### Bug Fixes
+
+* **daemon:** flag stacked PRs that diverged from their base ([eea319e](https://github.com/babariviere/pilot/commit/eea319e393363f03f133ee3ada79a459d940b286))
+
 ## [1.22.0](https://github.com/babariviere/pilot/compare/v1.21.0...v1.22.0) (2026-10-13)
 
 
