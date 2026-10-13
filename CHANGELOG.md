@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.25.1](https://github.com/babariviere/pilot/compare/v1.25.0...v1.25.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **daemon:** avoid blocking stop during startup ([d79ddf8](https://github.com/babariviere/pilot/commit/d79ddf805a3066fe44d063450e7e98b7fd0ffda3))
+* **daemon:** drain queued abort before stop settles ([a72d31b](https://github.com/babariviere/pilot/commit/a72d31b93f4711ca71dd299f6c28bfd21ad8449b))
+* report submodules before untracked-path cleanup errors and update edit button test ([f83009d](https://github.com/babariviere/pilot/commit/f83009d28c48a76d3eb4dc78a0dc8b69e9bc47a8))
+
 ## [1.25.0](https://github.com/babariviere/pilot/compare/v1.24.0...v1.25.0) (2026-10-13)
 
 
