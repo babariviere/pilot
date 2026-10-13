@@ -80,9 +80,16 @@ test("an empty project has empty bounded sections and no extension data", () => 
 
 test("dashboard supports a larger but explicitly bounded section limit", () => {
 	const sessions = Array.from({ length: 8 }, (_, i) => session({ id: `work-${i}`, state: "working" }));
-	const dashboard = buildProjectDashboard({
-		projectId: "p1", sessions, missions: [], progress: new Map(), isUnread: () => true,
-	}, 7);
+	const dashboard = buildProjectDashboard(
+		{
+			projectId: "p1",
+			sessions,
+			missions: [],
+			progress: new Map(),
+			isUnread: () => true,
+		},
+		7,
+	);
 	assert.equal(dashboard.working.total, 8);
 	assert.equal(dashboard.working.items.length, 7);
 	assert.equal(build({ sessions }).working.items.length, 5);
