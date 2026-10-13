@@ -4,6 +4,7 @@ import SwiftUI
 
 /// Multi-line text input that distinguishes Return, Option-Return and Shift-Return, which
 /// SwiftUI's TextField cannot do reliably. Shift-Return inserts a line; the others submit.
+/// With returnInsertsNewline (forms), Return inserts a line and only Command-Return submits.
 struct ChatTextEditor: NSViewRepresentable {
     @Binding var text: String
     @Binding var height: CGFloat
@@ -12,6 +13,7 @@ struct ChatTextEditor: NSViewRepresentable {
     var maxLines = 10
     var focusOnAppear = true
     var isEditable = true
+    var returnInsertsNewline = false
     var focusToken: UUID?
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Void)?
@@ -39,6 +41,7 @@ struct ChatTextEditor: NSViewRepresentable {
         textView.drawsBackground = false
         textView.font = font
         textView.isEditable = isEditable
+        textView.returnInsertsNewline = returnInsertsNewline
         textView.onPasteImages = onPasteImages
         textView.textColor = .labelColor
         textView.textContainerInset = .zero
@@ -82,6 +85,7 @@ struct ChatTextEditor: NSViewRepresentable {
         context.coordinator.parent = self
         guard let textView = scroll.documentView as? SubmitTextView else { return }
         textView.isEditable = isEditable
+        textView.returnInsertsNewline = returnInsertsNewline
         textView.onPasteImages = onPasteImages
         if focusToken != context.coordinator.lastFocusToken {
             context.coordinator.lastFocusToken = focusToken
@@ -193,6 +197,8 @@ final class SubmitTextView: NSTextView {
     var onNavigateQueue: ((QueueNavigationDirection) -> Bool)?
     var onCancel: (() -> Bool)?
     var onPasteImages: ((NSPasteboard) -> Bool)?
+    /// Form mode: Return inserts a line, Command-Return submits.
+    var returnInsertsNewline = false
 
     override var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         guard onPasteImages != nil else { return super.readablePasteboardTypes }
@@ -283,8 +289,8 @@ final class SubmitTextView: NSTextView {
         }
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         if isReturn, !hasMarkedText() {
-            if inputFlags.contains(.shift) { super.insertNewlineIgnoringFieldEditor(nil) }
-            else { onSubmit?(inputFlags) }
+            let submits = returnInsertsNewline ? inputFlags.contains(.command) : !inputFlags.contains(.shift)
+            if submits { onSubmit?(inputFlags) } else { super.insertNewlineIgnoringFieldEditor(nil) }
             return
         }
         super.keyDown(with: event)
