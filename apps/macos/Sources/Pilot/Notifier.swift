@@ -28,6 +28,18 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().add(request)
     }
 
+    func deliverReadyPullRequest(sessionId: String, title: String, number: Int) {
+        guard available else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Ready to merge"
+        content.body = "\(title) · PR #\(number)"
+        content.userInfo = ["sessionId": sessionId]
+        content.sound = .default
+        UNUserNotificationCenter.current().add(
+            UNNotificationRequest(identifier: "pr-ready-\(sessionId)-\(number)", content: content, trigger: nil)
+        )
+    }
+
     nonisolated func userNotificationCenter(
         _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,

@@ -21,6 +21,7 @@ final class AppSettings: ObservableObject {
     /// 0: from the Ghostty config.
     @Published var terminalFontSize: Double { didSet { defaults.set(terminalFontSize, forKey: "terminalFontSize") } }
     @Published var useGhosttyConfig: Bool { didSet { defaults.set(useGhosttyConfig, forKey: "useGhosttyConfig") } }
+    @Published var notifyWhenPRReady: Bool { didSet { defaults.set(notifyWhenPRReady, forKey: "notifyWhenPRReady") } }
 
     init() {
         chatFontFamily = defaults.string(forKey: "chatFontFamily") ?? Self.systemFont
@@ -30,6 +31,7 @@ final class AppSettings: ObservableObject {
         terminalFontFamily = defaults.string(forKey: "terminalFontFamily") ?? ""
         terminalFontSize = defaults.object(forKey: "terminalFontSize") as? Double ?? 0
         useGhosttyConfig = defaults.object(forKey: "useGhosttyConfig") as? Bool ?? true
+        notifyWhenPRReady = defaults.object(forKey: "notifyWhenPRReady") as? Bool ?? false
     }
 
     var fonts: PilotFonts {
@@ -159,6 +161,10 @@ private struct AppearanceSettings: View {
             Section("Code and tool output") {
                 FontFamilyPicker(title: "Font", selection: $settings.codeFontFamily, system: AppSettings.systemMono, families: AppSettings.monospacedFamilies)
                 SizeStepper(title: "Size", value: $settings.codeFontSize, range: 9 ... 20)
+            }
+            Section("Notifications") {
+                Toggle("Notify when a pull request is ready to merge", isOn: $settings.notifyWhenPRReady)
+                    .accessibilityHint("Sends a notification when an open pull request changes to ready.")
             }
             Section("Preview") {
                 VStack(alignment: .leading, spacing: 8) {

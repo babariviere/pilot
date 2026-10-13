@@ -54,9 +54,12 @@ struct PullRequestLink: View {
 
     private var badge: some View {
         let pr = pullRequest
+        let ready = pr.readiness?.state == .ready
         return HStack(spacing: 4) {
-            if presentation == .badge { pr.state.icon }
-            Text(presentation == .details ? "\(pr.state.compactLabel) PR #\(pr.number)" : "#\(pr.number)")
+            if ready {
+                Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
+            } else if presentation == .badge { pr.state.icon }
+            Text(presentation == .details ? "\(ready ? "Ready to merge" : pr.state.compactLabel) PR #\(pr.number)" : "#\(pr.number)")
             if stale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
             }
@@ -66,9 +69,29 @@ struct PullRequestLink: View {
         }
         .font(.system(size: 10, weight: .medium))
         .padding(.vertical, 2)
-        .foregroundStyle(pr.state.color)
+        .foregroundStyle(ready ? Theme.success : pr.state.color)
         .fixedSize()
-        .accessibilityLabel("Pull request \(pr.number), \(stale ? "last known " : "")\(pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
+        .accessibilityLabel("Pull request \(pr.number), \(stale ? "last known " : "")\(ready ? "Ready to merge" : pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
+        .help(readinessHelp(pr))
+    }
+
+    private func readinessHelp(_ pr: SessionPullRequest) -> String {
+        guard let readiness = pr.readiness else { return "Pull request #\(pr.number), \(pr.state.label). Readiness not checked." }
+        if readiness.state == .ready { return "Pull request #\(pr.number) is ready to merge. Pilot will not merge it." }
+        let reasons = readiness.reasons.map { reason -> String in
+            switch reason.code {
+            case "failing_checks": return "Failing checks: \((reason.names ?? []).joined(separator: ", "))"
+            case "unresolved_comments": return "\(reason.count ?? 0) unresolved review comments"
+            case "conflicts": return "Merge conflicts"
+            case "draft": return "Draft pull request"
+            case "changes_requested": return "Changes requested"
+            case "review_required": return "Review required"
+            case "behind": return "Branch is behind its base"
+            case "readiness_unknown": return "Readiness could not be determined"
+            default: return reason.value ?? reason.code.replacingOccurrences(of: "_", with: " ")
+            }
+        }
+        return ([readiness.state == .pending ? "Readiness pending" : "Blocked from merging"] + reasons).joined(separator: "\n")
     }
 }
 
