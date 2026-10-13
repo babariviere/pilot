@@ -182,6 +182,11 @@ CREATE TABLE IF NOT EXISTS member_completions (
 	outcome_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS blocked_tasks_by_mission ON tasks (mission_id) WHERE status = 'blocked';
+CREATE TABLE IF NOT EXISTS member_runs (
+	session_id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	done_tasks TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS needs_you_comments_by_mission ON comments (mission_id)
 	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
 `;
@@ -456,15 +461,56 @@ export class MissionStore {
 
 	// Missions
 
+	/** Snapshot completed work once per run, before a new turn can change task state. */
+	recordMemberRun(session: SessionSummary): void {
+		const id = this.missionOf(session.id);
+		if (!id || this.require(id).coordinatorSessionId === session.id) return;
+		this.run(
+			"INSERT INTO member_runs (session_id, mission_id, done_tasks) VALUES (?, ?, ?) ON CONFLICT(session_id) DO NOTHING",
+			session.id,
+			id,
+			JSON.stringify(
+				this.tasks(id)
+					.filter((task) => task.sessionId === session.id && task.status === "done")
+					.map((task) => task.id),
+			),
+		);
+	}
+
 	/** Durable high-water mark prevents ready snapshots/restarts from announcing a completion twice. */
 	recordMemberCompletion(session: SessionSummary, recovering = false): void {
 		if (!session.outcome || session.outcomeAt === undefined) return;
 		const id = this.missionOf(session.id);
-		if (!id) return;
+		if (!id || this.require(id).coordinatorSessionId === session.id) return;
 		const previous = this.one("SELECT * FROM member_completions WHERE session_id = ?", session.id);
 		if (previous && num(previous.outcome_at!) >= session.outcomeAt) return;
-		const tasks = this.tasks(id).filter((task) => task.sessionId === session.id);
-		const prs = session.pullRequests ?? (session.pullRequest ? [session.pullRequest] : []);
+		const ownedTasks = this.tasks(id).filter((task) => task.sessionId === session.id);
+		const run = this.one(
+			"SELECT done_tasks FROM member_runs WHERE session_id = ? AND mission_id = ?",
+			session.id,
+			id,
+		);
+		const alreadyDone = new Set<string>(run ? JSON.parse(str(run.done_tasks!)) : []);
+		const tasks = ownedTasks.filter((task) =>
+			run
+				? !alreadyDone.has(task.id)
+				: task.status !== "done" ||
+					(task.completedAt ?? task.updatedAt) >
+						(session.lastUserMessageAt ?? (previous ? num(previous.outcome_at!) : session.createdAt)),
+		);
+		const activeTaskIds = new Set(tasks.map((task) => task.id));
+		const linkedPrs = this.all(
+			"SELECT r.url, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id WHERE r.mission_id = ? AND t.session_id = ? AND r.kind = 'github.pr'",
+			id,
+			session.id,
+		);
+		const activePrs = new Set(
+			linkedPrs.filter((row) => activeTaskIds.has(str(row.task_id!))).map((row) => str(row.url!)),
+		);
+		const excludedPrs = new Set(linkedPrs.filter((row) => !activePrs.has(str(row.url!))).map((row) => str(row.url!)));
+		const prs = (session.pullRequests ?? (session.pullRequest ? [session.pullRequest] : [])).filter(
+			(pr) => !excludedPrs.has(pr.url),
+		);
 		// Poll timestamps, titles and stack positions do not change the state being announced.
 		const signature = JSON.stringify([
 			session.outcome,
@@ -491,17 +537,31 @@ export class MissionStore {
 				session.outcomeAt!,
 				signature,
 			);
+			this.run("DELETE FROM member_runs WHERE session_id = ?", session.id);
+			if (ownedTasks.length && !tasks.length) return;
 			// Startup is recovery, not a replay of all historical outcomes of newly attached chats.
 			if (recovering && !previous && session.outcomeAt! < joinedAt) return;
 			// Distinct failures remain useful (and can be counted), but unchanged successful/stopped
 			// snapshots must not produce another notice just because their outcome version advanced.
 			if ((previous?.signature === signature || unchangedLegacy) && session.outcome !== "failed") return;
 			// A new outcome may follow work on a different PR. Do not re-report old merges with it.
+			const previousPrs = new Map<string, string>(previous?.signature ? JSON.parse(str(previous.signature))[3] : []);
 			const relevantPrs = prs.filter(
 				(pr) =>
-					pr.state !== "merged" ||
-					(pr.mergedAt !== undefined && pr.mergedAt > (previous ? num(previous.outcome_at!) : joinedAt)),
+					previousPrs.get(pr.url) !== pr.state &&
+					(pr.state !== "merged" ||
+						(pr.mergedAt !== undefined && pr.mergedAt > (previous ? num(previous.outcome_at!) : joinedAt))),
 			);
+			const prior = previous?.signature ? JSON.parse(str(previous.signature)) : undefined;
+			if (
+				prior &&
+				session.outcome !== "failed" &&
+				prior[0] === session.outcome &&
+				prior[1] === (session.outcomeReason ?? null) &&
+				tasks.every((task) => prior[2].includes(task.id)) &&
+				!relevantPrs.length
+			)
+				return;
 			const note = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
 			const suffix = note.slice(label.length);
 			this.event(
@@ -1588,6 +1648,7 @@ export class MissionStore {
 
 	private detach(sessionId: string, id: string, actor: MissionActor): void {
 		this.run("DELETE FROM members WHERE session_id = ?", sessionId);
+		this.run("DELETE FROM member_runs WHERE session_id = ?", sessionId);
 		this.run(
 			"UPDATE tasks SET session_id = NULL, status = CASE status WHEN 'in_progress' THEN 'todo' ELSE status END WHERE mission_id = ? AND session_id = ?",
 			id,
