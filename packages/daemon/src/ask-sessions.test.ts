@@ -476,13 +476,10 @@ test("direct project origin heads are available only with Ask branches mode, and
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-	const ws = new WebSocket(`${base.replace("http:", "ws:")}/api/ws`);
 	t.after(async () => {
-		ws.terminate();
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
-	await once(ws, "open");
 	assert.deepEqual(await (await fetch(`${base}/api/projects/${f.project.id}/branches`)).json(), { branches: [] });
 	assert.deepEqual(await (await fetch(`${base}/api/projects/${f.project.id}/branches?mode=ask`)).json(), {
 		branches: ["main", "topic/remote-only"],
@@ -505,15 +502,13 @@ test("direct project origin heads are available only with Ask branches mode, and
 	for (const route of ["publish", "pull-request", "pull-requests", "pr"]) {
 		assert.equal((await fetch(`${base}/api/sessions/${ask.id}/${route}`, { method: "POST" })).status, 404);
 	}
-	for (const message of [
-		{ type: "terminal.attach", sessionId: ask.id, cols: 80, rows: 24 },
-		{ type: "terminal.input", sessionId: ask.id, data: "touch forbidden\n" },
-	]) {
-		const result = once(ws, "message");
-		ws.send(JSON.stringify(message));
-		const [raw] = await result;
-		assert.match(JSON.parse(String(raw)).message, /read-only/);
-	}
+	// A terminal socket is refused for good before any input can reach a shell.
+	const terminal = new WebSocket(`${base.replace("http:", "ws:")}/api/sessions/${ask.id}/terminal/ws?cols=80&rows=24`);
+	t.after(() => terminal.terminate());
+	const refused = once(terminal, "message");
+	const [code] = await once(terminal, "close");
+	assert.equal(code, 4409);
+	assert.match(JSON.parse(String((await refused)[0])).message, /read-only/);
 	assert.equal(terminalCalls, 0);
 	assert.deepEqual(await fileHashes(f.source), before);
 });

@@ -836,14 +836,18 @@ test("POST returns durable starting session before clone or worker, guarding cha
 	assert.equal(f.workers.length, 0);
 	assert.equal((await fetch(`${url}/api/sessions/${created.id}/changes`)).status, 400);
 
-	ws = new WebSocket(`${url.replace("http", "ws")}/api/ws`);
+	ws = new WebSocket(`${url.replace("http", "ws")}/api/sessions/${created.id}/ws`);
 	const messages: { type: string; message?: string }[] = [];
 	ws.on("message", (raw) => messages.push(JSON.parse(String(raw))));
 	await once(ws, "open");
-	ws.send(JSON.stringify({ type: "subscribe", sessionId: created.id }));
-	ws.send(JSON.stringify({ type: "terminal.attach", sessionId: created.id, cols: 80, rows: 24 }));
-	await until(() => messages.some((message) => message.type === "error"));
-	assert.match(messages.find((message) => message.type === "error")!.message!, /still preparing/);
+	// A terminal cannot start before the clone is ready. The refusal is retryable.
+	const terminal = new WebSocket(
+		`${url.replace("http", "ws")}/api/sessions/${created.id}/terminal/ws?cols=80&rows=24`,
+	);
+	const refusal = once(terminal, "message");
+	const [code] = await once(terminal, "close");
+	assert.equal(code, 1013);
+	assert.match(JSON.parse(String((await refusal)[0])).message, /still preparing/);
 	assert.equal(terminalsStarted, 0);
 	assert.equal(f.workers.length, 0);
 	clone.resolve();

@@ -34,9 +34,9 @@ async function state(): Promise<string> {
 }
 
 async function reopen(): Promise<number> {
-	const socket = new WebSocket(`${base}/api/ws`);
-	await new Promise((resolve, reject) => socket.once("open", resolve).once("error", reject));
+	// Opening the chat socket subscribes. Long snapshots arrive newest entries first, so this is time to first paint.
 	const start = performance.now();
+	const socket = new WebSocket(`${base}/api/sessions/${encodeURIComponent(meta.id)}/ws`);
 	const done = new Promise<number>((resolve) =>
 		socket.on("message", (data) => {
 			const update = JSON.parse(String(data));
@@ -44,7 +44,6 @@ async function reopen(): Promise<number> {
 				resolve(performance.now() - start);
 		}),
 	);
-	socket.send(JSON.stringify({ type: "subscribe", sessionId: meta.id }));
 	const elapsed = await done;
 	socket.close();
 	return elapsed;

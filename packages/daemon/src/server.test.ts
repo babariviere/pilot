@@ -214,73 +214,7 @@ test("changes summary GET returns only metadata and counts and preserves route g
 	assert.deepEqual(await pending.json(), { error: "Session workspace is still preparing" });
 });
 
-test("websocket overload closes with a reconnect instruction and resubscription starts with a fresh snapshot", {
-	timeout: 30_000,
-}, async (t) => {
-	const projects = new ProjectStore("/unused");
-	const sessions = new SessionManager("/unused", projects);
-	const snapshot: AgentEvent = {
-		type: "snapshot",
-		entries: [],
-		tools: [],
-		compactions: [],
-		inbox: [],
-		agent: {},
-		usage: { models: {}, tools: {} },
-	};
-	let deliver!: Parameters<SessionManager["subscribe"]>[1];
-	let unsubscribed = 0;
-	t.mock.method(sessions, "subscribe", (_id: string, listener: typeof deliver) => {
-		deliver = listener;
-		listener([snapshot]);
-		return () => {
-			unsubscribed++;
-		};
-	});
-	t.mock.method(sessions, "artifacts", async () => []);
-	const server = createDaemonServer(
-		{ home: "/unused", host: "127.0.0.1", port: 0 },
-		sessions,
-		projects,
-		new ModelCatalog("/unused"),
-		new TerminalManager(),
-	);
-	const sockets: WebSocket[] = [];
-	t.after(async () => {
-		for (const socket of sockets) socket.terminate();
-		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-	});
-	server.listen(0, "127.0.0.1");
-	await once(server, "listening");
-	const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/ws`;
-	const subscribe = async () => {
-		const socket = new WebSocket(url);
-		sockets.push(socket);
-		const received = new Promise<ServerMessage>((resolve) => {
-			socket.on("message", (data) => {
-				const message = JSON.parse(String(data)) as ServerMessage;
-				if (message.type === "events") resolve(message);
-			});
-		});
-		await once(socket, "open");
-		socket.send(JSON.stringify({ type: "subscribe", sessionId: "session-1" }));
-		assert.deepEqual(await received, { type: "events", sessionId: "session-1", events: [snapshot] });
-		return socket;
-	};
-	const first = await subscribe();
-	const closed = once(first, "close");
-	const buffered = t.mock.getter(WebSocket.prototype, "bufferedAmount", () => 128 * 1024 * 1024);
-	deliver([{ type: "queue_update", items: [] }]);
-	buffered.mock.restore();
-	const [code, reason] = await closed;
-	assert.equal(code, 1013);
-	assert.match(String(reason), /Reconnect.*snapshot/);
-	// The server close event releases the subscription before the next connection subscribes.
-	await subscribe();
-	assert.equal(unsubscribed, 1);
-});
-
-test("chat sockets stream one session each, isolate overload and release their subscription on close", {
+test("chat sockets stream one session each, isolate overload and resume only the missed batches", {
 	timeout: 30_000,
 }, async (t) => {
 	const projects = new ProjectStore("/unused");
@@ -387,6 +321,19 @@ test("chat sockets stream one session each, isolate overload and release their s
 	assert.deepEqual(missing.messages, [{ type: "error", sessionId: "missing", message: "Unknown session: missing" }]);
 	const invalid = open("/api/sessions/a/b/ws");
 	await once(invalid.socket, "error");
+
+	// The control socket no longer streams transcripts.
+	const control = open("/api/ws");
+	await once(control.socket, "open");
+	control.socket.send(JSON.stringify({ type: "subscribe", sessionId: "session-a" }));
+	assert.deepEqual(await control.until((m) => m.type === "error"), {
+		type: "error",
+		message: "Invalid client message",
+	});
+	assert.equal(
+		control.messages.some((m) => m.type === "events"),
+		false,
+	);
 });
 
 test("terminal and subagent sockets stream one target each and accept only their own messages", {
@@ -705,19 +652,6 @@ test("subagent routes decode names, validate bodies and forward transcript, mess
 				? { signature: "8/full/1:2", unchanged: true }
 				: { signature: "8/full/1:2", transcript: { name, full: true, events: [] } },
 	);
-	let watched: { events(events: AgentEvent[]): void; error(message: string): void } | undefined;
-	let unwatched = 0;
-	const watch = t.mock.method(
-		sessions,
-		"watchSubagent",
-		(_id: string, name: string, listener: { events(events: AgentEvent[]): void; error(message: string): void }) => {
-			if (name === "missing") throw new Error("No subagent named missing");
-			watched = listener;
-			return () => {
-				unwatched++;
-			};
-		},
-	);
 	const command = t.mock.method(sessions, "subagentCommand", async () => {});
 	const server = createDaemonServer(
 		{ home: "/tmp/pilot-server-test-unused", host: "127.0.0.1", port: 0 },
@@ -751,37 +685,6 @@ test("subagent routes decode names, validate bodies and forward transcript, mess
 	assert.equal(badCursor.status, 400);
 	await badCursor.arrayBuffer();
 
-	// Live transcripts stream over the WebSocket and stop with the subscription or the socket.
-	const socket = new WebSocket(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/api/ws`);
-	const messages: ServerMessage[] = [];
-	socket.on("message", (data) => messages.push(JSON.parse(String(data)) as ServerMessage));
-	await once(socket, "open");
-	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "code review/1" }));
-	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "missing" }));
-	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "" }));
-	const waitFor = async (check: () => boolean) => {
-		for (let n = 0; n < 100 && !check(); n++) await new Promise((resolve) => setTimeout(resolve, 10));
-		assert.ok(check(), JSON.stringify(messages));
-	};
-	await waitFor(() => watched !== undefined && messages.filter((message) => message.type === "error").length === 2);
-	watched!.events([{ type: "entry_appended", entry: { id: 4 } } as unknown as AgentEvent]);
-	await waitFor(() => messages.some((message) => message.type === "subagent.events"));
-	assert.deepEqual(
-		messages.find((message) => message.type === "subagent.events"),
-		{
-			type: "subagent.events",
-			sessionId: "session-1",
-			name: "code review/1",
-			events: [{ type: "entry_appended", entry: { id: 4 } }],
-		},
-	);
-	assert.ok(messages.some((message) => message.type === "error" && message.name === "missing"));
-	socket.send(JSON.stringify({ type: "subagent.unsubscribe", sessionId: "session-1", name: "code review/1" }));
-	await waitFor(() => unwatched === 1);
-	socket.send(JSON.stringify({ type: "subagent.subscribe", sessionId: "session-1", name: "code review/1" }));
-	await waitFor(() => watch.mock.callCount() === 3);
-	socket.close();
-	await waitFor(() => unwatched === 2);
 	const post = (path: string, body: unknown) =>
 		fetch(`${base}/${path}`, {
 			method: "POST",
