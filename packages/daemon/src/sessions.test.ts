@@ -1,8 +1,8 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Bracket access tests private supervision seams.
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter, once } from "node:events";
-import type { ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -17,15 +17,15 @@ import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import {
 	CommandRejected,
+	Worker as KernelWorker,
 	type SessionFactories,
 	SessionManager,
-	Worker as KernelWorker,
-	WorkerUnavailable,
 	type SessionManagerOptions,
 	type SessionWorker,
+	WorkerUnavailable,
 } from "./sessions.ts";
-import type { TerminalManager } from "./terminals.ts";
 import type { SubagentWatchUpdate } from "./subagent-watches.ts";
+import type { TerminalManager } from "./terminals.ts";
 
 type Command = Extract<KernelCommand, { type: "input" | "abort" }>;
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
@@ -532,9 +532,9 @@ test("a new execution drain is busy even during a reentrant idle worker factory 
 });
 
 async function until(check: () => boolean | Promise<boolean>): Promise<void> {
-	const deadline = Date.now() + 3_000;
+	const deadline = performance.now() + 3_000;
 	while (!(await check())) {
-		assert.ok(Date.now() < deadline, "condition did not settle");
+		assert.ok(performance.now() < deadline, "condition did not settle");
 		await delay(1);
 	}
 }
@@ -1475,39 +1475,56 @@ test("execution packets reset the parking deadline and working workers remain pr
 
 test("idle unwatched kernels without subprocesses park, and reopen only after releasing storage", async (t) => {
 	const f = await fixture(t);
-	const sessions = await f.manager({}, { idleParkMs: 30 });
+	const idleParkMs = 60_000;
+	const sessions = await f.manager({}, { idleParkMs });
 	const created = await sessions.spawn({ cwd: f.source, message: "work" });
 	await until(() => sessions.get(created.id)?.state === "working");
-	await delay(100);
+	let now = Date.now() + idleParkMs + 1;
+	t.mock.method(Date, "now", () => now);
+	await sessions["parkIdleWorkers"]();
 	assert.equal(sessions.get(created.id)?.state, "working", "working kernels never park");
 	await sessions.stop(created.id);
+	await sessions["starting"].get(created.id);
 	await until(() => sessions.get(created.id)?.state === "idle");
+	now += idleParkMs + 1;
 	const first = f.workers[0]!;
 	const off = sessions.subscribe(created.id, () => {});
-	await delay(100);
+	now += idleParkMs + 1;
+	await sessions["parkIdleWorkers"]();
 	assert.equal(first.closed, false, "a viewer keeps the kernel open");
 	first.children = true;
 	off();
-	await delay(100);
+	now += idleParkMs + 1;
+	await sessions["parkIdleWorkers"]();
 	assert.equal(first.closed, false, "background jobs and subagents keep the kernel open");
 	const release = deferred();
-	first.closeGate = release.promise;
-	first.children = false;
-	await until(() => sessions.get(created.id)?.state === "parked");
-	assert.equal(first.closed, true);
-	const events: AgentEvent[][] = [];
-	sessions.subscribe(created.id, (batch) => events.push(batch));
-	await delay(50);
-	assert.equal(f.workers.length, 1, "viewing parked history never reopens the kernel");
-	const sending = sessions.send(created.id, "resume work");
-	await delay(50);
-	assert.equal(f.workers.length, 1, "explicit execution waits for the parked kernel to release its lease");
-	release.resolve();
-	await sending;
-	await until(() => f.workers.length === 2 && sessions.get(created.id)?.state === "working");
-	await until(() => events.some((batch) => batch.some((event) => event.type === "snapshot")));
-	assert.equal((await f.stored(created.id)).failure, undefined);
-	assert.equal(sessions.get(created.id)?.error, undefined);
+	try {
+		first.closeGate = release.promise;
+		first.children = false;
+		await sessions["parkIdleWorkers"]();
+		assert.equal(sessions.get(created.id)?.state, "parked");
+		assert.equal(first.closed, true);
+		const events: AgentEvent[][] = [];
+		sessions.subscribe(created.id, (batch) => events.push(batch));
+		assert.equal(f.workers.length, 1, "viewing parked history never reopens the kernel");
+		const waiting = deferred();
+		const unparked = sessions["unparked"].bind(sessions);
+		t.mock.method(sessions as unknown as { unparked(id: string): Promise<void> }, "unparked", async (id: string) => {
+			waiting.resolve();
+			await unparked(id);
+		});
+		const sending = sessions.send(created.id, "resume work");
+		await waiting.promise;
+		assert.equal(f.workers.length, 1, "explicit execution waits for the parked kernel to release its lease");
+		release.resolve();
+		await sending;
+		await until(() => f.workers.length === 2 && sessions.get(created.id)?.state === "working");
+		await until(() => events.some((batch) => batch.some((event) => event.type === "snapshot")));
+		assert.equal((await f.stored(created.id)).failure, undefined);
+		assert.equal(sessions.get(created.id)?.error, undefined);
+	} finally {
+		release.resolve();
+	}
 });
 
 test("malformed preparing metadata never removes or runs in the source directory", async (t) => {

@@ -1,12 +1,13 @@
+// biome-ignore-all lint/complexity/useLiteralKeys: Inspect the private recall worker lifetime without widening the service API.
 import assert from "node:assert/strict";
 import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { cover } from "./memory-cover.ts";
 import { MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
-import { ProjectMemoryService, type MemorySummarizer } from "./project-memory.ts";
+import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 
 async function until(check: () => boolean) {
 	const end = Date.now() + 5000;
@@ -268,12 +269,18 @@ test("compactor failures and invalid output back off, survive new notes, and rec
 test("a pathological recall regex is timed out without blocking append or wake", async (t) => {
 	const { service } = await fixture(t);
 	await service.note("p", `${"a".repeat(275)}!`, "chat");
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const pending = service.recall("p", "(a+)+$");
 	const rejected = assert.rejects(pending, /5-second limit/);
-	await delay(50);
 	assert.equal((await service.note("p", "still responsive", "chat")).index, 1);
 	assert.equal((await service.wake("p")).count, 2);
+	// The load RPC precedes these writes; its isolated recall worker is now registered.
+	assert.equal(service["recalls"].size, 1);
+	t.mock.timers.tick(4_999);
+	assert.equal(service["recalls"].size, 1, "the production deadline has not elapsed");
+	t.mock.timers.tick(1);
 	await rejected;
+	assert.equal(service["recalls"].size, 0);
 });
 
 test("compaction concurrency is globally bounded and unloaded projects release locks without losing notes", async (t) => {

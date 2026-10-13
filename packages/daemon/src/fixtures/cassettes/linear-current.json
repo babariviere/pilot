@@ -1,0 +1,198 @@
+{
+	"version": 1,
+	"entries": [
+		{
+			"request": {
+				"tool": "cycles",
+				"args": {
+					"teamId": "team-root",
+					"type": "current"
+				}
+			},
+			"response": [
+				{
+					"id": "cycle-1",
+					"number": 12,
+					"name": "October",
+					"startsAt": "2026-10-05T00:00:00.000Z",
+					"endsAt": "2026-10-19T00:00:00.000Z",
+					"progress": 0.9
+				}
+			]
+		},
+		{
+			"request": {
+				"tool": "issues",
+				"args": {
+					"team": "team-root",
+					"includeSubTeams": true,
+					"assignee": "me",
+					"includeArchived": false,
+					"cycle": "cycle-1",
+					"limit": 100,
+					"orderBy": "updatedAt",
+					"fields": ["id", "uuid", "statusType"]
+				}
+			},
+			"response": {
+				"issues": [
+					{
+						"id": "issue-1",
+						"identifier": "ENG-1",
+						"title": "Fix the settings refresh",
+						"url": "https://linear.app/example/issue/ENG-1",
+						"status": "In Progress",
+						"statusType": "started",
+						"priority": 2,
+						"estimate": 3,
+						"assigneeId": "user-me",
+						"teamId": "team-child",
+						"cycleId": "cycle-1",
+						"gitBranchName": "eng-1-settings-refresh",
+						"updatedAt": "2026-10-13T10:00:00.000Z"
+					}
+				],
+				"hasNextPage": true,
+				"cursor": "page-2"
+			}
+		},
+		{
+			"request": {
+				"tool": "issues",
+				"args": {
+					"team": "team-root",
+					"includeSubTeams": true,
+					"assignee": "me",
+					"includeArchived": false,
+					"cycle": "cycle-1",
+					"cursor": "page-2",
+					"limit": 100,
+					"orderBy": "updatedAt",
+					"fields": ["id", "uuid", "statusType"]
+				}
+			},
+			"response": {
+				"issues": [
+					{
+						"id": "issue-2",
+						"identifier": "ENG-2",
+						"title": "Update keyboard navigation",
+						"url": "https://linear.app/example/issue/ENG-2",
+						"status": "Done",
+						"statusType": "completed",
+						"priority": 3,
+						"estimate": null,
+						"assigneeId": "user-me",
+						"teamId": "team-root",
+						"cycleId": "cycle-1",
+						"gitBranchName": null,
+						"updatedAt": "2026-10-12T09:00:00.000Z"
+					}
+				],
+				"hasNextPage": false,
+				"cursor": null
+			}
+		},
+		{
+			"request": {
+				"tool": "issues",
+				"args": {
+					"team": "team-root",
+					"includeSubTeams": true,
+					"assignee": "me",
+					"includeArchived": false,
+					"cycle": "cycle-1",
+					"limit": 100,
+					"orderBy": "updatedAt",
+					"fields": [
+						"id",
+						"uuid",
+						"title",
+						"url",
+						"status",
+						"statusType",
+						"priority",
+						"estimate",
+						"assigneeId",
+						"teamId",
+						"cycleId",
+						"gitBranchName",
+						"updatedAt"
+					]
+				}
+			},
+			"response": {
+				"issues": [
+					{
+						"id": "issue-1",
+						"identifier": "ENG-1",
+						"title": "Fix the settings refresh",
+						"url": "https://linear.app/example/issue/ENG-1",
+						"status": "In Progress",
+						"statusType": "started",
+						"priority": 2,
+						"estimate": 3,
+						"assigneeId": "user-me",
+						"teamId": "team-child",
+						"cycleId": "cycle-1",
+						"gitBranchName": "eng-1-settings-refresh",
+						"updatedAt": "2026-10-13T10:00:00.000Z"
+					}
+				],
+				"hasNextPage": true,
+				"cursor": "page-2"
+			}
+		},
+		{
+			"request": {
+				"tool": "issues",
+				"args": {
+					"team": "team-root",
+					"includeSubTeams": true,
+					"assignee": "me",
+					"includeArchived": false,
+					"cycle": "cycle-1",
+					"cursor": "page-2",
+					"limit": 100,
+					"orderBy": "updatedAt",
+					"fields": [
+						"id",
+						"uuid",
+						"title",
+						"url",
+						"status",
+						"statusType",
+						"priority",
+						"estimate",
+						"assigneeId",
+						"teamId",
+						"cycleId",
+						"gitBranchName",
+						"updatedAt"
+					]
+				}
+			},
+			"response": {
+				"issues": [
+					{
+						"id": "issue-2",
+						"identifier": "ENG-2",
+						"title": "Update keyboard navigation",
+						"url": "https://linear.app/example/issue/ENG-2",
+						"status": "Done",
+						"statusType": "completed",
+						"priority": 3,
+						"estimate": null,
+						"assigneeId": "user-me",
+						"teamId": "team-root",
+						"cycleId": "cycle-1",
+						"gitBranchName": null,
+						"updatedAt": "2026-10-12T09:00:00.000Z"
+					}
+				],
+				"hasNextPage": false,
+				"cursor": null
+			}
+		}
+	]
+}
