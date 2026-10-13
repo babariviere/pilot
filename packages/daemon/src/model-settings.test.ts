@@ -55,6 +55,22 @@ test("SDK settings lock contention waits without blocking timers, then reads the
 	}
 });
 
+test("exhausted settings locks reject rather than replacing model scope with defaults", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-model-settings-exhausted-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	await mkdir(join(root, ".pi"));
+	for (const path of [join(root, "settings.json"), join(root, ".pi", "settings.json")]) {
+		await writeFile(path, JSON.stringify({ enabledModels: ["test/scoped"] }));
+		const release = await lockfile.lock(path, { realpath: false });
+		try {
+			await assert.rejects(readModelSettings(root, root), { code: "ELOCKED" });
+		} finally {
+			await release();
+		}
+		assert.deepEqual((await readModelSettings(root, root)).getEnabledModels(), ["test/scoped"]);
+	}
+});
+
 test("aborted lock waits cancel promptly and never replace scoped settings with defaults", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-model-settings-abort-"));
 	t.after(() => rm(root, { recursive: true, force: true }));

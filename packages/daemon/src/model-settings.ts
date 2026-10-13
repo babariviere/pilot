@@ -29,7 +29,7 @@ function settingsPath(path: string): string {
 	return resolve(path.startsWith("file://") ? fileURLToPath(path) : path);
 }
 
-async function snapshot(path: string, signal?: AbortSignal): Promise<string | undefined | Error> {
+async function snapshot(path: string, signal?: AbortSignal): Promise<string | undefined> {
 	try {
 		try {
 			await stat(path);
@@ -56,7 +56,9 @@ async function snapshot(path: string, signal?: AbortSignal): Promise<string | un
 			await release?.().catch(() => undefined);
 		}
 	} catch (error) {
-		return error instanceof Error ? error : new Error(String(error));
+		// Do not let the SDK's per-scope fallback turn transient I/O/lock failures into
+		// empty settings, which would silently expand the user's enabled model scope.
+		throw error instanceof Error ? error : new Error(String(error));
 	}
 }
 
@@ -71,7 +73,6 @@ export async function readModelSettings(cwd: string, agentDir: string, signal?: 
 	return SettingsManager.fromStorage({
 		withLock(scope, read) {
 			const current = scope === "global" ? global : project;
-			if (current instanceof Error) throw current;
 			if (read(current) !== undefined) throw new Error("Model settings snapshots are read-only");
 		},
 	});
