@@ -725,6 +725,18 @@ export class MissionStore {
 		return row ? missionFrom(row) : undefined;
 	}
 
+	/** Task counts per mission (dropped tasks excluded), for summaries that do not load task bodies. */
+	taskProgress(projectId?: string): Map<string, { done: number; total: number }> {
+		const rows = this.all(
+			`SELECT t.mission_id AS id, SUM(t.status = 'done') AS done, COUNT(*) AS total
+				FROM tasks t JOIN missions m ON m.id = t.mission_id
+				WHERE t.status != 'dropped'${projectId ? " AND m.project_id = ?" : ""}
+				GROUP BY t.mission_id`,
+			...(projectId ? [projectId] : []),
+		);
+		return new Map(rows.map((row) => [str(row.id!), { done: num(row.done!), total: num(row.total!) }]));
+	}
+
 	require(id: string): Mission {
 		const mission = this.get(id);
 		if (!mission) throw new NotFound(`Unknown mission: ${id}`);

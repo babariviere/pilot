@@ -13,6 +13,10 @@ public enum ServerUpdate: Sendable {
     case missions([Mission])
     /// Full detail for one subscribed mission.
     case mission(MissionDetail)
+    /// A subscribed project's dashboard.
+    case dashboard(ProjectDashboard)
+    /// Sidebar counts for every project.
+    case dashboardCounts(ProjectDashboardCounts)
     case terminalData(sessionId: String, data: String)
     case terminalExit(sessionId: String, code: Int)
     case error(sessionId: String?, name: String?, message: String)
@@ -47,6 +51,12 @@ public enum ServerUpdate: Sendable {
         case "mission":
             guard let detail = json["mission"] else { return nil }
             return .mission(try detail.decode(MissionDetail.self))
+        case "dashboard":
+            guard let dashboard = json["dashboard"] else { return nil }
+            return .dashboard(try dashboard.decode(ProjectDashboard.self))
+        case "dashboard.counts":
+            guard let counts = json["counts"] else { return nil }
+            return .dashboardCounts(try counts.decode(ProjectDashboardCounts.self))
         case "terminal.data":
             guard let id = json["sessionId"]?.string, let data = json["data"]?.string else { return nil }
             return .terminalData(sessionId: id, data: data)

@@ -466,7 +466,13 @@ test("direct project origin heads are available only with Ask branches mode, and
 			terminalCalls++;
 		},
 	} as unknown as TerminalManager;
-	const server = createDaemonServer({} as DaemonConfig, sessions, f.projects, {} as ModelCatalog, terminals);
+	const server = createDaemonServer(
+		{ home: f.home, host: "127.0.0.1", port: 0 } as DaemonConfig,
+		sessions,
+		f.projects,
+		{} as ModelCatalog,
+		terminals,
+	);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
 	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
