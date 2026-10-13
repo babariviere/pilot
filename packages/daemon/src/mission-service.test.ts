@@ -228,6 +228,41 @@ test("coordinator admission rolls back membership and promotion if the bridge fa
 	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
 });
 
+test("failed promoted admission drains queued metadata before removing the session", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let joined!: () => void;
+	const joining = new Promise<void>((resolve) => {
+		joined = resolve;
+	});
+	let id!: string;
+	const joinSpawn = f.sessions["missions"]!.joinSpawn;
+	t.mock.method(f.sessions["missions"]!, "joinSpawn", (...args: Parameters<typeof joinSpawn>) => {
+		id = args[0];
+		f.sessions["saving"].set(id, blocked);
+		joinSpawn(...args); // Promotion queues its write behind an earlier save.
+		joined();
+		throw new Error("admission failed");
+	});
+	const rejection = assert.rejects(f.service.startCoordinator(mission.id), /admission failed/);
+	try {
+		await joining;
+		assert.ok(f.sessions["metas"].has(id), "removal must wait for queued promotion and rollback writes");
+	} finally {
+		release();
+	}
+	await rejection;
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
 test("get keeps recent user notes visible beyond the activity window for every member", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

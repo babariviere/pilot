@@ -824,8 +824,9 @@ export class SharedWorkspaceStore {
 					],
 					cwd,
 				);
+				// Identity warnings can follow jj's successful operation report.
 				const prefix = trial.match(
-					/Operation left uncommitted because --no-integrate-operation was requested: ([0-9a-f]+)$/,
+					/^Operation left uncommitted because --no-integrate-operation was requested: ([0-9a-f]+)$/m,
 				)?.[1];
 				if (!prefix) throw new Error("Missing trial rebase operation");
 				const operation = await this.jj(

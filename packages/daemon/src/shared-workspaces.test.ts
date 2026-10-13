@@ -59,6 +59,7 @@ for (const scenario of [
 	"long-idle",
 	"squash-merged",
 	"on-upstream",
+	"unconfigured-author",
 	"own",
 	"conflict",
 	"shared",
@@ -68,6 +69,8 @@ for (const scenario of [
 	test(`base refresh: ${scenario} preserves sibling changes and bookmarks`, async () => {
 		let refreshing = false;
 		const f = fixture(async (file, args, ...rest) => {
+			if (file === "jj" && scenario === "unconfigured-author")
+				args = ["--config=user.name=", "--config=user.email=", ...args];
 			if (
 				refreshing &&
 				scenario === "long-idle" &&
