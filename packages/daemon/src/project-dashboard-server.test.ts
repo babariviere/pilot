@@ -12,11 +12,11 @@ import { WebSocket } from "ws";
 import type { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
+import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
-import { ProjectMemoryService } from "./project-memory.ts";
 
 async function until<T>(check: () => T | undefined | false): Promise<T> {
 	const deadline = Date.now() + 3_000;
@@ -121,6 +121,13 @@ async function fixture(t: TestContext) {
 			for (const listener of providerListeners) listener();
 		},
 	};
+}
+
+/** A pong follows earlier frames on this socket, providing a real transport barrier without a sleep. */
+async function roundTrip(ws: WebSocket): Promise<void> {
+	const pong = once(ws, "pong");
+	ws.ping();
+	await pong;
 }
 
 test("GET /api/projects/:id/dashboard aggregates the project and rejects unknown ones", async (t) => {
@@ -231,10 +238,13 @@ test("WebSocket pushes counts on connect and dashboards on change, without dupli
 	assert.deepEqual(counts()[1]!.counts, { projects: { [f.project.id]: { working: 2, needsYou: 1 } } });
 
 	// A change that does not alter the dashboard (a title-less metadata touch) pushes nothing.
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	f.put({ id: "a", state: "working", updatedAt: 99 });
-	await delay(500);
+	t.mock.timers.tick(500);
+	await roundTrip(ws);
 	assert.equal(dashboards().length, 2);
 	assert.equal(counts().length, 2);
+	t.mock.timers.reset();
 
 	// Mission changes and extension providers also update it.
 	f.store.create({ projectId: f.project.id, title: "M", goal: "" });
@@ -244,12 +254,15 @@ test("WebSocket pushes counts on connect and dashboards on change, without dupli
 	await until(() => dashboards().length === 4);
 	assert.equal(dashboards()[3]!.dashboard.scheduled.total, 1);
 
+	t.mock.timers.enable({ apis: ["setTimeout"] });
 	ws.send(JSON.stringify({ type: "dashboard.unsubscribe", projectId: f.project.id }));
-	await delay(50);
+	await roundTrip(ws);
 	f.put({ id: "d", state: "working" });
-	await until(() => counts().length === 3);
-	await delay(400);
+	t.mock.timers.tick(400);
+	await roundTrip(ws);
+	assert.equal(counts().length, 3);
 	assert.equal(dashboards().length, 4);
+	t.mock.timers.reset();
 
 	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: "missing" }));
 	await until(() => messages.some((m) => m.type === "error" && /Unknown project/.test(m.message)));

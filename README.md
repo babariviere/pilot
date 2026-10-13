@@ -105,6 +105,10 @@ open apps/macos/build/Pilot.app
 Daemon only, in the foreground: `pnpm dev:daemon`. Checks: `pnpm typecheck`, `pnpm test`,
 `apps/macos/scripts/test.sh`.
 
+For quick feedback use `pnpm test:fast`; `pnpm test:integration` and `pnpm test:stress` select the heavier
+groups. `pnpm test` still runs every group in CI. See [testing.md](docs/testing.md) for timing reports,
+offline API cassettes and fixture/cache conventions.
+
 Dependencies use [pnpm](https://pnpm.io) so that per-session workspaces clone packages from one shared store
 instead of each holding a full `node_modules`. The Swift scripts likewise share SwiftPM's binary artifacts
 (libghostty, Sparkle) between checkouts through APFS clones (`apps/macos/scripts/share-artifacts.sh`).

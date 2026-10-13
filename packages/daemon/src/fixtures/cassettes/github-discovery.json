@@ -1,0 +1,24 @@
+{
+	"version": 1,
+	"entries": [
+		{
+			"request": {
+				"file": "gh",
+				"args": [
+					"api",
+					"graphql",
+					"--hostname=github.com",
+					"-f",
+					"query=query PilotPullRequests($owner: String!, $name: String!, $h0: String!) {\nrateLimit { remaining resetAt }\nrepository(owner: $owner, name: $name) {\no0: pullRequests(headRefName: $h0, states: [OPEN], first: 20, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...Open } }\na0: pullRequests(headRefName: $h0, first: 20, orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...Fields } }\n}\n}\nfragment Fields on PullRequest { number url title state isDraft headRefName isCrossRepository createdAt mergedAt stack { number size baseRefName } stackEntry { position } }\nfragment Open on PullRequest { ...Fields commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } }",
+					"-f",
+					"owner=octo",
+					"-f",
+					"name=repo",
+					"-f",
+					"h0=feat/example"
+				]
+			},
+			"response": "{\"data\":{\"rateLimit\":{\"remaining\":4000,\"resetAt\":\"2100-01-01T00:00:00Z\"},\"repository\":{\"o0\":{\"nodes\":[{\"number\":1,\"url\":\"https://github.com/octo/repo/pull/1\",\"title\":\"Synthetic PR\",\"state\":\"OPEN\",\"isDraft\":false,\"headRefName\":\"feat/example\",\"isCrossRepository\":false,\"createdAt\":\"2026-01-01T00:00:00Z\",\"mergedAt\":null,\"commits\":{\"nodes\":[{\"commit\":{\"statusCheckRollup\":{\"state\":\"SUCCESS\"}}}]}}]},\"a0\":{\"nodes\":[]}}}}"
+		}
+	]
+}

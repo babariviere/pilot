@@ -597,23 +597,6 @@ test("very large sets of distinct groups produce one bounded notice with an over
 	}
 });
 
-test("10,000 failed outcomes retain one bounded summary, without loading raw events into JavaScript", (t) => {
-	const { store, id } = setup();
-	try {
-		for (let index = 1; index <= 10_000; index++) store.recordMemberCompletion(completion("failed", index));
-		const start = performance.now();
-		const now = Date.now() + 30_000;
-		const notice = store.prepareNotice(id, "lead", now)!;
-		t.diagnostic(`Grouped 10,000 events in ${(performance.now() - start).toFixed(1)} ms`);
-		assert.match(notice.content, /chat failed 10000 times/);
-		assert.ok(notice.content.length < 1_000);
-		store.acknowledgeNotice(notice, now);
-		assert.deepEqual(store.noticeDeadlines(now), []);
-	} finally {
-		store.close();
-	}
-});
-
 test("legacy queued events migrate into groups, and legacy consumed states do not repeat", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-notice-migration-"));
 	t.after(() => rm(home, { recursive: true, force: true }));

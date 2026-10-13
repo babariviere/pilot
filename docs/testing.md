@@ -1,0 +1,109 @@
+# Testing and test speed
+
+Node 24 strips our erasable TypeScript directly. Tests still use `node:test`, isolated processes, and
+fresh temporary state. Model tests use faux providers, never user accounts. `tsx` remains available for
+runner comparisons and the existing reopen benchmark, but is not needed by the default runner.
+
+## Commands
+
+| Command | Scope |
+| --- | --- |
+| `pnpm test:fast` | Explicitly selected unit and offline service tests for quick feedback |
+| `pnpm test:integration` | Real repository, process, persistence, transport and kernel integration tests |
+| `pnpm test:stress` | Large-file diff budgets, fan-out and 10,000-event notice regression tests |
+| `pnpm test` | Every group, including runner/helper tests. This remains the CI gate |
+| `pnpm test:timings` | Full gate plus the slowest reported test-file execution times |
+
+New tests default to integration unless explicitly admitted to the fast list in `scripts/test-suites.ts`.
+`*.stress.test.ts` belongs to stress. No group is silently dropped by the full command.
+`pnpm test -- --list` lists the full selection; each group also accepts `--list`. Native Node test flags
+can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
+
+The default is two test files concurrently, including in CI. `PILOT_TEST_CONCURRENCY=4 pnpm test`
+is useful on an otherwise quiet machine with headroom, but more Git/jj and compiler processes can make
+individual tests slower. The runner starts known expensive workspace groups early to avoid a long tail.
+Reported file durations exclude imports/startup and overlap, so do not sum them as wall time.
+The per-test deadline remains two minutes, configurable with `PILOT_TEST_TIMEOUT_MS`. Tests with explicit
+timeouts keep their own limits; the runner rejects invalid concurrency or timeout values.
+
+To run just affected files without importing every file in a group:
+
+```sh
+node --test --test-force-exit --test-concurrency=2 packages/daemon/src/github.test.ts
+```
+
+### Local measurements
+
+On 2026-10-13, sequential runs on macOS arm64 (Node 24.21.0, pnpm 12.10.1, jj 0.46.0, 11 logical CPUs),
+the same installed dependencies, and no competing Swift build produced:
+
+| Selection | File concurrency | Wall time | Passed / skipped |
+| --- | --- | --- | --- |
+| Main `522759f`, original `tsx` full command | 2 | 197.11s | 867 / 14 |
+| Changed full command with `--tsx` | 2 | 212.78s | 877 / 14 |
+| Changed full command, native Node | 2 | 155.81s | 877 / 14 |
+| Changed full command, native Node | 4 | 90.41s | 877 / 14 |
+| Changed fast group, native Node | 2 | 5.63s | 341 / 0 |
+
+The like-for-like default full command improved about 21%, despite adding ten tests. All original
+workspace/stress test declarations remain, and renderer-dependent skips are unchanged. These are single
+local samples, not a CI guarantee. Keep concurrency 2 as the safe default; 4 is an opt-in for headroom.
+The split suite with `tsx` was slower than main in this sample; native Node avoids that added loader
+overhead. Do not assume splitting alone or seed copies alone explain the combined improvement.
+The baseline used a temporary snapshot of main with the same installed dependencies and independent
+test state. The original audit's 323.86s and an early verification overlapping a cold Swift build are
+not suitable isolated comparisons. Swift CI cache savings require a subsequent Actions cache hit.
+
+For a runner comparison, alternate `pnpm test:timings` and `pnpm test:timings -- --tsx` on the same quiet
+machine, with the same concurrency, installed renderers and dependency cache. Record wall time, failures
+and skips. Do not benchmark a full suite concurrently with a Swift build or another suite.
+
+## Workspace fixtures and clocks
+
+Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real
+Git/jj safety, failure and crash assertions are retained, not replaced by replay. `testing/git-seed.ts`
+builds immutable Git-only seeds once per test process, then copies independent objects, refs, config and
+files for every case. No hard links, alternates, mutable shared stores or copied jj workspace paths are
+used. Seed preparation disables ambient Git config, signing, templates and hooks.
+
+Use completion promises or transport barriers to observe asynchronous work. Fake clocks can exercise
+deadline boundaries without waiting for production timeout lengths. Keep real timers where the test is
+specifically about native process cancellation, I/O or scheduling. Test cleanup must release any gated
+operation even when an assertion fails. Polling helpers should use monotonic time if tests freeze `Date`.
+
+## Offline API cassettes
+
+`packages/daemon/src/testing/cassette.ts` is a replay-only helper. Examples for GitHub, Linear and Slack
+live under `packages/daemon/src/fixtures/cassettes`, and `service-cassettes.test.ts` drives the real
+adapters and parsers through them. The versioned JSON format is:
+
+```json
+{"version":1,"entries":[{"request":{"tool":"issues","args":{"team":"example"}},"response":{"issues":[]}}]}
+```
+
+- `cassetteRunner` matches executable plus the complete argv, including GitHub's GraphQL query and
+  variables. It never runs `gh` or a fallback process. Cwd, environment and timeout are not recorded.
+- `cassetteSource` matches the fixed source tool plus every JSON argument, including scope, fields,
+  cursor and page bounds. Only object key order and omitted `undefined` properties are normalized;
+  array order, request order and values must match exactly.
+- Responses are copied per call. Unexpected, reordered or extra calls fail immediately. Call
+  `assertDone()` to catch missing calls and unused responses. Mismatch diagnostics do not echo payloads.
+- There is no live fallback or recording mode, including on a cache miss. Author synthetic fixtures
+  explicitly and review contract changes before updating them. Never commit raw account responses,
+  private messages, repository data, model prompts, authorization headers, cookies or signed URLs.
+  Use fake identities and public example domains, not merely redacted tokens in otherwise private data.
+
+Keep small inline fakes for dynamic scenarios and error injection. Cassettes complement those tests;
+they do not replace real daemon HTTP/WebSocket tests or certify compatibility with a live provider.
+
+## Swift checks and CI caches
+
+Continue using `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`, which select the supported
+SDK and test macro plugin. After a successful build, `apps/macos/scripts/test.sh --skip-build --filter
+<name>` is appropriate for repeating an affected test without rebuilding.
+
+Swift test and app-bundle CI jobs already run independently. Both now cache only pinned dependency
+repositories/downloaded artifacts and the patched Ghostty vendor sources. Keys include OS, architecture,
+Swift and SDK versions, package pins/manifests, and vendor/patch scripts. No executable build products,
+signing material or user data are cached; dependency resolution still runs and verifies binary artifacts.
+Local APFS sharing in `share-artifacts.sh` remains separate from this download cache.

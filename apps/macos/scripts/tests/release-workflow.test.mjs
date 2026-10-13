@@ -19,6 +19,26 @@ test("verification installs checksum-verified jj before pnpm test", () => {
 	assert.match(installation, /"\$install_dir\/jj" --version/);
 });
 
+test("Swift verification and bundle jobs cache only pinned dependencies with toolchain-specific keys", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	for (const name of ["swift-test", "app-bundle"]) {
+		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
+		assert.match(job, /id: swift-toolchain/);
+		assert.match(job, /xcrun --show-sdk-version/);
+		assert.match(job, /uses: actions\/cache@v4/);
+		assert.match(job, /steps\.swift-toolchain\.outputs\.key/);
+		assert.match(job, /runner\.os.*runner\.arch/);
+		assert.match(job, /hashFiles\('apps\/macos\/Package.resolved', 'apps\/macos\/Package.swift'/);
+		assert.match(job, /scripts\/vendor-ghostty.sh.*scripts\/patch-ghostty-resources.py/);
+		const cached = job.slice(job.indexOf("path: |"), job.indexOf("key: swift-deps"));
+		assert.match(cached, /org.swift.swiftpm\/repositories/);
+		assert.match(cached, /org.swift.swiftpm\/artifacts/);
+		assert.match(cached, /Vendor\/libghostty-spm/);
+		assert.ok(!cached.includes(".build") && !cached.includes("build/") && !cached.includes("sign"));
+		assert.ok(job.indexOf("uses: actions/cache@v4") < job.indexOf("run: apps/macos/scripts/"));
+	}
+});
+
 test("release job publishes only newly created stable releases or explicit draft retries", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];

@@ -1,0 +1,36 @@
+{
+	"version": 1,
+	"entries": [
+		{
+			"request": {
+				"tool": "history",
+				"args": {
+					"channel_id": "C000000001",
+					"oldest": "1791288000.000000",
+					"latest": "1791892800.000000",
+					"limit": 8,
+					"response_format": "detailed"
+				}
+			},
+			"response": {
+				"messages": "Channel: #bugs (C000000001)\n\n=== Message from Reporter <reporter@example.test> (U000000001) at 2026-10-13 11:55:05 CEST ===\nMessage TS: 1791885305.000001\n\nExport crashes after choosing a large file.\nSteps:\n1. Open <https://example.test/export|Export>.\n2. Choose a file, then press Export.\nExpected: a download. Actual: a blank page.\nReactions: eyes (2)\n\nThread: 2 replies (latest: 2026-10-13 12:00:00 CEST)\n\n=== Message from Helper (U000000002) at 2026-10-13 11:50:00 CEST ===\nMessage TS: 1791885000.000001\n\nWeekly release notes are ready.\n",
+				"pagination_info": "There are more messages available. To view the next page, use cursor: `NEXT_PAGE`\n"
+			}
+		},
+		{
+			"request": {
+				"tool": "thread",
+				"args": {
+					"channel_id": "C000000001",
+					"message_ts": "1791885305.000001",
+					"limit": 30,
+					"response_format": "detailed"
+				}
+			},
+			"response": {
+				"messages": "=== THREAD PARENT MESSAGE ===\nFrom: Reporter <reporter@example.test> (U000000001)\nTime: 2026-10-13 11:55:05 CEST\nMessage TS: 1791885305.000001\n\nExport crashes after choosing a large file.\nReactions: eyes (2)\n\n=== THREAD REPLIES (2 total) ===\n\n--- Reply 1 of 2 ---\nFrom: Helper (U000000002)\nTime: 2026-10-13 11:56:00 CEST\nMessage TS: 1791885360.000001\n\nReproduced on the latest release.\nThe browser console reports a TypeError.\nReactions: thumbsup (1)\n\n--- Reply 2 of 2 ---\nFrom: Reporter <reporter@example.test> (U000000001)\nTime: 2026-10-13 11:58:00 CEST\nMessage TS: 1791885480.000001\n\nSmall files work; large files fail.\n",
+				"pagination_info": "There are no more messages in this thread.\n"
+			}
+		}
+	]
+}
