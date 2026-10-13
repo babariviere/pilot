@@ -276,7 +276,7 @@ export interface SessionSubagent {
 /**
  * GET /api/sessions/:id/subagents/:name/transcript[?after=<entryId>]: a read-only read of the subagent's
  * conversation. Responses carry an ETag; `If-None-Match` returns 304 when storage has not changed.
- * Clients that display a transcript should prefer the `subagent.subscribe` WebSocket stream.
+ * Clients that display a transcript should prefer the subagent socket (see SubagentServerMessage).
  */
 export interface SubagentTranscript {
 	name: string;
@@ -1019,23 +1019,6 @@ export interface RemoveQueuedMessageResponse {
 
 /** Client to daemon, over /api/ws. */
 export type ClientMessage =
-	/** Legacy transcript stream on the shared socket. Clients should open a chat socket instead (see ChatServerMessage). */
-	| { type: "subscribe"; sessionId: string }
-	| { type: "unsubscribe"; sessionId: string }
-	/**
-	 * Attach to the session's daemon-owned shell, starting it if needed (or replacing it with `restart`).
-	 * The daemon replies with the retained scrollback, then live output.
-	 */
-	| { type: "terminal.attach"; sessionId: string; cols: number; rows: number; restart?: boolean }
-	/** Stop receiving output. The shell keeps running. */
-	| { type: "terminal.detach"; sessionId: string }
-	| { type: "terminal.input"; sessionId: string; data: string }
-	| { type: "terminal.resize"; sessionId: string; cols: number; rows: number }
-	/** Kill the shell. */
-	| { type: "terminal.close"; sessionId: string }
-	/** Stream one subagent's transcript: a snapshot first (also after reconnects), then appended entries. */
-	| { type: "subagent.subscribe"; sessionId: string; name: string }
-	| { type: "subagent.unsubscribe"; sessionId: string; name: string }
 	/** Receive `mission` details for one mission: the current detail first, then after every change. */
 	| { type: "mission.subscribe"; missionId: string }
 	| { type: "mission.unsubscribe"; missionId: string }
@@ -1044,11 +1027,11 @@ export type ClientMessage =
 	| { type: "dashboard.unsubscribe"; projectId: string }
 	/**
 	 * The client is in the foreground showing these sessions (at most 50). The daemon rechecks their
-	 * pull requests soon unless they were checked recently. Subscribing to a session implies the same.
+	 * pull requests soon unless they were checked recently. Opening a chat socket implies the same.
 	 */
 	| { type: "focus"; sessionIds: string[] };
 
-/** Daemon to client, over /api/ws. */
+/** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
 	| import("./schedules.ts").SchedulesMessage
 	/** Includes both active and archived sessions, so clients can switch views locally. */
@@ -1067,11 +1050,8 @@ export type ServerMessage =
 	| { type: "dashboard"; dashboard: ProjectDashboard }
 	/** Sidebar counts for every project, on connection and whenever they change. */
 	| { type: "dashboard.counts"; counts: ProjectDashboardCounts }
-	/**
-	 * Starts with a snapshot event on every (re)subscription, then incremental batches. On chat sockets, `seq` numbers
-	 * the stream's batches from 1, for resuming.
-	 */
-	| { type: "events"; sessionId: string; events: AgentEvent[]; seq?: number }
+	/** A chat stream's batches, numbered from 1 for resuming. A new stream's first batch holds a snapshot. */
+	| { type: "events"; sessionId: string; events: AgentEvent[]; seq: number }
 	/**
 	 * First frame on every chat socket connection. `resumed`: the frames after the requested `after` follow. Otherwise
 	 * this is a new stream and its first batch holds a snapshot. Reconnect with `?stream=<streamId>&after=<last seq>`.

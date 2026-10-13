@@ -404,10 +404,10 @@ test("library assets are JavaScript for native requests only", async (t) => {
 	}
 });
 
-function client(t: TestContext, server: Server) {
+function client(t: TestContext, server: Server, path = "/api/ws") {
 	const address = server.address();
 	assert.ok(address && typeof address !== "string");
-	const ws = new WebSocket(`ws://127.0.0.1:${address.port}/api/ws`);
+	const ws = new WebSocket(`ws://127.0.0.1:${address.port}${path}`);
 	t.after(() => ws.terminate());
 	const messages: ServerMessage[] = [];
 	let wake: (() => void) | undefined;
@@ -441,9 +441,12 @@ function client(t: TestContext, server: Server) {
 	};
 }
 
+const chat = (t: TestContext, server: Server) => client(t, server, `/api/sessions/${sessionId}/ws`);
+
 test("WS rejects malformed JSON shapes and unknown message types without dispatching or disconnecting", async (t) => {
 	const { server, sessions, terminals, base } = await api(t);
 	const subscribe = t.mock.method(sessions, "subscribe", () => () => {});
+	const watch = t.mock.method(sessions, "watchSubagent", () => () => {});
 	const attach = t.mock.method(terminals, "attach", () => () => {});
 	const resize = t.mock.method(terminals, "resize", () => {});
 	const write = t.mock.method(terminals, "write", () => {});
@@ -463,23 +466,18 @@ test("WS rejects malformed JSON shapes and unknown message types without dispatc
 		{ type: null, sessionId },
 		{ type: 1, sessionId },
 		{ type: {}, sessionId },
-		{ type: "subscribe" },
-		{ type: "subscribe", sessionId: null },
-		{ type: "subscribe", sessionId: 1 },
-		{ type: "subscribe", sessionId: [] },
-		{ type: "subscribe", sessionId: "" },
-		{ type: "subscribe", sessionId: "  " },
 		{ type: "unknown", sessionId },
-		{ type: "terminal.unknown", sessionId },
-		{ type: "terminal.input", sessionId },
-		{ type: "terminal.input", sessionId, data: {} },
-		{ type: "terminal.attach", sessionId },
-		{ type: "terminal.attach", sessionId, cols: 80, rows: 24, restart: "true" },
-		{ type: "terminal.resize", sessionId, cols: "80", rows: 24 },
-		{ type: "terminal.resize", sessionId, cols: 80, rows: null },
-		{ type: "terminal.resize", sessionId, cols: 0, rows: 24 },
-		{ type: "terminal.resize", sessionId, cols: 80.5, rows: 24 },
-		{ type: "terminal.resize", sessionId, cols: 1001, rows: 24 },
+		// Transcripts, terminals and subagents have dedicated sockets, never the control socket.
+		{ type: "subscribe", sessionId },
+		{ type: "unsubscribe", sessionId },
+		{ type: "subagent.subscribe", sessionId, name: "review" },
+		{ type: "terminal.attach", sessionId, cols: 80, rows: 24 },
+		{ type: "terminal.input", sessionId, data: "ls" },
+		{ type: "terminal.resize", sessionId, cols: 80, rows: 24 },
+		{ type: "terminal.close", sessionId },
+		{ type: "mission.subscribe" },
+		{ type: "dashboard.subscribe", projectId: "" },
+		{ type: "focus", sessionIds: [1] },
 	]) {
 		connection.ws.send(JSON.stringify(value));
 		assert.deepEqual(
@@ -488,65 +486,74 @@ test("WS rejects malformed JSON shapes and unknown message types without dispatc
 			JSON.stringify(value),
 		);
 	}
-	connection.ws.send('{"type":"terminal.resize","sessionId":"test","cols":1e400,"rows":24}');
-	assert.deepEqual(await connection.next("error"), { type: "error", message: "Invalid client message" });
 	connection.ws.send("{");
 	assert.deepEqual(await connection.next("error"), { type: "error", message: "Invalid JSON" });
-	for (const method of [subscribe, attach, resize, write, close]) assert.equal(method.mock.callCount(), 0);
+	for (const method of [subscribe, watch, attach, resize, write, close]) assert.equal(method.mock.callCount(), 0);
 	assert.equal((await fetch(`${base}/api/sessions`)).status, 200);
-	connection.ws.send(JSON.stringify({ type: "subscribe", sessionId }));
-	assert.deepEqual(await connection.next("artifacts"), { type: "artifacts", sessionId, artifacts: [summary] });
-	assert.equal(subscribe.mock.callCount(), 1);
 	assert.equal(connection.ws.readyState, WebSocket.OPEN);
 });
 
-test("WS still dispatches every valid terminal message after validation", async (t) => {
-	const { server, terminals } = await api(t);
+test("terminal sockets validate their messages and dispatch every valid one", async (t) => {
+	const { server, sessions, terminals } = await api(t);
+	t.mock.method(sessions, "assertWritable", () => {});
+	t.mock.method(sessions, "changeBase", () => ({ cwd: "/tmp" }));
 	const detach = t.mock.fn(() => {});
 	const attach = t.mock.method(terminals, "attach", () => detach);
 	const resize = t.mock.method(terminals, "resize", () => {});
 	const write = t.mock.method(terminals, "write", () => {});
-	const close = t.mock.method(terminals, "close", () => {});
-	const connection = client(t, server);
-	await connection.next("sessions");
-	for (const message of [
-		{ type: "terminal.attach", sessionId, cols: 80, rows: 24, restart: true },
-		{ type: "terminal.input", sessionId, data: "echo hello\n" },
-		{ type: "terminal.resize", sessionId, cols: 100, rows: 30 },
-		{ type: "terminal.detach", sessionId },
-		{ type: "terminal.close", sessionId },
-	])
-		connection.ws.send(JSON.stringify(message));
+	const connection = client(t, server, `/api/sessions/${sessionId}/terminal/ws?cols=80&rows=24&restart=1`);
+	await once(connection.ws, "open");
+	for (const value of [
+		null,
+		{},
+		{ type: "terminal.input" },
+		{ type: "terminal.input", data: {} },
+		{ type: "terminal.resize", cols: "80", rows: 24 },
+		{ type: "terminal.resize", cols: 80, rows: null },
+		{ type: "terminal.resize", cols: 0, rows: 24 },
+		{ type: "terminal.resize", cols: 80.5, rows: 24 },
+		{ type: "terminal.resize", cols: 1001, rows: 24 },
+		{ type: "terminal.close" },
+	]) {
+		connection.ws.send(JSON.stringify(value));
+		assert.deepEqual(
+			await connection.next("error"),
+			{ type: "error", sessionId, message: "Invalid terminal message" },
+			JSON.stringify(value),
+		);
+	}
+	connection.ws.send('{"type":"terminal.resize","cols":1e400,"rows":24}');
+	assert.deepEqual(await connection.next("error"), { type: "error", sessionId, message: "Invalid terminal message" });
+	assert.equal(write.mock.callCount() + resize.mock.callCount(), 0);
+	connection.ws.send(JSON.stringify({ type: "terminal.input", data: "echo hello\n" }));
+	connection.ws.send(JSON.stringify({ type: "terminal.resize", cols: 100, rows: 30 }));
 	const pong = once(connection.ws, "pong");
 	connection.ws.ping();
 	await pong;
 	assert.equal(attach.mock.callCount(), 1);
+	assert.deepEqual(attach.mock.calls[0]?.arguments.slice(0, 4), [sessionId, "/tmp", 80, 24]);
 	assert.equal(attach.mock.calls[0]?.arguments[5], true);
 	assert.deepEqual(write.mock.calls[0]?.arguments, [sessionId, "echo hello\n"]);
 	assert.deepEqual(resize.mock.calls[0]?.arguments, [sessionId, 100, 30]);
-	assert.equal(detach.mock.callCount(), 1);
-	assert.deepEqual(close.mock.calls[0]?.arguments, [sessionId]);
-	assert.ok(!connection.messages.some((message) => message.type === "error"));
+	assert.equal(connection.ws.readyState, WebSocket.OPEN);
+	connection.ws.close();
+	await once(connection.ws, "close");
+	while (!detach.mock.callCount()) await new Promise((resolve) => setTimeout(resolve, 5));
 });
 
-test("WS subscription/reconnect snapshots and live broadcasts contain artifacts", async (t) => {
+test("chat sockets start with the artifact index, and live broadcasts reach chats and the control socket", async (t) => {
 	const { server, broadcast } = await api(t);
-	const first = client(t, server);
-	await first.next("sessions");
-	first.ws.send(JSON.stringify({ type: "subscribe", sessionId }));
+	const first = chat(t, server);
 	assert.deepEqual(await first.next("artifacts"), { type: "artifacts", sessionId, artifacts: [summary] });
-	const second = client(t, server);
-	await second.next("sessions");
+	const control = client(t, server);
+	await control.next("sessions");
 	const updated = { ...summary, revision: 3 };
 	broadcast(sessionId, [updated]);
 	assert.deepEqual(await first.next("artifacts"), { type: "artifacts", sessionId, artifacts: [updated] });
-	assert.deepEqual(await second.next("artifacts"), { type: "artifacts", sessionId, artifacts: [updated] });
+	assert.deepEqual(await control.next("artifacts"), { type: "artifacts", sessionId, artifacts: [updated] });
 	first.ws.terminate();
-	second.ws.send(JSON.stringify({ type: "subscribe", sessionId }));
-	assert.deepEqual(await second.next("artifacts"), { type: "artifacts", sessionId, artifacts: [summary] });
-	second.ws.send(JSON.stringify({ type: "unsubscribe", sessionId }));
-	second.ws.send(JSON.stringify({ type: "subscribe", sessionId }));
-	assert.deepEqual(await second.next("artifacts"), { type: "artifacts", sessionId, artifacts: [summary] });
+	const reconnected = chat(t, server);
+	assert.deepEqual(await reconnected.next("artifacts"), { type: "artifacts", sessionId, artifacts: [summary] });
 });
 
 test("WS update supersedes an in-flight initial artifact snapshot", async (t) => {
@@ -563,9 +570,7 @@ test("WS update supersedes an in-flight initial artifact snapshot", async (t) =>
 		started();
 		return reading;
 	});
-	const connection = client(t, server);
-	await connection.next("sessions");
-	connection.ws.send(JSON.stringify({ type: "subscribe", sessionId }));
+	const connection = chat(t, server);
 	await ready;
 	broadcast(sessionId, [{ ...summary, revision: 3 }]);
 	complete([summary]);
@@ -575,35 +580,6 @@ test("WS update supersedes an in-flight initial artifact snapshot", async (t) =>
 		artifacts: [{ ...summary, revision: 3 }],
 	});
 	const pong = once(connection.ws, "pong");
-	connection.ws.ping();
-	await pong;
-	assert.ok(!connection.messages.some((message) => message.type === "artifacts"));
-});
-
-test("WS unsubscribe suppresses an in-flight artifact snapshot", async (t) => {
-	const { server, sessions } = await api(t);
-	let complete!: (value: ArtifactSummary[]) => void;
-	const reading = new Promise<ArtifactSummary[]>((resolve) => {
-		complete = resolve;
-	});
-	let started!: () => void;
-	const ready = new Promise<void>((resolve) => {
-		started = resolve;
-	});
-	t.mock.method(sessions, "artifacts", () => {
-		started();
-		return reading;
-	});
-	const connection = client(t, server);
-	await connection.next("sessions");
-	connection.ws.send(JSON.stringify({ type: "subscribe", sessionId }));
-	await ready;
-	connection.ws.send(JSON.stringify({ type: "unsubscribe", sessionId }));
-	let pong = once(connection.ws, "pong");
-	connection.ws.ping();
-	await pong;
-	complete([summary]);
-	pong = once(connection.ws, "pong");
 	connection.ws.ping();
 	await pong;
 	assert.ok(!connection.messages.some((message) => message.type === "artifacts"));

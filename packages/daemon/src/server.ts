@@ -115,7 +115,6 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 type MissionClientMessage = Extract<ClientMessage, { missionId: string }>;
 type FocusClientMessage = Extract<ClientMessage, { type: "focus" }>;
 type DashboardClientMessage = Extract<ClientMessage, { projectId: string }>;
-type SessionClientMessage = Exclude<ClientMessage, MissionClientMessage | FocusClientMessage | DashboardClientMessage>;
 
 function isDashboardClientMessage(value: unknown): value is DashboardClientMessage {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -202,39 +201,6 @@ function closeReason(message: string): string {
 	let reason = message.slice(0, 123);
 	while (Buffer.byteLength(reason) > 123) reason = reason.slice(0, -1);
 	return reason;
-}
-
-/** Treat WebSocket JSON as untrusted input, not as an already-validated protocol union. */
-function isClientMessage(value: unknown): value is SessionClientMessage {
-	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-	const message = value as Record<string, unknown>;
-	if (typeof message.type !== "string" || typeof message.sessionId !== "string" || !message.sessionId.trim())
-		return false;
-	switch (message.type) {
-		case "subscribe":
-		case "unsubscribe":
-		case "terminal.detach":
-		case "terminal.close":
-			return true;
-		case "subagent.subscribe":
-		case "subagent.unsubscribe":
-			return typeof message.name === "string" && message.name.length > 0 && message.name.length <= 128;
-		case "terminal.input":
-			return typeof message.data === "string";
-		case "terminal.attach":
-		case "terminal.resize":
-			if (
-				message.type === "terminal.attach" &&
-				message.restart !== undefined &&
-				typeof message.restart !== "boolean"
-			)
-				return false;
-			return [message.cols, message.rows].every(
-				(size) => typeof size === "number" && Number.isInteger(size) && size > 0 && size <= 1000,
-			);
-		default:
-			return false;
-	}
 }
 
 export function createDaemonServer(
@@ -663,8 +629,8 @@ export function createDaemonServer(
 		});
 	});
 
-	// Large enough for terminal pastes.
-	const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+	// The control socket carries only small subscription messages. Terminal pastes use the terminal socket.
+	const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 	// Dedicated chat, terminal and subagent sockets. Each has its own send queue, so one stream's large snapshot,
 	// output burst or slow reader never delays another stream or the sidebar, and overload resets only that stream.
 	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
@@ -855,9 +821,6 @@ export function createDaemonServer(
 
 	wss.on("connection", (ws: WebSocket) => {
 		clients.set(ws, boundedSender(ws));
-		const subscriptions = new Map<string, () => void>();
-		const subagentSubscriptions = new Map<string, () => void>();
-		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
 		if (schedules) {
 			const version = schedulesVersion;
@@ -916,67 +879,7 @@ export function createDaemonServer(
 				subscribers.add(ws);
 				return pushDashboard(projectId, [ws], false);
 			}
-			if (!isClientMessage(message)) return send(ws, { type: "error", message: "Invalid client message" });
-			const { sessionId } = message;
-			if (message.type.startsWith("terminal.")) {
-				try {
-					handleTerminal(message, attachedTerminals, ws);
-				} catch (error) {
-					send(ws, { type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
-				}
-			} else if (message.type === "subscribe" && !subscriptions.has(sessionId)) {
-				try {
-					const unsubscribe = sessions.subscribe(sessionId, (events) =>
-						send(ws, { type: "events", sessionId, events }),
-					);
-					subscriptions.set(sessionId, unsubscribe);
-					// An opened chat should show a fresh PR badge.
-					sessions.focusPullRequests([sessionId]);
-					const version = artifactVersions.get(sessionId);
-					void sessions.artifacts(sessionId).then(
-						(artifacts) => {
-							// An update broadcast already supersedes an older in-flight snapshot.
-							if (subscriptions.get(sessionId) === unsubscribe && artifactVersions.get(sessionId) === version)
-								send(ws, { type: "artifacts", sessionId, artifacts });
-						},
-						(error: unknown) => {
-							if (subscriptions.get(sessionId) === unsubscribe)
-								send(ws, {
-									type: "error",
-									sessionId,
-									message: error instanceof Error ? error.message : String(error),
-								});
-						},
-					);
-				} catch (error) {
-					send(ws, { type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
-				}
-			} else if (message.type === "unsubscribe") {
-				subscriptions.get(sessionId)?.();
-				subscriptions.delete(sessionId);
-			} else if (message.type === "subagent.subscribe" || message.type === "subagent.unsubscribe") {
-				const { name } = message;
-				const key = `${sessionId}\0${name}`;
-				subagentSubscriptions.get(key)?.();
-				subagentSubscriptions.delete(key);
-				if (message.type === "subagent.unsubscribe") return;
-				try {
-					subagentSubscriptions.set(
-						key,
-						sessions.watchSubagent(sessionId, name, {
-							events: (events) => send(ws, { type: "subagent.events", sessionId, name, events }),
-							error: (error) => send(ws, { type: "error", sessionId, name, message: error }),
-						}),
-					);
-				} catch (error) {
-					send(ws, {
-						type: "error",
-						sessionId,
-						name,
-						message: error instanceof Error ? error.message : String(error),
-					});
-				}
-			}
+			send(ws, { type: "error", message: "Invalid client message" });
 		});
 		ws.on("close", () => {
 			clients.delete(ws);
@@ -991,11 +894,6 @@ export function createDaemonServer(
 				subscribers.delete(ws);
 				if (!subscribers.size) missionSubscribers.delete(id);
 			}
-			for (const unsubscribe of subscriptions.values()) unsubscribe();
-			subscriptions.clear();
-			for (const unsubscribe of subagentSubscriptions.values()) unsubscribe();
-			subagentSubscriptions.clear();
-			for (const detach of attachedTerminals.values()) detach();
 		});
 	});
 
@@ -1121,50 +1019,6 @@ export function createDaemonServer(
 			});
 		} catch (error) {
 			refuse(ws, report, error);
-		}
-	}
-
-	function handleTerminal(message: SessionClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {
-		const { sessionId } = message;
-		if (message.type === "terminal.attach" || message.type === "terminal.input") sessions.assertWritable(sessionId);
-		switch (message.type) {
-			case "terminal.attach": {
-				const session = sessions.get(sessionId);
-				if (!session) throw new NotFound(`Unknown session: ${sessionId}`);
-				// A terminal must not start before the private clone is ready.
-				const { cwd } = sessions.changeBase(sessionId);
-				attached.get(sessionId)?.();
-				attached.set(
-					sessionId,
-					terminals.attach(
-						sessionId,
-						cwd,
-						message.cols,
-						message.rows,
-						{
-							data: (data) => send(ws, { type: "terminal.data", sessionId, data }),
-							exit: (code) => send(ws, { type: "terminal.exit", sessionId, code }),
-						},
-						message.restart === true,
-					),
-				);
-				break;
-			}
-			case "terminal.detach":
-				attached.get(sessionId)?.();
-				attached.delete(sessionId);
-				break;
-			case "terminal.input":
-				if (typeof message.data === "string") terminals.write(sessionId, message.data);
-				break;
-			case "terminal.resize":
-				terminals.resize(sessionId, message.cols, message.rows);
-				break;
-			case "terminal.close":
-				attached.get(sessionId)?.();
-				attached.delete(sessionId);
-				terminals.close(sessionId);
-				break;
 		}
 	}
 
