@@ -62,7 +62,9 @@ Docs to use when the task touches them:
   pnpm store, so per-session installs cost little disk. Declare every imported package in the importing
   package's `package.json`; pnpm does not expose undeclared transitive dependencies.
 - Biome: tabs, width 120. `pnpm fmt` / `pnpm fmt:check`.
-- Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
+- Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`. `pnpm test` fails any
+  test that runs longer than two minutes (`PILOT_TEST_TIMEOUT_MS`), so a test awaiting an event that never comes
+  fails instead of stalling the whole run.
 - Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
   your change, fix failures it causes, and rerun them without asking: `pnpm typecheck`, `pnpm test` (two
   test files at a time; `PILOT_TEST_CONCURRENCY=4 pnpm test` when the machine has headroom), and for Swift
