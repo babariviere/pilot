@@ -14,7 +14,8 @@ private func folderSidebarOutline(in view: NSView) -> NSOutlineView? {
 private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView, x: CGFloat = 70) throws {
     let window = try #require(outline.window)
     // Hit the title area, not the project's chevron or action buttons.
-    let point = outline.convert(NSPoint(x: x, y: outline.rect(ofRow: row).midY), to: nil)
+    let rowRect = outline.rect(ofRow: row)
+    let point = outline.convert(NSPoint(x: x, y: rowRect.midY), to: nil)
     let timestamp = ProcessInfo.processInfo.systemUptime
     let down = try #require(NSEvent.mouseEvent(
         with: .leftMouseDown, location: point, modifierFlags: [], timestamp: timestamp,
@@ -96,12 +97,14 @@ func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
 
     // The project name navigates to the project page. Its trailing chevron is the
     // independent control for folding the project's sessions.
-    try clickFolderSidebarRow(headerRow, in: outline, x: outline.bounds.width - 12)
+    // Section rows can be narrower than the outline itself when nested under a folder.
+    // Derive the trailing-button hit point from the actual row frame, not the outline width.
+    try clickFolderSidebarRow(headerRow, in: outline, x: outline.rect(ofRow: headerRow).maxX - 12)
     settleFolderSidebar(hosting)
     #expect(model.collapsedProjects.contains(project.id))
     #expect(outline.numberOfRows == expandedRowCount - 2)
     #expect(model.selectedSessionId == nil)
-    try clickFolderSidebarRow(headerRow, in: outline, x: outline.bounds.width - 12)
+    try clickFolderSidebarRow(headerRow, in: outline, x: outline.rect(ofRow: headerRow).maxX - 12)
     settleFolderSidebar(hosting)
     #expect(!model.collapsedProjects.contains(project.id))
     #expect(outline.numberOfRows == expandedRowCount)
