@@ -651,9 +651,49 @@ formatted `messages` text (message TS and thread delimiters) and `pagination_inf
 message rows. Public search similarly wraps formatted `results` text. Slack normalization must
 explicitly validate/parse that format; the framework JSON decoder deliberately does not invent
 structured records from markdown.
-Slack parsing/classification and inbox actions remain follow-up work. The Linear poller is registered
-at daemon startup; unregistered adapters report unavailable on manual poll. Tracking never posts to
-Linear or Slack.
+
+**Slack polling and classification (implemented).** The dedicated Slack adapter reads one history
+page of at most eight messages per poll, rotating through configured channels. The initial window
+is seven days; subsequent reads pin a time range while paging, then advance the per-channel
+checkpoint. Both adapters use the shared source scheduler, with a five-minute cadence and at most
+two fetch/prefill operations globally. Timers stop when unconfigured or shut down; errors respect
+backoff and rate limits. The app does not poll. No channel settings are inferred or changed.
+
+History parses the observed `Channel`, `=== Message from … ===`, `Message TS` and optional
+`Thread` framing. Thread reads have a separate contract: `=== THREAD PARENT MESSAGE ===`,
+`From`/`Time`/`Message TS`, `=== THREAD REPLIES (N total) ===`, and numbered reply delimiters.
+Both validate pagination text, counts, timestamps, duplicate IDs and response bounds. Unknown or
+ambiguous formats produce a visible source error, retaining last data and the checkpoint. Fixtures
+use synthetic content/identifiers with real wire formatting, including empty history and pagination.
+
+Standalone messages use their parent text. Threads read at most 30 replies; classification sees only
+a bounded 12,000-character excerpt. `ModelCatalog` reuses title-price selection restricted to scoped,
+authenticated `openai-codex/gpt-6-luna`, resolves once per poll, disables thinking/tools, requests strict
+provider-side JSON schema, and strictly validates the five fields: `isBugReport`, confidence (0..1),
+severity, one-line summary and guessed project. Missing model scope/auth fails before admission.
+Only bug reports with confidence ≥ 0.8 become tracked items. Guessed project never changes routing;
+URLs and thread identity come from validated source fields, never the model. No agents start.
+
+The SQLite worker stores a global `(channel, thread_ts)` classification cache, including negative
+results, plus a global limit of 100 attempts per UTC day. Atomic admission precedes the model call
+and survives restart. A thread has at most one attempt, even across projects; failed, malformed or
+interrupted attempts are cached, surfaced as source errors, and never retried automatically.
+Concurrent projects share an in-flight result. Budget exhaustion retains the unfinished page and
+pauses that source until the next UTC midnight, without blocking Linear. Cached classification
+errors retain a five-minute cadence. Raw Slack text and raw model errors are not persisted or echoed in diagnostics.
+Source polling never posts to Slack or Linear. Socket Mode and inbox actions remain later work.
+
+**Slack checks.** Parser fixtures, strict malformed-output tests, threshold/negative caching,
+cross-project dedupe, concurrent and interrupted attempts, restart/UTC budget rollover, bounded
+pagination, opt-in timer disposal and registry status/last-data tests cover the adapter. Bounded
+read-only checks verified the history empty/end and thread prefix/end formats. A synthetic report
+also verified the scoped Luna completion with strict JSON schema and no tools. No private payloads
+or identifiers are included in fixtures.
+On a busy development host, 100 parses each of ~500 KiB history and thread fixtures measured
+1.84 ms median / 2.60 ms p95 combined CPU time (8.33 ms max), with 5.63 MiB RSS growth. Wall time
+was noisy under concurrent builds (3.11 ms median / 57.65 ms p95 in that run, up to 479.87 ms in an
+earlier run). The timer never queues work; source pages, excerpts and retained in-flight results are
+bounded. Live multi-project throughput and app scrolling during remote source traffic are unverified.
 
 **Verification.** Store/restart/dedupe/action tests, config/cursor/cancellation/concurrency tests, HTTP/WS
 dashboard integration, a local real MCP fixture (stored OAuth, required sign-in, fixed tools, write-tool

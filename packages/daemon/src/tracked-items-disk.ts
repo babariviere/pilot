@@ -10,6 +10,11 @@ import type {
 	TrackingJson,
 } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
+import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
+
+export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
+export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
+export const SLACK_DAILY_BUDGET = 100;
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt">;
 export interface SourceCheckpoint {
@@ -60,6 +65,11 @@ export class TrackedItemDisk {
 			CREATE INDEX IF NOT EXISTS tracked_project_kind ON tracked_items(project_id, kind, dismissed, updated_at DESC, id);
 			CREATE INDEX IF NOT EXISTS tracked_project ON tracked_items(project_id, dismissed, updated_at DESC, id);
 			CREATE TABLE IF NOT EXISTS source_checkpoints (id TEXT PRIMARY KEY, value TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS slack_classifications (
+			 channel TEXT NOT NULL, thread_ts TEXT NOT NULL, state TEXT NOT NULL, result TEXT,
+			 PRIMARY KEY(channel, thread_ts)
+			);
+			CREATE TABLE IF NOT EXISTS slack_budget (day TEXT PRIMARY KEY, used INTEGER NOT NULL);
 		`);
 		if (
 			!this.db
@@ -75,6 +85,56 @@ export class TrackedItemDisk {
 	}
 	close(): void {
 		this.db.close();
+	}
+	/** Global thread cache, including negative results and failed/interrupted attempts. No raw text. */
+	slackCached(channel: string, ts: string): SlackCache | undefined {
+		validateSlackKey(channel, ts);
+		const row = this.db
+			.prepare("SELECT state, result FROM slack_classifications WHERE channel=? AND thread_ts=?")
+			.get(channel, ts);
+		if (!row) return undefined;
+		return row.state === "done"
+			? { state: "done", result: parseSlackClassification(String(row.result)) }
+			: { state: row.state === "error" ? "error" : "pending" };
+	}
+	/** Crash-safe admission before any model call. One attempt per thread, across projects/restarts. */
+	reserveSlack(channel: string, ts: string, now: number): SlackReservation {
+		validateSlackKey(channel, ts);
+		const day = new Date(now).toISOString().slice(0, 10);
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const cached = this.slackCached(channel, ts);
+			let result: SlackReservation;
+			if (cached) result = cached;
+			else {
+				const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
+				if (used >= SLACK_DAILY_BUDGET) result = { state: "budget" };
+				else {
+					this.db.prepare("INSERT INTO slack_classifications VALUES (?, ?, 'pending', NULL)").run(channel, ts);
+					this.db
+						.prepare("INSERT INTO slack_budget VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET used=used+1")
+						.run(day);
+					this.db
+						.prepare("DELETE FROM slack_budget WHERE day < ?")
+						.run(new Date(now - 7 * 86_400_000).toISOString().slice(0, 10));
+					result = { state: "reserved" };
+				}
+			}
+			this.db.exec("COMMIT");
+			return result;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+	finishSlack(channel: string, ts: string, result?: SlackClassification): void {
+		validateSlackKey(channel, ts);
+		const value = result ? JSON.stringify(parseSlackClassification(JSON.stringify(result))) : null;
+		this.db
+			.prepare(
+				"UPDATE slack_classifications SET state=?, result=? WHERE channel=? AND thread_ts=? AND state='pending'",
+			)
+			.run(value ? "done" : "error", value, channel, ts);
 	}
 	onChange(listener: (projectId: string) => void): () => void {
 		this.listeners.add(listener);
@@ -221,6 +281,15 @@ export class TrackedItemDisk {
 	private emit(projectId: string): void {
 		for (const listener of this.listeners) listener(projectId);
 	}
+}
+function validateSlackKey(channel: string, ts: string): void {
+	if (
+		typeof channel !== "string" ||
+		typeof ts !== "string" ||
+		!/^[CDG][A-Z0-9]{1,199}$/.test(channel) ||
+		!/^\d{1,12}\.\d{6}$/.test(ts)
+	)
+		throw new Error("Invalid Slack thread key");
 }
 function decode(row: Row): TrackedItem {
 	return {
