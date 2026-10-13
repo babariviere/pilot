@@ -534,8 +534,13 @@ final class AppModel: ObservableObject {
         pendingSessionActions.insert(sessionId)
         Task {
             defer { pendingSessionActions.remove(sessionId) }
-            do { try await client.stop(sessionId) }
-            catch { sessionActionError = error.localizedDescription }
+            do {
+                // Queued messages were sent before anything typed since, so they lead the draft.
+                if let restored = try await client.stop(sessionId), !restored.isEmpty {
+                    let composer = composer(for: sessionId)
+                    composer.draft = [restored, composer.draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+                }
+            } catch { sessionActionError = error.localizedDescription }
         }
     }
 

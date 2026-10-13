@@ -168,8 +168,10 @@ final class PilotClient: ObservableObject {
         let _: Ack = try await call("api/sessions/\(sessionId)/messages", body: SendRequest(message: message, mode: mode))
     }
 
-    func stop(_ sessionId: String) async throws {
-        let _: Ack = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())
+    /// Stops current work. Returns the user's queued messages that Stop withdrew, which belong in the composer.
+    func stop(_ sessionId: String) async throws -> String? {
+        let response: StopResponse = try await call("api/sessions/\(sessionId)/stop", body: [String: String]())
+        return response.draft
     }
 
     /// Prompt templates and skills the session's kernel expands. Reopens a parked chat only when pilotd has no list yet.

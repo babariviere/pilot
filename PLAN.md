@@ -839,6 +839,8 @@ reports), producing a morning summary in the app and Slack.
   after consumption without resubmitting. Remove individual queued messages before delivery without
   stopping the active run; clearing an inline edit and submitting it removes the selected row.
   Command-Delete keeps normal text-editing behavior. Reject removal once a message has been consumed.
+  Stop withdraws the queue but returns the user's own undelivered messages to the composer draft, in delivery
+  order and ahead of any text typed since. Automatic input is dropped as before.
   Removal errors are dismissible inline warnings that clear after five seconds or when leaving the
   chat, without changing drafts.
 - Message times: user bubbles and assistant text reveal a muted date/time footer only on click.

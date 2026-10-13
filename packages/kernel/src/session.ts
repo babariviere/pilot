@@ -57,7 +57,14 @@ import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
-import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQueue } from "./queue.ts";
+import {
+	editQueuedMessage,
+	queueUpdateForDisplay,
+	removeQueuedMessage,
+	type WithdrawnMessage,
+	watchQueue,
+	withdrawUserMessages,
+} from "./queue.ts";
 import { refActivity } from "./ref-activity.ts";
 import { openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
@@ -557,9 +564,27 @@ export class KernelSession {
 		await this.conversation.compact(trimmed || undefined, context);
 	}
 
-	/** Withdraw queued input and abort the current run. The conversation stays usable. */
-	async abort(): Promise<void> {
+	/**
+	 * Withdraw queued input and abort the current run. The conversation stays usable. Returns the user's own withdrawn
+	 * messages so Stop can restore them to the composer.
+	 */
+	async abort(): Promise<WithdrawnMessage[]> {
+		let withdrawn: WithdrawnMessage[] = [];
+		try {
+			const inbox = await this.harness.snapshot(InboxDoc, this.conversation.id, context);
+			withdrawn = await withdrawUserMessages(
+				this.harness,
+				this.conversation.id,
+				inbox ?? null,
+				(id) => this.#storage.submission(id, context),
+				context,
+			);
+		} catch (error) {
+			// Stop must still stop. The abort below withdraws whatever is left.
+			console.warn(`pilot: could not keep queued messages on Stop: ${error}`);
+		}
 		await this.conversation.abort(context, { background: true });
+		return withdrawn;
 	}
 
 	get #moving(): boolean {

@@ -486,8 +486,7 @@ export function createDaemonServer(
 				return json(res, 202, { ok: true });
 			}
 			if (parts[3] === "stop") {
-				await sessions.stop(id);
-				return json(res, 202, { ok: true });
+				return json(res, 202, await sessions.stop(id));
 			}
 			if (parts[3] === "compact") {
 				const body = (await readJson<CompactRequest | null>(req)) ?? {};

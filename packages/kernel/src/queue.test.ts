@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, InboxDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
-import { editQueuedMessage, queueUpdate, queueUpdateForDisplay, watchQueue } from "./queue.ts";
+import { editQueuedMessage, queueUpdate, queueUpdateForDisplay, watchQueue, withdrawUserMessages } from "./queue.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -233,6 +233,66 @@ test("an edit racing consumption or withdrawal fails without resubmitting or cha
 			editQueuedMessage(session, conversation.id, withdrawn.id, "Too late", context),
 			/no longer queued/,
 		);
+	} finally {
+		await session.close(context);
+	}
+});
+
+test("stop withdraws the user's queued messages in delivery order and leaves automatic input for the abort", async () => {
+	const storage = new MemoryStorage();
+	const session = createSession(storage);
+	try {
+		const { conversation, ids } = await session.commit(async (tx) => {
+			const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+			const inbox = await tx.doc(InboxDoc, conversation.id);
+			const ids: Record<string, number> = {};
+			for (const [requestId, mode, content] of [
+				["user:1", "followUp", "First follow-up"],
+				["native:jobs.result:abc", "followUp", "Job result"],
+				["user:2", "steer", "Steer me"],
+				[
+					"user:3",
+					"followUp",
+					[
+						{ type: "text", text: "Second" },
+						{ type: "text", text: "follow-up" },
+					],
+				],
+			] as const) {
+				const input = await tx.createSubmission({
+					conversationId: conversation.id,
+					requestId,
+					type: "input",
+					status: "queued",
+				});
+				ids[requestId] = input.id;
+				inbox.items.push({ id: input.id, mode, content: content as string });
+			}
+			const write = await tx.createSubmission({ conversationId: conversation.id, type: "write", status: "queued" });
+			inbox.items.push({ id: write.id, mode: "write", entry: { kind: "notice" } });
+			return { conversation, ids };
+		}, context);
+		const readSubmission = (id: Parameters<typeof storage.submission>[0]) => storage.submission(id, context);
+		const watch = await watchQueue(session, conversation.id, context);
+		const withdrawn = await withdrawUserMessages(session, conversation.id, watch.value, readSubmission, context);
+		await watch.stop();
+		assert.deepEqual(withdrawn, [
+			{ requestId: "user:2", content: "Steer me" },
+			{ requestId: "user:1", content: "First follow-up" },
+			{ requestId: "user:3", content: "Second\nfollow-up" },
+		]);
+		for (const requestId of ["user:1", "user:2", "user:3"]) {
+			const record = await storage.submission(ids[requestId] as never, context);
+			assert.equal(record?.status, "unanswered");
+		}
+		const remaining = await watchQueue(session, conversation.id, context);
+		assert.deepEqual(
+			remaining.value?.items.map((item) => item.mode),
+			["followUp", "write"],
+			"automatic input and writes stay for the abort",
+		);
+		await remaining.stop();
+		assert.deepEqual(await withdrawUserMessages(session, conversation.id, null, readSubmission, context), []);
 	} finally {
 		await session.close(context);
 	}

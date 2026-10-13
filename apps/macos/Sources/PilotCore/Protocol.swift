@@ -501,6 +501,11 @@ public struct RewindResponse: Codable, Sendable {
     public let draft: String?
 }
 
+/// POST /api/sessions/:id/stop. `draft` holds the user's own queued messages Stop withdrew, for the composer.
+public struct StopResponse: Codable, Sendable {
+    public let draft: String?
+}
+
 /// POST /api/sessions/:id/model. Only idle chats can change their pinned model.
 public struct ChangeModelRequest: Codable, Sendable {
     public let model: String

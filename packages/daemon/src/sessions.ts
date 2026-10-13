@@ -9,6 +9,7 @@ import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
 	type EarlierEntriesRead,
+	inputOrigin,
 	type KernelCommand,
 	type KernelPacket,
 	type KernelSubagent,
@@ -36,6 +37,7 @@ import type {
 	SessionState,
 	SessionSubagent,
 	SessionSummary,
+	StopResponse,
 	SessionUsage,
 	SpawnRequest,
 	SubagentTranscript,
@@ -659,6 +661,10 @@ export class SessionManager {
 	private readonly changingModels = new Map<string, Promise<void>>();
 	/** Kernel answers to rewind and attempt switches, read once their request settles. */
 	private readonly rewindResults = new Map<string, { switched: boolean; content?: string }>();
+	/** Queued messages the kernel withdrew for a waiting Stop, keyed by its abort request. */
+	private readonly stopResults = new Map<string, { requestId?: string; content: string }[]>();
+	/** Input whose kernel admission is in flight or uncertain, by session. Stop leaves it to the kernel. */
+	private readonly delivering = new Map<string, string>();
 	private readonly modelCatalog: ModelCatalog;
 	/** Same-target retries share the durable result; opposite transitions execute in order. */
 	private readonly archiveTransitions = new Map<
@@ -1976,25 +1982,67 @@ export class SessionManager {
 		}
 	}
 
-	async stop(id: string): Promise<void> {
+	async stop(id: string): Promise<StopResponse> {
 		const meta = this.require(id);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
-		if (meta.failure) return;
-		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length) return;
+		if (meta.failure) return { ok: true };
+		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length) return { ok: true };
 		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
 		if (!this.workers.has(id)) this.updateGate.assertOpen();
-		// Drop queued input, and abort anything whose acknowledgement was in flight.
+		// Drop queued input, and abort anything whose acknowledgement was in flight. The user's own undelivered messages
+		// go back to the composer. One in flight reaches the kernel first, which either withdraws it too or runs it.
+		const delivering = this.delivering.get(id);
+		const unsent = (meta.pending ?? []).flatMap((command) =>
+			command.type === "input" &&
+			!command.onlyIfIdle &&
+			command.requestId !== delivering &&
+			inputOrigin(command.requestId) === undefined &&
+			command.content.trim()
+				? [{ requestId: command.requestId, content: command.content }]
+				: [],
+		);
 		const requestId = randomUUID();
 		meta.pending = [{ type: "abort", requestId }];
 		if (meta.preparing) meta.cancelled = true;
 		await this.save(meta);
 		if (meta.preparing) for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
-		const starting = meta.initializing;
-		const admission = this.start(id);
-		if (!starting) {
-			const rejected = await admission;
-			if (rejected.has(requestId)) throw rejected.get(requestId);
+		this.stopResults.set(requestId, []);
+		try {
+			const starting = meta.initializing;
+			const admission = this.start(id);
+			if (!starting) {
+				const rejected = await admission;
+				if (rejected.has(requestId)) throw rejected.get(requestId);
+			}
+			// Kernel messages were admitted before anything still waiting here.
+			const withdrawn = this.stopResults.get(requestId) ?? [];
+			const known = new Set(withdrawn.map((message) => message.requestId));
+			const draft = [...withdrawn, ...unsent.filter((message) => !known.has(message.requestId))]
+				.map((message) => message.content)
+				.join("\n\n");
+			return draft ? { ok: true, draft } : { ok: true };
+		} finally {
+			this.stopResults.delete(requestId);
+		}
+	}
+
+	/**
+	 * Send one pending command. Input stays marked as delivering while its admission is in flight, and after a lost
+	 * acknowledgement, so Stop leaves it to the kernel instead of also restoring it to the composer.
+	 */
+	private async deliver(id: string, worker: SessionWorker, command: PendingCommand): Promise<void> {
+		if (command.type !== "input") return worker.request(command);
+		this.delivering.set(id, command.requestId);
+		let settled = false;
+		try {
+			await worker.request(command);
+			settled = true;
+		} catch (error) {
+			settled = error instanceof CommandRejected;
+			throw error;
+		} finally {
+			if (settled && this.delivering.get(id) === command.requestId) this.delivering.delete(id);
 		}
 	}
 
@@ -2705,7 +2753,7 @@ export class SessionManager {
 							continue;
 						}
 						try {
-							await worker.request(command);
+							await this.deliver(id, worker, command);
 							if (command.type === "input") delete meta.inputError;
 						} catch (error) {
 							if (this.closing) return;
@@ -2870,6 +2918,9 @@ export class SessionManager {
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
+		if (packet.type === "aborted" && packet.withdrawn?.length && this.stopResults.has(packet.requestId)) {
+			this.stopResults.set(packet.requestId, packet.withdrawn);
+		}
 		if (
 			packet.type === "error" &&
 			!packet.requestId &&

@@ -56,6 +56,67 @@ export async function removeQueuedMessage(
 	}, context);
 }
 
+/** A message withdrawn by Stop, for the composer. */
+export interface WithdrawnMessage {
+	requestId?: string;
+	content: string;
+}
+
+function messageText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (!Array.isArray(content)) return "";
+	return content
+		.flatMap((part) =>
+			part && typeof part === "object" && part.type === "text" && typeof part.text === "string" ? [part.text] : [],
+		)
+		.join("\n");
+}
+
+/**
+ * Withdraw the user's own queued messages before Stop aborts, and return their text in delivery order (steering, then
+ * follow-ups). Withdrawal shares the inbox mutation line with consumption, so a returned message was never delivered.
+ * Automatic input is left for the abort, which withdraws it as before.
+ */
+export async function withdrawUserMessages(
+	session: Pick<Session, "commit">,
+	conversationId: ConversationId,
+	inbox: Readonly<InboxState> | null,
+	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+	context: Context,
+): Promise<WithdrawnMessage[]> {
+	const visible = (await queueUpdateForDisplay(inbox, readSubmission)).items;
+	if (!visible.length) return [];
+	const requestIds = new Map<number, string | undefined>();
+	await Promise.all(
+		visible.map(async (item) => {
+			requestIds.set(item.id, (await readSubmission(item.id as SubmissionId))?.requestId);
+		}),
+	);
+	const withdrawn = await session.commit(async (tx) => {
+		const inbox = await tx.doc(InboxDoc, conversationId);
+		const taken: { mode: "steer" | "followUp"; message: WithdrawnMessage }[] = [];
+		for (let index = 0; index < inbox.items.length; ) {
+			const item = inbox.items[index]!;
+			if (item.mode === "write" || !requestIds.has(item.id)) {
+				index++;
+				continue;
+			}
+			tx.settleSubmission(item.id, { status: "unanswered", reason: "aborted" });
+			inbox.items.splice(index, 1);
+			const requestId = requestIds.get(item.id);
+			taken.push({
+				mode: item.mode,
+				message: { ...(requestId !== undefined ? { requestId } : {}), content: messageText(item.content) },
+			});
+		}
+		return taken;
+	}, context);
+	return [
+		...withdrawn.filter((item) => item.mode === "steer"),
+		...withdrawn.filter((item) => item.mode !== "steer"),
+	].flatMap((item) => (item.message.content.trim() ? [item.message] : []));
+}
+
 /** Exact committed inbox frames, independent of the agent stream's content-free queue IDs. */
 export async function watchQueue(observer: DocumentObserver, conversationId: ConversationId, context: Context) {
 	const watch = await observer.watchDoc(InboxDoc, conversationId, context);
