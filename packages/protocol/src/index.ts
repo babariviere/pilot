@@ -779,6 +779,8 @@ export interface ProjectDashboard {
 	scheduled: DashboardSection<DashboardScheduledItem>;
 	/** One group per configured source, in a stable order. */
 	tracked: DashboardTrackedSource[];
+	/** Memory provider extension point; absent when unavailable or not yet loaded. */
+	memory?: import("./memory.ts").ProjectMemorySummary;
 	/** Finished chats that are no longer waiting on the user, latest first. */
 	recent: DashboardSection<DashboardRecentItem>;
 }
@@ -1011,3 +1013,4 @@ export type ServerMessage =
 	| { type: "error"; sessionId?: string; name?: string; message: string };
 
 export const DEFAULT_PORT = 4319;
+export type * from "./memory.ts";

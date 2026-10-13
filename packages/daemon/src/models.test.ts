@@ -24,6 +24,58 @@ const model = (id: string, input: number, output: number): Model => ({
 const expensive = model("large", 3, 15);
 const cheap = model("small", 0.1, 0.4);
 
+test("memory compaction uses the explicit luna model, no tools or reasoning, and surfaces failure", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
+	let fail = false,
+		calls = 0;
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				getAvailable: async () => [cheap, luna],
+				completeSimple: async (
+					chosen: Model,
+					context: Parameters<ModelRuntime["completeSimple"]>[1],
+					options: Parameters<ModelRuntime["completeSimple"]>[2],
+				) => {
+					calls++;
+					assert.equal(chosen, luna);
+					assert.equal(context.tools, undefined);
+					assert.equal(options?.reasoning, undefined);
+					assert.equal(options?.maxTokens, 256);
+					assert.equal(options?.maxRetries, 0);
+					assert.match(context.systemPrompt!, /Invent nothing/);
+					return answer("lasting fact", fail ? "error" : "stop");
+				},
+			}) as unknown as ModelRuntime,
+	);
+	const catalog = new ModelCatalog(root),
+		controller = new AbortController();
+	assert.equal(await catalog.summarizeMemory("memories", controller.signal), "lasting fact");
+	fail = true;
+	await assert.rejects(catalog.summarizeMemory("memories", controller.signal), /failed: error/);
+	controller.abort();
+	await assert.rejects(catalog.summarizeMemory("memories", controller.signal));
+	assert.equal(calls, 2);
+});
+
+test("memory compaction never falls back to another model when luna is unavailable", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () => ({ getAvailable: async () => [cheap] }) as unknown as ModelRuntime,
+	);
+	await assert.rejects(
+		new ModelCatalog(root).summarizeMemory("memories", new AbortController().signal),
+		/requires authenticated openai-codex\/gpt-6-luna/,
+	);
+});
+
 function answer(
 	text: string,
 	stopReason: "stop" | "error" | "aborted" = "stop",
