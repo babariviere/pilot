@@ -13,9 +13,12 @@ struct ProjectPage: View {
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
     @State private var showingMemory = false
-    @State private var showingTracked = false
+    /// The tracked items sheet: every source from the … menu, or one source from its page section.
+    @State private var trackedSheet: TrackedSheetScope?
     /// Navigation requested from the tracked items sheet, run once it has closed.
     @State private var afterTracked: (() -> Void)?
+    /// Start chat / Start mission on the page's Current cycle and Tracked rows.
+    @StateObject private var trackedActions = TrackedItemActions()
     @State private var retrying = false
     @State private var fullList: ProjectFullList?
     @State private var fullListDashboard: ProjectDashboard?
@@ -31,7 +34,7 @@ struct ProjectPage: View {
                         ProjectToolbar(project: project, model: model,
                                        openSettings: { openProjectSettings(project) },
                                        showArtifacts: { showingArtifacts = true },
-                                       showTracked: { showingTracked = true })
+                                       showTracked: { trackedSheet = .all })
                     }
                     .sheet(isPresented: $showingArtifacts) {
                         ProjectArtifactsBrowser(project: project, client: client)
@@ -39,14 +42,15 @@ struct ProjectPage: View {
                     .sheet(isPresented: $showingMemory) {
                         ProjectMemoryBrowser(project: project, client: client)
                     }
-                    .sheet(isPresented: $showingTracked, onDismiss: {
+                    .sheet(item: $trackedSheet, onDismiss: {
                         let next = afterTracked
                         afterTracked = nil
                         next?()
-                    }) {
-                        TrackedInboxSheet(project: project, openSettings: { openProjectSettings(project) }) { next in
+                    }) { scope in
+                        TrackedInboxSheet(project: project, kinds: scope.kinds,
+                                          openSettings: { openProjectSettings(project) }) { next in
                             afterTracked = next
-                            showingTracked = false
+                            trackedSheet = nil
                         }
                     }
                     .sheet(item: $fullList) { list in
@@ -76,7 +80,7 @@ struct ProjectPage: View {
                                                       retrying: retrying, retry: retry) : nil
             let scheduled = scheduled
             if dashboard.summary.chats == 0, dashboard.missions.total == 0, dashboard.memory == nil,
-               dashboard.needsYou.total == 0, scheduled.isEmpty {
+               dashboard.needsYou.total == 0, scheduled.isEmpty, dashboard.tracked.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         banner
@@ -96,7 +100,10 @@ struct ProjectPage: View {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
                                      needsYou: dashboard.needsYou, scheduled: scheduled,
                                      banner: banner, showFullList: showFullList,
-                                     browseMemory: { showingMemory = true })
+                                     browseMemory: { showingMemory = true },
+                                     trackedActions: trackedActions,
+                                     showTracked: { trackedSheet = $0 },
+                                     openSettings: { openProjectSettings(project) })
             }
         } else if let error = client.dashboardErrors[projectId] {
             EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load this project", message: error) {
@@ -211,6 +218,9 @@ private struct ProjectDashboardBody: View {
     let banner: ProjectRefreshBanner?
     let showFullList: (ProjectFullList) -> Void
     let browseMemory: () -> Void
+    @ObservedObject var trackedActions: TrackedItemActions
+    let showTracked: (TrackedSheetScope) -> Void
+    let openSettings: () -> Void
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -327,6 +337,14 @@ private struct ProjectDashboardBody: View {
                 }
             }
 
+            ProjectCycleSection(project: project, group: dashboard.tracked.first { $0.source == TrackedKind.linear.rawValue },
+                                actions: trackedActions, now: now) { showTracked(.linear) }
+
+            ProjectTrackedSection(project: project,
+                                  groups: dashboard.tracked.filter { $0.source != TrackedKind.linear.rawValue },
+                                  actions: trackedActions, now: now, openSettings: openSettings,
+                                  showAll: { showTracked(.only($0)) })
+
             if let memory = dashboard.memory {
                 ProjectPageSection(header: PageSectionHeader(title: "Memory", count: memory.count,
                                                               linkTitle: "Browse memory", link: browseMemory)) {
@@ -391,6 +409,28 @@ private struct ProjectMoreLine: View {
                 .font(.pilot(.caption))
                 .foregroundStyle(Theme.faintForeground)
                 .padding(.leading, 34)
+        }
+    }
+}
+
+/// Which sources the tracked items sheet lists: all of them from the … menu, or one from its page section.
+enum TrackedSheetScope: Identifiable, Hashable {
+    case all
+    case only(TrackedKind)
+
+    static let linear = TrackedSheetScope.only(.linear)
+
+    var id: String {
+        switch self {
+        case .all: "all"
+        case let .only(kind): kind.rawValue
+        }
+    }
+
+    var kinds: [TrackedKind] {
+        switch self {
+        case .all: [.linear, .slack]
+        case let .only(kind): [kind]
         }
     }
 }
@@ -507,6 +547,114 @@ struct ProjectRefreshBanner: View {
             .accessibilityElement(children: .contain)
         }
     }
+}
+
+// MARK: Tracking
+
+/// The attached Linear team's current cycle: only my issues, grouped by status with Done collapsed, at most
+/// five open rows and "All N issues" for my full list. With no active cycle, my open issues in the team.
+/// One quiet line until a team is attached. Rows reuse the tracked row and its Start chat / Start mission.
+private struct ProjectCycleSection: View {
+    let project: Project
+    /// The dashboard's Linear group, absent until a team is attached and the source is configured.
+    let group: DashboardTrackedSource?
+    @ObservedObject var actions: TrackedItemActions
+    let now: Date
+    let showAll: () -> Void
+    @State private var showDone = false
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let total = group?.total ?? 0
+        ProjectPageSection(header: PageSectionHeader(title: "Current cycle",
+                                                      linkTitle: total > 0 ? TrackedItemText.allIssues(total) : nil,
+                                                      link: showAll)) {
+            if let group {
+                let source = projectTrackingSource(group, projectId: project.id, kind: .linear, client: model.client)
+                let open = group.items.map { TrackedItem(dashboard: $0, projectId: project.id, kind: .linear) }
+                let done = (group.done?.items ?? []).map { TrackedItem(dashboard: $0, projectId: project.id, kind: .linear) }
+                let doneCount = group.done?.total ?? 0
+                TrackedSourceStatusLine(source: source, actions: actions, now: now)
+                if let linear = group.linear { LinearCycleHeader(summary: linear, now: now).padding(.vertical, 4) }
+                if open.isEmpty,
+                   let empty = TrackedItemText.linearEmpty(group.linear, status: source.status, doneCount: doneCount) {
+                    ProjectQuietLine(text: empty)
+                }
+                LinearIssueGroups(open: open, done: done, doneCount: doneCount, showDone: $showDone, actions: actions,
+                                  now: now, showAllDone: showAll)
+            } else if let team = project.tracking?.linearTeam, !team.isEmpty {
+                ProjectQuietLine(text: "Your cycle appears after the first sync.")
+            } else {
+                ProjectQuietLine(text: "Attach a Linear team in Tracking settings to follow your current cycle here.")
+            }
+        }
+    }
+}
+
+/// Every other tracking source (Slack bug reports today), one group each with its own sync, sign-in or error
+/// status, at most five rows and "Show all N". One quiet line until a source is configured.
+private struct ProjectTrackedSection: View {
+    let project: Project
+    /// Dashboard groups other than Linear, which has the Current cycle section.
+    let groups: [DashboardTrackedSource]
+    @ObservedObject var actions: TrackedItemActions
+    let now: Date
+    let openSettings: () -> Void
+    let showAll: (TrackedKind) -> Void
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let known = groups.filter { TrackedKind(rawValue: $0.source) != nil }
+        ProjectPageSection(header: PageSectionHeader(title: "Tracked", linkTitle: "Tracking settings",
+                                                      link: openSettings)) {
+            if known.isEmpty {
+                ProjectQuietLine(text: "Add Slack channels in Tracking settings to follow bug reports here.")
+            }
+            ForEach(known) { group in
+                if let kind = TrackedKind(rawValue: group.source) { sourceGroup(group, kind: kind) }
+            }
+        }
+    }
+
+    private func sourceGroup(_ group: DashboardTrackedSource, kind: TrackedKind) -> some View {
+        let source = projectTrackingSource(group, projectId: project.id, kind: kind, client: model.client)
+        let items = group.items.map { TrackedItem(dashboard: $0, projectId: project.id, kind: kind) }
+        return VStack(alignment: .leading, spacing: 4) {
+            SectionLabel(title: TrackedItemText.sourceTitle(kind, teamName: project.tracking?.linearTeamName),
+                         count: group.total)
+                .padding(.horizontal, 8).padding(.top, 2)
+            TrackedSourceStatusLine(source: source, actions: actions, now: now)
+            if items.isEmpty, source.status == .ok || source.status == .syncing {
+                ProjectQuietLine(text: TrackedItemText.emptySource(source, project: project))
+            }
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 { HairlineDivider(leading: 34) }
+                TrackedItemRow(item: item, actions: actions, now: now)
+            }
+            ProjectMoreLine(hidden: max(0, group.total - items.count), total: group.total,
+                            noun: kind == .slack ? "bug reports" : "items") { showAll(kind) }
+        }
+    }
+}
+
+/// A section's one quiet line: empty guidance or what is missing.
+private struct ProjectQuietLine: View {
+    let text: String
+
+    var body: some View {
+        Text(text).font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 8).padding(.vertical, 4)
+    }
+}
+
+/// The live source from the WebSocket list (sync time, sign-in command), or the dashboard's copy until it arrives.
+@MainActor
+private func projectTrackingSource(_ group: DashboardTrackedSource, projectId: String, kind: TrackedKind,
+                                   client: PilotClient) -> TrackingSource {
+    client.source(projectId: projectId, kind: kind)
+        ?? TrackingSource(id: "\(projectId):\(kind.rawValue)", projectId: projectId, kind: kind, label: group.label,
+                          configured: true, status: group.status, error: group.error)
 }
 
 // MARK: Rows

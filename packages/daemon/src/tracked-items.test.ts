@@ -86,6 +86,42 @@ test("durable, project-scoped dedupe preserves dismissals and links on refresh",
 		await rm(home, { recursive: true, force: true });
 	}
 });
+test("the Linear preview leads with open issues by status and priority and keeps done ones apart", async () => {
+	const store = new TrackedItemStore(":memory:");
+	const issue = (id: string, statusType: string, priority: number, updatedAt: number): TrackedInput => ({
+		...trackedInput(id, updatedAt),
+		metadata: { statusType, priority },
+	});
+	try {
+		await store.load(["p"]);
+		await store.commit("p", "linear", [
+			issue("todo-low", "unstarted", 4, 90),
+			issue("todo-urgent", "unstarted", 1, 10),
+			issue("todo-none", "backlog", 0, 80),
+			issue("started-medium", "started", 3, 20),
+			issue("started-high", "started", 2, 5),
+			...Array.from({ length: 7 }, (_, i) => issue(`done-${i}`, i % 2 ? "canceled" : "completed", 1, 100 + i)),
+		]);
+		const preview = store.preview("p", "linear");
+		assert.equal(preview.total, 12);
+		assert.deepEqual(
+			preview.items.map((item) => item.externalId),
+			["started-high", "started-medium", "todo-urgent", "todo-low", "todo-none"],
+		);
+		assert.equal(preview.done?.total, 7);
+		assert.deepEqual(
+			preview.done?.items.map((item) => item.externalId),
+			["done-6", "done-5", "done-4", "done-3", "done-2"],
+		);
+		const { id } = (await store.list({ projectId: "p", limit: 1 })).items[0]!;
+		await store.patch(id, { dismissed: true });
+		assert.equal(store.preview("p", "linear").done?.total, 6, "dismissed issues leave the preview");
+		await store.commit("p", "slack", [trackedInput("thread")]);
+		assert.equal(store.preview("p", "slack").done, undefined);
+	} finally {
+		await store.close();
+	}
+});
 test("links keep a bounded history; the latest shows on the row and null clears a kind", async () => {
 	const store = new TrackedItemStore(":memory:");
 	try {

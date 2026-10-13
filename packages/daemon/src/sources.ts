@@ -245,9 +245,9 @@ export class SourceRegistry {
 			.filter((source) => source.configured)
 			.map((source) => {
 				const checkpoint = this.items.checkpoint(source.id);
-				const { items, total } =
+				const { items, total, done } =
 					checkpoint && checkpoint.configKey !== this.currentKey(source.id)
-						? { items: [], total: 0 }
+						? { items: [], total: 0, done: undefined }
 						: this.items.preview(projectId, source.kind);
 				return {
 					source: source.kind,
@@ -256,6 +256,7 @@ export class SourceRegistry {
 					...(source.error ? { error: source.error } : {}),
 					total,
 					items,
+					...(done ? { done } : {}),
 					...(source.linear ? { linear: source.linear } : {}),
 				};
 			});

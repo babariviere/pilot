@@ -336,12 +336,16 @@ test("tracked sources pass through bounded, and the dashboard is stable across i
 			status: "ok" as const,
 			total: 9,
 			items: Array.from({ length: 9 }, (_, i) => ({ id: `L-${i}`, title: `Issue ${i}` })),
+			done: { total: 7, items: Array.from({ length: 7 }, (_, i) => ({ id: `D-${i}`, title: `Done ${i}` })) },
 		},
 		{ source: "slack", label: "Slack", status: "sign_in_required" as const, total: 0, items: [] },
 	];
 	const dashboard = build({ tracked });
 	assert.equal(dashboard.tracked[0]?.items.length, 5);
 	assert.equal(dashboard.tracked[0]?.total, 9);
+	assert.equal(dashboard.tracked[0]?.done?.items.length, 5);
+	assert.equal(dashboard.tracked[0]?.done?.total, 7);
+	assert.equal(dashboard.tracked[1]?.done, undefined);
 	assert.equal(dashboard.tracked[1]?.status, "sign_in_required");
 	assert.equal(JSON.stringify(dashboard), JSON.stringify(build({ tracked })));
 });

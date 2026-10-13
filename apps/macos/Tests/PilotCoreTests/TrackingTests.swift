@@ -107,3 +107,31 @@ import Testing
     #expect(prefill.gitBranchName == "eng-1-bug")
     #expect(prefill.description == "External text")
 }
+
+@Test func dashboardLinearGroupDecodesDoneAndConvertsRowsToItems() throws {
+    let json = Data(#"""
+    {"source":"linear","label":"Linear","status":"ok","total":3,
+     "items":[{"id":"i1","title":"Open","url":"https://linear.app/a/issue/ENG-1","status":"In Progress",
+               "updatedAt":20,"externalId":"uuid-1","metadata":{"identifier":"ENG-1","statusType":"started"},
+               "sessionIds":["s1","s2"],"sessionId":"s2"}],
+     "done":{"total":2,"items":[{"id":"i2","title":"Shipped","status":"Done","updatedAt":30}]}}
+    """#.utf8)
+    let source = try JSONDecoder().decode(DashboardTrackedSource.self, from: json)
+    #expect(source.done?.total == 2)
+    #expect(source.done?.hiddenCount == 1)
+    let item = TrackedItem(dashboard: source.items[0], projectId: "p", kind: .linear)
+    #expect(item.projectId == "p")
+    #expect(item.kind == .linear)
+    #expect(item.externalId == "uuid-1")
+    #expect(item.metadata["identifier"] == .string("ENG-1"))
+    #expect(item.sessionIds == ["s1", "s2"])
+    #expect(!item.dismissed)
+    let sparse = TrackedItem(dashboard: source.done!.items[0], projectId: "p", kind: .linear)
+    #expect(sparse.externalId == "i2")
+    #expect(sparse.url.isEmpty)
+    #expect(sparse.updatedAt == 30)
+    let slack = try JSONDecoder().decode(DashboardTrackedSource.self, from: Data(#"""
+    {"source":"slack","label":"Slack","status":"ok","total":0,"items":[]}
+    """#.utf8))
+    #expect(slack.done == nil)
+}

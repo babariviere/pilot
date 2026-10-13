@@ -186,39 +186,36 @@ export class TrackedItemDisk {
 	}
 	/** Only current projects are loaded into the daemon's bounded dashboard cache. */
 	preview(projectId: string, kind: TrackedKind): import("@pilot/protocol").DashboardTrackedSource {
-		const page = this.list({ projectId, kind, limit: 5 });
+		const label = kind === "linear" ? "Linear" : "Slack";
+		if (kind !== "linear") {
+			const page = this.list({ projectId, kind, limit: 5 });
+			return { source: kind, label, status: "idle", total: page.total, items: page.items.map(previewItem) };
+		}
+		// Open issues lead (in progress, then to do, by priority); done ones are a separate, collapsed group.
+		const filter = "project_id = ? AND kind = 'linear' AND active = 1 AND dismissed = 0";
+		const closed = "coalesce(json_extract(metadata, '$.statusType'), '') IN ('completed', 'canceled')";
+		const count = (where: string) =>
+			Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${where}`).get(projectId)!.n);
+		const rows = (where: string, order: string) =>
+			(
+				this.db
+					.prepare(`SELECT * FROM tracked_items WHERE ${where} ORDER BY ${order} LIMIT 5`)
+					.all(projectId) as Row[]
+			).map((row) => previewItem(decode(row)));
+		const openTotal = count(`${filter} AND NOT ${closed}`),
+			doneTotal = count(`${filter} AND ${closed}`);
 		return {
 			source: kind,
-			label: kind === "linear" ? "Linear" : "Slack",
+			label,
 			status: "idle",
-			total: page.total,
-			items: page.items.map(
-				({
-					id,
-					title,
-					url,
-					status,
-					updatedAt,
-					externalId,
-					metadata,
-					sessionId,
-					missionId,
-					sessionIds,
-					missionIds,
-				}) => ({
-					id,
-					title,
-					url,
-					status,
-					updatedAt,
-					externalId,
-					metadata,
-					...(sessionId ? { sessionId } : {}),
-					...(missionId ? { missionId } : {}),
-					...(sessionIds ? { sessionIds } : {}),
-					...(missionIds ? { missionIds } : {}),
-				}),
+			total: openTotal + doneTotal,
+			items: rows(
+				`${filter} AND NOT ${closed}`,
+				`CASE json_extract(metadata, '$.statusType') WHEN 'started' THEN 0 ELSE 1 END,
+				 CASE WHEN json_extract(metadata, '$.priority') BETWEEN 1 AND 4 THEN json_extract(metadata, '$.priority') ELSE 5 END,
+				 updated_at DESC, id`,
 			),
+			done: { total: doneTotal, items: rows(`${filter} AND ${closed}`, "updated_at DESC, id") },
 		};
 	}
 	/** Bounded, atomic commit of a poll page and its cursor. Validate the whole page first. */
@@ -365,6 +362,24 @@ function decode(row: Row): TrackedItem {
 	};
 }
 const LINK_LIMIT = 20;
+/** The fields a dashboard row needs. */
+function previewItem(item: TrackedItem): import("@pilot/protocol").DashboardTrackedItem {
+	const { id, title, url, status, updatedAt, externalId, metadata, sessionId, missionId, sessionIds, missionIds } =
+		item;
+	return {
+		id,
+		title,
+		url,
+		status,
+		updatedAt,
+		externalId,
+		metadata,
+		...(sessionId ? { sessionId } : {}),
+		...(missionId ? { missionId } : {}),
+		...(sessionIds ? { sessionIds } : {}),
+		...(missionIds ? { missionIds } : {}),
+	};
+}
 /** A new link moves to the end (latest). null clears every link of that kind. */
 function bind(current: string[], link: string | null | undefined): string[] {
 	if (link === undefined) return current;

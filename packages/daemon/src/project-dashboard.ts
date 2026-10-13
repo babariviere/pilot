@@ -248,6 +248,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		tracked: (input.tracked ?? []).map((source) => ({
 			...source,
 			items: source.items.slice(0, limit),
+			...(source.done ? { done: { total: source.done.total, items: source.done.items.slice(0, limit) } } : {}),
 		})),
 		recent: section(recent, limit),
 		...(input.memory ? { memory: input.memory } : {}),

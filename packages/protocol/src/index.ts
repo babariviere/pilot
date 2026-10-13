@@ -787,8 +787,12 @@ export interface DashboardTrackedSource {
 	label: string;
 	status: DashboardSourceStatus;
 	error?: string;
+	/** Every active item of the source, including those in `done`. */
 	total: number;
+	/** Latest first. Linear lists open issues only: in progress, then to do, each by priority. */
 	items: DashboardTrackedItem[];
+	/** Linear only: completed and canceled issues, latest first, shown collapsed. */
+	done?: DashboardSection<DashboardTrackedItem>;
 	linear?: import("./tracking.ts").LinearSourceSummary;
 }
 
