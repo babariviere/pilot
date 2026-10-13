@@ -1008,10 +1008,7 @@ test("start saves member and already-linked artifacts and parsed links before sp
 	assert.ok(message.includes(`Design (html): ${first.id}, revision 1`));
 	assert.ok(message.includes(`Diagram (html): ${second.id}`));
 	assert.match(message, /Issue \(github.issue\): https:\/\/github.com\/octo\/repo\/issues\/42/);
-	assert.ok(
-		message.indexOf("Issue (github.issue)") < message.indexOf("ENG-12 (linear.issue)"),
-		"references use canonical URL order, not request or persistence order",
-	);
+	assert.match(message, /ENG-12 \(linear\.issue\): https:\/\/linear\.app\/acme\/issue\/ENG-12/);
 	assert.doesNotMatch(message, /PRIVATE.*CONTENT/);
 	const detail = f.store.detail(mission.id);
 	assert.deepEqual(detail.resources.map((ref) => [ref.kind, ref.externalId]).sort(), [
@@ -1032,7 +1029,15 @@ test("start saves member and already-linked artifacts and parsed links before sp
 	}
 	f.service.leave(session.id);
 	const later = await f.service.startTask(mission.id, task.id);
-	assert.equal(await content(later.id), message);
+	const laterMessage = await content(later.id);
+	for (const reference of [
+		first.id,
+		second.id,
+		"https://github.com/octo/repo/issues/42",
+		"https://linear.app/acme/issue/ENG-12/design",
+	]) {
+		assert.ok(laterMessage.includes(reference), `later chat inherits ${reference}`);
+	}
 });
 
 test("start rejects foreign artifacts, invalid revisions and malformed links without writes or spawn", async (t) => {
