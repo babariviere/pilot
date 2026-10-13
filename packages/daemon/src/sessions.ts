@@ -2010,9 +2010,14 @@ export class SessionManager {
 		this.stopResults.set(requestId, []);
 		try {
 			const starting = meta.initializing;
-			const admission = this.start(id);
-			if (!starting) {
-				const rejected = await admission;
+			let admission = this.start(id);
+			let rejected = await admission;
+			if (rejected.has(requestId)) throw rejected.get(requestId);
+			// An existing drain can finish just before observing the abort saved above.
+			// Await it first so start() can register a fresh drain for that still-pending abort.
+			if (starting && meta.pending?.some((command) => command.requestId === requestId)) {
+				admission = this.start(id);
+				rejected = await admission;
 				if (rejected.has(requestId)) throw rejected.get(requestId);
 			}
 			// Kernel messages were admitted before anything still waiting here.
