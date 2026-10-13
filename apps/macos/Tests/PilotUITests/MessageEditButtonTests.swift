@@ -85,7 +85,7 @@ import Testing
     }
 }
 
-@Test @MainActor func messagePencilStaysInTheRightMarginOutsideTheBubble() {
+@Test @MainActor func messagePencilStaysInTheRightMarginOutsideTheBubble() throws {
     _ = NSApplication.shared
     let rewind = TranscriptRewind()
     let selection = MessageTimestampSelection()
@@ -96,7 +96,11 @@ import Testing
                         timestamp: key.milliseconds, entryID: 42)
                 .environment(\.transcriptRewind, rewind)
                 .environment(\.messageTimestampSelection, selection)
+                .frame(width: width)
         )
+        // Older NSHostingView versions can resize their window to the root's ideal size.
+        // Keep this fixture's viewport fixed, like the transcript's bounded content column.
+        host.sizingOptions = []
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 100),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -105,6 +109,7 @@ import Testing
         window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless()
         host.layoutSubtreeIfNeeded()
+        try #require(abs(host.bounds.width - width) < 0.5)
         func bubbleContains(x: CGFloat) -> Bool {
             (0..<100).contains { y in
                 let point = host.convert(NSPoint(x: x, y: CGFloat(y)), to: nil)

@@ -27,7 +27,11 @@ final class MessageTimestampSelection: ObservableObject {
     func unregister(_ view: NSView) { targets.removeValue(forKey: ObjectIdentifier(view)) }
 
     func target(at point: NSPoint, in window: NSWindow) -> MessageTimestampKey? {
-        targets.values.first { target in
+        // Older SwiftUI hosts can give background markers oversized, unclipped bounds.
+        // A marker must never claim a point outside the window's content viewport.
+        guard let content = window.contentView,
+              content.bounds.contains(content.convert(point, from: nil)) else { return nil }
+        return targets.values.first { target in
             guard let view = target.view, view.window === window else { return false }
             // Unclipped NSViews can report a visibleRect larger than their own bounds.
             // Intersect both so a bubble cannot claim clicks elsewhere in the window.
