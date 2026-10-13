@@ -448,7 +448,9 @@ for (const phase of ["clone", "ready", "ack"] as const) {
 		const stopping = sessions.stop(created.id);
 		assert.deepEqual(sessions.prepareUpdate(), { ready: false });
 		await stopping;
-		assert.deepEqual((await f.stored(created.id)).pending, []);
+		const settled = await f.stored(created.id);
+		assert.deepEqual(settled.pending, []);
+		assert.equal(settled.initializing, undefined);
 		assert.equal(sessions.get(created.id)?.state, "idle");
 		// Idle workers can still have background metadata writes; the lease waits for those too.
 		await until(() => sessions.prepareUpdate().ready);
