@@ -52,8 +52,9 @@ class TestOutputTests(unittest.TestCase):
             env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "TEST_OUTPUT": output,
                    "TEST_STATUS": str(status), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2"}
+            # Use macOS's Bash 3.2, not a newer Homebrew bash picked by env.
             result = subprocess.run(
-                ["bash", "-c", '"$@" && touch "$CONTINUED"', "test", str(scripts / "test.sh"), *args],
+                ["/bin/bash", "-c", '/bin/bash "$@" && touch "$CONTINUED"', "test", str(scripts / "test.sh"), *args],
                 env={**env, "CONTINUED": str(marker)}, capture_output=True, text=True)
             return result, marker.exists(), arguments.read_text().splitlines()
 
