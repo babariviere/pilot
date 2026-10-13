@@ -9,6 +9,7 @@ import { test } from "node:test";
 import type { AgentEvent, ServerMessage, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { RepositoryChanges } from "./changes.ts";
+import { Conflict } from "./errors.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -333,15 +334,19 @@ test("chat sockets stream one session each, isolate overload and release their s
 
 	const a = open("/api/sessions/session-a/ws");
 	const b = open(`/api/sessions/${encodeURIComponent("session b")}/ws`);
+	const hello = (await a.until((m) => m.type === "chat.stream")) as Extract<ServerMessage, { type: "chat.stream" }>;
+	assert.equal(hello.resumed, false);
 	assert.deepEqual(await a.until((m) => m.type === "events"), {
 		type: "events",
 		sessionId: "session-a",
 		events: [snapshot],
+		seq: 1,
 	});
 	assert.deepEqual(await b.until((m) => m.type === "events"), {
 		type: "events",
 		sessionId: "session b",
 		events: [snapshot],
+		seq: 1,
 	});
 	assert.deepEqual(await a.until((m) => m.type === "artifacts"), {
 		type: "artifacts",
@@ -349,7 +354,7 @@ test("chat sockets stream one session each, isolate overload and release their s
 		artifacts: [],
 	});
 
-	// Overload on one chat socket resynchronizes only that chat.
+	// Overload on one chat socket closes only that chat. Its stream stays subscribed for a resume.
 	const closed = once(a.socket, "close");
 	const buffered = t.mock.getter(WebSocket.prototype, "bufferedAmount", () => 128 * 1024 * 1024);
 	deliver.get("session-a")!([{ type: "queue_update", items: [] }]);
@@ -357,14 +362,23 @@ test("chat sockets stream one session each, isolate overload and release their s
 	const [code, reason] = await closed;
 	assert.equal(code, 1013);
 	assert.match(String(reason), /Reconnect.*snapshot/);
-	while (!unsubscribed.length) await new Promise((resolve) => setTimeout(resolve, 5));
-	assert.deepEqual(unsubscribed, ["session-a"]);
 	deliver.get("session b")!([{ type: "queue_update", items: [] }]);
 	assert.deepEqual(await b.until((m) => m.type === "events" && m.events[0]?.type === "queue_update"), {
 		type: "events",
 		sessionId: "session b",
 		events: [{ type: "queue_update", items: [] }],
+		seq: 2,
 	});
+	// The reconnect replays the batch the overloaded socket missed, without a new snapshot or subscription.
+	const resumed = open(`/api/sessions/session-a/ws?stream=${hello.streamId}&after=1`);
+	assert.deepEqual(await resumed.until((m) => m.type === "events"), {
+		type: "events",
+		sessionId: "session-a",
+		events: [{ type: "queue_update", items: [] }],
+		seq: 2,
+	});
+	assert.deepEqual(resumed.messages[0], { ...hello, resumed: true });
+	assert.deepEqual(unsubscribed, []);
 
 	// An unknown session is final, and a malformed path never upgrades.
 	const missing = open("/api/sessions/missing/ws");
@@ -373,11 +387,127 @@ test("chat sockets stream one session each, isolate overload and release their s
 	assert.deepEqual(missing.messages, [{ type: "error", sessionId: "missing", message: "Unknown session: missing" }]);
 	const invalid = open("/api/sessions/a/b/ws");
 	await once(invalid.socket, "error");
+});
 
-	b.socket.close();
-	await once(b.socket, "close");
-	while (unsubscribed.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
-	assert.deepEqual(unsubscribed, ["session-a", "session b"]);
+test("terminal and subagent sockets stream one target each and accept only their own messages", {
+	timeout: 30_000,
+}, async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const terminals = new TerminalManager();
+	const writable = t.mock.method(sessions, "assertWritable", (id: string) => {
+		if (id === "ask") throw new Conflict("Ask sessions are read-only");
+		if (id === "missing") throw new NotFound(`Unknown session: ${id}`);
+	});
+	t.mock.method(sessions, "changeBase", () => ({ cwd: "/tmp" }));
+	let output!: { data(data: string): void; exit(code: number): void };
+	let detached = 0;
+	const attach = t.mock.method(
+		terminals,
+		"attach",
+		(_id: string, _cwd: string, _cols: number, _rows: number, listener: typeof output) => {
+			output = listener;
+			listener.data("scrollback");
+			return () => {
+				detached++;
+			};
+		},
+	);
+	const write = t.mock.method(terminals, "write", () => {});
+	const resize = t.mock.method(terminals, "resize", () => {});
+	let watcher!: { events(events: AgentEvent[]): void; error(message: string): void };
+	let unwatched = 0;
+	t.mock.method(sessions, "watchSubagent", (_id: string, name: string, listener: typeof watcher) => {
+		if (name === "missing") throw new NotFound("No subagent named missing");
+		watcher = listener;
+		listener.events([]);
+		return () => {
+			unwatched++;
+		};
+	});
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	const sockets: WebSocket[] = [];
+	t.after(async () => {
+		for (const socket of sockets) socket.terminate();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const open = (path: string) => {
+		const socket = new WebSocket(`${base}${path}`);
+		sockets.push(socket);
+		const messages: ServerMessage[] = [];
+		socket.on("message", (data) => messages.push(JSON.parse(String(data)) as ServerMessage));
+		const until = async (predicate: (message: ServerMessage) => boolean) => {
+			while (!messages.some(predicate)) await new Promise((resolve) => setTimeout(resolve, 5));
+			return messages.find(predicate)!;
+		};
+		return { socket, messages, until };
+	};
+
+	const terminal = open("/api/sessions/session-1/terminal/ws?cols=100&rows=30&restart=1");
+	assert.deepEqual(await terminal.until((m) => m.type === "terminal.data"), {
+		type: "terminal.data",
+		sessionId: "session-1",
+		data: "scrollback",
+	});
+	assert.deepEqual(attach.mock.calls[0]?.arguments.slice(0, 4), ["session-1", "/tmp", 100, 30]);
+	assert.equal(attach.mock.calls[0]?.arguments[5], true);
+	terminal.socket.send(JSON.stringify({ type: "terminal.input", data: "ls\r" }));
+	terminal.socket.send(JSON.stringify({ type: "terminal.resize", cols: 120, rows: 40 }));
+	terminal.socket.send(JSON.stringify({ type: "terminal.close" }));
+	assert.deepEqual(await terminal.until((m) => m.type === "error"), {
+		type: "error",
+		sessionId: "session-1",
+		message: "Invalid terminal message",
+	});
+	assert.deepEqual(write.mock.calls[0]?.arguments, ["session-1", "ls\r"]);
+	assert.deepEqual(resize.mock.calls[0]?.arguments, ["session-1", 120, 40]);
+	output.exit(0);
+	await terminal.until((m) => m.type === "terminal.exit");
+	terminal.socket.close();
+	await once(terminal.socket, "close");
+	while (!detached) await new Promise((resolve) => setTimeout(resolve, 5));
+
+	for (const [path, expected] of [
+		["/api/sessions/ask/terminal/ws?cols=80&rows=24", 4409],
+		["/api/sessions/missing/terminal/ws?cols=80&rows=24", 4404],
+		["/api/sessions/session-1/terminal/ws?cols=0&rows=24", 4409],
+	] as const) {
+		const refused = open(path);
+		const [code] = await once(refused.socket, "close");
+		assert.equal(code, expected, path);
+		assert.equal(refused.messages[0]?.type, "error");
+	}
+	assert.ok(writable.mock.callCount() >= 3);
+
+	const subagent = open(`/api/sessions/session-1/subagents/${encodeURIComponent("code review/1")}/ws`);
+	assert.deepEqual(await subagent.until((m) => m.type === "subagent.events"), {
+		type: "subagent.events",
+		sessionId: "session-1",
+		name: "code review/1",
+		events: [],
+	});
+	watcher.error("reader failed");
+	assert.deepEqual(await subagent.until((m) => m.type === "error"), {
+		type: "error",
+		sessionId: "session-1",
+		name: "code review/1",
+		message: "reader failed",
+	});
+	subagent.socket.close();
+	await once(subagent.socket, "close");
+	while (!unwatched) await new Promise((resolve) => setTimeout(resolve, 5));
+	const missing = open("/api/sessions/session-1/subagents/missing/ws");
+	const [missingCode] = await once(missing.socket, "close");
+	assert.equal(missingCode, 4404);
 });
 
 test("queued message PATCH forwards the message ID and content and reports stale edits", async (t) => {

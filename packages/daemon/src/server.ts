@@ -32,11 +32,13 @@ import type {
 	StartMissionTaskRequest,
 	StartMissionCoordinatorRequest,
 	SubagentMessageRequest,
+	TerminalSocketMessage,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { boundedSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
+import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -148,19 +150,51 @@ function isMissionClientMessage(value: unknown): value is MissionClientMessage {
 	);
 }
 
-/** Close code for a chat socket whose session does not exist. Clients must not reconnect. */
-export const CHAT_NOT_FOUND = 4404;
+/** Final close codes for dedicated sockets. Clients must not reconnect. */
+export const SOCKET_NOT_FOUND = 4404;
+export const SOCKET_REFUSED = 4409;
 
-/** The session ID of a `/api/sessions/:id/ws` chat socket path, if valid. */
-export function chatSocketSession(pathname: string): string | undefined {
-	const match = /^\/api\/sessions\/([^/]+)\/ws$/.exec(pathname);
-	if (!match) return undefined;
+export type StreamSocketRoute =
+	| { kind: "chat"; sessionId: string }
+	| { kind: "terminal"; sessionId: string }
+	| { kind: "subagent"; sessionId: string; name: string };
+
+/** Route a dedicated socket path: `/api/sessions/:id/ws`, `…/terminal/ws` or `…/subagents/:name/ws`. */
+export function streamSocketRoute(pathname: string): StreamSocketRoute | undefined {
+	const raw = pathname.split("/");
+	if (raw[0] !== "" || raw[1] !== "api" || raw[2] !== "sessions" || raw.at(-1) !== "ws") return undefined;
+	let parts: string[];
 	try {
-		const id = decodeURIComponent(match[1]!);
-		return id.trim() && id.length <= 128 && !id.includes("/") ? id : undefined;
+		parts = raw.map((part) => decodeURIComponent(part));
 	} catch {
 		return undefined;
 	}
+	const sessionId = parts[3];
+	if (!sessionId?.trim() || sessionId.length > 128 || sessionId.includes("/")) return undefined;
+	if (parts.length === 5) return { kind: "chat", sessionId };
+	if (parts.length === 6 && parts[4] === "terminal") return { kind: "terminal", sessionId };
+	const name = parts[5];
+	if (parts.length === 7 && parts[4] === "subagents" && name && name.length <= 128)
+		return { kind: "subagent", sessionId, name };
+	return undefined;
+}
+
+function terminalSize(value: string | null): number | undefined {
+	const size = value === null ? Number.NaN : Number(value);
+	return Number.isInteger(size) && size > 0 && size <= 1000 ? size : undefined;
+}
+
+/** Messages a client may send on a terminal socket. Untrusted input. */
+function isTerminalSocketMessage(value: unknown): value is TerminalSocketMessage {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const message = value as Record<string, unknown>;
+	if (message.type === "terminal.input") return typeof message.data === "string";
+	return (
+		message.type === "terminal.resize" &&
+		[message.cols, message.rows].every(
+			(size) => typeof size === "number" && Number.isInteger(size) && size > 0 && size <= 1000,
+		)
+	);
 }
 
 /** WebSocket close reasons are limited to 123 UTF-8 bytes. */
@@ -631,25 +665,31 @@ export function createDaemonServer(
 
 	// Large enough for terminal pastes.
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
-	// Chat sockets are server-to-client only. Each has its own send queue, so one chat's large snapshot or slow
-	// reader never delays another chat or the sidebar, and overload resynchronizes only that chat.
-	const chatWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
+	// Dedicated chat, terminal and subagent sockets. Each has its own send queue, so one stream's large snapshot,
+	// output burst or slow reader never delays another stream or the sidebar, and overload resets only that stream.
+	const streamWss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+	const chatStreams = new ChatStreams((sessionId, listener) => sessions.subscribe(sessionId, listener));
+	server.on("close", () => chatStreams.close());
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url ?? "/", "http://localhost");
+		const url = new URL(req.url ?? "/", "http://localhost");
 		if (!isAllowedOrigin(req.headers.origin)) {
 			socket.destroy();
 			return;
 		}
-		if (pathname === "/api/ws") {
+		if (url.pathname === "/api/ws") {
 			wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
 			return;
 		}
-		const sessionId = chatSocketSession(pathname);
-		if (!sessionId) {
+		const route = streamSocketRoute(url.pathname);
+		if (!route) {
 			socket.destroy();
 			return;
 		}
-		chatWss.handleUpgrade(req, socket, head, (ws) => openChat(ws, sessionId));
+		streamWss.handleUpgrade(req, socket, head, (ws) => {
+			if (route.kind === "chat") openChat(ws, route.sessionId, url.searchParams);
+			else if (route.kind === "terminal") openTerminal(ws, route.sessionId, url.searchParams);
+			else openSubagent(ws, route.sessionId, route.name);
+		});
 	});
 
 	const clients = new Map<WebSocket, (data: string) => void>();
@@ -959,27 +999,37 @@ export function createDaemonServer(
 		});
 	});
 
-	/** Stream one session's transcript on its own socket: a snapshot first, then live batches, until close. */
-	function openChat(ws: WebSocket, sessionId: string): void {
+	/** Report and close a dedicated socket: final for unknown or refused targets, otherwise retryable. */
+	function refuse(ws: WebSocket, report: (message: string) => void, error: unknown): void {
+		const message = error instanceof Error ? error.message : String(error);
+		report(message);
+		const code = error instanceof NotFound ? SOCKET_NOT_FOUND : error instanceof Conflict ? SOCKET_REFUSED : 1013;
+		ws.close(code, closeReason(message));
+	}
+
+	/**
+	 * Stream one session's transcript on its own socket. A new stream starts with a snapshot; a resume with
+	 * `?stream=&after=` replays only the missed batches.
+	 */
+	function openChat(ws: WebSocket, sessionId: string, params: URLSearchParams): void {
 		const sendData = boundedSender(ws);
 		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
-		let unsubscribe: (() => void) | undefined;
+		let detach: (() => void) | undefined;
 		let closed = false;
 		ws.on("message", () => undefined);
 		ws.on("close", () => {
 			closed = true;
-			unsubscribe?.();
+			detach?.();
 			const chats = chatSenders.get(sessionId);
 			chats?.delete(sendData);
 			if (chats && !chats.size) chatSenders.delete(sessionId);
 		});
+		const streamId = params.get("stream");
+		const after = Number(params.get("after"));
 		try {
-			unsubscribe = sessions.subscribe(sessionId, (events) => send({ type: "events", sessionId, events }));
+			detach = chatStreams.attach(sessionId, sendData, streamId ? { streamId, after } : undefined).detach;
 		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			send({ type: "error", sessionId, message });
-			// Unknown sessions are final. Anything else (an update in progress, shutdown) is worth a retry.
-			ws.close(error instanceof NotFound ? CHAT_NOT_FOUND : 1013, closeReason(message));
+			refuse(ws, (message) => send({ type: "error", sessionId, message }), error);
 			return;
 		}
 		let chats = chatSenders.get(sessionId);
@@ -1002,6 +1052,76 @@ export function createDaemonServer(
 					send({ type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
 			},
 		);
+	}
+
+	/** Attach to the session's shell for the socket's lifetime. Input and resizes arrive on the same socket. */
+	function openTerminal(ws: WebSocket, sessionId: string, params: URLSearchParams): void {
+		const sendData = boundedSender(ws);
+		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
+		const report = (message: string) => send({ type: "error", sessionId, message });
+		let detach: (() => void) | undefined;
+		ws.on("close", () => detach?.());
+		const cols = terminalSize(params.get("cols"));
+		const rows = terminalSize(params.get("rows"));
+		if (cols === undefined || rows === undefined) {
+			report("Invalid terminal size");
+			ws.close(SOCKET_REFUSED, "Invalid terminal size");
+			return;
+		}
+		try {
+			sessions.assertWritable(sessionId);
+			// A terminal must not start before the private clone is ready.
+			const { cwd } = sessions.changeBase(sessionId);
+			detach = terminals.attach(
+				sessionId,
+				cwd,
+				cols,
+				rows,
+				{
+					data: (data) => send({ type: "terminal.data", sessionId, data }),
+					exit: (code) => send({ type: "terminal.exit", sessionId, code }),
+				},
+				params.get("restart") === "1",
+			);
+		} catch (error) {
+			refuse(ws, report, error);
+			return;
+		}
+		ws.on("message", (raw) => {
+			let message: unknown;
+			try {
+				message = JSON.parse(String(raw));
+			} catch {
+				return report("Invalid JSON");
+			}
+			if (!isTerminalSocketMessage(message)) return report("Invalid terminal message");
+			try {
+				if (message.type === "terminal.input") {
+					sessions.assertWritable(sessionId);
+					terminals.write(sessionId, message.data);
+				} else terminals.resize(sessionId, message.cols, message.rows);
+			} catch (error) {
+				report(error instanceof Error ? error.message : String(error));
+			}
+		});
+	}
+
+	/** Stream one subagent's transcript on its own socket: a snapshot first, then appended entries. */
+	function openSubagent(ws: WebSocket, sessionId: string, name: string): void {
+		const sendData = boundedSender(ws);
+		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
+		const report = (message: string) => send({ type: "error", sessionId, name, message });
+		let stop: (() => void) | undefined;
+		ws.on("message", () => undefined);
+		ws.on("close", () => stop?.());
+		try {
+			stop = sessions.watchSubagent(sessionId, name, {
+				events: (events) => send({ type: "subagent.events", sessionId, name, events }),
+				error: report,
+			});
+		} catch (error) {
+			refuse(ws, report, error);
+		}
 	}
 
 	function handleTerminal(message: SessionClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {

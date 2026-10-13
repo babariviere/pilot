@@ -8,7 +8,10 @@ public enum ServerUpdate: Sendable {
     case trackedChanged(projectId: String)
     case sessions([SessionSummary])
     case session(SessionSummary)
-    case events(sessionId: String, events: [JSONValue])
+    /// `seq` numbers a chat socket's batches, for resuming; absent on the shared socket.
+    case events(sessionId: String, events: [JSONValue], seq: Int?)
+    /// First frame on every chat socket connection. Not resumed: a snapshot follows.
+    case chatStream(sessionId: String, streamId: String, resumed: Bool)
     /// A subagent transcript batch: a snapshot (or empty list) replaces it, entry_appended events extend it.
     case subagentEvents(sessionId: String, name: String, events: [JSONValue])
     case artifacts(ArtifactListMessage)
@@ -49,7 +52,10 @@ public enum ServerUpdate: Sendable {
             return .session(try session.decode(SessionSummary.self))
         case "events":
             guard let id = json["sessionId"]?.string, let events = json["events"]?.array else { return nil }
-            return .events(sessionId: id, events: events)
+            return .events(sessionId: id, events: events, seq: json["seq"]?.int)
+        case "chat.stream":
+            guard let id = json["sessionId"]?.string, let stream = json["streamId"]?.string else { return nil }
+            return .chatStream(sessionId: id, streamId: stream, resumed: json["resumed"]?.bool ?? false)
         case "subagent.events":
             guard let id = json["sessionId"]?.string, let name = json["name"]?.string,
                   let events = json["events"]?.array else { return nil }

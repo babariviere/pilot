@@ -115,7 +115,18 @@ export interface TodosUpdateEvent {
 	items: SessionTodo[];
 }
 
-export type AgentEvent = DurableAgentEvent | QueueUpdateEvent | TodosUpdateEvent;
+/**
+ * Chat sockets split a long snapshot: the `snapshot` event carries only its newest entries and `prefixPending: true`,
+ * and this event follows in the next frame with the older entries of the same active transcript, before any later
+ * event. Clients treat both together as one snapshot.
+ */
+export interface SnapshotPrefixEvent {
+	type: "snapshot_prefix";
+	/** Oldest first, all older than the snapshot's entries. */
+	entries: EntryRecord[];
+}
+
+export type AgentEvent = DurableAgentEvent | QueueUpdateEvent | TodosUpdateEvent | SnapshotPrefixEvent;
 
 /** POST /api/update/prepare, no body. Ready holds new worker admissions for a 30-second lease. */
 export interface UpdatePreparation {
@@ -1056,8 +1067,16 @@ export type ServerMessage =
 	| { type: "dashboard"; dashboard: ProjectDashboard }
 	/** Sidebar counts for every project, on connection and whenever they change. */
 	| { type: "dashboard.counts"; counts: ProjectDashboardCounts }
-	/** Starts with a snapshot event on every (re)subscription, then incremental batches. */
-	| { type: "events"; sessionId: string; events: AgentEvent[] }
+	/**
+	 * Starts with a snapshot event on every (re)subscription, then incremental batches. On chat sockets, `seq` numbers
+	 * the stream's batches from 1, for resuming.
+	 */
+	| { type: "events"; sessionId: string; events: AgentEvent[]; seq?: number }
+	/**
+	 * First frame on every chat socket connection. `resumed`: the frames after the requested `after` follow. Otherwise
+	 * this is a new stream and its first batch holds a snapshot. Reconnect with `?stream=<streamId>&after=<last seq>`.
+	 */
+	| { type: "chat.stream"; sessionId: string; streamId: string; resumed: boolean }
 	| { type: "terminal.data"; sessionId: string; data: string }
 	| { type: "terminal.exit"; sessionId: string; code: number }
 	/** Replaces the transcript when it contains a snapshot (or is empty); otherwise appends entries. */
@@ -1065,13 +1084,33 @@ export type ServerMessage =
 	| { type: "error"; sessionId?: string; name?: string; message: string };
 
 /**
- * Daemon to client, over a chat socket at /api/sessions/:id/ws, one per open chat. Opening the socket subscribes
- * and closing it unsubscribes; clients send nothing. Events start with a snapshot on every connection, then
- * incremental batches. Artifact index updates for the session are repeated here so they stay ordered with the
- * initial index. Close codes: 4404 for an unknown session (do not reconnect), 1013 to reconnect for a fresh
- * snapshot (overload, or a temporary refusal such as a pending update).
+ * Dedicated sockets. Each has its own send queue, so one stream never delays another. Close codes in 4400–4499
+ * are final (4404: unknown session or subagent, 4409: refused, for example a read-only session's terminal), so
+ * clients do not reconnect. 1013 asks the client to reconnect (overload, or a temporary refusal such as a pending
+ * update).
+ *
+ * Chat socket, /api/sessions/:id/ws[?stream=<id>&after=<seq>], one per open chat. Opening it subscribes and closing
+ * it unsubscribes; clients send nothing. The first frame is `chat.stream`, then numbered `events` batches starting
+ * with a snapshot, unless the stream resumed. Artifact index updates for the session are repeated here so they
+ * stay ordered with the initial index.
  */
-export type ChatServerMessage = Extract<ServerMessage, { type: "events" | "artifacts" | "error" }>;
+export type ChatServerMessage = Extract<ServerMessage, { type: "chat.stream" | "events" | "artifacts" | "error" }>;
+
+/**
+ * Terminal socket, /api/sessions/:id/terminal/ws?cols=<n>&rows=<n>[&restart=1]. Connecting attaches to the session's
+ * daemon-owned shell (starting it, or replacing it with `restart`); the daemon replies with the retained scrollback,
+ * then live output. Closing detaches; the shell keeps running.
+ */
+export type TerminalServerMessage = Extract<ServerMessage, { type: "terminal.data" | "terminal.exit" | "error" }>;
+export type TerminalSocketMessage =
+	| { type: "terminal.input"; data: string }
+	| { type: "terminal.resize"; cols: number; rows: number };
+
+/**
+ * Subagent socket, /api/sessions/:id/subagents/:name/ws. Streams one subagent's transcript: a snapshot first (also
+ * after reconnects), then appended entries. Clients send nothing.
+ */
+export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.events" | "error" }>;
 
 export const DEFAULT_PORT = 4319;
 export type * from "./memory.ts";

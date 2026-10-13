@@ -526,9 +526,14 @@ the isolated working copy is ready.
   the daemon. The SDK retains ownership of settings parsing, migrations and global/project merging.
 - Slow WebSocket clients are disconnected explicitly and resynchronize from snapshots, never silently
   lose arbitrary deltas. Internal worker activity watches project only run/inbox state, not history.
-- Each open chat streams on its own WebSocket with its own send queue, beside one control socket for lists,
-  dashboards, missions and terminals. A large snapshot or slow chat delays and resynchronizes only itself.
-  The app decodes every socket on its own background queue and hands ordered batches to the main actor.
+- Each open chat, terminal and subagent transcript streams on its own WebSocket with its own send queue, beside
+  one control socket for lists, dashboards and missions. A large snapshot, output burst or slow reader delays
+  and resets only its own stream. The app decodes every socket on its own background queue and hands ordered
+  batches to the main actor.
+- Chat streams are resumable: batches carry a sequence number, and pilotd keeps a dropped stream subscribed for
+  30 seconds with up to 4 MiB of recent frames, so a reconnect replays only what it missed. A resume it cannot
+  serve exactly gets a fresh snapshot. Long snapshots arrive newest entries first (60 entries or 256 KiB), then
+  the older entries in a `snapshot_prefix` batch.
 - pilotd never spawns Git, jj or gh on its event loop. `spawn` blocks its thread until the child starts
   (hundreds of milliseconds on a saturated machine), so a small bounded worker-thread pool
   (`packages/daemon/src/subprocess.ts`) owns these processes and keeps admission, kernel IPC and
@@ -1035,7 +1040,7 @@ reports), producing a morning summary in the app and Slack.
   inspector's Agents tab lists them with the selected subagent's full read-only transcript (read from its
   private `runs.sqlite`, never waking a parked kernel), plus Steer, Queue and Stop. Answers delivered
   to the parent render as compact answer cards. Unread answers are tracked locally per answer ID.
-  Transcripts stream over `subagent.subscribe`: pilotd runs one long-lived reader thread per watched
+  Transcripts stream over a dedicated subagent socket: pilotd runs one long-lived reader thread per watched
   subagent (at most 8), shared by all viewers. It polls only the size and mtime of `runs.sqlite` and its
   WAL every 250 ms (about 1 ms of CPU per second when idle) and, on a change, reads just the new entries
   in a short read transaction, so it never pins the child's WAL. A moved head marker (compaction)
@@ -1122,7 +1127,7 @@ reports), producing a morning summary in the app and Slack.
   archived), Artifacts and Activity tabs. The chat inspector gains a Mission tab with the chat's task,
   the brief and other tasks. Needs you collects member chats waiting on the user, PRs ready for review,
   blocked tasks, comments for the user and pending external closes.
-- Terminal: libghostty per Build session (⌘J), on a pilotd-owned PTY streamed over the WebSocket, so it survives app
+- Terminal: libghostty per Build session (⌘J), on a pilotd-owned PTY streamed over its own WebSocket, so it survives app
   restarts and works against remote daemons.
 - **Private releases and updates (implemented):** Release Please generates semantic-version release
   PRs and changelogs on `main`; metadata-only PRs skip workflows and need no workflow approval.
@@ -1229,7 +1234,8 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |
 | `GET /api/sessions/:id/artifacts/:artifactId?revision=N` | Read a pinned revision (latest when omitted) |
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
-| WS `/api/sessions/:id/ws`, `ChatServerMessage` | One socket per open chat: a transcript snapshot on every connection, then live event batches and the session's artifact indexes. Close code 4404 for unknown sessions, 1013 to reconnect. The control socket's `subscribe` remains for older clients (done) |
+| WS `/api/sessions/:id/ws[?stream=&after=]`, `ChatServerMessage` | One socket per open chat: `chat.stream`, then numbered event batches starting with a snapshot (split newest first when long), or only the missed batches on a resume, plus the session's artifact indexes (done) |
+| WS `/api/sessions/:id/terminal/ws?cols=&rows=[&restart=1]`, `/api/sessions/:id/subagents/:name/ws` | One socket per attached terminal (input and resizes on the same socket) and per watched subagent transcript. Close codes 4400–4499 are final (4404 unknown, 4409 refused); 1013 asks clients to reconnect. The control socket's `subscribe`, `terminal.*` and `subagent.*` messages remain for older clients (done) |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `SessionSummary.pullRequest`, `.pullRequests`, `.pullRequestError` | Branch-linked GitHub PR status (current branch, and every PR the session opened) and cached-lookup errors (done for private manual sessions) |
 | `SessionPullRequest.readiness` | Cached merge readiness (`state`, structured `reasons`, health `checkedAt`), shared by session and mission-linked PRs. Reasons carry failing check names, unresolved thread count or raw blocking state, never comment bodies. Absent until first successful health lookup and on terminal PRs |

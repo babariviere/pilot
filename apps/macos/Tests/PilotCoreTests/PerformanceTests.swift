@@ -93,7 +93,7 @@ private func event(_ text: String) -> JSONValue { try! JSONValue.decode(Data(tex
 
 @Test func decodesWebSocketEventsWithoutLosingSnapshotOrDeltaOrder() throws {
     let data = Data(#"{"type":"events","sessionId":"s","events":[{"type":"snapshot","entries":[]},{"type":"run_start"}]}"#.utf8)
-    guard case let .events(id, events)? = try ServerUpdate.decode(data) else { Issue.record("expected events"); return }
+    guard case let .events(id, events, _)? = try ServerUpdate.decode(data) else { Issue.record("expected events"); return }
     #expect(id == "s")
     #expect(events.map { $0["type"]?.string } == ["snapshot", "run_start"])
     #expect(try ServerUpdate.decode(Data(#"{"type":"future"}"#.utf8)) == nil)
