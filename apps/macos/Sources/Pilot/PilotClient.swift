@@ -611,6 +611,29 @@ final class PilotClient: ObservableObject {
         return try await call(request)
     }
 
+    func memoryZoom(_ projectId: String, lo: Int, hi: Int) async throws -> [MemoryNode] {
+        try await missionRequest(["projects", projectId, "memory", "zoom"], query: [
+            URLQueryItem(name: "lo", value: String(lo)), URLQueryItem(name: "hi", value: String(hi)),
+        ])
+    }
+
+    func memoryWake(_ projectId: String) async throws -> MemoryView {
+        try await missionRequest(["projects", projectId, "memory", "wake"], query: [
+            URLQueryItem(name: "lines", value: "96"),
+        ])
+    }
+
+    func memoryRecall(_ projectId: String, regex: String) async throws -> MemoryRecall {
+        try await missionRequest(["projects", projectId, "memory", "recall"], query: [
+            URLQueryItem(name: "regex", value: regex), URLQueryItem(name: "lines", value: "96"),
+        ])
+    }
+
+    func forgetMemory(_ projectId: String, lo: Int, hi: Int) async throws {
+        let _: Ack = try await missionRequest(["projects", projectId, "memory", "forget"], method: "POST",
+                                               body: MemoryRange(lo: lo, hi: hi))
+    }
+
     private func receive(_ dashboard: ProjectDashboard) {
         projectDashboards[dashboard.projectId] = dashboard
         dashboardReceivedAt[dashboard.projectId] = Date()
