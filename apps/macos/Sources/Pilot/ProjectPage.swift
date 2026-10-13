@@ -254,20 +254,26 @@ private struct ProjectDashboardBody: View {
 
             if !dashboard.pullRequests.items.isEmpty {
                 ProjectPageSection(header: PageSectionHeader(title: "Pull requests", count: dashboard.pullRequests.total)) {
-                    let readyCount = dashboard.pullRequests.items.filter(\.isReady).count
-                    if readyCount > 0 {
-                        Label("Ready to merge", systemImage: "checkmark.circle.fill")
-                            .font(.pilot(.label, weight: .medium)).foregroundStyle(Theme.success)
-                            .accessibilityLabel("Ready to merge, \(readyCount) pull requests")
-                    }
-                    ForEach(Array(dashboard.pullRequests.items.enumerated()), id: \.element.id) { index, pr in
-                        if index > 0 {
-                            if pr.isReady != dashboard.pullRequests.items[index - 1].isReady, readyCount > 0 {
-                                Text("Other pull requests").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-                                    .padding(.top, 6)
-                            } else { HairlineDivider(leading: 34) }
+                    let ready = dashboard.pullRequests.items.filter(\.isReady)
+                    let other = dashboard.pullRequests.items.filter { !$0.isReady }
+                    if !ready.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            PageSectionHeader(title: "Ready to merge", count: ready.count)
+                            ForEach(Array(ready.enumerated()), id: \.element.id) { index, pr in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectPullRequestRow(pr: pr)
+                            }
                         }
-                        ProjectPullRequestRow(pr: pr)
+                    }
+                    if !other.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            PageSectionHeader(title: ready.isEmpty ? "Open pull requests" : "Other pull requests",
+                                              count: other.count)
+                            ForEach(Array(other.enumerated()), id: \.element.id) { index, pr in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectPullRequestRow(pr: pr)
+                            }
+                        }
                     }
                     ProjectMoreLine(hidden: dashboard.pullRequests.hiddenCount, total: dashboard.pullRequests.total,
                                     noun: "open") { showFullList(.pullRequests) }

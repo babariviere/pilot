@@ -33,17 +33,22 @@ private struct ReadyToMergeCard: View {
             ForEach(Array(ready.indices.prefix(5)), id: \.self) { index in
                 let (session, pr) = ready[index]
                 Button { app.selectedSessionId = session.id } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
-                        Text("#\(pr.number)").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                        Text(pr.title).font(.pilot(.body)).lineLimit(1)
-                        Spacer(minLength: 4)
-                        Text(session.title).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                    HoverRow(verticalPadding: 5) { _ in
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
+                                .accessibilityHidden(true)
+                            Text("#\(pr.number)").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(pr.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                                Text(session.title).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                            }
+                            Spacer(minLength: 4)
+                        }
                     }
-                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Pull request #\(pr.number), \(pr.title), ready to merge. Open chat \(session.title).")
+                if index < min(ready.count, 5) - 1 { HairlineDivider(leading: 24) }
             }
         }
     }
