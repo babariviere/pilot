@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.22.0](https://github.com/babariviere/pilot/compare/v1.21.0...v1.22.0) (2026-10-13)
+
+
+### Features
+
+* **macos:** show GitHub, Linear and Slack marks for links ([4a641b8](https://github.com/babariviere/pilot/commit/4a641b8b658c4a327187aaa89561a4041832235b))
+* **macos:** sidebar scope switcher, Home row and project focus ([f47cce5](https://github.com/babariviere/pilot/commit/f47cce5ce87922de0c54291d8cfe50385380f232))
+
 ## [1.21.0](https://github.com/babariviere/pilot/compare/v1.20.0...v1.21.0) (2026-10-13)
 
 
