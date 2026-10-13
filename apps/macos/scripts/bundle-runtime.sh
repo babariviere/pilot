@@ -21,26 +21,20 @@ export PATH="$node_root/bin:$PATH"
 mkdir -p "$stage/runtime/node/bin"
 cp "$node_root/bin/node" "$stage/runtime/node/bin/node"
 cp "$node_root/LICENSE" "$stage/runtime/node/LICENSE"
-cp "$repo/package.json" "$repo/package-lock.json" "$stage/runtime/"
+cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$stage/runtime/"
 # tar preserves relative workspace links; exclude any existing workspace node_modules.
 (cd "$repo"; tar --exclude=node_modules --exclude='*.test.ts' -cf - packages) | (cd "$stage/runtime"; tar -xf -)
-# npm 11.19 gates lifecycle scripts. Approve only these locked production dependencies
-# in the temporary manifest, without changing the checkout's package.json or policy.
-(cd "$stage/runtime"; node --input-type=module <<'JS'
-import { readFileSync, writeFileSync } from 'node:fs';
-const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
-const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
-pkg.allowScripts = Object.fromEntries(['esbuild', 'node-pty', 'fsevents', 'protobufjs', '@google/genai']
-  .map(name => [`${name}@${lock.packages[`node_modules/${name}`].version}`, true]));
-writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-JS
-)
-(cd "$stage/runtime"; npm ci --omit=dev --no-audit --no-fund)
+# Lifecycle scripts are limited to pnpm-workspace.yaml's allowBuilds. The hoisted linker keeps the
+# flat node_modules layout the release has always shipped (for example node_modules/node-pty), so
+# the app runtime does not depend on pnpm's virtual store or symlinks into it.
+(cd "$stage/runtime"; pnpm install --prod --frozen-lockfile --config.node-linker=hoisted)
+rm -rf "$stage/runtime/node_modules/.pnpm" "$stage/runtime/node_modules/.modules.yaml" \
+	"$stage/runtime/node_modules/.pnpm-workspace-state-v1.json"
 # Ship minified artifact libraries, so first previews never wait for esbuild inside pilotd.
 (cd "$stage/runtime"; node packages/artifacts/scripts/build-libraries.ts)
 python3 "$here/scripts/release_metadata.py" prepare-runtime "$stage/runtime"
 python3 "$here/scripts/release_metadata.py" symlinks "$stage/runtime"
-# Copy links, not their targets. npm's @pilot/* links must stay relative to runtime/packages.
+# Copy links, not their targets. The @pilot/* workspace links must stay relative to runtime/packages.
 mkdir -p "$destination"
 cp -R "$stage/runtime/." "$destination/"
 "$here/scripts/check-runtime.sh" "$destination"

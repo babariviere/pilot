@@ -38,9 +38,9 @@ that a particular view accounts for all the CPU usage.
 ## Repeatable checks
 
 ```sh
-npm run typecheck
-npm test
-npm run fmt:check
+pnpm typecheck
+pnpm test
+pnpm fmt:check
 apps/macos/scripts/test.sh
 apps/macos/scripts/build.sh
 

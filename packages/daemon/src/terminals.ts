@@ -26,7 +26,7 @@ export function loginShell(): ShellCommand {
 	return { file: process.env.SHELL || "/bin/zsh", args: ["-l"] };
 }
 
-/** npm may skip node-pty's install script, which marks the prebuilt spawn helper executable. */
+/** Installs may skip node-pty's install script, which marks the prebuilt spawn helper executable. */
 function loadPty(): NodePty {
 	if (pty) return pty;
 	const root = dirname(require.resolve("node-pty/package.json"));

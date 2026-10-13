@@ -33,7 +33,7 @@ this kernel policy.
 ## Repeatable offline measurement
 
 ```sh
-npm ci --ignore-scripts
+pnpm install --frozen-lockfile --ignore-scripts
 node scripts/bench/io.ts
 # Optional comparison against this task's original base:
 node scripts/bench/io.ts 4eb47dd4b72193418a83c387dd43b86f333ada67

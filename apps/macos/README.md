@@ -118,7 +118,7 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 Requires macOS 14+ and Swift 6.2+. Command Line Tools are enough:
 
 ```sh
-scripts/bundle.sh            # -> build/Pilot.app (also: npm run app:macos from the repo root)
+scripts/bundle.sh            # -> build/Pilot.app (also: pnpm app:macos from the repo root)
 scripts/check-app.sh build/Pilot.app  # relocated app: packaged resources and terminal initialization
 scripts/test.sh              # PilotCore tests
 scripts/build.sh             # swift build with an SDK where @State compiles (see below)
@@ -146,7 +146,7 @@ apps/macos/.build/debug/Pilot --artifact-render-test /tmp/pilot-artifact-test
                              # optional PILOT_ARTIFACT_TEST_MERMAID=/absolute/path/to/bundled-mermaid.js
                              # optional PILOT_ARTIFACT_TEST_REACT=/absolute/path/to/prepared-react.html
                              # React fixtures also need PILOT_ARTIFACT_TEST_LIBRARIES (default
-                             # packages/artifacts/dist/libraries, from npm run artifacts:libraries)
+                             # packages/artifacts/dist/libraries, from pnpm artifacts:libraries)
                              # React fixture: "Native React 7", button increments to "Native React 8";
                              # Motion #native-react-counter reaches opacity 1 after 300ms, or optionally
                              # sets window.nativeMotionDone=false then true on animation completion

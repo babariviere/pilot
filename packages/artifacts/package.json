@@ -7,7 +7,7 @@
 		".": "./src/index.ts"
 	},
 	"dependencies": {
-		"@pilot/protocol": "0.1.0",
+		"@pilot/protocol": "workspace:*",
 		"d3": "7.9.0",
 		"echarts": "6.1.0",
 		"esbuild": "0.28.2",

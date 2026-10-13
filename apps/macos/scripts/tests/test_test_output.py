@@ -40,8 +40,9 @@ class TestOutputTests(unittest.TestCase):
             for name in ["test.sh", "check-test-output.py"]:
                 shutil.copy2(SCRIPTS / name, scripts / name)
             (scripts / "swift-env.sh").write_text("")
-            (scripts / "vendor-ghostty.sh").write_text("#!/bin/sh\nexit 0\n")
-            (scripts / "vendor-ghostty.sh").chmod(0o755)
+            for name in ["vendor-ghostty.sh", "share-artifacts.sh"]:
+                (scripts / name).write_text("#!/bin/sh\nexit 0\n")
+                (scripts / name).chmod(0o755)
             (root / "xcrun").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_SWIFT"\n')
             (root / "xcrun").chmod(0o755)
             (root / "swift").write_text(
