@@ -5,7 +5,13 @@
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
-import { decodeMcpResult, dedicatedSourceTool, sourceRateLimit, SourceRateLimited } from "./source-mcp.ts";
+import {
+	decodeMcpResult,
+	dedicatedSourceTool,
+	sourceRateLimit,
+	SourceRateLimited,
+	SourceToolError,
+} from "./source-mcp.ts";
 
 interface Connection {
 	state: string;
@@ -52,7 +58,13 @@ parentPort!.on("message", () => {
 	controller.abort(new Error("MCP request cancelled or timed out"));
 	void close();
 });
-let reply: { value?: ReturnType<typeof decodeMcpResult>; error?: string; signIn?: boolean; retryAfterMs?: number };
+let reply: {
+	value?: ReturnType<typeof decodeMcpResult>;
+	error?: string;
+	signIn?: boolean;
+	retryAfterMs?: number;
+	toolError?: boolean;
+};
 try {
 	const { kind, tool: logicalTool, args } = workerData;
 	const name = dedicatedSourceTool(kind, logicalTool);
@@ -93,6 +105,7 @@ try {
 				: "MCP request failed. Check pi mcp list and the source tool configuration.",
 		signIn: connection?.state === "needs-auth",
 		...(limited ? { retryAfterMs: limited.retryAfterMs } : {}),
+		...(!limited && error instanceof SourceToolError ? { toolError: true } : {}),
 	};
 } finally {
 	await close();

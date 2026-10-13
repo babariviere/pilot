@@ -10,8 +10,11 @@ final class PilotClient: ObservableObject {
     @Published private(set) var projects: [Project] = []
     @Published private(set) var schedules: [ScheduledItem] = []
     @Published private(set) var trackingSources: [TrackingSource] = []
-    /// Invalidation only. Inbox views can refresh a bounded page; project pages already get dashboard updates.
-    var onTrackedItemsChanged: ((String) -> Void)?
+    /// Invalidation only, per project. Inbox views refresh a bounded page; project pages already get
+    /// dashboard updates. Observers register with observeTrackedItems.
+    private var trackedObservers: [UUID: (String) -> Void] = [:]
+    /// Snapshot fixtures for tracked items and the settings pickers. Never set in the live app.
+    var fixtureTracking: TrackingFixture?
     @Published private(set) var hasProjectSnapshot = false
     @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
     private var artifactVersions: [String: Int] = [:]
@@ -372,8 +375,52 @@ final class PilotClient: ObservableObject {
         try await call(url: missionURL(["sources", id, "poll"]), body: [String: String]())
     }
 
+    func source(projectId: String, kind: TrackedKind) -> TrackingSource? {
+        trackingSources.first { $0.projectId == projectId && $0.kind == kind }
+    }
+
+    /// Linear teams for the project settings picker. Sign-in and errors come back as states.
+    func linearTeams(query: String? = nil) async throws -> TrackingLookup<LinearTeamOption> {
+        if let fixture = fixtureTracking { return fixture.teams }
+        return try await missionRequest(["tracking", "linear", "teams"],
+                                        query: query.map { [URLQueryItem(name: "query", value: $0)] } ?? [])
+    }
+
+    /// Slack channels matching a query, or the channels I'm in when the query is nil.
+    func slackChannelOptions(query: String? = nil) async throws -> TrackingLookup<SlackChannelOption> {
+        if let fixture = fixtureTracking {
+            guard let query, !query.isEmpty else { return fixture.myChannels }
+            return TrackingLookup(status: .ok, items: fixture.searchChannels.items.filter {
+                $0.name.localizedCaseInsensitiveContains(query.trimmingCharacters(in: CharacterSet(charactersIn: "# ")))
+            })
+        }
+        return try await missionRequest(["tracking", "slack", "channels"],
+                                        query: query.map { [URLQueryItem(name: "query", value: $0)] } ?? [])
+    }
+
+    func observeTrackedItems(_ handler: @escaping (String) -> Void) -> UUID {
+        let id = UUID()
+        trackedObservers[id] = handler
+        return id
+    }
+
+    func stopObservingTrackedItems(_ id: UUID) {
+        trackedObservers[id] = nil
+    }
+
+    func loadTrackingFixture(_ fixture: TrackingFixture) {
+        fixtureTracking = fixture
+        trackingSources = fixture.sources
+    }
+
     func trackedItems(projectId: String, kind: TrackedKind? = nil, dismissed: Bool = false,
                       limit: Int = 100, offset: Int = 0) async throws -> TrackedItemList {
+        if let fixture = fixtureTracking {
+            let items = fixture.items.filter {
+                $0.projectId == projectId && $0.dismissed == dismissed && (kind == nil || $0.kind == kind)
+            }
+            return TrackedItemList(items: Array(items.prefix(limit)), total: items.count)
+        }
         var query = [URLQueryItem(name: "projectId", value: projectId),
                      URLQueryItem(name: "dismissed", value: String(dismissed)),
                      URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "offset", value: String(offset))]
@@ -1032,7 +1079,7 @@ final class PilotClient: ObservableObject {
         case let .sources(list):
             if trackingSources != list { trackingSources = list }
         case let .trackedChanged(projectId):
-            onTrackedItemsChanged?(projectId)
+            for observer in trackedObservers.values { observer(projectId) }
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true

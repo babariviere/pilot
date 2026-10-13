@@ -109,6 +109,10 @@ export class TrackedItemStore {
 	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		return this.rpc("patch", { id, patch });
 	}
+	/** Show only Slack items of configured channels (by ID, or by name in older configs). */
+	retainSlack(projectId: string, channels: string[]): Promise<void> {
+		return this.rpc("retainSlack", { projectId, channels });
+	}
 	onChange(listener: (projectId: string) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);

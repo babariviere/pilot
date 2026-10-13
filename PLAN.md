@@ -649,7 +649,8 @@ isolates the pinned internal compatibility boundary in `source-mcp-worker.ts` (c
 local MCP/OAuth fixture). It connects only the selected server per call and closes it afterward.
 Repository-local MCP files are not loaded by tracking. Disabled/hidden servers/tools are not called.
 Tracking connects only the dedicated servers named `linear` and `slack`, with fixed tools:
-`list_issues`, `list_cycles`, `get_issue`, `slack_read_channel` and `slack_read_thread`. There are no server/tool overrides,
+`list_issues`, `list_cycles`, `get_issue`, `slack_read_channel` and `slack_read_thread`, plus `list_teams`,
+`slack_search_channels` and `slack_list_user_channels` for the settings pickers only. There are no server/tool overrides,
 dispatchers, fallback servers or auto-detection. Project settings accept only Slack channels and
 a Linear team. Legacy project MCP overrides are discarded on load while preserving those settings;
 checkpoint fingerprints change so old cursors are not reused.
@@ -668,6 +669,12 @@ is seven days; subsequent reads pin a time range while paging, then advance the 
 checkpoint. Both adapters use the shared source scheduler, with a five-minute cadence and at most
 two fetch/prefill operations globally. Timers stop when unconfigured or shut down; errors respect
 backoff and rate limits. The app does not poll. No channel settings are inferred or changed.
+Checkpoints key progress by channel (a short hash), so adding a channel starts only that channel at
+the seven-day window and removing one keeps the others' progress. The Slack fingerprint excludes the
+channel list. A channel the tool itself refuses (`SourceToolError`, for example no access) is marked
+failed in the checkpoint and skipped until its next turn, with a source error naming the cause; sign-in,
+rate limits, connection and format errors still stop the whole source. Items carry `channelName`.
+Removing a channel marks its items inactive (kept with dismissals and links); re-adding shows them again.
 
 History parses the observed `Channel`, `=== Message from … ===`, `Message TS` and optional
 `Thread` framing. Thread reads have a separate contract: `=== THREAD PARENT MESSAGE ===`,
@@ -692,6 +699,23 @@ Concurrent projects share an in-flight result. Budget exhaustion retains the unf
 pauses that source until the next UTC midnight, without blocking Linear. Cached classification
 errors retain a five-minute cadence. Raw Slack text and raw model errors are not persisted or echoed in diagnostics.
 Source polling never posts to Slack or Linear. Socket Mode and inbox actions remain later work.
+
+**Inbox and settings UI (implemented).** Project settings → Tracking holds a Linear team picker
+(`list_teams`, sub-teams shown as “Parent › Team”) and a Slack channel list: each configured channel
+shows its status (pulled time, could not read, sign-in required, or “Save to start tracking”) and a
+remove button; a search field suggests channels I'm in and searches public and private channels.
+Config stores channel IDs with display names (`slackChannelNames`) and the team ID with
+`linearTeamName`; names never change the poll scope. `TrackingSource.channels` reports per-channel
+status. Lookups are read-only, latest-wins per source and share the two MCP slots with polls.
+The project page’s “Tracked Items…” sheet lists each configured source with its own status (sync now,
+sign-in command, errors), my current cycle with progress, my issues grouped In progress / To do /
+Done, and Slack bug reports. Rows open the ticket; Start chat opens the new-chat composer in Build
+mode, prefilled with the ticket quoted as untrusted JSON and its branch name, with the project locked;
+Start mission opens the new-mission sheet prefilled (title “ID: title”, goal and coordinator message).
+Nothing starts until the user sends or creates. The started chat or mission is bound through
+`PATCH /api/tracked-items/:id`, which keeps a bounded history (`sessionIds`, `missionIds`, latest
+last); rows then show the latest one’s status with Open chat / Open mission and a count. Rows also
+link to an existing mission, dismiss and restore. Nothing is written to Linear or Slack.
 
 **Slack checks.** Parser fixtures, strict malformed-output tests, threshold/negative caching,
 cross-project dedupe, concurrent and interrupted attempts, restart/UTC budget rollover, bounded
@@ -1221,8 +1245,9 @@ reports), producing a morning summary in the app and Slack.
 | `/api/missions/:id/decisions`, `/comments`, `/resources`, `/artifacts` (POST, PATCH/DELETE by id), `/events` (GET, POST) | Decisions, anchored comments, external links, artifact links and activity |
 | `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
 | `GET /api/sources?projectId=...`, `POST /api/sources/:id/poll` | Project-scoped tracking status and single-flight manual poll; id is `<projectId>:linear/slack`; WS `sources` sends status on connection/change |
-| `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or linked chat/mission (null clears). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
+| `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or bind a chat/mission (each link joins a bounded history, latest shown; null clears that kind). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
 | `GET /api/tracked-items/:id/prefill` | Transient Linear ticket prefill after fresh mine/team membership verification; bounded description and quoted external JSON prompt, gitBranchName, no storage or automatic start |
+| `GET /api/tracking/linear/teams?query=...`, `GET /api/tracking/slack/channels?query=...` | Read-only settings lookups through the dedicated servers (`list_teams`; `slack_search_channels` with a query, else `slack_list_user_channels`). Returns `{status: ok/sign_in_required/error, items, more?, error?, signInCommand?}`; latest wins per source |
 | `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first, with cached blocker labels), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
 | `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |

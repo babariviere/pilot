@@ -1,9 +1,13 @@
 import type {
 	DashboardTrackedSource,
+	LinearTeamOption,
 	Project,
 	ProjectTrackingConfig,
+	SlackChannelOption,
+	SlackChannelStatus,
 	TrackedKind,
 	TrackingJson,
+	TrackingLookup,
 	TrackingSource,
 	LinearSourceSummary,
 	TrackedItemPrefill,
@@ -13,6 +17,8 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SourceRateLimited, SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
 import { linearPrefill } from "./linear-source.ts";
+import { slackChannelProgress } from "./slack-source.ts";
+import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
@@ -31,7 +37,7 @@ export interface SourcePollResult {
 	linear?: LinearSourceSummary;
 	/** Full scoped membership, for removing stale rows without losing local links. */
 	activeIds?: string[];
-	issue?: "slack_classification" | "slack_budget";
+	issue?: "slack_classification" | "slack_budget" | "slack_channel";
 }
 export type SourcePoller = (context: SourcePollContext) => Promise<SourcePollResult>;
 export type TrackingChange = { type: "sources" | "items"; projectId: string };
@@ -59,6 +65,10 @@ export class SourceRegistry {
 		string,
 		{ sourceId: string; key: string; controller: AbortController; promise: Promise<TrackedItemPrefill> }
 	>();
+	/** Settings lookups, at most one per kind. They share the two MCP slots with polls and prefills. */
+	private readonly lookups = new Map<TrackedKind, { controller: AbortController; promise: Promise<unknown> }>();
+	/** Configured Slack channels per project, to hide items of removed channels once. */
+	private slackChannels = new Map<string, string>();
 	private readonly projects: Pick<ProjectStore, "list" | "require" | "onChange">;
 	readonly items: TrackedItemStore;
 	private readonly mcp: SourceMcpClient;
@@ -71,12 +81,22 @@ export class SourceRegistry {
 		this.items = items;
 		this.mcp = mcp;
 		this.knownProjects = new Set(projects.list().map((project) => project.id));
+		this.slackChannels = new Map(
+			projects.list().map((project) => [project.id, JSON.stringify(project.tracking?.slackChannels ?? [])]),
+		);
 		this.disposers = [
 			items.onChange((projectId) => this.emit({ type: "items", projectId })),
 			projects.onChange(() => {
 				const current = new Set(projects.list().map((project) => project.id));
 				for (const id of this.knownProjects) if (!current.has(id)) items.unload(id);
 				this.knownProjects = current;
+				for (const project of projects.list()) {
+					const channels = project.tracking?.slackChannels ?? [];
+					if (this.slackChannels.get(project.id) === JSON.stringify(channels)) continue;
+					this.slackChannels.set(project.id, JSON.stringify(channels));
+					// Removing a channel hides its items; adding it back shows them again. Links are kept.
+					void items.retainSlack(project.id, channels).catch(() => {});
+				}
 				for (const [id, run] of this.running)
 					if (this.currentKey(id) !== run.key) run.controller.abort(new Error("Tracking configuration changed"));
 				for (const run of this.details.values())
@@ -118,7 +138,7 @@ export class SourceRegistry {
 						!this.running.has(source.id) &&
 						(source.nextPollAt ?? (source.lastPolledAt ?? 0) + 300_000) <= Date.now(),
 				);
-				if (source && this.running.size + this.details.size < 2)
+				if (source && this.busy() < 2)
 					void this.poll(source.id)
 						.catch(() => {})
 						.finally(() => this.schedule());
@@ -157,7 +177,7 @@ export class SourceRegistry {
 		}
 		const poller = this.pollers.get(source.kind);
 		if (!poller) throw new ServiceUnavailable("Source adapter is not installed");
-		if (this.running.size + this.details.size >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
+		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
 		const project = structuredClone(this.projects.require(source.projectId));
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(new Error("Poll timed out")), 90_000);
@@ -183,6 +203,11 @@ export class SourceRegistry {
 					...(result.linear ? { linear: result.linear } : {}),
 				};
 				await this.items.commit(project.id, source.kind, result.items, checkpoint, result.activeIds);
+				if (source.kind === "slack")
+					await this.items.retainSlack(
+						project.id,
+						this.projects.require(project.id).tracking?.slackChannels ?? [],
+					);
 				const nextPollAt =
 					result.issue === "slack_budget"
 						? (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000
@@ -197,7 +222,9 @@ export class SourceRegistry {
 								error:
 									result.issue === "slack_budget"
 										? "Slack classification daily budget reached. Remaining threads will resume tomorrow."
-										: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
+										: result.issue === "slack_channel"
+											? "A Slack channel could not be read. Check its access in Tracking settings."
+											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
 							}
 						: {}),
 				});
@@ -247,7 +274,7 @@ export class SourceRegistry {
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
 		const existing = this.details.get(itemId);
 		if (existing) return existing.promise;
-		if (this.running.size + this.details.size >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
+		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(new Error("Prefill timed out")), 60_000);
 		const run = { sourceId: "", key: "", controller, promise: Promise.resolve({} as TrackedItemPrefill) };
@@ -298,10 +325,74 @@ export class SourceRegistry {
 		for (const dispose of this.disposers) dispose();
 		for (const run of this.running.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.details.values()) run.controller.abort(new Error("Tracking stopped"));
+		for (const run of this.lookups.values()) run.controller.abort(new Error("Tracking stopped"));
 		await Promise.allSettled([...this.running.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.details.values()].map((run) => run.promise));
+		await Promise.allSettled([...this.lookups.values()].map((run) => run.promise));
 		await this.mcp.close?.();
 		this.listeners.clear();
+	}
+	/** Linear teams for the project settings picker. Read-only, never stored. */
+	linearTeams(query?: string): Promise<TrackingLookup<LinearTeamOption>> {
+		return this.lookup("linear", (call) => lookupLinearTeams(call, query));
+	}
+	/** Slack channels matching a query, or the channels I'm in. Read-only, never stored. */
+	slackChannelOptions(query?: string): Promise<TrackingLookup<SlackChannelOption>> {
+		return this.lookup("slack", (call) => lookupSlackChannels(call, query));
+	}
+	/** Latest wins per kind, so typing in a search field never queues MCP work. */
+	private async lookup<T>(
+		kind: TrackedKind,
+		work: (call: (tool: string, args: Record<string, unknown>) => Promise<TrackingJson>) => Promise<{
+			items: T[];
+			more: boolean;
+		}>,
+	): Promise<TrackingLookup<T>> {
+		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		const previous = this.lookups.get(kind);
+		if (previous) {
+			previous.controller.abort(new Error("Superseded by a newer lookup"));
+			await previous.promise.catch(() => {});
+			if (this.lookups.get(kind)) return { status: "error", items: [], error: "Superseded by a newer search." };
+		}
+		if (this.busy() >= 2) return { status: "error", items: [], error: "Tracking is syncing. Try again in a moment." };
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(new Error("Lookup timed out")), 45_000);
+		const label = kind === "linear" ? "Linear" : "Slack";
+		const promise = abortable(
+			work((tool, args) => this.mcp.call(kind, tool, args, controller.signal)),
+			controller.signal,
+		)
+			.then(({ items, more }): TrackingLookup<T> => ({ status: "ok", items, ...(more ? { more } : {}) }))
+			.catch((error): TrackingLookup<T> => {
+				if (error instanceof SourceSignInRequired)
+					return {
+						status: "sign_in_required",
+						items: [],
+						error: "Sign in required",
+						signInCommand: `pi mcp login ${kind}`,
+					};
+				return {
+					status: "error",
+					items: [],
+					error:
+						error instanceof SourceRateLimited
+							? `${label} is rate limiting requests. Try again in a minute.`
+							: controller.signal.aborted
+								? "The search was cancelled. Try again."
+								: `Could not reach ${label}. Check pi mcp list and retry.`,
+				};
+			})
+			.finally(() => {
+				clearTimeout(timer);
+				if (this.lookups.get(kind)?.controller === controller) this.lookups.delete(kind);
+				this.schedule();
+			});
+		this.lookups.set(kind, { controller, promise });
+		return promise;
+	}
+	private busy(): number {
+		return this.running.size + this.details.size + this.lookups.size;
 	}
 	private failed(id: string, key: string, error: unknown): void {
 		if (this.currentKey(id) !== key || this.stopped) return;
@@ -355,7 +446,37 @@ export class SourceRegistry {
 			...(health?.key === key ? { nextPollAt: health.nextPollAt } : {}),
 			...(health?.key === key && health.error ? { error: health.error } : {}),
 			...(status === "sign_in_required" ? { signInCommand: `pi mcp login ${kind}` } : {}),
+			...(kind === "slack" && configured
+				? {
+						channels: this.channelStatus(
+							project.tracking!,
+							status,
+							checkpoint?.configKey === key ? checkpoint : undefined,
+						),
+					}
+				: {}),
 		};
+	}
+	private channelStatus(
+		config: ProjectTrackingConfig,
+		status: TrackingSource["status"],
+		checkpoint: SourceCheckpoint | undefined,
+	): SlackChannelStatus[] {
+		const progress = slackChannelProgress(checkpoint?.cursor, config.slackChannels);
+		return config.slackChannels.map((id, index) => {
+			const { pulledAt, failedAt } = progress[index]!;
+			const name = config.slackChannelNames?.[id];
+			const failed = !!failedAt && (!pulledAt || failedAt > pulledAt);
+			return {
+				id,
+				...(name ? { name } : {}),
+				status: status === "sign_in_required" ? "sign_in_required" : failed ? "error" : pulledAt ? "ok" : "pending",
+				...(pulledAt ? { lastPulledAt: pulledAt } : {}),
+				...(failed && status !== "sign_in_required"
+					? { error: "Couldn't read this channel. Check that you can open it in Slack." }
+					: {}),
+			};
+		});
 	}
 	private currentKey(id: string): string | undefined {
 		try {
@@ -373,9 +494,10 @@ function configKey(project: Project, kind: TrackedKind): string {
 	return createHash("sha256")
 		.update(
 			JSON.stringify([
-				kind === "linear" ? project.tracking?.linearTeam : project.tracking?.slackChannels,
+				// Slack progress is kept per channel, so editing the list does not restart the others.
+				kind === "linear" ? project.tracking?.linearTeam : null,
 				kind,
-				kind === "linear" ? "linear-mine-cycle-descendants-v1" : "dedicated-v1",
+				kind === "linear" ? "linear-mine-cycle-descendants-v1" : "dedicated-v2",
 			]),
 		)
 		.digest("hex");

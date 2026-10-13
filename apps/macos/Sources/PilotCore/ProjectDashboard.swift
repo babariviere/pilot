@@ -291,10 +291,13 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let metadata: [String: JSONValue]?
     public let sessionId: String?
     public let missionId: String?
+    public let sessionIds: [String]?
+    public let missionIds: [String]?
 
     public init(id: String, title: String, url: String? = nil, status: String? = nil, updatedAt: Double? = nil,
                 externalId: String? = nil, metadata: [String: JSONValue]? = nil,
-                sessionId: String? = nil, missionId: String? = nil) {
+                sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
+                missionIds: [String]? = nil) {
         self.id = id
         self.title = title
         self.url = url
@@ -302,6 +305,7 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
         self.updatedAt = updatedAt
         self.externalId = externalId; self.metadata = metadata
         self.sessionId = sessionId; self.missionId = missionId
+        self.sessionIds = sessionIds; self.missionIds = missionIds
     }
 }
 

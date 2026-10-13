@@ -45,6 +45,10 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.patch(args.id, args.patch);
 				projectId = disk.require(args.id).projectId;
 				break;
+			case "retainSlack":
+				disk.retainSlack(args.projectId, args.channels);
+				projectId = args.projectId;
+				break;
 			case "close":
 				disk.close();
 				parentPort!.postMessage({ id });

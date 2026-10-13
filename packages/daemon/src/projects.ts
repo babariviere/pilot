@@ -156,8 +156,9 @@ function validatePullRequestSetting(request: Partial<ProjectRequest>): void {
 export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tracking must be an object");
 	const config = value as ProjectTrackingConfig;
-	if (Object.keys(config).some((key) => key !== "slackChannels" && key !== "linearTeam"))
-		throw new Error("Tracking supports only slackChannels and linearTeam");
+	const keys = ["slackChannels", "slackChannelNames", "linearTeam", "linearTeamName"];
+	if (Object.keys(config).some((key) => !keys.includes(key)))
+		throw new Error("Tracking supports only slackChannels, slackChannelNames, linearTeam and linearTeamName");
 	if (
 		!Array.isArray(config.slackChannels) ||
 		config.slackChannels.length > 100 ||
@@ -166,9 +167,35 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		throw new Error("slackChannels must contain at most 100 non-empty channel names or IDs");
 	if (config.linearTeam !== undefined && (typeof config.linearTeam !== "string" || config.linearTeam.length > 200))
 		throw new Error("linearTeam must be a string of at most 200 characters");
+	if (
+		config.linearTeamName !== undefined &&
+		(typeof config.linearTeamName !== "string" || config.linearTeamName.length > 200)
+	)
+		throw new Error("linearTeamName must be a string of at most 200 characters");
+	const names = config.slackChannelNames;
+	if (
+		names !== undefined &&
+		(!names ||
+			typeof names !== "object" ||
+			Array.isArray(names) ||
+			Object.keys(names).length > 100 ||
+			Object.values(names).some((name) => typeof name !== "string" || name.length > 200))
+	)
+		throw new Error("slackChannelNames must map channel IDs to names of at most 200 characters");
+	const slackChannels = [...new Set(config.slackChannels.map((channel) => channel.trim()))];
+	// Names are display-only: keep those of configured channels.
+	const slackChannelNames = Object.fromEntries(
+		slackChannels.flatMap((channel) => {
+			const name = names && Object.hasOwn(names, channel) ? names[channel]!.trim().replace(/^#/, "") : "";
+			return name ? [[channel, name]] : [];
+		}),
+	);
+	const linearTeam = config.linearTeam?.trim();
 	const result: ProjectTrackingConfig = {
-		slackChannels: [...new Set(config.slackChannels.map((channel) => channel.trim()))],
-		...(config.linearTeam?.trim() ? { linearTeam: config.linearTeam.trim() } : {}),
+		slackChannels,
+		...(Object.keys(slackChannelNames).length ? { slackChannelNames } : {}),
+		...(linearTeam ? { linearTeam } : {}),
+		...(linearTeam && config.linearTeamName?.trim() ? { linearTeamName: config.linearTeamName.trim() } : {}),
 	};
 	return result;
 }

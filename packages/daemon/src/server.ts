@@ -240,9 +240,16 @@ export function createDaemonServer(
 			}
 			throw new HttpError(404, "Unknown schedule operation");
 		}
-		if (parts[1] === "sources" || parts[1] === "tracked-items") {
+		if (parts[1] === "sources" || parts[1] === "tracked-items" || parts[1] === "tracking") {
 			if (!tracking) throw new ServiceUnavailable("Tracking is unavailable");
-			if (parts[1] === "sources") {
+			if (parts[1] === "tracking") {
+				// Read-only pickers for project settings. Nothing is stored until the project is saved.
+				const query = url.searchParams.get("query")?.trim().slice(0, 100) || undefined;
+				if (parts.length === 4 && parts[2] === "linear" && parts[3] === "teams" && req.method === "GET")
+					return json(res, 200, await tracking.linearTeams(query));
+				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "channels" && req.method === "GET")
+					return json(res, 200, await tracking.slackChannelOptions(query));
+			} else if (parts[1] === "sources") {
 				if (parts.length === 2 && req.method === "GET")
 					return json(res, 200, tracking.list(url.searchParams.get("projectId") ?? undefined));
 				if (parts.length === 4 && parts[3] === "poll" && req.method === "POST")

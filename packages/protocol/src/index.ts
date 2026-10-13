@@ -776,6 +776,8 @@ export interface DashboardTrackedItem {
 	metadata?: Record<string, import("./tracking.ts").TrackingJson>;
 	sessionId?: string;
 	missionId?: string;
+	sessionIds?: string[];
+	missionIds?: string[];
 }
 
 /** Extension point for tracked items, one group per configured source. Empty until a source is configured. */

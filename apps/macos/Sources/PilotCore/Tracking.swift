@@ -14,12 +14,20 @@ public struct LinearCycleSummary: Codable, Equatable, Sendable {
     public let done: Int
     public let inProgress: Int
     public let todo: Int
+    public init(id: String, name: String? = nil, number: Int, startsAt: String, endsAt: String, progress: Double,
+                total: Int, done: Int, inProgress: Int, todo: Int) {
+        self.id = id; self.name = name; self.number = number; self.startsAt = startsAt; self.endsAt = endsAt
+        self.progress = progress; self.total = total; self.done = done; self.inProgress = inProgress; self.todo = todo
+    }
 }
 public struct LinearSourceSummary: Codable, Equatable, Sendable {
     public enum CycleStatus: String, Codable, Sendable { case current, noActiveCycle = "no_active_cycle" }
     public let cycleStatus: CycleStatus
     public let currentCycle: LinearCycleSummary?
     public let statusMessage: String?
+    public init(cycleStatus: CycleStatus, currentCycle: LinearCycleSummary? = nil, statusMessage: String? = nil) {
+        self.cycleStatus = cycleStatus; self.currentCycle = currentCycle; self.statusMessage = statusMessage
+    }
 }
 /// Transient, quoted external content. Starting work always requires user confirmation.
 public struct TrackedItemPrefill: Codable, Equatable, Sendable {
@@ -30,12 +38,24 @@ public struct TrackedItemPrefill: Codable, Equatable, Sendable {
     public let description: String
     public let gitBranchName: String?
     public let prompt: String
+    public init(itemId: String, identifier: String, title: String, url: String, description: String,
+                gitBranchName: String? = nil, prompt: String) {
+        self.itemId = itemId; self.identifier = identifier; self.title = title; self.url = url
+        self.description = description; self.gitBranchName = gitBranchName; self.prompt = prompt
+    }
 }
 public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
+    /// Channel IDs from the picker. Older configs may hold names.
     public var slackChannels: [String]
+    /// Display names by channel ID. Never part of the poll scope.
+    public var slackChannelNames: [String: String]?
+    /// Team ID from list_teams. An empty string in a request clears the team.
     public var linearTeam: String?
-    public init(slackChannels: [String] = [], linearTeam: String? = nil) {
-        self.slackChannels = slackChannels; self.linearTeam = linearTeam
+    public var linearTeamName: String?
+    public init(slackChannels: [String] = [], slackChannelNames: [String: String]? = nil,
+                linearTeam: String? = nil, linearTeamName: String? = nil) {
+        self.slackChannels = slackChannels; self.slackChannelNames = slackChannelNames
+        self.linearTeam = linearTeam; self.linearTeamName = linearTeamName
     }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
@@ -48,16 +68,23 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let status: String
     public let metadata: [String: JSONValue]
     public let dismissed: Bool
+    /// Latest bound chat and mission.
     public let sessionId: String?
     public let missionId: String?
+    /// Every bound chat and mission, oldest first.
+    public let sessionIds: [String]?
+    public let missionIds: [String]?
     public let createdAt: Double
     public let updatedAt: Double
     public init(id: String, projectId: String, kind: TrackedKind, externalId: String, title: String, url: String,
                 status: String, metadata: [String: JSONValue] = [:], dismissed: Bool = false,
-                sessionId: String? = nil, missionId: String? = nil, createdAt: Double, updatedAt: Double) {
+                sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
+                missionIds: [String]? = nil, createdAt: Double, updatedAt: Double) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.externalId = externalId
         self.title = title; self.url = url; self.status = status; self.metadata = metadata; self.dismissed = dismissed
         self.sessionId = sessionId; self.missionId = missionId; self.createdAt = createdAt; self.updatedAt = updatedAt
+        self.sessionIds = sessionIds ?? sessionId.map { [$0] }
+        self.missionIds = missionIds ?? missionId.map { [$0] }
     }
 }
 public struct TrackedItemList: Codable, Equatable, Sendable {
@@ -86,6 +113,22 @@ public struct TrackedItemPatch: Encodable, Sendable {
         else { try values.encodeIfPresent(missionId, forKey: .missionId) }
     }
 }
+/// Per-channel health of a configured Slack channel.
+public struct SlackChannelStatus: Codable, Equatable, Sendable {
+    public enum Status: String, LenientStringEnum {
+        case pending, ok, error
+        case signInRequired = "sign_in_required"
+        public static let fallback = Status.error
+    }
+    public let id: String
+    public let name: String?
+    public let status: Status
+    public let lastPulledAt: Double?
+    public let error: String?
+    public init(id: String, name: String? = nil, status: Status, lastPulledAt: Double? = nil, error: String? = nil) {
+        self.id = id; self.name = name; self.status = status; self.lastPulledAt = lastPulledAt; self.error = error
+    }
+}
 public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let projectId: String
@@ -98,13 +141,54 @@ public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let signInCommand: String?
     public let nextPollAt: Double?
     public let linear: LinearSourceSummary?
+    /// Slack only, in configuration order.
+    public let channels: [SlackChannelStatus]?
     public init(id: String, projectId: String, kind: TrackedKind, label: String, configured: Bool,
                 status: DashboardSourceStatus, lastPolledAt: Double? = nil,
                 error: String? = nil, signInCommand: String? = nil,
-                nextPollAt: Double? = nil, linear: LinearSourceSummary? = nil) {
+                nextPollAt: Double? = nil, linear: LinearSourceSummary? = nil, channels: [SlackChannelStatus]? = nil) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.label = label; self.configured = configured
         self.status = status; self.lastPolledAt = lastPolledAt; self.error = error
         self.signInCommand = signInCommand
-        self.nextPollAt = nextPollAt; self.linear = linear
+        self.nextPollAt = nextPollAt; self.linear = linear; self.channels = channels
+    }
+}
+/// A Linear team for the project settings picker.
+public struct LinearTeamOption: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let key: String
+    public let parentId: String?
+    public init(id: String, name: String, key: String, parentId: String? = nil) {
+        self.id = id; self.name = name; self.key = key; self.parentId = parentId
+    }
+}
+/// A Slack channel for the project settings picker.
+public struct SlackChannelOption: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let isPrivate: Bool
+    enum CodingKeys: String, CodingKey { case id, name, isPrivate = "private" }
+    public init(id: String, name: String, isPrivate: Bool = false) {
+        self.id = id; self.name = name; self.isPrivate = isPrivate
+    }
+}
+public enum TrackingLookupStatus: String, LenientStringEnum {
+    case ok, error
+    case signInRequired = "sign_in_required"
+    public static let fallback = TrackingLookupStatus.error
+}
+/// Read-only lookup result. Sign-in and errors are states, not HTTP failures.
+public struct TrackingLookup<Item: Codable & Equatable & Sendable>: Codable, Equatable, Sendable {
+    public typealias Status = TrackingLookupStatus
+    public let status: Status
+    public let items: [Item]
+    public let more: Bool?
+    public let error: String?
+    public let signInCommand: String?
+    public init(status: Status, items: [Item] = [], more: Bool? = nil, error: String? = nil,
+                signInCommand: String? = nil) {
+        self.status = status; self.items = items; self.more = more; self.error = error
+        self.signInCommand = signInCommand
     }
 }

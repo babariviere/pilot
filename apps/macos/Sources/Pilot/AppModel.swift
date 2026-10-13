@@ -322,6 +322,23 @@ final class AppModel: ObservableObject {
         newSessionForm.mission = mission
     }
 
+    /// The new-chat composer, prefilled from a tracked item in Build mode. Nothing starts until the user sends.
+    func startChat(from item: TrackedItem, prefill: TrackedItemPrefill?) {
+        newSession(in: item.projectId, message: TrackedItemText.chatPrompt(item, prefill: prefill))
+        newSessionForm.consumeDraft(from: self)
+        newSessionForm.trackedItem = TrackedItemBinding(itemId: item.id, projectId: item.projectId,
+                                                        label: TrackedItemText.identifier(item))
+    }
+
+    /// Records what a tracked item started. Local only: nothing is written to Linear or Slack.
+    func bindTrackedItem(_ itemId: String, label: String, sessionId: String? = nil, missionId: String? = nil) async {
+        do {
+            _ = try await client.updateTrackedItem(itemId, TrackedItemPatch(sessionId: sessionId, missionId: missionId))
+        } catch {
+            sessionActionError = "Started, but Pilot couldn't link it to \(label): \(error.localizedDescription)"
+        }
+    }
+
     /// An explicit new Build draft. The original Ask session and its history are never changed.
     func buildWithContext(from session: SessionSummary, rows: [ChatRow]) {
         guard session.isAsk else { return }

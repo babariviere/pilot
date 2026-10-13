@@ -253,8 +253,8 @@ final class ProjectEditor: ObservableObject {
     @Published var model = ""
     @Published var privateClones = true
     @Published var requirePullRequest = true
-    @Published var slackChannels = ""
-    @Published var linearTeam = ""
+    @Published var slackChannels: [TrackedChannelRef] = []
+    @Published var linearTeam: TrackedTeamRef?
     @Published var error: String?
 
     func load(_ project: Project) {
@@ -262,19 +262,32 @@ final class ProjectEditor: ObservableObject {
         model = project.model ?? ""
         privateClones = project.usesPrivateClones
         requirePullRequest = project.effectiveRequirePullRequest
-        slackChannels = project.tracking?.slackChannels.joined(separator: ", ") ?? ""
-        linearTeam = project.tracking?.linearTeam ?? ""
+        let tracking = project.tracking
+        slackChannels = (tracking?.slackChannels ?? []).map { TrackedChannelRef(id: $0, name: tracking?.slackChannelNames?[$0]) }
+        linearTeam = tracking?.linearTeam.flatMap { $0.isEmpty ? nil : TrackedTeamRef(id: $0, name: tracking?.linearTeamName) }
         error = nil
     }
 
+    func addChannel(_ option: SlackChannelOption) {
+        guard !slackChannels.contains(where: { $0.id == option.id }) else { return }
+        slackChannels.append(TrackedChannelRef(id: option.id, name: option.name))
+    }
+
+    func removeChannel(_ id: String) {
+        slackChannels.removeAll { $0.id == id }
+    }
+
     var request: ProjectRequest {
-        ProjectRequest(
+        let names = Dictionary(slackChannels.compactMap { channel in channel.name.map { (channel.id, $0) } },
+                               uniquingKeysWith: { first, _ in first })
+        return ProjectRequest(
             name: name, model: model, workspace: privateClones ? "clone" : "direct",
             requirePullRequest: requirePullRequest,
             tracking: ProjectTrackingConfig(
-                slackChannels: slackChannels.components(separatedBy: CharacterSet(charactersIn: ",\n"))
-                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
-                linearTeam: linearTeam.trimmingCharacters(in: .whitespacesAndNewlines)
+                slackChannels: slackChannels.map(\.id),
+                slackChannelNames: names.isEmpty ? nil : names,
+                linearTeam: linearTeam?.id ?? "",
+                linearTeamName: linearTeam?.name
             )
         )
     }
@@ -322,13 +335,7 @@ private struct ProjectSettings: View {
                         Text("Require a pull request when publishing changes. Disabling permits direct pushes to the default branch. Changes take effect when a session worker next starts.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Section("Tracking") {
-                            TextField("Linear team", text: $editor.linearTeam, prompt: Text("Team name or ID"))
-                            TextField("Slack channels", text: $editor.slackChannels, prompt: Text("Channel names or IDs, comma-separated"))
-                            Text("Leave empty to disable tracking. Uses your pi MCP servers and sign-in. Sources never post or start chats automatically.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                        TrackingSettingsSection(project: project, editor: editor)
                         if let error = editor.error { Text(error).foregroundStyle(.red) }
                         HStack {
                             Spacer()

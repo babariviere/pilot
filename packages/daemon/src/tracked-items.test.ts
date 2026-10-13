@@ -86,6 +86,31 @@ test("durable, project-scoped dedupe preserves dismissals and links on refresh",
 		await rm(home, { recursive: true, force: true });
 	}
 });
+test("links keep a bounded history; the latest shows on the row and null clears a kind", async () => {
+	const store = new TrackedItemStore(":memory:");
+	try {
+		await store.load(["p"]);
+		await store.commit("p", "linear", [trackedInput()]);
+		const { id } = (await store.list({ projectId: "p" })).items[0]!;
+		await store.patch(id, { sessionId: "s1" });
+		await store.patch(id, { sessionId: "s2", missionId: "m1" });
+		let item = await store.patch(id, { sessionId: "s1" });
+		assert.equal(item.sessionId, "s1");
+		assert.deepEqual(item.sessionIds, ["s2", "s1"]);
+		assert.deepEqual(item.missionIds, ["m1"]);
+		assert.deepEqual(store.preview("p", "linear").items[0]?.sessionIds, ["s2", "s1"]);
+		for (let i = 0; i < 25; i++) await store.patch(id, { sessionId: `n${i}` });
+		item = await store.require(id);
+		assert.equal(item.sessionIds?.length, 20);
+		assert.equal(item.sessionId, "n24");
+		item = await store.patch(id, { sessionId: null });
+		assert.equal(item.sessionId, undefined);
+		assert.equal(item.sessionIds, undefined);
+		assert.equal(item.missionId, "m1");
+	} finally {
+		await store.close();
+	}
+});
 test("poll commits validate atomically, bound lists and preserve checkpoints on failure", async () => {
 	const store = new TrackedItemStore(":memory:");
 	try {

@@ -43,6 +43,39 @@ import Testing
     #expect(try JSONDecoder().decode(DashboardSourceStatus.self, from: Data(#""not_configured""#.utf8)) == .notConfigured)
 }
 
+@Test func trackingDecodesLinksChannelsAndLookups() throws {
+    let item = try JSONDecoder().decode(TrackedItem.self, from: Data(#"""
+    {"id":"i","projectId":"p","kind":"slack","externalId":"C1/1.000001","title":"Bug","url":"https://example.com",
+     "status":"bug_report","metadata":{},"dismissed":false,"sessionId":"s2","sessionIds":["s1","s2"],
+     "createdAt":1,"updatedAt":2}
+    """#.utf8))
+    #expect(item.sessionIds == ["s1", "s2"])
+    #expect(item.missionIds == nil)
+    let source = try JSONDecoder().decode(TrackingSource.self, from: Data(#"""
+    {"id":"p:slack","projectId":"p","kind":"slack","label":"Slack","configured":true,"status":"error",
+     "channels":[{"id":"C1","name":"bugs","status":"ok","lastPulledAt":5},{"id":"C2","status":"sign_in_required"},
+                 {"id":"C3","status":"future_state"}]}
+    """#.utf8))
+    #expect(source.channels?.map(\.status) == [.ok, .signInRequired, .error])
+    #expect(source.channels?.first?.name == "bugs")
+    let teams = try JSONDecoder().decode(TrackingLookup<LinearTeamOption>.self, from: Data(#"""
+    {"status":"ok","items":[{"id":"t","name":"Platform","key":"PLT","parentId":"root"}],"more":true}
+    """#.utf8))
+    #expect(teams.items.first?.parentId == "root")
+    #expect(teams.more == true)
+    let channels = try JSONDecoder().decode(TrackingLookup<SlackChannelOption>.self, from: Data(#"""
+    {"status":"sign_in_required","items":[],"error":"Sign in required","signInCommand":"pi mcp login slack"}
+    """#.utf8))
+    #expect(channels.status == .signInRequired)
+    let option = try JSONDecoder().decode(SlackChannelOption.self, from: Data(#"{"id":"G1","name":"x","private":true}"#.utf8))
+    #expect(option.isPrivate)
+    let config = ProjectTrackingConfig(slackChannels: ["C1"], slackChannelNames: ["C1": "bugs"], linearTeam: "t",
+                                       linearTeamName: "Platform")
+    let json = try JSONValue.decode(JSONEncoder().encode(config))
+    #expect(json["slackChannelNames"]?["C1"]?.string == "bugs")
+    #expect(json["linearTeamName"]?.string == "Platform")
+}
+
 @Test func trackedPatchDistinguishesMissingLinksFromClearedLinks() throws {
     let patch = TrackedItemPatch(dismissed: true, clearSession: true)
     let json = try JSONValue.decode(JSONEncoder().encode(patch))

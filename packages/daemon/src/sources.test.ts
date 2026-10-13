@@ -63,7 +63,7 @@ test("sources are opt-in and call only their dedicated server", async (t) => {
 		f.projects.update(f.project.id, {
 			tracking: { slackChannels: [], mcp: { linear: { server: "alternative", tools: {} } } } as never,
 		}),
-		/only slackChannels and linearTeam/,
+		/Tracking supports only/,
 	);
 	f.registry.register("linear", async (context) => {
 		await context.call("issues", { team: context.config.linearTeam });

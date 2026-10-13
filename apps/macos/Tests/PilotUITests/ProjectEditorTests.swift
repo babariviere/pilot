@@ -35,12 +35,21 @@ import Testing
 @Test @MainActor func projectEditorRoundTripsTracking() {
     let editor = ProjectEditor()
     editor.load(Project(id: "p", name: "Repo", path: "/repo",
-                        tracking: .init(slackChannels: ["C1"], linearTeam: "ENG"), createdAt: 1))
-    #expect(editor.slackChannels == "C1")
-    editor.slackChannels = " C1, C2 , , bugs "
-    editor.linearTeam = " "
-    #expect(editor.request.tracking?.slackChannels == ["C1", "C2", "bugs"])
+                        tracking: .init(slackChannels: ["C1", "bugs"], slackChannelNames: ["C1": "general"],
+                                        linearTeam: "team-1", linearTeamName: "Platform"), createdAt: 1))
+    #expect(editor.slackChannels.map(\.display) == ["#general", "#bugs"])
+    #expect(editor.linearTeam == TrackedTeamRef(id: "team-1", name: "Platform"))
+    editor.addChannel(SlackChannelOption(id: "C2", name: "app-bugs", isPrivate: true))
+    editor.addChannel(SlackChannelOption(id: "C1", name: "renamed"))
+    editor.removeChannel("bugs")
+    #expect(editor.request.tracking?.slackChannels == ["C1", "C2"])
+    #expect(editor.request.tracking?.slackChannelNames == ["C1": "general", "C2": "app-bugs"])
+    #expect(editor.request.tracking?.linearTeam == "team-1")
+    #expect(editor.request.tracking?.linearTeamName == "Platform")
+    editor.linearTeam = nil
     #expect(editor.request.tracking?.linearTeam == "")
+    #expect(editor.request.tracking?.linearTeamName == nil)
     editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))
     #expect(editor.request.tracking?.slackChannels == [])
+    #expect(editor.request.tracking?.slackChannelNames == nil)
 }

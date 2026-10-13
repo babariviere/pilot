@@ -93,6 +93,15 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	const auth = (await (await api(`/sources/${project.id}:linear/poll`, {})).json()) as TrackingSource;
 	assert.equal(auth.status, "sign_in_required");
 	assert.equal(auth.signInCommand, "pi mcp login linear");
+	const teams = await (await api("/tracking/linear/teams")).json();
+	assert.deepEqual(teams, {
+		status: "sign_in_required",
+		items: [],
+		error: "Sign in required",
+		signInCommand: "pi mcp login linear",
+	});
+	assert.equal((await (await api("/tracking/slack/channels?query=bugs")).json()).status, "sign_in_required");
+	assert.equal((await api("/tracking/slack/teams")).status, 404);
 	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: project.id }));
 	await until(() => messages.some((message) => message.type === "dashboard"));
 	await items.commit(

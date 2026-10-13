@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import type { TrackingJson } from "@pilot/protocol";
 import type { ModelCatalog } from "./models.ts";
 import { parseSlackPage, parseSlackThread, slackTimestamp, SlackFormatChanged } from "./slack-format.ts";
+import { SourceToolError } from "./source-mcp.ts";
 import type { SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { SlackCache } from "./tracked-items-disk.ts";
@@ -9,13 +11,41 @@ import type { SlackClassification } from "./slack-classifier.ts";
 export const SLACK_CONFIDENCE_THRESHOLD = 0.8;
 export const SLACK_BATCH_SIZE = 8;
 const THREAD_LIMIT = 30;
+/** A newly added channel starts this far back. Classification results are cached per thread. */
 const INITIAL_LOOKBACK_MS = 7 * 86_400_000;
-// Compact positional tuples, aligned to the config fingerprint, fit 100 channels in a 16 KiB checkpoint.
-type ChannelCursor = [oldest: string, latest: string | null, next: string | null];
-type Cursor = { version: 1; index: number; channels: ChannelCursor[] };
+// Compact tuples keyed by a short channel hash, so adding or removing a channel keeps the others' progress.
+type ChannelCursor = [
+	oldest: string,
+	latest: string | null,
+	next: string | null,
+	pulledAt: number | null,
+	failedAt: number | null,
+];
+type Cursor = { version: 2; last: string | null; channels: Record<string, ChannelCursor> };
 type CacheStore = Pick<TrackedItemStore, "slackCached" | "reserveSlack" | "finishSlack">;
 
-/** One history page per poll, round-robin channels. At most eight tool-free classification attempts. */
+/** Per-channel progress for source status. Old or foreign checkpoints report nothing. */
+export function slackChannelProgress(
+	value: TrackingJson | undefined,
+	channels: string[],
+): Array<{ pulledAt?: number; failedAt?: number }> {
+	let cursor: Cursor | undefined;
+	try {
+		cursor = value === undefined ? undefined : readCursor(value, channels, 0);
+	} catch {
+		cursor = undefined;
+	}
+	return channels.map((channel) => {
+		const state = cursor?.channels[channelKey(channel)];
+		return {
+			...(state?.[3] ? { pulledAt: state[3] } : {}),
+			...(state?.[4] ? { failedAt: state[4] } : {}),
+		};
+	});
+}
+
+/** One history page per poll, round-robin channels. At most eight tool-free classification attempts.
+ * A channel the tool refuses (for example, no access) is marked failed and the others keep their turns. */
 export function createSlackPoller(
 	store: CacheStore,
 	models: Pick<ModelCatalog, "classifySlack"> & Partial<Pick<ModelCatalog, "prepareSlackClassifier">>,
@@ -28,136 +58,168 @@ export function createSlackPoller(
 		if (names.length > 100) throw new Error("Too many configured Slack channels");
 		context.signal.throwIfAborted();
 		const cursor = readCursor(context.cursor, names, now());
-		const name = names[cursor.index]!;
-		const [oldest, savedLatest, next] = cursor.channels[cursor.index]!;
+		const last = cursor.last === null ? -1 : names.findIndex((name) => channelKey(name) === cursor.last);
+		const name = names[(last + 1) % names.length]!;
+		const key = channelKey(name);
+		const [oldest, savedLatest, next, pulledAt] = cursor.channels[key]!;
 		const latest = savedLatest ?? timestamp(now());
-		const page = parseSlackPage(
-			await context.call("history", {
-				channel_id: name,
-				oldest,
-				latest,
-				...(next ? { cursor: next } : {}),
-				limit: SLACK_BATCH_SIZE,
-				response_format: "detailed",
-			}),
-			SLACK_BATCH_SIZE,
-		);
-		if (/^[CDG][A-Z0-9]+$/.test(name) && name !== page.channel) throw new SlackFormatChanged();
-		if (!/^[CDG][A-Z0-9]+$/.test(name) && name.replace(/^#/, "") !== page.name) throw new SlackFormatChanged();
+		cursor.last = key;
+		let page: ReturnType<typeof parseSlackPage>;
 		const items: TrackedInput[] = [];
-		let classify: ((text: string) => Promise<SlackClassification>) | undefined;
 		let issue: SourcePollResult["issue"],
 			deferred = false;
-		for (const message of page.messages) {
-			context.signal.throwIfAborted();
-			const key = `${page.channel}/${message.threadTs}`;
-			let cached = await store.slackCached(page.channel, message.threadTs);
-			if (cached?.state === "pending") {
-				cached = active.has(key) ? await active.get(key)! : { state: "error" };
-			}
-			if (!cached) {
-				classify ??= models.prepareSlackClassifier
-					? await models.prepareSlackClassifier(context.project.path, context.signal)
-					: (text) => models.classifySlack(context.project.path, text, context.signal);
-				// Read only a bounded prefix, once. Later replies never cause reclassification.
-				const thread = message.replies
-					? parseSlackThread(
-							await context.call("thread", {
-								channel_id: page.channel,
-								message_ts: message.threadTs,
-								limit: THREAD_LIMIT,
-								response_format: "detailed",
-							}),
-							message.threadTs,
-							THREAD_LIMIT,
-						)
-					: { messages: [message] };
+		try {
+			page = parseSlackPage(
+				await context.call("history", {
+					channel_id: name,
+					oldest,
+					latest,
+					...(next ? { cursor: next } : {}),
+					limit: SLACK_BATCH_SIZE,
+					response_format: "detailed",
+				}),
+				SLACK_BATCH_SIZE,
+			);
+			if (/^[CDG][A-Z0-9]+$/.test(name) && name !== page.channel) throw new SlackFormatChanged();
+			if (!/^[CDG][A-Z0-9]+$/.test(name) && name.replace(/^#/, "") !== page.name) throw new SlackFormatChanged();
+			let classify: ((text: string) => Promise<SlackClassification>) | undefined;
+			for (const message of page.messages) {
 				context.signal.throwIfAborted();
-				const reservation = await store.reserveSlack(page.channel, message.threadTs, now());
-				if (reservation.state === "budget") {
-					issue = "slack_budget";
-					deferred = true;
-					break;
+				const threadKey = `${page.channel}/${message.threadTs}`;
+				let cached = await store.slackCached(page.channel, message.threadTs);
+				if (cached?.state === "pending") {
+					cached = active.has(threadKey) ? await active.get(threadKey)! : { state: "error" };
 				}
-				if (reservation.state === "reserved") {
-					const work = (async (): Promise<SlackCache> => {
-						try {
-							context.signal.throwIfAborted();
-							const result = await classify!(
-								thread.messages
-									.map((reply) => reply.text)
-									.join("\n\n")
-									.slice(0, 12_000),
-							);
-							await store.finishSlack(page.channel, message.threadTs, result);
-							return { state: "done", result };
-						} catch {
-							await store.finishSlack(page.channel, message.threadTs);
-							return { state: "error" };
-						}
-					})();
-					active.set(key, work);
-					try {
-						cached = await work;
-					} finally {
-						active.delete(key);
+				if (!cached) {
+					classify ??= models.prepareSlackClassifier
+						? await models.prepareSlackClassifier(context.project.path, context.signal)
+						: (text) => models.classifySlack(context.project.path, text, context.signal);
+					// Read only a bounded prefix, once. Later replies never cause reclassification.
+					const thread = message.replies
+						? parseSlackThread(
+								await context.call("thread", {
+									channel_id: page.channel,
+									message_ts: message.threadTs,
+									limit: THREAD_LIMIT,
+									response_format: "detailed",
+								}),
+								message.threadTs,
+								THREAD_LIMIT,
+							)
+						: { messages: [message] };
+					context.signal.throwIfAborted();
+					const reservation = await store.reserveSlack(page.channel, message.threadTs, now());
+					if (reservation.state === "budget") {
+						issue = "slack_budget";
+						deferred = true;
+						break;
 					}
-				} else cached = reservation.state === "pending" && active.has(key) ? await active.get(key)! : reservation;
+					if (reservation.state === "reserved") {
+						const channel = page.channel;
+						const work = (async (): Promise<SlackCache> => {
+							try {
+								context.signal.throwIfAborted();
+								const result = await classify!(
+									thread.messages
+										.map((reply) => reply.text)
+										.join("\n\n")
+										.slice(0, 12_000),
+								);
+								await store.finishSlack(channel, message.threadTs, result);
+								return { state: "done", result };
+							} catch {
+								await store.finishSlack(channel, message.threadTs);
+								return { state: "error" };
+							}
+						})();
+						active.set(threadKey, work);
+						try {
+							cached = await work;
+						} finally {
+							active.delete(threadKey);
+						}
+					} else
+						cached =
+							reservation.state === "pending" && active.has(threadKey)
+								? await active.get(threadKey)!
+								: reservation;
+				}
+				context.signal.throwIfAborted();
+				if (!cached || cached.state !== "done") {
+					issue ??= "slack_classification";
+					continue;
+				}
+				const result = cached.result;
+				if (!result.isBugReport || result.confidence < SLACK_CONFIDENCE_THRESHOLD) continue;
+				items.push({
+					externalId: `${page.channel}/${message.threadTs}`,
+					title: result.summary,
+					url: `https://slack.com/archives/${page.channel}/p${message.threadTs.replace(".", "")}`,
+					status: "bug_report",
+					updatedAt: Number(message.threadTs) * 1000,
+					metadata: { channel: page.channel, channelName: page.name, thread_ts: message.threadTs, ...result },
+				});
 			}
-			context.signal.throwIfAborted();
-			if (!cached || cached.state !== "done") {
-				issue ??= "slack_classification";
-				continue;
-			}
-			const result = cached.result;
-			if (!result.isBugReport || result.confidence < SLACK_CONFIDENCE_THRESHOLD) continue;
-			items.push({
-				externalId: `${page.channel}/${message.threadTs}`,
-				title: result.summary,
-				url: `https://slack.com/archives/${page.channel}/p${message.threadTs.replace(".", "")}`,
-				status: "bug_report",
-				updatedAt: Number(message.threadTs) * 1000,
-				metadata: { channel: page.channel, thread_ts: message.threadTs, ...result },
-			});
+		} catch (error) {
+			// Only the tool's own refusal is channel-specific. Sign-in, limits and format changes stop the source.
+			if (!(error instanceof SourceToolError) || context.signal.aborted) throw error;
+			cursor.channels[key] = [oldest, savedLatest, next, pulledAt, now()];
+			return { items: [], cursor: cursor as unknown as TrackingJson, issue: "slack_channel" };
 		}
-		cursor.channels[cursor.index] = deferred
-			? [oldest, latest, next]
+		const pulled = now();
+		cursor.channels[key] = deferred
+			? [oldest, latest, next, pulled, null]
 			: page.next
-				? [oldest, latest, page.next]
-				: [latest, null, null];
-		cursor.index = (cursor.index + 1) % names.length;
+				? [oldest, latest, page.next, pulled, null]
+				: [latest, null, null, pulled, null];
 		return { items, cursor: cursor as unknown as TrackingJson, ...(issue ? { issue } : {}) };
 	};
 }
 function timestamp(now: number): string {
 	return `${Math.floor(now / 1000)}.000000`;
 }
+/** Short, stable key. Configured entries can be up to 200 characters; the checkpoint stays small. */
+function channelKey(channel: string): string {
+	return createHash("sha256").update(channel).digest("base64url").slice(0, 12);
+}
+/** Keeps progress of channels still configured, starts new ones at the bounded lookback, drops removed ones. */
 function readCursor(value: TrackingJson | undefined, names: string[], now: number): Cursor {
-	if (value === undefined)
-		return {
-			version: 1,
-			index: 0,
-			channels: names.map(() => [timestamp(now - INITIAL_LOOKBACK_MS), null, null]),
-		};
-	const cursor = value as unknown as Cursor;
+	const fresh = (): ChannelCursor => [timestamp(now - INITIAL_LOOKBACK_MS), null, null, null, null];
+	const previous = value as unknown as (Omit<Partial<Cursor>, "version"> & { version?: number }) | null;
+	// Version 1 cursors were positional and tied to the whole channel list. Start over once.
+	if (value === undefined || (previous && typeof previous === "object" && previous.version === 1))
+		return { version: 2, last: null, channels: Object.fromEntries(names.map((name) => [channelKey(name), fresh()])) };
 	if (
-		!cursor ||
-		cursor.version !== 1 ||
-		!Number.isInteger(cursor.index) ||
-		cursor.index < 0 ||
-		cursor.index >= names.length ||
-		!Array.isArray(cursor.channels) ||
-		cursor.channels.length !== names.length ||
-		cursor.channels.some(
+		!previous ||
+		typeof previous !== "object" ||
+		previous.version !== 2 ||
+		(previous.last !== null && (typeof previous.last !== "string" || previous.last.length > 32)) ||
+		!previous.channels ||
+		typeof previous.channels !== "object" ||
+		Array.isArray(previous.channels) ||
+		Object.keys(previous.channels).length > 100 ||
+		Object.values(previous.channels).some(
 			(channel) =>
 				!Array.isArray(channel) ||
-				channel.length !== 3 ||
+				channel.length !== 5 ||
 				!slackTimestamp(channel[0]) ||
 				(channel[1] !== null && !slackTimestamp(channel[1])) ||
 				(channel[2] !== null &&
-					(typeof channel[2] !== "string" || !channel[2].length || channel[2].length > 96 || !channel[1])),
+					(typeof channel[2] !== "string" || !channel[2].length || channel[2].length > 96 || !channel[1])) ||
+				(channel[3] !== null && !Number.isFinite(channel[3])) ||
+				(channel[4] !== null && !Number.isFinite(channel[4])),
 		)
 	)
 		throw new Error("Invalid Slack checkpoint");
-	return structuredClone(cursor);
+	const channels = previous.channels;
+	return {
+		version: 2,
+		last: previous.last ?? null,
+		channels: Object.fromEntries(
+			names.map((name) => {
+				const key = channelKey(name);
+				return [key, Object.hasOwn(channels, key) ? structuredClone(channels[key]!) : fresh()];
+			}),
+		),
+	};
 }
