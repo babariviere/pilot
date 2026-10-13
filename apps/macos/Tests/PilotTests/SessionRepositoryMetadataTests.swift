@@ -4,16 +4,25 @@ import Testing
 @testable import Pilot
 
 private final class RepositoryHTTPStub: URLProtocol {
+    private static let lock = NSLock()
+    private static var requests: [String: Int] = [:]
+
+    static func count(_ host: String, path: String) -> Int {
+        lock.withLock { requests[host + path, default: 0] }
+    }
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
         let url = request.url!
-        let success = url.path == "/api/sessions/task/changes/summary" && url.host != "failed.invalid"
+        Self.lock.withLock { Self.requests[url.host! + url.path, default: 0] += 1 }
+        let full = url.path == "/api/sessions/task/changes"
+        let success = (full || url.path == "/api/sessions/task/changes/summary") && url.host != "failed.invalid"
         let response = HTTPURLResponse(url: url, statusCode: success ? 200 : 404, httpVersion: nil,
                                        headerFields: ["Content-Type": "application/json"])!
         let body = success
-            ? #"{"base":"origin/main","branch":"pilot/task","fileCount":3,"additions":13,"deletions":2}"#
+            ? (full ? #"{"base":"HEAD","files":[],"diff":"","truncated":false}"#
+                    : #"{"base":"origin/main","branch":"pilot/task","fileCount":3,"additions":13,"deletions":2}"#)
             : #"{"error":"Not a git repository"}"#
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Data(body.utf8))
@@ -39,6 +48,34 @@ private func repositorySession(_ state: String = "idle") -> SessionSummary {
     await model.load(repositorySession(), client: client)
     #expect(model.summary == SessionChangeSummary(base: "origin/main", branch: "pilot/task", fileCount: 3, additions: 13, deletions: 2))
     #expect(model.error == nil)
+}
+
+@Test @MainActor func fullDiffReadsCoalesceAndActivityInvalidatesTheirCache() async throws {
+    let host = "\(UUID().uuidString.lowercased()).invalid"
+    let path = "/api/sessions/task/changes"
+    let client = repositoryClient(host)
+    client.handle(.sessions([repositorySession()]))
+    async let first = client.changes("task")
+    async let second = client.changes("task")
+    let (a, b) = try await (first, second)
+    #expect(a == b)
+    #expect(RepositoryHTTPStub.count(host, path: path) == 1)
+    let session = SessionSummary(id: "task", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 3, state: "idle")
+    client.handle(.session(session))
+    _ = try await client.changes("task")
+    #expect(RepositoryHTTPStub.count(host, path: path) == 2)
+}
+
+@Test @MainActor func returningToWindowBypassesCompletedRepositoryValues() async throws {
+    let host = "\(UUID().uuidString.lowercased()).invalid"
+    let client = repositoryClient(host)
+    _ = try await client.changeSummary("task")
+    _ = try await client.changes("task")
+    client.refreshRepositoryCaches()
+    _ = try await client.changeSummary("task")
+    _ = try await client.changes("task")
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes/summary") == 2)
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes") == 2)
 }
 
 @Test @MainActor func sidebarDoesNotShowZeroOrStaleCountAfterAnError() async {

@@ -12,7 +12,7 @@ final class SessionRepositoryModel: ObservableObject {
     }
 
     func load(_ session: SessionSummary, client: PilotClient) async {
-        guard !session.isAsk, session.state != "starting" else { return }
+        guard !Task.isCancelled, !session.isAsk, session.state != "starting" else { return }
         do {
             let summary = try await client.changeSummary(session.id)
             try Task.checkCancellation()
@@ -31,7 +31,12 @@ final class SessionRepositoryModel: ObservableObject {
 struct SessionRepositoryMetadata: View {
     let session: SessionSummary
     @EnvironmentObject private var app: AppModel
+    @Environment(\.repositoryPollingVisible) private var windowVisible
     @StateObject private var model = SessionRepositoryModel()
+
+    private var pollingKey: RepositoryPollingKey {
+        RepositoryPollingKey(visible: windowVisible, state: session.state, updatedAt: session.updatedAt)
+    }
 
     var body: some View {
         if session.isAsk {
@@ -42,13 +47,13 @@ struct SessionRepositoryMetadata: View {
         } else {
             SessionRepositoryMetadataContent(session: session, summary: model.summary,
                                              branch: model.branch(for: session), error: model.error)
-            .task(id: session.state) {
-                guard session.state != "starting" else { return }
-                // SwiftUI cancels this task when the row disappears. State changes refresh immediately;
-                // periodic reads also pick up external edits in idle sessions.
+            .task(id: pollingKey) {
+                guard pollingKey.enabled else { return }
+                // Refresh on return/activity, but back off idle workspaces. External editor changes
+                // still arrive on the bounded periodic fallback, without polling hidden windows.
                 while !Task.isCancelled {
                     await model.load(session, client: app.client)
-                    do { try await Task.sleep(for: .seconds(10)) }
+                    do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: false))) }
                     catch { return }
                 }
             }

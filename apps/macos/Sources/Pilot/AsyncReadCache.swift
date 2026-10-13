@@ -80,6 +80,9 @@ final class AsyncReadCache<Key: Hashable, Value: Sendable> {
 
     func readerCount(for key: Key) -> Int { pending[key]?.readers.count ?? 0 }
 
+    /// Visibility refreshes bypass completed values without splitting another window's active read.
+    func clearValues() { entries.removeAll(keepingCapacity: true) }
+
     func invalidate(_ key: Key) {
         entries[key] = nil
         // Existing readers still receive their result, but it cannot repopulate the cache.

@@ -302,7 +302,16 @@ export class KernelSession {
 			registry.install(prepare(adapter.extension));
 			harness = await Harness.open(
 				owned.storage,
-				{ models: adapter.models, registry, settings: { toolExecution: "sequential" } },
+				{
+					models: adapter.models,
+					registry,
+					settings: {
+						toolExecution: "sequential",
+						// Progress is durable and drives display. Four checkpoints/sec bound page-write
+						// amplification while keeping streaming responsive; admissions/final results bypass it.
+						progress: { partialIntervalMs: 250, outputIntervalMs: 250 },
+					},
+				},
 				context,
 			);
 			// The agent applies only on first creation; a reopened session keeps its pinned choices.

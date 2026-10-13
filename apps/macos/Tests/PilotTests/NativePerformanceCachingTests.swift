@@ -33,6 +33,24 @@ import Testing
     #expect(try await cache.value(for: "s") { 9 } == 9)
 }
 
+@Test @MainActor func visibilityRefreshClearsValuesWithoutSplittingInFlightReads() async throws {
+    let cache = AsyncReadCache<String, Int>(ttl: 10)
+    #expect(try await cache.value(for: "completed") { 1 } == 1)
+    cache.clearValues()
+    #expect(try await cache.value(for: "completed") { 2 } == 2)
+    var release: CheckedContinuation<Int, Never>?
+    let first = Task { @MainActor in
+        try await cache.value(for: "pending") { await withCheckedContinuation { release = $0 } }
+    }
+    while release == nil { await Task.yield() }
+    cache.clearValues()
+    let second = Task { @MainActor in try await cache.value(for: "pending") { 99 } }
+    while cache.readerCount(for: "pending") != 2 { await Task.yield() }
+    release?.resume(returning: 7)
+    #expect(try await first.value == 7)
+    #expect(try await second.value == 7)
+}
+
 @Test @MainActor func invalidatedInFlightReadCannotOverwriteNewerCacheValue() async throws {
     let cache = AsyncReadCache<String, Int>(ttl: 10)
     var release: CheckedContinuation<Int, Never>?

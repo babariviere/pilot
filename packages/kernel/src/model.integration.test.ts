@@ -19,7 +19,7 @@ import {
 	ModelRuntime,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { ConversationBusy, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import { ConversationBusy, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import { userText } from "./attempts.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
@@ -126,6 +126,31 @@ async function fixture(
 	};
 	return { open, a, b, bus, changes, adapters, spec };
 }
+
+test("kernel coalesces durable progress without losing short final responses", {
+	timeout: 15_000,
+}, async (t) => {
+	const open = Harness.open;
+	const settings: unknown[] = [];
+	t.mock.method(Harness, "open", (...args: Parameters<typeof Harness.open>) => {
+		settings.push(args[1].settings);
+		return open(...args);
+	});
+	const f = await fixture(t);
+	f.a.setResponses([fauxAssistantMessage("Short final answer.")]);
+	const session = await f.open();
+	await session.submit("short-answer", "Answer briefly", "followUp");
+	await session.conversation.waitForIdle(context);
+	const snapshot = await readSessionSnapshot(f.spec.storageDir, f.spec.cwd);
+	assert.ok(JSON.stringify(snapshot).includes("Short final answer."));
+	await session.close();
+	const restored = await f.open();
+	assert.deepEqual(settings, [
+		{ toolExecution: "sequential", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
+		{ toolExecution: "sequential", progress: { partialIntervalMs: 250, outputIntervalMs: 250 } },
+	]);
+	await restored.close();
+});
 
 test("jobs-style completions stay pending while Harness works and wake it once after settling", {
 	timeout: 15_000,

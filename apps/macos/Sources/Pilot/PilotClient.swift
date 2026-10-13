@@ -47,6 +47,7 @@ final class PilotClient: ObservableObject {
     private let artifactSession: URLSession
     private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
     private let summaryCache = AsyncReadCache<String, SessionChangeSummary>(ttl: 10)
+    private let changesCache = AsyncReadCache<String, SessionChanges>(ttl: 1, limit: 8)
     init(baseURL: URL? = nil, artifactSession: URLSession = .shared) {
         self.baseURL = baseURL
         self.artifactSession = artifactSession
@@ -440,6 +441,11 @@ final class PilotClient: ObservableObject {
     var fixtureChanges: SessionChanges?
     var fixtureChangeSummaries: [String: SessionChangeSummary] = [:]
 
+    func refreshRepositoryCaches() {
+        summaryCache.clearValues()
+        changesCache.clearValues()
+    }
+
     /// Sidebar metadata only, without computing or transferring full diffs.
     func changeSummary(_ sessionId: String) async throws -> SessionChangeSummary {
         if let fixture = fixtureChangeSummaries[sessionId] { return fixture }
@@ -466,8 +472,16 @@ final class PilotClient: ObservableObject {
     /// The session's working copy against the point it branched from.
     func changes(_ sessionId: String) async throws -> SessionChanges {
         if let fixtureChanges { return fixtureChanges }
+        return try await changesCache.value(for: sessionId) { [self] in
+            try await fetchChanges(sessionId)
+        }
+    }
+
+    private func fetchChanges(_ sessionId: String) async throws -> SessionChanges {
         guard let baseURL else { throw ClientError("pilotd is not connected") }
-        let (data, response) = try await URLSession.shared.data(from: baseURL.appending(path: "api/sessions/\(sessionId)/changes"))
+        let (data, response) = try await repositoryRequests.perform {
+            try await artifactSession.data(from: baseURL.appending(path: "api/sessions/\(sessionId)/changes"))
+        }
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
@@ -993,7 +1007,10 @@ final class PilotClient: ObservableObject {
 
     private func update(_ session: SessionSummary) {
         let current = self.session(session.id)
-        if current?.updatedAt != session.updatedAt { summaryCache.invalidate(session.id) }
+        if current?.updatedAt != session.updatedAt {
+            summaryCache.invalidate(session.id)
+            changesCache.invalidate(session.id)
+        }
         // An unchanged summary must not invalidate every view observing the session list.
         guard current != session else { return }
         // Publish once, rather than once per removal, insertion and sort.

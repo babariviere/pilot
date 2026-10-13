@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { collectChangeSummary, collectChanges, RepositoryChanges } from "./changes.ts";
+import { type ProcessOptions, subprocesses } from "./subprocess.ts";
 
 const git = (cwd: string, ...args: string[]) =>
 	execFileSync("git", args, {
@@ -18,6 +19,89 @@ const git = (cwd: string, ...args: string[]) =>
 			GIT_COMMITTER_EMAIL: "t@t",
 		},
 	});
+
+test("untracked stats match Git attributes, drivers, thresholds and symlinks without per-file Git", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-untracked-git-parity-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	git(root, "init", "--quiet", "-b", "main");
+	writeFileSync(
+		join(root, ".gitattributes"),
+		"*.forced diff\n*.binary -diff\n*.custom diff=custom\n*.text-driver diff=text-driver\n",
+	);
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "base");
+	git(root, "config", "diff.custom.binary", "true");
+	git(root, "config", "diff.text-driver.binary", "false");
+	git(root, "config", "core.bigFileThreshold", "1k");
+	const contents = new Map<string, string | Buffer>([
+		["plain", "one\r\ntwo"],
+		["empty", ""],
+		["nul", Buffer.from([0, 10])],
+		["text.forced", Buffer.from([0, 10, 97])],
+		["text.binary", "one\ntwo\n"],
+		["text.custom", "one\ntwo\n"],
+		["nul.text-driver", Buffer.from([0, 10, 97])],
+		["large", "one\n".repeat(1024)],
+		["late-nul.forced", `${"a".repeat(8000)}\0\nlast`],
+	]);
+	for (const [path, content] of contents) writeFileSync(join(root, path), content);
+	symlinkSync("missing\nexternal-target", join(root, "link.binary"));
+	let additions = 0;
+	for (const path of [...contents.keys(), "link.binary"]) {
+		let output: string;
+		try {
+			output = git(
+				root,
+				"diff",
+				"--no-ext-diff",
+				"--no-textconv",
+				"--numstat",
+				"-z",
+				"--no-index",
+				"--",
+				"/dev/null",
+				path,
+			);
+		} catch (error) {
+			output = (error as { stdout: string }).stdout;
+		}
+		additions += Number(output.split("\t")[0]) || 0;
+	}
+	const run = subprocesses.run.bind(subprocesses);
+	const commands: string[][] = [];
+	t.mock.method(subprocesses, "run", (file: string, args: string[], options: ProcessOptions) => {
+		if (file === "git") commands.push(args);
+		return run(file, args, options);
+	});
+	const summary = await collectChangeSummary(root);
+	assert.equal(summary.fileCount, contents.size + 1);
+	assert.equal(summary.additions, additions);
+	assert.equal(summary.deletions, 0);
+	assert.equal(commands.filter((args) => args.includes("--no-index")).length, 0);
+});
+
+test("many untracked files use a constant command count and share metadata across endpoints", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-untracked-fanout-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	git(root, "init", "--quiet", "-b", "main");
+	git(root, "commit", "--quiet", "--allow-empty", "-m", "base");
+	for (let i = 0; i < 100; i++) writeFileSync(join(root, `${i}.txt`), "one\ntwo\n");
+	const run = subprocesses.run.bind(subprocesses);
+	const commands: string[][] = [];
+	t.mock.method(subprocesses, "run", (file: string, args: string[], options: ProcessOptions) => {
+		commands.push(args);
+		return run(file, args, options);
+	});
+	const cache = new RepositoryChanges();
+	const summary = await cache.summary(root);
+	assert.equal(summary.fileCount, 100);
+	assert.equal(summary.additions, 200);
+	assert.equal(commands.length, 8, "fixed repository + attribute/config reads, regardless of file count");
+	const full = await cache.changes(root);
+	assert.equal(full.files.length, 100);
+	assert.equal(commands.filter((args) => args.includes("--numstat")).length, 1, "full diff reuses sidebar metadata");
+	assert.equal(commands.filter((args) => args.includes("--name-status")).length, 1);
+});
 
 test("reports committed, uncommitted and untracked changes since the base", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-changes-"));
