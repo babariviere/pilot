@@ -59,6 +59,8 @@ const hash = (input: string | Buffer) => createHash("sha256").update(input).dige
 const recoverableInput = (path: string) =>
 	localConfigs.includes(path) || /^\.pi\/todos\/[a-zA-Z0-9_-]+\.(md|json)$/.test(path);
 const fullCommit = /^[0-9a-f]{40}$/;
+/** Where a child's gitdir file is hidden while jj updates or snapshots it without importing Git refs. */
+const PARKED_GIT = ".jj/pilot-refresh-git";
 /** Exact file/mode/blob transitions, unlike patch-id which normalizes away whitespace edits. */
 const changeFingerprint = (raw: string) => {
 	const lines = raw.split("\n").filter((line) => line.startsWith(":"));
@@ -345,6 +347,32 @@ export class SharedWorkspaceStore {
 		if (!(await stat(join(cwd, ".git"))))
 			await this.jj(["--ignore-working-copy", "git", "colocation", "enable"], cwd, signal);
 		await this.child(cwd, shared);
+	}
+
+	/** Restore a child's gitdir file hidden by an interrupted refresh or snapshot. */
+	private async unparkGit(cwd: string) {
+		const marker = join(cwd, ".git");
+		if (!(await stat(join(cwd, PARKED_GIT)))) return;
+		if ((await stat(marker)) || !(await safeFile(cwd, PARKED_GIT)))
+			throw new Error("Unsafe interrupted refresh metadata");
+		await rename(join(cwd, PARKED_GIT), marker);
+	}
+
+	/**
+	 * Snapshot this child's filesystem. Another workspace may have rewritten its working-copy commit, leaving it
+	 * stale, so update it first. Hide the gitdir file meanwhile so neither command imports shared Git refs.
+	 */
+	private async snapshotChild(cwd: string, shared: SharedWorkspace) {
+		await this.jjChild(cwd, shared);
+		await this.unparkGit(cwd);
+		await this.child(cwd, shared);
+		await rename(join(cwd, ".git"), join(cwd, PARKED_GIT));
+		try {
+			await this.jj(["workspace", "update-stale"], cwd);
+			await this.jj(["status"], cwd);
+		} finally {
+			await rename(join(cwd, PARKED_GIT), join(cwd, ".git"));
+		}
 	}
 
 	/** A retained, empty non-colocated command workspace. Never snapshot/import the default workspace. */
@@ -712,13 +740,9 @@ export class SharedWorkspaceStore {
 			await this.owned(shared, cwd);
 			await this.jjChild(cwd, shared);
 			const marker = join(cwd, ".git");
-			const parkedMarker = join(cwd, ".jj/pilot-refresh-git");
+			const parkedMarker = join(cwd, PARKED_GIT);
 			// Recover an interrupted refresh before validating colocation.
-			if (await stat(parkedMarker)) {
-				if ((await stat(marker)) || !(await safeFile(cwd, ".jj/pilot-refresh-git")))
-					throw new Error("Unsafe interrupted refresh metadata");
-				await rename(parkedMarker, marker);
-			}
+			await this.unparkGit(cwd);
 			await this.child(cwd, shared);
 			const control = await this.control(shared.repository);
 			const base = await this.base(source, shared.repository, branch, this.runner);
@@ -989,8 +1013,7 @@ export class SharedWorkspaceStore {
 		cwd = await canonical(cwd);
 		return this.queue(shared.repository, async () => {
 			await this.owned(shared, cwd);
-			await this.child(cwd, shared);
-			await this.jj(["status"], cwd);
+			await this.snapshotChild(cwd, shared);
 			const ids = await this.ids(cwd);
 			const configs = await this.inspect(cwd);
 			recoveryDirectory = await canonical(recoveryDirectory);
@@ -1046,8 +1069,7 @@ export class SharedWorkspaceStore {
 			}
 			if (!(await this.registered(shared)))
 				throw new Error("Workspace was unregistered but its directory remains; partial removal needs review");
-			await this.child(cwd, shared);
-			await this.jj(["status"], cwd);
+			await this.snapshotChild(cwd, shared);
 			if ((await this.ids(cwd)).commitId !== recovery.commitId)
 				throw new Error("Workspace changed since recovery snapshot");
 			if (JSON.stringify(await this.inspect(cwd)) !== JSON.stringify(recovery.localConfigs))

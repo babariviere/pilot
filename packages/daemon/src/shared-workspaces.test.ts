@@ -289,6 +289,34 @@ test("empty saved change remains jj-resolvable and restores exact IDs after both
 	}
 });
 
+test("a working copy left stale by another workspace's rewrite is updated before reclamation", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		writeFileSync(join(w.path, "a.txt"), "edited\n");
+		jj(w.path, "status");
+		const commit = jj(w.path, "log", "--no-graph", "-r", "@", "-T", "commit_id");
+		// A sibling rewrites this child's commit onto a different tree, as a Git import rebasing it would.
+		const sibling = await f.store.create(f.source, f.path("session-b"));
+		writeFileSync(join(sibling.path, "b.txt"), "sibling\n");
+		jj(sibling.path, "commit", "-m", "sibling");
+		const parent = jj(sibling.path, "log", "--no-graph", "-r", "@-", "-T", "commit_id");
+		jj(w.shared!.repository, "--ignore-working-copy", "rebase", "-r", commit, "-d", parent);
+		assert.throws(() => jj(w.path, "status"), /stale/);
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		assert.notEqual(recovery.commitId, commit);
+		assert.equal(existsSync(join(w.path, ".git")), true);
+		assert.equal(existsSync(join(w.path, ".jj/pilot-refresh-git")), false);
+		await f.store.remove(w.path, w.shared!, recovery);
+		assert.equal(existsSync(w.path), false);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "edited\n");
+		assert.equal(readFileSync(join(w.path, "b.txt"), "utf8"), "sibling\n");
+	} finally {
+		f.close();
+	}
+});
+
 test("merge conflicts survive exact recovery", async () => {
 	const f = fixture();
 	try {
