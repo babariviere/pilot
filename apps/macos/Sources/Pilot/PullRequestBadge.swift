@@ -59,7 +59,8 @@ struct PullRequestLink: View {
             if ready {
                 Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
             } else if presentation == .badge { pr.state.icon }
-            Text(presentation == .details ? "\(ready ? "Ready to merge" : pr.state.compactLabel) PR #\(pr.number)" : "#\(pr.number)")
+            Text(presentation == .details ? "\(ready ? "Ready to merge" : pr.state.compactLabel) PR #\(pr.number)"
+                : ready ? "Ready to merge #\(pr.number)" : "#\(pr.number)")
             if stale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
             }
