@@ -70,7 +70,7 @@ import Testing
     }
 }
 
-@Test @MainActor func foldedMessagesDoNotBuildTheirFullContent() {
+@Test @MainActor func foldedMessagesDoNotBuildTheirFullContent() throws {
     _ = NSApplication.shared
     let source = String(repeating: "Crash report frame\n", count: 4000)
     var fullContentBuilds = 0
