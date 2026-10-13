@@ -66,6 +66,8 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 
 - Biome: tabs, width 120. `npm run fmt` / `npm run fmt:check`.
 - Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
+- Run tests with `npm test` (bounded to 2 test files concurrently by default). Raise the local
+  limit with `PILOT_TEST_CONCURRENCY=4 npm test` when your machine has headroom.
 - Before finishing a change: `npm run typecheck` and `npm test`; for Swift changes also
   `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`.
 
