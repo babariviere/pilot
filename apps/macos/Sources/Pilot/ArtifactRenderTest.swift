@@ -136,6 +136,7 @@ enum ArtifactRenderTest {
             try await renderImageDefaults(directory: directory, client: client)
             try await renderViewerHeader(directory: directory)
             try await renderContentGrowth(directory: directory, client: client)
+            try await renderFullScreenshot(directory: directory, client: client)
             try await renderMermaidLayout(directory: directory, client: client)
             try await renderChatLayout(directory: directory, client: client)
             try await renderCompactContent(directory: directory, client: client)
@@ -323,6 +324,43 @@ enum ArtifactRenderTest {
         """) as? Bool
         guard overridden == true else { throw ClientError("Mermaid author override lost") }
         print("artifact-render-test passed: saved Mermaid centered at wide/narrow widths, author override")
+    }
+
+    /// Screenshots cover the whole document, not just the scrolled viewport.
+    private static func renderFullScreenshot(directory: URL, client: PilotClient) async throws {
+        let state = ArtifactRenderState()
+        let coordinator = ArtifactWebView.Coordinator(state: state)
+        let handler = ArtifactLibraryHandler(libraries: [], client: client)
+        let view = ArtifactWebView.makeSandboxView(coordinator: coordinator, libraries: handler)
+        view.frame = CGRect(x: 0, y: 0, width: 400, height: 300)
+        let window = NSWindow(contentRect: view.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = view
+        window.orderFront(nil)
+        defer { ArtifactWebView.dismantleNSView(view, coordinator: coordinator); window.close() }
+        coordinator.install(in: view, document: ArtifactSandboxPolicy.document("""
+        <style>html,body{margin:0;background:#fff}div{height:600px}</style>
+        <div style="background:#ff0000"></div><div style="background:#0000ff"></div>
+        """))
+        try await wait("Tall document load") { !state.loading || state.error != nil }
+        if let error = state.error { throw ClientError(error) }
+        _ = try await view.evaluateJavaScript("window.scrollTo(0, 700)")
+        try await Task.sleep(for: .milliseconds(200))
+        let png = try await state.snapshotPNG()
+        try png.write(to: directory.appending(path: "artifact-full-screenshot.png"))
+        guard let bitmap = NSBitmapImageRep(data: png) else { throw ClientError("Full screenshot unreadable") }
+        let scale = CGFloat(bitmap.pixelsHigh) / 1200
+        guard abs(CGFloat(bitmap.pixelsWide) / scale - 400) < 1 else {
+            throw ClientError("Full screenshot size \(bitmap.pixelsWide)x\(bitmap.pixelsHigh)")
+        }
+        func color(_ y: CGFloat) -> NSColor? {
+            bitmap.colorAt(x: bitmap.pixelsWide / 2, y: Int(y * scale))?.usingColorSpace(.sRGB)
+        }
+        guard let top = color(50), top.redComponent > 0.9, top.blueComponent < 0.1,
+              let bottom = color(1150), bottom.blueComponent > 0.9, bottom.redComponent < 0.1 else {
+            throw ClientError("Full screenshot missed offscreen content: \(String(describing: color(50))), \(String(describing: color(1150)))")
+        }
+        print("artifact-render-test passed: full-document screenshot while scrolled")
     }
 
     private static func renderContentGrowth(directory: URL, client: PilotClient) async throws {

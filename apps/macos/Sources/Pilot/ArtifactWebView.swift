@@ -10,18 +10,44 @@ final class ArtifactRenderState: ObservableObject {
     @Published var contentSize: CGSize?
     weak var webView: WKWebView?
 
-    /// Capture the current viewport, including interactive state, without a JS/native bridge.
+    /// Longest captured side, in points. Taller or wider documents are scaled down to bound bitmap memory.
+    static let maxSnapshotSide: CGFloat = 8192
+
+    /// Capture the whole document, including content scrolled out of view and interactive state.
+    /// `takeSnapshot` only paints the visible tiles, so render the full page to PDF and rasterize it.
+    /// No JS/native bridge is exposed to the artifact.
     func snapshotPNG() async throws -> Data {
         guard !loading, error == nil, let webView else { throw ClientError("Preview is not ready") }
-        let configuration = WKSnapshotConfiguration()
-        configuration.rect = webView.bounds
-        let image = try await webView.takeSnapshot(configuration: configuration)
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let data = bitmap.representation(using: .png, properties: [:]) else {
+        let pdf = try await webView.pdf(configuration: WKPDFConfiguration())
+        let scale = webView.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        guard let data = Self.rasterize(pdf: pdf, scale: scale) else {
             throw ClientError("Cannot encode artifact screenshot")
         }
         return data
+    }
+
+    /// Draw the first PDF page at the display scale, capped so the longest side stays within
+    /// `maxSnapshotSide` points.
+    static func rasterize(pdf: Data, scale: CGFloat) -> Data? {
+        guard let provider = CGDataProvider(data: pdf as CFData), let document = CGPDFDocument(provider),
+              let page = document.page(at: 1) else { return nil }
+        let box = page.getBoxRect(.mediaBox)
+        let size = box.size
+        guard size.width > 0, size.height > 0 else { return nil }
+        let fit = min(1, maxSnapshotSide / max(size.width, size.height))
+        let pixelsWide = max(1, Int((size.width * fit * scale).rounded()))
+        let pixelsHigh = max(1, Int((size.height * fit * scale).rounded()))
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: pixelsWide, height: pixelsHigh, bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.scaleBy(x: CGFloat(pixelsWide) / size.width, y: CGFloat(pixelsHigh) / size.height)
+        context.translateBy(x: -box.minX, y: -box.minY)
+        context.drawPDFPage(page)
+        guard let image = context.makeImage() else { return nil }
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        bitmap.size = CGSize(width: size.width * fit, height: size.height * fit)
+        return bitmap.representation(using: .png, properties: [:])
     }
 }
 

@@ -877,7 +877,8 @@ reports), producing a morning summary in the app and Slack.
   or an interactive sandbox for apps. Expanded artifact viewers always show the preview, with no
   Preview/Source switch. Their Share menu copies file content, materializes a pinned source/image file
   locally to copy its full path or reveal it in Finder, saves the original source/image with Save As,
-  and copies or exports a PNG of the visible preview (including interactive state). Local files live
+  and copies or exports a PNG of the full preview, including content scrolled out of view and
+  interactive state (capped at 8192 points on the longest side). Local files live
   in the app's artifact export cache, not the daemon's private store.
   The single viewer header has a close icon on the left, artifact type beside the revision label,
   and Share on the top right, without a repeated compact revision badge.
