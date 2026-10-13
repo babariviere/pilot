@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.20.0](https://github.com/babariviere/pilot/compare/v1.19.0...v1.20.0) (2026-10-13)
+
+
+### Features
+
+* **macos:** redesign mission pages as calm status views ([2c87f20](https://github.com/babariviere/pilot/commit/2c87f20ed226e966e0a4fc1200557dafe1ce036b))
+
+
+### Bug Fixes
+
+* **workspaces:** handle trial warnings and rollback writes ([6e3c05c](https://github.com/babariviere/pilot/commit/6e3c05cf0f3ecb1d63366d543933e45ee3be1580))
+* **workspaces:** refresh bases safely between turns ([cf1ed3f](https://github.com/babariviere/pilot/commit/cf1ed3f94e58f599d34c9ca59321bdd8f0fac96d))
+
 ## [1.19.0](https://github.com/babariviere/pilot/compare/v1.18.0...v1.19.0) (2026-10-13)
 
 
