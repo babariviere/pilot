@@ -3131,7 +3131,7 @@ export class SessionManager {
 		};
 	}
 
-	/** Fresh, owned, open PRs whose problems could trigger a follow-up now. Health is looked up only for these. */
+	/** Fresh, owned, open PRs whose problems could trigger a follow-up now. Display readiness is independent. */
 	private followUpHealthPlan(
 		meta: SessionMeta,
 		result: PullRequestResult,

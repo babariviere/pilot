@@ -22,6 +22,7 @@ import type { MissionStore } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { ReviewStore } from "./reviews.ts";
 import { NotFound } from "./errors.ts";
+import { readinessReasonLabel } from "./pull-request-readiness.ts";
 
 /** Optional data providers. Until registered, their sections are empty or absent. */
 export interface DashboardProviders {
@@ -76,9 +77,10 @@ function ref(pr: SessionPullRequest | undefined): DashboardPullRequestRef | unde
 	return pr ? { number: pr.number, url: pr.url, state: pr.state } : undefined;
 }
 
-/** Extension point for merge readiness; the daemon has none yet, so rows carry none. */
-function readinessOf(_pr: SessionPullRequest): DashboardPullRequestReadiness | undefined {
-	return undefined;
+function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | undefined {
+	return pr.readiness
+		? { state: pr.readiness.state, reasons: pr.readiness.reasons.map(readinessReasonLabel) }
+		: undefined;
 }
 
 /** A finished chat that has not been reviewed: its result or failure still waits on the user. */

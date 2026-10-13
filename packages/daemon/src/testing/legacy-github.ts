@@ -84,6 +84,9 @@ export function legacyGitHub(legacy: Runner): Runner {
 					state: view.state,
 					headRefName: view.headRefName,
 					mergeable: view.mergeable,
+					isDraft: view.isDraft,
+					reviewDecision: view.reviewDecision,
+					mergeStateStatus: view.mergeStateStatus,
 					commits: {
 						nodes: [
 							{

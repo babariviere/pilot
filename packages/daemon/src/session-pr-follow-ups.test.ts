@@ -232,6 +232,10 @@ async function setup(cooldownMs?: number) {
 	let manager = makeManager();
 	await manager.load();
 	await manager["pullRequests"].settled();
+	// Readiness is fetched on startup even before the PR becomes eligible for follow-ups.
+	controls.healthCalls = 0;
+	controls.graphqlCalls = 0;
+	controls.healthNumbers = [];
 	// Ownership is deliberately absent on load, so each test controls the first eligible sweep.
 	delete manager["metas"].get(otherId)!.agentPullRequests;
 	manager["metas"].get(id)!.agentPullRequests = [url];
@@ -386,7 +390,7 @@ test("one follow-up covers all fresh owned stack heads, even when the current PR
 		const before = activity(f.meta);
 		await f.refresh();
 		assert.equal(f.inputs.length, 1);
-		assert.deepEqual(f.controls.healthNumbers.sort(), [11, 12]);
+		assert.deepEqual(f.controls.healthNumbers.sort(), [11, 12, 13], "unowned PRs still get display readiness");
 		for (const pr of prs.slice(0, 2)) {
 			assert.ok(f.inputs[0]!.content.includes(pr.url));
 			assert.ok(f.inputs[0]!.content.includes(pr.branch!));
@@ -446,7 +450,7 @@ test("closed-current stacks keep polling across restart without bypassing cooldo
 		const calls = f.controls.healthCalls;
 		await f.restart();
 		assert.equal(f.inputs.length, 3);
-		assert.equal(f.controls.healthCalls, calls, "exhausted stack budget stops health queries");
+		assert.equal(f.controls.healthCalls, calls + 2, "exhausted budget still refreshes display readiness");
 	});
 });
 
@@ -680,7 +684,7 @@ test("failed, malformed, unknown and stale GitHub health never consume an attemp
 	});
 });
 
-test("busy, queued, unowned, direct, ask, archived and transitional sessions do not even query health", async () => {
+test("busy, queued, unowned, direct, ask, archived and transitional sessions never get automatic follow-ups", async () => {
 	await fixture(async (f) => {
 		const manager = f.manager;
 		const meta = f.meta;
@@ -781,7 +785,6 @@ test("busy, queued, unowned, direct, ask, archived and transitional sessions do 
 			try {
 				start();
 				await f.refresh();
-				assert.equal(f.controls.healthCalls, 0, label);
 				assert.equal(f.inputs.length, 0, label);
 				assert.equal(meta.prFollowUp, undefined, label);
 				assert.deepEqual(activity(meta), before, label);
@@ -802,7 +805,7 @@ test("the first private session to discover an unowned PR claims it, and a PR ha
 		await f.refresh();
 		f.manager["onPacket"](f.meta, f.worker(), { type: "pullRequest.created", url });
 		assert.equal(f.meta.agentPullRequests, undefined);
-		assert.equal(f.controls.healthCalls, 0);
+		assert.ok(f.controls.healthCalls > 0, "unowned PR still receives display readiness");
 		assert.equal(f.inputs.length, 0);
 
 		// Ask and archived sessions never claim delivery PRs.

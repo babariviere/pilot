@@ -6,11 +6,16 @@
 import type { SessionPullRequest } from "@pilot/protocol";
 import {
 	failedChecks,
+	checksPending,
 	githubRepository,
+	type HealthResult,
 	type PullRequestProblems,
 	stackBaseFields,
 	stackDivergence,
+	readinessFields,
+	unsupportedReadinessField,
 } from "./github.ts";
+import { mergeReadiness } from "./pull-request-readiness.ts";
 import { execFileOffThread } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
@@ -72,9 +77,17 @@ export async function discoverPullRequestProblems(
 	session: { cwd: string; workspace?: { upstream?: string; branch?: string }; pullRequest?: SessionPullRequest },
 	runner: Runner = run,
 ): Promise<PullRequestProblems> {
+	return (await discoverPullRequestHealth(session, runner)).problems;
+}
+
+export async function discoverPullRequestHealth(
+	session: { cwd: string; workspace?: { upstream?: string; branch?: string }; pullRequest?: SessionPullRequest },
+	runner: Runner = run,
+	unsupported = new Set<string>(),
+): Promise<Extract<HealthResult, { problems: PullRequestProblems }>> {
 	const pr = session.pullRequest;
 	if (!pr || pr.state === "merged" || pr.state === "closed")
-		return { failedChecks: [], reviewComments: 0, mergeConflicts: false };
+		return { problems: { failedChecks: [], reviewComments: 0, mergeConflicts: false } };
 	if (
 		(pr.state !== "open" && pr.state !== "draft") ||
 		!Number.isSafeInteger(pr.number) ||
@@ -109,17 +122,30 @@ export async function discoverPullRequestProblems(
 	)
 		throw new Error("Invalid GitHub pull request URL for health discovery");
 
-	const view = parse(
-		await command("gh", [
-			"pr",
-			"view",
-			String(pr.number),
-			`--repo=${repo.identity}`,
-			"--json=statusCheckRollup,mergeable,state,headRefName",
-		]),
-	);
+	let view: Record<string, unknown>;
+	for (;;) {
+		try {
+			view = parse(
+				await command("gh", [
+					"pr",
+					"view",
+					String(pr.number),
+					`--repo=${repo.identity}`,
+					`--json=statusCheckRollup,mergeable,state,headRefName,isDraft${readinessFields
+						.filter((field) => !unsupported.has(field))
+						.map((field) => `,${field}`)
+						.join("")}`,
+				]),
+			);
+			break;
+		} catch (error) {
+			const field = unsupportedReadinessField(error);
+			if (!field || unsupported.has(field)) throw error;
+			unsupported.add(field);
+		}
+	}
 	if (view.state !== "OPEN" && view.state !== "CLOSED" && view.state !== "MERGED") invalid();
-	if (view.state !== "OPEN") return { failedChecks: [], reviewComments: 0, mergeConflicts: false };
+	if (view.state !== "OPEN") return { problems: { failedChecks: [], reviewComments: 0, mergeConflicts: false } };
 	const head = text(view.headRefName);
 	if (session.workspace?.branch !== undefined && head !== session.workspace.branch)
 		throw new Error("GitHub pull request head does not match the session workspace branch");
@@ -193,7 +219,13 @@ export async function discoverPullRequestProblems(
 		const pageInfo = object(connection.pageInfo);
 		if (typeof pageInfo.hasNextPage !== "boolean") invalid();
 		if (pageInfo.endCursor !== null && typeof pageInfo.endCursor !== "string") invalid();
-		if (!pageInfo.hasNextPage) return problems(reviewComments);
+		if (!pageInfo.hasNextPage) {
+			const result = problems(reviewComments);
+			return {
+				problems: result,
+				readiness: mergeReadiness({ state: view.state, ...view }, result, checksPending(view.statusCheckRollup)),
+			};
+		}
 		cursor = text(pageInfo.endCursor);
 		if (!connection.nodes.length || cursors.has(cursor)) invalid();
 		cursors.add(cursor);

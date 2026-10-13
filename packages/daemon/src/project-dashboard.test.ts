@@ -95,6 +95,42 @@ test("dashboard supports a larger but explicitly bounded section limit", () => {
 	assert.equal(build({ sessions }).working.items.length, 5);
 });
 
+test("readiness projects structured reasons, sorts ready first and counts ready across the row limit", () => {
+	const sessions = Array.from({ length: 7 }, (_, i) =>
+		session({
+			pullRequest: pr(i + 1, {
+				readiness: {
+					state: i === 6 ? "blocked" : "ready",
+					checkedAt: 42,
+					reasons:
+						i === 6
+							? [
+									{ code: "failing_checks", names: ["build"] },
+									{ code: "unresolved_comments", count: 2 },
+								]
+							: [],
+				},
+			}),
+		}),
+	);
+	const dashboard = build({ sessions });
+	assert.equal(dashboard.summary.readyPullRequests, 6);
+	assert.equal(dashboard.pullRequests.total, 7);
+	assert.equal(dashboard.pullRequests.items.length, 5);
+	assert.ok(dashboard.pullRequests.items.every((item) => item.readiness?.state === "ready"));
+	const expanded = buildProjectDashboard(
+		{ projectId: "p1", sessions, missions: [], progress: new Map(), isUnread: () => true },
+		7,
+	);
+	assert.equal(expanded.pullRequests.items.length, 7);
+	assert.equal(expanded.pullRequests.items.at(-1)?.readiness?.state, "blocked");
+	const blocked = build({ sessions: [sessions[6]!] }).pullRequests.items[0]!;
+	assert.deepEqual(blocked.readiness, {
+		state: "blocked",
+		reasons: ["Failing checks: build", "2 unresolved review threads"],
+	});
+});
+
 test("sections hold at most five rows and report the full total", () => {
 	const sessions = Array.from({ length: 8 }, (_, i) =>
 		session({ state: "working", lastUserMessageAt: 100 + i, mode: "ask" }),
