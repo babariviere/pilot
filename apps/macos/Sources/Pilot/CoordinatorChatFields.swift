@@ -24,6 +24,8 @@ struct CoordinatorChatForm {
 struct CoordinatorChatFields: View {
     let projectId: String?
     @Binding var form: CoordinatorChatForm
+    /// Command-Return in the message field.
+    var onSubmit: () -> Void = {}
     @ObservedObject private var client = AppModel.shared.client
 
     private var option: ModelOption? {
@@ -34,9 +36,8 @@ struct CoordinatorChatFields: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             ComposerTray {
-                TextField("Tell it what to plan: links, constraints, what done looks like…", text: $form.message, axis: .vertical)
-                    .lineLimit(4 ... 8)
-                    .accessibilityLabel("What should it do?")
+                MissionTextArea(prompt: "Tell it what to plan: links, constraints, what done looks like…", text: $form.message,
+                                minLines: 4, maxLines: 8, label: "What should it do?", onSubmit: onSubmit)
             } controls: {
                 ModelMenu(model: $form.model, projectDefault: projectId.flatMap { client.project($0)?.model }, list: form.models)
                     .disabled(form.loading)

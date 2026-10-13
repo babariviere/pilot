@@ -59,11 +59,11 @@ struct CreateMissionSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 TextField("Mission title", text: $form.title)
                     .font(.pilot(.headline, weight: .semibold))
+                    .onSubmit { if canCreate { create() } }
                     .accessibilityLabel("Title")
-                TextField(goalPrompt, text: $form.goal, axis: .vertical)
-                    .font(.pilot(.body))
-                    .lineLimit(1 ... 6)
-                    .accessibilityLabel("Goal")
+                MissionTextArea(prompt: goalPrompt, text: $form.goal, minLines: 1, maxLines: 6, label: "Goal") {
+                    if canCreate { create() }
+                }
             }
             .textFieldStyle(.plain)
             HairlineDivider()
@@ -79,7 +79,7 @@ struct CreateMissionSheet: View {
                                  detail: "It drafts the brief and tasks for your review. It does not implement them.",
                                  isOn: $form.coordinator)
                 if form.coordinator {
-                    CoordinatorChatFields(projectId: form.projectId, form: $form.chat)
+                    CoordinatorChatFields(projectId: form.projectId, form: $form.chat) { if canCreate { create() } }
                 }
             }
             if let error = form.error {
@@ -88,8 +88,9 @@ struct CreateMissionSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(createTitle) { create() }
-                    .keyboardShortcut(.defaultAction)
+                Button { create() } label: { ShortcutLabel(title: createTitle) }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("\(createTitle) (⌘↩)")
                     .disabled(!canCreate)
             }
         }
@@ -259,8 +260,10 @@ struct EditMissionSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Edit mission").font(.headline)
             Form {
-                TextField("Title", text: $form.title)
-                TextField("Goal", text: $form.goal, axis: .vertical).lineLimit(3 ... 8)
+                TextField("Title", text: $form.title).onSubmit { if canSave { save() } }
+                MissionTextArea(prompt: "Goal", text: $form.goal, minLines: 3, maxLines: 8, label: "Goal") {
+                    if canSave { save() }
+                }
             }
             .formStyle(.grouped)
             if let error = form.error {
@@ -269,9 +272,10 @@ struct EditMissionSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(form.saving ? "Saving…" : "Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(form.saving || form.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button { save() } label: { ShortcutLabel(title: form.saving ? "Saving…" : "Save") }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .help("Save (⌘↩)")
+                    .disabled(!canSave)
             }
         }
         .padding(20)
@@ -283,6 +287,8 @@ struct EditMissionSheet: View {
             form.goal = mission.goal
         }
     }
+
+    private var canSave: Bool { !form.saving && !form.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private func save() {
         form.saving = true
@@ -319,5 +325,16 @@ struct MissionToggleRow: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .help(detail)
+    }
+}
+
+/// Button title with its Command-Return shortcut, for sheets where Return inserts a newline.
+struct ShortcutLabel: View {
+    let title: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Text("⌘↩").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+        }
     }
 }
