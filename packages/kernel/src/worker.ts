@@ -119,7 +119,7 @@ export function runKernelWorker(): void {
 	let commands: Promise<void> = Promise.resolve();
 	/** Latest context sent while the kernel was still starting. */
 	let pendingMission: { context?: MissionContext } | undefined;
-	const missionCalls = new Map<string, { resolve(value: JsonValue): void; reject(error: Error): void }>();
+	const daemonCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
 	/** Subagent commands may wait on a child worker; they never block session commands. */
 	const subagentCommands = new Set<Promise<void>>();
 	let exiting = false;
@@ -138,29 +138,31 @@ export function runKernelWorker(): void {
 	const send = (packet: KernelPacket) => sender.send(packet);
 	// Notification hooks cannot await. Their retention is still bounded by the same FIFO.
 	const notify = (packet: KernelPacket) => void send(packet).catch(() => undefined);
-	const callMission: MissionCall = (action, args) =>
-		new Promise<JsonValue>((resolve, reject) => {
+	const callDaemon = <T>(packet: (callId: string) => KernelPacket): Promise<T> =>
+		new Promise<T>((resolve, reject) => {
 			const callId = randomUUID();
 			const timer = setTimeout(() => {
-				missionCalls.delete(callId);
-				reject(new Error("pilotd did not answer the mission call"));
+				daemonCalls.delete(callId);
+				reject(new Error("pilotd did not answer the tool call"));
 			}, 60_000);
 			timer.unref();
-			missionCalls.set(callId, {
+			daemonCalls.set(callId, {
 				resolve: (value) => {
 					clearTimeout(timer);
-					resolve(value);
+					resolve(value as T);
 				},
 				reject: (error) => {
 					clearTimeout(timer);
 					reject(error);
 				},
 			});
-			send({ type: "mission.call", callId, action, args }).catch((error: unknown) => {
-				missionCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
-				missionCalls.delete(callId);
+			send(packet(callId)).catch((error: unknown) => {
+				daemonCalls.get(callId)?.reject(error instanceof Error ? error : new Error(String(error)));
+				daemonCalls.delete(callId);
 			});
 		});
+	const callMission: MissionCall = (action, args) =>
+		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -249,11 +251,11 @@ export function runKernelWorker(): void {
 			void shutdown();
 			return;
 		}
-		if (command.type === "mission.result") {
-			const call = missionCalls.get(command.callId);
-			missionCalls.delete(command.callId);
+		if (command.type === "mission.result" || command.type === "artifact.reference.result") {
+			const call = daemonCalls.get(command.callId);
+			daemonCalls.delete(command.callId);
 			if (command.error !== undefined) call?.reject(new Error(command.error));
-			else call?.resolve(command.result ?? null);
+			else call?.resolve(command.result ?? (command.type === "mission.result" ? null : undefined));
 			return;
 		}
 		if (command.type === "mission.context") {
@@ -275,6 +277,8 @@ export function runKernelWorker(): void {
 					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
+					readArtifactReference: (id, revision) =>
+						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 				});
 				if (pendingMission) opened.setMission(pendingMission.context);
 				session = opened;

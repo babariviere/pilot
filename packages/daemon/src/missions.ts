@@ -1321,6 +1321,12 @@ export class MissionStore {
 	}
 
 	// Resources and artifacts
+	/** Indexed source authorization lookup, without materializing tasks, activity or the brief. */
+	artifactReferences(id: string, artifactId: string): MissionArtifactLink[] {
+		return this.all("SELECT * FROM artifact_links WHERE mission_id = ? AND artifact_id = ?", id, artifactId).map(
+			artifactFrom,
+		);
+	}
 
 	/** One commit and one detail/context broadcast, rather than one per reference. */
 	attachTaskReferences(

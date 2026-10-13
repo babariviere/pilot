@@ -1040,6 +1040,138 @@ test("start saves member and already-linked artifacts and parsed links before sp
 	}
 });
 
+test("artifact reference IPC reads pinned and latest sources for later members without waking the author", async (t) => {
+	const f = await fixture(t);
+	const author = await f.spawn();
+	const reader = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: author.id,
+		draft: false,
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	f.service.join(reader.id, { missionId: mission.id });
+	const store = f.sessions["artifactStore"](author.id);
+	const first = await store.create({ title: "Pinned", kind: "html", source: "PINNED SOURCE" });
+	const latest = await store.create({ title: "Latest", kind: "html", source: "OLD SOURCE" });
+	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: first.id, revision: 1, taskId: "1" });
+	await f.service.linkArtifact(mission.id, { sessionId: author.id, artifactId: latest.id });
+	await store.update(first.id, { title: "Pinned", kind: "html", source: "NEW SOURCE" });
+	await store.update(latest.id, { title: "Latest", kind: "html", source: "LATEST SOURCE" });
+	f.service.leave(author.id); // A persisted reference survives its author leaving the group.
+	const worker = f.workers.get(reader.id)!;
+	const sent = f.workers.get(author.id)!.sent.length;
+	const requests = f.workers.get(author.id)!.requests.length;
+	const read = async (id: string, revision?: number) => {
+		const callId = `read:${worker.sent.length}`;
+		worker.onPacket({ type: "artifact.reference.get", callId, id, revision });
+		return await until(() =>
+			worker.sent.find(
+				(command): command is Extract<KernelCommand, { type: "artifact.reference.result" }> =>
+					command.type === "artifact.reference.result" && command.callId === callId,
+			),
+		);
+	};
+	const pin = await read(first.id);
+	assert.equal(pin.result?.source, "PINNED SOURCE");
+	assert.equal(pin.result?.revision, 1);
+	assert.equal(pin.result?.sessionId, author.id);
+	assert.ok(!("html" in pin.result!));
+	assert.equal((await read(latest.id)).result?.source, "LATEST SOURCE");
+	assert.equal((await read(latest.id, 1)).result?.source, "OLD SOURCE");
+	assert.match((await read(latest.id, 99)).error!, /revision/);
+	assert.match((await read(first.id, 2)).error!, /not linked/);
+	assert.equal(f.workers.get(author.id)!.sent.length, sent);
+	assert.equal(f.workers.get(author.id)!.requests.length, requests);
+	assert.deepEqual(await f.sessions.artifacts(reader.id), []);
+	// Several task references can pin different revisions. Never silently select one.
+	f.store.attachTaskReferences(
+		mission.id,
+		f.store.resolveTask(mission.id, "2").id,
+		[{ ...f.store.detail(mission.id).artifacts.find((ref) => ref.artifactId === first.id)!, revision: 2 }],
+		[],
+	);
+	assert.match((await read(first.id)).error!, /conflicting revisions/);
+	assert.equal((await read(first.id, 2)).result?.source, "NEW SOURCE");
+	f.store.unlinkArtifact(mission.id, first.id, undefined, "1");
+	assert.equal((await read(first.id)).result?.revision, 2);
+	f.store.unlinkArtifact(mission.id, first.id, undefined, "2");
+	assert.match((await read(first.id)).error!, /not authorized/);
+	f.store.attachTaskReferences(
+		mission.id,
+		f.store.resolveTask(mission.id, "2").id,
+		[{ ...f.store.detail(mission.id).artifacts.find((ref) => ref.artifactId === latest.id)!, revision: 1 }],
+		[],
+	);
+	assert.match((await read(latest.id)).error!, /conflicting revisions/);
+	assert.equal((await read(latest.id, 2)).result?.source, "LATEST SOURCE");
+	f.service.leave(reader.id);
+	assert.match((await read(latest.id)).error!, /not authorized/);
+});
+
+test("artifact reference reads reject foreign sources, forged links and revoked access", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const other = await f.spawn(f.other.id);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: member.id,
+		draft: false,
+	});
+	const foreignMission = await f.service.create({
+		projectId: f.other.id,
+		title: "Other",
+		fromSessionId: other.id,
+		draft: false,
+	});
+	const make = (id: string) =>
+		f.sessions["artifactStore"](id).create({ title: "Private", kind: "html", source: "PRIVATE" });
+	const own = await make(member.id);
+	const foreign = await make(outsider.id);
+	const crossProject = await make(other.id);
+	await f.service.linkArtifact(foreignMission.mission.id, { sessionId: other.id, artifactId: crossProject.id });
+	const read = (caller: string, id: string, revision?: number) =>
+		f.service.readArtifactReference(caller, id, revision);
+	const diskRead = t.mock.method(f.sessions, "artifact");
+	for (const id of [own.id, foreign.id, crossProject.id, "missing", "../../foreign"]) {
+		await assert.rejects(read(member.id, id), /not authorized/);
+	}
+	assert.equal(diskRead.mock.callCount(), 0, "denied IDs never reach a foreign store");
+	await f.service.linkArtifact(mission.id, { sessionId: member.id, artifactId: own.id, revision: 1 });
+	await assert.rejects(read(outsider.id, own.id), /not authorized/);
+	await assert.rejects(read(other.id, own.id), /not authorized/);
+	for (const revision of [0, -1, 1.5, NaN, Infinity])
+		await assert.rejects(read(member.id, own.id, revision), /positive integer/);
+	// Even a corrupted persisted link cannot cross project boundaries.
+	f.store.join(other.id, mission.id);
+	f.store.linkArtifact(mission.id, {
+		artifactId: crossProject.id,
+		sessionId: other.id,
+		title: "Forged",
+		kind: "html",
+	});
+	f.store.leave(other.id);
+	await assert.rejects(read(member.id, crossProject.id), /own project/);
+	const original = f.sessions.artifact.bind(f.sessions);
+	t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+		const result = await original(...args);
+		f.store.unlinkArtifact(mission.id, own.id);
+		return result;
+	});
+	await assert.rejects(read(member.id, own.id), /not authorized/);
+	t.mock.method(f.sessions, "artifact", original);
+	await f.service.linkArtifact(mission.id, { sessionId: member.id, artifactId: own.id });
+	t.mock.method(f.sessions, "artifact", async (...args: Parameters<SessionManager["artifact"]>) => {
+		const result = await original(...args);
+		f.service.leave(member.id);
+		return result;
+	});
+	await assert.rejects(read(member.id, own.id), /not authorized/);
+});
+
 test("start rejects foreign artifacts, invalid revisions and malformed links without writes or spawn", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

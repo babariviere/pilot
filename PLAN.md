@@ -397,7 +397,11 @@ level, without overwriting an existing mission-level pin. Opening messages list 
 content, and reject messages over 4,000 characters including the task body and reference list. Durable
 context belongs in the brief, decisions or task links, not only in the opening message. Scoped artifact
 unlinking uses `DELETE /api/missions/:id/artifacts/:artifactId?taskId=…`; omission unlinks the mission-level
-reference. Mission chats receive a compact mission header in Pilot's prompt section (goal, coordinator,
+reference. `artifact get` falls back from the caller's local store to read-only linked mission/task sources.
+The daemon validates current membership, project and persisted links on every read, including after async
+I/O. Omitted revision uses a link's pin, or latest for unpinned links; conflicting links require an explicit
+revision. Pinned-only links cannot read unlinked revisions. Ownership, update and list stay session-local,
+and opening messages never copy source content. Mission chats receive a compact mission header in Pilot's prompt section (goal, coordinator,
 own open tasks, decisions and how
 to use the tool), not the whole brief. The header only changes when those fields change, preserving
 prompt caching.

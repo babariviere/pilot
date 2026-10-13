@@ -518,6 +518,88 @@ text(await tools.artifact({action:"create",title:"New after restart",kind:"html"
 	});
 }
 
+test("KernelSession codemode reads linked sources without publishing, copying or enabling foreign edits", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t, "only");
+	const foreign = new ArtifactStore(join(f.root, "author"), { sessionId: "author", projectId: "project-1" });
+	const linked = await foreign.create({ title: "Reference", kind: "html", source: "LINKED SOURCE" });
+	const open = NativeAdapter.open;
+	const refreshUsage = NativeAdapter.prototype.refreshUsage;
+	const usageRefreshes: Promise<void>[] = [];
+	t.mock.method(
+		NativeAdapter.prototype,
+		"refreshUsage",
+		function (this: NativeAdapter, ...args: Parameters<typeof refreshUsage>) {
+			const result = refreshUsage.apply(this, args);
+			usageRefreshes.push(result);
+			return result;
+		},
+	);
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionId: options.sessionId,
+			sessionFile: options.sessionFile,
+			sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+		}),
+	);
+	const reads: unknown[][] = [];
+	let publications = 0;
+	const session = await KernelSession.open(
+		{
+			sessionId: "reader",
+			projectId: "project-1",
+			cwd: f.root,
+			storageDir: join(f.root, "storage"),
+		},
+		{
+			onWorking: () => {},
+			onArtifactsChanged: () => publications++,
+			readArtifactReference: async (id, revision) => {
+				reads.push([id, revision]);
+				assert.equal(id, linked.id);
+				const { html: _html, ...source } = await foreign.get(id, revision ?? 1);
+				return source;
+			},
+		},
+	);
+	f.cleanup.push(async () => {
+		await Promise.all(usageRefreshes);
+		await session.close();
+	});
+	f.faux.setResponses([
+		fauxAssistantMessage(
+			fauxToolCall("codemode", {
+				code: `
+text(await tools.artifact({action:"get",id:${JSON.stringify(linked.id)}}));
+try { await tools.artifact({action:"update",id:${JSON.stringify(linked.id)},title:"Forbidden",kind:"html",source:"OVERWRITE"}); }
+catch { text("foreign update denied"); }
+text(await tools.artifact({action:"list"}));
+`,
+			}),
+			{ stopReason: "toolUse" },
+		),
+		(transcript) => {
+			const result = transcript.messages.find((message) => message.role === "toolResult");
+			assert.ok(result);
+			assert.match(JSON.stringify(result), /LINKED SOURCE/);
+			assert.match(JSON.stringify(result), /foreign update denied/);
+			assert.match(JSON.stringify(result), /artifacts.*\[\]/);
+			return fauxAssistantMessage("Read the reference.");
+		},
+	]);
+	await session.submit("reference", "Read the linked reference", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	assert.deepEqual(reads, [[linked.id, undefined]]);
+	assert.equal(publications, 0);
+	assert.equal((await foreign.get(linked.id)).source, "LINKED SOURCE");
+	assert.deepEqual(await new ArtifactStore(f.root, { sessionId: "reader" }).list(), []);
+	const view = await session.conversation.context(BACKGROUND_CONTEXT);
+	assert.ok(!view.entries.some((entry) => entry.kind === "pilot.artifact"));
+});
+
 test("busy codemode publications and automatic completion survive native tool refresh and reopen", {
 	timeout: 20_000,
 }, async (t) => {

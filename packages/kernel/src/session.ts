@@ -101,6 +101,8 @@ export interface KernelSessionHooks {
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
 	callMission?: MissionCall;
+	/** Read-only artifact references, authorized by pilotd on every call. */
+	readArtifactReference?: ArtifactToolOptions["readReference"];
 }
 
 export class KernelSession {
@@ -193,6 +195,7 @@ export class KernelSession {
 			});
 			const artifactOptions: ArtifactToolOptions = {
 				store: artifacts,
+				readReference: hooks.readArtifactReference,
 				onArtifactsChanged: hooks.onArtifactsChanged,
 				onArtifactPublished: async (artifact) => {
 					if (!artifactConversation) throw new Error("Artifact publication requires a bound Harness conversation");

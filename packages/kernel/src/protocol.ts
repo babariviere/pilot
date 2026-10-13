@@ -1,5 +1,6 @@
 /** IPC between pilotd and one kernel worker process. */
 import type {
+	ArtifactRevision,
 	AgentEvent,
 	DeliveryMode,
 	RewindAction,
@@ -70,6 +71,7 @@ export type KernelCommand =
 	/** Replaces the mission context; omitted when the chat left its mission. */
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "shutdown" };
 
 export type KernelPacket =
@@ -95,6 +97,8 @@ export type KernelPacket =
 	| { type: "refs.changed" }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
+	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
+	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
 	/**
