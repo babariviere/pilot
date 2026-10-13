@@ -9,7 +9,7 @@ struct Dashboard: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], spacing: 14) {
             WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
             ActivityCard(sessions: client.activeSessions)
-            RecentCard(sessions: Array(client.activeSessions.filter { !$0.isWorking }.prefix(6)))
+            IdleCard(sessions: client.activeSessions.filter(\.isIdleAwaitingReview))
             ProjectsCard(projects: client.projects, sessions: client.activeSessions)
         }
     }
@@ -122,14 +122,15 @@ private struct ActivityCard: View {
     }
 }
 
-private struct RecentCard: View {
+/// Idle chats with an open PR or none yet. Chats with merged or closed PRs are settled and left out.
+private struct IdleCard: View {
     let sessions: [SessionSummary]
     @EnvironmentObject private var app: AppModel
 
     var body: some View {
-        DashboardCard(title: "Recent sessions", icon: "clock") {
-            if sessions.isEmpty { EmptyLine(text: "No sessions yet.") }
-            ForEach(sessions) { session in
+        DashboardCard(title: "Idle chats", icon: "moon.zzz", count: sessions.count) {
+            if sessions.isEmpty { EmptyLine(text: "No idle chats with open work.") }
+            ForEach(sessions.prefix(6)) { session in
                 VStack(alignment: .leading, spacing: 4) {
                     Button { app.selectedSessionId = session.id } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {

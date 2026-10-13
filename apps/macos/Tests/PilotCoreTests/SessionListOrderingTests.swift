@@ -70,6 +70,21 @@ private func listSession(
     #expect(listSession("s", userAt: .nan, finishAt: .infinity).listActivityAt == 1_000)
 }
 
+@Test func homeIdleListKeepsIdleChatsWithOpenOrNoPullRequest() {
+    let sessions = [
+        listSession("no-pr"),
+        listSession("open", prState: .open),
+        listSession("draft", prState: .draft),
+        listSession("failed", outcome: .failed),
+        listSession("merged", prState: .merged),
+        listSession("closed", prState: .closed),
+        listSession("merged-unpublished", prState: .merged, unpublished: true),
+        listSession("working", state: "working"),
+        listSession("working-open", state: "starting", prState: .open),
+    ]
+    #expect(sessions.filter(\.isIdleAwaitingReview).map(\.id) == ["no-pr", "open", "draft", "failed", "merged-unpublished"])
+}
+
 @Test func sessionListTiesAreDeterministicAndUnaffectedByMetadataUpdates() {
     let first = listSession("a", updatedAt: 1_000)
     let second = listSession("b", updatedAt: 9_000)

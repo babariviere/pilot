@@ -8,6 +8,10 @@ extension SessionSummary {
         return linkedPullRequests.allSatisfy(\.isTerminal)
     }
 
+    /// Home's idle list: chats not working whose PR, if any, is still open or draft. Chats whose PRs have all
+    /// merged or closed are settled and stay out of it.
+    public var isIdleAwaitingReview: Bool { !isWorking && !hasTerminalPullRequest }
+
     /// Working sessions retain their live activity behavior. Settled results use stable user/finish
     /// times instead of metadata updates (parking, PR polling, reviewing, or model changes).
     public var listActivityAt: Double {
