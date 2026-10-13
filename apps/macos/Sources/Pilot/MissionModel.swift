@@ -235,16 +235,43 @@ extension MissionResourceKind {
     }
 }
 
-/// The one icon for a mission link, everywhere links appear. Pull requests carry their state as a small
-/// coloured dot. Brand marks replace the symbols here once they are bundled.
+extension MissionResource {
+    /// What VoiceOver reads for a link: the service, then its number or ID, such as
+    /// "GitHub pull request #133, Open" or "Linear issue ENG-12". Falls back to the title.
+    func accessibilityName(pullRequest: SessionPullRequest?) -> String {
+        let reference: String? = switch kind {
+        case .githubPullRequest, .githubIssue:
+            pullRequest.map { "#\($0.number)" }
+                ?? externalId?.split(separator: "#").last.map { "#\($0)" }
+        case .linearIssue: externalId
+        case .linearProject, .slackThread, .url: nil
+        }
+        let name = [kind.serviceLabel, reference ?? displayTitle].joined(separator: " ")
+        guard let pullRequest else { return name }
+        return "\(name), \(pullRequest.state.label)"
+    }
+}
+
+/// The one icon for a mission link, everywhere links appear: the GitHub, Linear or Slack mark, or the link
+/// symbol for other URLs. Pull requests and issues carry their state as a small coloured dot.
 struct MissionLinkIcon: View {
     let kind: MissionResourceKind
     var pullRequestState: PullRequestState? = nil
     var size: CGFloat = 11
 
     var body: some View {
-        Image(systemName: kind.symbol)
-            .font(.system(size: size - 1, weight: .medium))
+        Group {
+            if let mark = BrandMark(kind) {
+                Image(nsImage: mark.image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: size, height: size)
+            } else {
+                Image(systemName: kind.symbol)
+                    .font(.system(size: size - 1, weight: .medium))
+            }
+        }
             .foregroundStyle(Theme.mutedForeground)
             .frame(width: size + 2, height: size + 2)
             .overlay(alignment: .bottomTrailing) {

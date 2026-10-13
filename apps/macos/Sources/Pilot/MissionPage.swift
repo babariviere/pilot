@@ -709,7 +709,7 @@ struct MissionLinkChip: View {
             }
         }
         .help([resource.url, pr?.stack?.helpText].compactMap { $0 }.joined(separator: "\n"))
-        .accessibilityLabel("\(resource.kind.serviceLabel): \(resource.displayTitle)\(pr.map { ", \($0.state.label)" } ?? "")")
+        .accessibilityLabel(resource.accessibilityName(pullRequest: pr))
         .contextMenu {
             Button("Copy Link") {
                 NSPasteboard.general.clearContents()
