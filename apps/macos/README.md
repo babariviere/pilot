@@ -161,6 +161,11 @@ is set or Xcode provides the plugin; Ghostty's resource lookup is patched to use
 every bundle build smoke-tests terminal initialization from a temporary location without a daemon.
 Swift Testing's macro plugin lives outside the default plugin
 path, so `scripts/test.sh` passes it explicitly.
+On CLT 27, SwiftPM can exit successfully after a failed test target if a later target passes.
+The test wrapper uses `python3` to stream output and check every Swift Testing/XCTest failure
+summary, while retaining nonzero driver exits. Warning text alone does not fail verification.
+The wrapper regressions (including a small real Swift `#require` failure/success fixture) run with
+`python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_test_output.py'`.
 
 The opt-in live suite uses a deterministic loopback model, an isolated project and data directory,
 and shipping native views in hosted AppKit windows. It does not use credentials, install a launch
