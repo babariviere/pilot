@@ -12,6 +12,7 @@ struct ProjectPage: View {
     @ObservedObject private var client = AppModel.shared.client
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
+    @State private var showingMemory = false
     @State private var retrying = false
     @State private var fullList: ProjectFullList?
     @State private var fullListDashboard: ProjectDashboard?
@@ -30,6 +31,9 @@ struct ProjectPage: View {
                     }
                     .sheet(isPresented: $showingArtifacts) {
                         ProjectArtifactsBrowser(project: project, client: client)
+                    }
+                    .sheet(isPresented: $showingMemory) {
+                        ProjectMemoryBrowser(project: project, client: client)
                     }
                     .sheet(item: $fullList) { list in
                         ProjectFullListSheet(project: project, list: list, dashboard: fullListDashboard,
@@ -56,7 +60,7 @@ struct ProjectPage: View {
             let banner = stale ? ProjectRefreshBanner(receivedAt: client.dashboardReceivedAt[projectId],
                                                       error: client.dashboardErrors[projectId],
                                                       retrying: retrying, retry: retry) : nil
-            if dashboard.summary.chats == 0, dashboard.missions.total == 0 {
+            if dashboard.summary.chats == 0, dashboard.missions.total == 0, dashboard.memory == nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         banner
@@ -75,7 +79,8 @@ struct ProjectPage: View {
             } else {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
                                      needsYou: dashboard.needsYou,
-                                     banner: banner, showFullList: showFullList)
+                                     banner: banner, showFullList: showFullList,
+                                     browseMemory: { showingMemory = true })
             }
         } else if let error = client.dashboardErrors[projectId] {
             EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load this project", message: error) {
@@ -180,6 +185,7 @@ private struct ProjectDashboardBody: View {
     let needsYou: DashboardSection<DashboardNeedsYouItem>
     let banner: ProjectRefreshBanner?
     let showFullList: (ProjectFullList) -> Void
+    let browseMemory: () -> Void
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -265,6 +271,31 @@ private struct ProjectDashboardBody: View {
                     }
                     ProjectMoreLine(hidden: dashboard.missions.hiddenCount, total: dashboard.missions.total,
                                     noun: "active") { showFullList(.missions) }
+                }
+            }
+
+            if let memory = dashboard.memory {
+                ProjectPageSection(header: PageSectionHeader(title: "Memory", count: memory.count,
+                                                              linkTitle: "Browse memory", link: browseMemory)) {
+                    if memory.count == 0 {
+                        Text("No project memories yet.")
+                            .font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                    } else {
+                        ForEach(Array(memory.recent.prefix(3).enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 { HairlineDivider(leading: 34) }
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "brain.head.profile").foregroundStyle(Theme.faintForeground).frame(width: 16)
+                                Text(entry.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                                    .lineLimit(2).textSelection(.enabled)
+                                Spacer(minLength: 0)
+                                Text(Date(timeIntervalSince1970: entry.at / 1000), style: .relative)
+                                    .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                        }
+                    }
+                    MemoryCompactionLine(compaction: memory.compaction)
                 }
             }
 
