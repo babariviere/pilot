@@ -149,6 +149,15 @@ public struct Transcript: Equatable, Sendable {
     public private(set) var earlierCursor: Int?
     /// Where the snapshot's active transcript starts. Earlier pages stay valid only while this is unchanged.
     private var activeStart: Int?
+    /// Loaded history kept across a replacement snapshot that is split: its older entries follow in
+    /// `snapshot_prefix`, and only then is the active transcript, and so its start, known.
+    private var pendingPrefix: KeptHistory?
+
+    private struct KeptHistory: Sendable {
+        var activeStart: Int?
+        var earlierCursor: Int?
+        var earlier: [Entry]
+    }
     public var error: String? {
         didSet { if error != oldValue { rowRevision &+= 1 } }
     }
@@ -224,23 +233,21 @@ public struct Transcript: Equatable, Sendable {
             let savedTodos = todos
             let savedRowRevision = rowRevision
             let savedCommittedRevision = committedRowRevision
-            let savedActiveStart = activeStart
-            let savedEarlierCursor = earlierCursor
-            let savedEarlier = activeStart.map { start in storedEntries.filter { $0.id < start } } ?? []
+            // A split snapshot replacing another split snapshot still keeps the history of the last complete one.
+            let kept = pendingPrefix ?? KeptHistory(
+                activeStart: activeStart, earlierCursor: earlierCursor,
+                earlier: activeStart.map { start in storedEntries.filter { $0.id < start } } ?? []
+            )
             self = Transcript()
             queuedMessages = queue
             todos = savedTodos
             let active = (event["entries"]?.array ?? []).compactMap(Entry.init(json:))
-            // Older entries are hidden only behind a compaction or reset marker.
-            let start = active.contains { $0.head != nil } ? active.map { $0.head ?? $0.id }.min() : nil
-            activeStart = start
-            if let start, start == savedActiveStart {
-                // A reconnect or overflow snapshot keeps pages already loaded above the same head.
-                entries = (savedEarlier + active).sorted { $0.id < $1.id }
-                earlierCursor = savedEarlierCursor
-            } else {
+            if event["prefixPending"]?.bool == true {
+                // The newest entries paint first. No earlier page is offered until the prefix completes the snapshot.
+                pendingPrefix = kept
                 entries = active.sorted { $0.id < $1.id }
-                earlierCursor = start.flatMap { $0 > 1 ? $0 : nil }
+            } else {
+                setActive(active, kept: kept)
             }
             if let message = event["generation"]?["message"], !message.isNull { streaming = ChatMessage(json: message) }
             for tool in event["tools"]?.array ?? [] {
@@ -259,6 +266,12 @@ public struct Transcript: Equatable, Sendable {
             // artifact lookups. Never reuse a previous snapshot's generation numbers.
             rowRevision = savedRowRevision &+ 1
             committedRowRevision = savedCommittedRevision &+ 1
+        case "snapshot_prefix":
+            // Completes a split snapshot. Live events cannot precede it, so everything held is the snapshot's tail.
+            guard let kept = pendingPrefix else { return }
+            pendingPrefix = nil
+            let prefix = (event["entries"]?.array ?? []).compactMap(Entry.init(json:)).filter { !entryIDs.contains($0.id) }
+            setActive(prefix + storedEntries, kept: kept)
         case Transcript.earlierEntriesEvent:
             // Only the page that was asked for: stale or duplicate pages are ignored.
             guard let before = event["before"]?.int, before == earlierCursor else { return }
@@ -324,6 +337,20 @@ public struct Transcript: Equatable, Sendable {
             error = event["message"]?.string
         default:
             break
+        }
+    }
+
+    /// Sets a complete snapshot's active transcript. Older entries are hidden only behind a compaction or reset
+    /// marker; a reconnect or overflow snapshot keeps pages already loaded above the same head.
+    private mutating func setActive(_ active: [Entry], kept: KeptHistory) {
+        let start = active.contains { $0.head != nil } ? active.map { $0.head ?? $0.id }.min() : nil
+        activeStart = start
+        if let start, start == kept.activeStart {
+            entries = (kept.earlier + active).sorted { $0.id < $1.id }
+            earlierCursor = kept.earlierCursor
+        } else {
+            entries = active.sorted { $0.id < $1.id }
+            earlierCursor = start.flatMap { $0 > 1 ? $0 : nil }
         }
     }
 

@@ -205,3 +205,42 @@ private func page(before: Int, ids: [Int], more: Bool) -> JSONValue {
     transcript.apply(json(#"{"type":"queue_update","items":[]}"#))
     #expect(transcript.queuedMessagesInDeliveryOrder.isEmpty)
 }
+
+private func split(_ snapshot: JSONValue, tail: Int) -> [JSONValue] {
+    guard case var .object(head) = snapshot, let entries = snapshot["entries"]?.array else { return [snapshot] }
+    head["entries"] = .array(Array(entries.suffix(tail)))
+    head["prefixPending"] = .bool(true)
+    return [.object(head), .object(["type": .string("snapshot_prefix"), "entries": .array(Array(entries.dropLast(tail)))])]
+}
+
+@Test func splitSnapshotsPaintTheTailFirstThenMatchTheWholeSnapshot() {
+    let whole = compactedSnapshot(head: 6, marker: 9, after: [10, 11, 12])
+    var expected = Transcript()
+    expected.apply(whole)
+
+    var transcript = Transcript()
+    let parts = split(whole, tail: 2)
+    transcript.apply(parts[0])
+    #expect(transcript.entries.map(\.id) == [11, 12], "the newest entries paint first")
+    #expect(transcript.earlierCursor == nil, "no earlier page before the snapshot is complete")
+    transcript.apply(page(before: 6, ids: [5], more: false))
+    #expect(transcript.entries.map(\.id) == [11, 12], "a page cannot apply to a partial snapshot")
+    transcript.apply(parts[1])
+    #expect(transcript == expected)
+    #expect(transcript.earlierCursor == 6)
+    transcript.apply(json(#"{"type":"snapshot_prefix","entries":[\#(user(1, "late"))]}"#))
+    #expect(transcript == expected, "a prefix without a pending split snapshot is ignored")
+}
+
+@Test func splitReplacementSnapshotsKeepLoadedEarlierPagesForTheSameHead() {
+    var transcript = Transcript()
+    transcript.apply(compactedSnapshot(head: 6, marker: 9, after: [10]))
+    transcript.apply(page(before: 6, ids: [4, 5], more: true))
+    #expect(transcript.earlierCursor == 4)
+    // A reconnect snapshot, split, and replaced again before its prefix arrived.
+    transcript.apply(split(compactedSnapshot(head: 6, marker: 9, after: [10, 11]), tail: 1)[0])
+    let parts = split(compactedSnapshot(head: 6, marker: 9, after: [10, 11, 12]), tail: 1)
+    transcript.apply(parts)
+    #expect(transcript.entries.map(\.id) == [4, 5, 6, 9, 10, 11, 12])
+    #expect(transcript.earlierCursor == 4)
+}

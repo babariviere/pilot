@@ -2,8 +2,8 @@ import AppKit
 import Foundation
 import PilotCore
 
-/// pilotd client: REST commands, one reconnecting control WebSocket for lists, dashboards, missions and
-/// terminals, and one reconnecting WebSocket per open chat for its agent event stream.
+/// pilotd client: REST commands, one reconnecting control WebSocket for lists, dashboards and missions, and one
+/// reconnecting WebSocket per open chat, terminal and subagent transcript.
 @MainActor
 final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
@@ -67,23 +67,19 @@ final class PilotClient: ObservableObject {
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
     private var listeners: [String: [UUID: ([JSONValue]) -> Void]] = [:]
-    private var chats: [String: ChatConnection] = [:]
+    private var chats: [String: ChatStream] = [:]
     private var subagentListeners: [SubagentKey: [UUID: SubagentListener]] = [:]
+    private var subagentSockets: [SubagentKey: StreamSocket] = [:]
     private var terminals: [String: TerminalAttachment] = [:]
+    private var terminalSockets: [String: StreamSocket] = [:]
 
-    /// One open chat's socket, or its pending reconnect.
-    private final class ChatConnection {
-        var reader: SocketReader?
-        var retry = 0
-        var reconnect: Task<Void, Never>?
+    /// One open chat's socket and where to resume its stream after a disconnect.
+    private final class ChatStream {
+        var socket: StreamSocket?
+        var streamId: String?
+        /// Last batch handed to listeners.
+        var seq = 0
     }
-
-    /// Dedicated to WebSockets, so every open chat gets its own connection rather than waiting for a slot.
-    private static let socketSession: URLSession = {
-        let configuration = URLSessionConfiguration.default
-        configuration.httpMaximumConnectionsPerHost = 64
-        return URLSession(configuration: configuration)
-    }()
 
     /// One app-side terminal attached to a daemon-owned shell.
     struct TerminalAttachment {
@@ -99,7 +95,9 @@ final class PilotClient: ObservableObject {
         fixtureSessions = false
         self.baseURL = baseURL
         open()
-        for id in listeners.keys { openChat(id) }
+        for chat in chats.values { chat.socket?.connect() }
+        for socket in terminalSockets.values { socket.connect() }
+        for socket in subagentSockets.values { socket.connect() }
     }
 
     func session(_ id: String) -> SessionSummary? {
@@ -269,7 +267,7 @@ final class PilotClient: ObservableObject {
             let events = fixtureSubagentTranscripts[key.name] ?? []
             Task { @MainActor in self.subagentListeners[key]?[token]?.events(events) }
         } else if first {
-            postSubagent("subagent.subscribe", key)
+            openSubagent(key)
         }
         return token
     }
@@ -278,11 +276,27 @@ final class PilotClient: ObservableObject {
         subagentListeners[key]?[token] = nil
         guard subagentListeners[key]?.isEmpty ?? false else { return }
         subagentListeners[key] = nil
-        if fixtureSubagentTranscripts == nil { postSubagent("subagent.unsubscribe", key) }
+        subagentSockets.removeValue(forKey: key)?.close()
     }
 
-    private func postSubagent(_ type: String, _ key: SubagentKey) {
-        post(["type": .string(type), "sessionId": .string(key.sessionId), "name": .string(key.name)])
+    private func openSubagent(_ key: SubagentKey) {
+        let socket = StreamSocket(
+            url: { [weak self] in
+                self?.socketURL("/api/sessions/\(Self.pathSegment(key.sessionId))/subagents/\(Self.pathSegment(key.name))/ws")
+            },
+            receive: { [weak self] updates in
+                guard let self else { return }
+                for update in updates {
+                    switch update {
+                    case let .subagentEvents(id, name, _) where id == key.sessionId && name == key.name: self.handle(update)
+                    case let .error(id, name, _) where id == key.sessionId && name == key.name: self.handle(update)
+                    default: break
+                    }
+                }
+            }
+        )
+        subagentSockets[key] = socket
+        socket.connect()
     }
 
     /// Steers current work by default; `followUp` queues after it.
@@ -957,66 +971,58 @@ final class PilotClient: ObservableObject {
     }
 
     private func openChat(_ sessionId: String) {
-        guard listeners[sessionId] != nil, let url = socketURL(chatPath(sessionId)) else { return }
-        let chat = chats[sessionId] ?? ChatConnection()
-        chats[sessionId] = chat
-        chat.reconnect?.cancel()
-        chat.reconnect = nil
-        chat.reader?.cancel()
-        let task = Self.socketSession.webSocketTask(with: url)
-        // Snapshots of long transcripts exceed the 1 MiB default.
-        task.maximumMessageSize = 64 * 1024 * 1024
-        let reader = SocketReader(
-            task: task, label: "pilot.chat-socket",
-            deliver: { [weak self] reader, updates in
-                guard let self, let chat = self.chats[sessionId], chat.reader === reader else { return }
-                chat.retry = 0
-                // Only this chat's transcript and artifact index travel on its socket.
-                for case let update? in updates {
+        guard chats[sessionId] == nil else { return }
+        let chat = ChatStream()
+        chat.socket = StreamSocket(
+            url: { [weak self, weak chat] in
+                guard let self, let chat else { return nil }
+                var query: [URLQueryItem] = []
+                // Resume where the last connection stopped. pilotd falls back to a snapshot if it cannot.
+                if let stream = chat.streamId, chat.seq > 0 {
+                    query = [URLQueryItem(name: "stream", value: stream), URLQueryItem(name: "after", value: String(chat.seq))]
+                }
+                return self.socketURL("/api/sessions/\(Self.pathSegment(sessionId))/ws", query: query)
+            },
+            receive: { [weak self, weak chat] updates in
+                guard let self, let chat, self.chats[sessionId] === chat else { return }
+                // Only this chat's stream and artifact index travel on its socket.
+                for update in updates {
                     switch update {
-                    case let .events(id, _): if id == sessionId { self.handle(update) }
-                    case let .artifacts(message): if message.sessionId == sessionId { self.handle(update) }
+                    case let .chatStream(id, stream, resumed) where id == sessionId:
+                        chat.streamId = stream
+                        if !resumed { chat.seq = 0 }
+                    case let .events(id, _, seq) where id == sessionId:
+                        if let seq { chat.seq = seq }
+                        self.handle(update)
+                    case let .artifacts(message) where message.sessionId == sessionId:
+                        self.handle(update)
                     default: break
                     }
                 }
-            },
-            failed: { [weak self] reader in
-                guard let self, let chat = self.chats[sessionId], chat.reader === reader else { return }
-                chat.reader = nil
-                // The session no longer exists. Reconnecting cannot help.
-                if reader.task.closeCode.rawValue == 4404 { return }
-                let delay = min(10.0, 0.5 * pow(2.0, Double(chat.retry)))
-                chat.retry += 1
-                chat.reconnect = Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(delay))
-                    guard !Task.isCancelled, let self, self.chats[sessionId] === chat, chat.reader == nil else { return }
-                    self.openChat(sessionId)
-                }
             }
         )
-        chat.reader = reader
-        reader.start()
+        chats[sessionId] = chat
+        chat.socket?.connect()
     }
 
     private func closeChat(_ sessionId: String) {
-        guard let chat = chats.removeValue(forKey: sessionId) else { return }
-        chat.reconnect?.cancel()
-        chat.reader?.cancel()
+        chats.removeValue(forKey: sessionId)?.socket?.close()
     }
 
-    private func chatPath(_ sessionId: String) -> String {
-        var allowed = CharacterSet.urlPathAllowed
-        allowed.remove("/")
-        return "/api/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: allowed) ?? sessionId)/ws"
+    /// One opaque path segment: IDs and subagent names may contain any text, including slashes.
+    private static func pathSegment(_ value: String) -> String {
+        var unreserved = CharacterSet.alphanumerics
+        unreserved.insert(charactersIn: "-._~")
+        return value.addingPercentEncoding(withAllowedCharacters: unreserved) ?? value
     }
 
-    private func socketURL(_ percentEncodedPath: String) -> URL? {
+    private func socketURL(_ percentEncodedPath: String, query: [URLQueryItem] = []) -> URL? {
         guard let baseURL, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
         components.scheme = components.scheme == "https" ? "wss" : "ws"
         components.percentEncodedPath = percentEncodedPath
+        components.queryItems = query.isEmpty ? nil : query
         return components.url
     }
-
     /// Ask the daemon to recheck pull requests of the chats currently open in the app.
     private func postFocus() {
         let ids = listeners.keys.prefix(50).map(JSONValue.string)
@@ -1026,40 +1032,55 @@ final class PilotClient: ObservableObject {
 
     // MARK: Terminals (daemon-owned PTYs)
 
+    /// Attach on the terminal's own socket. Reconnects reattach without restarting, replaying the scrollback.
     func attachTerminal(_ sessionId: String, cols: Int, rows: Int, restart: Bool = false, _ attachment: TerminalAttachment) {
         terminals[sessionId] = attachment
-        sendAttach(sessionId, restart: restart)
+        terminalSockets.removeValue(forKey: sessionId)?.close()
+        var restartNext = restart
+        let socket = StreamSocket(
+            url: { [weak self] in
+                guard let self, let attachment = self.terminals[sessionId] else { return nil }
+                defer { restartNext = false }
+                var query = [
+                    URLQueryItem(name: "cols", value: String(attachment.cols)),
+                    URLQueryItem(name: "rows", value: String(attachment.rows)),
+                ]
+                if restartNext { query.append(URLQueryItem(name: "restart", value: "1")) }
+                return self.socketURL("/api/sessions/\(Self.pathSegment(sessionId))/terminal/ws", query: query)
+            },
+            willConnect: { [weak self] in self?.terminals[sessionId]?.onReplay() },
+            receive: { [weak self] updates in
+                guard let self else { return }
+                for update in updates {
+                    switch update {
+                    case let .terminalData(id, _) where id == sessionId: self.handle(update)
+                    case let .terminalExit(id, _) where id == sessionId: self.handle(update)
+                    default: break
+                    }
+                }
+            }
+        )
+        terminalSockets[sessionId] = socket
+        socket.connect()
     }
 
     func detachTerminal(_ sessionId: String) {
         guard terminals.removeValue(forKey: sessionId) != nil else { return }
-        post(["type": .string("terminal.detach"), "sessionId": .string(sessionId)])
+        terminalSockets.removeValue(forKey: sessionId)?.close()
     }
 
     func terminalInput(_ sessionId: String, _ data: Data) {
-        post(["type": .string("terminal.input"), "sessionId": .string(sessionId), "data": .string(String(decoding: data, as: UTF8.self))])
+        terminalSockets[sessionId]?.send(["type": .string("terminal.input"), "data": .string(String(decoding: data, as: UTF8.self))])
     }
 
     func terminalResize(_ sessionId: String, cols: Int, rows: Int) {
         guard cols > 0, rows > 0 else { return }
         terminals[sessionId]?.cols = cols
         terminals[sessionId]?.rows = rows
-        post([
-            "type": .string("terminal.resize"), "sessionId": .string(sessionId),
-            "cols": .number(Double(cols)), "rows": .number(Double(rows)),
+        terminalSockets[sessionId]?.send([
+            "type": .string("terminal.resize"), "cols": .number(Double(cols)), "rows": .number(Double(rows)),
         ])
     }
-
-    private func sendAttach(_ sessionId: String, restart: Bool) {
-        guard let attachment = terminals[sessionId], connected else { return }
-        attachment.onReplay()
-        post([
-            "type": .string("terminal.attach"), "sessionId": .string(sessionId),
-            "cols": .number(Double(attachment.cols)), "rows": .number(Double(attachment.rows)),
-            "restart": .bool(restart),
-        ])
-    }
-
     private func post(_ message: [String: JSONValue]) {
         guard connected, let control, let data = try? JSONEncoder().encode(JSONValue.object(message)) else { return }
         control.task.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
@@ -1069,11 +1090,8 @@ final class PilotClient: ObservableObject {
         control?.cancel()
         control = nil
         guard let url = socketURL("/api/ws") else { return }
-        let task = Self.socketSession.webSocketTask(with: url)
-        // Snapshots of long transcripts exceed the 1 MiB default.
-        task.maximumMessageSize = 64 * 1024 * 1024
         let reader = SocketReader(
-            task: task, label: "pilot.control-socket",
+            task: StreamSocket.task(url), label: "pilot.control-socket",
             deliver: { [weak self] reader, updates in
                 guard let self, self.control === reader else { return }
                 if !self.connected { self.didConnect() }
@@ -1093,15 +1111,12 @@ final class PilotClient: ObservableObject {
         connected = true
         retry = 0
         // The daemon sends a fresh snapshot per subscription, so reconnects resync.
-        for key in subagentListeners.keys { postSubagent("subagent.subscribe", key) }
         for id in missionRefs.keys { post(["type": .string("mission.subscribe"), "missionId": .string(id)]) }
         for id in dashboardRefs.keys { post(["type": .string("dashboard.subscribe"), "projectId": .string(id)]) }
-        for id in terminals.keys { sendAttach(id, restart: false) }
-        // pilotd is back: chats waiting out a reconnect delay retry now.
-        for (id, chat) in chats where chat.reader == nil {
-            chat.retry = 0
-            openChat(id)
-        }
+        // pilotd is back: dedicated sockets waiting out a reconnect delay retry now.
+        for chat in chats.values { chat.socket?.retryNow() }
+        for socket in terminalSockets.values { socket.retryNow() }
+        for socket in subagentSockets.values { socket.retryNow() }
     }
 
     private func scheduleReconnect() {
@@ -1153,8 +1168,10 @@ final class PilotClient: ObservableObject {
         case let .session(session):
             awaitingList[session.id] = nil
             update(session)
-        case let .events(id, events):
+        case let .events(id, events, _):
             for listener in listeners[id]?.values ?? [:].values { listener(events) }
+        case .chatStream:
+            break
         case let .subagentEvents(id, name, events):
             for listener in subagentListeners[SubagentKey(sessionId: id, name: name)]?.values ?? [:].values {
                 listener.events(events)
