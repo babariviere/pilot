@@ -4,6 +4,13 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
+/// Lays out, lets measured heights reach @State, then lays out again.
+@MainActor private func settle(_ host: NSView) {
+    host.layoutSubtreeIfNeeded()
+    RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+    host.layoutSubtreeIfNeeded()
+}
+
 @Test @MainActor func taskDescriptionsExpandAndCollapseAtListAndInspectorWidths() {
     _ = NSApplication.shared
     let source = (1...20).map { "Step \($0): read the complete task description." }.joined(separator: "\n")
@@ -14,20 +21,37 @@ import Testing
                                                                  expansion: expansion)
             .fixedSize(horizontal: false, vertical: true).frame(width: width))
         host.frame = NSRect(x: 0, y: 0, width: width, height: 800)
-        host.layoutSubtreeIfNeeded()
+        settle(host)
         let collapsedHeight = host.fittingSize.height
         #expect(!expansion.expanded)
         #expect(collapsedHeight < 150)
 
         expansion.expanded = true
-        host.layoutSubtreeIfNeeded()
+        settle(host)
         #expect(host.fittingSize.height > collapsedHeight + 200)
         #expect(host.fittingSize.width <= width)
 
         expansion.expanded = false
-        host.layoutSubtreeIfNeeded()
+        settle(host)
         #expect(host.fittingSize.height == collapsedHeight)
     }
+}
+
+@Test @MainActor func shortTaskDescriptionsHaveNoToggle() {
+    _ = NSApplication.shared
+    let short = MissionTask(id: "task", number: 1, title: "Task", body: "One short line.")
+    let long = MissionTask(id: "task", number: 1, title: "Task", body: String(repeating: "A longer line of text.\n", count: 6))
+    func height(_ task: MissionTask) -> CGFloat {
+        let host = NSHostingView(rootView: MissionTaskDescription(task: task)
+            .fixedSize(horizontal: false, vertical: true).frame(width: 600))
+        host.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+        settle(host)
+        return host.fittingSize.height
+    }
+    let one = height(short)
+    #expect(one > 0)
+    #expect(one < 22, "a description that fits shows no Show more toggle")
+    #expect(height(long) > one + 20, "a cut-off description adds its second line and the toggle")
 }
 
 @Test @MainActor func absentTaskDescriptionsHaveNoContentOrToggle() {

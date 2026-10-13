@@ -3,7 +3,7 @@ import PilotCore
 import SwiftUI
 
 enum MissionTab: String, CaseIterable, Hashable {
-    case overview, brief, tasks, chats, artifacts, activity
+    case overview, tasks, brief, chats, artifacts, activity
 
     var title: String {
         switch self {
@@ -220,6 +220,61 @@ extension MissionResourceKind {
         case .slackThread: "number"
         case .url: "link"
         }
+    }
+
+    /// The service, for chips and accessibility labels.
+    var serviceLabel: String {
+        switch self {
+        case .linearProject: "Linear project"
+        case .linearIssue: "Linear issue"
+        case .githubIssue: "GitHub issue"
+        case .githubPullRequest: "GitHub pull request"
+        case .slackThread: "Slack thread"
+        case .url: "Link"
+        }
+    }
+}
+
+/// The one icon for a mission link, everywhere links appear. Pull requests carry their state as a small
+/// coloured dot. Brand marks replace the symbols here once they are bundled.
+struct MissionLinkIcon: View {
+    let kind: MissionResourceKind
+    var pullRequestState: PullRequestState? = nil
+    var size: CGFloat = 11
+
+    var body: some View {
+        Image(systemName: kind.symbol)
+            .font(.system(size: size - 1, weight: .medium))
+            .foregroundStyle(Theme.mutedForeground)
+            .frame(width: size + 2, height: size + 2)
+            .overlay(alignment: .bottomTrailing) {
+                if let pullRequestState {
+                    Circle().fill(pullRequestState.color)
+                        .frame(width: size * 0.5, height: size * 0.5)
+                        .overlay(Circle().strokeBorder(Theme.background, lineWidth: 1))
+                        .offset(x: 2, y: 2)
+                }
+            }
+            .accessibilityHidden(true)
+    }
+}
+
+extension MissionTaskCounts {
+    /// Bar segments in `barOrder`, coloured like the task status icons.
+    var segments: [SegmentedProgressBar.Segment] {
+        Self.barOrder.map { status in
+            SegmentedProgressBar.Segment(id: status.rawValue, value: self[status],
+                                         color: status == .todo ? Theme.border : status.color)
+        }
+    }
+
+    /// "2 of 6 done, 1 in review, 1 blocked" for VoiceOver and help tags.
+    var summary: String {
+        guard total > 0 else { return "No tasks yet" }
+        let rest = Self.barOrder.dropFirst().compactMap { status in
+            self[status] > 0 ? "\(self[status]) \(status.label.lowercased())" : nil
+        }
+        return (["\(done) of \(total) done"] + rest).joined(separator: ", ")
     }
 }
 

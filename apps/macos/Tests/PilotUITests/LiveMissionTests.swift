@@ -184,13 +184,13 @@ import WebKit
         try liveType(host, index: 0, text: "Native created")
         try liveType(host, index: 1, text: "A native form goal")
         try await Task.sleep(for: .milliseconds(100))
-        try liveClick(host, x: 663, top: 868)
+        try livePress(host, title: "Create and Start Coordinator")
         try await liveUntil { client.missions.contains { $0.title == "Native created" } }
     })
     try await liveCapture(CreateMissionSheet(projectId: nil, sourceSessionId: rejected.id).environmentObject(model), name: "make", exercise: { host in
         try liveType(host, index: 0, text: "Native drafted")
         try await Task.sleep(for: .milliseconds(100))
-        try liveClick(host, x: 663, top: 868)
+        try livePress(host, title: "Create Mission")
         try await liveUntil { client.missions.contains { $0.title == "Native drafted" && $0.briefRevision == 1 } }
     })
     model.removeFromMission(other.id)
@@ -279,6 +279,23 @@ import WebKit
         try await Task.sleep(for: .milliseconds(100))
     }
     throw ClientError("Live artifact image did not finish rendering")
+}
+
+/// Presses a button by its title through accessibility, independent of the sheet's layout.
+@MainActor private func livePress(_ host: NSView, title: String) throws {
+    func find(_ element: Any, depth: Int = 0) -> NSAccessibilityProtocol? {
+        guard depth < 40, let accessible = element as? NSAccessibilityProtocol else { return nil }
+        if accessible.accessibilityRole() == .button,
+           [accessible.accessibilityTitle(), accessible.accessibilityLabel()].contains(title) {
+            return accessible
+        }
+        for child in accessible.accessibilityChildren() ?? [] {
+            if let match = find(child, depth: depth + 1) { return match }
+        }
+        return nil
+    }
+    let button = try #require(find(host), "Missing button \(title)")
+    #expect(button.accessibilityPerformPress())
 }
 
 @MainActor private func liveClick(_ host: NSView, x: CGFloat, top: CGFloat) throws {

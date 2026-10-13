@@ -43,55 +43,88 @@ struct CreateMissionSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(source == nil ? "New mission" : "Make a mission").font(.headline)
+            HStack(spacing: 8) {
+                Text(source == nil ? "New mission" : "Make a mission").font(.pilot(.body, weight: .semibold))
+                Spacer(minLength: 8)
+                if source == nil {
+                    projectMenu
+                } else if let name = client.project(source?.projectId)?.name {
+                    Label(name, systemImage: "folder").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                }
+            }
             if let source {
                 Text("“\(source.title)” joins the mission. Missions group chats of one project around a shared goal, brief and tasks.")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
             }
-            Form {
-                if source == nil {
-                    Picker("Project", selection: $form.projectId) {
-                        Text("Choose a project").tag(String?.none)
-                        ForEach(client.projects) { Text($0.name).tag(Optional($0.id)) }
-                    }
-                }
-                TextField("Title", text: $form.title)
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("Mission title", text: $form.title)
+                    .font(.pilot(.headline, weight: .semibold))
+                    .accessibilityLabel("Title")
                 TextField(goalPrompt, text: $form.goal, axis: .vertical)
-                    .lineLimit(3 ... 6)
-                if source != nil {
-                    Toggle("This chat coordinates the mission", isOn: $form.coordinator)
-                        .help("The coordinator can start and message mission chats. Without one, you coordinate.")
-                    Toggle("Ask this chat to draft the brief and tasks", isOn: $form.draft)
-                        .help("Sends this chat a message asking it to draft the goal, brief and tasks from its conversation.")
-                } else {
-                    Toggle("Start a coordinator chat", isOn: $form.coordinator)
-                        .help("Starts a chat that drafts the brief and tasks for your review. It will not implement them.")
-                    if form.coordinator {
-                        CoordinatorChatFields(projectId: form.projectId, form: $form.chat)
-                    }
+                    .font(.pilot(.body))
+                    .lineLimit(1 ... 6)
+                    .accessibilityLabel("Goal")
+            }
+            .textFieldStyle(.plain)
+            HairlineDivider()
+            if source != nil {
+                MissionToggleRow(title: "This chat coordinates the mission",
+                                 detail: "The coordinator can start and message mission chats. Without one, you coordinate.",
+                                 isOn: $form.coordinator)
+                MissionToggleRow(title: "Ask this chat to draft the brief and tasks",
+                                 detail: "Sends this chat a message asking it to draft the goal, brief and tasks from its conversation.",
+                                 isOn: $form.draft)
+            } else {
+                MissionToggleRow(title: "Start a coordinator chat",
+                                 detail: "It drafts the brief and tasks for your review. It does not implement them.",
+                                 isOn: $form.coordinator)
+                if form.coordinator {
+                    CoordinatorChatFields(projectId: form.projectId, form: $form.chat)
                 }
             }
-            .formStyle(.grouped)
-            .disabled(form.saving)
             if let error = form.error {
-                Text(error).font(.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
+                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(form.saving ? "Creating…" : "Create Mission") { create() }
+                Button(createTitle) { create() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canCreate)
             }
         }
+        .disabled(form.saving)
         .padding(20)
-        .frame(width: 480)
+        .frame(width: 500)
         .onAppear(perform: prepare)
     }
 
+    private var createTitle: String {
+        if form.saving { return "Creating…" }
+        return source == nil && form.coordinator ? "Create and Start Coordinator" : "Create Mission"
+    }
+
+    private var projectMenu: some View {
+        Menu {
+            ForEach(client.projects) { project in
+                Button {
+                    form.projectId = project.id
+                } label: {
+                    if project.id == form.projectId { Label(project.name, systemImage: "checkmark") } else { Text(project.name) }
+                }
+            }
+        } label: {
+            ChipLabel(title: client.project(form.projectId)?.name ?? "Choose project", icon: "folder")
+        }
+        .chipMenuStyle()
+        .fixedSize()
+        .help("The project whose chats join this mission")
+        .accessibilityLabel("Project: \(client.project(form.projectId)?.name ?? "none")")
+    }
+
     private var goalPrompt: String {
-        let drafts = (source != nil && form.draft) || (source == nil && form.coordinator)
-        return drafts ? "Goal (optional, the chat can draft it)" : "Goal"
+        if source != nil { return form.draft ? "Goal (optional, the chat can draft it)" : "Goal" }
+        return form.coordinator ? "Goal (optional, the coordinator can draft it)" : "Goal"
     }
 
     private var canCreate: Bool {
@@ -265,5 +298,26 @@ struct EditMissionSheet: View {
                 form.error = error.localizedDescription
             }
         }
+    }
+}
+
+/// A switch with a title and one line of explanation, for mission sheets.
+struct MissionToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
+        .help(detail)
     }
 }

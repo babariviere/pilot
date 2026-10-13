@@ -262,38 +262,47 @@ enum Snapshot {
         if CommandLine.arguments.contains("--missions-only") {
             let now = Fixtures.now
             func member(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,
-                        ago: Double, pinned: Bool = false) -> SessionSummary {
+                        ago: Double, pinned: Bool = false, mission: String = "m1") -> SessionSummary {
                 SessionSummary(id: id, title: title, cwd: Fixtures.projects[0].path, projectId: "p1",
                                branch: "feat/\(id)", createdAt: now - ago, updatedAt: now - ago, state: state,
-                               outcome: outcome, outcomeAt: outcome == nil ? nil : now - ago, pinned: pinned, missionId: "m1")
+                               outcome: outcome, outcomeAt: outcome == nil ? nil : now - ago, pinned: pinned, missionId: mission)
             }
             let sessions = [
                 member("coord", "Plan API v2 migration", ago: 3_600_000),
                 member("auth", "Port auth endpoints", state: "working", ago: 60_000, pinned: true),
                 member("pagination", "Cursor pagination", outcome: .done, ago: 900_000),
                 member("errors", "Error envelope", outcome: .failed, ago: 1_800_000),
+                member("draft", "Plan search ranking", state: "working", ago: 30_000, mission: "m3"),
                 SessionSummary(id: "solo", title: "Fix flaky CI cache", cwd: Fixtures.projects[0].path, projectId: "p1",
                                createdAt: now - 7_200_000, updatedAt: now - 7_200_000, state: "idle"),
             ]
             let json = """
             [{"mission":{"id":"m1","projectId":"p1","title":"API v2","goal":"Ship the v2 public API with cursor pagination, a single error envelope and token auth, without breaking v1 clients.","status":"active","coordinatorSessionId":"coord","needsYouCount":1,"briefRevision":4,"createdAt":\(now - 86_400_000),"updatedAt":\(now)},
-              "brief":{"missionId":"m1","revision":4,"markdown":"# API v2\\n\\n## Scope\\n- Cursor pagination on every list endpoint\\n- One error envelope\\n","authorSessionId":"coord","createdAt":\(now - 600_000)},
+              "brief":{"missionId":"m1","revision":4,"markdown":"# API v2\\n\\n## Scope\\n- Cursor pagination on every list endpoint\\n- One error envelope\\n- Token auth replaces session cookies\\n\\n## Out of scope\\nGraphQL and webhook payloads stay on v1 until the SDK is regenerated.\\n","authorSessionId":"coord","createdAt":\(now - 600_000)},
               "decisions":[{"id":"d1","text":"Cursors are opaque base64 strings.","createdAt":1,"updatedAt":1},
                            {"id":"d2","text":"v1 stays frozen; no new fields.","authorSessionId":"coord","createdAt":1,"updatedAt":1}],
               "comments":[{"id":"c1","text":"Should rate-limit errors share the envelope?","anchor":"One error envelope","authorSessionId":"errors","createdAt":\(now - 500_000)}],
-              "tasks":[{"id":"t1","number":1,"title":"Inventory v1 endpoints","status":"done","order":1,"sessionId":"coord","createdAt":1,"updatedAt":1},
-                       {"id":"t2","number":2,"title":"Port auth endpoints","status":"in_progress","order":2,"sessionId":"auth","createdAt":1,"updatedAt":1},
-                       {"id":"t3","number":3,"title":"Cursor pagination","status":"in_review","order":3,"sessionId":"pagination","createdAt":1,"updatedAt":1},
-                       {"id":"t4","number":4,"title":"Error envelope","status":"blocked","order":4,"sessionId":"errors","createdAt":1,"updatedAt":1},
-                       {"id":"t5","number":5,"title":"SDK regeneration","status":"todo","order":5,"createdAt":1,"updatedAt":1},
-                       {"id":"t6","number":6,"title":"Migration guide","status":"todo","order":6,"createdAt":1,"updatedAt":1}],
-              "artifacts":[{"artifactId":"a1","sessionId":"coord","title":"Endpoint map","kind":"html","linkedAt":1}],
-              "resources":[{"id":"r1","url":"https://linear.app/acme/project/api-v2","kind":"linear.project","externalId":"api-v2","title":"API v2 (Linear)","createdAt":1},
-                           {"id":"r2","url":"https://github.com/acme/api/pull/412","kind":"github.pr","externalId":"acme/api#412","createdAt":1}],
-              "events":[{"id":9,"kind":"update","text":"Auth port is halfway; token refresh remains.","sessionId":"auth","health":"on_track","at":\(now - 120_000)},
+              "tasks":[{"id":"t1","number":1,"title":"Inventory v1 endpoints","status":"done","order":1,"milestone":"Foundations","sessionId":"coord","createdAt":1,"updatedAt":1},
+                       {"id":"t2","number":2,"title":"Port auth endpoints","body":"Move /auth/* to v2 with token refresh and the new error envelope.","status":"in_progress","order":2,"milestone":"Foundations","sessionId":"auth","createdAt":1,"updatedAt":1},
+                       {"id":"t3","number":3,"title":"Cursor pagination","status":"in_review","order":3,"milestone":"Endpoints","sessionId":"pagination","createdAt":1,"updatedAt":1},
+                       {"id":"t4","number":4,"title":"Error envelope","body":"Waiting on the rate-limit decision.","status":"blocked","order":4,"milestone":"Endpoints","sessionId":"errors","createdAt":1,"updatedAt":1},
+                       {"id":"t5","number":5,"title":"SDK regeneration","status":"todo","order":5,"milestone":"Release","createdAt":1,"updatedAt":1},
+                       {"id":"t6","number":6,"title":"Migration guide","body":"Document breaking changes for v1 clients.","status":"todo","order":6,"milestone":"Release","createdAt":1,"updatedAt":1}],
+              "artifacts":[{"artifactId":"a1","sessionId":"coord","title":"Endpoint map","kind":"html","linkedAt":1},
+                           {"artifactId":"a2","sessionId":"pagination","taskId":"t3","title":"Cursor format","kind":"swiftui","revision":2,"linkedAt":1}],
+              "resources":[{"id":"r1","url":"https://linear.app/acme/project/api-v2","kind":"linear.project","externalId":"api-v2","title":"API v2","createdAt":1},
+                           {"id":"r2","url":"https://github.com/acme/api/pull/412","kind":"github.pr","externalId":"acme/api#412","createdAt":1},
+                           {"id":"r3","url":"https://acme.slack.com/archives/C1/p1","kind":"slack.thread","title":"#api-v2","createdAt":1},
+                           {"id":"r4","taskId":"t3","url":"https://github.com/acme/api/pull/412","kind":"github.pr","externalId":"acme/api#412","pullRequest":{"number":412,"url":"https://github.com/acme/api/pull/412","title":"Cursor pagination","state":"open","checkedAt":1},"createdAt":1}],
+              "events":[{"id":10,"kind":"update","text":"Auth port is halfway; token refresh remains.","sessionId":"auth","health":"on_track","at":\(now - 120_000)},
+                        {"id":9,"kind":"handoff","text":"Pagination is ready for review. Cursor encoding follows the decision; the SDK task can start once #412 merges.","sessionId":"pagination","at":\(now - 900_000)},
                         {"id":8,"kind":"task","text":"Error envelope is blocked on the rate-limit question.","sessionId":"errors","at":\(now - 1_800_000)},
-                        {"id":7,"kind":"brief","text":"Brief revision 4","sessionId":"coord","at":\(now - 3_000_000)}]},
+                        {"id":7,"kind":"brief","text":"Brief revision 4","sessionId":"coord","at":\(now - 90_000_000)}]},
              {"mission":{"id":"m2","projectId":"p1","title":"Billing cleanup","goal":"Remove legacy invoices.","status":"done","briefRevision":1,"createdAt":\(now - 900_000_000),"updatedAt":1},
+              "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]},
+             {"mission":{"id":"m3","projectId":"p1","title":"Search ranking","goal":"","status":"active","coordinatorSessionId":"draft","briefRevision":0,"createdAt":\(now - 60_000),"updatedAt":\(now)},
+              "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[{"id":1,"kind":"created","text":"Mission created","at":\(now - 60_000)}]},
+             {"mission":{"id":"m4","projectId":"p1","title":"Docs refresh","goal":"Rewrite the getting-started guide for v2.","status":"active","briefRevision":0,"createdAt":\(now - 120_000),"updatedAt":\(now)},
               "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]}]
             """
             guard let details = try? JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8)) else {
@@ -313,9 +322,44 @@ enum Snapshot {
                 await render(MissionPage(missionId: "m1"), size: CGSize(width: 1000, height: 900),
                              to: directory.appending(path: "mission-\(tab.rawValue).png"))
             }
+            // Drafting: a new coordinator has not saved a goal, brief or task yet.
+            model.openMission("m3")
+            await render(MissionPage(missionId: "m3"), size: CGSize(width: 1000, height: 560),
+                         to: directory.appending(path: "mission-drafting.png"))
+            // Empty states: no coordinator, tasks, brief, chats, artifacts or activity.
+            model.openMission("m4")
+            for tab in MissionTab.allCases {
+                model.missionTab = tab
+                await render(MissionPage(missionId: "m4"), size: CGSize(width: 1000, height: 560),
+                             to: directory.appending(path: "mission-empty-\(tab.rawValue).png"))
+            }
             model.inspectorTab = .mission
             await render(MissionInspectorPane(session: sessions[1]), size: CGSize(width: 420, height: 700),
                          to: directory.appending(path: "mission-inspector.png"))
+            await render(CreateMissionSheet(projectId: "p1", sourceSessionId: nil), size: CGSize(width: 500, height: 440),
+                         to: directory.appending(path: "mission-new-sheet.png"))
+            await render(CreateMissionSheet(projectId: nil, sourceSessionId: "solo"), size: CGSize(width: 500, height: 360),
+                         to: directory.appending(path: "mission-make-sheet.png"))
+            await render(StartCoordinatorSheet(missionId: "m4"), size: CGSize(width: 500, height: 380),
+                         to: directory.appending(path: "mission-start-coordinator.png"))
+
+            // The real window, so the toolbar title, section picker and actions are visible.
+            model.openMission("m1")
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            guard let window = NSApp.windows.first(where: { $0.toolbar != nil }),
+                  let frame = window.contentView?.superview else {
+                print("No native toolbar window available")
+                exit(1)
+            }
+            window.setFrameOrigin(NSPoint(x: 100, y: 100))
+            window.makeKeyAndOrderFront(nil)
+            for (width, tab) in [(1360.0, MissionTab.overview), (1360.0, .tasks), (1360.0, .brief), (1360.0, .chats),
+                                 (1360.0, .activity), (980.0, .overview)] {
+                model.missionTab = tab
+                window.setContentSize(CGSize(width: width, height: 860))
+                for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+                snapshot(frame, to: directory.appending(path: "mission-window-\(tab.rawValue)-\(Int(width)).png"))
+            }
             print("snapshots written to \(directory.path)")
             exit(0)
         }

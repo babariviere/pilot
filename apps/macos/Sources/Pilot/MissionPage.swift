@@ -14,34 +14,39 @@ struct MissionInput {
     func trimmed(_ value: String) -> String { value.trimmingCharacters(in: .whitespacesAndNewlines) }
 }
 
-/// The main detail area for a selected mission.
+/// The main detail area for a selected mission. The window toolbar carries the title, the section
+/// picker and the primary actions, like a chat; the page itself starts with content.
 struct MissionPage: View {
     let missionId: String
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @State private var confirmingDeletion = false
+    @State private var width: CGFloat = 1000
 
     var body: some View {
         Group {
             if let mission = client.mission(missionId) {
-                VStack(spacing: 0) {
-                    MissionHeader(mission: mission, confirmingDeletion: $confirmingDeletion)
-                    MissionTabBar(mission: mission)
-                    Rectangle().fill(Theme.border).frame(height: 1)
-                    content(mission, detail: client.missionDetails[missionId])
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
-                .navigationTitle(mission.title)
-                .navigationSubtitle(client.project(mission.projectId)?.name ?? "")
+                content(mission, detail: client.missionDetails[missionId])
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle(mission.title)
+                    .navigationSubtitle(subtitle(mission))
+                    .toolbar {
+                        MissionToolbar(mission: mission, model: model, client: client,
+                                       compactTabs: width < MissionPage.compactTabsWidth,
+                                       confirmingDeletion: $confirmingDeletion)
+                    }
             } else {
-                VStack(spacing: 8) {
-                    Image(systemName: "scope").font(.title2).foregroundStyle(Theme.faintForeground)
-                    Text("This mission no longer exists").foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                EmptyStateView(icon: "scope", title: "This mission no longer exists",
+                               message: "It was deleted. Its chats are kept in their project.")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(Theme.background)
+        .background(GeometryReader { geometry in
+            Color.clear
+                .onAppear { width = geometry.size.width }
+                .onChange(of: geometry.size.width) { _, value in width = value }
+        })
         .missionSubscription(missionId, client: client)
         .confirmationDialog("Delete this mission?", isPresented: $confirmingDeletion) {
             Button("Delete Mission", role: .destructive) {
@@ -53,6 +58,13 @@ struct MissionPage: View {
         } message: {
             Text("Its brief, tasks and activity are deleted. Member chats are kept and detached from the mission.")
         }
+    }
+
+    /// Below this detail width the section control becomes a pop-up button.
+    static let compactTabsWidth: CGFloat = 760
+
+    private func subtitle(_ mission: Mission) -> String {
+        [client.project(mission.projectId)?.name, mission.status.label].compactMap { $0 }.joined(separator: " · ")
     }
 
     @ViewBuilder
@@ -72,59 +84,43 @@ struct MissionPage: View {
     }
 }
 
-private struct MissionHeader: View {
+/// Section picker, New chat and mission actions in the window toolbar.
+private struct MissionToolbar: ToolbarContent {
     let mission: Mission
+    let model: AppModel
+    let client: PilotClient
+    let compactTabs: Bool
     @Binding var confirmingDeletion: Bool
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
 
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "scope").font(.system(size: 20)).foregroundStyle(Theme.mutedForeground)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
-                Text(mission.title).font(.title2.weight(.semibold)).lineLimit(2).textSelection(.enabled)
-                HStack(spacing: 6) {
-                    MissionStatusChip(status: mission.status)
-                    Text(client.project(mission.projectId)?.name ?? "Unknown project").lineLimit(1)
-                    Text("·")
-                    if let coordinator = mission.coordinatorSessionId {
-                        Button { model.selectedSessionId = coordinator } label: {
-                            HStack(spacing: 4) {
-                                MissionCoordinatorIndicator()
-                                Text("Coordinated by \(client.session(coordinator)?.title ?? "a chat")")
-                                    .lineLimit(1)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open the coordinator chat")
-                    } else {
-                        Button("Start a coordinator") { model.missionSheet = .startCoordinator(missionId: mission.id) }
-                            .disabled(mission.status != .active)
-                        if !model.members(of: mission).filter({ !$0.isArchived }).isEmpty {
-                            Menu("Make coordinator") {
-                                ForEach(model.members(of: mission).filter { !$0.isArchived }) { session in
-                                    Button(session.title) { model.setCoordinator(session.id, missionId: mission.id) }
-                                }
-                            }
-                            .menuStyle(.borderlessButton).fixedSize()
-                        }
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(Theme.mutedForeground)
+    var body: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            MissionTabPicker(mission: mission, compact: compactTabs)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Button { model.newSession(in: mission) } label: { Label("New Chat", systemImage: "plus") }
+                Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
+            } label: {
+                Label("New chat", systemImage: "plus")
+                    .labelStyle(.titleAndIcon)
+            } primaryAction: {
+                model.newSession(in: mission)
             }
-            Spacer(minLength: 12)
+            .disabled(mission.status != .active)
+            .help(mission.status == .active ? "Open a new chat in this mission" : "Reopen the mission to add chats")
+        }
+        ToolbarItem(placement: .primaryAction) {
             Menu {
                 Button { model.missionSheet = .edit(missionId: mission.id) } label: {
-                    Label("Edit title and goal…", systemImage: "pencil")
+                    Label("Edit Title and Goal…", systemImage: "pencil")
                 }
+                coordinatorItems
                 Button { model.showArchive(in: mission.projectId, missionId: mission.id) } label: {
                     Label("Browse Archived Chats", systemImage: "archivebox")
                 }
                 Divider()
                 if mission.status != .done {
-                    Button { setStatus(.done) } label: { Label("Mark as done", systemImage: "checkmark.circle") }
+                    Button { setStatus(.done) } label: { Label("Mark as Done", systemImage: "checkmark.circle") }
                 }
                 if mission.status != .active {
                     Button { setStatus(.active) } label: { Label("Reopen", systemImage: "arrow.uturn.backward") }
@@ -134,20 +130,38 @@ private struct MissionHeader: View {
                 }
                 Divider()
                 Button(role: .destructive) { confirmingDeletion = true } label: {
-                    Label("Delete mission…", systemImage: "trash")
+                    Label("Delete Mission…", systemImage: "trash")
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .fixedSize()
             .help("Mission actions")
             .accessibilityLabel("Mission actions")
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 18)
-        .padding(.bottom, 10)
+    }
+
+    @ViewBuilder private var coordinatorItems: some View {
+        let members = model.members(of: mission).filter { !$0.isArchived }
+        if let coordinator = mission.coordinatorSessionId {
+            Button { model.selectedSessionId = coordinator } label: {
+                Label("Open Coordinator", systemImage: "star")
+            }
+            Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
+        } else {
+            Button { model.missionSheet = .startCoordinator(missionId: mission.id) } label: {
+                Label("Start a Coordinator…", systemImage: "star")
+            }
+            .disabled(mission.status != .active)
+        }
+        let candidates = members.filter { $0.id != mission.coordinatorSessionId }
+        if !candidates.isEmpty {
+            Menu("Make Coordinator") {
+                ForEach(candidates) { session in
+                    Button(session.title) { model.setCoordinator(session.id, missionId: mission.id) }
+                }
+            }
+        }
     }
 
     private func setStatus(_ status: MissionStatus) {
@@ -157,12 +171,49 @@ private struct MissionHeader: View {
     }
 }
 
+/// Native segmented control for the mission sections; a pop-up button when the window is narrow.
+struct MissionTabPicker: View {
+    let mission: Mission
+    var compact = false
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
+
+    var body: some View {
+        let picker = Picker("Mission section", selection: $model.missionTab) {
+            ForEach(MissionTab.allCases, id: \.self) { tab in
+                Text(label(tab)).tag(tab)
+            }
+        }
+        .labelsHidden()
+        .help("Mission sections")
+        if compact {
+            picker.pickerStyle(.menu).fixedSize()
+        } else {
+            picker.pickerStyle(.segmented).fixedSize()
+        }
+    }
+
+    private func label(_ tab: MissionTab) -> String {
+        guard let count = count(tab), count > 0 else { return tab.title }
+        return "\(tab.title) \(count)"
+    }
+
+    /// Open tasks and active chats: what is still in play.
+    private func count(_ tab: MissionTab) -> Int? {
+        switch tab {
+        case .tasks: client.missionDetails[mission.id]?.tasks.filter { !$0.status.isClosed }.count
+        case .chats: model.members(of: mission).filter { !$0.isArchived }.count
+        default: nil
+        }
+    }
+}
+
 struct MissionStatusChip: View {
     let status: MissionStatus
 
     var body: some View {
         Text(status.label)
-            .font(.caption2.weight(.semibold))
+            .font(.pilot(.small, weight: .semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
             .background(Capsule().fill(status == .active ? Theme.info.opacity(0.14) : Theme.muted))
@@ -170,98 +221,45 @@ struct MissionStatusChip: View {
     }
 }
 
-private struct MissionTabBar: View {
-    let mission: Mission
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
+/// Tasks by status as a split bar, with a legend that names each part.
+struct MissionTaskProgress: View {
+    let counts: MissionTaskCounts
+    var compact = false
 
     var body: some View {
-        HStack(spacing: 2) {
-            ForEach(MissionTab.allCases, id: \.self) { tab in
-                Button { model.missionTab = tab } label: {
-                    HStack(spacing: 5) {
-                        Text(tab.title)
-                            .font(.system(size: 12, weight: model.missionTab == tab ? .semibold : .regular))
-                            .foregroundStyle(model.missionTab == tab ? Theme.foreground : Theme.mutedForeground)
-                        if let count = count(tab), count > 0 {
-                            Text("\(count)").font(.system(size: 10)).monospacedDigit().foregroundStyle(Theme.faintForeground)
-                        }
+        if compact {
+            HStack(spacing: 8) {
+                SegmentedProgressBar(segments: counts.segments, height: 5)
+                Text(counts.total == 0 ? "No tasks" : "\(counts.done) of \(counts.total)")
+                    .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground).fixedSize()
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(counts.summary)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                SegmentedProgressBar(segments: counts.segments, height: 6)
+                legend
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(counts.summary)
+        }
+    }
+
+    private var legend: some View {
+        HStack(spacing: 12) {
+            Text(counts.total == 0 ? "No tasks yet" : "\(counts.done) of \(counts.total) done")
+                .font(.pilot(.label, weight: .medium)).monospacedDigit().foregroundStyle(Theme.foreground)
+            ForEach(MissionTaskCounts.barOrder.dropFirst(), id: \.self) { status in
+                if counts[status] > 0 {
+                    HStack(spacing: 4) {
+                        Circle().fill(status == .todo ? Theme.faintForeground : status.color).frame(width: 6, height: 6)
+                        Text("\(counts[status]) \(status.label.lowercased())")
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(model.missionTab == tab ? Theme.card : .clear))
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(model.missionTab == tab ? Theme.border : .clear))
+                    .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
                 }
-                .buttonStyle(.plain)
             }
-            Spacer()
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 6)
-    }
-
-    private func count(_ tab: MissionTab) -> Int? {
-        let detail = client.missionDetails[mission.id]
-        switch tab {
-        case .tasks: return detail?.tasks.count
-        case .chats: return model.members(of: mission).filter { !$0.isArchived }.count
-        case .artifacts: return detail?.artifacts.count
-        default: return nil
         }
     }
-}
-
-/// A titled section on mission pages.
-struct MissionSection<Content: View, Accessory: View>: View {
-    let title: String
-    @ViewBuilder var accessory: () -> Accessory
-    @ViewBuilder var content: () -> Content
-
-    init(_ title: String, @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() },
-         @ViewBuilder content: @escaping () -> Content) {
-        self.title = title
-        self.accessory = accessory
-        self.content = content
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
-                Spacer()
-                accessory()
-            }
-            VStack(alignment: .leading, spacing: 0) { content() }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .card()
-        }
-    }
-}
-
-struct MissionProgressBar: View {
-    let done: Int
-    let total: Int
-
-    var body: some View {
-        HStack(spacing: 10) {
-            GeometryReader { geometry in
-                Capsule().fill(Theme.muted)
-                    .overlay(alignment: .leading) {
-                        Capsule().fill(done == total && total > 0 ? Theme.success : Theme.foreground.opacity(0.7))
-                            .frame(width: geometry.size.width * CGFloat(done) / CGFloat(max(1, total)))
-                    }
-            }
-            .frame(height: 6)
-            Text(total == 0 ? "No tasks yet" : "\(done) of \(total) tasks done")
-                .font(.caption).monospacedDigit().foregroundStyle(Theme.mutedForeground).fixedSize()
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(total == 0 ? "No tasks yet" : "\(done) of \(total) tasks done")
-    }
-}
-
-struct MissionRowDivider: View {
-    var body: some View { Rectangle().fill(Theme.border).frame(height: 1) }
 }
 
 // MARK: Overview
@@ -271,106 +269,228 @@ struct MissionOverviewTab: View {
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @State private var resource = MissionInput()
 
     var body: some View {
-        let progress = detail.progress
+        let counts = MissionTaskCounts(detail.tasks)
         let needs = model.needsYou(mission)
-        let openTasks = MissionTaskOrdering.sorted(detail.tasks).filter { !$0.status.isClosed }
+        let inFlight = MissionTaskOrdering.groups(detail.tasks)
+            .filter { [.inProgress, .inReview, .blocked].contains($0.status) }
+            .flatMap(\.tasks)
+        let waiting = detail.tasks.filter { $0.status == .todo }.count
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(mission.goal.isEmpty ? "No goal yet" : mission.goal)
-                        .font(.body)
-                        .foregroundStyle(mission.goal.isEmpty ? Theme.faintForeground : Theme.foreground)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
-                    MissionProgressBar(done: progress.done, total: progress.total)
-                    if progress.total > 0, progress.done == progress.total, mission.status == .active {
-                        HStack {
-                            Text("Every task is done.").font(.callout).foregroundStyle(Theme.mutedForeground)
-                            Button("Mark mission as done") {
-                                model.missionAction { [client, id = mission.id] in
-                                    try await client.updateMission(id, UpdateMissionRequest(status: .done))
-                                }
-                            }
-                            .controlSize(.small)
+            VStack(alignment: .leading, spacing: 28) {
+                summary(counts)
+                if drafting {
+                    MissionDraftingBanner(mission: mission)
+                } else if detail.tasks.isEmpty {
+                    EmptyStateView(icon: "checklist", title: "Plan the work",
+                                   message: mission.coordinatorSessionId == nil
+                                       ? "Break the goal into tasks, or start a coordinator to draft them from the brief."
+                                       : "Break the goal into tasks, or ask the coordinator to draft them from the brief.") {
+                        Button("Add a Task") { model.missionTab = .tasks }
+                            .buttonStyle(.borderedProminent)
+                        if let coordinator = mission.coordinatorSessionId {
+                            Button("Open Coordinator") { model.selectedSessionId = coordinator }
                         }
                     }
                 }
-                MissionSection("Needs you") {
+                VStack(alignment: .leading, spacing: 6) {
+                    PageSectionHeader(title: "Needs you", count: needs.count, countStyle: .attention)
                     if needs.isEmpty {
-                        Text("Nothing is waiting on you").font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
+                            Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
+                        }
+                        .font(.pilot(.body))
+                        .padding(.horizontal, 8).padding(.vertical, 4)
                     }
                     ForEach(Array(needs.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { MissionRowDivider() }
+                        if index > 0 { HairlineDivider(leading: 34) }
                         NeedsYouRow(item: item, mission: mission)
                     }
                 }
-                MissionSection("Tasks", accessory: {
-                    Button("All tasks") { model.missionTab = .tasks }.buttonStyle(.link).font(.caption)
-                }) {
-                    if openTasks.isEmpty {
-                        Text(detail.tasks.isEmpty ? "No tasks yet" : "No open tasks")
-                            .font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
-                    }
-                    ForEach(Array(openTasks.prefix(8).enumerated()), id: \.element.id) { index, task in
-                        if index > 0 { MissionRowDivider() }
-                        CompactTaskRow(task: task)
-                    }
-                    if openTasks.count > 8 {
-                        MissionRowDivider()
-                        Button("\(openTasks.count - 8) more…") { model.missionTab = .tasks }
-                            .buttonStyle(.link).font(.caption).padding(10)
-                    }
-                }
-                MissionSection("Recent activity", accessory: {
-                    Button("All activity") { model.missionTab = .activity }.buttonStyle(.link).font(.caption)
-                }) {
-                    if detail.events.isEmpty {
-                        Text("No activity yet").font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
-                    }
-                    ForEach(Array(detail.events.prefix(5).enumerated()), id: \.element.id) { index, event in
-                        if index > 0 { MissionRowDivider() }
-                        MissionEventRow(event: event)
+                if !inFlight.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        PageSectionHeader(title: "In flight", count: inFlight.count, linkTitle: "All tasks") {
+                            model.missionTab = .tasks
+                        }
+                        ForEach(Array(inFlight.prefix(8).enumerated()), id: \.element.id) { index, task in
+                            if index > 0 { HairlineDivider(leading: 34) }
+                            CompactTaskRow(task: task)
+                        }
+                        if waiting > 0 || inFlight.count > 8 {
+                            Button(waitingText(waiting: waiting, hidden: max(0, inFlight.count - 8))) {
+                                model.missionTab = .tasks
+                            }
+                            .buttonStyle(.plain)
+                            .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                            .padding(.leading, 34)
+                        }
                     }
                 }
-                MissionSection("Resources") {
-                    ForEach(detail.resources.filter { $0.taskId == nil }) { item in
-                        ResourceRow(resource: item, missionId: mission.id)
-                        MissionRowDivider()
+                if !detail.events.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        PageSectionHeader(title: "Recent activity", linkTitle: "All activity") { model.missionTab = .activity }
+                        ForEach(detail.events.prefix(3)) { event in
+                            MissionEventRow(event: event)
+                        }
                     }
-                    HStack(spacing: 8) {
-                        TextField("Link (Linear, GitHub, Slack or any URL)", text: $resource.text)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit(addResource)
-                        TextField("Title (optional)", text: $resource.secondary)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 180)
-                            .onSubmit(addResource)
-                        Button("Add", action: addResource)
-                            .disabled(resource.busy || URL(string: resource.trimmed(resource.text))?.scheme == nil)
-                    }
-                    .padding(10)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    PageSectionHeader(title: "Links")
+                    MissionLinkList(missionId: mission.id, resources: detail.resources.filter { $0.taskId == nil })
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 860, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
     }
 
-    private func addResource() {
-        let url = resource.trimmed(resource.text)
-        guard !resource.busy, URL(string: url)?.scheme != nil else { return }
-        let title = resource.trimmed(resource.secondary)
-        resource.busy = true
-        model.missionAction { [client, id = mission.id] in
-            defer { resource.busy = false }
-            try await client.addMissionResource(id, MissionResourceWrite(url: url, title: title.isEmpty ? nil : title))
-            resource.text = ""
-            resource.secondary = ""
+    /// A coordinator was just started and has not saved a goal, brief or task yet.
+    private var drafting: Bool {
+        mission.status == .active && mission.coordinatorSessionId != nil && mission.goal.isEmpty
+            && detail.tasks.isEmpty && mission.briefRevision == 0
+    }
+
+    private func waitingText(waiting: Int, hidden: Int) -> String {
+        var parts: [String] = []
+        if hidden > 0 { parts.append("\(hidden) more in flight") }
+        if waiting > 0 { parts.append("\(waiting) to do") }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func summary(_ counts: MissionTaskCounts) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if mission.goal.isEmpty {
+                Button("Add a goal…") { model.missionSheet = .edit(missionId: mission.id) }
+                    .buttonStyle(.plain)
+                    .font(.pilot(.headline))
+                    .foregroundStyle(Theme.faintForeground)
+            } else {
+                Text(mission.goal)
+                    .font(.pilot(.headline))
+                    .lineSpacing(3)
+                    .foregroundStyle(Theme.foreground)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            MissionMetaLine(mission: mission, detail: detail)
+            if counts.total > 0 { MissionTaskProgress(counts: counts) }
+            if counts.total > 0, counts.done == counts.total, mission.status == .active {
+                HStack(spacing: 8) {
+                    Text("Every task is done.").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                    Button("Mark Mission as Done") {
+                        model.missionAction { [client, id = mission.id] in
+                            try await client.updateMission(id, UpdateMissionRequest(status: .done))
+                        }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            let milestones = MissionMilestones.progress(detail.tasks)
+            if !milestones.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(milestones) { milestone in
+                        MissionMilestoneRow(milestone: milestone)
+                    }
+                }
+                .padding(.top, 2)
+            }
         }
+    }
+}
+
+/// Coordinator, brief revision and decision count under the goal.
+private struct MissionMetaLine: View {
+    let mission: Mission
+    let detail: MissionDetail
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let coordinator = mission.coordinatorSessionId {
+                MissionCoordinatorIndicator()
+                Text("Coordinated by")
+                Button(client.session(coordinator)?.title ?? "a chat") { model.selectedSessionId = coordinator }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.foreground)
+                    .lineLimit(1)
+                    .help("Open the coordinator chat")
+            } else {
+                Text("You coordinate")
+                if mission.status == .active {
+                    Text("·")
+                    Button("Start a coordinator…") { model.missionSheet = .startCoordinator(missionId: mission.id) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Theme.foreground)
+                }
+            }
+            Text("·")
+            Button(detail.brief.map { "Brief revision \($0.revision)" } ?? "No brief yet") { model.missionTab = .brief }
+                .buttonStyle(.plain)
+            if !detail.decisions.isEmpty {
+                Text("·")
+                Text("\(detail.decisions.count) decision\(detail.decisions.count == 1 ? "" : "s")")
+            }
+        }
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.mutedForeground)
+    }
+}
+
+private struct MissionMilestoneRow: View {
+    let milestone: MissionMilestoneProgress
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(milestone.name ?? "No phase")
+                .font(.pilot(.label))
+                .foregroundStyle(milestone.name == nil ? Theme.mutedForeground : Theme.foreground)
+                .lineLimit(1)
+                .frame(width: 150, alignment: .leading)
+            SegmentedProgressBar(segments: milestone.counts.segments, height: 5)
+            Text("\(milestone.counts.done)/\(milestone.counts.total)")
+                .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
+                .frame(width: 36, alignment: .trailing)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(milestone.name ?? "No phase"): \(milestone.counts.summary)")
+    }
+}
+
+/// Shown on Overview while a new coordinator drafts the goal, brief and tasks.
+struct MissionDraftingBanner: View {
+    let mission: Mission
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
+
+    var body: some View {
+        let coordinator = mission.coordinatorSessionId.flatMap { client.session($0) }
+        let working = coordinator?.isWorking ?? false
+        HStack(spacing: 10) {
+            if let coordinator { SessionStatusIcon(status: coordinator.status) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(working ? "The coordinator is drafting the goal, brief and tasks"
+                             : "Waiting for the coordinator to draft the goal, brief and tasks")
+                    .font(.pilot(.body))
+                    .foregroundStyle(Theme.foreground)
+                Text(working ? "They appear here as the coordinator saves them."
+                             : "Open its chat to answer questions or tell it what to plan.")
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.mutedForeground)
+            }
+            Spacer(minLength: 8)
+            if let id = coordinator?.id {
+                Button("Open Chat") { model.selectedSessionId = id }
+            }
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.muted))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -382,19 +502,24 @@ private struct NeedsYouRow: View {
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: 10) {
-                icon.frame(width: 16)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).lineLimit(1)
-                    Text(subtitle).font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(2)
+            HoverRow(verticalPadding: 7) { hovered in
+                HStack(spacing: 10) {
+                    icon.frame(width: 16)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                        Text(subtitle).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2)
+                    }
+                    Spacer(minLength: 8)
+                    Text(action).font(.pilot(.label, weight: .medium))
+                        .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
+                    Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
+                        .foregroundStyle(Theme.faintForeground)
                 }
-                Spacer()
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(Theme.faintForeground)
             }
-            .padding(10)
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(title). \(subtitle)")
+        .accessibilityHint(action)
     }
 
     @ViewBuilder private var icon: some View {
@@ -403,7 +528,7 @@ private struct NeedsYouRow: View {
             if session.isActiveMissionCoordinator { MissionCoordinatorIndicator() }
             else { SessionStatusIcon(status: session.status) }
         case .blockedTask: Image(systemName: MissionTaskStatus.blocked.symbol).foregroundStyle(MissionTaskStatus.blocked.color)
-        case .comment: Image(systemName: "text.quote").foregroundStyle(Theme.info)
+        case .comment: Image(systemName: "text.bubble").foregroundStyle(Theme.info)
         }
     }
 
@@ -418,13 +543,21 @@ private struct NeedsYouRow: View {
     private var subtitle: String {
         switch item {
         case let .chat(session):
-            session.outcome == .failed ? "Failed. Review the chat." :
+            session.outcome == .failed ? "Failed. Open the chat to see why." :
                 session.isActiveMissionCoordinator ? "New result. Review the chat." : "Finished. Review the result."
         case let .blockedTask(task):
             "Blocked" + (task.sessionId.flatMap { client.session($0)?.title }.map { " · \($0)" } ?? "")
         case let .comment(comment):
             "Comment from \(missionAuthorName(comment.authorSessionId, client: client))"
                 + (comment.anchor.map { " on “\($0)”" } ?? "")
+        }
+    }
+
+    private var action: String {
+        switch item {
+        case let .chat(session): session.outcome == .failed ? "Open chat" : "Review"
+        case .blockedTask: "View task"
+        case .comment: "Reply"
         }
     }
 
@@ -437,8 +570,10 @@ private struct NeedsYouRow: View {
     }
 }
 
+/// A read-only task line: status, number, title and the chat working on it.
 struct CompactTaskRow: View {
     let task: MissionTask
+    var showsOwner = true
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
@@ -446,24 +581,25 @@ struct CompactTaskRow: View {
         HStack(spacing: 8) {
             Image(systemName: task.status.symbol).foregroundStyle(task.status.color).frame(width: 16)
                 .help(task.status.label)
-            Text("#\(task.number)").font(.caption.monospacedDigit()).foregroundStyle(Theme.faintForeground)
-            Text(task.title).lineLimit(1).strikethrough(task.status.isClosed)
+                .accessibilityLabel(task.status.label)
+            Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                .frame(minWidth: 20, alignment: .leading)
+            Text(task.title).font(.pilot(.body)).lineLimit(1).strikethrough(task.status.isClosed)
                 .foregroundStyle(task.status.isClosed ? Theme.mutedForeground : Theme.foreground)
             Spacer(minLength: 8)
-            if let sessionId = task.sessionId {
+            if showsOwner, let sessionId = task.sessionId {
                 let title = client.session(sessionId)?.title
                 Button { model.selectedSessionId = sessionId } label: {
                     Label(MissionTaskOwnerLabel.text(task: task, chatTitle: title), systemImage: "bubble.left")
-                        .lineLimit(1).font(.caption).foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
                 .buttonStyle(.plain)
                 .frame(maxWidth: 200, alignment: .trailing)
                 .help(MissionTaskOwnerLabel.help(chatTitle: title))
             }
         }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
     }
 }
 
@@ -473,38 +609,76 @@ struct MissionEventRow: View {
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: event.kind.symbol).foregroundStyle(Theme.mutedForeground).frame(width: 16)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(event.text).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 6) {
-                    if let health = event.health {
-                        HStack(spacing: 4) {
-                            Circle().fill(health.color).frame(width: 6, height: 6)
-                            Text(health.label)
-                        }
-                    }
-                    if let sessionId = event.sessionId {
-                        Button(client.session(sessionId)?.title ?? "A chat") { model.selectedSessionId = sessionId }
-                            .buttonStyle(.plain).lineLimit(1)
-                    } else {
-                        Text("You or Pilot")
-                    }
-                }
-                .font(.caption).foregroundStyle(Theme.mutedForeground)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: event.kind.symbol).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).frame(width: 16)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(event.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                MissionEventByline(event: event)
             }
             Spacer(minLength: 8)
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 Text(missionRelativeTime(event.at, now: context.date))
-                    .font(.caption).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                    .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
     }
 }
 
-struct ResourceRow: View {
+/// Author chat (a link) and health of an activity entry.
+struct MissionEventByline: View {
+    let event: MissionEvent
+    var time: String? = nil
+    @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if let sessionId = event.sessionId {
+                Button(client.session(sessionId)?.title ?? "A chat") { model.selectedSessionId = sessionId }
+                    .buttonStyle(.plain).lineLimit(1)
+                    .help("Open this chat")
+            } else {
+                Text("You or Pilot")
+            }
+            if let health = event.health {
+                Text("·")
+                Circle().fill(health.color).frame(width: 6, height: 6)
+                Text(health.label)
+            }
+            if let time {
+                Text("·")
+                Text(time).monospacedDigit()
+            }
+        }
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.mutedForeground)
+    }
+}
+
+// MARK: Links
+
+/// Mission or task links as wrapping chips, with an "Add link" popover at the end.
+struct MissionLinkList: View {
+    let missionId: String
+    let resources: [MissionResource]
+    var taskId: String? = nil
+    var compact = false
+
+    var body: some View {
+        ResponsiveControlsLayout(horizontalSpacing: 6, verticalSpacing: 6) {
+            ForEach(resources) { resource in
+                MissionLinkChip(resource: resource, missionId: missionId, compact: compact)
+            }
+            MissionAddLinkButton(missionId: missionId, taskId: taskId, compact: compact)
+        }
+    }
+}
+
+/// One link: service icon (with PR state), title and a muted detail. Context menu copies or removes it.
+struct MissionLinkChip: View {
     let resource: MissionResource
     let missionId: String
     var compact = false
@@ -512,34 +686,124 @@ struct ResourceRow: View {
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: resource.kind.symbol).foregroundStyle(Theme.mutedForeground).frame(width: 16)
-            if let url = URL(string: resource.url) {
-                let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
-                Link(destination: url) {
-                    HStack(spacing: 8) {
-                        Text(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle).lineLimit(1)
-                        if let stack = pr?.stack {
-                            Text(stack.label).font(.caption).foregroundStyle(Theme.mutedForeground).fixedSize()
-                        }
-                    }
-                }
-                .help([resource.url, pr?.stack?.helpText].compactMap { $0 }.joined(separator: "\n"))
-            } else {
-                Text(resource.displayTitle).lineLimit(1)
+        let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
+        let label = HStack(spacing: 5) {
+            MissionLinkIcon(kind: resource.kind, pullRequestState: pr?.state, size: compact ? 10 : 11)
+            Text(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle)
+                .foregroundStyle(compact ? Theme.mutedForeground : Theme.foreground)
+                .lineLimit(1)
+            if let detail = detail(pr) {
+                Text(detail).foregroundStyle(Theme.mutedForeground).lineLimit(1)
             }
-            Spacer()
-            Button {
-                model.missionAction { [client = model.client] in
+        }
+        .font(.pilot(compact ? .caption : .label))
+        .padding(.horizontal, compact ? 0 : 8)
+        .padding(.vertical, compact ? 0 : 4)
+        .background(RoundedRectangle(cornerRadius: 7).fill(compact ? Color.clear : Theme.muted))
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        Group {
+            if let url = URL(string: resource.url), url.scheme != nil {
+                Link(destination: url) { label }.buttonStyle(.plain)
+            } else {
+                label
+            }
+        }
+        .help([resource.url, pr?.stack?.helpText].compactMap { $0 }.joined(separator: "\n"))
+        .accessibilityLabel("\(resource.kind.serviceLabel): \(resource.displayTitle)\(pr.map { ", \($0.state.label)" } ?? "")")
+        .contextMenu {
+            Button("Copy Link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(resource.url, forType: .string)
+            }
+            Button("Remove Link", role: .destructive) {
+                model.missionAction { [client] in
                     try await client.deleteMissionResource(missionId, resourceId: resource.id)
                 }
-            } label: { Image(systemName: "xmark") }
-                .buttonStyle(.borderless)
-                .help("Remove link")
-                .accessibilityLabel("Remove link")
+            }
         }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .accessibilityAction(named: "Remove link") {
+            model.missionAction { [client] in try await client.deleteMissionResource(missionId, resourceId: resource.id) }
+        }
+    }
+
+    private func detail(_ pr: SessionPullRequest?) -> String? {
+        if let pr { return [compact ? nil : pr.state.label, pr.stack?.label].compactMap { $0 }.joined(separator: " · ") }
+        if compact { return nil }
+        switch resource.kind {
+        case .linearProject: return "Linear project"
+        case .linearIssue: return "Linear"
+        case .githubIssue: return "Issue"
+        case .slackThread: return "Slack"
+        case .githubPullRequest, .url: return nil
+        }
+    }
+}
+
+/// "+ Add link" with a small popover for the URL and an optional title.
+struct MissionAddLinkButton: View {
+    let missionId: String
+    var taskId: String? = nil
+    var compact = false
+    @State private var presented = false
+
+    var body: some View {
+        Button { presented = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus").font(.pilot(.micro, weight: .semibold))
+                Text("Add link")
+            }
+            .font(.pilot(compact ? .caption : .label))
+            .foregroundStyle(Theme.mutedForeground)
+            .padding(.horizontal, compact ? 0 : 6)
+            .padding(.vertical, compact ? 0 : 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Link a Linear, GitHub or Slack item, or any URL")
+        .popover(isPresented: $presented, arrowEdge: .bottom) {
+            MissionAddLinkForm(missionId: missionId, taskId: taskId) { presented = false }
+        }
+    }
+}
+
+/// URL and optional title for a new mission or task link. Shown in a popover.
+struct MissionAddLinkForm: View {
+    let missionId: String
+    var taskId: String? = nil
+    var title = "Add a link"
+    let dismiss: () -> Void
+    @EnvironmentObject private var model: AppModel
+    @State private var input = MissionInput()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.pilot(.body, weight: .semibold))
+            TextField("Linear, GitHub, Slack or any URL", text: $input.text)
+                .textFieldStyle(.roundedBorder).onSubmit(add)
+            TextField("Title (optional)", text: $input.secondary)
+                .textFieldStyle(.roundedBorder).onSubmit(add)
+            HStack {
+                Spacer()
+                Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
+                Button("Add", action: add).keyboardShortcut(.defaultAction)
+                    .disabled(input.busy || URL(string: input.trimmed(input.text))?.scheme == nil)
+            }
+        }
+        .padding(14)
+        .frame(width: 340)
+    }
+
+    private func add() {
+        let url = input.trimmed(input.text)
+        guard !input.busy, URL(string: url)?.scheme != nil else { return }
+        let title = input.trimmed(input.secondary)
+        input.busy = true
+        model.missionAction { [client = model.client] in
+            defer { input.busy = false }
+            try await client.addMissionResource(missionId, MissionResourceWrite(url: url, title: title.isEmpty ? nil : title,
+                                                                                taskId: taskId))
+            input = MissionInput()
+            dismiss()
+        }
     }
 }
