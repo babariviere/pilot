@@ -12,6 +12,7 @@ struct ProjectPage: View {
     @ObservedObject private var client = AppModel.shared.client
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
+    @State private var showingMemory = false
     @State private var retrying = false
 
     var body: some View {
@@ -27,6 +28,9 @@ struct ProjectPage: View {
                     }
                     .sheet(isPresented: $showingArtifacts) {
                         ProjectArtifactsBrowser(project: project, client: client)
+                    }
+                    .sheet(isPresented: $showingMemory) {
+                        ProjectMemoryBrowser(project: project, client: client)
                     }
             } else if client.hasProjectSnapshot {
                 EmptyStateView(icon: "folder", title: "This project no longer exists",
@@ -46,7 +50,7 @@ struct ProjectPage: View {
             let banner = stale ? ProjectRefreshBanner(receivedAt: client.dashboardReceivedAt[projectId],
                                                       error: client.dashboardErrors[projectId],
                                                       retrying: retrying, retry: retry) : nil
-            if dashboard.summary.chats == 0, dashboard.missions.total == 0 {
+            if dashboard.summary.chats == 0, dashboard.missions.total == 0, dashboard.memory == nil {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         banner
@@ -65,7 +69,7 @@ struct ProjectPage: View {
             } else {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
                                      needsYou: ProjectPageNeeds.visible(dashboard.needsYou, isReviewed: isReviewed),
-                                     banner: banner)
+                                     banner: banner, browseMemory: { showingMemory = true })
             }
         } else if let error = client.dashboardErrors[projectId] {
             EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load this project", message: error) {
@@ -152,6 +156,7 @@ private struct ProjectDashboardBody: View {
     let dashboard: ProjectDashboard
     let needsYou: DashboardSection<DashboardNeedsYouItem>
     let banner: ProjectRefreshBanner?
+    let browseMemory: () -> Void
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -233,6 +238,31 @@ private struct ProjectDashboardBody: View {
                         ProjectMissionRow(mission: mission)
                     }
                     ProjectMoreLine(hidden: dashboard.missions.hiddenCount, noun: "active")
+                }
+            }
+
+            if let memory = dashboard.memory {
+                ProjectPageSection(header: PageSectionHeader(title: "Memory", count: memory.count,
+                                                              linkTitle: "Browse memory", link: browseMemory)) {
+                    if memory.count == 0 {
+                        Text("No project memories yet.")
+                            .font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                    } else {
+                        ForEach(Array(memory.recent.prefix(3).enumerated()), id: \.element.id) { index, entry in
+                            if index > 0 { HairlineDivider(leading: 34) }
+                            HStack(alignment: .top, spacing: 10) {
+                                Image(systemName: "brain.head.profile").foregroundStyle(Theme.faintForeground).frame(width: 16)
+                                Text(entry.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                                    .lineLimit(2).textSelection(.enabled)
+                                Spacer(minLength: 0)
+                                Text(Date(timeIntervalSince1970: entry.at / 1000), style: .relative)
+                                    .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                        }
+                    }
+                    MemoryCompactionLine(compaction: memory.compaction)
                 }
             }
 
@@ -725,6 +755,209 @@ enum ProjectPageNeeds {
 
 // MARK: Subscription
 
+private struct MemoryCompactionLine: View {
+    let compaction: MemoryCompaction
+
+    var body: some View {
+        HStack(spacing: 7) {
+            if compaction.state == .running || compaction.state == .pending {
+                ProgressView().controlSize(.small).frame(width: 16)
+            } else {
+                Image(systemName: compaction.state == .backoff ? "exclamationmark.circle" : "checkmark.circle")
+                    .foregroundStyle(compaction.state == .backoff ? Theme.warning : Theme.faintForeground)
+                    .frame(width: 16)
+            }
+            Text(message).font(.pilot(.caption))
+                .foregroundStyle(compaction.state == .backoff ? Theme.warning : Theme.mutedForeground)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8).padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var message: String {
+        if compaction.state == .backoff { return "Compaction paused: \(compaction.error ?? "will retry automatically")" }
+        if compaction.state == .running { return "Updating memory summaries…" }
+        if compaction.state == .pending { return "\(compaction.pending) summaries waiting to build" }
+        return "Memory summaries are up to date"
+    }
+}
+
+/// A bounded tree browser. Nodes are expanded on demand and recall is a single explicit request,
+/// so large project logs never load or scan on the UI thread.
+private struct ProjectMemoryBrowser: View {
+    let project: Project
+    let client: PilotClient
+    @Environment(\.dismiss) private var dismiss
+    @State private var roots: [MemoryNode] = []
+    @State private var children: [String: [MemoryNode]] = [:]
+    @State private var expanded = Set<String>()
+    @State private var query = ""
+    @State private var results: [MemoryEntry] = []
+    @State private var resultCount: Int?
+    @State private var error: String?
+    @State private var loading = true
+    @State private var busy = false
+    @State private var forgetting: MemoryNode?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Browse memory").font(.pilot(.title))
+                    Text(project.name).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                }
+                Spacer()
+                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
+            }
+            HStack(spacing: 8) {
+                TextField("Search memories (regular expression)", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { search() }
+                    .accessibilityLabel("Search project memories")
+                Button("Search", action: search).disabled(busy || query.isEmpty)
+                    .keyboardShortcut(.return, modifiers: [.command])
+            }
+            if let error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.warning).textSelection(.enabled)
+            }
+            if let resultCount {
+                if results.isEmpty {
+                    Text("No matching memories.").font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                } else {
+                    Text("\(resultCount) matches").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(results.enumerated()), id: \.element.id) { index, entry in
+                                if index > 0 { HairlineDivider(leading: 28) }
+                                memoryEntry(entry)
+                            }
+                        }
+                    }
+                }
+            } else if loading {
+                ProgressView("Loading memory…").frame(maxWidth: .infinity, alignment: .leading)
+            } else if roots.isEmpty {
+                EmptyStateView(icon: "brain.head.profile", title: "No memories yet",
+                               message: "Lasting project notes from agents will appear here.")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(roots, id: \.key) { node in treeNode(node, depth: 0) }
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 520, minHeight: 440)
+        .background(Theme.background)
+        .task { await load() }
+        .confirmationDialog("Forget this summary?", isPresented: Binding(
+            get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }
+        ), titleVisibility: .visible) {
+            Button("Forget summary", role: .destructive) {
+                guard let node = forgetting else { return }
+                forgetting = nil
+                Task { await forget(node) }
+            }
+            Button("Cancel", role: .cancel) { forgetting = nil }
+        } message: {
+            Text("The original memory notes stay unchanged. This summary and summaries built from it will be rebuilt.")
+        }
+    }
+
+    private func treeNode(_ node: MemoryNode, depth: Int) -> AnyView {
+        let key = node.key
+        let canExpand = node.hi - node.lo + 1 >= 2
+        return AnyView(VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 8) {
+                Button {
+                    if expanded.contains(key) { expanded.remove(key) }
+                    else { Task { await expand(node) } }
+                } label: {
+                    Image(systemName: canExpand ? (expanded.contains(key) ? "chevron.down" : "chevron.right") : "circle.fill")
+                        .font(.pilot(.glyph)).foregroundStyle(Theme.faintForeground).frame(width: 14)
+                }
+                .buttonStyle(.plain).disabled(!canExpand || busy)
+                .accessibilityLabel(expanded.contains(key) ? "Collapse entries \(node.lo) through \(node.hi)" :
+                                        "Expand entries \(node.lo) through \(node.hi)")
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(node.entry?.text ?? node.text ?? (node.pending == true ? "Summary is being built…" : "Memory range"))
+                        .font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(node.entry.map { "#\($0.index) · \(Date(timeIntervalSince1970: $0.at / 1000).formatted(date: .abbreviated, time: .shortened))" }
+                         ?? "Entries \(node.lo)–\(node.hi)")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                }
+                Spacer(minLength: 4)
+                if node.text != nil {
+                    Button { forgetting = node } label: { Image(systemName: "trash") }
+                        .buttonStyle(.plain).help("Forget this summary")
+                        .accessibilityLabel("Forget summary for entries \(node.lo) through \(node.hi)")
+                }
+            }
+            .padding(.leading, CGFloat(depth) * 18 + 4).padding(.vertical, 7)
+            if expanded.contains(key) {
+                ForEach(children[key] ?? [], id: \.key) { child in treeNode(child, depth: depth + 1) }
+            }
+            HairlineDivider(leading: CGFloat(depth) * 18 + 26)
+        })
+    }
+
+    private func memoryEntry(_ entry: MemoryEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(entry.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            Text("#\(entry.index) · \(Date(timeIntervalSince1970: entry.at / 1000).formatted(date: .abbreviated, time: .shortened))")
+                .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+        }.padding(.horizontal, 8).padding(.vertical, 8)
+    }
+
+    @MainActor private func load() async {
+        loading = true; error = nil
+        do { roots = try await client.memoryWake(project.id).nodes; loading = false }
+        catch { self.error = error.localizedDescription; loading = false }
+    }
+
+    @MainActor private func expand(_ node: MemoryNode) async {
+        busy = true; error = nil
+        do {
+            children[node.key] = try await client.memoryZoom(project.id, lo: node.lo, hi: node.hi)
+            expanded.insert(node.key)
+        } catch { self.error = error.localizedDescription }
+        busy = false
+    }
+
+    @MainActor private func search() {
+        guard !query.isEmpty else { resultCount = nil; return }
+        busy = true; error = nil
+        Task {
+            do {
+                let recall = try await client.memoryRecall(project.id, regex: query)
+                results = recall.entries; resultCount = recall.matches
+                if recall.truncated { error = "Showing the newest matching notes; narrow the search for more." }
+            } catch { self.error = error.localizedDescription; resultCount = nil }
+            busy = false
+        }
+    }
+
+    @MainActor private func forget(_ node: MemoryNode) async {
+        busy = true; error = nil
+        do {
+            try await client.forgetMemory(project.id, lo: node.lo, hi: node.hi)
+            children.removeAll(); expanded.removeAll(); resultCount = nil
+            await load()
+        } catch { self.error = error.localizedDescription }
+        busy = false
+    }
+}
+
+private extension MemoryNode {
+    var key: String { "\(lo)-\(hi)" }
+}
+
 /// Keeps one project's dashboard subscribed while a view is on screen.
 struct DashboardSubscription: ViewModifier {
     let projectId: String
@@ -746,4 +979,3 @@ extension View {
         modifier(DashboardSubscription(projectId: projectId, client: client))
     }
 }
-
