@@ -336,10 +336,7 @@ struct MissionOverviewTab: View {
                         }
                     }
                 }
-                VStack(alignment: .leading, spacing: 8) {
-                    PageSectionHeader(title: "Links")
-                    MissionLinkList(missionId: mission.id, resources: detail.resources.filter { $0.taskId == nil })
-                }
+                MissionLinksSection(mission: mission, detail: detail)
             }
             .padding(.horizontal, 32)
             .padding(.vertical, 24)

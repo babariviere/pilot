@@ -60,6 +60,8 @@ final class AppModel: ObservableObject {
     @Published var settingsTab: SettingsTab = .appearance
     @Published var settingsProjectId: String?
     @Published var missionTab: MissionTab = .overview
+    /// A task the Tasks tab should scroll to and briefly highlight, set by "Show task" on a link.
+    @Published var revealedMissionTaskId: String?
     @Published var missionSheet: MissionSheet?
     /// Missions whose chats are listed in the sidebar.
     @Published var expandedMissions: Set<String> = []

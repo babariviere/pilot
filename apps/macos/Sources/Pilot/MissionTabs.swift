@@ -496,10 +496,14 @@ struct MissionTasksTab: View {
     @State private var input = MissionInput()
     /// Closed groups start folded.
     @State private var collapsed: Set<MissionTaskStatus> = [.done, .dropped]
+    /// The task "Show task" just revealed, shown with a soft fill for a moment.
+    @State private var highlighted: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let groups = MissionTaskOrdering.groups(detail.tasks)
         let counts = MissionTaskCounts(detail.tasks)
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if counts.total > 0 {
@@ -530,7 +534,9 @@ struct MissionTasksTab: View {
                     if !collapsed.contains(group.status) {
                         ForEach(Array(group.tasks.enumerated()), id: \.element.id) { index, task in
                             if index > 0 { HairlineDivider(leading: 58) }
-                            MissionTaskRow(task: task, mission: mission, siblings: group.tasks)
+                            MissionTaskRow(task: task, mission: mission, siblings: group.tasks,
+                                           highlighted: highlighted == task.id)
+                                .id(task.id)
                         }
                     }
                 }
@@ -539,6 +545,29 @@ struct MissionTasksTab: View {
             .padding(.vertical, 24)
             .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+        .onAppear { reveal(proxy) }
+        .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(proxy) }
+        }
+    }
+
+    /// Unfolds the group of the task named by "Show task", scrolls to it and highlights it briefly.
+    private func reveal(_ proxy: ScrollViewProxy) {
+        guard let id = model.revealedMissionTaskId else { return }
+        model.revealedMissionTaskId = nil
+        guard let task = detail.tasks.first(where: { $0.id == id }) else { return }
+        collapsed.remove(task.status)
+        highlighted = id
+        Task { @MainActor in
+            // Let the unfolded group lay out before scrolling.
+            try? await Task.sleep(for: .milliseconds(60))
+            if reduceMotion {
+                proxy.scrollTo(id, anchor: .center)
+            } else {
+                withAnimation(Theme.Motion.quick) { proxy.scrollTo(id, anchor: .center) }
+            }
+            try? await Task.sleep(for: .milliseconds(1_800))
+            if highlighted == id { highlighted = nil }
         }
     }
 
@@ -606,16 +635,18 @@ struct MissionTaskRow: View {
     let mission: Mission
     /// The displayed list this row reorders within.
     let siblings: [MissionTask]
+    var highlighted = false
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @StateObject private var artifacts = MissionArtifactsState()
 
-    init(task: MissionTask, mission: Mission, siblings: [MissionTask]) {
+    init(task: MissionTask, mission: Mission, siblings: [MissionTask], highlighted: Bool = false) {
         self.task = task
         self.mission = mission
         self.siblings = siblings
+        self.highlighted = highlighted
         _title = StateObject(wrappedValue: TaskTitleState(task.title))
     }
 
@@ -684,6 +715,8 @@ struct MissionTaskRow: View {
             }
         }
         .onChange(of: task.title) { _, value in title.title = value }
+        .background(RoundedRectangle(cornerRadius: 7).fill(highlighted ? Theme.selected : .clear))
+        .animation(Theme.Motion.quick, value: highlighted)
         .contextMenu { menuItems }
         .popover(isPresented: $addingLink, arrowEdge: .bottom) {
             MissionAddLinkForm(missionId: mission.id, taskId: task.id, title: "Link to task #\(task.number)") {

@@ -259,6 +259,13 @@ enum Snapshot {
             exit(0)
         }
 
+        // Overview links grouped by provider, with many pull requests in every state.
+        if CommandLine.arguments.contains("--mission-links-only") {
+            await renderMissionLinks(model: model, to: directory)
+            print("snapshots written to \(directory.path)")
+            exit(0)
+        }
+
         if CommandLine.arguments.contains("--missions-only") {
             let now = Fixtures.now
             func member(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,
@@ -740,6 +747,112 @@ enum Snapshot {
 
     /// Project page states with fixture dashboards: populated, long content, quiet, new, loading and errors,
     /// plus the real window so the toolbar title, New chat and actions menu are visible.
+
+    private static func renderMissionLinks(model: AppModel, to directory: URL) async {
+        let now = Fixtures.now
+        let hour = 3_600_000.0
+        func resource(_ id: String, _ url: String, _ kind: String, task: String? = nil, title: String? = nil,
+                      externalId: String? = nil, pr: String? = nil, at: Double = 1) -> String {
+            var fields = ["\"id\":\"\(id)\"", "\"url\":\"\(url)\"", "\"kind\":\"\(kind)\"", "\"createdAt\":\(at)"]
+            if let task { fields.append("\"taskId\":\"\(task)\"") }
+            if let title { fields.append("\"title\":\"\(title)\"") }
+            if let externalId { fields.append("\"externalId\":\"\(externalId)\"") }
+            if let pr { fields.append("\"pullRequest\":\(pr)") }
+            return "{" + fields.joined(separator: ",") + "}"
+        }
+        func pullRequest(_ number: Int, _ title: String, _ state: String, merged: Double? = nil) -> String {
+            let url = "https://github.com/acme/pilot/pull/\(number)"
+            let mergedAt = merged.map { ",\"mergedAt\":\($0)" } ?? ""
+            return "{\"number\":\(number),\"url\":\"\(url)\",\"title\":\"\(title)\",\"state\":\"\(state)\",\"checkedAt\":\(now)\(mergedAt)}"
+        }
+        func prLink(_ number: Int, _ title: String, _ state: String, task: Int?, merged: Double? = nil) -> String {
+            resource("pr\(number)", "https://github.com/acme/pilot/pull/\(number)", "github.pr",
+                     task: task.map { "t\($0)" }, externalId: "acme/pilot#\(number)",
+                     pr: pullRequest(number, title, state, merged: merged), at: now - Double(1_000 - number) * hour / 10)
+        }
+        var links = [
+            resource("lp", "https://linear.app/acme/project/missions-0123456789ab", "linear.project",
+                     title: "Missions: shared goals across chats", externalId: "missions-0123456789ab"),
+            resource("li1", "https://linear.app/acme/issue/PIL-142", "linear.issue", task: "t3",
+                     title: "Restack dependent pull requests in one step", externalId: "PIL-142", at: 2),
+            resource("li2", "https://linear.app/acme/issue/PIL-138", "linear.issue", task: "t4",
+                     title: "Mission tabs freeze when switching", externalId: "PIL-138", at: 3),
+            resource("li3", "https://linear.app/acme/issue/PIL-151/overview-link-groups", "linear.issue", task: "t5",
+                     externalId: "PIL-151", at: 4),
+            resource("li4", "https://linear.app/acme/issue/PIL-120", "linear.issue", task: "t1",
+                     title: "Share the brief between chats", externalId: "PIL-120", at: 5),
+            resource("li5", "https://linear.app/acme/issue/PIL-121", "linear.issue", task: "t2",
+                     title: "Decisions override the brief", externalId: "PIL-121", at: 6),
+            resource("li6", "https://linear.app/acme/issue/PIL-122", "linear.issue", task: "t2",
+                     title: "Needs-you counts in the sidebar", externalId: "PIL-122", at: 7),
+            resource("s1", "https://acme.slack.com/archives/C1/p1111111111111111", "slack.thread",
+                     title: "#pilot-dev thread"),
+            resource("g1", "https://github.com/acme/pilot/issues/31", "github.issue", task: "t6", externalId: "acme/pilot#31"),
+            resource("u1", "https://gist.github.com/acme/optchat", "url", title: "OptChat gist"),
+            resource("u2", "https://docs.example.com/gh-stack", "url", title: "gh-stack docs"),
+            // A pull request whose state was never looked up is not guessed to be open.
+            resource("pr-unknown", "https://github.com/acme/pilot/pull/96", "github.pr", title: "Dedicated new chat",
+                     externalId: "acme/pilot#96"),
+            prLink(212, "perf(macos): build mission rows lazily", "draft", task: 4),
+            prLink(210, "feat(macos): group links by provider", "open", task: 5),
+            prLink(209, "feat(macos): show GitHub, Linear and Slack marks for links", "open", task: 6),
+        ]
+        let mergedTitles = [
+            "feat(macos): redesign mission pages as calm status views", "feat(artifacts): expose parent-scoped tools to subagents",
+            "feat(artifacts): read authorized linked cross-chat sources", "Refresh shared workspace bases safely between turns",
+            "fix(macos): reject failed native test target summaries", "test(daemon): stabilize start reference assertions",
+            "feat(chats): start a planning chat from creation forms", "fix(daemon): omit self-originated and stale settle updates",
+            "fix: bound test concurrency by default", "feat: track pull request stack positions",
+            "feat: add task deletion, ordering and bulk grouping", "feat(daemon): deliver durable batched event notices",
+        ]
+        for (index, title) in mergedTitles.enumerated() {
+            let number = 203 - index
+            links.append(prLink(number, title, "merged", task: 1 + index % 6, merged: now - Double(index + 1) * 5 * hour))
+        }
+        for (index, number) in [180, 176, 171, 160].enumerated() {
+            links.append(prLink(number, "Abandoned approach \(index + 1)", "closed", task: index + 1))
+        }
+        // The same pull request linked from the mission and from a task shows once, with its task.
+        links.append(resource("pr210-mission", "https://github.com/acme/pilot/pull/210", "github.pr", externalId: "acme/pilot#210",
+                              pr: pullRequest(210, "feat(macos): group links by provider", "open"),
+                              at: now - 790 * hour / 10))
+        let tasks = (1...6).map { number in
+            "{\"id\":\"t\(number)\",\"number\":\(number + 66),\"title\":\"Task \(number + 66)\",\"status\":\"\(number < 3 ? "done" : "in_progress")\",\"order\":\(number),\"createdAt\":1,\"updatedAt\":1}"
+        }.joined(separator: ",")
+        let json = """
+        [{"mission":{"id":"ml","projectId":"p1","title":"Pilot Mission","goal":"Share a goal across chats.","status":"active","briefRevision":1,"createdAt":\(now),"updatedAt":\(now)},
+          "decisions":[],"comments":[],"tasks":[\(tasks)],"artifacts":[],"resources":[\(links.joined(separator: ","))],"events":[]},
+         {"mission":{"id":"mn","projectId":"p1","title":"Quiet mission","goal":"No links.","status":"active","briefRevision":1,"createdAt":\(now),"updatedAt":\(now)},
+          "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]},
+         {"mission":{"id":"mo","projectId":"p1","title":"Few links","goal":"A little.","status":"active","briefRevision":1,"createdAt":\(now),"updatedAt":\(now)},
+          "decisions":[],"comments":[],"tasks":[],"artifacts":[],"events":[],"resources":[\(links.prefix(3).joined(separator: ",")),\(links[11]),\(links[13])]}]
+        """
+        guard let details = try? JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8)) else {
+            print("Invalid mission link fixture")
+            exit(1)
+        }
+        model.client.loadFixture(projects: Fixtures.projects, sessions: [])
+        model.client.loadMissionFixture(details)
+        let full = details[0]
+        model.openMission("ml")
+        model.missionTab = .overview
+        await render(MissionPage(missionId: "ml"), size: CGSize(width: 1000, height: 1500),
+                     to: directory.appending(path: "mission-links-overview.png"))
+        func section(_ detail: MissionDetail, width: CGFloat = 720, _ disclosure: MissionLinksDisclosure = MissionLinksDisclosure()) -> some View {
+            MissionLinksSection(mission: detail.mission, detail: detail, disclosure: disclosure)
+                .padding(24).frame(width: width, alignment: .leading).frame(maxHeight: .infinity, alignment: .top)
+                .background(Theme.background)
+        }
+        await render(section(full), size: CGSize(width: 720, height: 980), to: directory.appending(path: "mission-links-default.png"))
+        await render(section(full, MissionLinksDisclosure(expanded: [.linear, .open, .merged, .closed], showClosed: true, otherExpanded: true)),
+                     size: CGSize(width: 720, height: 1700), to: directory.appending(path: "mission-links-expanded.png"))
+        await render(section(full, MissionLinksDisclosure(otherExpanded: false)), size: CGSize(width: 720, height: 900),
+                     to: directory.appending(path: "mission-links-other-collapsed.png"))
+        await render(section(details[2]), size: CGSize(width: 720, height: 380), to: directory.appending(path: "mission-links-few.png"))
+        await render(section(details[1]), size: CGSize(width: 720, height: 160), to: directory.appending(path: "mission-links-empty.png"))
+        await render(section(full, width: 440), size: CGSize(width: 440, height: 980), to: directory.appending(path: "mission-links-narrow.png"))
+    }
+
     private static func renderProjectPages(model: AppModel, to directory: URL) async {
         let now = Fixtures.now
         let minute = 60_000.0
