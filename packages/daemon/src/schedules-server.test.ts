@@ -11,6 +11,7 @@ import { WebSocket } from "ws";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -41,7 +42,20 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		spawn: async () => ({ id: "spawned" }),
 	} as unknown as SessionManager;
 	const store = new ScheduleStore(join(home, "schedules.sqlite"));
-	const schedules = new ScheduleService(store, { sessions, projects });
+	const trackedItems = new TrackedItemStore(join(home, "tracked-items.sqlite"));
+	await trackedItems.load([project.id]);
+	await trackedItems.commit(project.id, "linear", [
+		{
+			externalId: "issue-1",
+			title: "Fix crash",
+			url: "https://example.com/issue/1",
+			status: "Todo",
+			metadata: {},
+			updatedAt: 1,
+		},
+	]);
+	const ticket = (await trackedItems.list({ projectId: project.id })).items[0]!;
+	const schedules = new ScheduleService(store, { sessions, projects, trackedItems });
 	await schedules.load();
 	schedules.start();
 	const server = createDaemonServer(
@@ -65,6 +79,7 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		await schedules.stop();
 		await store.close();
+		await trackedItems.close();
 		await rm(home, { recursive: true, force: true });
 	});
 	const api = (path: string, method = "GET", body?: unknown) =>
@@ -132,4 +147,34 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	assert.equal((await api(`/schedules/${cancelled.id}`, "DELETE")).status, 200);
 	await schedules.signal({ type: "wake" });
 	assert.equal(((await (await api(`/schedules/${cancelled.id}`)).json()) as ScheduledItem).state, "cancelled");
+
+	const chatTarget = {
+		kind: "chat",
+		spawn: { projectId: project.id, message: "Fix crash" },
+		trackedItemId: ticket.id,
+	};
+	assert.equal((await api("/schedules", "POST", { target: { ...chatTarget, trackedItemId: null } })).status, 400);
+	assert.equal((await api("/schedules", "POST", { target: { ...chatTarget, trackedItemId: "missing" } })).status, 404);
+	const chatResponse = await api("/schedules", "POST", { trigger: "on_wake", target: chatTarget });
+	assert.equal(chatResponse.status, 201);
+	const scheduledChat = (await chatResponse.json()) as ScheduledItem;
+	assert.deepEqual(scheduledChat.target, chatTarget);
+	assert.equal((await trackedItems.require(ticket.id)).sessionId, undefined);
+	const updatedChat = await api(`/schedules/${scheduledChat.id}`, "PATCH", { title: "Later" });
+	assert.equal(updatedChat.status, 200);
+	assert.deepEqual(((await updatedChat.json()) as ScheduledItem).target, chatTarget);
+	await waitFor(() =>
+		first.messages.some(
+			(m) =>
+				m.type === "schedules" &&
+				m.schedules.some(
+					(s) => s.id === scheduledChat.id && s.target.kind === "chat" && s.target.trackedItemId === ticket.id,
+				),
+		),
+	);
+	await schedules.signal({ type: "wake" });
+	assert.equal((await trackedItems.require(ticket.id)).sessionId, "spawned");
+	const dispatched = (await (await api(`/schedules/${scheduledChat.id}`)).json()) as ScheduledItem;
+	assert.equal(dispatched.state, "fired");
+	assert.equal(dispatched.sessionId, "spawned");
 });

@@ -6,6 +6,7 @@ import { test, type TestContext } from "node:test";
 import type { ScheduleRequest, SpawnRequest } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { ScheduleStore } from "./schedule-store.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 import {
 	ScheduleService,
 	type ScheduleClock,
@@ -55,6 +56,21 @@ class FakeTriggers implements ScheduleTriggerSource {
 async function fixture(t: TestContext, initialOnline = false) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-schedules-"));
 	const file = join(home, "schedules.sqlite");
+	const trackingFile = join(home, "tracked-items.sqlite");
+	let trackedItems = new TrackedItemStore(trackingFile);
+	await trackedItems.load(["p", "other"]);
+	for (const projectId of ["p", "other"])
+		for (const kind of ["linear", "slack"] as const)
+			await trackedItems.commit(projectId, kind, [
+				{
+					externalId: "issue-1",
+					title: "Fix crash",
+					url: "https://example.com/issue/1",
+					status: "Todo",
+					metadata: {},
+					updatedAt: 1,
+				},
+			]);
 	const clock = new FakeClock();
 	const triggers = new FakeTriggers();
 	triggers.online = initialOnline;
@@ -81,6 +97,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 	const deps = {
+		trackedItems,
 		clock,
 		triggers,
 		sessions,
@@ -100,6 +117,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 	t.after(async () => {
 		await service.stop();
 		await store.close();
+		await trackedItems.close();
 		await rm(home, { recursive: true, force: true });
 	});
 	return {
@@ -109,6 +127,9 @@ async function fixture(t: TestContext, initialOnline = false) {
 		chats,
 		file,
 		deps,
+		get trackedItems() {
+			return trackedItems;
+		},
 		settle,
 		get service() {
 			return service;
@@ -116,12 +137,16 @@ async function fixture(t: TestContext, initialOnline = false) {
 		get store() {
 			return store;
 		},
-		fail: (error: Error) => {
+		fail: (error: Error | undefined) => {
 			failure = error;
 		},
 		restart: async () => {
 			await service.stop();
 			await store.close();
+			await trackedItems.close();
+			trackedItems = new TrackedItemStore(trackingFile);
+			await trackedItems.load(["p", "other"]);
+			deps.trackedItems = trackedItems;
 			store = new ScheduleStore(file);
 			service = new ScheduleService(store, deps);
 			await service.load();
@@ -144,6 +169,119 @@ const chat = (extra: Partial<ScheduleRequest> = {}): ScheduleRequest => ({
 		},
 	},
 	...extra,
+});
+
+test("scheduled tickets survive edits and restart, then bind on dispatch exactly once", async (t) => {
+	const f = await fixture(t);
+	for (const kind of ["linear", "slack"] as const) {
+		const ticket = (await f.trackedItems.list({ projectId: "p", kind })).items[0]!;
+		const target = { ...chat().target, trackedItemId: ticket.id };
+		const item = await f.service.create(chat({ target }));
+		assert.equal((await f.trackedItems.require(ticket.id)).sessionId, undefined);
+		await f.service.update(item.id, { title: "Edited", trigger: "on_online" });
+		await f.restart();
+		assert.deepEqual(f.service.require(item.id).target, target);
+		assert.equal((await f.trackedItems.require(ticket.id)).sessionId, undefined);
+		await f.service.signal({ type: "online", online: false });
+		await f.service.signal({ type: "online", online: true });
+		const fired = f.service.require(item.id);
+		assert.equal(fired.state, "fired");
+		assert.equal(fired.sessionId, "created");
+		assert.deepEqual((await f.trackedItems.require(ticket.id)).sessionIds, ["created"]);
+		await f.service.signal({ type: "online", online: false });
+		await f.service.signal({ type: "online", online: true });
+	}
+	assert.equal(f.calls.length, 2);
+	await f.restart();
+	assert.equal(f.calls.length, 2);
+	for (const kind of ["linear", "slack"] as const)
+		assert.equal((await f.trackedItems.list({ projectId: "p", kind })).items[0]!.sessionId, "created");
+});
+
+test("ticket binding is validated on create, replacement and dispatch", async (t) => {
+	const f = await fixture(t);
+	const ticket = (await f.trackedItems.list({ projectId: "p" })).items[0]!;
+	const other = (await f.trackedItems.list({ projectId: "other" })).items[0]!;
+	const target = { kind: "chat" as const, spawn: { projectId: "p", message: "Work" }, trackedItemId: ticket.id };
+	for (const trackedItemId of [null, 1, "", " ", "x".repeat(201), "missing", other.id])
+		await assert.rejects(f.service.create({ target: { ...target, trackedItemId } } as ScheduleRequest));
+	await assert.rejects(
+		f.service.create({ target: { ...target, spawn: { cwd: "/tmp", message: "Work" } } }),
+		/project/,
+	);
+	await assert.rejects(
+		f.service.create({
+			target: {
+				kind: "message",
+				sessionId: "existing",
+				message: "Work",
+				trackedItemId: ticket.id,
+			},
+		} as ScheduleRequest),
+		/only valid for a chat/,
+	);
+	const item = await f.service.create({ trigger: "on_wake", target });
+	await assert.rejects(f.service.update(item.id, { target: { ...target, trackedItemId: other.id } }), /project/);
+	assert.deepEqual(f.service.require(item.id).target, target);
+	f.trackedItems.require = async () => {
+		throw new NotFound("Ticket was removed");
+	};
+	await f.service.signal({ type: "wake" });
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.service.require(item.id).state, "failed");
+	assert.match(f.service.require(item.id).error!, /Ticket was removed/);
+});
+
+test("complete target replacement can change or remove the scheduled ticket", async (t) => {
+	const f = await fixture(t);
+	const linear = (await f.trackedItems.list({ projectId: "p", kind: "linear" })).items[0]!;
+	const slack = (await f.trackedItems.list({ projectId: "p", kind: "slack" })).items[0]!;
+	const target = { kind: "chat" as const, spawn: { projectId: "p", message: "Work" }, trackedItemId: linear.id };
+	const item = await f.service.create({ trigger: "on_wake", target });
+	const replaced = await f.service.update(item.id, { target: { ...target, trackedItemId: slack.id } });
+	assert.deepEqual(replaced.target, { ...target, trackedItemId: slack.id });
+	const unbound = await f.service.update(item.id, { target: { kind: "chat", spawn: target.spawn } });
+	assert.deepEqual(unbound.target, { kind: "chat", spawn: target.spawn });
+	await f.restart();
+	await f.service.signal({ type: "wake" });
+	assert.equal(f.service.require(item.id).state, "fired");
+	assert.equal((await f.trackedItems.require(linear.id)).sessionId, undefined);
+	assert.equal((await f.trackedItems.require(slack.id)).sessionId, undefined);
+});
+
+test("cancelled or failed admission never binds; binding failure retains the created chat without replay", async (t) => {
+	const f = await fixture(t);
+	const ticket = (await f.trackedItems.list({ projectId: "p" })).items[0]!;
+	const request: ScheduleRequest = {
+		trigger: "on_wake",
+		target: {
+			kind: "chat",
+			spawn: { projectId: "p", message: "Work" },
+			trackedItemId: ticket.id,
+		},
+	};
+	const cancelled = await f.service.create(request);
+	await f.service.remove(cancelled.id);
+	await f.service.signal({ type: "wake" });
+	assert.equal(f.calls.length, 0);
+	const rejected = await f.service.create(request);
+	f.fail(new Error("Admission failed"));
+	await f.service.signal({ type: "wake" });
+	assert.equal(f.service.require(rejected.id).state, "failed");
+	assert.equal((await f.trackedItems.require(ticket.id)).sessionId, undefined);
+	await f.restart();
+	f.fail(undefined);
+	f.trackedItems.patch = async () => {
+		throw new Error("Binding failed");
+	};
+	const item = await f.service.create(request);
+	await f.service.signal({ type: "wake" });
+	assert.equal(f.service.require(item.id).state, "failed");
+	assert.equal(f.service.require(item.id).sessionId, "created");
+	assert.match(f.service.require(item.id).error!, /Binding failed/);
+	await f.service.signal({ type: "wake" });
+	await f.restart();
+	assert.equal(f.calls.length, 2);
 });
 
 test("wake then online survives restart and fires once with the full spawn request", async (t) => {

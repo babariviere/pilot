@@ -3,7 +3,12 @@ import type { SpawnRequest } from "./index.ts";
 /** on_back is wake followed by reachability ("When I'm back"). All triggers are one-shot. */
 export type ScheduleTrigger = "at" | "on_wake" | "on_online" | "on_back";
 export type ScheduleTarget =
-	| { kind: "chat"; spawn: SpawnRequest }
+	| {
+			kind: "chat";
+			spawn: SpawnRequest;
+			/** Bound to the created chat on dispatch. */
+			trackedItemId?: string;
+	  }
 	| { kind: "message"; sessionId: string; message: string };
 export type ScheduleState = "pending" | "dispatching" | "fired" | "failed" | "cancelled";
 

@@ -940,7 +940,9 @@ reports), producing a morning summary in the app and Slack.
   chats, Home and archives or reopening the window. Keep the new-task form and its base-branch
   selection too. Save drafts atomically to a private local JSON file in
   `~/Library/Application Support/Pilot/Drafts/drafts.json`, restoring text, attachments, queued edits
-  and new-task selections across app restarts. Missing images do not prevent text restoration;
+  and new-task selections across app restarts. The new-task draft also keeps its mission and linked
+  ticket (optional fields, so older drafts decode without them); sending or resetting the chat context
+  clears them. Missing images do not prevent text restoration;
   unreadable or unsupported draft files are preserved and reported rather than overwritten.
   Navigation never sends or clears drafts. Sending clears the submitted draft, and an explicit debug prefill
   replaces the new-task draft without being erased by an older pending spawn.
@@ -1160,6 +1162,9 @@ reports), producing a morning summary in the app and Slack.
   a message target retains its chat ID and follow-up text. Triggers are `at` (epoch milliseconds),
   `on_wake`, `on_online` (next offline-to-online edge), and default `on_back` ("When I'm back":
   next wake, then network reachable). `at` defers while offline and catches up when online.
+- New-chat targets can retain a `trackedItemId`, validated against the destination project on save
+  and dispatch. The ticket is linked only after the chat starts, without writing to its source.
+  Binding failure surfaces as a failed schedule retaining the created chat ID, never a replay.
 - Pending items can be edited or cancelled. A revision/state compare-and-swap commits a
   `dispatching` claim before any session effect, so racing triggers, edits and cancellation have
   one winner. Dispatch is serial and follow-ups use the durable input key `schedule:<id>`.

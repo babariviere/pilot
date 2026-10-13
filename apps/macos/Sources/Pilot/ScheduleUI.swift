@@ -51,7 +51,7 @@ enum ScheduleText {
             return firstLine(item.error).map { "Couldn’t start: \($0)" } ?? "Couldn’t start."
         }
         switch item.target {
-        case let .chat(spawn):
+        case let .chat(spawn, _):
             return ["New chat", projectName, spawn.mode == .ask ? "Ask" : nil].compactMap { $0 }.joined(separator: " · ")
         case .message:
             return chatTitle.map { "Follow-up in \($0)" } ?? "Follow-up message"

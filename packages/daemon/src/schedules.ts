@@ -11,6 +11,7 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ScheduleStore } from "./schedule-store.ts";
+import type { TrackedItemStore } from "./tracked-items.ts";
 
 /** Detection plugs in here. Initial online state is not an offline→online edge. */
 export type ScheduleTriggerEvent = { type: "wake" } | { type: "online"; online: boolean; initial?: boolean };
@@ -44,6 +45,7 @@ export interface ScheduleServiceDeps {
 	sessions: ScheduleDispatch;
 	projects: Pick<ProjectStore, "require">;
 	missions?: Pick<MissionStore, "require">;
+	trackedItems?: Pick<TrackedItemStore, "require" | "patch">;
 	clock?: ScheduleClock;
 	triggers?: ScheduleTriggerSource;
 }
@@ -197,10 +199,14 @@ export class ScheduleService {
 			throw error;
 		}
 		let next: ScheduledItem;
+		let sessionId: string | undefined;
 		try {
-			let sessionId: string;
 			if (claimed.target.kind === "chat") {
+				// Recheck the local ticket's project binding before admission.
+				await this.validateTrackedItem(claimed.target.trackedItemId, claimed.projectId);
 				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn)).id;
+				if (claimed.target.trackedItemId)
+					await this.deps.trackedItems!.patch(claimed.target.trackedItemId, { sessionId });
 			} else {
 				sessionId = claimed.target.sessionId;
 				if (!this.deps.sessions.get(sessionId)) throw new NotFound("Target chat was deleted");
@@ -210,6 +216,7 @@ export class ScheduleService {
 		} catch (error) {
 			next = {
 				...claimed,
+				sessionId,
 				state: "failed",
 				error: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
 				updatedAt: this.time.now(),
@@ -220,7 +227,7 @@ export class ScheduleService {
 	}
 	async create(request: ScheduleRequest): Promise<ScheduledItem> {
 		this.assertOpen();
-		const data = this.validate(request);
+		const data = await this.validate(request);
 		const now = this.time.now();
 		return this.store.create({
 			...data,
@@ -246,7 +253,7 @@ export class ScheduleService {
 		if (patch.expectedRevision !== undefined && patch.expectedRevision !== old.revision)
 			throw new Conflict("Schedule changed; reload before editing");
 		const trigger = patch.trigger ?? old.trigger;
-		const data = this.validate({
+		const data = await this.validate({
 			title: patch.title ?? old.title,
 			trigger,
 			at: trigger === "at" ? (patch.at ?? old.at) : patch.at,
@@ -296,9 +303,17 @@ export class ScheduleService {
 	private assertOpen(): void {
 		if (this.stopped) throw new ServiceUnavailable("Scheduler stopped");
 	}
-	private validate(
+	private async validateTrackedItem(id: string | undefined, projectId: string | undefined): Promise<void> {
+		if (id === undefined) return;
+		if (typeof id !== "string" || !id.trim() || id.length > 200)
+			throw new Error("trackedItemId must be 1 to 200 characters");
+		if (!this.deps.trackedItems) throw new ServiceUnavailable("Tracking unavailable");
+		const item = await this.deps.trackedItems.require(id);
+		if (!projectId || item.projectId !== projectId) throw new Error("Ticket must belong to this project");
+	}
+	private async validate(
 		request: ScheduleRequest,
-	): Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId"> {
+	): Promise<Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId">> {
 		if (!request || typeof request !== "object" || Array.isArray(request))
 			throw new Error("Schedule request is required");
 		const trigger = request.trigger === undefined ? "on_back" : request.trigger;
@@ -362,9 +377,15 @@ export class ScheduleService {
 				(!project || copy.cwd || (copy.mode !== "ask" && (copy.workspace ?? project.workspace) === "direct"))
 			)
 				throw new Error("baseBranch requires a branch-backed project");
-			target = { kind: "chat", spawn: copy };
+			await this.validateTrackedItem(raw.trackedItemId, projectId);
+			target = {
+				kind: "chat",
+				spawn: copy,
+				...(raw.trackedItemId !== undefined ? { trackedItemId: raw.trackedItemId } : {}),
+			};
 			message = copy.message;
 		} else if (raw.kind === "message") {
+			if ("trackedItemId" in raw) throw new Error("trackedItemId is only valid for a chat target");
 			if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) throw new Error("sessionId is required");
 			const session = this.deps.sessions.get(raw.sessionId);
 			if (!session) throw new NotFound("Unknown target chat");

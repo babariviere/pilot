@@ -16,7 +16,7 @@ struct TrackingFixture {
 }
 
 /// Binds a new chat to the tracked item it was started from. Shown as a chip in the composer.
-struct TrackedItemBinding: Hashable {
+struct TrackedItemBinding: Hashable, Codable {
     let itemId: String
     let projectId: String
     /// "ENG-123" or "#bugs".

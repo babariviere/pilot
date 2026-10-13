@@ -98,7 +98,7 @@ private struct ScheduledCard: View {
 
     private func detail(_ item: ScheduledItem) -> String {
         switch item.target {
-        case let .chat(spawn):
+        case let .chat(spawn, _):
             let project = app.client.project(item.projectId ?? spawn.projectId)
             return ScheduleText.detail(item, projectName: project?.name ?? spawn.cwd?.abbreviatingHome)
         case let .message(sessionId, _):

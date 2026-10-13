@@ -7,13 +7,14 @@ import Testing
         projectId: "p", message: "Do work", title: "Work", model: "provider/model", thinking: "high",
         baseBranch: "release", mode: .ask, missionId: "m"
     )
-    let targets: [ScheduleTarget] = [.chat(spawn), .message(sessionId: "s", message: "Continue")]
+    let targets: [ScheduleTarget] = [.chat(spawn, trackedItemId: "ticket"), .message(sessionId: "s", message: "Continue")]
     for target in targets {
         let request = ScheduleRequest(trigger: .onBack, target: target)
         let encoded = try JSONEncoder().encode(request)
         let decoded = try JSONDecoder().decode(ScheduleRequest.self, from: encoded)
         switch decoded.target {
-        case let .chat(value):
+        case let .chat(value, trackedItemId):
+            #expect(trackedItemId == "ticket")
             #expect(value.missionId == "m")
             #expect(value.projectId == "p")
             #expect(value.mode == .ask)
@@ -47,6 +48,12 @@ import Testing
     }
     #expect(items.count == 2)
     #expect(items[0].wakeObserved == true)
+    guard case let .chat(_, trackedItemId) = items[0].target else {
+        Issue.record("Expected chat target"); return
+    }
+    #expect(trackedItemId == nil)
+    let legacyTarget = try JSONSerialization.jsonObject(with: JSONEncoder().encode(items[0].target)) as? [String: Any]
+    #expect(legacyTarget?["trackedItemId"] == nil)
     #expect(items[1].state == .failed)
     #expect(items[1].claimedAt == 2500)
     #expect(items[1].sessionId == "s")
