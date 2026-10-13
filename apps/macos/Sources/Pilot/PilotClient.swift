@@ -9,6 +9,9 @@ final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var projects: [Project] = []
     @Published private(set) var schedules: [ScheduledItem] = []
+    @Published private(set) var trackingSources: [TrackingSource] = []
+    /// Invalidation only. Inbox views can refresh a bounded page; project pages already get dashboard updates.
+    var onTrackedItemsChanged: ((String) -> Void)?
     @Published private(set) var hasProjectSnapshot = false
     @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
     private var artifactVersions: [String: Int] = [:]
@@ -349,6 +352,27 @@ final class PilotClient: ObservableObject {
     func deleteProject(_ id: String) async throws {
         let _: Ack = try await call("api/projects/\(id)", method: "DELETE", body: [String: String]())
         projects.removeAll { $0.id == id }
+    }
+
+    func sources(projectId: String? = nil) async throws -> [TrackingSource] {
+        try await missionRequest(["sources"], query: projectId.map { [URLQueryItem(name: "projectId", value: $0)] } ?? [])
+    }
+
+    func pollSource(_ id: String) async throws -> TrackingSource {
+        try await call(url: missionURL(["sources", id, "poll"]), body: [String: String]())
+    }
+
+    func trackedItems(projectId: String, kind: TrackedKind? = nil, dismissed: Bool = false,
+                      limit: Int = 100, offset: Int = 0) async throws -> TrackedItemList {
+        var query = [URLQueryItem(name: "projectId", value: projectId),
+                     URLQueryItem(name: "dismissed", value: String(dismissed)),
+                     URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "offset", value: String(offset))]
+        if let kind { query.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
+        return try await missionRequest(["tracked-items"], query: query)
+    }
+
+    func updateTrackedItem(_ id: String, _ patch: TrackedItemPatch) async throws -> TrackedItem {
+        try await call(url: missionURL(["tracked-items", id]), method: "PATCH", body: patch)
     }
 
     private func upsert(_ project: Project) {
@@ -951,6 +975,10 @@ final class PilotClient: ObservableObject {
         switch message {
         case let .schedules(list):
             schedules = list
+        case let .sources(list):
+            if trackingSources != list { trackingSources = list }
+        case let .trackedChanged(projectId):
+            onTrackedItemsChanged?(projectId)
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true

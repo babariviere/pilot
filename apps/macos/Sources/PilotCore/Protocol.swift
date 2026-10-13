@@ -251,6 +251,7 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let workspace: String?
     /// Whether publishing requires a pull request. Omitted by older daemons; defaults to true.
     public let requirePullRequest: Bool?
+    public let tracking: ProjectTrackingConfig?
     public let createdAt: Double
 
     public var usesPrivateClones: Bool { workspace != "direct" }
@@ -258,7 +259,7 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
 
     public init(
         id: String, name: String, path: String, model: String? = nil, workspace: String? = nil,
-        requirePullRequest: Bool? = nil, createdAt: Double
+        requirePullRequest: Bool? = nil, tracking: ProjectTrackingConfig? = nil, createdAt: Double
     ) {
         self.id = id
         self.name = name
@@ -266,6 +267,7 @@ public struct Project: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.model = model
         self.workspace = workspace
         self.requirePullRequest = requirePullRequest
+        self.tracking = tracking
         self.createdAt = createdAt
     }
 }
@@ -277,16 +279,18 @@ public struct ProjectRequest: Codable, Sendable {
     public var model: String?
     public var workspace: String?
     public var requirePullRequest: Bool?
+    public var tracking: ProjectTrackingConfig?
 
     public init(
         path: String? = nil, name: String? = nil, model: String? = nil, workspace: String? = nil,
-        requirePullRequest: Bool? = nil
+        requirePullRequest: Bool? = nil, tracking: ProjectTrackingConfig? = nil
     ) {
         self.path = path
         self.name = name
         self.model = model
         self.workspace = workspace
         self.requirePullRequest = requirePullRequest
+        self.tracking = tracking
     }
 }
 

@@ -233,6 +233,9 @@ final class ProjectEditor: ObservableObject {
     @Published var model = ""
     @Published var privateClones = true
     @Published var requirePullRequest = true
+    @Published var slackChannels = ""
+    @Published var linearTeam = ""
+    private var trackingMcp: [String: SourceMcpConfig]?
     @Published var error: String?
 
     func load(_ project: Project) {
@@ -240,13 +243,22 @@ final class ProjectEditor: ObservableObject {
         model = project.model ?? ""
         privateClones = project.usesPrivateClones
         requirePullRequest = project.effectiveRequirePullRequest
+        slackChannels = project.tracking?.slackChannels.joined(separator: ", ") ?? ""
+        linearTeam = project.tracking?.linearTeam ?? ""
+        trackingMcp = project.tracking?.mcp
         error = nil
     }
 
     var request: ProjectRequest {
         ProjectRequest(
             name: name, model: model, workspace: privateClones ? "clone" : "direct",
-            requirePullRequest: requirePullRequest
+            requirePullRequest: requirePullRequest,
+            tracking: ProjectTrackingConfig(
+                slackChannels: slackChannels.components(separatedBy: CharacterSet(charactersIn: ",\n"))
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
+                linearTeam: linearTeam.trimmingCharacters(in: .whitespacesAndNewlines),
+                mcp: trackingMcp
+            )
         )
     }
 }
@@ -293,6 +305,13 @@ private struct ProjectSettings: View {
                         Text("Require a pull request when publishing changes. Disabling permits direct pushes to the default branch. Changes take effect when a session worker next starts.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Section("Tracking") {
+                            TextField("Linear team", text: $editor.linearTeam, prompt: Text("Team name or ID"))
+                            TextField("Slack channels", text: $editor.slackChannels, prompt: Text("Channel names or IDs, comma-separated"))
+                            Text("Leave empty to disable tracking. Uses your pi MCP servers and sign-in. Sources never post or start chats automatically.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                         if let error = editor.error { Text(error).foregroundStyle(.red) }
                         HStack {
                             Spacer()

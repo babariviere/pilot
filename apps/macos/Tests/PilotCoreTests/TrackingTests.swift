@@ -1,0 +1,45 @@
+import Foundation
+import Testing
+@testable import PilotCore
+
+@Test func trackingDecodesLegacyProjectsAndConfiguration() throws {
+    let old = try JSONDecoder().decode(Project.self, from: Data(#"{"id":"p","name":"Repo","path":"/repo","createdAt":1}"#.utf8))
+    #expect(old.tracking == nil)
+    let request = ProjectRequest(tracking: .init(slackChannels: ["C1", "bugs"], linearTeam: "ENG",
+        mcp: ["linear": .init(server: "unified", tools: ["issues": "LINEAR_LIST"], dispatchTool: "CALL_TOOL")]))
+    let json = try JSONValue.decode(JSONEncoder().encode(request))
+    #expect(json["tracking"]?["slackChannels"]?.array?.count == 2)
+    #expect(json["tracking"]?["mcp"]?["linear"]?["server"]?.string == "unified")
+}
+
+@Test func trackingDecodesItemsStatusAndWebSocketChanges() throws {
+    let json = Data(#"""
+    {"items":[{"id":"i","projectId":"p","kind":"linear","externalId":"ENG-1","title":"Bug","url":"https://example.com",
+      "status":"Todo","metadata":{"priority":2,"assignee":null,"nested":{"ok":true}},"dismissed":true,"sessionId":"s",
+      "missionId":"m","createdAt":1,"updatedAt":2}],"total":1}
+    """#.utf8)
+    let list = try JSONDecoder().decode(TrackedItemList.self, from: json)
+    #expect(list.items[0].metadata["priority"] == .number(2))
+    #expect(list.items[0].dismissed)
+    #expect(list.items[0].missionId == "m")
+    let source = Data(#"""
+    {"type":"sources","sources":[{"id":"p:linear","projectId":"p","kind":"linear","label":"Linear","configured":true,
+      "status":"sign_in_required","mcp":{"server":"linear","tools":{"issues":"list_issues"}},"signInCommand":"pi mcp login linear"}]}
+    """#.utf8)
+    guard case let .sources(sources) = try ServerUpdate.decode(source) else { Issue.record("Expected sources"); return }
+    #expect(sources[0].status == .signInRequired)
+    #expect(sources[0].signInCommand == "pi mcp login linear")
+    guard case let .trackedChanged(projectId) = try ServerUpdate.decode(Data(#"{"type":"tracked.changed","projectId":"p"}"#.utf8))
+    else { Issue.record("Expected invalidation"); return }
+    #expect(projectId == "p")
+    #expect(try JSONDecoder().decode(DashboardSourceStatus.self, from: Data(#""idle""#.utf8)) == .idle)
+    #expect(try JSONDecoder().decode(DashboardSourceStatus.self, from: Data(#""not_configured""#.utf8)) == .notConfigured)
+}
+
+@Test func trackedPatchDistinguishesMissingLinksFromClearedLinks() throws {
+    let patch = TrackedItemPatch(dismissed: true, clearSession: true)
+    let json = try JSONValue.decode(JSONEncoder().encode(patch))
+    #expect(json["sessionId"] == .null)
+    #expect(json["missionId"] == nil)
+    #expect(json["dismissed"] == .bool(true))
+}

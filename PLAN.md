@@ -601,6 +601,53 @@ time; no duplicate sessions or pushes across restarts; Pilot never reacts to its
 
 ### 6.3 Slack: bug reports (M5)
 
+**Tracking foundation (implemented).** Opt-in project settings hold `tracking.slackChannels: string[]`
+and `tracking.linearTeam?: string`. Empty settings fetch nothing. The daemon stores external items
+in `tracked-items.sqlite`, shared by Linear and Slack, deduped by project/kind/external id. Refreshes
+preserve dismissals and linked chat/mission IDs, ignore older versions, and commit a bounded page with
+its incremental checkpoint atomically. External text is data, never instructions or an automatic chat start.
+
+`SourceRegistry.register(kind, poller)` supplies adapters with config, cursor, cancellation and a
+logical-tool MCP caller. Manual polls are single-flight per project/source, with at most two in flight
+globally and no request backlog. Config changes and shutdown cancel obsolete work. Source status is
+independent per project, including idle, syncing, error and sign-in required. SQLite and MCP config/auth
+work run on workers, not the daemon event loop; dashboard reads use five cached lightweight rows and
+counts per source through `DashboardProviders.tracked`. RPC queues and page sizes are bounded (64
+requests, 100 items/256 KiB per poll page, 512 KiB MCP result). Socket changes are coalesced and retain
+last data on error. There is no background polling yet.
+
+**Access.** Reuse pi's user `mcp.json` and locked `mcp-auth.json`, including OAuth refreshes and
+`pi mcp login <server>`; no new API tokens or browser sign-in from the daemon. SDK 1.0.4 exports
+`createMcpExtension`, but not standalone config/auth/connection helpers, so the small daemon client
+isolates the pinned internal compatibility boundary in `source-mcp-worker.ts` (covered by a real
+local MCP/OAuth fixture). It connects only the selected server per call and closes it afterward.
+Repository-local MCP files are not loaded by tracking. Disabled/hidden servers/tools are not called.
+Optional per-project `tracking.mcp.linear/slack` bindings override `server`, logical `tools`
+(Linear: `issues`; Slack: `history`, `thread`) and an optional `dispatchTool` such as `CALL_TOOL`.
+Overrides are API-configurable and preserved by Project settings.
+
+**Payload verification (2026-10-13, read-only).** Prefer dedicated `linear/list_issues`: JSON
+`issues`, `hasNextPage`, `cursor` and requested fields. Prefer dedicated
+`slack/slack_read_channel` and `slack_read_thread`: channel history returns a JSON envelope with
+formatted `messages` text (message TS and thread delimiters) and `pagination_info`, not structured
+message rows. Public search similarly wraps formatted `results` text. Slack normalization must
+explicitly validate/parse that format; the framework JSON decoder deliberately does not invent
+structured records from markdown. Unified `stoik_data.SERVICES` reports Linear and Slack disabled
+for this account, so their payloads could not be verified without changing service settings. No
+settings were changed. Dedicated defaults are configurable, not a claim that unified payloads work.
+Actual Linear polling and Slack parsing/classification, scheduling and inbox actions remain follow-up
+work; the framework ships no source pollers and reports an unavailable adapter on manual poll until
+one is registered. It never posts to Linear or Slack.
+
+**Verification.** Store/restart/dedupe/action tests, config/cursor/cancellation/concurrency tests, HTTP/WS
+dashboard integration, a local real MCP fixture (stored OAuth, required sign-in, dispatcher, write-tool
+refusal and cancellation), and Swift decoding/editor tests cover the foundation. A 10,000-item disk
+run (100 pages, ~700 bytes metadata/item) took 2.923 s, with 127.8 ms p95 commit RPC latency and
+12.67 ms daemon event-loop p99; an idle baseline under concurrent builds measured 19.91 ms p99
+(noisy measurements, not a speedup claim). Dashboard state remained five rows plus the full count.
+Real remote adapter throughput and app scrolling during live source traffic remain unverified until
+the pollers and inbox are implemented.
+
 **Triggers.** Messages in allowlisted channels that mention `@pilot`, or a `:pilot:` reaction on a message.
 
 **Source.** Socket Mode (works locally, no public URL); Events API when hosted.
@@ -1021,7 +1068,8 @@ reports), producing a morning summary in the app and Slack.
 | `/api/missions/:id/tasks` (POST), `/tasks/:taskId` (PATCH, DELETE), `/tasks/:taskId/claim`, `/tasks/:taskId/start` | Tasks, atomic claims and Start chat (returns the new session) |
 | `/api/missions/:id/decisions`, `/comments`, `/resources`, `/artifacts` (POST, PATCH/DELETE by id), `/events` (GET, POST) | Decisions, anchored comments, external links, artifact links and activity |
 | `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
-| `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
+| `GET /api/sources?projectId=...`, `POST /api/sources/:id/poll` | Project-scoped tracking status and single-flight manual poll; id is `<projectId>:linear/slack`; WS `sources` sends status on connection/change |
+| `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or linked chat/mission (null clears). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
 | `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first once readiness exists), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
 | `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |

@@ -271,6 +271,8 @@ public struct DashboardScheduledItem: Codable, Identifiable, Equatable, Sendable
 }
 
 public enum DashboardSourceStatus: String, LenientStringEnum {
+    case notConfigured = "not_configured"
+    case idle
     case ok
     case syncing
     case signInRequired = "sign_in_required"
