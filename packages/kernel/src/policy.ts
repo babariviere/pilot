@@ -1,5 +1,6 @@
 /** Pilot's rules for agents: where they work, how they deliver, and what they may not do on GitHub. */
-import { type Extension, hook, section, ToolTask } from "@earendil-works/pi-durable";
+import { type Extension, hook, section, ToolTask, type PromptInput } from "@earendil-works/pi-durable";
+import type { Context } from "@earendil-works/chord";
 
 export interface WorkspaceContext {
 	/** The user's checkout this isolated workspace came from. */
@@ -236,12 +237,14 @@ export function withPilotPolicy(
 	context: PilotContext,
 	artifactsAvailable: () => boolean = () => false,
 	mission: () => MissionContext | undefined = () => undefined,
+	prepareTurn?: (input: PromptInput, context: Context) => Promise<void>,
 ): Extension {
 	return {
 		...extension,
 		sections: [
 			...(extension.sections ?? []),
-			section("pilot", () => {
+			section("pilot", async (input, requestContext) => {
+				await prepareTurn?.(input, requestContext);
 				const current = mission();
 				const prompt = pilotPrompt(context, artifactsAvailable());
 				return current ? `${prompt}\n${missionPrompt(current, context.ghStack)}` : prompt;

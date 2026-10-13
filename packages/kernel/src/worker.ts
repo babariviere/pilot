@@ -5,7 +5,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
 import type { MissionCall } from "./mission-tools.ts";
-import type { MissionContext } from "./policy.ts";
+import type { MissionContext, WorkspaceContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
 
@@ -120,6 +120,17 @@ export function runKernelWorker(): void {
 	/** Latest context sent while the kernel was still starting. */
 	let pendingMission: { context?: MissionContext } | undefined;
 	const daemonCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+	const workspaceCalls = new Map<string, (workspace?: WorkspaceContext) => void>();
+	const prepareWorkspace = () =>
+		new Promise<WorkspaceContext | undefined>((resolve) => {
+			const callId = randomUUID();
+			// Do not time out into a model request while the daemon might still be changing files.
+			workspaceCalls.set(callId, resolve);
+			void send({ type: "workspace.prepare", callId }).catch(() => {
+				workspaceCalls.delete(callId);
+				void shutdown(1);
+			});
+		});
 	/** Subagent commands may wait on a child worker; they never block session commands. */
 	const subagentCommands = new Set<Promise<void>>();
 	let exiting = false;
@@ -258,6 +269,11 @@ export function runKernelWorker(): void {
 			else call?.resolve(command.result ?? (command.type === "mission.result" ? null : undefined));
 			return;
 		}
+		if (command.type === "workspace.prepared") {
+			workspaceCalls.get(command.callId)?.(command.workspace);
+			workspaceCalls.delete(command.callId);
+			return;
+		}
 		if (command.type === "mission.context") {
 			if (session) session.setMission(command.context);
 			else pendingMission = { ...(command.context ? { context: command.context } : {}) };
@@ -279,6 +295,7 @@ export function runKernelWorker(): void {
 					callMission,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
+					prepareWorkspace,
 				});
 				if (pendingMission) opened.setMission(pendingMission.context);
 				session = opened;

@@ -49,7 +49,9 @@ export const run: Runner = async (file, args, cwd, timeoutMs = 120_000, signal, 
 	if (result.timedOut) throw new Error(`Workspace command timed out: ${file} ${args.join(" ")}`);
 	if (result.overflowed) throw new Error("Workspace command output exceeded 16 MiB");
 	if (result.code !== 0) throw new Error(`${file} ${args.join(" ")} failed: ${result.stderr.trim() || result.code}`);
-	return result.stdout.toString("utf8").trim();
+	// jj reports unintegrated operation IDs on stderr, even on success. Callers need the ID to
+	// inspect a trial before integrating it; ordinary command output remains stdout-only.
+	return (result.stdout.toString("utf8") + (args.includes("--no-integrate-operation") ? result.stderr : "")).trim();
 };
 
 async function attempt(runner: Runner, file: string, args: string[], cwd: string): Promise<string | undefined> {

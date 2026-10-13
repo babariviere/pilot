@@ -351,6 +351,16 @@ Each backlog produces one notice with at most 100 one-line summaries (500 charac
 overflow count linking readers to activity for additional groups. All raw events remain in activity.
 Waiting-on-user triggers remain deferred until that lifecycle signal exists. Autopilot is not enabled.
 
+An active coordinator's shared jj workspace refreshes from its current base branch before each new
+turn (including queued user inputs and notices), at most once per ten minutes, and after a linked PR
+merges. A merge during work waits for a safe boundary; idle chats have no refresh timer. Fetching uses
+the private shared-repository base import. Only this chat's proven changes are rebased, after an
+unintegrated trial confirms no conflicts or changes to another chat's history or bookmarks. Identical
+file/blob transitions already merged upstream are not replayed, including squash merges. Otherwise
+the working copy stays behind and a mission comment explains why. Refresh also clears a stale working
+copy. Promotion detaches the old task bookmark association without deleting the bookmark. Chat details
+show the current base and refresh age; the next system prompt uses that base. Other chats do not refresh.
+
 Every wake-up adds to the coordinator's context, so pilotd compacts it while idle. After five minutes
 idle (the prompt-cache lifetime, before the ten-minute park), it queues a manual compaction when the
 context is at least 40% of the window or 100k tokens, whichever is lower. It skips chats with a pending

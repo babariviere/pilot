@@ -50,3 +50,16 @@ import Testing
     #expect(explicit.workspaceLabel == "Isolated workspace")
     #expect(explicit.sourceLabel == "origin/feat/billing")
 }
+
+@Test func currentWorkspaceBaseRoundTripsAndShowsRefreshAge() throws {
+    let session = SessionSummary(id: "lead", title: "Lead", cwd: "/workspace", createdAt: 0, updatedAt: 0,
+                                 state: "idle", sourceBranch: "main", activeMissionCoordinator: true,
+                                 workspaceBase: "1234567890abcdef", workspaceUpdatedAt: 60_000)
+    #expect(session.workspaceBaseLabel(now: Date(timeIntervalSince1970: 181)) == "on main @ 12345678, updated 2 min ago")
+    #expect(session.workspaceBaseLabel(now: Date(timeIntervalSince1970: 0)) == "on main @ 12345678, updated 0 min ago")
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session)) == session)
+    let behind = SessionSummary(id: "lead", title: "Lead", cwd: "/workspace", createdAt: 0, updatedAt: 0,
+                                state: "idle", sourceBranch: "main", activeMissionCoordinator: true,
+                                workspaceBase: "1234567890abcdef", workspaceBehind: "Conflict")
+    #expect(behind.workspaceBaseLabel() == "behind main @ 12345678, not yet updated")
+}

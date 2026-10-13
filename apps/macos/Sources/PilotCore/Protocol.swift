@@ -31,6 +31,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let workspace: WorkspaceMode?
     /// Nil for legacy clones and direct checkouts.
     public let workspaceStorage: WorkspaceStorage?
+    public let workspaceBase: String?
+    public let workspaceUpdatedAt: Double?
+    public let workspaceBehind: String?
     /// Epoch milliseconds when the working directory was reclaimed; restored from its pinned jj snapshot on resume.
     public let workspaceReclaimedAt: Double?
     public let workspaceCleanupError: String?
@@ -111,6 +114,14 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var isArchived: Bool { archivedAt != nil }
     public var isPinned: Bool { pinned ?? false }
     public var isActiveMissionCoordinator: Bool { activeMissionCoordinator ?? false }
+    public func workspaceBaseLabel(now: Date = Date()) -> String? {
+        guard isActiveMissionCoordinator, let workspaceBase else { return nil }
+        let prefix = workspaceBehind == nil ? "on" : "behind"
+        let base = "\(prefix) \(sourceBranch ?? "base") @ \(workspaceBase.prefix(8))"
+        guard let workspaceUpdatedAt else { return "\(base), not yet updated" }
+        let minutes = max(0, Int((now.timeIntervalSince1970 * 1000 - workspaceUpdatedAt) / 60_000))
+        return "\(base), updated \(minutes) min ago"
+    }
     public var hasUnpublishedWork: Bool { unpublishedWork ?? false }
     /// Visible state eligibility. The daemon also rejects un-stopped durable work after a failure.
     public var canArchive: Bool { !isArchived && !isWorking }
@@ -127,7 +138,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
         branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
-        unpublishedWork: Bool? = nil
+        unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
+        workspaceBehind: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -136,6 +148,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.mode = mode
         self.workspace = workspace
         self.workspaceStorage = workspaceStorage
+        self.workspaceBase = workspaceBase
+        self.workspaceUpdatedAt = workspaceUpdatedAt
+        self.workspaceBehind = workspaceBehind
         self.workspaceReclaimedAt = workspaceReclaimedAt
         self.workspaceCleanupError = workspaceCleanupError
         self.sourceBranch = sourceBranch

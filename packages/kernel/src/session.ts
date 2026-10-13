@@ -54,6 +54,8 @@ import { NativeAdapter } from "./native-adapter.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
 import { refActivity } from "./ref-activity.ts";
+import { turnPreparation } from "./turn-preparation.ts";
+import type { WorkspaceContext } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { editQueuedMessage, queueUpdateForDisplay, removeQueuedMessage, watchQueue } from "./queue.ts";
 import { InputOrigins } from "./input-origin.ts";
@@ -103,6 +105,7 @@ export interface KernelSessionHooks {
 	callMission?: MissionCall;
 	/** Read-only artifact references, authorized by pilotd on every call. */
 	readArtifactReference?: ArtifactToolOptions["readReference"];
+	prepareWorkspace?(): Promise<WorkspaceContext | undefined>;
 }
 
 export class KernelSession {
@@ -189,6 +192,17 @@ export class KernelSession {
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage, active), detectGhStack(spec.cwd)]);
 			const pilot = { ...spec.pilot, ghStack };
+			const prepareWorkspace = hooks.prepareWorkspace
+				? turnPreparation(
+						owned.storage,
+						async () => {
+							if (mission.current?.coordinator !== "self" || mission.current.status !== "active") return;
+							const workspace = await hooks.prepareWorkspace!();
+							if (workspace) pilot.workspace = workspace;
+						},
+						() => mission.current?.coordinator === "self" && mission.current.status === "active",
+					)
+				: undefined;
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
@@ -238,6 +252,7 @@ export class KernelSession {
 							adapter!.session.getCallableToolNames().includes("artifact") ||
 							adapter!.session.getActiveToolNames().includes("artifact"),
 						() => mission.current,
+						prepareWorkspace,
 					),
 				);
 				const tracked = refs ? refs.prepare(prepared) : prepared;

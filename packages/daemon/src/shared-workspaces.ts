@@ -16,6 +16,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
 import {
 	copyLocalConfigs,
 	dissociateWorkspace,
@@ -58,6 +59,11 @@ const hash = (input: string | Buffer) => createHash("sha256").update(input).dige
 const recoverableInput = (path: string) =>
 	localConfigs.includes(path) || /^\.pi\/todos\/[a-zA-Z0-9_-]+\.(md|json)$/.test(path);
 const fullCommit = /^[0-9a-f]{40}$/;
+/** Exact file/mode/blob transitions, unlike patch-id which normalizes away whitespace edits. */
+const changeFingerprint = (raw: string) => {
+	const lines = raw.split("\n").filter((line) => line.startsWith(":"));
+	return lines.length ? hash(lines.join("\n")) : undefined;
+};
 const maintenance = ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "fetch.writeCommitGraph=false"];
 const baseRefs = "refs/pilot/origin/";
 const baseRemote = "pilot-base";
@@ -698,6 +704,186 @@ export class SharedWorkspaceStore {
 		if (!commitId || !fullCommit.test(commitId) || !changeId || !/^[k-z]+$/.test(changeId))
 			throw new Error("Invalid jj recovery IDs");
 		return { commitId, changeId };
+	}
+
+	/** Refresh only this working copy. Trial rebases stay unintegrated until safety and conflicts are checked. */
+	async refreshBase(cwd: string, shared: SharedWorkspace, source: string, previousBase: string, branch?: string) {
+		return this.queue(shared.repository, async () => {
+			await this.owned(shared, cwd);
+			await this.jjChild(cwd, shared);
+			const marker = join(cwd, ".git");
+			const parkedMarker = join(cwd, ".jj/pilot-refresh-git");
+			// Recover an interrupted refresh before validating colocation.
+			if (await stat(parkedMarker)) {
+				if ((await stat(marker)) || !(await safeFile(cwd, ".jj/pilot-refresh-git")))
+					throw new Error("Unsafe interrupted refresh metadata");
+				await rename(parkedMarker, marker);
+			}
+			await this.child(cwd, shared);
+			const control = await this.control(shared.repository);
+			const base = await this.base(source, shared.repository, branch, this.runner);
+			await this.importBase(shared.repository, control, base.commitId);
+			// jj snapshots/update-stale in a colocated child also import Git refs. Hide only this child's
+			// gitdir file for the transaction, so stale agent refs cannot resurrect or move bookmarks.
+			await rename(marker, parkedMarker);
+			try {
+				await this.jj(["workspace", "update-stale"], cwd);
+				await this.jj(["status"], cwd); // snapshot this workspace's filesystem, never a sibling's
+				if (base.commitId === previousBase) return { base: previousBase };
+				const binding = JSON.parse(await readFile(this.bindingPath(shared), "utf8")) as Binding;
+				const machineRunner: Runner = (file, args, ...rest) =>
+					this.runner(file, file === "jj" ? ["--no-pager", "--color=never", ...args] : args, ...rest);
+				const own = await workspaceChangeIds(cwd, shared.name, machineRunner);
+				if (binding.initialCommitId) {
+					const initial = await this.optional(
+						"jj",
+						["--ignore-working-copy", "log", "--no-graph", "-r", binding.initialCommitId, "-T", "change_id"],
+						control,
+						machineRunner,
+					);
+					if (initial) own.add(initial);
+				}
+				// A long-idle empty working copy can predate the bounded provenance window. It has no
+				// authored content to rebase; the trial below still rejects every foreign pointer or descendant.
+				const emptyWorkingCopy = await this.jj(
+					["--ignore-working-copy", "log", "--no-graph", "-r", "@ & empty()", "-T", "change_id"],
+					cwd,
+				);
+				if (emptyWorkingCopy) own.add(emptyWorkingCopy);
+				let selected = `${previousBase}..@ ~ ::${base.commitId}`;
+				let revisions = (
+					await this.jj(
+						[
+							"--ignore-working-copy",
+							"log",
+							"--no-graph",
+							"-r",
+							selected,
+							"-T",
+							'change_id ++ "\\t" ++ commit_id ++ "\\n"',
+						],
+						cwd,
+					)
+				)
+					.split("\n")
+					.filter(Boolean)
+					.map((line) => line.split("\t"));
+				const behind = (reason: string) => ({ base: previousBase, behind: reason, target: base.commitId });
+				if (revisions.length > 256) return behind("The change stack exceeds the automatic update safety limit.");
+				if (revisions.length > 1 || !emptyWorkingCopy) {
+					// Squash/rebase merges change commit IDs. Do not replay old completed work onto newer
+					// implementations: recognize only identical blob transitions already in upstream history.
+					const upstream = await this.runner(
+						"git",
+						[
+							"log",
+							"--no-merges",
+							"--format=commit %H",
+							"--raw",
+							"--no-abbrev",
+							"--no-renames",
+							`${previousBase}..${base.commitId}`,
+						],
+						shared.repository,
+					);
+					const integrated = new Set(
+						upstream
+							.split(/^commit [0-9a-f]{40}$/m)
+							.map(changeFingerprint)
+							.filter(Boolean),
+					);
+					const completed: string[] = [];
+					for (const [, commit] of revisions) {
+						const raw = await this.runner(
+							"git",
+							["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", commit!],
+							shared.repository,
+						);
+						const fingerprint = changeFingerprint(raw);
+						if (fingerprint && integrated.has(fingerprint)) completed.push(commit!);
+					}
+					if (completed.length) {
+						selected = `(${selected}) ~ (${completed.join(" | ")})`;
+						revisions = revisions.filter(([, commit]) => !completed.includes(commit!));
+					}
+				}
+				const ids = revisions.map(([id]) => id!);
+				if (ids.some((id) => !own.has(id)))
+					return behind("The working copy includes changes not owned by this chat.");
+				const bookmarks = new Set(await workspaceBookmarks(cwd, shared.name, machineRunner));
+				const head = () =>
+					this.jj(["--ignore-working-copy", "op", "log", "--no-graph", "--limit", "1", "-T", "id"], cwd);
+				const before = await head();
+				const trial = await this.jj(
+					[
+						"--ignore-working-copy",
+						"--no-integrate-operation",
+						...(ids.length
+							? ["rebase", "-r", selected, "-o", base.commitId, "--skip-emptied"]
+							: ["new", base.commitId]),
+					],
+					cwd,
+				);
+				const prefix = trial.match(
+					/Operation left uncommitted because --no-integrate-operation was requested: ([0-9a-f]+)$/,
+				)?.[1];
+				if (!prefix) throw new Error("Missing trial rebase operation");
+				const operation = await this.jj(
+					["--at-op", prefix, "op", "log", "--no-graph", "--limit", "1", "-T", "id"],
+					cwd,
+				);
+				const conflicts = await this.jj(
+					[
+						"--at-op",
+						operation,
+						"log",
+						"--no-graph",
+						"-r",
+						`(${base.commitId}..@) & conflicts()`,
+						"-T",
+						"commit_id",
+					],
+					cwd,
+				);
+				if (conflicts) return behind("Rebasing this chat's changes would conflict with the latest base.");
+				const diff = await this.jj(
+					[
+						"--ignore-working-copy",
+						"op",
+						"show",
+						"--no-graph",
+						"-T",
+						"",
+						'--config=templates.commit_summary="change_id ++ \\" \\" ++ commit_id"',
+						operation,
+					],
+					cwd,
+				);
+				const removed = [
+					...(diff.split("Changed commits:\n")[1]?.split(/\nChanged /)[0] ?? "").matchAll(/^- ([k-z]+) /gm),
+				];
+				if (
+					removed.some((match) => !ids.includes(match[1]!)) ||
+					[...diff.matchAll(/^Changed working copy (.+):$/gm)].some((match) => match[1] !== `${shared.name}@`) ||
+					(diff.split("Changed local bookmarks:\n")[1]?.split(/\nChanged /)[0] ?? "")
+						.split("\n")
+						.some((line) => /^[^\s+-].*:$/.test(line) && !bookmarks.has(line.slice(0, -1)))
+				)
+					return behind("Updating would rewrite another chat's changes or bookmarks.");
+				if ((await head()) !== before)
+					return behind("The shared repository changed during the update; retry on the next turn.");
+				await this.jj(["--ignore-working-copy", "op", "integrate", operation], control);
+				await this.jj(["workspace", "update-stale"], cwd);
+				await this.runner(
+					"git",
+					["update-ref", `refs/pilot/base/${shared.name}`, base.commitId],
+					shared.repository,
+				);
+				return { base: base.commitId };
+			} finally {
+				await rename(parkedMarker, marker);
+			}
+		});
 	}
 
 	/** Compare the actual filesystem with jj's tree, including omitted large/auto-track-disabled files. */

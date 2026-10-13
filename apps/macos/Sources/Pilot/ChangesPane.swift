@@ -144,6 +144,7 @@ struct ChangesRepositoryContext: View {
     var changes: SessionChanges?
 
     var branch: String? {
+        if session.isActiveMissionCoordinator { return nil }
         if let changes { return changes.branch }
         return session.branch
     }
@@ -164,6 +165,17 @@ struct ChangesRepositoryContext: View {
                     .help(session.workspaceHelp)
             }
             .padding(.horizontal, 8)
+            if session.isActiveMissionCoordinator, session.workspaceBase != nil {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Text(session.workspaceBaseLabel(now: context.date) ?? "")
+                        .font(.pilot(.small))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .help(session.workspaceBehind ?? "Current workspace base. Updates happen between turns, never during work.")
+                }
+                .padding(.horizontal, 8)
+            }
             if !links.isEmpty {
                 VStack(spacing: 2) {
                     ForEach(links) { link in
