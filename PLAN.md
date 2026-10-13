@@ -864,6 +864,9 @@ reports), producing a morning summary in the app and Slack.
 - Private-branch sessions show a linked colored PR icon and number independently of run outcome;
   open PRs share the three-node Git branch glyph with the base-branch selector, retaining their green color.
   Tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
+  Compact PR links show only a state icon and number; readiness stays in the tooltip and accessibility
+  label, with an outlined green check when ready. Merged and closed states use GitHub's terminal PR
+  octicons in purple and red, independently of the agent's outcome icon.
   Sidebar rows also show the changed-file count, added/deleted line totals since the session base,
   and the workspace branch after a middle-dot separator,
   including before a PR exists. Visible rows refresh lightweight repository summaries every ten seconds,

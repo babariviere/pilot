@@ -43,6 +43,14 @@ struct PullRequestLink: View {
     var presentation: PullRequestBadge.Presentation = .badge
     var stale = false
 
+    var isReady: Bool { pullRequest.state == .open && pullRequest.readiness?.state == .ready }
+
+    var label: String {
+        presentation == .details
+            ? "\(isReady ? "Ready to merge" : pullRequest.state.compactLabel) PR #\(pullRequest.number)"
+            : "#\(pullRequest.number)"
+    }
+
     var body: some View {
         if let url = pullRequest.browserURL {
             Link(destination: url) { badge }
@@ -54,13 +62,14 @@ struct PullRequestLink: View {
 
     private var badge: some View {
         let pr = pullRequest
-        let ready = pr.readiness?.state == .ready
+        let ready = isReady
         return HStack(spacing: 4) {
             if ready {
-                Image(systemName: "checkmark.circle.fill").accessibilityHidden(true)
-            } else if presentation == .badge { pr.state.icon }
-            Text(presentation == .details ? "\(ready ? "Ready to merge" : pr.state.compactLabel) PR #\(pr.number)"
-                : ready ? "Ready to merge #\(pr.number)" : "#\(pr.number)")
+                Image(systemName: "checkmark.circle")
+                    .font(.pilot(.caption, weight: .medium))
+                    .accessibilityHidden(true)
+            } else if presentation == .badge { pr.state.icon.accessibilityHidden(true) }
+            Text(label)
             if stale || pr.browserURL == nil {
                 Image(systemName: "exclamationmark.triangle")
             }
@@ -68,15 +77,16 @@ struct PullRequestLink: View {
                 Image(systemName: "arrow.up.right").accessibilityHidden(true)
             }
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(.pilot(.small, weight: .medium))
         .padding(.vertical, 2)
-        .foregroundStyle(ready ? Theme.success : pr.state.color)
+        .foregroundStyle(ready ? PullRequestState.open.color : pr.state.color)
         .fixedSize()
         .accessibilityLabel("Pull request \(pr.number), \(stale ? "last known " : "")\(ready ? "Ready to merge" : pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
         .help(readinessHelp(pr))
     }
 
     private func readinessHelp(_ pr: SessionPullRequest) -> String {
+        guard pr.state == .open else { return "Pull request #\(pr.number), \(pr.state.label)." }
         guard let readiness = pr.readiness else { return "Pull request #\(pr.number), \(pr.state.label). Readiness not checked." }
         if readiness.state == .ready { return "Pull request #\(pr.number) is ready to merge. Pilot will not merge it." }
         let reasons = readiness.reasons.map { reason -> String in
@@ -97,12 +107,12 @@ struct PullRequestLink: View {
 }
 
 extension PullRequestState {
-    @ViewBuilder var icon: some View {
+    @MainActor @ViewBuilder var icon: some View {
         switch self {
         case .draft: Image(systemName: "pencil.circle")
         case .open: Image(nsImage: GitBranchGlyph.image).resizable().frame(width: 11, height: 11)
-        case .merged: Image(systemName: "arrow.triangle.pull")
-        case .closed: Image(systemName: "xmark.circle")
+        case .merged: Image(nsImage: PullRequestGlyph.merged.image).resizable().frame(width: 11, height: 11)
+        case .closed: Image(nsImage: PullRequestGlyph.closed.image).resizable().frame(width: 11, height: 11)
         }
     }
 
