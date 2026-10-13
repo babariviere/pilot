@@ -10,6 +10,7 @@ struct Dashboard: View {
             WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
             ActivityCard(sessions: client.activeSessions)
             RecentCard(sessions: Array(client.activeSessions.filter { !$0.isWorking }.prefix(6)))
+            ScheduledItemsCard()
             ProjectsCard(projects: client.projects, sessions: client.activeSessions)
         }
     }

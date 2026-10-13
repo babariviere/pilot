@@ -172,6 +172,8 @@ struct TaskComposer: View {
     @StateObject private var form: NewSessionForm
     @StateObject private var branches: BranchSelectorState
     @FocusState private var focused: Bool
+    @State private var scheduleTrigger: ScheduleTrigger = .onBack
+    @State private var scheduleDate = Date().addingTimeInterval(3600)
 
     @MainActor init(branches: BranchSelectorState? = nil, form: NewSessionForm? = nil, client: PilotClient? = nil) {
         let form = form ?? NewSessionForm()
@@ -278,6 +280,7 @@ struct TaskComposer: View {
                     .disabled(form.busy)
                 }
                 ModelMenu(model: $form.model, projectDefault: project?.model, list: form.models)
+                ScheduleChoice(trigger: $scheduleTrigger, date: $scheduleDate, disabled: !canStart) { scheduleNewChat() }
                 if form.mode == .build, let project {
                     Menu {
                         Button("Project default (\(project.usesPrivateClones ? "Isolated workspace" : "Current checkout"))") { form.workspace = nil }
@@ -381,6 +384,26 @@ struct TaskComposer: View {
             } catch {
                 if form.revision == revision { form.error = error.localizedDescription }
             }
+        }
+    }
+
+    private func scheduleNewChat() {
+        guard canStart else { return }
+        form.busy = true
+        form.error = nil
+        let request = form.spawnRequest(in: project, branches: branches)
+        let trigger = scheduleTrigger
+        Task {
+            defer { form.busy = false }
+            do {
+                _ = try await client.createSchedule(ScheduleRequest(
+                    title: request.message.split(separator: "\n").first.map(String.init),
+                    trigger: trigger, at: trigger == .at ? scheduleDate.timeIntervalSince1970 * 1000 : nil,
+                    target: .chat(request)
+                ))
+                form.message = ""
+                form.attachments = ImageAttachments()
+            } catch { form.error = error.localizedDescription }
         }
     }
 }

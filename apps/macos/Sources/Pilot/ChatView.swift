@@ -287,6 +287,12 @@ struct ChatView: View {
                         slashCommands: slashCommands.commands,
                         onSlashCommandsNeeded: { [sessionId = session.id] in
                             slashCommands.load(sessionId: sessionId, client: AppModel.shared.client)
+                        },
+                        onSchedule: { message, trigger, at in
+                            _ = try await AppModel.shared.client.createSchedule(ScheduleRequest(
+                                title: session.title, trigger: trigger, at: at,
+                                target: .message(sessionId: session.id, message: message)
+                            ))
                         }
                     )
                 }

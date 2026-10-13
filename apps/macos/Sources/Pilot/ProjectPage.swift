@@ -246,6 +246,16 @@ private struct ProjectDashboardBody: View {
                 }
             }
 
+            let scheduled = client.schedules.filter { $0.projectId == project.id && $0.state == .pending }
+            if !scheduled.isEmpty {
+                ProjectPageSection(header: PageSectionHeader(title: "Scheduled", count: scheduled.count)) {
+                    ForEach(Array(scheduled.prefix(5).enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { HairlineDivider(leading: 34) }
+                        ScheduledItemRow(item: item)
+                    }
+                }
+            }
+
             if !dashboard.recent.items.isEmpty {
                 ProjectPageSection(header: PageSectionHeader(title: "Recent", linkTitle: "Archived chats") {
                     model.showArchive(in: project.id)

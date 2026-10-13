@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     /// Drafts outlive their views and are saved locally by the production app.
     let newSessionForm = NewSessionForm()
     private var chatComposers: [String: ComposerState] = [:]
+    private var knownScheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var reviewRevision = 0
 
     @Published var selectedSessionId: String? {
@@ -229,6 +230,13 @@ final class AppModel: ObservableObject {
         }
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
+        client.onSchedulesChanged = { [weak self] items in
+            guard let self else { return }
+            for item in items where item.state == .fired && self.knownScheduleStates[item.id] == .pending {
+                self.notifier.deliverScheduled(title: item.title, sessionId: item.sessionId, identifier: item.id)
+            }
+            self.knownScheduleStates = Dictionary(uniqueKeysWithValues: items.map { ($0.id, $0.state) })
+        }
         restoreSidebarScope()
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }

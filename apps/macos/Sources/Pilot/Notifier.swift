@@ -28,6 +28,16 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().add(request)
     }
 
+    func deliverScheduled(title: String, sessionId: String?, identifier: String) {
+        guard available else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "Scheduled work started"
+        content.body = title
+        if let sessionId { content.userInfo = ["sessionId": sessionId] }
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "schedule-\(identifier)", content: content, trigger: nil))
+    }
+
     nonisolated func userNotificationCenter(
         _: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,

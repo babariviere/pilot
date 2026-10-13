@@ -120,6 +120,7 @@ final class ComposerState: ObservableObject {
 /// empty queue edit removes the message instead.
 struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var client = AppModel.shared.client
     @ObservedObject var state: ComposerState
     let working: Bool
     let queuedMessages: [QueuedMessage]
@@ -132,7 +133,10 @@ struct Composer: View {
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
     var onSlashCommandsNeeded: (() -> Void)? = nil
+    var onSchedule: ((String, ScheduleTrigger, Double?) async throws -> Void)? = nil
     @StateObject private var modelPicker: ChatModelPickerState
+    @State private var scheduleTrigger: ScheduleTrigger = .onBack
+    @State private var scheduleDate = Date().addingTimeInterval(3600)
 
     init(
         state: ComposerState,
@@ -145,7 +149,8 @@ struct Composer: View {
         onRemoveQueuedMessage: @escaping (Int) async throws -> Void,
         session: SessionSummary? = nil,
         slashCommands: [SlashCommand]? = nil,
-        onSlashCommandsNeeded: (() -> Void)? = nil
+        onSlashCommandsNeeded: (() -> Void)? = nil,
+        onSchedule: ((String, ScheduleTrigger, Double?) async throws -> Void)? = nil
     ) {
         self.state = state
         self.working = working
@@ -158,10 +163,16 @@ struct Composer: View {
         self.session = session
         self.slashCommands = slashCommands
         self.onSlashCommandsNeeded = onSlashCommandsNeeded
+        self.onSchedule = onSchedule
         _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd))
     }
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
+
+    private func scheduledSessionId(_ item: ScheduledItem) -> String? {
+        if case let .message(sessionId, _) = item.target { return sessionId }
+        return nil
+    }
 
     private var showsQueue: Bool {
         !remainingQueuedMessages.isEmpty || state.queueEditing.selected != nil || state.queueRemovalError != nil
@@ -169,6 +180,14 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if let session {
+                ForEach(client.schedules.filter { scheduledSessionId($0) == session.id && $0.state == .pending }) { item in
+                    ScheduledItemRow(item: item, compact: true)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Capsule().fill(Theme.muted))
+                        .frame(maxWidth: Theme.column, alignment: .trailing)
+                }
+            }
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
                 if showsQueue {
@@ -248,6 +267,20 @@ struct Composer: View {
                 }
             }
             Spacer(minLength: 8)
+            if let onSchedule {
+                ScheduleChoice(trigger: $scheduleTrigger, date: $scheduleDate,
+                               disabled: !state.canSend(changingModel: modelPicker.changing)) {
+                    let text = state.attachments.message(text: state.trimmed)
+                    Task {
+                        do {
+                            try await onSchedule(text, scheduleTrigger, scheduleTrigger == .at ? scheduleDate.timeIntervalSince1970 * 1000 : nil)
+                            state.draft = ""
+                            state.attachments = ImageAttachments()
+                            state.error = nil
+                        } catch { state.error = error.localizedDescription }
+                    }
+                }
+            }
             ComposerSendButtons(state: state, draft: state.draftState, modelPicker: modelPicker,
                                 working: working, onStop: onStop, onSend: { send(.steer) })
         }
