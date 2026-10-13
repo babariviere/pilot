@@ -1,7 +1,9 @@
 /** IPC between pilotd and one kernel worker process. */
+
+import type { JsonValue } from "@earendil-works/chord";
 import type {
-	ArtifactRevision,
 	AgentEvent,
+	ArtifactRevision,
 	DeliveryMode,
 	RewindAction,
 	SessionAttempt,
@@ -9,7 +11,6 @@ import type {
 	SessionCompletion,
 	SessionSubagent,
 } from "@pilot/protocol";
-import type { JsonValue } from "@earendil-works/chord";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -71,6 +72,7 @@ export type KernelCommand =
 	/** Replaces the mission context; omitted when the chat left its mission. */
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "shutdown" };
@@ -98,6 +100,12 @@ export type KernelPacket =
 	| { type: "refs.changed" }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
+	| {
+			type: "memory.call";
+			callId: string;
+			action: "wake" | "note" | "recall" | "zoom";
+			args: Record<string, JsonValue>;
+	  }
 	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */

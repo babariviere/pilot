@@ -1,15 +1,15 @@
 /** pilotd: background pi agents on durable sessions. */
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
+import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
-import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
-import { ProjectMemoryService } from "./project-memory.ts";
 
 const config = loadConfig();
 // Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
@@ -54,6 +54,7 @@ const sessions = new SessionManager(
 		models,
 	},
 );
+sessions.setProjectMemory(memory);
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionService = new MissionService(missionStore, sessions, projects);

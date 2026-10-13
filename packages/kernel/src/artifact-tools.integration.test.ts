@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { after, type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
-	getSystemMessageText,
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxToolCall,
+	getSystemMessageText,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
@@ -17,8 +17,8 @@ import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendi
 import type { SubmissionDraft } from "@earendil-works/pi-durable";
 import { ArtifactStore, closePreviewBrowser } from "@pilot/artifacts";
 import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
-import { createArtifactTools } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { createArtifactTools } from "./artifact-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 
@@ -287,6 +287,48 @@ test("KernelSession registers tools with the session directory and project ident
 	assert.ok(!JSON.stringify(imageResult).includes(png));
 	assert.equal(notifications, 2);
 	assert.equal(f.faux.state.callCount, 0);
+});
+
+test("top-level project chats inject bounded wake context and register project memory tools", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t);
+	let adapter: NativeAdapter | undefined;
+	const open = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+		adapter = await open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionId: options.sessionId,
+			sessionFile: options.sessionFile,
+			sessionOptions: { ...f.options.sessionOptions, ...options.sessionOptions },
+		});
+		return adapter;
+	});
+	let wakeCalls = 0;
+	const session = await KernelSession.open(
+		{ sessionId: "memory-session", projectId: "project-1", cwd: f.root, storageDir: join(f.root, "memory-session") },
+		{
+			onWorking: () => {},
+			callMemory: async (action) => {
+				if (action === "wake") {
+					wakeCalls++;
+					return { count: 1, text: "#0-1: durable project fact" };
+				}
+				return null;
+			},
+		},
+	);
+	f.cleanup.push(() => session.close());
+	assert.equal(wakeCalls, 1);
+	assert.match(adapter!.session.systemPrompt, /#0-1: durable project fact/);
+	assert.deepEqual(
+		adapter!.session.agent.state.tools
+			.filter((tool) => tool.name.startsWith("memory_"))
+			.map((tool) => tool.name)
+			.sort(),
+		["memory_note", "memory_recall", "memory_zoom"],
+	);
 });
 
 for (const mode of ["on", "only"] as const) {

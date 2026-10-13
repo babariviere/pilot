@@ -1,6 +1,7 @@
 /** Kernel worker entry: one process per session, driven over Node IPC by pilotd. */
-import { serialize } from "node:v8";
+
 import { randomUUID } from "node:crypto";
+import { serialize } from "node:v8";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
@@ -174,6 +175,8 @@ export function runKernelWorker(): void {
 		});
 	const callMission: MissionCall = (action, args) =>
 		callDaemon<JsonValue>((callId) => ({ type: "mission.call", callId, action, args }));
+	const callMemory = (action: "wake" | "note" | "recall" | "zoom", args: Record<string, JsonValue>) =>
+		callDaemon<JsonValue>((callId) => ({ type: "memory.call", callId, action, args }));
 
 	async function shutdown(code = 0): Promise<void> {
 		if (exiting) return;
@@ -262,11 +265,19 @@ export function runKernelWorker(): void {
 			void shutdown();
 			return;
 		}
-		if (command.type === "mission.result" || command.type === "artifact.reference.result") {
+		if (
+			command.type === "mission.result" ||
+			command.type === "memory.result" ||
+			command.type === "artifact.reference.result"
+		) {
 			const call = daemonCalls.get(command.callId);
 			daemonCalls.delete(command.callId);
 			if (command.error !== undefined) call?.reject(new Error(command.error));
-			else call?.resolve(command.result ?? (command.type === "mission.result" ? null : undefined));
+			else
+				call?.resolve(
+					command.result ??
+						(command.type === "mission.result" || command.type === "memory.result" ? null : undefined),
+				);
 			return;
 		}
 		if (command.type === "workspace.prepared") {
@@ -293,6 +304,7 @@ export function runKernelWorker(): void {
 					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
+					callMemory,
 					readArtifactReference: (id, revision) =>
 						callDaemon((callId) => ({ type: "artifact.reference.get", callId, id, revision })),
 					prepareWorkspace,
