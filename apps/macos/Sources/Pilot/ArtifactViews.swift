@@ -474,7 +474,7 @@ private final class ProjectArtifactsState: ObservableObject {
     @Published var error: String?
 }
 
-private struct ProjectArtifactsBrowser: View {
+struct ProjectArtifactsBrowser: View {
     let project: Project
     @ObservedObject var client: PilotClient
     @StateObject private var state = ProjectArtifactsState()

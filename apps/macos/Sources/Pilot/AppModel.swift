@@ -33,10 +33,23 @@ final class AppModel: ObservableObject {
     @Published private(set) var reviewRevision = 0
 
     @Published var selectedSessionId: String? {
-        didSet { if selectedSessionId != nil, selectedMissionId != nil { selectedMissionId = nil } }
+        didSet {
+            guard selectedSessionId != nil else { return }
+            if selectedMissionId != nil { selectedMissionId = nil }
+            if selectedProjectId != nil { selectedProjectId = nil }
+        }
     }
     /// The mission page shown in the detail area when no chat is selected.
-    @Published var selectedMissionId: String?
+    @Published var selectedMissionId: String? {
+        didSet { if selectedMissionId != nil, selectedProjectId != nil { selectedProjectId = nil } }
+    }
+    /// The project page shown in the detail area when no chat or mission is selected.
+    @Published var selectedProjectId: String? {
+        didSet { if selectedProjectId != nil, selectedMissionId != nil { selectedMissionId = nil } }
+    }
+    /// Settings tab to show next, and a project to select there ("Project Settings…").
+    @Published var settingsTab: SettingsTab = .appearance
+    @Published var settingsProjectId: String?
     @Published var missionTab: MissionTab = .overview
     @Published var missionSheet: MissionSheet?
     /// Missions whose chats are listed in the sidebar.
@@ -247,6 +260,7 @@ final class AppModel: ObservableObject {
         }
         selectedSessionId = nil
         selectedMissionId = nil
+        selectedProjectId = nil
     }
 
     /// Open a dedicated, empty composer. The chat joins on spawn, without claiming a task.
@@ -364,6 +378,14 @@ final class AppModel: ObservableObject {
         showingArchive = true
         selectedSessionId = nil
         selectedMissionId = nil
+        selectedProjectId = nil
+    }
+
+    /// Shows a project's page, keeping the sidebar as it is.
+    func openProject(_ id: String) {
+        showingArchive = false
+        selectedSessionId = nil
+        selectedProjectId = id
     }
 
     func setPinned(_ pinned: Bool, sessionId: String) {

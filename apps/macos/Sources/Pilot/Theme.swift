@@ -27,6 +27,9 @@ enum Theme {
     static let success = Color(hex: 0x10B981)
     static let warning = Color(hex: 0xF59E0B)
     static let destructive = Color(hex: 0xEF4444)
+    /// Text-weight amber for blockers the user can act on, such as a PR blocked from merging or a
+    /// scheduled item that could not start. Readable on white, unlike `warning`.
+    static let blocked = Color(hex: 0xB45309)
 
     /// Syntax colors with contrast against the light code surface.
     static func syntaxColor(_ kind: CodeSyntax.Kind?) -> Color {

@@ -23,6 +23,9 @@ struct MainWindow: View {
                 } else if let missionId = model.selectedMissionId {
                     MissionPage(missionId: missionId)
                         .id(missionId)
+                } else if let projectId = model.selectedProjectId {
+                    ProjectPage(projectId: projectId)
+                        .id(projectId)
                 } else if model.showingArchive {
                     ArchiveView()
                 } else {

@@ -365,6 +365,11 @@ enum Snapshot {
         }
 
 
+        if CommandLine.arguments.contains("--project-page-only") {
+            await renderProjectPages(model: model, to: directory)
+            return
+        }
+
         // Dense repository metadata must not push titles or timestamps out of narrow rows.
         model.client.loadFixture(projects: Fixtures.projects, sessions: Fixtures.sidebarLayoutSessions)
         model.client.fixtureChangeSummaries = Dictionary(uniqueKeysWithValues: Fixtures.sidebarLayoutSessions
@@ -725,6 +730,231 @@ enum Snapshot {
                 size: size,
                 to: directory.appending(path: "\(session.id).png")
             )
+        }
+        print("snapshots written to \(directory.path)")
+        exit(0)
+    }
+
+    /// Project page states with fixture dashboards: populated, long content, quiet, new, loading and errors,
+    /// plus the real window so the toolbar title, New chat and actions menu are visible.
+    private static func renderProjectPages(model: AppModel, to directory: URL) async {
+        let now = Fixtures.now
+        let minute = 60_000.0
+        let home = Fixtures.home
+        let projects = [
+            Project(id: "p1", name: "pilot", path: "\(home)/src/github.com/babariviere/pilot",
+                    model: "anthropic/claude-opus-5-5", createdAt: now),
+            Project(id: "p2", name: "dotfiles", path: "\(home)/src/github.com/babariviere/dotfiles", workspace: "direct",
+                    createdAt: now),
+            Project(id: "p3", name: "new-service", path: "\(home)/src/github.com/acme/new-service", createdAt: now),
+            Project(id: "p4", name: "monorepo-with-a-rather-long-name",
+                    path: "\(home)/src/github.com/acme/platform/services/monorepo-with-a-rather-long-name", createdAt: now),
+        ]
+        func session(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil, ago: Double,
+                     mission: String? = nil, branch: String? = nil, project: String = "p1") -> SessionSummary {
+            SessionSummary(id: id, title: title, cwd: projects[0].path, projectId: project, branch: branch,
+                           createdAt: now - ago, updatedAt: now - ago, state: state, model: "anthropic/claude-opus-5-5",
+                           outcome: outcome, outcomeAt: outcome == nil ? nil : now - ago, missionId: mission)
+        }
+        let sessions = [
+            session("w1", "Daemon aggregate endpoint for the project page", state: "working", ago: 14 * minute,
+                    mission: "m1", branch: "feat/project-dashboard-api"),
+            session("w2", "Wake and online detection", state: "working", ago: 6 * minute, mission: "m1",
+                    branch: "feat/wake-detection"),
+            session("w3", "Why does the sidebar re-render on every token?", state: "working", ago: minute),
+            session("n1", "Fix stale PR badge after force-push", outcome: .done, ago: 12 * minute, branch: "fix/pr-badge"),
+            session("n2", "Investigate worker crash on resume", outcome: .failed, ago: 40 * minute),
+            session("r1", "Theme tokens for motion", outcome: .done, ago: 120 * minute),
+            session("d1", "Update Ghostty config", outcome: .done, ago: 26 * 60 * minute, project: "p2"),
+        ]
+        model.client.loadFixture(projects: projects, sessions: sessions)
+        model.client.loadMissionFixture([])
+        func ref(_ number: Int, _ state: PullRequestState = .open) -> DashboardPullRequestRef {
+            DashboardPullRequestRef(number: number, url: "https://github.com/babariviere/pilot/pull/\(number)", state: state)
+        }
+        func pr(_ number: Int, _ title: String, chat: String, state: DashboardPullRequestState = .open,
+                readiness: DashboardPullRequestReadiness? = nil) -> DashboardPullRequest {
+            DashboardPullRequest(number: number, url: "https://github.com/babariviere/pilot/pull/\(number)", title: title,
+                                 state: state, sessionId: "n1", sessionTitle: chat, checkedAt: now, readiness: readiness)
+        }
+        let populated = ProjectDashboard(
+            projectId: "p1",
+            summary: ProjectDashboardSummary(chats: 12, working: 3, needsYou: 3, openPullRequests: 4,
+                                             readyPullRequests: 1, activeMissions: 2),
+            needsYou: DashboardSection(total: 3, items: [
+                DashboardNeedsYouItem(kind: .failed, id: "session:n2", title: "Investigate worker crash on resume",
+                                      sessionId: "n2", outcome: .failed,
+                                      reason: "kernel exited with code 137 while running npm test", at: now - 40 * minute),
+                DashboardNeedsYouItem(kind: .question, id: "mission:m1", title: "Project Dashboard and Task Scheduling",
+                                      missionId: "m1", count: 1, at: now - 60 * minute),
+                DashboardNeedsYouItem(kind: .unread, id: "session:n1", title: "Fix stale PR badge after force-push",
+                                      sessionId: "n1", outcome: .done, at: now - 12 * minute),
+            ]),
+            working: DashboardSection(total: 3, items: [
+                DashboardWorkingItem(sessionId: "w3", title: "Why does the sidebar re-render on every token?", mode: .ask,
+                                     model: "anthropic/claude-haiku-5", startedAt: now - minute),
+                DashboardWorkingItem(sessionId: "w2", title: "Wake and online detection", missionId: "m1",
+                                     missionTitle: "Project Dashboard", model: "anthropic/claude-sonnet-5-5",
+                                     branch: "feat/wake-detection", pullRequest: ref(421), startedAt: now - 6 * minute),
+                DashboardWorkingItem(sessionId: "w1", title: "Daemon aggregate endpoint for the project page",
+                                     missionId: "m1", missionTitle: "Project Dashboard", model: "anthropic/claude-opus-5-5",
+                                     branch: "feat/project-dashboard-api", startedAt: now - 14 * minute),
+            ]),
+            pullRequests: DashboardSection(total: 4, items: [
+                pr(418, "fix: refresh PR badge after force-push", chat: "Fix stale PR badge after force-push",
+                   readiness: .init(state: .ready)),
+                pr(421, "feat: detect wake and network return", chat: "Wake and online detection",
+                   readiness: .init(state: .pending)),
+                pr(415, "feat: tracked items store", chat: "Tracked-items store",
+                   readiness: .init(state: .blocked, reasons: ["2 unresolved comments", "failing checks: build"])),
+                pr(409, "refactor: split ChatView", chat: "Split ChatView", state: .draft),
+            ]),
+            missions: DashboardSection(total: 2, items: [
+                DashboardMission(id: "m1", title: "Project Dashboard and Task Scheduling", tasksDone: 3, tasksTotal: 13,
+                                 working: 2, needsYou: 1),
+                DashboardMission(id: "m2", title: "Artifact renderer hardening", tasksDone: 5, tasksTotal: 6, working: 0),
+            ]),
+            recent: DashboardSection(total: 3, items: [
+                DashboardRecentItem(sessionId: "r1", title: "Theme tokens for motion", outcome: .done,
+                                    outcomeAt: now - 120 * minute, pullRequest: ref(402, .merged)),
+                DashboardRecentItem(sessionId: "r2", title: "Explain session feed cache", outcome: .done,
+                                    outcomeAt: now - 26 * 60 * minute),
+                DashboardRecentItem(sessionId: "r3", title: "Bump pi-durable", outcome: .stopped,
+                                    outcomeAt: now - 30 * 60 * minute),
+            ])
+        )
+        // Today's PR data: no readiness until pilotd tracks it, so open PRs read as plain "Open".
+        let withoutReadiness = ProjectDashboard(
+            projectId: "p1", summary: populated.summary, needsYou: populated.needsYou, working: populated.working,
+            pullRequests: DashboardSection(total: 3, items: [
+                pr(418, "fix: refresh PR badge after force-push", chat: "Fix stale PR badge after force-push"),
+                pr(421, "feat: detect wake and network return", chat: "Wake and online detection"),
+                pr(409, "refactor: split ChatView", chat: "Split ChatView", state: .draft),
+            ]),
+            missions: populated.missions, recent: populated.recent)
+        let longTitle = "A deliberately long chat title that keeps going so it has to truncate on a single line"
+        let longReason = "Kernel exited with code 137 while running the full npm test suite after the dependency bump; "
+            + "the worker was restarted twice and the transcript ends in the middle of a tool call."
+        let longNeeds: [DashboardNeedsYouItem] = (1...5).map { index -> DashboardNeedsYouItem in
+            let failed = index == 1
+            let at: Double = now - Double(index * 17) * minute
+            let kind: DashboardNeedsYouKind = failed ? .failed : .unread
+            let outcome: SessionOutcome = failed ? .failed : .done
+            let reason: String? = failed ? longReason : nil
+            return DashboardNeedsYouItem(kind: kind, id: "need-\(index)", title: "\(longTitle) \(index)",
+                                         sessionId: "long-\(index)", outcome: outcome, reason: reason, at: at)
+        }
+        let longWorking: [DashboardWorkingItem] = (1...5).map { index -> DashboardWorkingItem in
+            let pullRequest: DashboardPullRequestRef? = index.isMultiple(of: 2) ? ref(1000 + index) : nil
+            let startedAt: Double = now - Double(index * 23) * minute
+            return DashboardWorkingItem(sessionId: "long-w\(index)", title: "\(longTitle) \(index)", missionId: "lm",
+                                        missionTitle: "Migrate every service to the new deployment pipeline",
+                                        model: "openai-codex/gpt-6.1-sol",
+                                        branch: "feat/a-very-long-branch-name-for-the-deployment-pipeline-\(index)",
+                                        pullRequest: pullRequest, startedAt: startedAt)
+        }
+        let blockers = ["3 unresolved comments", "failing checks: build, lint, e2e", "merge conflicts", "review required"]
+        let longPullRequests: [DashboardPullRequest] = (1...5).map { index -> DashboardPullRequest in
+            let readiness = index <= 2 ? DashboardPullRequestReadiness(state: .ready)
+                : DashboardPullRequestReadiness(state: .blocked, reasons: blockers)
+            return pr(2000 + index, "feat: \(longTitle.lowercased()) \(index)", chat: longTitle, readiness: readiness)
+        }
+        let longMissions: [DashboardMission] = (1...5).map { index -> DashboardMission in
+            let needsYou = index == 1 ? 4 : 0
+            return DashboardMission(id: "lm\(index)", title: "Migrate every service to the new deployment pipeline \(index)",
+                                    tasksDone: index * 2, tasksTotal: 12, working: index % 3, needsYou: needsYou)
+        }
+        let longRecent: [DashboardRecentItem] = (1...5).map { index -> DashboardRecentItem in
+            let outcomeAt: Double = now - Double(index) * 3_600_000
+            return DashboardRecentItem(sessionId: "long-r\(index)", title: "\(longTitle) \(index)", outcome: .done,
+                                       outcomeAt: outcomeAt, pullRequest: ref(3000 + index, .merged))
+        }
+        let long = ProjectDashboard(
+            projectId: "p4",
+            summary: ProjectDashboardSummary(chats: 48, working: 9, needsYou: 14, openPullRequests: 11,
+                                             readyPullRequests: 3, activeMissions: 7),
+            needsYou: DashboardSection(total: 14, items: longNeeds),
+            working: DashboardSection(total: 9, items: longWorking),
+            pullRequests: DashboardSection(total: 11, items: longPullRequests),
+            missions: DashboardSection(total: 7, items: longMissions),
+            recent: DashboardSection(total: 30, items: longRecent)
+        )
+        let quiet = ProjectDashboard(
+            projectId: "p2", summary: ProjectDashboardSummary(chats: 2),
+            recent: DashboardSection(total: 2, items: [
+                DashboardRecentItem(sessionId: "d1", title: "Update Ghostty config", outcome: .done,
+                                    outcomeAt: now - 26 * 60 * minute),
+                DashboardRecentItem(sessionId: "d2", title: "Why is zsh slow to start?", outcome: .done,
+                                    outcomeAt: now - 3 * 24 * 60 * minute),
+            ]))
+        let fresh = ProjectDashboard(projectId: "p3")
+        let pageSize = CGSize(width: 900, height: 900)
+        func page(_ id: String, _ name: String, height: CGFloat = 900) async {
+            await render(ProjectPage(projectId: id), size: CGSize(width: pageSize.width, height: height),
+                         to: directory.appending(path: "project-\(name).png"))
+        }
+        model.client.loadDashboardFixture([populated, long, quiet, fresh])
+        await page("p1", "populated", height: 980)
+        await page("p4", "long", height: 1500)
+        await page("p2", "quiet", height: 420)
+        await page("p3", "new", height: 360)
+        model.client.loadDashboardFixture([withoutReadiness])
+        await page("p1", "no-readiness", height: 980)
+        model.client.loadDashboardFixture([])
+        await page("p1", "loading", height: 300)
+        model.client.loadDashboardFixture([], errors: ["p1": "HTTP 500"])
+        await page("p1", "load-error", height: 360)
+        model.client.loadDashboardFixture([populated], receivedAt: Date().addingTimeInterval(-180),
+                                          errors: ["p1": "pilotd did not answer"])
+        await page("p1", "stale", height: 600)
+
+        // One review sheet with the secondary states side by side.
+        let extra = [
+            Project(id: "p5", name: "api-gateway", path: "\(home)/src/github.com/acme/api-gateway", createdAt: now),
+            Project(id: "p6", name: "billing", path: "\(home)/src/github.com/acme/billing", createdAt: now),
+        ]
+        model.client.loadFixture(projects: projects + extra, sessions: sessions)
+        model.client.loadDashboardFixture([populated, quiet, fresh], receivedAt: Date().addingTimeInterval(-180),
+                                          errors: ["p1": "pilotd did not answer", "p6": "HTTP 500"])
+        let states: [(title: String, detail: String, id: String, height: CGFloat)] = [
+            ("New project", "No chats or missions yet: one empty state with the next steps.", "p3", 230),
+            ("Quiet project", "Empty sections hide. Needs you always shows, so nothing waiting is explicit.", "p2", 300),
+            ("First load", "A spinner only on first open. Later updates arrive over the WebSocket in place.", "p5", 150),
+            ("Load failed", "No data yet and the refresh failed: the error and Retry.", "p6", 220),
+            ("Refresh failed", "The last data stays under a muted banner with Retry.", "p1", 330),
+        ]
+        let sheet = VStack(spacing: 0) {
+            ForEach(states, id: \.id) { state in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    Text(state.detail).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                }
+                .padding(.horizontal, 24).padding(.vertical, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color(hex: 0xEDEDED))
+                ProjectPage(projectId: state.id).frame(height: state.height).clipped()
+            }
+        }
+        let sheetHeight = states.reduce(0) { $0 + $1.height + 58 }
+        await render(sheet, size: CGSize(width: 900, height: sheetHeight),
+                     to: directory.appending(path: "project-states.png"))
+        model.client.loadFixture(projects: projects, sessions: sessions)
+
+        // The real window: toolbar title, subtitle, New chat and the actions menu, with the sidebar entry selected.
+        model.client.loadDashboardFixture([populated])
+        model.openProject("p1")
+        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+        guard let window = NSApp.windows.first(where: { $0.toolbar != nil }),
+              let frame = window.contentView?.superview else {
+            print("No native toolbar window available")
+            exit(1)
+        }
+        window.setFrameOrigin(NSPoint(x: 100, y: 100))
+        window.makeKeyAndOrderFront(nil)
+        for width in [1360.0, 980.0] {
+            window.setContentSize(CGSize(width: width, height: 900))
+            for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+            snapshot(frame, to: directory.appending(path: "project-window-\(Int(width)).png"))
         }
         print("snapshots written to \(directory.path)")
         exit(0)

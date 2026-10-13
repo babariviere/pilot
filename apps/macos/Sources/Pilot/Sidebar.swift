@@ -332,14 +332,17 @@ private struct ProjectHeader: View {
     let onNewFolder: () -> Void
 
     var body: some View {
+        let selected = model.selectedProjectId == project.id && model.selectedSessionId == nil
         HStack(spacing: 6) {
-            Button { isExpanded.toggle() } label: {
+            // The name opens the project page without changing the sidebar; the chevron folds its chats.
+            Button { model.openProject(project.id) } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "folder").font(.system(size: 10)).frame(width: 14)
                     Text(project.name)
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .foregroundStyle(selected ? Theme.foreground : Color.secondary)
                     if working > 0 {
                         CountBadge(count: working)
                             .help("\(working) working")
@@ -349,7 +352,9 @@ private struct ProjectHeader: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
+            .accessibilityLabel("Open \(project.name)")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            .help("Open \(project.name) (\(project.path.abbreviatingHome))")
             ProjectArtifactsButton(project: project, client: client)
                 .frame(width: 16, height: 16)
             Button(action: onArchive) { Image(systemName: "archivebox") }
@@ -369,7 +374,11 @@ private struct ProjectHeader: View {
             .help("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
             .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
         }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.subtleFill : Color.clear))
         .contextMenu {
+            Button("Open Project") { model.openProject(project.id) }
             Button("New Session", action: onNew)
             Button("New Mission…") { model.missionSheet = .create(projectId: project.id) }
             Button("Browse Archived Chats", action: onArchive)
