@@ -86,7 +86,8 @@ test("a run containing only already completed tasks carries no new activity", ()
 	}
 });
 
-test("settles omit old completed work while retaining work completed during this run", () => {
+test("settles omit old completed work while retaining work completed during this run", (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	try {
 		store.updateTask(id, "1", { status: "done" });
@@ -96,6 +97,7 @@ test("settles omit old completed work while retaining work completed during this
 		store.addResource(id, { url: old.url, taskId: store.resolveTask(id, "1").id });
 		store.recordMemberRun({ ...completion("done", 1), state: "working" });
 		store.updateTask(id, next.id, { status: "done" });
+		t.mock.timers.tick(1);
 		const now = Date.now();
 		store.recordMemberCompletion({
 			...completion("done", now + 1),
