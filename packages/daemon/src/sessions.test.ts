@@ -450,6 +450,8 @@ for (const phase of ["clone", "ready", "ack"] as const) {
 		await stopping;
 		assert.deepEqual((await f.stored(created.id)).pending, []);
 		assert.equal(sessions.get(created.id)?.state, "idle");
+		// Idle workers can still have background metadata writes; the lease waits for those too.
+		await until(() => sessions.prepareUpdate().ready);
 		assert.deepEqual(sessions.prepareUpdate(), { ready: true });
 		// Watching a live idle worker is permitted, without reopening or admitting input.
 		const off = sessions.subscribe(created.id, () => {});
