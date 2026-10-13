@@ -955,6 +955,9 @@ export class SharedWorkspaceStore {
 			for (const entry of await readdir(directory, { withFileTypes: true })) {
 				const path = prefix + entry.name;
 				if (!prefix && (path === ".git" || path === ".jj")) continue;
+				// jj does not list submodules, so a nested .git is the only sign of one. Report it specifically.
+				if (prefix && entry.name === ".git")
+					throw new Error(`Submodule or nested git repository prevents automatic cleanup: ${prefix.slice(0, -1)}`);
 				if (entry.isDirectory()) {
 					if (regenerable.has(entry.name) && ![...tracked].some((file) => file.startsWith(`${path}/`))) {
 						// Only ignored outputs may be discarded. Unignored directories can contain inputs.
