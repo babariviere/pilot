@@ -800,7 +800,10 @@ export function createDaemonServer(
 					return;
 				}
 				let subscribers = missionSubscribers.get(missionId);
-				if (!subscribers) missionSubscribers.set(missionId, (subscribers = new Set()));
+				if (!subscribers) {
+					subscribers = new Set();
+					missionSubscribers.set(missionId, subscribers);
+				}
 				subscribers.add(ws);
 				return pushMission(missionId, [ws]);
 			}
@@ -817,7 +820,10 @@ export function createDaemonServer(
 					return;
 				}
 				let subscribers = dashboardSubscribers.get(projectId);
-				if (!subscribers) dashboardSubscribers.set(projectId, (subscribers = new Set()));
+				if (!subscribers) {
+					subscribers = new Set();
+					dashboardSubscribers.set(projectId, subscribers);
+				}
 				subscribers.add(ws);
 				return pushDashboard(projectId, [ws], false);
 			}

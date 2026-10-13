@@ -43,7 +43,11 @@ let connection: Connection | undefined;
 let closing: Promise<void> | undefined;
 // SDK connection.close() itself is not single-flight: a second close can miss the first transport's
 // pending stdio shutdown. Await the same close before replying or allowing daemon shutdown.
-const close = () => (connection ? (closing ??= connection.close()) : Promise.resolve());
+const close = () => {
+	if (!connection) return Promise.resolve();
+	closing ??= connection.close();
+	return closing;
+};
 parentPort!.on("message", () => {
 	controller.abort(new Error("MCP request cancelled or timed out"));
 	void close();
