@@ -17,6 +17,7 @@ import type {
 	MissionResourceWrite,
 	MissionTaskWrite,
 	ProjectRequest,
+	ReviewRequest,
 	RewindRequest,
 	SendRequest,
 	ServerMessage,
@@ -40,12 +41,17 @@ import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { expandHome, type ProjectStore } from "./projects.ts";
+import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
+import { ReviewStore } from "./reviews.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
 const HISTORY_PAGE_MAX = 500;
+const REVIEW_MARKS_MAX = 1000;
+/** Dashboards are recomputed at most this often after changes, and only pushed when their content differs. */
+const DASHBOARD_DEBOUNCE_MS = 250;
 
 /** Telemetry and generated titles are not evidence of a changed working copy. */
 function repositoryVersion(session: SessionSummary): string {
@@ -94,7 +100,19 @@ async function readJson<T>(req: IncomingMessage): Promise<T> {
 
 type MissionClientMessage = Extract<ClientMessage, { missionId: string }>;
 type FocusClientMessage = Extract<ClientMessage, { type: "focus" }>;
-type SessionClientMessage = Exclude<ClientMessage, MissionClientMessage | FocusClientMessage>;
+type DashboardClientMessage = Extract<ClientMessage, { projectId: string }>;
+type SessionClientMessage = Exclude<ClientMessage, MissionClientMessage | FocusClientMessage | DashboardClientMessage>;
+
+function isDashboardClientMessage(value: unknown): value is DashboardClientMessage {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const message = value as Record<string, unknown>;
+	return (
+		(message.type === "dashboard.subscribe" || message.type === "dashboard.unsubscribe") &&
+		typeof message.projectId === "string" &&
+		message.projectId.length > 0 &&
+		message.projectId.length <= 128
+	);
+}
 
 function isFocusClientMessage(value: unknown): value is FocusClientMessage {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -158,8 +176,17 @@ export function createDaemonServer(
 	models: ModelCatalog,
 	terminals: TerminalManager,
 	missions?: { service: MissionService; store: MissionStore },
+	dashboardProviders?: DashboardProviders,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
+	const reviews = new ReviewStore(_config.home);
+	const dashboards = new ProjectDashboardService({
+		sessions,
+		projects,
+		reviews,
+		...(missions ? { missions: missions.store } : {}),
+		...(dashboardProviders ? { providers: dashboardProviders } : {}),
+	});
 	const repositoryChanges = new RepositoryChanges();
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
@@ -207,6 +234,30 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "artifacts" && req.method === "GET")
 			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "dashboard" && req.method === "GET")
+			return json(res, 200, dashboards.dashboard(parts[2]!));
+		if (parts[1] === "dashboard" && parts[2] === "counts" && parts.length === 3 && req.method === "GET")
+			return json(res, 200, dashboards.counts());
+		if (parts[1] === "reviews" && parts.length === 2 && req.method === "POST") {
+			const body = await readJson<ReviewRequest>(req);
+			const marks = body?.marks;
+			if (
+				!Array.isArray(marks) ||
+				marks.length > REVIEW_MARKS_MAX ||
+				!marks.every(
+					(mark) =>
+						mark !== null &&
+						typeof mark === "object" &&
+						typeof mark.sessionId === "string" &&
+						typeof mark.outcomeAt === "number" &&
+						Number.isFinite(mark.outcomeAt),
+				)
+			)
+				throw new HttpError(400, `marks must list at most ${REVIEW_MARKS_MAX} { sessionId, outcomeAt } entries`);
+			// Chats that no longer exist have nothing to review.
+			reviews.mark(marks.filter((mark) => sessions.get(mark.sessionId)));
+			return json(res, 200, { ok: true });
+		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "branches" && req.method === "GET")
 			return json(
 				res,
@@ -446,6 +497,65 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	projects.onChange((list) => {
+		broadcast({ type: "projects", projects: list });
+	});
+	sessions.onArtifactsChanged((sessionId, artifacts) => {
+		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
+		broadcast({ type: "artifacts", sessionId, artifacts });
+	});
+	/** Subscribed sockets per mission. Detail is read once per change and shared. */
+	const missionSubscribers = new Map<string, Set<WebSocket>>();
+	/** Subscribed sockets per project dashboard, and the last content sent for each (to push only real changes). */
+	const dashboardSubscribers = new Map<string, Set<WebSocket>>();
+	const dashboardSent = new Map<string, string>();
+	let countsSent = "";
+	let dashboardTimer: NodeJS.Timeout | undefined;
+	const sendCounts = (targets?: WebSocket) => {
+		const counts = dashboards.counts();
+		const key = JSON.stringify(counts);
+		if (targets) return send(targets, { type: "dashboard.counts", counts });
+		if (key === countsSent) return;
+		countsSent = key;
+		broadcast({ type: "dashboard.counts", counts });
+	};
+	const pushDashboard = (projectId: string, targets: Iterable<WebSocket>, onlyChanged: boolean) => {
+		try {
+			const dashboard = dashboards.dashboard(projectId);
+			const key = JSON.stringify(dashboard);
+			if (onlyChanged && dashboardSent.get(projectId) === key) return;
+			dashboardSent.set(projectId, key);
+			for (const ws of targets) send(ws, { type: "dashboard", dashboard });
+		} catch (error) {
+			dashboardSent.delete(projectId);
+			for (const ws of targets)
+				send(ws, { type: "error", message: error instanceof Error ? error.message : String(error) });
+			if (error instanceof NotFound) dashboardSubscribers.delete(projectId);
+		}
+	};
+	const refreshDashboards = () => {
+		dashboardTimer = undefined;
+		if (clients.size === 0) return;
+		try {
+			sendCounts();
+			for (const [projectId, subscribers] of [...dashboardSubscribers])
+				if (subscribers.size) pushDashboard(projectId, [...subscribers], true);
+		} catch (error) {
+			console.warn(`pilotd: dashboard update failed: ${error}`);
+		}
+	};
+	// Event-driven: any source change schedules one trailing recompute, so bursts cost a single pass.
+	const stopDashboardWatch = dashboards.onChange(() => {
+		if (clients.size === 0 || dashboardTimer) return;
+		dashboardTimer = setTimeout(refreshDashboards, DASHBOARD_DEBOUNCE_MS);
+		dashboardTimer.unref();
+	});
+	server.on("close", () => {
+		stopDashboardWatch();
+		clearTimeout(dashboardTimer);
+		dashboardTimer = undefined;
+	});
+	// Keep this the last `sessions.onChange` registration: server.test.ts drives the most recent listener.
 	sessions.onChange((session) => {
 		const previous = repositoryVersions.get(session.id);
 		const version = repositoryVersion(session);
@@ -456,15 +566,6 @@ export function createDaemonServer(
 		}
 		broadcast({ type: "session", session });
 	});
-	projects.onChange((list) => {
-		broadcast({ type: "projects", projects: list });
-	});
-	sessions.onArtifactsChanged((sessionId, artifacts) => {
-		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
-		broadcast({ type: "artifacts", sessionId, artifacts });
-	});
-	/** Subscribed sockets per mission. Detail is read once per change and shared. */
-	const missionSubscribers = new Map<string, Set<WebSocket>>();
 	const pushMission = (missionId: string, targets: Iterable<WebSocket>) => {
 		if (!missions) return;
 		const detail = missions.store.get(missionId) ? missions.store.detail(missionId) : undefined;
@@ -501,6 +602,7 @@ export function createDaemonServer(
 		send(ws, { type: "projects", projects: projects.list() });
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
 		if (missions) send(ws, { type: "missions", missions: missions.store.list() });
+		sendCounts(ws);
 		ws.on("message", (raw) => {
 			if (ws.readyState !== ws.OPEN) return;
 			let message: unknown;
@@ -522,6 +624,22 @@ export function createDaemonServer(
 				return pushMission(missionId, [ws]);
 			}
 			if (isFocusClientMessage(message)) return sessions.focusPullRequests(message.sessionIds);
+			if (isDashboardClientMessage(message)) {
+				const { projectId } = message;
+				if (message.type === "dashboard.unsubscribe") {
+					const subscribers = dashboardSubscribers.get(projectId);
+					subscribers?.delete(ws);
+					if (subscribers && !subscribers.size) {
+						dashboardSubscribers.delete(projectId);
+						dashboardSent.delete(projectId);
+					}
+					return;
+				}
+				let subscribers = dashboardSubscribers.get(projectId);
+				if (!subscribers) dashboardSubscribers.set(projectId, (subscribers = new Set()));
+				subscribers.add(ws);
+				return pushDashboard(projectId, [ws], false);
+			}
 			if (!isClientMessage(message)) return send(ws, { type: "error", message: "Invalid client message" });
 			const { sessionId } = message;
 			if (message.type.startsWith("terminal.")) {
@@ -586,6 +704,13 @@ export function createDaemonServer(
 		});
 		ws.on("close", () => {
 			clients.delete(ws);
+			for (const [id, subscribers] of dashboardSubscribers) {
+				subscribers.delete(ws);
+				if (!subscribers.size) {
+					dashboardSubscribers.delete(id);
+					dashboardSent.delete(id);
+				}
+			}
 			for (const [id, subscribers] of missionSubscribers) {
 				subscribers.delete(ws);
 				if (!subscribers.size) missionSubscribers.delete(id);

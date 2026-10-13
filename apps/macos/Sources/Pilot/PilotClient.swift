@@ -17,6 +17,11 @@ final class PilotClient: ObservableObject {
     @Published private(set) var missionDetails: [String: MissionDetail] = [:]
     /// Subscription reference counts for views displaying mission detail.
     private var missionRefs: [String: Int] = [:]
+    /// Dashboards of subscribed projects only. Updates arrive over the socket, never by polling.
+    @Published private(set) var projectDashboards: [String: ProjectDashboard] = [:]
+    /// Working and needs-you counts per project, for the sidebar scope switcher.
+    @Published private(set) var projectCounts = ProjectDashboardCounts()
+    private var dashboardRefs: [String: Int] = [:]
     private var fixtureMissions = false
     private var fixtureSessions = false
     @Published private(set) var connected = false
@@ -503,6 +508,22 @@ final class PilotClient: ObservableObject {
 
     // MARK: Missions
 
+    /// Keeps a project's dashboard live while a view shows it. Balance with `releaseDashboard`.
+    func retainDashboard(_ projectId: String) {
+        dashboardRefs[projectId, default: 0] += 1
+        if dashboardRefs[projectId] == 1 {
+            post(["type": .string("dashboard.subscribe"), "projectId": .string(projectId)])
+        }
+    }
+
+    func releaseDashboard(_ projectId: String) {
+        guard let count = dashboardRefs[projectId] else { return }
+        if count > 1 { dashboardRefs[projectId] = count - 1; return }
+        dashboardRefs[projectId] = nil
+        projectDashboards[projectId] = nil
+        post(["type": .string("dashboard.unsubscribe"), "projectId": .string(projectId)])
+    }
+
     /// Keeps a mission's detail live while a view shows it. Balance with `releaseMission`.
     func retainMission(_ id: String) {
         missionRefs[id, default: 0] += 1
@@ -821,6 +842,9 @@ final class PilotClient: ObservableObject {
                         for id in self.missionRefs.keys {
                             self.post(["type": .string("mission.subscribe"), "missionId": .string(id)])
                         }
+                        for id in self.dashboardRefs.keys {
+                            self.post(["type": .string("dashboard.subscribe"), "projectId": .string(id)])
+                        }
                         for id in self.terminals.keys { self.sendAttach(id, restart: false) }
                     }
                     if let decoded { self.handle(decoded) }
@@ -888,6 +912,11 @@ final class PilotClient: ObservableObject {
             guard missionRefs[detail.mission.id] != nil else { break }
             missionDetails[detail.mission.id] = detail
             upsert(detail.mission)
+        case let .dashboard(dashboard):
+            guard dashboardRefs[dashboard.projectId] != nil else { break }
+            projectDashboards[dashboard.projectId] = dashboard
+        case let .dashboardCounts(counts):
+            projectCounts = counts
         case let .terminalData(id, data):
             terminals[id]?.onData(data)
         case let .terminalExit(id, code):

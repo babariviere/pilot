@@ -931,6 +931,9 @@ reports), producing a morning summary in the app and Slack.
 | `/api/missions/:id/decisions`, `/comments`, `/resources`, `/artifacts` (POST, PATCH/DELETE by id), `/events` (GET, POST) | Decisions, anchored comments, external links, artifact links and activity |
 | `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
+| `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first once readiness exists), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
+| `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
+| `POST /api/reviews` (`{ marks: [{ sessionId, outcomeAt }] }`) | Daemon-side record of reviewed chat results (`reviews.json`, marks only move forward, at most 1000 per request), so "unread" in the dashboard and counts matches what the user has seen. Clients forward their reviews, and may backfill their local marks once |
 | `GET /api/audit` | External effects log |
 | WS `questions` | Push new questions to clients |
 

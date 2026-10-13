@@ -606,6 +606,199 @@ export interface StartMissionTaskRequest {
 	baseBranch?: string;
 }
 
+/** Rows each project dashboard section carries. Sections also report their full `total`. */
+export const DASHBOARD_SECTION_LIMIT = 5;
+
+/** A bounded slice of a dashboard section: at most DASHBOARD_SECTION_LIMIT rows plus the full count. */
+export interface DashboardSection<T> {
+	/** Every matching row, not just those in `items`. */
+	total: number;
+	items: T[];
+}
+
+/**
+ * Why something needs the user, most urgent first.
+ * - `failed`: a chat's latest run failed and has not been reviewed.
+ * - `question`: an active mission has blocked tasks, or open agent comments with no coordinator chat to take them.
+ * - `scheduled_failed`: a scheduled item could not start.
+ * - `unread`: a chat finished or stopped and its result has not been reviewed.
+ */
+export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "unread";
+
+export interface DashboardNeedsYouItem {
+	kind: DashboardNeedsYouKind;
+	/** Stable row key. */
+	id: string;
+	title: string;
+	/** `failed` and `unread`. */
+	sessionId?: string;
+	/** `question` always, chats when they belong to a mission. */
+	missionId?: string;
+	/** `scheduled_failed`: the scheduled item. */
+	scheduledId?: string;
+	/** `failed` and `unread`. */
+	outcome?: SessionOutcome;
+	/** Failure or stop reason, one short line. */
+	reason?: string;
+	/** `question`: blocked tasks plus open comments awaiting the user. */
+	count?: number;
+	/** Epoch ms: completion time, mission update time, or the item's scheduled time. Newest first within a kind. */
+	at: number;
+}
+
+/** A PR a row can show without the whole SessionPullRequest. */
+export interface DashboardPullRequestRef {
+	number: number;
+	url: string;
+	state: SessionPullRequest["state"];
+}
+
+export interface DashboardWorkingItem {
+	sessionId: string;
+	title: string;
+	state: "starting" | "working";
+	mode: ChatMode;
+	missionId?: string;
+	missionTitle?: string;
+	model?: string;
+	branch?: string;
+	pullRequest?: DashboardPullRequestRef;
+	/** Latest user submission (else creation), epoch ms. Clients compute elapsed time locally. */
+	startedAt: number;
+}
+
+/**
+ * Merge readiness of an open PR. Provisional mirror of the per-PR readiness the daemon will track
+ * (`SessionPullRequest.readiness`); reasons are short labels such as "failing checks: build". Omitted until known.
+ */
+export interface DashboardPullRequestReadiness {
+	state: "ready" | "pending" | "blocked";
+	reasons?: string[];
+}
+
+export interface DashboardPullRequest {
+	number: number;
+	url: string;
+	title: string;
+	state: "draft" | "open";
+	branch?: string;
+	/** Chat that owns the PR. */
+	sessionId: string;
+	sessionTitle: string;
+	missionId?: string;
+	checkedAt: number;
+	readiness?: DashboardPullRequestReadiness;
+}
+
+export interface DashboardMission {
+	id: string;
+	title: string;
+	/** Tasks done, and tasks overall (dropped tasks excluded). */
+	tasksDone: number;
+	tasksTotal: number;
+	/** Member chats working now. */
+	working: number;
+	/** Needs-you rows belonging to the mission: its question count plus member chats with an unreviewed result. */
+	needsYou: number;
+	coordinatorSessionId?: string;
+}
+
+export interface DashboardRecentItem {
+	sessionId: string;
+	title: string;
+	outcome: SessionOutcome;
+	/** Epoch ms. */
+	outcomeAt: number;
+	missionId?: string;
+	branch?: string;
+	pullRequest?: DashboardPullRequestRef;
+}
+
+/** Extension point for scheduled items. Filled by the scheduler; absent until then (section total 0). */
+export interface DashboardScheduledItem {
+	id: string;
+	title: string;
+	/** What it will do. */
+	kind: "chat" | "message";
+	trigger: "on_back" | "on_online" | "at";
+	/** Epoch ms, for `at` triggers. */
+	at?: number;
+	/** `pending` rows list under Scheduled, `failed` ones under Needs you. */
+	state: "pending" | "failed";
+	/** Why it could not start. */
+	error?: string;
+	/** Target chat of a message. */
+	sessionId?: string;
+}
+
+/** Health of one tracked-item source. */
+export type DashboardSourceStatus = "ok" | "syncing" | "sign_in_required" | "error";
+
+export interface DashboardTrackedItem {
+	id: string;
+	title: string;
+	url?: string;
+	/** Source-specific label, for example a Linear state or "bug report". */
+	status?: string;
+	updatedAt?: number;
+}
+
+/** Extension point for tracked items, one group per configured source. Empty until a source is configured. */
+export interface DashboardTrackedSource {
+	/** Source identifier, for example "linear" or "slack". */
+	source: string;
+	label: string;
+	status: DashboardSourceStatus;
+	error?: string;
+	total: number;
+	items: DashboardTrackedItem[];
+}
+
+/** Counts for the headline sentence and the sidebar. */
+export interface ProjectDashboardSummary {
+	/** Active (not archived) chats of the project. 0 means a new project. */
+	chats: number;
+	working: number;
+	/** Equals `needsYou.total`. */
+	needsYou: number;
+	openPullRequests: number;
+	readyPullRequests: number;
+	activeMissions: number;
+}
+
+/** GET /api/projects/:id/dashboard, and the payload of WS `dashboard`. Bounded, with no timestamps of its own. */
+export interface ProjectDashboard {
+	projectId: string;
+	summary: ProjectDashboardSummary;
+	needsYou: DashboardSection<DashboardNeedsYouItem>;
+	working: DashboardSection<DashboardWorkingItem>;
+	/** Open and draft PRs. Ready to merge first, then newest check first. */
+	pullRequests: DashboardSection<DashboardPullRequest>;
+	/** Active missions, those needing the user first. */
+	missions: DashboardSection<DashboardMission>;
+	scheduled: DashboardSection<DashboardScheduledItem>;
+	/** One group per configured source, in a stable order. */
+	tracked: DashboardTrackedSource[];
+	/** Finished chats that are no longer waiting on the user, latest first. */
+	recent: DashboardSection<DashboardRecentItem>;
+}
+
+/** Per-project counts for the sidebar scope switcher. Same figures as `ProjectDashboardSummary`. */
+export interface ProjectDashboardCount {
+	working: number;
+	needsYou: number;
+}
+
+/** GET /api/dashboard/counts, and the payload of WS `dashboard.counts`. Projects with neither are omitted. */
+export interface ProjectDashboardCounts {
+	projects: Record<string, ProjectDashboardCount>;
+}
+
+/** POST /api/reviews: the user has seen these chat results (up to 1000 marks). Marks only move forward. */
+export interface ReviewRequest {
+	marks: Array<{ sessionId: string; outcomeAt: number }>;
+}
+
 /** One selectable model, from the user's pi scope. */
 export interface ModelOption {
 	/** "provider/modelId", the value to send as `model`. */
@@ -785,6 +978,9 @@ export type ClientMessage =
 	/** Receive `mission` details for one mission: the current detail first, then after every change. */
 	| { type: "mission.subscribe"; missionId: string }
 	| { type: "mission.unsubscribe"; missionId: string }
+	/** Receive `dashboard` for one project: the current dashboard first, then whenever it changes. */
+	| { type: "dashboard.subscribe"; projectId: string }
+	| { type: "dashboard.unsubscribe"; projectId: string }
 	/**
 	 * The client is in the foreground showing these sessions (at most 50). The daemon rechecks their
 	 * pull requests soon unless they were checked recently. Subscribing to a session implies the same.
@@ -802,6 +998,10 @@ export type ServerMessage =
 	| { type: "missions"; missions: Mission[] }
 	/** Full detail for a subscribed mission, on subscription and after every change. */
 	| { type: "mission"; mission: MissionDetail }
+	/** A subscribed project's dashboard, on subscription and after every change that alters it. */
+	| { type: "dashboard"; dashboard: ProjectDashboard }
+	/** Sidebar counts for every project, on connection and whenever they change. */
+	| { type: "dashboard.counts"; counts: ProjectDashboardCounts }
 	/** Starts with a snapshot event on every (re)subscription, then incremental batches. */
 	| { type: "events"; sessionId: string; events: AgentEvent[] }
 	| { type: "terminal.data"; sessionId: string; data: string }
