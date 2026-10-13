@@ -654,8 +654,8 @@ reports), producing a morning summary in the app and Slack.
   settings, Finder, archived chats, artifacts). The body is one reading column: a headline sentence and
   meta line, then Needs you (always shown), Working now, Pull requests (readiness when pilotd reports it,
   otherwise plain Open or Draft), Missions with task progress and Recent, each at most 5 rows plus
-  "N more". Data is the daemon's project dashboard, subscribed while the page is visible and updated in
-  place over the WebSocket. First open shows a spinner; a lost connection or failed Retry keeps the last
+  "Show all N". Selecting it opens a full-list destination backed by a one-time bounded dashboard read
+  (up to 100 rows); live updates on the page remain on the WebSocket, with no polling. First open shows a spinner; a lost connection or failed Retry keeps the last
   data under a banner. Until review marks reach pilotd, the app's own review state hides results the user
   has already reviewed. Scheduled and Tracked sections are added with those features.
 - Sidebar scope: a switcher at the top of the sidebar lists every project ("All projects", the default) or

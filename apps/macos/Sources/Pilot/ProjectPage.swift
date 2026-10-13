@@ -13,6 +13,9 @@ struct ProjectPage: View {
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
     @State private var retrying = false
+    @State private var fullList: ProjectFullList?
+    @State private var fullListDashboard: ProjectDashboard?
+    @State private var fullListError: String?
 
     var body: some View {
         Group {
@@ -27,6 +30,13 @@ struct ProjectPage: View {
                     }
                     .sheet(isPresented: $showingArtifacts) {
                         ProjectArtifactsBrowser(project: project, client: client)
+                    }
+                    .sheet(item: $fullList) { list in
+                        ProjectFullListSheet(project: project, list: list, dashboard: fullListDashboard,
+                                             error: fullListError, isReviewed: isReviewed) {
+                            Task { await loadFullList(projectId: project.id) }
+                        }
+                        .task { await loadFullList(projectId: project.id) }
                     }
             } else if client.hasProjectSnapshot {
                 EmptyStateView(icon: "folder", title: "This project no longer exists",
@@ -65,7 +75,7 @@ struct ProjectPage: View {
             } else {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
                                      needsYou: ProjectPageNeeds.visible(dashboard.needsYou, isReviewed: isReviewed),
-                                     banner: banner)
+                                     banner: banner, showFullList: showFullList)
             }
         } else if let error = client.dashboardErrors[projectId] {
             EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load this project", message: error) {
@@ -94,6 +104,19 @@ struct ProjectPage: View {
             await client.refreshDashboard(projectId)
             retrying = false
         }
+    }
+
+    private func loadFullList(projectId: String) async {
+        guard fullListDashboard == nil else { return }
+        fullListError = nil
+        do { fullListDashboard = try await client.fullProjectDashboard(projectId) }
+        catch { fullListError = error.localizedDescription }
+    }
+
+    private func showFullList(_ section: ProjectFullList) {
+        fullListDashboard = nil
+        fullListError = nil
+        fullList = section
     }
 
     private func openProjectSettings(_ project: Project) {
@@ -162,6 +185,7 @@ private struct ProjectDashboardBody: View {
     let dashboard: ProjectDashboard
     let needsYou: DashboardSection<DashboardNeedsYouItem>
     let banner: ProjectRefreshBanner?
+    let showFullList: (ProjectFullList) -> Void
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -213,7 +237,8 @@ private struct ProjectDashboardBody: View {
                     if index > 0 { HairlineDivider(leading: 34) }
                     ProjectNeedsYouRow(item: item, now: now)
                 }
-                ProjectMoreLine(hidden: needsYou.hiddenCount, noun: "need you")
+                ProjectMoreLine(hidden: needsYou.hiddenCount, total: needsYou.total + needsYou.hiddenCount,
+                                noun: "need you") { showFullList(.needsYou) }
             }
 
             if !dashboard.working.items.isEmpty {
@@ -222,7 +247,8 @@ private struct ProjectDashboardBody: View {
                         if index > 0 { HairlineDivider(leading: 34) }
                         ProjectWorkingRow(item: item, status: client.session(item.sessionId)?.status ?? .working, now: now)
                     }
-                    ProjectMoreLine(hidden: dashboard.working.hiddenCount, noun: "working")
+                    ProjectMoreLine(hidden: dashboard.working.hiddenCount, total: dashboard.working.total,
+                                    noun: "working") { showFullList(.working) }
                 }
             }
 
@@ -232,7 +258,8 @@ private struct ProjectDashboardBody: View {
                         if index > 0 { HairlineDivider(leading: 34) }
                         ProjectPullRequestRow(pr: pr)
                     }
-                    ProjectMoreLine(hidden: dashboard.pullRequests.hiddenCount, noun: "open")
+                    ProjectMoreLine(hidden: dashboard.pullRequests.hiddenCount, total: dashboard.pullRequests.total,
+                                    noun: "open") { showFullList(.pullRequests) }
                 }
             }
 
@@ -242,7 +269,8 @@ private struct ProjectDashboardBody: View {
                         if index > 0 { HairlineDivider(leading: 34) }
                         ProjectMissionRow(mission: mission)
                     }
-                    ProjectMoreLine(hidden: dashboard.missions.hiddenCount, noun: "active")
+                    ProjectMoreLine(hidden: dashboard.missions.hiddenCount, total: dashboard.missions.total,
+                                    noun: "active") { showFullList(.missions) }
                 }
             }
 
@@ -271,17 +299,98 @@ private struct ProjectPageSection<Content: View>: View {
     }
 }
 
-/// "N more …" under a section that shows only its first rows. The sidebar lists the rest.
+/// A concise full-list entry point under a section's first five rows.
 private struct ProjectMoreLine: View {
     let hidden: Int
+    let total: Int
     let noun: String
+    let action: () -> Void
 
     var body: some View {
         if hidden > 0 {
-            Text("\(hidden) more \(noun)")
+            Button("Show all \(total) \(noun)", action: action)
+                .buttonStyle(.plain)
                 .font(.pilot(.caption))
                 .foregroundStyle(Theme.faintForeground)
                 .padding(.leading, 34)
+        }
+    }
+}
+
+private enum ProjectFullList: String, Identifiable {
+    case needsYou, working, pullRequests, missions
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .needsYou: "Needs you"
+        case .working: "Working now"
+        case .pullRequests: "Pull requests"
+        case .missions: "Missions"
+        }
+    }
+}
+
+/// A bounded, one-time dashboard read keeps long lists out of the live page and uses no polling.
+private struct ProjectFullListSheet: View {
+    let project: Project
+    let list: ProjectFullList
+    let dashboard: ProjectDashboard?
+    let error: String?
+    let isReviewed: (String) -> Bool
+    let retry: () -> Void
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("\(project.name) · \(list.title)").font(.pilot(.title)).foregroundStyle(Theme.foreground)
+            if let dashboard {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        switch list {
+                        case .needsYou:
+                            let visible = ProjectPageNeeds.visible(dashboard.needsYou, isReviewed: isReviewed)
+                            ForEach(Array(visible.items.enumerated()), id: \.element.id) { index, item in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectNeedsYouRow(item: item, now: Date())
+                            }
+                            capNote(visible.total, visible.items.count)
+                        case .working:
+                            ForEach(Array(dashboard.working.items.enumerated()), id: \.element.sessionId) { index, item in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectWorkingRow(item: item, status: model.client.session(item.sessionId)?.status ?? .working, now: Date())
+                            }
+                            capNote(dashboard.working.total, dashboard.working.items.count)
+                        case .pullRequests:
+                            ForEach(Array(dashboard.pullRequests.items.enumerated()), id: \.element.url) { index, item in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectPullRequestRow(pr: item)
+                            }
+                            capNote(dashboard.pullRequests.total, dashboard.pullRequests.items.count)
+                        case .missions:
+                            ForEach(Array(dashboard.missions.items.enumerated()), id: \.element.id) { index, item in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectMissionRow(mission: item)
+                            }
+                            capNote(dashboard.missions.total, dashboard.missions.items.count)
+                        }
+                    }
+                }
+            } else if let error {
+                ContentUnavailableView("Couldn't load this list", systemImage: "exclamationmark.triangle", description: Text(error))
+                Button("Retry", action: retry)
+            } else {
+                ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 560, minHeight: 420)
+        .background(Theme.background)
+    }
+
+    @ViewBuilder private func capNote(_ total: Int, _ count: Int) -> some View {
+        if total > count {
+            Text("Showing the first \(count) of \(total). Refine the list to see more.")
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).padding(.vertical, 8)
         }
     }
 }
