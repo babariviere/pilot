@@ -155,7 +155,13 @@ async function fixture(t: TestContext, options: SessionManagerOptions = {}) {
 	const sessions = await manager();
 	const spawn = async (workspace?: "clone" | "direct") => {
 		const created = await sessions.spawn({ projectId: project.id, workspace, message: "workspace lifecycle" });
-		await until(() => !sessions["starting"].has(created.id));
+		// spawn() starts this initializer asynchronously. Await its own completion rather than polling with
+		// a 10-second wall-clock budget: jj workspace creation is subprocess-heavy and can exceed that
+		// budget when the rest of the local suite is contending for resources.
+		const startup = sessions["starting"].get(created.id);
+		assert.ok(startup, "spawn should publish its startup task before returning");
+		await startup;
+		assert.equal(sessions["starting"].has(created.id), false, "startup task should be removed when settled");
 		assert.equal(sessions.get(created.id)?.state, "working", sessions["metas"].get(created.id)?.failure);
 		await sessions.stop(created.id);
 		await Promise.all([...sessions["titleTasks"], ...sessions["saving"].values()]);
