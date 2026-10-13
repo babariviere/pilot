@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { decodeMcpResult, PiSourceMcpClient, SourceSignInRequired } from "./source-mcp.ts";
 
 test("MCP decoding accepts structured data or JSON envelopes, not markdown or error results", () => {
@@ -22,6 +23,88 @@ test("MCP decoding accepts structured data or JSON envelopes, not markdown or er
 	assert.throws(() => decodeMcpResult({ content: [{ type: "text", text: "# Issues\n1. example" }] }));
 	assert.throws(() => decodeMcpResult({ isError: true, structuredContent: { secret: "do not display" } }), /error/);
 	assert.throws(() => decodeMcpResult({ structuredContent: { text: "x".repeat(513 * 1024) } }), /512/);
+});
+
+test("in-flight stdio cancellation waits for process-group shutdown before returning", async () => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-mcp-stdio-"));
+	const client = new PiSourceMcpClient(home);
+	const marker = join(home, "pids.json");
+	let pids: number[] = [];
+	try {
+		const server = join(home, "server.mjs");
+		await writeFile(
+			server,
+			`
+import {createInterface} from "node:readline";
+import {spawn} from "node:child_process";
+import {writeFileSync} from "node:fs";
+process.on("SIGTERM", () => {});
+for await (const line of createInterface({input:process.stdin})) {
+ const message = JSON.parse(line);
+ if (message.id === undefined) continue;
+ let result = {};
+ if (message.method === "initialize") result = {protocolVersion:"2025-11-25",capabilities:{tools:{}},serverInfo:{name:"fixture",version:"1"}};
+ if (message.method === "tools/list") result = {tools:[{name:"history",inputSchema:{type:"object"},annotations:{readOnlyHint:true}}]};
+ if (message.method === "tools/call") {
+  const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], {stdio:"ignore"});
+  writeFileSync(process.argv[2], JSON.stringify([process.pid,child.pid]));
+  continue;
+ }
+ console.log(JSON.stringify({jsonrpc:"2.0",id:message.id,result}));
+}
+setInterval(()=>{},1000);
+`,
+		);
+		await writeFile(
+			join(home, "mcp.json"),
+			JSON.stringify({
+				mcpServers: {
+					fixture: { command: process.execPath, args: [server, marker] },
+				},
+			}),
+		);
+		const controller = new AbortController();
+		const pending = client.call(
+			{ server: "fixture", tools: { history: "history" } },
+			"history",
+			{},
+			controller.signal,
+		);
+		// Attach the rejection handler immediately, even if fixture startup unexpectedly fails.
+		const settled = assert.rejects(pending, /cancel/);
+		for (let i = 0; i < 1000; i++) {
+			const data = await readFile(marker, "utf8").catch(() => undefined);
+			if (data) {
+				pids = JSON.parse(data);
+				break;
+			}
+			await delay(10);
+		}
+		assert.equal(pids.length, 2, "stdio tool started");
+		controller.abort(new Error("cancel stdio"));
+		await settled;
+		const alive = (pid: number) => {
+			try {
+				process.kill(pid, 0);
+				return true;
+			} catch {
+				return false;
+			}
+		};
+		for (let i = 0; i < 500 && pids.some(alive); i++) await delay(10);
+		assert.ok(
+			pids.every((pid) => !alive(pid)),
+			"both server and child are gone when cancellation completes",
+		);
+	} finally {
+		await client.close();
+		for (const pid of pids) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {}
+		}
+		await rm(home, { recursive: true, force: true });
+	}
 });
 test("pinned SDK wrapper reuses stored OAuth, dispatcher/tool bindings and detects required sign-in", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-mcp-"));

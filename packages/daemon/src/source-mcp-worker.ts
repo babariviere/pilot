@@ -40,9 +40,13 @@ const auth = (await import(new URL("./core/auth-storage.js", sdk).href)) as {
 };
 const controller = new AbortController();
 let connection: Connection | undefined;
+let closing: Promise<void> | undefined;
+// SDK connection.close() itself is not single-flight: a second close can miss the first transport's
+// pending stdio shutdown. Await the same close before replying or allowing daemon shutdown.
+const close = () => (connection ? (closing ??= connection.close()) : Promise.resolve());
 parentPort!.on("message", () => {
 	controller.abort(new Error("MCP request cancelled or timed out"));
-	void connection?.close();
+	void close();
 });
 let reply: { value?: ReturnType<typeof decodeMcpResult>; error?: string; signIn?: boolean };
 try {
@@ -88,7 +92,7 @@ try {
 		signIn: connection?.state === "needs-auth",
 	};
 } finally {
-	await connection?.close();
+	await close();
 }
 parentPort!.postMessage(reply);
 parentPort!.close();
