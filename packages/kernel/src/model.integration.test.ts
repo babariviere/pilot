@@ -509,8 +509,9 @@ test("running and queued conversations reject model changes without aborting or 
 	await assert.rejects(session.changeModel(first, "low"), ConversationBusy);
 	assert.equal(session.model, first);
 	assert.deepEqual(await session.harness.inspect(context), before);
+	// Stop hands the user's queued message back for the composer.
+	assert.deepEqual(await session.abort(), [{ requestId: "queued", content: "Then do more" }]);
 	response.resolve(fauxAssistantMessage("done"));
-	await session.abort();
 	await session.conversation.waitForIdle(context);
 	// An idle run can still have a retained queue after failure. Check the inbox on the commit line.
 	await session.conversation.commit(async (tx) => {

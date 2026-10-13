@@ -950,6 +950,15 @@ export interface SessionHistoryPage {
 }
 
 /**
+ * POST /api/sessions/:id/stop. Aborts the current run and withdraws queued input. The user's own queued messages come
+ * back as `draft`, in delivery order, so the composer keeps them instead of losing them.
+ */
+export interface StopResponse {
+	ok: true;
+	draft?: string;
+}
+
+/**
  * POST /api/sessions/:id/rewind. Stops current work, then continues the session from an earlier point in a new
  * attempt. The previous attempt stays available. Workspace files are not reverted.
  * - `retry`: `entryId` is a failed assistant entry. Resends the user message that started its turn.

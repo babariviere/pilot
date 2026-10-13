@@ -206,10 +206,11 @@ export function runKernelWorker(): void {
 				await session.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
-			case "abort":
-				await session.abort();
-				await send({ type: "aborted", requestId: command.requestId });
+			case "abort": {
+				const withdrawn = await session.abort();
+				await send({ type: "aborted", requestId: command.requestId, ...(withdrawn.length ? { withdrawn } : {}) });
 				break;
+			}
 			case "rewind":
 			case "activateAttempt": {
 				const result =

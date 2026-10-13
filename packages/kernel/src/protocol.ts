@@ -111,7 +111,8 @@ export type KernelPacket =
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */
 	| { type: "workspace.prepare"; callId: string }
 	| { type: "accepted"; requestId: string }
-	| { type: "aborted"; requestId: string }
+	/** `withdrawn` holds the user's own queued messages, in delivery order, which Stop restores to the composer. */
+	| { type: "aborted"; requestId: string; withdrawn?: { requestId?: string; content: string }[] }
 	/**
 	 * The active attempt changed (`switched`): this kernel accepts no more work and must be replaced. `content` is the
 	 * message retry resends or edit restores to the composer.
