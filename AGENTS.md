@@ -4,7 +4,6 @@
 
 Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durable sessions
 (`@earendil-works/pi-durable`) and exposes them through a local daemon and a native macOS app.
-[PLAN.md](PLAN.md) is the spec and milestone plan; keep it current when scope changes.
 
 - `packages/protocol`: shared HTTP/WebSocket types between daemon and clients. Types only.
 - `packages/kernel`: one worker process per session. Owns the Harness, its SQLite storage and the
@@ -12,6 +11,17 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 - `packages/daemon`: `pilotd`. HTTP + WebSocket API, session registry and worker supervision.
 - `apps/macos`: SwiftUI app (SwiftPM, Command Line Tools only). `PilotCore` mirrors `packages/protocol`;
   change both together.
+
+Docs to use when the task touches them:
+
+- [PLAN.md](PLAN.md) is the spec. Read the section for the area you change (workspaces and policy in §5,
+  missions §5.7, project memory §5.8, integrations §6, the app §7) and keep it current when scope changes.
+- [DESIGN.md](DESIGN.md) holds the UI intent, state vocabulary and review checklist for UI changes.
+- `scripts/bench` holds reopen, workspace and memory benchmarks for hot-path changes;
+  [docs/performance-check.md](docs/performance-check.md) records a past CPU and memory audit and its method.
+- Agent-facing text (the Pilot prompt in `packages/kernel/src/policy.ts`, tool descriptions and the bundled
+  `pilot-artifacts` skill) is loaded on every turn or tool listing. Keep it short, state boundaries plainly,
+  and move detail into skill references or tool descriptions that load only when needed.
 
 ## Working conventions
 
@@ -24,53 +34,36 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
   shares with children, because `@State` re-evaluates its initial value on every view init.
 - Build Swift through `apps/macos/scripts/{build,test,bundle}.sh`. With Command Line Tools only, the macOS 27
   SDK's `@State` macro has no plugin, so `scripts/swift-env.sh` falls back to an older installed SDK.
-- For user-visible UI changes, use the `artifact` tool to show the result. Prefer `kind: "swiftui"`
-  for native layout previews: supply a self-contained `struct ArtifactView: View` with mock data,
-  inspect it with `action: "preview"` when available, then publish with `action: "create"` (or update an existing
-  artifact). SwiftUI artifacts are static screenshots, not project-aware builds; call out that
-  limitation when showing a prototype. If the tool or renderer is unavailable, explain why and
-  provide another visual check rather than claiming a preview was verified.
+- Show user-visible UI changes with a SwiftUI artifact built from mock data (the `pilot-artifacts` skill has
+  the details). It is a static screenshot, not the real views: say so, and say when no visual check was possible.
 
 ## Performance
 
-- Every change must consider GUI responsiveness and daemon CPU, memory, I/O and event-loop impact.
-  Treat smooth scrolling, typing and navigation as requirements, not optional polish.
-- Keep blocking I/O and expensive computation off the UI main thread and daemon event loop.
-  Bound concurrency, queues and retained data; avoid repeated work and unnecessary view updates.
-- Prefer event-driven updates over polling. Coalesce high-frequency updates where appropriate,
-  and cancel obsolete work and release timers, subscriptions and resources when no longer needed.
-- For changes affecting hot paths, verify with representative large sessions and streaming activity.
-  Use relevant benchmarks or profiling, compare before and after, and report any unverified risks.
+- GUI responsiveness (smooth scrolling, typing and navigation) and daemon CPU, memory, I/O and event-loop load
+  are requirements, not polish.
+- Keep blocking I/O and expensive computation off the UI main thread and the daemon event loop. Bound
+  concurrency, queues and retained data, and avoid repeated work and unnecessary view updates.
+- Prefer event-driven updates over polling, coalesce high-frequency updates, and cancel obsolete work and
+  release timers, subscriptions and resources when they are no longer needed.
+- When a change touches a hot path, measure it with large sessions and streaming activity, compare before and
+  after, and report any risk you could not verify.
 
-## UI consistency and simplicity
+## UI and design system
 
-- [DESIGN.md](DESIGN.md) states the design intent (calm, status-first). Read it before changing the UI.
-- Keep the UI clean, calm and focused. Prioritize primary actions and use progressive disclosure
-  for secondary controls and details instead of overloading screens.
-- Follow existing layouts, interaction patterns, terminology and visual hierarchy. Avoid introducing
-  one-off styles or duplicate controls for the same action.
-- Check changed UI at realistic window sizes and with long content, including loading, empty,
-  error and disabled states. Preserve keyboard access, readable contrast and reduced-motion support.
+- Keep screens calm and focused: one primary action, progressive disclosure for the rest, and existing
+  layouts, terminology and hierarchy. DESIGN.md explains the intent.
+- `apps/macos/Sources/Pilot/Theme.swift` and the shared components are the design system. Reuse their tokens
+  and components, add missing ones centrally with a note on their intended use, and evolve them incrementally
+  rather than adding one-off styles or a parallel system.
 
-## Design system
-
-- Treat `apps/macos/Sources/Pilot/Theme.swift` and shared UI components as the foundation of the
-  design system. Reuse them rather than adding screen-specific styling.
-- Keep colors, typography, spacing, sizing, corner radii and motion consistent through shared
-  semantic tokens. Add missing reusable tokens or components centrally instead of scattering literals.
-- Define reusable components with consistent interaction and accessibility behavior. Document new
-  patterns and their intended use alongside the shared implementation so future changes follow them.
-- Evolve the design system incrementally as part of relevant UI work; do not introduce a parallel
-  styling system or broad unrelated redesign.
-
-## Formatting and tests
+## Formatting and checks
 
 - Biome: tabs, width 120. `npm run fmt` / `npm run fmt:check`.
 - Tests use `node:test` and `node:assert/strict`, beside their implementation as `*.test.ts`.
-- Run tests with `npm test` (bounded to 2 test files concurrently by default). Raise the local
-  limit with `PILOT_TEST_CONCURRENCY=4 npm test` when your machine has headroom.
-- Before finishing a change: `npm run typecheck` and `npm test`; for Swift changes also
-  `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`.
+- Local checks use temporary directories and faux model providers, not real accounts. Run the ones that cover
+  your change, fix failures it causes, and rerun them without asking: `npm run typecheck`, `npm test` (two
+  test files at a time; `PILOT_TEST_CONCURRENCY=4 npm test` when the machine has headroom), and for Swift
+  changes `apps/macos/scripts/test.sh` and `apps/macos/scripts/build.sh`.
 
 ## Repository safety
 

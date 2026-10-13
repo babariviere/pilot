@@ -115,7 +115,7 @@ for (const mode of ["on", "only"] as const) {
 		f.cleanup.push(() => adapter.close());
 		assert.doesNotMatch(
 			adapter.session.systemPrompt,
-			/proactively publish a diagram/,
+			/publish one with the artifact tool/,
 			"ordinary Pi tools do not inject Pilot-only behavior",
 		);
 		for (const tool of tools) {
@@ -384,10 +384,10 @@ for (const mode of ["on", "only"] as const) {
 			assert.equal(f.faux.state.callCount, 1);
 			assert.ok(prompt);
 			if (available) {
-				assert.match(prompt, /proactively publish a diagram with the artifact tool/);
-				assert.match(prompt, /Artifact preview is optional verification/);
+				assert.match(prompt, /publish one with the artifact tool without being asked/);
+				assert.match(prompt, /Artifact preview is optional\./);
 			} else {
-				assert.doesNotMatch(prompt, /proactively publish a diagram|Artifact preview is optional verification/);
+				assert.doesNotMatch(prompt, /publish one with the artifact tool|Artifact preview is optional/);
 			}
 		});
 	}
@@ -524,9 +524,10 @@ text(await tools.read({path:${JSON.stringify(ARTIFACT_SKILL_PATH)}}));
 					description.includes(ARTIFACT_SKILL_PATH),
 					"namespace instructions locate the skill even with an older cached prompt",
 				);
-				assert.match(description, /ArtifactView/);
-				assert.match(description, /@StateObject/);
-				assert.match(description, /mermaid\.initialize/);
+				// The skill root routes to per-kind references instead of inlining every kind's details.
+				assert.match(description, /references\/swiftui\.md/);
+				assert.match(description, /references\/web\.md/);
+				assert.match(description, /expectedRevision/);
 				return fauxAssistantMessage(
 					fauxToolCall("codemode", {
 						code: `

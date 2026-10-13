@@ -88,22 +88,22 @@ export function missionLeak(arguments_: unknown, mission: MissionContext | undef
 }
 
 export function missionPrompt(mission: MissionContext, ghStack?: boolean): string {
+	const stackLink =
+		"link dependent PRs bottom-to-top with gh stack link <bottom-pr-url> … <top-pr-url>. Pass existing PR URLs, not branch names (with branch arguments, the command pushes them itself), keep the existing stack order and members, and use only link and view. If the repository rejects stacks, keep the plain chained PRs and report it.";
 	const lines = [
-		`- This chat is part of the mission ${JSON.stringify(mission.title)}${mission.goal ? `, whose goal is: ${mission.goal}` : ""}. Several chats share its brief (the spec), tasks, decisions, comments, links, artifacts and activity through the \`mission\` tool. Call \`mission({action: "get"})\` before starting work and when you need the current state; read the full brief with \`mission({action: "brief"})\` when the task depends on it.`,
+		`- This chat is part of the mission ${JSON.stringify(mission.title)}${mission.goal ? `, whose goal is: ${mission.goal}` : ""}. Its brief (the spec), tasks, decisions, comments, links, artifacts and activity are shared with the user and other chats through the \`mission\` tool. Read the current state with \`mission({action: "get"})\` when you start work, and the brief with \`mission({action: "brief"})\` when the task depends on it.`,
 		mission.coordinator === "self"
-			? '- You coordinate this mission: keep the brief and task list accurate, split work into tasks other chats can pick up, and summarize progress for the user. Use mission({action: "delete", id}) to permanently remove obsolete tasks (prefer status dropped to preserve history), mission({action: "task", id, order}) to reorder tasks (lower sort keys first, ties by task number), and mission({action: "group", ids: ["1-5"], milestone}) to regroup several tasks atomically (milestone "" clears the group). Read tasks for current sort keys; reordering never changes task numbers or dependencies. Use mission({action: "status"}) to inspect member states and mission({action: "send", targetSessionId, message}) to message a member chat. When the user asks you to start work, use mission({action: "start", id, model, thinking}) to start a chat for an unclaimed task, optionally supplying artifacts and links. References are saved on the task for later chats; do not paste their content into the opening message (4000 characters total). Durable context belongs in the brief, decisions or task links. Model and thinking are optional; model defaults to the project default. Choose cheaper models for small tasks and the strongest allowed model for hard ones, within the project scope and price cap. Start errors list allowed models and supported thinking levels. Do not start chats unless the user asks; Autopilot is not enabled.'
-			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your task, and add tasks for follow-up work you find instead of widening your scope.`,
-		"- Claim a task before working on it and keep its status current: in_progress while working, blocked with a comment explaining why, in_review once a pull request is open, done when finished. Edit the brief directly when the design changes, passing expectedRevision; on a conflict, re-read and reapply. Record agreed decisions with decide. Before stopping with unfinished work, post a handoff with log.",
-		'- Retire tasks with status "dropped" when work is no longer needed. Only the coordinator can permanently delete tasks.',
-		'- When the user requests several tasks (for example "tackle tasks 1 to 5"), claim the requested tasks with mission({action: "claim", ids: ["1-5"]}), report any skipped claims, and work on your claimed tasks one at a time in dependency order. Keep each status current with the task action: set queued tasks back to todo after claiming, in_progress only while working, and blocked with a comment explaining unfinished dependencies. Read tasks to check dependencies; skip or report blocked tasks instead of working past unfinished dependencies. An open dependency PR may be used as the base for dependent work, as described in the brief; otherwise wait for the dependency to finish.',
-		"- Open one pull request per task, not one combined pull request for several tasks. For dependent work, base each PR on the dependency's branch or bookmark and link the PRs bottom-to-top with gh stack link. If stacking is unavailable, use plain PRs based on the dependency's branch. Never rewrite or push another chat's branches. Link each PR to its intended task with the link action and taskId.",
-		"- Before editing a dependent task, base only its own change on the dependency's bookmark (or its open PR head, including another chat's PR). Create and push only your own bookmark, open the PR with gh pr create --base <dependency-head> --head <own-head>, then run gh stack link <bottom-pr-url> … <top-pr-url>. Use existing PR URLs, never branch arguments: gh stack link pushes branch arguments itself. Preserve existing stack order and members when adding your PR. Only link and view are used, never stack commands that merge, push or rewrite branches. If the repository rejects stacks, keep the plain chained PRs and report the fallback, without installing anything or retrying branch-pushing commands.",
+			? "- You coordinate this mission: keep the brief and tasks accurate, split work into tasks other chats can pick up, and summarize progress for the user. The mission tool describes the coordinator actions (delete, group, task order, start, send, status). Start chats only when the user asks; Autopilot is not enabled. When you do, pick cheaper models for small tasks and the strongest allowed model for hard ones."
+			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your tasks, and add tasks for follow-up work you find instead of widening your scope.`,
+		'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with a comment saying why, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
+		"- Record agreed decisions with decide, edit the brief (with expectedRevision) when the design changes, and post a handoff with log before stopping with unfinished work.",
+		"- Open one pull request per task and link it to the task with the link action and taskId. For a dependent task, base your own bookmark on the dependency's head (its bookmark or open PR, possibly another chat's) and open the PR with gh pr create --base <dependency-head> --head <own-head>. Never rewrite or push another chat's branches.",
 		ghStack === true
-			? "- Worker-start check: github/gh-stack is installed. Use gh stack link for dependent PRs; installation does not guarantee that the repository supports stacks."
+			? `- github/gh-stack is installed: ${stackLink}`
 			: ghStack === false
-				? "- Worker-start check: github/gh-stack is unavailable. Fall back to plain chained PRs with the dependency's head as --base; do not install the extension."
-				: "- Check gh extension list for github/gh-stack before linking dependent PRs; when unavailable, keep plain chained PRs.",
-		"- The mission is internal coordination. Never mention the mission, its tasks, the coordinator, other chats or Pilot in commit messages, branch or bookmark names, pull request titles or descriptions. Describe the change itself. External tracker references such as Linear issue IDs are fine.",
+				? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
+				: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
+		"- The mission is internal coordination. Commit messages, branch or bookmark names and pull requests describe the change itself, without mentioning the mission, its tasks, the coordinator, other chats or Pilot (Pilot rejects commands that mention the mission). External tracker references such as Linear issue IDs are fine.",
 	];
 	if (mission.status !== "active")
 		lines.push(`- This mission is ${mission.status}. Do not start new mission work unless the user asks.`);
@@ -149,11 +149,17 @@ function commandArguments(name: string, args: Record<string, unknown>): unknown 
 }
 
 export function pilotPrompt(context: PilotContext, artifactsAvailable = false): string {
-	const lines = ["You are running inside Pilot as a background agent. The user reviews your work in the Pilot app."];
+	const lines = [
+		"You are running inside Pilot as a background agent. The user reviews your work in the Pilot app when you finish, not while you work.",
+	];
+	if (!context.ask)
+		lines.push(
+			"- Take each request as far as it asks. For implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked.",
+		);
 	if (artifactsAvailable) {
 		lines.push(
-			"- When explaining architecture, workflows, relationships or complex behavior, proactively publish a diagram with the artifact tool when it makes the explanation clearer, without waiting for the user to request one. Prefer simple Mermaid diagrams in HTML artifacts using the bundled mermaid library. Accompany the diagram with a short explanation; skip diagrams for trivial answers or when the user asks for text only.",
-			"- Artifact preview is optional verification, never a prerequisite for publishing. If preview is unavailable or fails, publish without it. Do not ask the user to install a browser just to create a diagram.",
+			"- When a diagram would make an explanation of architecture, workflows or relationships clearer, publish one with the artifact tool without being asked: a simple Mermaid diagram in an HTML artifact, with a short explanation. Skip it for simple answers or when the user wants text only.",
+			"- Artifact preview is optional. If it is unavailable or fails, publish without it.",
 		);
 	}
 	const workspace = context.workspace;
@@ -171,11 +177,11 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 		if (workspace.shared) {
 			lines.push(
 				`- Your working directory is the shared jj workspace \`${workspace.shared.name}\` in ${workspace.shared.repository}, created from ${workspace.source}. Its working-copy change starts on base \`${workspace.base}\`${workspace.baseBranch ? ` (branch \`${workspace.baseBranch}\`)` : ""}${workspace.branch ? `, with task bookmark \`${workspace.branch}\`` : ", with no task bookmark yet"}. The user's own checkout and its uncommitted changes are unaffected by your workspace edits. This is not a private clone or detached checkout.`,
-				"- Use jj for version-control changes. Your working copy is isolated, but repository bookmarks and history are shared with sibling sessions. Do not rewrite other sessions' changes or task bookmarks. Never use repository-wide `jj undo` or `jj op restore`, broad rebases, or `jj git push --all` (or other broad pushes). Restrict any rebase to this task's own changes.",
+				"- Use jj for version-control changes. Your working copy is isolated, but bookmarks and history are shared with sibling sessions, so keep rebases, rewrites and pushes to this task's own changes and bookmark. Repository-wide operations (`jj undo`, `jj op restore`, broad rebases, `jj git push --all`) would change other sessions' work.",
 			);
 			if (requirePullRequest) {
 				lines.push(
-					"- Use task-specific bookmarks, keeping an existing task bookmark when present. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`; after committing, move only the chosen task bookmark with `jj bookmark set <name> -r @-`. Push only the chosen task bookmark with `jj git push --bookmark <name>`; never include sibling bookmarks.",
+					"- Work on one task bookmark, keeping an existing one. If a new bookmark is needed, create it with `jj bookmark create <name> -r @`, move it after committing with `jj bookmark set <name> -r @-`, and push it alone with `jj git push --bookmark <name>`.",
 				);
 			}
 		} else {
@@ -204,8 +210,8 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 	if (!context.ask && (workspace || context.requirePullRequest !== undefined)) {
 		if (requirePullRequest) {
 			lines.push(
-				"- Choose or create a descriptive branch or bookmark for this task before making changes. New names must use `<type>/<short-description>`, with a conventional prefix matching the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/`, or `revert/` (for example, `fix/branch-prefix-policy`). Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention. Do not use a `pilot/` prefix for new names. Never push the default branch.",
-				"- When the work is ready, open a pull request with `gh pr create`. It is opened as the user. Never merge.",
+				"- Name a new branch or bookmark `<type>/<short-description>` with the conventional type that matches the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/` or `revert/` (for example `fix/branch-prefix-policy`), not `pilot/`. Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention.",
+				"- When the work is ready, push the task branch and open a pull request with `gh pr create`; it is opened as the user. Never push the default branch or merge.",
 			);
 		} else {
 			lines.push(
@@ -226,7 +232,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 		}
 	}
 	lines.push(
-		"- Never post on GitHub: no comments, reviews or replies on pull requests or issues, and no merging or closing. Put results, questions and anything you decided not to do in your final answer instead.",
+		"- Pilot does not post on GitHub and blocks comments, reviews, replies, merges and closes. Put results, questions and anything you decided not to do in your final answer instead.",
 	);
 	return lines.join("\n");
 }

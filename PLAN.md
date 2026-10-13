@@ -412,9 +412,9 @@ The daemon validates current membership, project and persisted links on every re
 I/O. Omitted revision uses a link's pin, or latest for unpinned links; conflicting links require an explicit
 revision. Pinned-only links cannot read unlinked revisions. Ownership, update and list stay session-local,
 and opening messages never copy source content. Mission chats receive a compact mission header in Pilot's prompt section (goal, coordinator,
-own open tasks, decisions and how
-to use the tool), not the whole brief. The header only changes when those fields change, preserving
-prompt caching.
+own open tasks, decisions and working rules), not the whole brief. Per-action details, including the
+coordinator's actions, live in the mission tool description rather than the header. The header only
+changes when those fields change, preserving prompt caching.
 
 **New chat.** The Chats tab and sidebar mission group open the new-chat composer with the mission
 preselected and its project locked, without attaching a task. `SpawnRequest.missionId` validates an
