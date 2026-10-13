@@ -2,7 +2,7 @@ import PilotCore
 import SwiftUI
 
 /// Retry, edit and restore for one chat's transcript. Rows reach it through the environment, so they stay
-/// equatable and lazy; only the Retry button observes it.
+/// equatable and lazy; only action buttons observe it.
 @MainActor
 final class TranscriptRewind: ObservableObject {
     struct Request: Equatable {
@@ -126,7 +126,7 @@ private struct RewindMenu: ViewModifier {
 
     func body(content: Content) -> some View {
         if let rewind, let entryID = row.entryID, let action = row.rewindAction, action != .retry {
-            content.contextMenu {
+            let menu = content.contextMenu {
                 Button {
                     rewind.request(action, entryID: entryID)
                 } label: {
@@ -137,9 +137,45 @@ private struct RewindMenu: ViewModifier {
                     ? "Continue from before this message with it in the composer. Files are not reverted."
                     : "Continue from the end of this reply. Files are not reverted.")
             }
+            if action == .edit {
+                // Zero-opacity controls are omitted from the native accessibility tree. Keep the
+                // same action on the row so VoiceOver users never need to hover first.
+                menu
+                    .accessibilityElement(children: .contain)
+                    .accessibilityAction(named: Text(TranscriptRewind.menuTitle(action))) {
+                        if !rewind.pending { rewind.request(action, entryID: entryID) }
+                    }
+            } else {
+                menu
+            }
         } else {
             content
         }
+    }
+}
+
+/// Secondary action beside a user's bubble. Its reserved slot prevents hover from reflowing text.
+/// Keyboard focus reveals it too; RewindMenu exposes the action to VoiceOver without hover.
+struct MessageEditButton: View {
+    let entryID: Int
+    @ObservedObject var rewind: TranscriptRewind
+    let isHovered: Bool
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        Button {
+            rewind.request(.edit, entryID: entryID)
+        } label: {
+            Image(systemName: "pencil")
+        }
+        .buttonStyle(QuietIconButtonStyle())
+        .disabled(rewind.pending)
+        .focused($isFocused)
+        .opacity(isHovered || isFocused ? 1 : 0)
+        .allowsHitTesting(isHovered || isFocused)
+        .help("Edit and resend this message. Files are not reverted.")
+        .accessibilityLabel("Edit and Resend")
+        .accessibilityIdentifier("message-edit-\(entryID)")
     }
 }
 

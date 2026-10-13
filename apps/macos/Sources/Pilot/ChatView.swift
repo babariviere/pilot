@@ -436,7 +436,7 @@ struct RowView: View, Equatable {
                 SubagentAnswerRow(notification: notification)
             } else {
                 UserMessage(text: text, expansion: messageExpansions?.state(for: id),
-                            messageID: id, timestamp: timestamp)
+                            messageID: id, timestamp: timestamp, entryID: row.entryID)
                     .rewindMenu(for: row)
             }
         case let .automatic(id, text, origin, timestamp):
@@ -471,22 +471,34 @@ struct RowView: View, Equatable {
 
 struct UserMessage: View {
     @Environment(\.pilotFonts) private var fonts
+    @Environment(\.transcriptRewind) private var rewind
+    @State private var isHovered = false
     let text: String
     var expansion: ExpansionState? = nil
     var messageID: String = ""
     var timestamp: Double? = nil
+    var entryID: Int? = nil
 
     var body: some View {
         HStack {
-            Spacer(minLength: 72)
-            MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
-                CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
-                    Text(text)
-                        .font(fonts.body)
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
+            // Reserve the pencil's space even when hidden, without narrowing the message column.
+            Spacer(minLength: entryID != nil && rewind != nil ? 44 : 72)
+            HStack(alignment: .top, spacing: 8) {
+                if let entryID, let rewind {
+                    MessageEditButton(entryID: entryID, rewind: rewind, isHovered: isHovered)
+                        .padding(.top, 10)
+                }
+                MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
+                    CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
+                        Text(text)
+                            .font(fonts.body)
+                            .lineSpacing(3)
+                            .textSelection(.enabled)
+                    }
                 }
             }
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
         }
         .padding(.top, 6)
     }
