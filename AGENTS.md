@@ -44,6 +44,7 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 
 ## UI consistency and simplicity
 
+- [DESIGN.md](DESIGN.md) states the design intent (calm, status-first). Read it before changing the UI.
 - Keep the UI clean, calm and focused. Prioritize primary actions and use progressive disclosure
   for secondary controls and details instead of overloading screens.
 - Follow existing layouts, interaction patterns, terminology and visual hierarchy. Avoid introducing
