@@ -559,6 +559,19 @@ export interface CreateMissionRequest {
 	coordinator?: boolean;
 	/** With fromSessionId: ask that chat to draft the goal, brief and tasks from its conversation. Defaults to true. */
 	draft?: boolean;
+	/** Start a new coordinator. Omitted/false preserves title-and-goal creation. */
+	startCoordinator?: boolean;
+	model?: string;
+	thinking?: string;
+	/** Extra context, links and constraints for the draft request. */
+	message?: string;
+}
+
+/** POST /api/missions/:id/coordinator/start. Uses task-start model admission. */
+export interface StartMissionCoordinatorRequest {
+	model?: string;
+	thinking?: string;
+	message?: string;
 }
 
 /** PATCH /api/missions/:id. A null coordinatorSessionId hands coordination back to the user. */
@@ -602,7 +615,7 @@ export interface ModelOption {
 	thinking?: string;
 }
 
-/** GET /api/models?projectId=… or ?cwd=… */
+/** GET /api/models?projectId=… or ?cwd=…; purpose=task-start applies the task-start price cap. */
 export interface ModelList {
 	models: ModelOption[];
 	/** pi's default model for that directory. */

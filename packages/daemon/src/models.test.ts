@@ -319,6 +319,10 @@ test("task starts use the project scope, not every authenticated model", async (
 
 test("unscoped task starts cap combined input+output at the highest scoped reference price, inclusive", async (t) => {
 	const { root, catalog } = await taskCatalog(t);
+	const list = await catalog.listTaskModels(root);
+	assert.ok(list.models.some((model) => model.id === "test/at-cap"));
+	assert.ok(!list.models.some((model) => model.id === "test/frontier"));
+	assert.equal(list.defaultModel, "test/small");
 	assert.deepEqual(await catalog.selectTaskModel(root, "test/at-cap", "high"), {
 		model: "test/at-cap",
 		thinking: "high",

@@ -25,6 +25,7 @@ import type {
 	SessionSummary,
 	SpawnRequest,
 	StartMissionTaskRequest,
+	StartMissionCoordinatorRequest,
 	SubagentMessageRequest,
 	UpdateMissionRequest,
 } from "@pilot/protocol";
@@ -184,7 +185,11 @@ export function createDaemonServer(
 		if (parts[1] === "models" && parts.length === 2 && req.method === "GET") {
 			const projectId = url.searchParams.get("projectId");
 			const cwd = projectId ? projects.require(projectId).path : expandHome(url.searchParams.get("cwd") || "~");
-			return json(res, 200, await models.list(cwd));
+			return json(
+				res,
+				200,
+				await (url.searchParams.get("purpose") === "task-start" ? models.listTaskModels(cwd) : models.list(cwd)),
+			);
 		}
 		if (parts[1] === "projects" && parts.length === 2) {
 			if (req.method === "GET") return json(res, 200, projects.list());
@@ -675,6 +680,10 @@ async function missionRoute(
 	}
 	const section = parts[3];
 	const item = parts[4];
+	if (section === "coordinator" && item === "start" && parts.length === 5 && method === "POST")
+		return (
+			json(res, 201, await service.startCoordinator(id, await readJson<StartMissionCoordinatorRequest>(req))), true
+		);
 	if (section === "brief") {
 		if (parts.length === 4 && method === "GET") {
 			const value = url.searchParams.get("revision");

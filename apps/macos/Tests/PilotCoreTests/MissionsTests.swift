@@ -100,6 +100,23 @@ private func json(_ value: some Encodable) throws -> [String: Any] {
     try JSONSerialization.jsonObject(with: JSONEncoder().encode(value)) as! [String: Any]
 }
 
+@Test func coordinatorStartRequestsRoundTripAndPreserveLegacyCreation() throws {
+    let request = CreateMissionRequest(projectId: "p", title: "Plan", goal: "", startCoordinator: true,
+                                       model: "test/model", thinking: "high", message: "Context and links")
+    let decoded = try JSONDecoder().decode(CreateMissionRequest.self, from: JSONEncoder().encode(request))
+    #expect(decoded.startCoordinator == true)
+    #expect(decoded.model == "test/model")
+    #expect(decoded.thinking == "high")
+    #expect(decoded.message == "Context and links")
+    #expect(try json(CreateMissionRequest(projectId: "p", title: "Plan", goal: "Goal"))["startCoordinator"] == nil)
+    #expect(try json(CreateMissionRequest(projectId: "p", title: "Plan", goal: "Goal", startCoordinator: false))["startCoordinator"] as? Bool == false)
+    let start = StartMissionCoordinatorRequest(model: "test/model", thinking: "low", message: "Existing plan")
+    let roundTrip = try JSONDecoder().decode(StartMissionCoordinatorRequest.self, from: JSONEncoder().encode(start))
+    #expect(roundTrip.model == start.model)
+    #expect(roundTrip.thinking == start.thinking)
+    #expect(roundTrip.message == start.message)
+}
+
 @Test func nullableUpdatesSendExplicitNullAndOmitUnsetFields() throws {
     let release = try json(MissionTaskWrite(sessionId: .clear))
     #expect(release.keys.sorted() == ["sessionId"])

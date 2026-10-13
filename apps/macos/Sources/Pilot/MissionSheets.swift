@@ -12,6 +12,7 @@ struct MissionForm {
     var saving = false
     var error: String?
     var prepared = false
+    var chat = CoordinatorChatForm()
 }
 
 /// The single entry point for mission sheets.
@@ -24,6 +25,7 @@ struct MissionSheetView: View {
         case let .make(sessionId): CreateMissionSheet(projectId: nil, sourceSessionId: sessionId)
         case let .add(sessionId): AddToMissionSheet(sessionId: sessionId)
         case let .edit(missionId): EditMissionSheet(missionId: missionId)
+        case let .startCoordinator(missionId): StartCoordinatorSheet(missionId: missionId)
         }
     }
 }
@@ -61,9 +63,16 @@ struct CreateMissionSheet: View {
                         .help("The coordinator can start and message mission chats. Without one, you coordinate.")
                     Toggle("Ask this chat to draft the brief and tasks", isOn: $form.draft)
                         .help("Sends this chat a message asking it to draft the goal, brief and tasks from its conversation.")
+                } else {
+                    Toggle("Start a coordinator chat", isOn: $form.coordinator)
+                        .help("Starts a chat that drafts the brief and tasks for your review. It will not implement them.")
+                    if form.coordinator {
+                        CoordinatorChatFields(projectId: form.projectId, form: $form.chat)
+                    }
                 }
             }
             .formStyle(.grouped)
+            .disabled(form.saving)
             if let error = form.error {
                 Text(error).font(.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
             }
@@ -81,13 +90,15 @@ struct CreateMissionSheet: View {
     }
 
     private var goalPrompt: String {
-        source != nil && form.draft ? "Goal (optional, the chat can draft it)" : "Goal"
+        let drafts = (source != nil && form.draft) || (source == nil && form.coordinator)
+        return drafts ? "Goal (optional, the chat can draft it)" : "Goal"
     }
 
     private var canCreate: Bool {
         guard !form.saving, !form.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         if source != nil { return source?.projectId != nil }
-        return form.projectId != nil && !form.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let ready = form.coordinator ? form.chat.canStart : !form.goal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return form.projectId != nil && ready
     }
 
     private func prepare() {
@@ -111,7 +122,11 @@ struct CreateMissionSheet: View {
             goal: form.goal.trimmingCharacters(in: .whitespacesAndNewlines),
             fromSessionId: source?.id,
             coordinator: source == nil ? nil : form.coordinator,
-            draft: source == nil ? nil : form.draft
+            draft: source == nil ? nil : form.draft,
+            startCoordinator: source == nil ? form.coordinator : nil,
+            model: source == nil && form.coordinator ? form.chat.selectedModel : nil,
+            thinking: source == nil && form.coordinator ? form.chat.selectedThinking : nil,
+            message: source == nil && form.coordinator ? form.chat.message : nil
         )
         Task {
             defer { form.saving = false }
@@ -119,7 +134,10 @@ struct CreateMissionSheet: View {
                 let detail = try await client.createMission(request)
                 dismiss()
                 // Make a mission keeps the chat in view; it is drafting there.
-                if source == nil { model.openMission(detail.mission.id) }
+                if source == nil {
+                    if let id = detail.mission.coordinatorSessionId { model.selectedSessionId = id }
+                    else { model.openMission(detail.mission.id) }
+                }
             } catch {
                 form.error = error.localizedDescription
             }
@@ -249,4 +267,3 @@ struct EditMissionSheet: View {
         }
     }
 }
-

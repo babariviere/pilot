@@ -86,7 +86,7 @@ private struct MissionHeader: View {
                 Text(mission.title).font(.title2.weight(.semibold)).lineLimit(2).textSelection(.enabled)
                 HStack(spacing: 6) {
                     MissionStatusChip(status: mission.status)
-                    Text(client.project(mission.projectId)?.name ?? "Unknown project")
+                    Text(client.project(mission.projectId)?.name ?? "Unknown project").lineLimit(1)
                     Text("·")
                     if let coordinator = mission.coordinatorSessionId {
                         Button { model.selectedSessionId = coordinator } label: {
@@ -99,7 +99,16 @@ private struct MissionHeader: View {
                         .buttonStyle(.plain)
                         .help("Open the coordinator chat")
                     } else {
-                        Text("You coordinate")
+                        Button("Start a coordinator") { model.missionSheet = .startCoordinator(missionId: mission.id) }
+                            .disabled(mission.status != .active)
+                        if !model.members(of: mission).filter({ !$0.isArchived }).isEmpty {
+                            Menu("Make coordinator") {
+                                ForEach(model.members(of: mission).filter { !$0.isArchived }) { session in
+                                    Button(session.title) { model.setCoordinator(session.id, missionId: mission.id) }
+                                }
+                            }
+                            .menuStyle(.borderlessButton).fixedSize()
+                        }
                     }
                 }
                 .font(.caption)

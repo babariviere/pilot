@@ -321,19 +321,22 @@ final class PilotClient: ObservableObject {
     }
 
     /// The pi model scope for a project (or folder), with pi's default model.
-    func models(projectId: String?, cwd: String?) async throws -> ModelList {
+    func models(projectId: String?, cwd: String?, taskStart: Bool = false) async throws -> ModelList {
         if let fixtureModels { return fixtureModels }
         guard let baseURL, var components = URLComponents(url: baseURL.appending(path: "api/models"), resolvingAgainstBaseURL: false)
         else { throw ClientError("pilotd is not connected") }
         if let projectId { components.queryItems = [URLQueryItem(name: "projectId", value: projectId)] }
         else if let cwd, !cwd.isEmpty { components.queryItems = [URLQueryItem(name: "cwd", value: cwd)] }
+        if taskStart {
+            components.queryItems = (components.queryItems ?? []) + [URLQueryItem(name: "purpose", value: "task-start")]
+        }
         let (data, response) = try await URLSession.shared.data(from: components.url!)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)")
         }
         let list = try JSONDecoder().decode(ModelList.self, from: data)
-        modelCache.store(list, for: ModelListCache.key(projectId: projectId, cwd: cwd))
+        if !taskStart { modelCache.store(list, for: ModelListCache.key(projectId: projectId, cwd: cwd)) }
         return list
     }
 
@@ -562,6 +565,11 @@ final class PilotClient: ObservableObject {
     func createMission(_ request: CreateMissionRequest) async throws -> MissionDetail {
         let detail: MissionDetail = try await missionRequest(["missions"], body: request)
         upsert(detail.mission)
+        if let id = detail.mission.coordinatorSessionId, request.startCoordinator == true {
+            let session: SessionSummary = try await call("api/sessions/\(id)", method: "GET")
+            awaitingList[id] = session
+            update(session)
+        }
         if missionRefs[detail.mission.id] != nil { missionDetails[detail.mission.id] = detail }
         return detail
     }
@@ -615,6 +623,13 @@ final class PilotClient: ObservableObject {
 
     func deleteMissionTask(_ id: String, taskId: String) async throws {
         let _: Ack = try await missionRequest(["missions", id, "tasks", taskId], method: "DELETE")
+    }
+
+    func startMissionCoordinator(_ id: String, _ request: StartMissionCoordinatorRequest) async throws -> SessionSummary {
+        let session: SessionSummary = try await missionRequest(["missions", id, "coordinator", "start"], body: request)
+        awaitingList[session.id] = session
+        update(session)
+        return session
     }
 
     /// A new chat in the mission's project that joins the mission and claims the task.
