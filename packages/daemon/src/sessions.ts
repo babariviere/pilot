@@ -1797,6 +1797,10 @@ export class SessionManager {
 		} catch (error) {
 			// The mission may have closed, or another chat may now coordinate it.
 			this.missions?.leaveSpawn?.(id);
+			// Promotion and rollback can queue metadata writes. Drain them before removing their directory,
+			// and preserve the admission error even if one of those writes failed.
+			const saving = this.saving.get(id);
+			if (saving) await saving.catch(() => undefined);
 			this.metas.delete(id);
 			await rm(this.dir(id), { recursive: true, force: true });
 			throw error;
