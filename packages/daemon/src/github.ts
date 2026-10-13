@@ -3,7 +3,8 @@
  * discovery and one for PR health, instead of one or two per branch and three or more per PR.
  * Never fetch comment bodies or perform mutations.
  */
-import type { SessionPullRequest } from "@pilot/protocol";
+import type { PullRequestReadiness, SessionPullRequest } from "@pilot/protocol";
+import { mergeReadiness } from "./pull-request-readiness.ts";
 import { execFileOffThread } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
@@ -239,6 +240,8 @@ export function toSessionPullRequest(pr: Candidate, now = Date.now()): SessionPu
 export class RateLimits {
 	/** Schema capability only, not repository enablement. Re-probed after daemon restart. */
 	readonly unsupportedStacks = new Set<string>();
+	/** Unsupported optional health fields per host. Re-probed after restart. */
+	readonly unsupportedReadiness = new Map<string, Set<string>>();
 	private readonly hosts = new Map<string, { remaining: number; resetAt: number }>();
 	/** Leave headroom for the user's own gh usage. */
 	private readonly reserve: number;
@@ -519,6 +522,28 @@ export function failedChecks(rollup: unknown): string[] {
 	return [...failed];
 }
 
+/** Pending checks from a rollup already validated with failedChecks. They are not blockers, but prevent ready. */
+export function checksPending(rollup: unknown): boolean {
+	return (
+		Array.isArray(rollup) &&
+		rollup.some((check) =>
+			check.__typename === "CheckRun" ? check.status !== "COMPLETED" : ["PENDING", "EXPECTED"].includes(check.state),
+		)
+	);
+}
+
+export const readinessFields = ["mergeStateStatus", "reviewDecision"] as const;
+/** Fall back for schema absence only, never permission or network errors. */
+export function unsupportedReadinessField(error: unknown): string | undefined {
+	const message = error instanceof Error ? error.message : String(error);
+	return readinessFields.find((field) =>
+		new RegExp(
+			`(?:Field ['"]${field}['"] doesn't exist on type ['"]PullRequest['"]|Cannot query field ['"]${field}['"] on type ['"]PullRequest['"])`,
+			"i",
+		).test(message),
+	);
+}
+
 export interface HealthRequest {
 	number: number;
 	/** Expected head branch. A different head means the PR is not the one this session tracks. */
@@ -528,13 +553,13 @@ export interface HealthRequest {
 }
 
 export type HealthResult =
-	| { problems: PullRequestProblems }
+	| { problems: PullRequestProblems; readiness?: PullRequestReadiness }
 	/** More than one page of checks or review threads. Use the paginated single-PR lookup instead. */
 	| { overflow: true }
 	| { error: Error };
 
 const healthFields = [
-	"number state headRefName mergeable",
+	"number state headRefName mergeable isDraft",
 	"commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) {",
 	"nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } }",
 	"pageInfo { hasNextPage } } } } } }",
@@ -572,18 +597,25 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 		throw new Error("GitHub pull request head does not match the session workspace branch");
 	if (typeof pr.mergeable !== "string") invalid(healthWhat);
 	const commits = object(pr.commits, healthWhat);
-	if (!Array.isArray(commits.nodes)) invalid(healthWhat);
-	const rollup = (commits.nodes[0] as { commit?: { statusCheckRollup?: unknown } } | undefined)?.commit
-		?.statusCheckRollup;
+	if (!Array.isArray(commits.nodes) || commits.nodes.length !== 1) invalid(healthWhat);
+	const commit = object(object(commits.nodes[0], healthWhat).commit, healthWhat);
+	if (!("statusCheckRollup" in commit)) invalid(healthWhat);
+	const rollup = commit.statusCheckRollup;
 	let checks: string[] = [];
+	let pending = false;
 	if (rollup !== undefined && rollup !== null) {
 		const contexts = object(object(rollup, healthWhat).contexts, healthWhat);
-		if (object(contexts.pageInfo, healthWhat).hasNextPage === true) return { overflow: true };
+		const hasNextPage = object(contexts.pageInfo, healthWhat).hasNextPage;
+		if (typeof hasNextPage !== "boolean") invalid(healthWhat);
+		if (hasNextPage) return { overflow: true };
 		checks = failedChecks(contexts.nodes);
+		pending = checksPending(contexts.nodes);
 	}
 	const threads = object(pr.reviewThreads, healthWhat);
 	if (!Array.isArray(threads.nodes)) invalid(healthWhat);
-	if (object(threads.pageInfo, healthWhat).hasNextPage === true) return { overflow: true };
+	const hasNextPage = object(threads.pageInfo, healthWhat).hasNextPage;
+	if (typeof hasNextPage !== "boolean") invalid(healthWhat);
+	if (hasNextPage) return { overflow: true };
 	let reviewComments = 0;
 	const ids = new Set<string>();
 	for (const node of threads.nodes) {
@@ -598,14 +630,13 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 	}
 	const divergedFrom = stackedHead(request) ? stackDivergence(pr) : undefined;
 	// UNKNOWN (and future mergeability values) are not evidence of a conflict.
-	return {
-		problems: {
-			failedChecks: checks,
-			reviewComments,
-			mergeConflicts: pr.mergeable === "CONFLICTING",
-			...(divergedFrom ? { divergedFrom } : {}),
-		},
+	const problems = {
+		failedChecks: checks,
+		reviewComments,
+		mergeConflicts: pr.mergeable === "CONFLICTING",
+		...(divergedFrom ? { divergedFrom } : {}),
 	};
+	return { problems, readiness: mergeReadiness({ state: pr.state, ...pr }, problems, pending) };
 }
 
 /**
@@ -622,7 +653,8 @@ export async function lookupHealth(
 	const results = new Map<number, HealthResult>();
 	const unique = [...new Map(requests.map((request) => [request.number, request])).values()];
 	const failure = (error: unknown) => ({ error: error instanceof Error ? error : new Error(String(error)) });
-	const lookup = async (chunk: HealthRequest[]) => {
+	const unsupported = limits?.unsupportedReadiness.get(repo.host) ?? new Set<string>();
+	const lookup = async (chunk: HealthRequest[]): Promise<void> => {
 		const heads = chunk.map(stackedHead);
 		const query = [
 			`query PilotPullRequestHealth($owner: String!, $name: String!, ${chunk
@@ -632,22 +664,31 @@ export async function lookupHealth(
 			"repository(owner: $owner, name: $name) {",
 			...chunk.map(
 				(_, i) =>
-					`p${i}: pullRequest(number: $p${i}) { ${healthFields}${heads[i] ? ` ${stackBaseFields(`$h${i}`)}` : ""} }`,
+					`p${i}: pullRequest(number: $p${i}) { ${healthFields} ${readinessFields.filter((field) => !unsupported.has(field)).join(" ")}${heads[i] ? ` ${stackBaseFields(`$h${i}`)}` : ""} }`,
 			),
 			"}",
 			"}",
 		].join("\n");
-		const repository = await graphql(
-			repo,
-			query,
-			chunk.flatMap((request, i): [flag: "-f" | "-F", name: string, value: string][] => [
-				["-F", `p${i}`, String(request.number)],
-				...(heads[i] ? [["-f", `h${i}`, heads[i]!] as ["-f", string, string]] : []),
-			]),
-			cwd,
-			runner,
-			limits,
-		);
+		let repository: Record<string, unknown>;
+		try {
+			repository = await graphql(
+				repo,
+				query,
+				chunk.flatMap((request, i): [flag: "-f" | "-F", name: string, value: string][] => [
+					["-F", `p${i}`, String(request.number)],
+					...(heads[i] ? [["-f", `h${i}`, heads[i]!] as ["-f", string, string]] : []),
+				]),
+				cwd,
+				runner,
+				limits,
+			);
+		} catch (error) {
+			const field = unsupportedReadinessField(error);
+			if (!field || unsupported.has(field)) throw error;
+			unsupported.add(field);
+			limits?.unsupportedReadiness.set(repo.host, unsupported);
+			return lookup(chunk);
+		}
 		chunk.forEach((request, i) => {
 			try {
 				results.set(request.number, parseHealth(repository[`p${i}`], request));

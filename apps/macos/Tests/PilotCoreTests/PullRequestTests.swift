@@ -8,6 +8,23 @@ private func pr(_ state: PullRequestState = .open, url: String = "https://github
     SessionPullRequest(number: 7, url: url, title: "Add PR indicators", state: state, checkedAt: 1_781_524_800_000)
 }
 
+@Test func mergeReadinessDecodesAndRoundTripsWithStructuredReasons() throws {
+    let json = #"{"number":7,"url":"https://github.com/o/r/pull/7","title":"PR","state":"open","checkedAt":100,"readiness":{"state":"blocked","checkedAt":90,"reasons":[{"code":"failing_checks","names":["build","test"]},{"code":"unresolved_comments","count":2},{"code":"merge_state","value":"BLOCKED"},{"code":"future_reason"}]}}"#
+    let decoded = try JSONDecoder().decode(SessionPullRequest.self, from: Data(json.utf8))
+    #expect(decoded.readiness?.state == .blocked)
+    #expect(decoded.readiness?.checkedAt == 90)
+    #expect(decoded.readiness?.reasons[0].names == ["build", "test"])
+    #expect(decoded.readiness?.reasons[1].count == 2)
+    #expect(decoded.readiness?.reasons[2].value == "BLOCKED")
+    #expect(decoded.readiness?.reasons[3].code == "future_reason")
+    #expect(try JSONDecoder().decode(SessionPullRequest.self, from: JSONEncoder().encode(decoded)) == decoded)
+    for state in ["ready", "pending"] {
+        let data = Data(json.replacingOccurrences(of: #""state":"blocked""#, with: "\"state\":\"\(state)\"").utf8)
+        #expect(try JSONDecoder().decode(SessionPullRequest.self, from: data).readiness?.state.rawValue == state)
+    }
+    #expect(pr().readiness == nil)
+}
+
 @Test func branchLinksPairEveryBranchWithItsPullRequest() throws {
     func linked(_ number: Int, _ branch: String?) -> SessionPullRequest {
         SessionPullRequest(number: number, url: "https://github.com/example/repo/pull/\(number)", title: "Change",

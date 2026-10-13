@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { discoverPullRequestProblems } from "./pull-request-health.ts";
+import { discoverPullRequestHealth, discoverPullRequestProblems } from "./pull-request-health.ts";
 import type { Runner } from "./workspaces.ts";
 
 const healthy = { failedChecks: [], reviewComments: 0, mergeConflicts: false };
@@ -71,7 +71,7 @@ test("open and draft PR health uses explicit repository, hostname and typed Grap
 			"view",
 			"42",
 			"--repo=github.com/octo/repo",
-			"--json=statusCheckRollup,mergeable,state,headRefName",
+			"--json=statusCheckRollup,mergeable,state,headRefName,isDraft,mergeStateStatus,reviewDecision",
 		]);
 		const graphql = calls[1]!;
 		assert.deepEqual(graphql.slice(0, 3), ["api", "graphql", "--hostname=github.com"]);
@@ -97,6 +97,55 @@ test("absent and settled PRs require no commands", async () => {
 		target.pullRequest.state = state;
 		assert.deepEqual(await discoverPullRequestProblems(target, runner), healthy);
 	}
+});
+
+test("paginated fallback produces the same readiness evidence after all review pages", async () => {
+	const result = await discoverPullRequestHealth(
+		session(),
+		responses(
+			{
+				...view([check("build"), context("legacy", "PENDING")], "CONFLICTING"),
+				isDraft: true,
+				reviewDecision: "CHANGES_REQUESTED",
+				mergeStateStatus: "BEHIND",
+			},
+			[page([thread("t1")], true, "next"), page([thread("t2"), thread("old", { isOutdated: true })])],
+		),
+	);
+	assert.equal(result.readiness?.state, "blocked");
+	assert.deepEqual(result.readiness?.reasons, [
+		{ code: "failing_checks", names: ["build"] },
+		{ code: "unresolved_comments", count: 2 },
+		{ code: "conflicts" },
+		{ code: "draft" },
+		{ code: "changes_requested" },
+		{ code: "behind", value: "BEHIND" },
+		{ code: "checks_pending" },
+	]);
+	assert.ok(result.readiness!.checkedAt > 0);
+});
+
+test("paginated fallback tolerates servers without readiness fields without marking ready", async () => {
+	const unsupported = new Set<string>();
+	let calls = 0;
+	const result = await discoverPullRequestHealth(
+		session(),
+		async (_file, args) => {
+			calls++;
+			if (args[0] === "pr") {
+				for (const field of ["mergeStateStatus", "reviewDecision"]) {
+					if (args.some((arg) => arg.includes(field)))
+						throw new Error(`Field '${field}' doesn't exist on type 'PullRequest'`);
+				}
+				return JSON.stringify({ ...view(), isDraft: false });
+			}
+			return JSON.stringify(page());
+		},
+		unsupported,
+	);
+	assert.equal(calls, 4);
+	assert.equal(result.readiness?.state, "pending");
+	assert.equal(unsupported.size, 2);
 });
 
 test("PRs closed or merged during discovery cannot report problems or request review threads", async () => {

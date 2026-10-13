@@ -96,12 +96,28 @@ async function fixture(
 		{
 			...options,
 			runner: legacyGitHub(async (file, args, ...rest) =>
-				file === "git" && args[0] === "branch"
-					? currentBranch(args)
-					: // The unpublished-work check sees no repository here, so it never blocks or counts as a lookup.
-						file === "git" && args[0] === "rev-parse"
-						? ""
-						: options.runner!(file, args, ...rest),
+				file === "gh" && args[0] === "pr" && args.some((arg) => arg.includes("statusCheckRollup"))
+					? JSON.stringify({
+							state: "OPEN",
+							headRefName: branch,
+							statusCheckRollup: [],
+							mergeable: "UNKNOWN",
+							isDraft: false,
+						})
+					: file === "gh" && args[0] === "api" && args.some((arg) => arg === "query=reviewThreads")
+						? JSON.stringify({
+								data: {
+									repository: {
+										pullRequest: { reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } } },
+									},
+								},
+							})
+						: file === "git" && args[0] === "branch"
+							? currentBranch(args)
+							: // The unpublished-work check sees no repository here, so it never blocks or counts as a lookup.
+								file === "git" && args[0] === "rev-parse"
+								? ""
+								: options.runner!(file, args, ...rest),
 			),
 		},
 	);
@@ -158,6 +174,40 @@ test("load discovers parked private sessions without a client/worker, refresh br
 			assert.equal(persisted.pullRequest?.checkedAt, changes[1]!.pullRequest!.checkedAt);
 			assert.equal(persisted.updatedAt, 2);
 			assert.equal(persisted.outcomeAt, 10);
+		},
+	);
+});
+
+test("readiness is saved with the PR and exposed after a daemon restart with GitHub unavailable", async () => {
+	await fixture(
+		{ runner: async (_file, args) => JSON.stringify(args[1] === "view" ? candidate() : [candidate()]) },
+		async (manager, meta, home) => {
+			await manager["pullRequests"].settled();
+			const readiness = manager.get(meta.id)?.pullRequest?.readiness;
+			assert.equal(readiness?.state, "pending");
+			assert.ok(readiness!.checkedAt > 0);
+			assert.deepEqual((await saved(home, meta.id)).pullRequest?.readiness, readiness);
+			await manager.shutdown();
+			const reopened = new SessionManager(
+				home,
+				new ProjectStore(home),
+				undefined,
+				{},
+				{
+					runner: async () => {
+						throw new Error("offline");
+					},
+				},
+			);
+			try {
+				await reopened.load();
+				assert.deepEqual(reopened.get(meta.id)?.pullRequest?.readiness, readiness);
+				await reopened["pullRequests"].settled();
+				assert.deepEqual(reopened.get(meta.id)?.pullRequest?.readiness, readiness);
+				assert.deepEqual((await saved(home, meta.id)).pullRequest?.readiness, readiness);
+			} finally {
+				await reopened.shutdown();
+			}
 		},
 	);
 });

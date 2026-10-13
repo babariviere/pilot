@@ -43,6 +43,9 @@ function health(number: number, extra: Record<string, unknown> = {}) {
 		state: "OPEN",
 		headRefName: `feat/${number}`,
 		mergeable: "MERGEABLE",
+		isDraft: false,
+		reviewDecision: null,
+		mergeStateStatus: "CLEAN",
 		commits: {
 			nodes: [{ commit: { statusCheckRollup: { contexts: { nodes: [], pageInfo: { hasNextPage: false } } } } }],
 		},
@@ -270,13 +273,19 @@ test("health reports failed checks, live review threads and conflicts, and flags
 		"/clone",
 		runner,
 	);
-	assert.deepEqual(results.get(1), {
-		problems: { failedChecks: ["tests", "ci/legacy"], reviewComments: 1, mergeConflicts: true },
+	assert.deepEqual((results.get(1) as { problems: unknown }).problems, {
+		failedChecks: ["tests", "ci/legacy"],
+		reviewComments: 1,
+		mergeConflicts: true,
 	});
 	assert.deepEqual(results.get(2), { overflow: true });
 	assert.match((results.get(3) as { error: Error }).error.message, /head does not match/);
 	assert.deepEqual(results.get(4), { problems: { failedChecks: [], reviewComments: 0, mergeConflicts: false } });
-	assert.deepEqual(results.get(5), { problems: { failedChecks: [], reviewComments: 0, mergeConflicts: false } });
+	assert.deepEqual((results.get(5) as { problems: unknown }).problems, {
+		failedChecks: [],
+		reviewComments: 0,
+		mergeConflicts: false,
+	});
 });
 
 test("stacked PR health reports a head that no longer contains its base branch", async () => {
@@ -305,10 +314,14 @@ test("stacked PR health reports a head that no longer contains its base branch",
 		runner,
 	);
 	const healthy = { failedChecks: [], reviewComments: 0, mergeConflicts: false };
-	assert.deepEqual(results.get(1), { problems: { ...healthy, divergedFrom: "feat/bottom" } });
-	assert.deepEqual(results.get(2), { problems: healthy });
-	assert.deepEqual(results.get(3), { problems: healthy }, "a deleted base is not evidence of divergence");
-	assert.deepEqual(results.get(4), { problems: healthy });
+	assert.deepEqual((results.get(1) as { problems: unknown }).problems, { ...healthy, divergedFrom: "feat/bottom" });
+	assert.deepEqual((results.get(2) as { problems: unknown }).problems, healthy);
+	assert.deepEqual(
+		(results.get(3) as { problems: unknown }).problems,
+		healthy,
+		"a deleted base is not evidence of divergence",
+	);
+	assert.deepEqual((results.get(4) as { problems: unknown }).problems, healthy);
 	assert.ok("error" in results.get(5)!, "an invalid comparison is never read as healthy");
 	const query = seen[0]!.get("query")!;
 	assert.match(query, /\$h0: String!/);
@@ -344,6 +357,75 @@ test("rate limits pause a host near exhaustion until the reset, capped at an hou
 	assert.equal(limits.blockedUntil("github.com", now), 0, "malformed limits are ignored");
 });
 
+test("readiness schema fallback remembers unsupported fields per host, never hides permission failures", async () => {
+	const limits = new RateLimits();
+	const queries: string[] = [];
+	const runner: Runner = async (_file, args) => {
+		const query = variables(args).get("query")!;
+		queries.push(query);
+		for (const field of ["mergeStateStatus", "reviewDecision"]) {
+			if (query.includes(field))
+				return JSON.stringify({
+					data: null,
+					errors: [{ message: `Cannot query field "${field}" on type "PullRequest".` }],
+				});
+		}
+		return respond({ p0: health(1, { mergeStateStatus: undefined, reviewDecision: undefined }) });
+	};
+	for (let round = 0; round < 2; round++) {
+		const result = (await lookupHealth(repo, [{ number: 1 }], "/clone", runner, limits)).get(1)!;
+		assert.ok("problems" in result);
+		assert.equal(result.readiness?.state, "pending");
+		assert.deepEqual(result.readiness?.reasons, [{ code: "readiness_unknown" }]);
+	}
+	assert.equal(queries.length, 4, "two schema retries on the first round, none on the second");
+	assert.doesNotMatch(queries[3]!, /reviewDecision|mergeStateStatus/);
+	let calls = 0;
+	const result = (
+		await lookupHealth(repo, [{ number: 1 }], "/clone", async () => {
+			calls++;
+			throw new Error("Resource not accessible by integration");
+		})
+	).get(1)!;
+	assert.ok("error" in result);
+	assert.equal(calls, 1);
+});
+
+test("readiness detects pending status contexts and check runs, and malformed commit evidence never yields ready", async () => {
+	for (const node of [
+		{ __typename: "StatusContext", context: "ci", state: "PENDING" },
+		{ __typename: "StatusContext", context: "ci", state: "EXPECTED" },
+		{ __typename: "CheckRun", name: "ci", status: "QUEUED", conclusion: null },
+	]) {
+		const result = (
+			await lookupHealth(repo, [{ number: 1 }], "/clone", async () =>
+				respond({
+					p0: health(1, {
+						commits: {
+							nodes: [
+								{
+									commit: {
+										statusCheckRollup: { contexts: { nodes: [node], pageInfo: { hasNextPage: false } } },
+									},
+								},
+							],
+						},
+					}),
+				}),
+			)
+		).get(1)!;
+		assert.ok("problems" in result);
+		assert.equal(result.readiness?.state, "pending");
+		assert.deepEqual(result.readiness?.reasons, [{ code: "checks_pending" }]);
+	}
+	for (const commits of [{ nodes: [] }, { nodes: [{}] }, { nodes: [{ commit: {} }] }]) {
+		const result = (
+			await lookupHealth(repo, [{ number: 1 }], "/clone", async () => respond({ p0: health(1, { commits }) }))
+		).get(1)!;
+		assert.ok("error" in result);
+	}
+});
+
 test("large stacked-PR discovery retains the existing bounded batch count", async () => {
 	let calls = 0;
 	const heads = Array.from({ length: 100 }, (_, i) => `feat/${i}`);
@@ -374,4 +456,62 @@ test("large stacked-PR discovery retains the existing bounded batch count", asyn
 	assert.equal(result.numbers.size, 100);
 	assert.equal(result.heads.get("feat/99")?.stack?.position, 100);
 	assert.equal(result.numbers.get(1)?.stack?.position, 1);
+});
+
+test("readiness stays batched for 100 busy PRs and never fetches comment bodies", async (t) => {
+	let calls = 0;
+	const start = performance.now();
+	const result = await lookupHealth(
+		repo,
+		Array.from({ length: 100 }, (_, i) => ({ number: i + 1 })),
+		"/clone",
+		async (_file, args) => {
+			calls++;
+			const vars = variables(args);
+			assert.doesNotMatch(vars.get("query")!, /\bbody\b|\bmutation\b/);
+			const rows: Record<string, unknown> = {};
+			for (const [key, value] of vars)
+				if (/^p\d+$/.test(key))
+					rows[key] = health(Number(value), {
+						commits: {
+							nodes: [
+								{
+									commit: {
+										statusCheckRollup: {
+											contexts: {
+												nodes: Array.from({ length: 100 }, (_, i) => ({
+													__typename: "CheckRun",
+													name: `check/${i}`,
+													status: "COMPLETED",
+													conclusion: "SUCCESS",
+												})),
+												pageInfo: { hasNextPage: false },
+											},
+										},
+									},
+								},
+							],
+						},
+						reviewThreads: {
+							nodes: Array.from({ length: 100 }, (_, i) => ({
+								id: `t${i}`,
+								isResolved: true,
+								isOutdated: false,
+								comments: { totalCount: 1 },
+							})),
+							pageInfo: { hasNextPage: false },
+						},
+					});
+			return respond(rows);
+		},
+	);
+	assert.equal(calls, 10, "existing ten-PR health chunks, no per-PR readiness queries");
+	assert.equal(result.size, 100);
+	for (const item of result.values()) {
+		assert.ok("problems" in item);
+		assert.equal(item.readiness?.state, "ready");
+	}
+	t.diagnostic(
+		`100 PRs, 10,000 checks + 10,000 review threads: ${(performance.now() - start).toFixed(1)} ms, ${calls} batched calls`,
+	);
 });

@@ -562,9 +562,10 @@ time. Events (an agent turn settling, a PR created by the agent, a client openin
 the foreground with the `focus` message) mark entries urgent so they run next instead of waiting behind a
 sweep. A small fixed pool (3 jobs) runs batches: the most urgent entry plus other entries of the same
 repository due soon. A batch inspects workspaces locally (git/jj), sends one GraphQL request per
-repository for every head and linked PR number, and one more for the health of PRs eligible for a
-follow-up. Results apply serially per session. An entry never runs twice at once. Follow-up delivery runs
-detached, so starting a parked kernel never delays other sessions' PR checks. The cadence adapts: open PRs
+repository for every head and linked PR number, and one more for the health and merge readiness of all
+open/draft PRs, independently of follow-up eligibility. Results apply serially per session. An entry never
+runs twice at once. Follow-up delivery runs detached, so starting a parked kernel never delays other
+sessions' PR checks. The cadence adapts: open PRs
 with pending checks every 30 seconds, other open PRs every 2 minutes, sessions without a PR every minute
 while recently active, then every 5 or 30 minutes, settled PRs never. Failures back off exponentially up
 to 30 minutes, and a nearly exhausted GraphQL budget pauses the host until its reset.
@@ -576,6 +577,18 @@ number; only when that PR settles or moves is the head searched again. The kerne
 `refs.changed` hint when the agent runs a branch, bookmark, push or `gh pr` command, so a new or pushed
 branch is checked right away. The hint only triggers a read-only check; PR ownership still comes only
 from recognized `gh pr create` results.
+
+**Merge readiness.** `SessionPullRequest.readiness` caches `ready`, `pending` or `blocked`, structured
+reasons and a separate health `checkedAt`, across daemon restarts. Ready requires an open, non-draft PR,
+no failing checks, no pending checks, no unresolved current review threads, confirmed mergeability,
+an approved or unrequired review decision and a clean merge state. Failures include check names, thread
+counts, conflicts, draft, changes requested, required reviews, a behind base branch and other GitHub
+branch-protection blocks. Unknown mergeability, hook state or missing/future readiness fields remain
+pending, never falsely ready. Known blockers take precedence over pending evidence. The existing batched
+health query includes `mergeStateStatus` and `reviewDecision`; busy PRs use the bounded paginated fallback.
+Older servers retry without unsupported fields and retain pending readiness. Lookup failures retain the
+previous health timestamp and readiness for the same PR/state. Terminal PRs drop readiness. The project
+dashboard projects the reasons and sorts Ready to merge first. No new timer, polling loop or merge action.
 
 **Triggers**
 
@@ -1056,6 +1069,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `SessionSummary.pullRequest`, `.pullRequests`, `.pullRequestError` | Branch-linked GitHub PR status (current branch, and every PR the session opened) and cached-lookup errors (done for private manual sessions) |
+| `SessionPullRequest.readiness` | Cached merge readiness (`state`, structured `reasons`, health `checkedAt`), shared by session and mission-linked PRs. Reasons carry failing check names, unresolved thread count or raw blocking state, never comment bodies. Absent until first successful health lookup and on terminal PRs |
 | `GET /api/sessions/:id/changes/summary` | Lightweight base, branch, changed-file count and added/deleted line totals for sidebar rows, without generating patches (done) |
 | `GET /api/sessions/:id/questions`, `POST /api/sessions/:id/answers` | Human gates from the app |
 | `POST /api/sessions/:id/archive`, `POST /api/sessions/:id/restore` | Archive inactive chats or restore them, retaining history with recoverable jj snapshots (done) |
@@ -1073,7 +1087,7 @@ reports), producing a morning summary in the app and Slack.
 | `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
 | `GET /api/sources?projectId=...`, `POST /api/sources/:id/poll` | Project-scoped tracking status and single-flight manual poll; id is `<projectId>:linear/slack`; WS `sources` sends status on connection/change |
 | `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or linked chat/mission (null clears). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
-| `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first once readiness exists), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
+| `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first, with cached blocker labels), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
 | `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |
 | `GET .../memory/wake?lines=96`, `GET .../memory/recall?regex=…&lines=96` | Bounded wake view (nodes and prompt text), streamed newest-match recall (entries, matches, truncated); no model dependency |

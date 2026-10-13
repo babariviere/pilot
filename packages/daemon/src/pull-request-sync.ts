@@ -6,7 +6,7 @@
  *   created, a client opening a chat) mark an entry urgent; they never queue behind a full sweep.
  * - A job takes the most urgent entry plus every other entry of the same repository that is due soon,
  *   inspects their workspaces locally (git/jj), then asks GitHub once for all their heads and linked PRs,
- *   and once more for the health of PRs eligible for automatic follow-up.
+ *   and once more for open PR health/readiness, independently of automatic follow-up eligibility.
  * - The cadence adapts to state: pending checks poll faster, settled PRs never poll, idle sessions without
  *   a PR back off, failures back off exponentially and a low GraphQL budget pauses the host.
  * - An entry never runs twice at once, so per-session results apply in order.
@@ -26,7 +26,7 @@ import {
 	run,
 	toSessionPullRequest,
 } from "./github.ts";
-import { discoverPullRequestProblems } from "./pull-request-health.ts";
+import { discoverPullRequestHealth } from "./pull-request-health.ts";
 import {
 	checksState,
 	inspectionHeads,
@@ -57,6 +57,7 @@ const maxUrgentBatch = 8;
 const maxDelay = 30 * MINUTE;
 /** Safety net for a repository change the fingerprint missed. */
 const inspectionTtl = 10 * MINUTE;
+type CheckedHealth = Extract<HealthResult, { problems: PullRequestProblems }>;
 
 export interface HealthCheck {
 	pr: SessionPullRequest;
@@ -501,17 +502,23 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 			}
 		}
 
-		for (const item of work)
-			if (item.kind === "linked" && item.pr)
-				try {
-					this.host.linked?.apply(item.pr);
-				} catch (error) {
-					warn(`could not cache pull request for ${item.entry.key}`, error);
-				}
 		await this.applyResults(
 			work.flatMap((item) =>
 				item.kind === "session" && item.result
 					? [{ key: item.entry.key, session: item.session, result: item.result, repo: item.inspection?.repo }]
+					: [],
+			),
+			work.flatMap((item) =>
+				item.kind === "linked" && item.pr
+					? [
+							{
+								key: item.entry.key,
+								repo: item.repo,
+								cwd: item.target.cwd,
+								pr: item.pr,
+								target: item.target,
+							},
+						]
 					: [],
 			),
 		);
@@ -534,45 +541,88 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 	}
 
 	/**
-	 * Look up the health of fresh PRs eligible for automatic follow-up, batched per repository, then apply
+	 * Look up fresh open PR health/readiness, batched per repository, then apply
 	 * each result serially. Results of a job that was running at shutdown still persist.
 	 */
 	private async applyResults(
 		items: { key: string; session: Session; result: PullRequestResult; repo?: Repository }[],
+		linked: { key: string; repo: Repository; cwd: string; pr: SessionPullRequest; target: LinkedPullRequest }[] = [],
 	): Promise<void> {
 		const plans = new Map<(typeof items)[number], HealthPlan<Context>>();
 		const requests = new Map<string, { repo: Repository; cwd: string; prs: HealthRequest[] }>();
 		for (const item of items) {
 			if (item.result.error || !item.repo) continue;
 			const plan = this.host.health?.(item.session, item.result);
-			if (!plan?.prs.length) continue;
-			plans.set(item, plan);
+			if (plan?.prs.length) plans.set(item, plan);
 			let request = requests.get(item.repo.identity);
 			if (!request) {
 				request = { repo: item.repo, cwd: item.session.cwd, prs: [] };
 				requests.set(item.repo.identity, request);
 			}
-			for (const pr of plan.prs)
+			for (const pr of [item.result.pullRequest, ...(item.result.others ?? []), ...(plan?.prs ?? [])]) {
+				if (!pr || isTerminalPullRequest(pr)) continue;
 				request.prs.push({
 					number: pr.number,
-					branch: pr.branch ?? plan.branch,
+					branch: pr.branch ?? plan?.branch,
 					...(pr.stack ? { stacked: true } : {}),
 				});
+			}
+		}
+		for (const item of linked) {
+			if (isTerminalPullRequest(item.pr)) continue;
+			let request = requests.get(item.repo.identity);
+			if (!request) {
+				request = { repo: item.repo, cwd: item.cwd, prs: [] };
+				requests.set(item.repo.identity, request);
+			}
+			request.prs.push({
+				number: item.pr.number,
+				branch: item.pr.branch,
+				...(item.pr.stack ? { stacked: true } : {}),
+			});
 		}
 		const health = new Map<string, Map<number, HealthResult>>();
 		for (const [identity, request] of requests) {
 			if (this.stopped) break;
 			health.set(identity, await lookupHealth(request.repo, request.prs, request.cwd, this.runner, this.limits));
 		}
+		// Reuse even the paginated fallback when the same PR is both branch- and mission-linked.
+		const resolved = new Map<string, CheckedHealth | undefined>();
+		const resolve = async (cwd: string, repo: Repository, pr: SessionPullRequest, branch?: string) => {
+			const key = `${repo.identity}#${pr.number}`;
+			if (!resolved.has(key))
+				resolved.set(key, await this.problems(cwd, repo, pr, branch, health.get(repo.identity)?.get(pr.number)));
+			return resolved.get(key);
+		};
+		const attach = (
+			pr: SessionPullRequest,
+			result: Awaited<ReturnType<typeof resolve>>,
+			cached?: SessionPullRequest,
+		) => {
+			if (isTerminalPullRequest(pr)) return;
+			const readiness = result
+				? result.readiness
+				: cached?.url === pr.url && cached.state === pr.state
+					? cached.readiness
+					: undefined;
+			if (readiness) pr.readiness = readiness;
+		};
 		for (const item of items) {
 			try {
 				const plan = plans.get(item);
+				const cached = new Map(sessionPullRequests(item.session).map((pr) => [pr.url, pr]));
+				if (item.repo && !item.result.error) {
+					for (const pr of [item.result.pullRequest, ...(item.result.others ?? [])]) {
+						if (!pr || isTerminalPullRequest(pr)) continue;
+						attach(pr, await resolve(item.session.cwd, item.repo, pr, plan?.branch), cached.get(pr.url));
+					}
+				}
 				let checks: HealthCheck[] | undefined;
 				if (plan && item.repo) {
 					checks = [];
-					const results = health.get(item.repo.identity);
 					for (const pr of plan.prs) {
-						const problems = await this.problems(item.session, pr, plan.branch, results?.get(pr.number));
+						const result = await resolve(item.session.cwd, item.repo, pr, plan.branch);
+						const problems = result?.problems;
 						if (
 							problems &&
 							(problems.failedChecks.length ||
@@ -593,21 +643,35 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				warn(`could not cache pull request for ${item.key}`, error);
 			}
 		}
+		for (const item of linked) {
+			try {
+				attach(item.pr, await resolve(item.cwd, item.repo, item.pr), item.target.pullRequest);
+				this.host.linked?.apply(item.pr);
+			} catch (error) {
+				warn(`could not cache pull request for ${item.key}`, error);
+			}
+		}
 	}
 
 	/** Batched health, falling back to the paginated single-PR lookup for very busy PRs. */
 	private async problems(
-		session: Session,
+		cwd: string,
+		repo: Repository,
 		pr: SessionPullRequest,
 		branch: string | undefined,
 		result: HealthResult | undefined,
-	): Promise<PullRequestProblems | undefined> {
-		if (result && "problems" in result) return result.problems;
+	): Promise<CheckedHealth | undefined> {
+		if (result && "problems" in result) return result;
 		if (result && "overflow" in result && !this.stopped) {
 			try {
-				return await discoverPullRequestProblems(
-					{ cwd: session.cwd, workspace: { ...session.workspace, branch: pr.branch ?? branch }, pullRequest: pr },
+				return await discoverPullRequestHealth(
+					{
+						cwd,
+						workspace: { upstream: `https://${repo.identity}`, branch: pr.branch ?? branch },
+						pullRequest: pr,
+					},
 					this.runner,
+					this.limits.unsupportedReadiness.get(repo.host),
 				);
 			} catch (error) {
 				warn(`could not check pull request health for ${pr.url}`, error);

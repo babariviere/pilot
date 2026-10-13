@@ -31,9 +31,11 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
     /// Last successful lookup, epoch milliseconds.
     public let checkedAt: Double
     public let stack: PullRequestStack?
+    public let readiness: PullRequestReadiness?
 
     public init(number: Int, url: String, title: String, state: PullRequestState, checkedAt: Double,
-                branch: String? = nil, mergedAt: Double? = nil, stack: PullRequestStack? = nil) {
+                branch: String? = nil, mergedAt: Double? = nil, stack: PullRequestStack? = nil,
+                readiness: PullRequestReadiness? = nil) {
         self.number = number
         self.url = url
         self.title = title
@@ -42,6 +44,7 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
         self.mergedAt = mergedAt
         self.checkedAt = checkedAt
         self.stack = stack
+        self.readiness = readiness
     }
 
     public var isTerminal: Bool { state == .merged || state == .closed }
@@ -63,6 +66,37 @@ public struct SessionPullRequest: Codable, Equatable, Hashable, Sendable {
 
     public var checkedDate: Date? {
         checkedAt.isFinite ? Date(timeIntervalSince1970: checkedAt / 1000) : nil
+    }
+}
+
+public struct PullRequestReadiness: Codable, Equatable, Hashable, Sendable {
+    public enum State: String, Codable, Hashable, Sendable {
+        case ready, pending, blocked
+    }
+    public let state: State
+    public let reasons: [PullRequestReadinessReason]
+    /// Last successful health lookup, epoch milliseconds, separate from PR discovery.
+    public let checkedAt: Double
+
+    public init(state: State, reasons: [PullRequestReadinessReason], checkedAt: Double) {
+        self.state = state
+        self.reasons = reasons
+        self.checkedAt = checkedAt
+    }
+}
+
+public struct PullRequestReadinessReason: Codable, Equatable, Hashable, Sendable {
+    /// String so future daemon reason codes remain decodable by older clients.
+    public let code: String
+    public let names: [String]?
+    public let count: Int?
+    public let value: String?
+
+    public init(code: String, names: [String]? = nil, count: Int? = nil, value: String? = nil) {
+        self.code = code
+        self.names = names
+        self.count = count
+        self.value = value
     }
 }
 

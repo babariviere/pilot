@@ -49,6 +49,8 @@ class FakeGitHub {
 	readonly numbers = new Map<string, Row | Error>();
 	/** "repo#number" to failing check names. */
 	readonly failing = new Map<string, string[]>();
+	readonly healthOverrides = new Map<string, Record<string, unknown>>();
+	healthError?: Error;
 	/** Every gh process: one GraphQL request each. */
 	readonly calls: { repo: string; query: string; variables: string[] }[] = [];
 	gate?: Promise<void>;
@@ -87,19 +89,25 @@ class FakeGitHub {
 		if (args[0] === "pr" && args[1] === "view") {
 			const key = `${repo}#${args[2]}`;
 			if (args.some((arg) => arg.includes("statusCheckRollup"))) {
-				const pr = [...this.heads.values()]
-					.flat()
-					.find((candidate) => candidate.url.endsWith(`/${repo}/pull/${args[2]}`));
+				if (this.healthError) throw this.healthError;
+				const linked = this.numbers.get(key);
+				const pr =
+					(linked instanceof Error ? undefined : linked) ??
+					[...this.heads.values()].flat().find((candidate) => candidate.url.endsWith(`/${repo}/pull/${args[2]}`));
 				return JSON.stringify({
 					state: pr?.state ?? "OPEN",
 					headRefName: pr?.headRefName,
 					mergeable: "MERGEABLE",
+					isDraft: pr?.isDraft ?? false,
+					reviewDecision: null,
+					mergeStateStatus: "CLEAN",
 					statusCheckRollup: (this.failing.get(key) ?? []).map((name) => ({
 						__typename: "CheckRun",
 						name,
 						status: "COMPLETED",
 						conclusion: "FAILURE",
 					})),
+					...this.healthOverrides.get(key),
 				});
 			}
 			const pr =
@@ -184,12 +192,164 @@ test("one GitHub request per repository per round, with a bounded number of conc
 		gate.resolve();
 		await sync.settled();
 		assert.equal(github.maxActive, 2);
-		assert.deepEqual(github.calls.map((call) => call.repo).sort(), ["a", "b", "c"]);
+		assert.deepEqual(github.calls.map((call) => call.repo).sort(), ["a", "a", "b", "b", "c", "c"]);
 		const a = github.calls.find((call) => call.repo === "a")!;
 		assert.equal(a.variables.filter((value) => value.startsWith("h")).length, 3, "three sessions, one request");
 		for (const target of sessions) assert.equal(target.pullRequest?.state, "open", target.id);
 	} finally {
 		gate.resolve();
+		await sync.stop();
+	}
+});
+
+test("readiness updates without a follow-up plan, survives failed health and a serialized restart, and clears on merge", async () => {
+	const github = new FakeGitHub();
+	const target = session("a", "a");
+	github.heads.set("a/feat/a", [row("a", 7, "feat/a")]);
+	let sync = new PullRequestSync(host([target]), { runner: github.runner });
+	try {
+		await sync.refresh(target);
+		assert.equal(target.pullRequest?.readiness?.state, "ready");
+		const cached = structuredClone(target.pullRequest!.readiness);
+		github.healthError = new Error("offline");
+		await sync.refresh(target);
+		assert.deepEqual(target.pullRequest?.readiness, cached, "health freshness does not advance on failure");
+		await sync.stop();
+		const restored: PullRequestSession = JSON.parse(JSON.stringify(target));
+		sync = new PullRequestSync(host([restored]), { runner: github.runner });
+		await sync.refresh(restored);
+		assert.deepEqual(restored.pullRequest?.readiness, cached);
+		delete github.healthError;
+		github.healthOverrides.set("a#7", { reviewDecision: "CHANGES_REQUESTED" });
+		await sync.refresh(restored);
+		assert.equal(restored.pullRequest?.readiness?.state, "blocked");
+		github.healthOverrides.set("a#7", { mergeable: "UNKNOWN" });
+		await sync.refresh(restored);
+		assert.equal(restored.pullRequest?.readiness?.state, "pending");
+		github.healthOverrides.delete("a#7");
+		await sync.refresh(restored);
+		assert.equal(restored.pullRequest?.readiness?.state, "ready");
+		github.heads.set("a/feat/a", [row("a", 7, "feat/a", { state: "MERGED" })]);
+		await sync.refresh(restored);
+		assert.equal(restored.pullRequest?.state, "merged");
+		assert.equal(restored.pullRequest?.readiness, undefined);
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("mission-linked and session PRs share one health query and both receive readiness", async () => {
+	const github = new FakeGitHub();
+	const target = session("a", "a");
+	github.heads.set("a/feat/a", [row("a", 7, "feat/a")]);
+	const linked: LinkedPullRequest = { url: "https://github.com/octo/a/pull/7", cwd: "/source" };
+	const updates: SessionPullRequest[] = [];
+	const sync = new PullRequestSync(
+		host([target], {
+			linked: {
+				targets: () => [linked],
+				apply: (pr) => {
+					linked.pullRequest = pr;
+					updates.push(pr);
+				},
+			},
+		}),
+		{ runner: github.runner },
+	);
+	try {
+		sync.start();
+		await sync.settled();
+		assert.equal(target.pullRequest?.readiness?.state, "ready");
+		assert.equal(updates[0]?.readiness?.state, "ready");
+		assert.equal(github.calls.filter((call) => call.query === "query PilotPullRequestHealth").length, 1);
+		assert.equal(
+			github.calls
+				.find((call) => call.query === "query PilotPullRequestHealth")
+				?.variables.filter((value) => value.startsWith("p")).length,
+			1,
+			"duplicate PRs are queried once",
+		);
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("busy PR readiness uses one paginated fallback shared by session and mission links", async () => {
+	const github = new FakeGitHub();
+	const target = session("a", "a");
+	github.heads.set("a/feat/a", [row("a", 7, "feat/a")]);
+	const linked: LinkedPullRequest = { url: "https://github.com/octo/a/pull/7", cwd: "/source" };
+	let views = 0;
+	let pages = 0;
+	const runner: Runner = async (file, args, ...rest) => {
+		const query = args.find((arg) => arg.startsWith("query=")) ?? "";
+		if (query.includes("PilotPullRequestHealth"))
+			return JSON.stringify({
+				data: {
+					repository: {
+						p0: {
+							number: 7,
+							state: "OPEN",
+							headRefName: "feat/a",
+							mergeable: "MERGEABLE",
+							commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
+							reviewThreads: { nodes: [], pageInfo: { hasNextPage: true } },
+						},
+					},
+				},
+			});
+		if (args[0] === "pr" && args[1] === "view") {
+			views++;
+			assert.ok(args.includes("--repo=github.com/octo/a"));
+			return JSON.stringify({
+				state: "OPEN",
+				headRefName: "feat/a",
+				mergeable: "MERGEABLE",
+				isDraft: false,
+				reviewDecision: null,
+				mergeStateStatus: "CLEAN",
+				statusCheckRollup: [],
+			});
+		}
+		if (query.includes("reviewThreads")) {
+			pages++;
+			return JSON.stringify({
+				data: {
+					repository: {
+						pullRequest: {
+							reviewThreads: {
+								nodes: [
+									{ id: `t${pages}`, isResolved: pages === 1, isOutdated: false, comments: { totalCount: 1 } },
+								],
+								pageInfo: { hasNextPage: pages === 1, endCursor: pages === 1 ? "next" : null },
+							},
+						},
+					},
+				},
+			});
+		}
+		return github.runner(file, args, ...rest);
+	};
+	const sync = new PullRequestSync(
+		host([target], {
+			linked: {
+				targets: () => [linked],
+				apply: (pr) => {
+					linked.pullRequest = pr;
+				},
+			},
+		}),
+		{ runner },
+	);
+	try {
+		sync.start();
+		await sync.settled();
+		assert.equal(views, 1);
+		assert.equal(pages, 2);
+		assert.equal(target.pullRequest?.readiness?.state, "blocked");
+		assert.deepEqual(target.pullRequest?.readiness?.reasons, [{ code: "unresolved_comments", count: 1 }]);
+		assert.deepEqual(linked.pullRequest?.readiness, target.pullRequest?.readiness);
+	} finally {
 		await sync.stop();
 	}
 });
@@ -262,7 +422,10 @@ test("cadence adapts to PR state: pending checks fast, settled never, idle sessi
 	const sync = new PullRequestSync(host(sessions), { runner: github.runner, intervalMs: 1_000 });
 	const counts = () =>
 		Object.fromEntries(
-			sessions.map((target) => [target.id, github.calls.filter((call) => call.repo === target.id).length]),
+			sessions.map((target) => [
+				target.id,
+				github.calls.filter((call) => call.repo === target.id && call.query === "query PilotPullRequests").length,
+			]),
 		);
 	const advance = async (ms: number) => {
 		for (let step = 0; step < ms; step += 100) {
@@ -303,7 +466,7 @@ test("local inspection is reused while the repository and session are unchanged"
 			assert.equal(target.pullRequest?.number, 1);
 			await sync.refresh(target);
 			assert.equal(local, first, "no git process while nothing changed");
-			assert.equal(github.calls.length, 2, "GitHub is still asked for fresh PR state");
+			assert.equal(github.calls.length, 4, "GitHub is still asked for fresh PR state and health");
 			await writeFile(join(cwd, ".git", "refs", "heads", "feat", "b"), "def\n");
 			await sync.refresh(target);
 			assert.ok(local > first, "a new branch invalidates the inspection");
@@ -324,7 +487,9 @@ test("a known open PR is looked up by number instead of its head", async () => {
 		await sync.refresh(target);
 		await sync.refresh(target);
 		assert.deepEqual(
-			github.calls.map((call) => call.variables.filter((value) => /^[hn]\d+=/.test(value))),
+			github.calls
+				.filter((call) => call.query === "query PilotPullRequests")
+				.map((call) => call.variables.filter((value) => /^[hn]\d+=/.test(value))),
 			[["h0=feat/a"], ["n0=7"]],
 		);
 	} finally {
@@ -465,7 +630,7 @@ test("a bottom-of-stack PR whose head no longer contains the stack base reaches 
 							state: "OPEN",
 							headRefName: "feat/a",
 							mergeable: "MERGEABLE",
-							commits: { nodes: [] },
+							commits: { nodes: [{ commit: { statusCheckRollup: null } }] },
 							reviewThreads: { nodes: [], pageInfo: { hasNextPage: false } },
 							baseRefName: "main",
 							baseRef: { compare: { behindBy: 1 } },

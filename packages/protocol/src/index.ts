@@ -38,6 +38,34 @@ export interface SessionPullRequest {
 	checkedAt: number;
 	/** Read-only GitHub stack membership. Absent for unstacked PRs or unsupported servers. */
 	stack?: PullRequestStack;
+	/** Merge readiness from the last successful health lookup. Absent until checked, or for terminal PRs. */
+	readiness?: PullRequestReadiness;
+}
+
+export interface PullRequestReadiness {
+	state: "ready" | "pending" | "blocked";
+	reasons: PullRequestReadinessReason[];
+	/** Health lookup time, independent of PR discovery, epoch milliseconds. Cached across restarts. */
+	checkedAt: number;
+}
+
+export interface PullRequestReadinessReason {
+	code:
+		| "failing_checks"
+		| "unresolved_comments"
+		| "conflicts"
+		| "draft"
+		| "changes_requested"
+		| "review_required"
+		| "behind"
+		| "merge_state"
+		| "checks_pending"
+		| "mergeability_unknown"
+		| "readiness_unknown";
+	names?: string[];
+	count?: number;
+	/** Raw GitHub review decision, merge state or diverged base branch. */
+	value?: string;
 }
 
 export interface PullRequestStack {
@@ -671,8 +699,8 @@ export interface DashboardWorkingItem {
 }
 
 /**
- * Merge readiness of an open PR. Provisional mirror of the per-PR readiness the daemon will track
- * (`SessionPullRequest.readiness`); reasons are short labels such as "failing checks: build". Omitted until known.
+ * Merge readiness of an open PR, projected from SessionPullRequest.readiness.
+ * Reasons are display labels; the session PR retains structured reasons and the health timestamp.
  */
 export interface DashboardPullRequestReadiness {
 	state: "ready" | "pending" | "blocked";
