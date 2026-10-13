@@ -132,6 +132,8 @@ struct Composer: View {
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
     var onSlashCommandsNeeded: (() -> Void)? = nil
+    /// Send later: the message, its trigger and, for At a time, epoch milliseconds. Nil hides the control.
+    var onSchedule: ((String, ScheduleTrigger, Double?) -> Void)? = nil
     @StateObject private var modelPicker: ChatModelPickerState
 
     init(
@@ -145,7 +147,8 @@ struct Composer: View {
         onRemoveQueuedMessage: @escaping (Int) async throws -> Void,
         session: SessionSummary? = nil,
         slashCommands: [SlashCommand]? = nil,
-        onSlashCommandsNeeded: (() -> Void)? = nil
+        onSlashCommandsNeeded: (() -> Void)? = nil,
+        onSchedule: ((String, ScheduleTrigger, Double?) -> Void)? = nil
     ) {
         self.state = state
         self.working = working
@@ -158,6 +161,7 @@ struct Composer: View {
         self.session = session
         self.slashCommands = slashCommands
         self.onSlashCommandsNeeded = onSlashCommandsNeeded
+        self.onSchedule = onSchedule
         _modelPicker = StateObject(wrappedValue: ChatModelPickerState(cwd: session?.cwd))
     }
 
@@ -171,6 +175,9 @@ struct Composer: View {
         VStack(spacing: 8) {
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
+                if let session, onSchedule != nil {
+                    ScheduledFollowUpsStrip(sessionId: session.id)
+                }
                 if showsQueue {
                     QueuedMessagesStrip(state: state, messages: remainingQueuedMessages, completionDirectory: completionDirectory,
                                         onSave: saveQueueEdit, onRemove: { id in
@@ -248,6 +255,12 @@ struct Composer: View {
                 }
             }
             Spacer(minLength: 8)
+            if let onSchedule {
+                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker) { trigger, at in
+                    guard state.canSend(changingModel: modelPicker.changing) else { return }
+                    onSchedule(state.attachments.message(text: state.trimmed), trigger, at)
+                }
+            }
             ComposerSendButtons(state: state, draft: state.draftState, modelPicker: modelPicker,
                                 working: working, onStop: onStop, onSend: { send(.steer) })
         }
@@ -348,6 +361,18 @@ private struct ComposerSendButtons: View {
                 .disabled(!state.canSend(changingModel: modelPicker.changing))
                 .help(working ? "Steer (↩)" : "Send (↩)")
         }
+    }
+}
+
+/// Observes the draft on its own, like the send buttons, so typing never re-renders the composer.
+private struct ComposerSendLater: View {
+    @ObservedObject var state: ComposerState
+    @ObservedObject var draft: ComposerDraftState
+    @ObservedObject var modelPicker: ChatModelPickerState
+    let schedule: (ScheduleTrigger, Double?) -> Void
+
+    var body: some View {
+        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), schedule: schedule)
     }
 }
 

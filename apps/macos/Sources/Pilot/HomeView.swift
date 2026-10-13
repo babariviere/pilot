@@ -295,6 +295,7 @@ struct TaskComposer: View {
                 }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
+                SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat)
                 Button(action: start) { Image(systemName: "arrow.up") }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
@@ -378,6 +379,34 @@ struct TaskComposer: View {
                 let session = try await app.client.spawn(request)
                 if let id = request.projectId { lastProjectId = id }
                 if form.completeSubmission(revision: revision) { app.selectedSessionId = session.id }
+            } catch {
+                if form.revision == revision { form.error = error.localizedDescription }
+            }
+        }
+    }
+
+    /// Send later: the same request as Start, kept by pilotd until its trigger fires.
+    private func scheduleNewChat(_ trigger: ScheduleTrigger, _ at: Double?) {
+        guard canStart else { return }
+        form.busy = true
+        form.error = nil
+        let revision = form.revision
+        do { try form.attachments.retainForHistory() }
+        catch {
+            form.error = "Could not retain attached images: \(error.localizedDescription)"
+            form.busy = false
+            return
+        }
+        let request = form.spawnRequest(in: project, branches: branches)
+        let title = ScheduleText.title(form.message, fallback: "New chat")
+        Task {
+            defer { form.busy = false }
+            do {
+                _ = try await client.createSchedule(ScheduleRequest(
+                    title: title, trigger: trigger, at: at, target: .chat(request)
+                ))
+                if let id = request.projectId { lastProjectId = id }
+                _ = form.completeSubmission(revision: revision)
             } catch {
                 if form.revision == revision { form.error = error.localizedDescription }
             }

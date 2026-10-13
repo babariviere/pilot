@@ -37,7 +37,7 @@ struct ProjectPage: View {
                     }
                     .sheet(item: $fullList) { list in
                         ProjectFullListSheet(project: project, list: list, dashboard: fullListDashboard,
-                                             error: fullListError) {
+                                             scheduled: scheduled, error: fullListError) {
                             Task { await loadFullList(projectId: project.id) }
                         }
                         .task { await loadFullList(projectId: project.id) }
@@ -60,7 +60,9 @@ struct ProjectPage: View {
             let banner = stale ? ProjectRefreshBanner(receivedAt: client.dashboardReceivedAt[projectId],
                                                       error: client.dashboardErrors[projectId],
                                                       retrying: retrying, retry: retry) : nil
-            if dashboard.summary.chats == 0, dashboard.missions.total == 0, dashboard.memory == nil {
+            let scheduled = scheduled
+            if dashboard.summary.chats == 0, dashboard.missions.total == 0, dashboard.memory == nil,
+               dashboard.needsYou.total == 0, scheduled.isEmpty {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         banner
@@ -78,7 +80,7 @@ struct ProjectPage: View {
                 }
             } else {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
-                                     needsYou: dashboard.needsYou,
+                                     needsYou: dashboard.needsYou, scheduled: scheduled,
                                      banner: banner, showFullList: showFullList,
                                      browseMemory: { showingMemory = true })
             }
@@ -94,6 +96,12 @@ struct ProjectPage: View {
     /// Live updates have stopped: the socket is down, or an explicit refresh failed.
     private var stale: Bool {
         !client.connected || client.dashboardErrors[projectId] != nil
+    }
+
+    /// Pending items from the live schedule list, which also carries what editing needs. Failed ones are
+    /// listed under Needs you by pilotd's dashboard.
+    private var scheduled: [ScheduledItem] {
+        ScheduleText.listed(client.schedules, projectId: projectId, includeFailed: false)
     }
 
     private func retry() {
@@ -183,6 +191,7 @@ private struct ProjectDashboardBody: View {
     let project: Project
     let dashboard: ProjectDashboard
     let needsYou: DashboardSection<DashboardNeedsYouItem>
+    let scheduled: [ScheduledItem]
     let banner: ProjectRefreshBanner?
     let showFullList: (ProjectFullList) -> Void
     let browseMemory: () -> Void
@@ -291,6 +300,17 @@ private struct ProjectDashboardBody: View {
                 }
             }
 
+            if !scheduled.isEmpty {
+                ProjectPageSection(header: PageSectionHeader(title: "Scheduled", count: scheduled.count)) {
+                    ForEach(Array(scheduled.prefix(ProjectFullList.rowLimit).enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { HairlineDivider(leading: 34) }
+                        ProjectScheduledRow(item: item)
+                    }
+                    ProjectMoreLine(hidden: max(0, scheduled.count - ProjectFullList.rowLimit), total: scheduled.count,
+                                    noun: "scheduled") { showFullList(.scheduled) }
+                }
+            }
+
             if let memory = dashboard.memory {
                 ProjectPageSection(header: PageSectionHeader(title: "Memory", count: memory.count,
                                                               linkTitle: "Browse memory", link: browseMemory)) {
@@ -360,7 +380,9 @@ private struct ProjectMoreLine: View {
 }
 
 private enum ProjectFullList: String, Identifiable {
-    case needsYou, working, pullRequests, missions
+    case needsYou, working, pullRequests, missions, scheduled
+    /// Rows a section shows before its "Show all" line, as pilotd bounds its sections.
+    static let rowLimit = 5
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -368,6 +390,7 @@ private enum ProjectFullList: String, Identifiable {
         case .working: "Working now"
         case .pullRequests: "Pull requests"
         case .missions: "Missions"
+        case .scheduled: "Scheduled"
         }
     }
 }
@@ -377,6 +400,7 @@ private struct ProjectFullListSheet: View {
     let project: Project
     let list: ProjectFullList
     let dashboard: ProjectDashboard?
+    let scheduled: [ScheduledItem]
     let error: String?
     let retry: () -> Void
     @EnvironmentObject private var model: AppModel
@@ -413,6 +437,11 @@ private struct ProjectFullListSheet: View {
                                 ProjectMissionRow(mission: item)
                             }
                             capNote(dashboard.missions.total, dashboard.missions.items.count)
+                        case .scheduled:
+                            ForEach(Array(scheduled.enumerated()), id: \.element.id) { index, item in
+                                if index > 0 { HairlineDivider(leading: 34) }
+                                ProjectScheduledRow(item: item)
+                            }
                         }
                     }
                 }
@@ -497,6 +526,7 @@ private struct ProjectNeedsYouRow: View {
         .disabled(action == nil)
         .accessibilityLabel("\(item.title). \(subtitle)")
         .accessibilityHint(action ?? "")
+        .modifier(ScheduledFailureActions(item: item))
     }
 
     @ViewBuilder private var icon: some View {
@@ -504,9 +534,7 @@ private struct ProjectNeedsYouRow: View {
         case .unread: SessionStatusIcon(status: item.outcome == .stopped ? .stopped : .done)
         case .failed: SessionStatusIcon(status: .failed)
         case .question: MissionCoordinatorIndicator()
-        case .scheduledFailed:
-            Image(systemName: "calendar.badge.exclamationmark").foregroundStyle(Theme.blocked)
-                .accessibilityLabel("Scheduled item failed")
+        case .scheduledFailed: ScheduleStateIcon(state: .failed)
         }
     }
 
@@ -516,6 +544,46 @@ private struct ProjectNeedsYouRow: View {
             if let missionId = item.missionId { model.openMission(missionId) }
         case .unread, .failed, .scheduledFailed:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
+        }
+    }
+}
+
+/// A scheduled item that could not start stays under Needs you until dismissed, which deletes it in pilotd.
+private struct ScheduledFailureActions: ViewModifier {
+    let item: DashboardNeedsYouItem
+    @EnvironmentObject private var model: AppModel
+
+    func body(content: Content) -> some View {
+        if item.kind == .scheduledFailed, let id = item.scheduledId {
+            content
+                .contextMenu {
+                    if let sessionId = item.sessionId { Button("Open Chat") { model.selectedSessionId = sessionId } }
+                    Button("Dismiss") { dismiss(id) }
+                }
+                .accessibilityAction(named: "Dismiss") { dismiss(id) }
+        } else {
+            content
+        }
+    }
+
+    private func dismiss(_ id: String) {
+        Task {
+            do { try await model.client.deleteSchedule(id) }
+            catch { model.sessionActionError = error.localizedDescription }
+        }
+    }
+}
+
+private struct ProjectScheduledRow: View {
+    let item: ScheduledItem
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let chatTitle: String? = if case let .message(sessionId, _) = item.target {
+            model.client.session(sessionId)?.title
+        } else { nil }
+        ScheduledItemRow(item: item, detail: ScheduleText.detail(item, chatTitle: chatTitle)) {
+            model.selectedSessionId = $0
         }
     }
 }
