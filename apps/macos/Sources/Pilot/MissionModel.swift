@@ -26,6 +26,7 @@ enum MissionSheet: Identifiable, Hashable {
     /// "Add to mission…" for a chat.
     case add(sessionId: String)
     case edit(missionId: String)
+    case startCoordinator(missionId: String)
 
     var id: String {
         switch self {
@@ -33,6 +34,7 @@ enum MissionSheet: Identifiable, Hashable {
         case let .make(sessionId): "make-\(sessionId)"
         case let .add(sessionId): "add-\(sessionId)"
         case let .edit(missionId): "edit-\(missionId)"
+        case let .startCoordinator(missionId): "start-coordinator-\(missionId)"
         }
     }
 }
@@ -117,6 +119,9 @@ struct SessionMissionActions: View {
 
     var body: some View {
         if let missionId = session.missionId {
+            if AppModel.shared.client.mission(missionId)?.coordinatorSessionId != session.id && !session.isArchived {
+                Button("Make coordinator") { model.setCoordinator(session.id, missionId: missionId) }
+            }
             Button { model.openMission(missionId) } label: {
                 Label("Open mission", systemImage: "scope")
             }

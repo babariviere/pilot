@@ -316,6 +316,14 @@ implementation. The chat already holds the context and its prompt cache, so the 
 cheaper than an out-of-band summary of the transcript; the user reviews and edits the result on the
 mission page, where every brief change is a revision.
 
+**New mission.** Mission control offers **Start a coordinator chat**, on by default, with scoped,
+price-capped model and thinking choices and optional context, links and constraints. The daemon uses
+the task-start spawn path, joins and promotes the chat before its first turn, and sends the same draft
+request plus the goal and context. The app opens that chat. Opting out keeps title-and-goal creation.
+Without a coordinator, the header offers **Start a coordinator** with the same controls, alongside
+**Make coordinator** shortcuts for member chats. Failed admission removes any saved chat metadata
+and leaves no coordinator; the created mission remains available for retry from its page.
+
 **Coordinator.** An optional role held by one mission chat (Build or Ask); **Make coordinator** moves it.
 The user is the coordinator when no chat holds the role. The coordinator can start chats for tasks and
 message member chats; it is woken with a batched, durable notice when a member settles, fails or waits on

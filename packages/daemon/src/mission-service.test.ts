@@ -10,7 +10,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { MissionService } from "./mission-service.ts";
+import { draftMessage, MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -107,6 +107,126 @@ async function fixture(
 	};
 	return { home, projects, project, other, sessions, store, service, workers, spawn };
 }
+
+test("new mission starts a coordinator with the draft request and user context before its first turn", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Plan",
+		goal: "Ship a small feature",
+		startCoordinator: true,
+		model: "test/chosen",
+		thinking: "high",
+		message: "Use https://example.com/spec. Keep it small.",
+	});
+	assert.ok(mission.coordinatorSessionId);
+	const session = f.sessions.get(mission.coordinatorSessionId)!;
+	assert.equal(session.missionId, mission.id);
+	assert.equal(session.projectId, f.project.id);
+	assert.equal(session.thinking, "high");
+	assert.deepEqual(f.store.members(mission.id), [session.id]);
+	const worker = await until(() => f.workers.get(session.id));
+	assert.equal(worker.spec.model, "test/chosen");
+	assert.equal(worker.spec.mission?.coordinator, "self");
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(
+		input.type === "input" ? input.content : "",
+		`${draftMessage("Plan")}\n\nShip a small feature\n\nUse https://example.com/spec. Keep it small.`,
+	);
+});
+
+test("new mission with start disabled or omitted creates no chat", async (t) => {
+	const f = await fixture(t);
+	for (const startCoordinator of [false, undefined]) {
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "Plan",
+			goal: "Goal",
+			startCoordinator,
+		});
+		assert.equal(mission.coordinatorSessionId, undefined);
+		assert.deepEqual(f.store.members(mission.id), []);
+	}
+	assert.equal(f.sessions.list().length, 0);
+});
+
+test("failed coordinator model admission leaves the created mission without a coordinator or chat", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.sessions, "selectTaskModel", async () => {
+		throw new Error("Model exceeds price cap");
+	});
+	await assert.rejects(
+		f.service.create({ projectId: f.project.id, title: "Plan", startCoordinator: true }),
+		/price cap/,
+	);
+	const mission = f.store.list()[0]!;
+	assert.equal(mission.coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
+test("start coordinator on an existing mission uses project defaults and rejects replacing a coordinator", async (t) => {
+	const f = await fixture(t);
+	await f.projects.update(f.project.id, { model: "test/project-default" });
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Existing", goal: "Goal" });
+	const session = await f.service.startCoordinator(mission.id, { message: "Review the existing brief." });
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, session.id);
+	assert.equal(session.model, "test/project-default");
+	const worker = await until(() => f.workers.get(session.id));
+	assert.equal(worker.spec.mission?.coordinator, "self");
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.match(input.type === "input" ? input.content : "", /Review the existing brief/);
+	await assert.rejects(f.service.startCoordinator(mission.id), /already has a coordinator/);
+	assert.equal(f.sessions.list().length, 1);
+});
+
+test("coordinator final admission failures remove saved metadata and leave no coordinator", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	const spawnProject = f.sessions["missions"]!.spawnProject;
+	t.mock.method(f.sessions["missions"]!, "spawnProject", (id: string) => {
+		const project = spawnProject(id);
+		f.store.update(id, { status: "done" });
+		return project;
+	});
+	await assert.rejects(f.service.startCoordinator(mission.id), /Reopen/);
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
+
+test("concurrent coordinator starts admit only one chat and clean up the loser", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	const results = await Promise.allSettled([
+		f.service.startCoordinator(mission.id),
+		f.service.startCoordinator(mission.id),
+	]);
+	assert.equal(results.filter((item) => item.status === "fulfilled").length, 1);
+	assert.equal(f.sessions.list().length, 1);
+	assert.equal(f.store.members(mission.id).length, 1);
+	assert.equal((await readdir(join(f.home, "data", "sessions"))).length, 1);
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, f.store.members(mission.id)[0]);
+});
+
+test("coordinator admission rolls back membership and promotion if the bridge fails after joining", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "Plan" });
+	const joinSpawn = f.sessions["missions"]!.joinSpawn;
+	t.mock.method(f.sessions["missions"]!, "joinSpawn", (...args: Parameters<typeof joinSpawn>) => {
+		joinSpawn(...args);
+		throw new Error("admission failed");
+	});
+	await assert.rejects(f.service.startCoordinator(mission.id), /admission failed/);
+	assert.equal(f.store.require(mission.id).coordinatorSessionId, undefined);
+	assert.deepEqual(f.store.members(mission.id), []);
+	assert.equal(f.sessions.list().length, 0);
+	assert.equal(f.workers.size, 0);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+});
 
 test("get keeps recent user notes visible beyond the activity window for every member", async (t) => {
 	const f = await fixture(t);
@@ -1551,11 +1671,14 @@ test("a rejected task claim does not move a chat or release its previous work", 
 test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const f = await fixture(t);
 	const terminals = new TerminalManager();
+	const catalog = new ModelCatalog(f.home);
+	const cappedModels = { models: [{ id: "test/small", provider: "test", name: "Small" }] };
+	const modelList = t.mock.method(catalog, "listTaskModels", async () => cappedModels);
 	const server = createDaemonServer(
 		{ home: f.home, host: "127.0.0.1", port: 0 },
 		f.sessions,
 		f.projects,
-		new ModelCatalog(f.home),
+		catalog,
 		terminals,
 		{ service: f.service, store: f.store },
 	);
@@ -1579,6 +1702,10 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 			...init,
 			headers: init?.body ? { "content-type": "application/json" } : {},
 		});
+	const choices = await api(`/models?projectId=${f.project.id}&purpose=task-start`);
+	assert.equal(choices.status, 200);
+	assert.deepEqual(await choices.json(), cappedModels);
+	assert.deepEqual(modelList.mock.calls[0]?.arguments, [f.project.path]);
 	const created = await api("/missions", {
 		method: "POST",
 		body: JSON.stringify({ projectId: f.project.id, title: "API v2", goal: "Redesign" }),
@@ -1711,6 +1838,9 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 		});
 		assert.equal(inactiveStart.status, 409);
 		assert.match(await inactiveStart.text(), /Reopen the mission/);
+		const inactiveCoordinator = await api(`/missions/${id}/coordinator/start`, { method: "POST", body: "{}" });
+		assert.equal(inactiveCoordinator.status, 409);
+		assert.match(await inactiveCoordinator.text(), /Reopen the mission/);
 		assert.equal(spawn.mock.callCount(), spawnCalls, "REST rejects before spawning");
 		assert.deepEqual(
 			f.sessions.list({ archived: "all" }).map((session) => session.id),
@@ -1728,6 +1858,17 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const restartedChat = (await restarted.json()) as SessionSummary;
 	assert.equal(restartedChat.missionId, id);
 	assert.equal(f.store.task(id, unassigned.id).sessionId, restartedChat.id);
+	const startedCoordinator = await api(`/missions/${id}/coordinator/start`, {
+		method: "POST",
+		body: JSON.stringify({ message: "Review the current plan", thinking: "high" }),
+	});
+	assert.equal(startedCoordinator.status, 201);
+	const lead = (await startedCoordinator.json()) as SessionSummary;
+	assert.equal(lead.missionId, id);
+	assert.equal(f.store.require(id).coordinatorSessionId, lead.id);
+	const duplicateCoordinator = await api(`/missions/${id}/coordinator/start`, { method: "POST", body: "{}" });
+	assert.equal(duplicateCoordinator.status, 409);
+	await duplicateCoordinator.arrayBuffer();
 	const missing = await api("/missions/nope");
 	assert.equal(missing.status, 404);
 	await missing.arrayBuffer();

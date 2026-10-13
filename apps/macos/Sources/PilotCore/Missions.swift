@@ -403,10 +403,15 @@ public struct CreateMissionRequest: Codable, Sendable {
     public var coordinator: Bool?
     /// With fromSessionId: ask that chat to draft the goal, brief and tasks. The daemon defaults to true.
     public var draft: Bool?
+    public var startCoordinator: Bool?
+    public var model: String?
+    public var thinking: String?
+    public var message: String?
 
     public init(
         projectId: String, title: String, goal: String, brief: String? = nil, tasks: [MissionTaskDraft]? = nil,
-        fromSessionId: String? = nil, coordinator: Bool? = nil, draft: Bool? = nil
+        fromSessionId: String? = nil, coordinator: Bool? = nil, draft: Bool? = nil,
+        startCoordinator: Bool? = nil, model: String? = nil, thinking: String? = nil, message: String? = nil
     ) {
         self.projectId = projectId
         self.title = title
@@ -416,6 +421,23 @@ public struct CreateMissionRequest: Codable, Sendable {
         self.fromSessionId = fromSessionId
         self.coordinator = coordinator
         self.draft = draft
+        self.startCoordinator = startCoordinator
+        self.model = model
+        self.thinking = thinking
+        self.message = message
+    }
+}
+
+/// POST /api/missions/:id/coordinator/start.
+public struct StartMissionCoordinatorRequest: Codable, Sendable {
+    public var model: String?
+    public var thinking: String?
+    public var message: String?
+
+    public init(model: String? = nil, thinking: String? = nil, message: String? = nil) {
+        self.model = model
+        self.thinking = thinking
+        self.message = message
     }
 }
 

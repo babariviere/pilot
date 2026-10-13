@@ -11,6 +11,7 @@ import type {
 	MissionTask,
 	SessionSummary,
 	StartMissionTaskRequest,
+	StartMissionCoordinatorRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
@@ -103,11 +104,14 @@ export class MissionService {
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				return mission.projectId;
 			},
-			joinSpawn: (sessionId, missionId) => {
+			joinSpawn: (sessionId, missionId, coordinator) => {
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+				if (coordinator && mission.coordinatorSessionId)
+					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
 				store.join(sessionId, missionId);
+				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
 			membership: (sessionId) => {
 				const missionId = store.missionOf(sessionId);
@@ -120,6 +124,7 @@ export class MissionService {
 						}
 					: undefined;
 			},
+			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
 			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
@@ -211,6 +216,10 @@ export class MissionService {
 			if (session.projectId !== request.projectId) throw new Conflict("The chat belongs to another project");
 			if (session.archivedAt !== undefined) throw new Conflict("Restore the archived chat first");
 		}
+		if (request.startCoordinator !== undefined && typeof request.startCoordinator !== "boolean")
+			throw new Error("startCoordinator must be a boolean");
+		if (from !== undefined && request.startCoordinator)
+			throw new Error("startCoordinator cannot be combined with fromSessionId");
 		const mission = this.store.create(request);
 		if (from !== undefined) {
 			this.store.join(from, mission.id);
@@ -221,7 +230,31 @@ export class MissionService {
 					.send(from, draftMessage(mission.title), "followUp", `mission:draft:${randomUUID()}`)
 					.catch((error: unknown) => console.warn(`pilotd: could not ask ${from} to draft its mission: ${error}`));
 		}
+		if (request.startCoordinator) await this.startCoordinator(mission.id, request);
 		return this.store.detail(mission.id);
+	}
+
+	/** Promote inside spawn admission, before the worker sees its first input. */
+	async startCoordinator(missionId: string, request: StartMissionCoordinatorRequest = {}): Promise<SessionSummary> {
+		if (!request || typeof request !== "object") throw new Error("Expected coordinator start options");
+		const mission = this.store.require(missionId);
+		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
+		if (mission.coordinatorSessionId) throw new Conflict("The mission already has a coordinator");
+		if (request.message !== undefined && typeof request.message !== "string")
+			throw new Error("message must be a string");
+		const message = [draftMessage(mission.title), mission.goal, request.message?.trim()].filter(Boolean).join("\n\n");
+		if (message.length > 4000)
+			throw new Error("Opening message is too long (max 4000). Shorten the goal or context.");
+		const project = this.projects.require(mission.projectId);
+		const selection = await this.sessions.selectTaskModel(
+			project.path,
+			request.model ?? project.model,
+			request.thinking,
+		);
+		return this.sessions.spawn(
+			{ projectId: mission.projectId, missionId, title: mission.title, message, ...selection },
+			true,
+		);
 	}
 
 	join(sessionId: string, request: JoinMissionRequest): SessionSummary {

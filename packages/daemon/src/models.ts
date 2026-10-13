@@ -65,8 +65,13 @@ export class ModelCatalog {
 		return promise;
 	}
 
-	/** Validate before spawning, including the default, so neither HTTP nor tool calls bypass the cap. */
-	async selectTaskModel(cwd: string, model?: string, thinking?: string): Promise<{ model: string; thinking: string }> {
+	/** The same scoped, price-capped choices used by start admission. */
+	async listTaskModels(cwd: string): Promise<ModelList> {
+		const { list, allowed } = await this.taskModels(cwd);
+		return { ...list, models: allowed.map(({ option }) => option) };
+	}
+
+	private async taskModels(cwd: string) {
 		const [list, runtime, settings] = await Promise.all([
 			this.list(cwd),
 			this.getRuntime(),
@@ -86,6 +91,12 @@ export class ModelCatalog {
 				`pilotd: no task-start reference models in scope for ${cwd}; using the scope without a price cap`,
 			);
 		const allowed = scoped.filter(({ model }) => model && (cap === undefined || price(model) <= cap));
+		return { list, settings, scoped, price, cap, allowed };
+	}
+
+	/** Validate before spawning, including the default, so neither HTTP nor tool calls bypass the cap. */
+	async selectTaskModel(cwd: string, model?: string, thinking?: string): Promise<{ model: string; thinking: string }> {
+		const { list, settings, scoped, price, cap, allowed } = await this.taskModels(cwd);
 		const choices = () =>
 			`Allowed models: ${
 				allowed

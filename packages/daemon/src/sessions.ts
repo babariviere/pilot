@@ -100,7 +100,9 @@ export interface SessionMissionBridge {
 	/** Validate new-chat admission and resolve the mission's project. */
 	spawnProject(missionId: string): string;
 	/** Join after metadata is saved, but before starting the worker. */
-	joinSpawn(sessionId: string, missionId: string): void;
+	joinSpawn(sessionId: string, missionId: string, coordinator?: boolean): void;
+	/** Roll back membership if saving/admission fails before a worker starts. */
+	leaveSpawn?(sessionId: string): void;
 	/** The chat's mission, its status and this member's coordinator role. */
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
@@ -1574,10 +1576,10 @@ export class SessionManager {
 			throw new Error("Invalid Ask snapshot context");
 	}
 
-	async spawn(request: SpawnRequest): Promise<SessionSummary> {
+	async spawn(request: SpawnRequest, coordinator = false): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
-			return await this.spawnAdmitted(request);
+			return await this.spawnAdmitted(request, coordinator);
 		} finally {
 			end();
 		}
@@ -1607,7 +1609,7 @@ export class SessionManager {
 		return { ready: this.updateGate.prepare(busy) };
 	}
 
-	private async spawnAdmitted(request: SpawnRequest): Promise<SessionSummary> {
+	private async spawnAdmitted(request: SpawnRequest, coordinator: boolean): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
 			throw new Error("mode must be build or ask");
@@ -1681,16 +1683,17 @@ export class SessionManager {
 			...(model ? { model } : {}),
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
-		await this.save(meta);
-		if (request.missionId !== undefined) {
-			try {
-				this.missions!.joinSpawn(id, request.missionId);
-			} catch (error) {
-				// The mission may have closed or been deleted while metadata was being saved.
-				this.metas.delete(id);
-				await rm(this.dir(id), { recursive: true, force: true });
-				throw error;
+		try {
+			await this.save(meta);
+			if (request.missionId !== undefined) {
+				this.missions!.joinSpawn(id, request.missionId, coordinator);
 			}
+		} catch (error) {
+			// The mission may have closed, or another chat may now coordinate it.
+			this.missions?.leaveSpawn?.(id);
+			this.metas.delete(id);
+			await rm(this.dir(id), { recursive: true, force: true });
+			throw error;
 		}
 		const summary = this.summary(meta);
 		this.emit(meta);
