@@ -36,6 +36,7 @@ import type {
 } from "@pilot/protocol";
 import { watchActivity } from "./activity.ts";
 import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
+import { SubagentArtifactHost } from "./subagent-artifacts.ts";
 import { reconcileCompletion } from "./attention.ts";
 import {
 	type AttemptsState,
@@ -133,6 +134,7 @@ export class KernelSession {
 	private readonly todos: TodosWatch;
 	private readonly subagents: SubagentBridge;
 	private readonly callMission?: MissionCall;
+	private readonly artifactHost?: SubagentArtifactHost;
 
 	private constructor(
 		harness: Harness,
@@ -145,6 +147,7 @@ export class KernelSession {
 		ask: boolean,
 		mission: { current?: MissionContext },
 		callMission?: MissionCall,
+		artifactHost?: SubagentArtifactHost,
 	) {
 		this.harness = harness;
 		this.conversation = conversation;
@@ -156,6 +159,7 @@ export class KernelSession {
 		this.#ask = ask;
 		this.#mission = mission;
 		this.callMission = callMission;
+		this.artifactHost = artifactHost;
 	}
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
@@ -163,6 +167,7 @@ export class KernelSession {
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
 		let artifactConversation: Conversation | undefined;
+		let artifactHost: SubagentArtifactHost | undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const mission: { current?: MissionContext } = { current: spec.mission };
 		const missionTools = hooks.callMission
@@ -197,19 +202,24 @@ export class KernelSession {
 				store: artifacts,
 				readReference: hooks.readArtifactReference,
 				onArtifactsChanged: hooks.onArtifactsChanged,
-				onArtifactPublished: async (artifact) => {
+				onArtifactPublished: async (artifact, subagentName) => {
 					if (!artifactConversation) throw new Error("Artifact publication requires a bound Harness conversation");
 					// Passive write admission places publications at the post-tools boundary.
 					await artifactConversation.submit(
 						{
 							type: "write",
 							requestId: `artifact:${artifact.id}:${artifact.revision}`,
-							entry: { kind: "pilot.artifact", data: { artifact: { ...artifact } }, model: [] },
+							entry: {
+								kind: "pilot.artifact",
+								data: { artifact: { ...artifact }, ...(subagentName ? { subagentName } : {}) },
+								model: [],
+							},
 						},
 						context,
 					);
 				},
 			};
+			artifactHost = new SubagentArtifactHost(spec.sessionId, spec.cwd, artifactOptions);
 			adapter = await NativeAdapter.open({
 				cwd: spec.cwd,
 				ask: spec.pilot?.ask,
@@ -218,7 +228,11 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
-				hostExtensions: [...(provenance ? [provenance.native] : []), ...(refs ? [refs.native] : [])],
+				hostExtensions: [
+					...(provenance ? [provenance.native] : []),
+					...(refs ? [refs.native] : []),
+					artifactHost.native,
+				],
 				subagents,
 				hostTools: missionTools,
 				...(spec.pilot?.ask
@@ -285,6 +299,7 @@ export class KernelSession {
 				!!spec.pilot?.ask,
 				mission,
 				hooks.callMission,
+				artifactHost,
 			);
 			session.#reportedWorking = status.snapshot.run !== undefined;
 			session.#origins = new InputOrigins(
@@ -356,6 +371,7 @@ export class KernelSession {
 			};
 			return session;
 		} catch (error) {
+			await artifactHost?.close();
 			if (harness) await harness.close(context).catch(() => undefined);
 			else await owned.storage.close(context).catch(() => undefined);
 			await adapter?.close().catch(() => undefined);
@@ -690,6 +706,8 @@ export class KernelSession {
 	/** Pause: pending work stays durable and resumes on the next open. */
 	close(): Promise<void> {
 		this.#closing ??= (async () => {
+			// Drain child publications before the Harness storage and its transcript close.
+			await this.artifactHost?.close();
 			for (const id of [...this.#watches.keys()]) await this.unwatch(id).catch(() => undefined);
 			await this.status.stop().catch(() => undefined);
 			try {

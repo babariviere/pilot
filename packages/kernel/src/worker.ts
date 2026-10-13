@@ -1,6 +1,7 @@
 /** Kernel worker entry: one process per session, driven over Node IPC by pilotd. */
 import { serialize } from "node:v8";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
@@ -268,6 +269,12 @@ export function runKernelWorker(): void {
 			initialization = (async () => {
 				// Extensions resolve pi's agent directory from the environment, e.g. for the shared usage cache.
 				if (command.spec.agentDir) process.env.PI_CODING_AGENT_DIR = command.spec.agentDir;
+				if (!command.spec.pilot?.ask) {
+					process.env.PILOT_ARTIFACT_PARENT_SESSION_ID = command.spec.sessionId;
+					process.env.PILOT_ARTIFACT_EXTENSION = fileURLToPath(
+						new URL("./subagent-artifact-extension.ts", import.meta.url),
+					);
+				}
 				const opened = await KernelSession.open(command.spec, {
 					onWorking: (working, completion) =>
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),

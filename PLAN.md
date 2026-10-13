@@ -406,6 +406,16 @@ own open tasks, decisions and how
 to use the tool), not the whole brief. The header only changes when those fields change, preserving
 prompt caching.
 
+Subagents may use a bundled artifact extension when the parent kernel advertises
+`PILOT_ARTIFACT_EXTENSION` and `PILOT_ARTIFACT_PARENT_SESSION_ID`. The subagents package forwards
+artifact calls over supervised worker IPC, binding the real parent identity and child name on the host.
+The parent executes the shared artifact tool against its single store, without cross-member fallback.
+Create/update publish into the parent's conversation with `subagentName` provenance; child updates
+require `expectedRevision`. Children can list/get historical parent revisions, but not other stores.
+The capability has no filesystem-path selector or new network listener, bounds concurrent calls,
+and drains publications before closing parent storage. Child images must be inline data URLs;
+child preview is not exposed. The transport integration is optional and ordinary Pi is unchanged.
+
 **New chat.** The Chats tab and sidebar mission group open the new-chat composer with the mission
 preselected and its project locked, without attaching a task. `SpawnRequest.missionId` validates an
 active mission, resolves its project and joins before kernel startup, so the header and tool are present

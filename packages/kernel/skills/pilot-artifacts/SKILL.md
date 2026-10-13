@@ -25,6 +25,8 @@ Use the `artifact` tool for session-local, offline artifacts. Author directly in
 
 Ownership, `update` and `list` remain session-local. Reading another chat's reference does not copy it into this chat or grant editing rights.
 
+When a subagent has this tool, it uses its parent chat's store. It can list/get parent artifacts by ID, including historical revisions, and create/update artifacts that appear in the parent chat with its name recorded. Subagent updates require `expectedRevision`; foreign mission references are not inherited. Images must be inline data URLs and preview is not exposed in the child.
+
 Codemode example (use an existing artifact ID and your edited source):
 
 ```js

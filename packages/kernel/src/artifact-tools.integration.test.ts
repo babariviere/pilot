@@ -20,6 +20,8 @@ import type { ArtifactRevision, SessionCompletion } from "@pilot/protocol";
 import { createArtifactTools } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
+import { ARTIFACT_CALL_EVENT, ARTIFACT_RESULT_EVENT } from "./subagent-artifacts.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { KernelSession } from "./session.ts";
 
 // Previews keep a browser warm for a minute. Close it so the test process exits promptly.
@@ -598,6 +600,71 @@ text(await tools.artifact({action:"list"}));
 	assert.deepEqual(await new ArtifactStore(f.root, { sessionId: "reader" }).list(), []);
 	const view = await session.conversation.context(BACKGROUND_CONTEXT);
 	assert.ok(!view.entries.some((entry) => entry.kind === "pilot.artifact"));
+});
+
+test("subagent publication is admitted into the parent transcript with its name and local ownership", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	let pi!: ExtensionAPI;
+	f.options.loaderOptions!.extensionFactories!.push((api) => {
+		pi = api;
+	});
+	const open = NativeAdapter.open;
+	const refreshUsage = NativeAdapter.prototype.refreshUsage;
+	const refreshes: Promise<void>[] = [];
+	t.mock.method(
+		NativeAdapter.prototype,
+		"refreshUsage",
+		function (this: NativeAdapter, ...args: Parameters<typeof refreshUsage>) {
+			const result = refreshUsage.apply(this, args);
+			refreshes.push(result);
+			return result;
+		},
+	);
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		open.call(NativeAdapter, {
+			...options,
+			...f.options,
+			sessionId: options.sessionId,
+			sessionFile: options.sessionFile,
+			sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+		}),
+	);
+	const session = await KernelSession.open(
+		{ sessionId: "parent", cwd: f.root, storageDir: join(f.root, "storage") },
+		{
+			onWorking: () => {},
+		},
+	);
+	f.cleanup.push(async () => {
+		await Promise.all(refreshes);
+		await session.close();
+	});
+	const reply = new Promise<{ result?: unknown; error?: string }>((resolve) => {
+		const off = pi.events.on(ARTIFACT_RESULT_EVENT, (data) => {
+			off();
+			resolve(data as { result?: unknown; error?: string });
+		});
+	});
+	pi.events.emit(ARTIFACT_CALL_EVENT, {
+		callId: "publish",
+		parentSessionId: "parent",
+		name: "reviewer",
+		args: { action: "create", title: "Review", kind: "html", source: "<p>Child publication</p>" },
+	});
+	assert.equal((await reply).error, undefined);
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	const [artifact] = await new ArtifactStore(f.root, { sessionId: "parent" }).list();
+	assert.ok(artifact);
+	const view = await session.conversation.context(BACKGROUND_CONTEXT);
+	const entry = view.entries.find((entry) => entry.kind === "pilot.artifact");
+	assert.ok(entry);
+	assert.deepEqual(entry.data, {
+		artifact: { id: artifact.id, sessionId: "parent", title: "Review", revision: 1 },
+		subagentName: "reviewer",
+	});
+	assert.deepEqual(entry.model, []);
 });
 
 test("busy codemode publications and automatic completion survive native tool refresh and reopen", {

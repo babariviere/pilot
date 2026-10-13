@@ -59,7 +59,7 @@ export interface ArtifactToolOptions {
 	/** Read-only daemon lookup for references linked to the caller's current mission. */
 	readReference?: (id: string, revision?: number) => Promise<Omit<ArtifactRevision, "html"> | undefined>;
 	/** Persist a display-only transcript reference, including publications nested inside codemode. */
-	onArtifactPublished?: (artifact: ArtifactReference) => Promise<void>;
+	onArtifactPublished?: (artifact: ArtifactReference, subagentName?: string) => Promise<void>;
 	onArtifactsChanged?: () => void;
 	/** Override the renderer for tests, or disable preview. By default, require an installed renderer. */
 	preview?: typeof previewArtifact | false;
