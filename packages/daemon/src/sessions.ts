@@ -1,7 +1,7 @@
 /** Session registry and kernel worker supervision. */
 import { type ChildProcess, fork } from "node:child_process";
-import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,23 +41,23 @@ import type {
 	SubagentTranscript,
 	UpdatePreparation,
 } from "@pilot/protocol";
+import { prepareAskSnapshot } from "./ask-snapshots.ts";
+import { ColdViewReader } from "./cold-view-reader.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
-import { ColdViewReader } from "./cold-view-reader.ts";
-import { type SubagentWatchListener, SubagentWatches, type SubagentWatchStarter } from "./subagent-watches.ts";
-import { prepareAskSnapshot } from "./ask-snapshots.ts";
+import type { PullRequestProblems } from "./github.ts";
 import { ModelCatalog } from "./models.ts";
+import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
+import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
 import {
 	isTerminalPullRequest,
 	type LinkedPullRequest,
 	type PullRequestOptions,
 	type PullRequestResult,
-	sessionPullRequests,
 	sessionBranches,
+	sessionPullRequests,
 } from "./pull-requests.ts";
-import type { PullRequestProblems } from "./github.ts";
-import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
 import {
 	applyActivity,
 	applyFailure,
@@ -65,6 +65,8 @@ import {
 	normalizeLegacyOutcome,
 	type OutcomeMeta,
 } from "./session-outcomes.ts";
+import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
+import { SubagentWatches, type SubagentWatchListener, type SubagentWatchStarter } from "./subagent-watches.ts";
 import {
 	modelProvider,
 	type SubscriptionProvider,
@@ -72,10 +74,9 @@ import {
 	type SubscriptionUsageSource,
 	subscriptionProvider,
 } from "./subscription-usage.ts";
-import { UpdateGate } from "./update-gate.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
+import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
-import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
 import {
 	createWorkspace,
 	dissociateWorkspace,
@@ -721,6 +722,7 @@ export class SessionManager {
 
 	private readonly home: string;
 	private readonly projects: ProjectStore;
+	private memory?: ProjectMemoryService;
 	private readonly agentDir?: string;
 	private readonly factories: SessionFactories;
 
@@ -762,6 +764,10 @@ export class SessionManager {
 			},
 			pullRequests,
 		);
+	}
+
+	setProjectMemory(memory: ProjectMemoryService): void {
+		this.memory = memory;
 	}
 
 	private get sessionsDir(): string {
@@ -2917,6 +2923,35 @@ export class SessionManager {
 				: Promise.reject(new Error("Missions are unavailable"));
 			void call.then(
 				(result) => reply({ result: result ?? null }),
+				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+			);
+			return;
+		}
+		if (packet.type === "memory.call") {
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "memory.result", callId: packet.callId, ...(result as { result?: never }) });
+			};
+			const call = Promise.resolve().then(async () => {
+				if (!meta.projectId || !this.memory) throw new Error("Project memory is unavailable");
+				const args = packet.args;
+				switch (packet.action) {
+					case "wake":
+						return this.memory.wake(meta.projectId, 96);
+					case "note":
+						if (typeof args.text !== "string") throw new Error("Memory note requires text");
+						return this.memory.note(meta.projectId, args.text, meta.id);
+					case "recall":
+						if (typeof args.regex !== "string") throw new Error("Memory recall requires regex");
+						return this.memory.recall(meta.projectId, args.regex, 96);
+					case "zoom":
+						if (typeof args.lo !== "number" || typeof args.hi !== "number")
+							throw new Error("Memory zoom requires an inclusive range");
+						return this.memory.zoom(meta.projectId, args.lo, args.hi);
+				}
+			});
+			void call.then(
+				(result) => reply({ result }),
 				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
 			);
 			return;

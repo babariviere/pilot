@@ -31,9 +31,9 @@ import {
 	createToolSearchExtension,
 	DefaultResourceLoader,
 	type ExtensionFactory,
-	type McpTransportFactory,
-	type McpExtensionOptions,
 	getAgentDir,
+	type McpExtensionOptions,
+	type McpTransportFactory,
 	ProjectTrustStore,
 	resolveCliModel,
 	resolveModelScopeWithDiagnostics,
@@ -58,15 +58,15 @@ import {
 	type UserInput,
 } from "@earendil-works/pi-durable";
 import type { DeliveryMode, SessionCommand } from "@pilot/protocol";
-import { createArtifactTools, type ArtifactToolOptions } from "./artifact-tools.ts";
+import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
-import { askSettings, createAskSession } from "./ask-runtime.ts";
+import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { loadAskExtensionTools } from "./ask-extension-tools.ts";
+import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
-import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 
@@ -116,6 +116,8 @@ export interface NativeAdapterOptions {
 	/** Dependency injection for offline tests. */
 	settingsManager?: SettingsManager;
 	loaderOptions?: LoaderOptions;
+	/** One-time project wake context appended to top-level chat prompts. */
+	memoryPrompt?: string;
 	sessionOptions?: Pick<CreateAgentSessionOptions, "modelRuntime" | "model" | "customTools">;
 }
 
@@ -375,6 +377,10 @@ export class NativeAdapter {
 					}
 				: {
 						...options.loaderOptions,
+						appendSystemPrompt: [
+							...(options.loaderOptions?.appendSystemPrompt ?? []),
+							...(options.memoryPrompt ? [options.memoryPrompt] : []),
+						],
 						cwd,
 						agentDir,
 						settingsManager,
