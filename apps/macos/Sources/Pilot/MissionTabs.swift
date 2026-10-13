@@ -503,6 +503,8 @@ struct MissionTasksTab: View {
     var body: some View {
         let groups = MissionTaskOrdering.groups(detail.tasks)
         let counts = MissionTaskCounts(detail.tasks)
+        // One id lookup and one dependents index per update, shared by every row.
+        let dependencies = MissionTaskDependencyIndex(tasks: detail.tasks)
         ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
@@ -535,7 +537,9 @@ struct MissionTasksTab: View {
                         ForEach(Array(group.tasks.enumerated()), id: \.element.id) { index, task in
                             if index > 0 { HairlineDivider(leading: 58) }
                             MissionTaskRow(task: task, mission: mission, siblings: group.tasks,
-                                           highlighted: highlighted == task.id)
+                                           highlighted: highlighted == task.id,
+                                           dependencies: dependencies.dependencies(of: task),
+                                           onShowTask: { show($0, proxy) })
                                 .id(task.id)
                         }
                     }
@@ -555,6 +559,10 @@ struct MissionTasksTab: View {
     private func reveal(_ proxy: ScrollViewProxy) {
         guard let id = model.revealedMissionTaskId else { return }
         model.revealedMissionTaskId = nil
+        show(id, proxy)
+    }
+
+    private func show(_ id: String, _ proxy: ScrollViewProxy) {
         guard let task = detail.tasks.first(where: { $0.id == id }) else { return }
         collapsed.remove(task.status)
         highlighted = id
@@ -636,17 +644,24 @@ struct MissionTaskRow: View {
     /// The displayed list this row reorders within.
     let siblings: [MissionTask]
     var highlighted = false
+    /// Precomputed by the tab; rows never search the task list.
+    var dependencies = MissionTaskDependencies.none
+    /// Scrolls to a task and highlights it.
+    var onShowTask: (String) -> Void = { _ in }
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @StateObject private var artifacts = MissionArtifactsState()
 
-    init(task: MissionTask, mission: Mission, siblings: [MissionTask], highlighted: Bool = false) {
+    init(task: MissionTask, mission: Mission, siblings: [MissionTask], highlighted: Bool = false,
+         dependencies: MissionTaskDependencies = .none, onShowTask: @escaping (String) -> Void = { _ in }) {
         self.task = task
         self.mission = mission
         self.siblings = siblings
         self.highlighted = highlighted
+        self.dependencies = dependencies
+        self.onShowTask = onShowTask
         _title = StateObject(wrappedValue: TaskTitleState(task.title))
     }
 
@@ -656,17 +671,19 @@ struct MissionTaskRow: View {
         let links = detail?.artifacts.filter { $0.taskId == task.id } ?? []
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                MissionTaskStatusMenu(task: task, missionId: mission.id)
+                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: dependencies.isWaiting)
                 Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     .frame(minWidth: 20, alignment: .leading)
+                    .help(dependencies.helpText ?? "")
                 VStack(alignment: .leading, spacing: 3) {
                     TextField("Title", text: $title.title)
                         .textFieldStyle(.plain)
                         .font(.pilot(.body))
                         .strikethrough(task.status.isClosed)
-                        .foregroundStyle(task.status.isClosed ? Theme.mutedForeground : Theme.foreground)
+                        .foregroundStyle(task.status.isClosed || dependencies.isWaiting ? Theme.mutedForeground : Theme.foreground)
                         .onSubmit(saveTitle)
                         .accessibilityLabel("Task \(task.number) title")
+                    if dependencies.isWaiting { waitingLine }
                     MissionTaskDescription(task: task, collapsedLineLimit: 2)
                     if !resources.isEmpty || !links.isEmpty {
                         ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
@@ -715,6 +732,8 @@ struct MissionTaskRow: View {
             }
         }
         .onChange(of: task.title) { _, value in title.title = value }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilitySummary)
         .background(RoundedRectangle(cornerRadius: 7).fill(highlighted ? Theme.selected : .clear))
         .animation(Theme.Motion.quick, value: highlighted)
         .contextMenu { menuItems }
@@ -726,6 +745,33 @@ struct MissionTaskRow: View {
         .sheet(item: $artifacts.selected) { selection in
             ArtifactViewer(reference: selection.reference, latest: selection.latest)
         }
+    }
+
+    /// "Waiting on #12, #14": each number scrolls to that task.
+    private var waitingLine: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "lock").font(.pilot(.micro))
+            Text("Waiting on")
+            ForEach(Array(dependencies.waitingOn.enumerated()), id: \.element.id) { index, dependency in
+                Button { onShowTask(dependency.id) } label: {
+                    Text("#\(dependency.number)\(index < dependencies.waitingOn.count - 1 ? "," : "")")
+                        .monospacedDigit()
+                }
+                .buttonStyle(.plain)
+                .help("Show #\(dependency.number) \(dependency.title)")
+                .accessibilityLabel("Show task \(dependency.number)")
+            }
+        }
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.mutedForeground)
+        .lineLimit(1)
+        .help(dependencies.helpText ?? "")
+    }
+
+    private var accessibilitySummary: String {
+        var parts = ["Task \(task.number)", title.title, task.status.label]
+        if let waiting = dependencies.accessibilityText { parts.append(waiting) }
+        return parts.joined(separator: ", ")
     }
 
     @ViewBuilder private var menuItems: some View {
@@ -755,6 +801,9 @@ struct MissionTaskRow: View {
         }
         Divider()
         Button("Add Link…") { addingLink = true }
+        if let needed = dependencies.neededByText {
+            Text(needed)
+        }
         Button("Copy Reference") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString("#\(task.number) \(task.title)", forType: .string)
@@ -825,6 +874,8 @@ struct MissionTaskStartButton: View {
 struct MissionTaskStatusMenu: View {
     let task: MissionTask
     let missionId: String
+    /// Waiting on unfinished dependencies: a muted symbol. The stored status is unchanged.
+    var subdued = false
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -836,7 +887,7 @@ struct MissionTaskStatusMenu: View {
         } label: {
             Image(systemName: task.status.symbol)
                 .font(.pilot(.body, weight: .medium))
-                .foregroundStyle(task.status.color)
+                .foregroundStyle(subdued ? Theme.faintForeground : task.status.color)
                 .frame(width: 16)
                 .contentShape(Rectangle())
         }
