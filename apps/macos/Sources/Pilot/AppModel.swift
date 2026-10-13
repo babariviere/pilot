@@ -26,6 +26,7 @@ final class AppModel: ObservableObject {
     let settings = AppSettings.shared
     let terminals = TerminalStore()
     let notifier = Notifier()
+    private var knownReadyPullRequests = Set<String>()
     let attention: SessionAttention
     private lazy var reviewForwarder = SessionReviewForwarder { [weak self] request in
         guard let self else { throw CancellationError() }
@@ -240,6 +241,26 @@ final class AppModel: ObservableObject {
         restoreSidebarScope()
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }
+            let ready = Set(sessions.flatMap { session in
+                session.linkedPullRequests.filter { $0.state == .open && $0.readiness?.state == .ready }
+                    .map { "\(session.id):\($0.number)" }
+            })
+            if snapshot {
+                self.knownReadyPullRequests = ready
+            } else if AppSettings.shared.notifyWhenPRReady {
+                for session in sessions where !session.isArchived {
+                    for pr in session.linkedPullRequests where pr.state == .open && pr.readiness?.state == .ready {
+                        let key = "\(session.id):\(pr.number)"
+                        if !self.knownReadyPullRequests.contains(key) {
+                            self.notifier.deliverReadyPullRequest(sessionId: session.id, title: pr.title, number: pr.number)
+                        }
+                    }
+                }
+                self.knownReadyPullRequests.formUnion(ready)
+                self.knownReadyPullRequests.formIntersection(ready)
+            } else {
+                self.knownReadyPullRequests = ready
+            }
             if snapshot {
                 Task { await self.reviewForwarder.connected { await self.attention.reviewMarks() } }
             }

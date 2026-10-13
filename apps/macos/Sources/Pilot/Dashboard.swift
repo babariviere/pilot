@@ -9,8 +9,42 @@ struct Dashboard: View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], spacing: 14) {
             WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
             ActivityCard(sessions: client.activeSessions)
+            ReadyToMergeCard(sessions: client.activeSessions)
             IdleCard(sessions: client.activeSessions.filter(\.isIdleAwaitingReview))
             ProjectsCard(projects: client.projects, sessions: client.activeSessions)
+        }
+    }
+}
+
+private struct ReadyToMergeCard: View {
+    let sessions: [SessionSummary]
+    @EnvironmentObject private var app: AppModel
+
+    private var ready: [(SessionSummary, SessionPullRequest)] {
+        sessions.flatMap { session in
+            session.linkedPullRequests.filter { $0.state == .open && $0.readiness?.state == .ready }
+                .map { (session, $0) }
+        }
+    }
+
+    var body: some View {
+        DashboardCard(title: "Ready to merge", icon: "checkmark.circle.fill", count: ready.count) {
+            if ready.isEmpty { EmptyLine(text: "No pull requests are ready to merge.") }
+            ForEach(Array(ready.indices.prefix(5)), id: \.self) { index in
+                let (session, pr) = ready[index]
+                Button { app.selectedSessionId = session.id } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.success)
+                        Text("#\(pr.number)").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        Text(pr.title).font(.pilot(.body)).lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(session.title).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Pull request #\(pr.number), \(pr.title), ready to merge. Open chat \(session.title).")
+            }
         }
     }
 }
