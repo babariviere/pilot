@@ -11,6 +11,9 @@ public enum ArtifactViewerLayout {
     public static let inlineImageMaxHeight: CGFloat = 720
     /// Keeps tiny images large enough to click without letterboxing typical ones.
     public static let inlineImageMinSide: CGFloat = 48
+    /// The expanded viewer opens at 90% of the screen, but never wider than this. On ultrawide
+    /// displays 90% leaves most of the sheet empty; wider content still requests more room.
+    public static let viewerDefaultMaxWidth: CGFloat = 1600
 
     /// A bounded 4:3 fallback until measurement, then hug content height within the limits.
     /// Measured images instead hug their aspect-fitted size, so the card has no empty bands.
@@ -39,7 +42,7 @@ public enum ArtifactViewerLayout {
     }
 
     public static func size(available: CGSize, contentSize: CGSize? = nil) -> CGSize {
-        let baseline = CGSize(width: available.width * 0.9, height: available.height * 0.9)
+        let baseline = CGSize(width: min(available.width * 0.9, viewerDefaultMaxWidth), height: available.height * 0.9)
         guard let contentSize, contentSize.width.isFinite, contentSize.height.isFinite,
               contentSize.width > 0, contentSize.height > 0 else { return baseline }
         // Leave a small screen margin. Include the single header in the height request.

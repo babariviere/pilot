@@ -43,6 +43,16 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     #expect(ArtifactViewerLayout.size(available: CGSize(width: 1440, height: 900), contentSize: CGSize(width: 240, height: 120)) == large)
 }
 
+@Test func expandedArtifactViewerCapsDefaultWidthOnUltrawideDisplays() {
+    let ultrawide = CGSize(width: 3840, height: 1000)
+    #expect(ArtifactViewerLayout.size(available: ultrawide) == CGSize(width: 1600, height: 900))
+    // A viewport-filling measurement after opening must not widen the sheet again.
+    #expect(ArtifactViewerLayout.size(available: ultrawide, contentSize: CGSize(width: 1600, height: 400)).width == 1600)
+    // Genuinely wide content still grows, up to the screen margin.
+    #expect(ArtifactViewerLayout.size(available: ultrawide, contentSize: CGSize(width: 2400, height: 400)).width == 2400)
+    #expect(ArtifactViewerLayout.size(available: ultrawide, contentSize: CGSize(width: 5000, height: 400)).width == 3808)
+}
+
 @Test func nativeImagePreviewOverridesSavedFullViewportSizingWithoutChangingRevision() throws {
     let html = "<html><body><style>body{padding:0}img{display:block;width:100%;height:100vh;object-fit:contain}</style><img src='data:image/png;base64,test'></body></html>"
     let revision = ArtifactRevision(id: "a", sessionId: "s", projectId: nil, title: "Image", kind: .image,
