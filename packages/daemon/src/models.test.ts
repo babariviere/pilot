@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -315,6 +316,26 @@ test("task starts use the project scope, not every authenticated model", async (
 		/not available in the project's scope.*Allowed models: test\/claude-opus-5-5.*test\/small/,
 	);
 	await assert.rejects(catalog.selectTaskModel(root, "test/at-cap"), /not available in the project's scope/);
+});
+
+test("task model selection reads settings once and never broadens scope after lock exhaustion", async (t) => {
+	const { root, catalog } = await taskCatalog(t);
+	await mkdir(join(root, ".pi"));
+	const path = join(root, ".pi", "settings.json");
+	await writeFile(path, JSON.stringify({ enabledModels: ["test/small"] }));
+	const lockfile = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"))("proper-lockfile") as {
+		lock(path: string, options: { realpath: false }): Promise<() => Promise<void>>;
+	};
+	const release = await lockfile.lock(path, { realpath: false });
+	try {
+		await assert.rejects(catalog.selectTaskModel(root, "test/plain"), { code: "ELOCKED" });
+	} finally {
+		await release();
+	}
+	const lock = t.mock.method(lockfile, "lock");
+	await assert.rejects(catalog.selectTaskModel(root, "test/plain"), /not available in the project's scope/);
+	assert.equal(lock.mock.calls.filter((call) => call.arguments[0] === path).length, 1);
+	assert.equal(lock.mock.calls.filter((call) => call.arguments[0] === join(root, "settings.json")).length, 1);
 });
 
 test("unscoped task starts cap combined input+output at the highest scoped reference price, inclusive", async (t) => {

@@ -33,7 +33,13 @@ export class ModelCatalog {
 	private runtimeModels?: string;
 	private availability?: Availability;
 	/** Concurrent requests for one directory share a settings read. */
-	private readonly lists = new Map<string, Promise<ModelList>>();
+	private readonly lists = new Map<
+		string,
+		{
+			snapshot: Promise<{ settings: Awaited<ReturnType<typeof readModelSettings>>; list: ModelList }>;
+			list: Promise<ModelList>;
+		}
+	>();
 
 	private readonly agentDir: string;
 
@@ -56,13 +62,21 @@ export class ModelCatalog {
 
 	/** Scope and default follow pi's settings for `cwd` (global plus project settings). */
 	list(cwd: string): Promise<ModelList> {
+		try {
+			return this.pendingList(cwd).list;
+		} catch (error) {
+			return Promise.reject(error);
+		}
+	}
+
+	private pendingList(cwd: string) {
 		const existing = this.lists.get(cwd);
 		if (existing) return existing;
-		if (this.lists.size >= MAX_PENDING_LISTS)
-			return Promise.reject(new ServiceUnavailable("Model catalog is busy. Retry shortly."));
-		const promise = this.load(cwd).finally(() => this.lists.delete(cwd));
-		this.lists.set(cwd, promise);
-		return promise;
+		if (this.lists.size >= MAX_PENDING_LISTS) throw new ServiceUnavailable("Model catalog is busy. Retry shortly.");
+		const snapshot = this.load(cwd).finally(() => this.lists.delete(cwd));
+		const entry = { snapshot, list: snapshot.then(({ list }) => list) };
+		this.lists.set(cwd, entry);
+		return entry;
 	}
 
 	/** The same scoped, price-capped choices used by start admission. */
@@ -72,11 +86,10 @@ export class ModelCatalog {
 	}
 
 	private async taskModels(cwd: string) {
-		const [list, runtime, settings] = await Promise.all([
-			this.list(cwd),
-			this.getRuntime(),
-			readModelSettings(cwd, this.agentDir),
-		]);
+		// Scope, defaults and thinking must all come from the same settings snapshot.
+		// Reading the files twice also needlessly contends on the SDK settings locks.
+		const entry = this.pendingList(cwd);
+		const [list, { settings }, runtime] = await Promise.all([entry.list, entry.snapshot, this.getRuntime()]);
 		const scoped = list.models.map((option) => ({
 			option,
 			model: runtime.getModel(option.provider, option.id.slice(option.provider.length + 1)),
@@ -207,7 +220,7 @@ export class ModelCatalog {
 		return { settings, models };
 	}
 
-	private async load(cwd: string): Promise<ModelList> {
+	private async load(cwd: string) {
 		const { settings, models: scoped } = await this.scoped(cwd);
 		const provider = settings.getDefaultProvider();
 		const model = settings.getDefaultModel();
@@ -215,7 +228,7 @@ export class ModelCatalog {
 		let models = scoped.map(({ model, thinkingLevel }) => option(model, thinkingLevel));
 		const seen = new Set<string>();
 		models = models.filter((entry) => !seen.has(entry.id) && seen.add(entry.id));
-		return { models, ...(defaultModel ? { defaultModel } : {}) };
+		return { settings, list: { models, ...(defaultModel ? { defaultModel } : {}) } };
 	}
 }
 
