@@ -25,13 +25,21 @@ private func clickFolderSidebarRow(_ row: Int, in outline: NSOutlineView, x: CGF
         with: .leftMouseUp, location: point, modifierFlags: [], timestamp: timestamp + 0.01,
         windowNumber: window.windowNumber, context: nil, eventNumber: 2, clickCount: 1, pressure: 0
     ))
-    // AppKit may track the mouse until its matching mouse-up. Dispatch through the
-    // window so SwiftUI buttons receive clicks as well as native selection checks.
+    // Native buttons may track mouseDown until they dequeue the matching mouseUp.
     NSApp.postEvent(up, atStart: true)
     window.sendEvent(down)
     if let pending = NSApp.nextEvent(matching: .leftMouseUp, until: Date(), inMode: .default, dequeue: true) {
         window.sendEvent(pending)
     }
+}
+
+@MainActor
+private func clickFolderSidebarDisclosure(_ row: Int, in outline: NSOutlineView) throws {
+    let cell = try #require(outline.view(atColumn: 0, row: row, makeIfNecessary: true))
+    cell.layoutSubtreeIfNeeded()
+    let frame = outline.convert(cell.bounds, from: cell)
+    try #require(frame.width > 24)
+    try clickFolderSidebarRow(row, in: outline, x: frame.maxX - 12)
 }
 
 @MainActor
@@ -97,14 +105,14 @@ func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
 
     // The project name navigates to the project page. Its trailing chevron is the
     // independent control for folding the project's sessions.
-    // Section rows can be narrower than the outline itself when nested under a folder.
-    // Derive the trailing-button hit point from the actual row frame, not the outline width.
-    try clickFolderSidebarRow(headerRow, in: outline, x: outline.rect(ofRow: headerRow).maxX - 12)
+    // AppKit's row rect includes insets outside the hosted control on some macOS versions.
+    // Use the hosted cell's bounds to click the trailing disclosure control.
+    try clickFolderSidebarDisclosure(headerRow, in: outline)
     settleFolderSidebar(hosting)
     #expect(model.collapsedProjects.contains(project.id))
     #expect(outline.numberOfRows == expandedRowCount - 2)
     #expect(model.selectedSessionId == nil)
-    try clickFolderSidebarRow(headerRow, in: outline, x: outline.rect(ofRow: headerRow).maxX - 12)
+    try clickFolderSidebarDisclosure(headerRow, in: outline)
     settleFolderSidebar(hosting)
     #expect(!model.collapsedProjects.contains(project.id))
     #expect(outline.numberOfRows == expandedRowCount)

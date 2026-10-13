@@ -85,7 +85,7 @@ import Testing
     }
 }
 
-@Test @MainActor func messagePencilReservesTheRightMarginOutsideTheBubble() {
+@Test @MainActor func messagePencilStaysInTheRightMarginOutsideTheBubble() {
     _ = NSApplication.shared
     let rewind = TranscriptRewind()
     let selection = MessageTimestampSelection()
@@ -111,10 +111,10 @@ import Testing
                 return selection.target(at: point, in: window) == key
             }
         }
-        // The bubble ends before the 8-point gap and 20-point pencil slot. Neither the gap
-        // nor the button belongs to the timestamp's click target.
-        #expect(bubbleContains(x: width - 30))
-        #expect(!bubbleContains(x: width - 24))
-        #expect(!bubbleContains(x: width - 10))
+        // The bubble stays flush with the column edge. The overlaid 8-point gap and
+        // 20-point pencil slot sit outside it and never belong to the timestamp target.
+        #expect(bubbleContains(x: width - 2))
+        #expect(!bubbleContains(x: width + 4))
+        #expect(!bubbleContains(x: width + 18))
     }
 }

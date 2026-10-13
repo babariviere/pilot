@@ -142,22 +142,33 @@ import Testing
     try #require(ProcessInfo.processInfo.environment["FAIL_TARGET"] != "1")
 }
 ''',
-                "PassingTests": 'import Testing\n@Test func normalSuccess() { #expect(true) }\n',
+                "PassingTests": '''import Foundation
+import Testing
+@Test func normalSuccess() { #expect(true) }
+@Test @MainActor func stoppedMainLoopStillFinishes() async throws {
+    DispatchQueue.main.async { CFRunLoopStop(CFRunLoopGetMain()) }
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(true)
+}
+''',
             }.items():
                 folder = root / "Tests" / target
                 folder.mkdir(parents=True)
                 (folder / "Tests.swift").write_text(source)
+            shutil.copy2(SCRIPTS.parent / "Tests/PilotUITests/TestMainLoop.swift",
+                         root / "Tests/PassingTests/TestMainLoop.swift")
             swift = subprocess.check_output(["xcrun", "--find", "swift"], text=True).strip()
             plugins = str(Path(swift).parent / "../lib/swift/host/plugins/testing")
             for fail in ["1", "0"]:
                 result = subprocess.run(
-                    ["swift", "test", "--package-path", str(root), "--jobs", "2",
+                    ["swift", "test", "--package-path", str(root), "--build-system", "native", "--jobs", "2",
                      "-Xswiftc", "-plugin-path", "-Xswiftc", plugins],
                     env={**os.environ, "FAIL_TARGET": fail}, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, timeout=120)
                 checked = subprocess.run([sys.executable, str(GUARD)], input=result.stdout, capture_output=True)
                 self.assertEqual(checked.stdout, result.stdout)
                 self.assertEqual(checked.returncode, int(fail), result.stdout.decode())
+                self.assertIn(b"stoppedMainLoopStillFinishes() passed", result.stdout)
                 if fail == "0":
                     self.assertEqual(result.returncode, 0, result.stdout.decode())
 
