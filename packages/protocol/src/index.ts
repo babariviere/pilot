@@ -720,7 +720,7 @@ export interface DashboardScheduledItem {
 	title: string;
 	/** What it will do. */
 	kind: "chat" | "message";
-	trigger: "on_back" | "on_online" | "at";
+	trigger: import("./schedules.ts").ScheduleTrigger;
 	/** Epoch ms, for `at` triggers. */
 	at?: number;
 	/** `pending` rows list under Scheduled, `failed` ones under Needs you. */
@@ -991,6 +991,7 @@ export type ClientMessage =
 
 /** Daemon to client, over /api/ws. */
 export type ServerMessage =
+	| import("./schedules.ts").SchedulesMessage
 	/** Includes both active and archived sessions, so clients can switch views locally. */
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| { type: "session"; session: SessionSummary }
@@ -1014,3 +1015,4 @@ export type ServerMessage =
 
 export const DEFAULT_PORT = 4319;
 export type * from "./memory.ts";
+export type * from "./schedules.ts";

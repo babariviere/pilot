@@ -10,6 +10,8 @@ import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
+import { ScheduleStore } from "./schedule-store.ts";
+import { ScheduleService } from "./schedules.ts";
 
 const config = loadConfig();
 // Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
@@ -62,6 +64,12 @@ await sessions.load();
 missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
+const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
+const schedules = new ScheduleService(scheduleStore, { sessions, projects, missions: missionStore });
+await schedules.load();
+// The daemon trigger detector supplies wake/reachability through ScheduleTriggerSource.
+// Until registered, online is unknown and network-gated schedules stay pending.
+schedules.start();
 const server = createDaemonServer(
 	config,
 	sessions,
@@ -74,6 +82,7 @@ const server = createDaemonServer(
 	},
 	undefined,
 	memory,
+	schedules,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -86,6 +95,8 @@ async function stop(): Promise<void> {
 	console.log("pilotd: pausing sessions");
 	watchdog.stop();
 	server.close();
+	await schedules.stop();
+	await scheduleStore.close();
 	stopMemoryProjects();
 	await memory.stop();
 	await missionService.notices.stop();

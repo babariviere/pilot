@@ -22,6 +22,8 @@ import type {
 	ReviewRequest,
 	RewindRequest,
 	SendRequest,
+	ScheduleRequest,
+	SchedulePatch,
 	ServerMessage,
 	SessionCommandsResponse,
 	SessionHistoryPage,
@@ -48,6 +50,7 @@ import { ReviewStore } from "./reviews.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
+import type { ScheduleService } from "./schedules.ts";
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
@@ -80,8 +83,12 @@ class HttpError extends Error {
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
+	jsonText(res, status, JSON.stringify(body));
+}
+
+function jsonText(res: ServerResponse, status: number, body: string): void {
 	res.writeHead(status, { "content-type": "application/json" });
-	res.end(JSON.stringify(body));
+	res.end(body);
 }
 
 async function readJson<T>(req: IncomingMessage): Promise<T> {
@@ -181,6 +188,7 @@ export function createDaemonServer(
 	missions?: { service: MissionService; store: MissionStore },
 	dashboardProviders?: DashboardProviders,
 	memory?: ProjectMemoryService,
+	schedules?: ScheduleService,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -192,8 +200,13 @@ export function createDaemonServer(
 		providers: {
 			...dashboardProviders,
 			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
+			...(schedules ? { scheduled: (id: string) => schedules.dashboard(id) } : {}),
 			onChange(listener) {
-				const stops = [dashboardProviders?.onChange?.(listener), memory?.onChange(listener)];
+				const stops = [
+					dashboardProviders?.onChange?.(listener),
+					memory?.onChange(listener),
+					schedules?.onChange(listener),
+				];
 				return () => {
 					for (const stop of stops) stop?.();
 				};
@@ -206,6 +219,22 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "schedules" && parts.length <= 3) {
+			if (!schedules) throw new ServiceUnavailable("Scheduling is unavailable");
+			const id = parts[2];
+			if (!id && req.method === "GET")
+				return jsonText(res, 200, await schedules.snapshot(url.searchParams.get("projectId") ?? undefined));
+			if (!id && req.method === "POST")
+				return json(res, 201, await schedules.create(await readJson<ScheduleRequest>(req)));
+			if (id && req.method === "GET") return json(res, 200, schedules.require(id));
+			if (id && req.method === "PATCH")
+				return json(res, 200, await schedules.update(id, await readJson<SchedulePatch>(req)));
+			if (id && req.method === "DELETE") {
+				await schedules.remove(id);
+				return json(res, 200, { ok: true });
+			}
+			throw new HttpError(404, "Unknown schedule operation");
+		}
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
 		if (parts[1] === "projects" && parts[3] === "memory" && parts.length <= 5) {
 			const id = parts[2]!;
@@ -547,6 +576,28 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	// Coalesce claim/finalize and CRUD bursts. No serialization when no clients are connected.
+	let schedulesTimer: NodeJS.Timeout | undefined;
+	let schedulesVersion = 0;
+	const stopSchedulesWatch = schedules?.onChange(() => {
+		schedulesVersion++;
+		if (schedulesTimer || clients.size === 0) return;
+		schedulesTimer = setTimeout(() => {
+			schedulesTimer = undefined;
+			if (clients.size)
+				void schedules!
+					.snapshot(undefined, true)
+					.then((data) => {
+						for (const send of clients.values()) send(data);
+					})
+					.catch((error) => console.warn(`pilotd: schedule snapshot: ${error}`));
+		}, DASHBOARD_DEBOUNCE_MS);
+		schedulesTimer.unref();
+	});
+	server.on("close", () => {
+		stopSchedulesWatch?.();
+		clearTimeout(schedulesTimer);
+	});
 	projects.onChange((list) => {
 		broadcast({ type: "projects", projects: list });
 	});
@@ -650,6 +701,16 @@ export function createDaemonServer(
 		const subagentSubscriptions = new Map<string, () => void>();
 		const attachedTerminals = new Map<string, () => void>();
 		send(ws, { type: "projects", projects: projects.list() });
+		if (schedules) {
+			const version = schedulesVersion;
+			void schedules
+				.snapshot(undefined, true)
+				.then((data) => {
+					// A coalesced update will deliver the newer index if this initial read was superseded.
+					if (version === schedulesVersion && ws.readyState === ws.OPEN) clients.get(ws)?.(data);
+				})
+				.catch((error) => send(ws, { type: "error", message: String(error) }));
+		}
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
 		if (missions) send(ws, { type: "missions", missions: missions.store.list() });
 		sendCounts(ws);

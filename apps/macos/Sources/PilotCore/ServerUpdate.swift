@@ -2,6 +2,7 @@ import Foundation
 
 /// Fully decoded WebSocket updates, prepared before crossing onto the UI actor.
 public enum ServerUpdate: Sendable {
+    case schedules([ScheduledItem])
     case projects([Project])
     case sessions([SessionSummary])
     case session(SessionSummary)
@@ -24,6 +25,9 @@ public enum ServerUpdate: Sendable {
     public static func decode(_ data: Data) throws -> ServerUpdate? {
         let json = try JSONValue.decode(data)
         switch json["type"]?.string {
+        case "schedules":
+            guard let list = json["schedules"] else { return nil }
+            return .schedules(try list.decode([ScheduledItem].self))
         case "projects":
             guard let list = json["projects"] else { return nil }
             return .projects(try list.decode([Project].self).sorted {

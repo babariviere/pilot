@@ -959,10 +959,41 @@ reports), producing a morning summary in the app and Slack.
   `POST /api/update/prepare`, stops the launch agent, installs and relaunches. Terminal shells close,
   durable history remains. One-time key configuration and initial installation: [UPDATES.md](apps/macos/UPDATES.md).
 
+### Scheduled chats and follow-ups (store and dispatch implemented)
+
+- `pilotd` owns `schedules.sqlite`. A new-chat target retains the complete `SpawnRequest`;
+  a message target retains its chat ID and follow-up text. Triggers are `at` (epoch milliseconds),
+  `on_wake`, `on_online` (next offline-to-online edge), and default `on_back` ("When I'm back":
+  next wake, then network reachable). `at` defers while offline and catches up when online.
+- Pending items can be edited or cancelled. A revision/state compare-and-swap commits a
+  `dispatching` claim before any session effect, so racing triggers, edits and cancellation have
+  one winner. Dispatch is serial and follow-ups use the durable input key `schedule:<id>`.
+  Success records the created/target chat; admission errors (including deleted/archived targets)
+  become failures under the project's Needs you section. Fired means admitted, not agent completion.
+- Restarts retain pending items and the wake-observed latch. An interrupted claim becomes an
+  explicit uncertain-delivery failure, never an automatic replay: users should check chats before
+  rescheduling. This guarantees one dispatch attempt, not transactionally exactly-once delivery
+  across the scheduler and session stores. Terminal records can be dismissed with DELETE.
+- SQLite/WAL and fsync run in a dedicated worker. The index is bounded to 1000 items and 4 MiB of
+  target payloads (16 KiB per target); RPC and trigger queues cap at 64. Dashboard projections and
+  timer/trigger candidate scans do not copy prompts. Large HTTP/WS indexes are serialized in the
+  worker, not on the event loop; updates coalesce at 250 ms. One nearest-deadline
+  timer runs only while online; all timers/subscriptions stop on shutdown, and detectors get an
+  active/inactive hint so they can suspend probes when no pending items remain.
+- `ScheduleTriggerSource` injects initial reachability and wake/online events; `ScheduleClock`
+  provides fake-clock testing. OS wake and network detection is still a separate implementation.
+  Until a detector is registered in `daemon.ts`, reachability is unknown and network-gated items
+  stay pending. Composer/list UI and fired notifications remain separate work.
+- The server registers `DashboardProviders.scheduled` and its change subscription, so pending
+  items populate Scheduled and failures populate Needs you without app polling. Protocol and
+  PilotCore mirror CRUD payloads, targets, lifecycle and WS snapshots; the app retains the index
+  for the later scheduling UI.
+
 ## 8. API additions
 
 | Endpoint / message | Purpose |
 | --- | --- |
+| `GET/POST /api/schedules`, `GET/PATCH/DELETE /api/schedules/:id`, WS `schedules` | Bounded durable index (optional `projectId` GET filter), create, pending-only edit (optional `expectedRevision`), cancel pending or dismiss terminal items. In-flight dispatch returns 409 on edit/delete. WS sends the full index on connect and coalesced changes. One-shot `at`, `on_wake`, `on_online`, default `on_back`; new chats retain a full spawn request and messages dispatch as follow-ups |
 | `/api/projects` (GET, POST), `/api/projects/:id` (GET, PATCH, DELETE), WS `projects` | Projects (done in M1); policies and bindings will attach to them |
 | `GET /api/projects/:id/branches`, `SpawnRequest.baseBranch` | List origin's live branches and choose the base of a new private-clone session (done) |
 | `SpawnRequest.mode`, `.workspace`; `SessionSummary.mode`, `.workspace`, `.sourceBranch`, `.sourceCommit` | Immutable Ask/Build mode, per-chat Build workspace policy and source identity |
