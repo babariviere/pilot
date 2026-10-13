@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.19.0](https://github.com/babariviere/pilot/compare/v1.18.0...v1.19.0) (2026-10-13)
+
+
+### Features
+
+* **artifacts:** read authorized linked cross-chat sources ([279dc00](https://github.com/babariviere/pilot/commit/279dc0043ac83c6b8ae7bee4b7908b97be2462a0))
+* **chats:** start a planning chat from creation forms ([d290f27](https://github.com/babariviere/pilot/commit/d290f27247983198fa220b283b15d75db89ce003))
+
+
+### Bug Fixes
+
+* bound test concurrency by default ([7bf464c](https://github.com/babariviere/pilot/commit/7bf464c54ad73d58092b21809059a854854cb27f))
+* **daemon:** omit self-originated and stale settle updates ([bb4afcf](https://github.com/babariviere/pilot/commit/bb4afcfc6f36fe14b48179fb0c1d95e82d104043))
+* **macos:** reject failed native test target summaries ([9906c1e](https://github.com/babariviere/pilot/commit/9906c1ea80829e1eda7bed7be606774f36215865))
+* **macos:** support explicit test jobs on Bash 3.2 ([6013c13](https://github.com/babariviere/pilot/commit/6013c13280a75dd02993510c3dc8786141330a1b))
+* **models:** preserve scope when settings reads contend ([63c771e](https://github.com/babariviere/pilot/commit/63c771e4d1680392afc5dce85df27eef730dc07b))
+
 ## [1.18.0](https://github.com/babariviere/pilot/compare/v1.17.0...v1.18.0) (2026-10-12)
 
 
