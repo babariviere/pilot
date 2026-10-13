@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.24.0](https://github.com/babariviere/pilot/compare/v1.23.0...v1.24.0) (2026-10-13)
+
+
+### Features
+
+* **daemon:** add durable scheduled chat dispatch ([846fe01](https://github.com/babariviere/pilot/commit/846fe01e9a256d49a6e0b3c6f70d4aa391fa858c))
+* **daemon:** add tracked items and source framework ([44224c2](https://github.com/babariviere/pilot/commit/44224c293c25afb20d271bfe9ebb81ee4a03a689))
+* **daemon:** expose cached PR merge readiness ([df9df31](https://github.com/babariviere/pilot/commit/df9df31219712bc517e7625a51308d8a75cc1da1))
+* **macos:** add a hover pencil for message editing ([70f8e18](https://github.com/babariviere/pilot/commit/70f8e18e2e268942aa1b24c2dacfda17ddb5826a))
+* **macos:** browse project memory ([914b66f](https://github.com/babariviere/pilot/commit/914b66ffcc67c5853031b4cb4b03eb3776b63427))
+* **macos:** group overview links by provider ([875f6f6](https://github.com/babariviere/pilot/commit/875f6f62a8611d349ddbb7bff19f563082b34ec4))
+* **macos:** open full project dashboard lists ([2dc3326](https://github.com/babariviere/pilot/commit/2dc33262892223495fb36aade3a2c826b464f033))
+* **macos:** show idle chats with open or no PR on home ([45f7d4b](https://github.com/babariviere/pilot/commit/45f7d4b9c3bd93fe48fef4edcd66fad18002f07a))
+
+
+### Bug Fixes
+
+* **daemon:** await MCP shutdown before completing calls ([4fc9554](https://github.com/babariviere/pilot/commit/4fc95543444bafc0c6dec78078ec0ec4ec1eaeb9))
+* **macos:** allow selecting complete agent messages ([8cf3dec](https://github.com/babariviere/pilot/commit/8cf3decf9af37cabbda3b25e2e355d87cfbc7d65))
+* **macos:** capture the full artifact in screenshots ([e1e1e66](https://github.com/babariviere/pilot/commit/e1e1e669ea19c039bd7807755ad9e75e43221a5c))
+* **macos:** put the message pencil in the right margin ([d3627a7](https://github.com/babariviere/pilot/commit/d3627a71493c9f75413c529c67b2a723ffd59609))
+* **macos:** sync reviewed chat outcomes with daemon ([a548f36](https://github.com/babariviere/pilot/commit/a548f36291bb1c02489a597ae8b5f4c0c31588b8))
+* **tracking:** require dedicated MCP servers ([7969d15](https://github.com/babariviere/pilot/commit/7969d15ce96a725f8209caf5cc413287d373a8d8))
+
 ## [1.23.0](https://github.com/babariviere/pilot/compare/v1.22.0...v1.23.0) (2026-10-13)
 
 
