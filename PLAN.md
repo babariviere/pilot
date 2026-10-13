@@ -632,9 +632,8 @@ Overrides are API-configurable and preserved by Project settings.
 formatted `messages` text (message TS and thread delimiters) and `pagination_info`, not structured
 message rows. Public search similarly wraps formatted `results` text. Slack normalization must
 explicitly validate/parse that format; the framework JSON decoder deliberately does not invent
-structured records from markdown. Unified `stoik_data.SERVICES` reports Linear and Slack disabled
-for this account, so their payloads could not be verified without changing service settings. No
-settings were changed. Dedicated defaults are configurable, not a claim that unified payloads work.
+structured records from markdown. Dedicated defaults remain configurable; payloads from other MCP
+servers have not been verified.
 Actual Linear polling and Slack parsing/classification, scheduling and inbox actions remain follow-up
 work; the framework ships no source pollers and reports an unavailable adapter on manual poll until
 one is registered. It never posts to Linear or Slack.
