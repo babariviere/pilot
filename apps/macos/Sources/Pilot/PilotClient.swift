@@ -381,6 +381,10 @@ final class PilotClient: ObservableObject {
         try await call(url: missionURL(["tracked-items", id]), method: "PATCH", body: patch)
     }
 
+    func trackedItemPrefill(_ id: String) async throws -> TrackedItemPrefill {
+        try await missionRequest(["tracked-items", id, "prefill"])
+    }
+
     private func upsert(_ project: Project) {
         projects.removeAll { $0.id == project.id }
         projects.append(project)

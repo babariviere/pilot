@@ -621,13 +621,16 @@ preserve dismissals and linked chat/mission IDs, ignore older versions, and comm
 its incremental checkpoint atomically. External text is data, never instructions or an automatic chat start.
 
 `SourceRegistry.register(kind, poller)` supplies adapters with config, cursor, cancellation and a
-logical-tool MCP caller. Manual polls are single-flight per project/source, with at most two in flight
+logical-tool MCP caller. Polls are single-flight per project/source, with at most two in flight
 globally and no request backlog. Config changes and shutdown cancel obsolete work. Source status is
 independent per project, including idle, syncing, error and sign-in required. SQLite and MCP config/auth
 work run on workers, not the daemon event loop; dashboard reads use five cached lightweight rows and
 counts per source through `DashboardProviders.tracked`. RPC queues and page sizes are bounded (64
-requests, 100 items/256 KiB per poll page, 512 KiB MCP result). Socket changes are coalesced and retain
-last data on error. There is no background polling yet.
+requests, 500 items/1 MiB per atomic poll batch, 100 items per list request, 512 KiB MCP result).
+Socket changes are coalesced and retain last data on error. Registered sources can use
+`startPolling(kind)` for a five-minute background cadence; timers stop when unconfigured or shut down.
+Failures back off exponentially from 30 seconds to 30 minutes, respecting sanitized rate-limit
+retry-after timing (bounded to one day). Manual polls respect error cooldowns too.
 
 **Access.** Reuse pi's user `mcp.json` and locked `mcp-auth.json`, including OAuth refreshes and
 `pi mcp login <server>`; no new API tokens or browser sign-in from the daemon. SDK 1.0.4 exports
@@ -636,7 +639,7 @@ isolates the pinned internal compatibility boundary in `source-mcp-worker.ts` (c
 local MCP/OAuth fixture). It connects only the selected server per call and closes it afterward.
 Repository-local MCP files are not loaded by tracking. Disabled/hidden servers/tools are not called.
 Tracking connects only the dedicated servers named `linear` and `slack`, with fixed tools:
-`list_issues`, `slack_read_channel` and `slack_read_thread`. There are no server/tool overrides,
+`list_issues`, `list_cycles`, `get_issue`, `slack_read_channel` and `slack_read_thread`. There are no server/tool overrides,
 dispatchers, fallback servers or auto-detection. Project settings accept only Slack channels and
 a Linear team. Legacy project MCP overrides are discarded on load while preserving those settings;
 checkpoint fingerprints change so old cursors are not reused.
@@ -648,9 +651,9 @@ formatted `messages` text (message TS and thread delimiters) and `pagination_inf
 message rows. Public search similarly wraps formatted `results` text. Slack normalization must
 explicitly validate/parse that format; the framework JSON decoder deliberately does not invent
 structured records from markdown.
-Actual Linear polling and Slack parsing/classification, scheduling and inbox actions remain follow-up
-work; the framework ships no source pollers and reports an unavailable adapter on manual poll until
-one is registered. It never posts to Linear or Slack.
+Slack parsing/classification and inbox actions remain follow-up work. The Linear poller is registered
+at daemon startup; unregistered adapters report unavailable on manual poll. Tracking never posts to
+Linear or Slack.
 
 **Verification.** Store/restart/dedupe/action tests, config/cursor/cancellation/concurrency tests, HTTP/WS
 dashboard integration, a local real MCP fixture (stored OAuth, required sign-in, fixed tools, write-tool
@@ -658,8 +661,7 @@ refusal and cancellation), and Swift decoding/editor tests cover the foundation.
 run (100 pages, ~700 bytes metadata/item) took 2.923 s, with 127.8 ms p95 commit RPC latency and
 12.67 ms daemon event-loop p99; an idle baseline under concurrent builds measured 19.91 ms p99
 (noisy measurements, not a speedup claim). Dashboard state remained five rows plus the full count.
-Real remote adapter throughput and app scrolling during live source traffic remain unverified until
-the pollers and inbox are implemented.
+Real remote adapter throughput and app scrolling during live source traffic remain unverified.
 
 **Triggers.** Messages in allowlisted channels that mention `@pilot`, or a `:pilot:` reaction on a message.
 
@@ -677,6 +679,45 @@ the pollers and inbox are implemented.
 same thread; a thread never spawns two sessions.
 
 ### 6.4 Linear: spec loop (M4)
+
+**Read-only tracking (implemented).** Attaching a team enables the dedicated `linear` MCP poller.
+Each poll reads `list_cycles(teamId, type: "current")`, retaining id, optional name, number and dates.
+`list_issues` always supplies the attached team, `includeSubTeams: true`, `assignee: "me"` and
+`includeArchived: false`, including on every pagination and prefill membership request. Only my
+current-cycle tickets are tracked. Without an active cycle (including disabled cycles), source status
+reports the fallback and queries my open issues by state type (triage, backlog, unstarted, started),
+never scanning completed issue history. Cycle progress/counts cover only my issues, not the team's
+overall progress. `TrackingSource.linear` and `DashboardTrackedSource.linear` expose the summary;
+the tracked APIs expose cycleId, state/statusType, priority, estimate, assignee/team IDs, identifier
+and gitBranchName in metadata. Swift mirrors these types in PilotCore.
+
+Membership reconciliation is bounded to 500 tickets. Issue details are incremental by updatedAt
+with a one-second overlap; cycle rollover, settings changes and a periodic 15-minute refresh reset
+the delta. All pages must succeed before the atomic item/checkpoint commit. Oversized, malformed
+or repeated-cursor results fail visibly without advancing the checkpoint. Departed tickets are
+retired locally, preserving dismissals and chat/mission links if they reappear. Changing the attached
+team hides the previous team's cached rows immediately, before the next poll.
+
+`GET /api/tracked-items/:id/prefill` verifies fresh scoped membership, then reads one `get_issue`
+description (at most 32,000 characters). The response carries identifier/title/URL, description,
+gitBranchName and a prompt quoting the ticket as untrusted JSON. It is transient, never persisted
+or broadcast, and cannot start work; the normal chat/mission flows must obtain user confirmation.
+Concurrent requests for the same item coalesce; prefill shares the two-call global concurrency bound.
+
+**Verification.** Sanitized JSON fixtures cover current-cycle pagination, sub-team ticket metadata,
+personal progress, rollover, no-cycle fallback, delta resets, malformed/oversized responses,
+reconciliation/restart/local-link preservation and transient bounded prefill. HTTP/dashboard and
+Swift decoding tests cover the public contract. A local MCP/OAuth fixture checks fixed read-only
+tools, write-tool refusal, sign-in and sanitized rate-limit handling. Run the offline 500-ticket
+performance fixture with `node --import tsx scripts/bench/linear-tracking.ts`; real remote latency
+and live app scrolling are not measured by that fixture. Cycle/inbox UI and composer actions are
+separate from this source implementation.
+An offline 500-ticket run (40 polls, one changed ticket per delta) retained five dashboard rows and
+used ~9.8 MiB heap, with 160 ms poll p95. Event-loop p99 was 60.6 ms versus an 11.9 ms idle baseline
+under concurrent builds/tests, with earlier runs noisier (148–177 ms); this is not a smoothness or
+production-throughput claim. A CPU profile showed the main thread mostly idle, with SQLite commit
+and list work on the storage worker. Membership and inbox reads use active-row indexes, so retained
+retired tickets do not require materializing their full history on each reconciliation.
 
 **Triggers.** Issue assigned to the Pilot user, or labelled `pilot:spec`, in allowlisted teams.
 
@@ -1088,6 +1129,7 @@ reports), producing a morning summary in the app and Slack.
 | `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
 | `GET /api/sources?projectId=...`, `POST /api/sources/:id/poll` | Project-scoped tracking status and single-flight manual poll; id is `<projectId>:linear/slack`; WS `sources` sends status on connection/change |
 | `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or linked chat/mission (null clears). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
+| `GET /api/tracked-items/:id/prefill` | Transient Linear ticket prefill after fresh mine/team membership verification; bounded description and quoted external JSON prompt, gitBranchName, no storage or automatic start |
 | `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first, with cached blocker labels), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
 | `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |

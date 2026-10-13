@@ -1,0 +1,35 @@
+{
+	"cycles": [
+		{
+			"id": "cycle-2",
+			"number": 13,
+			"name": null,
+			"startsAt": "2026-10-19T00:00:00.000Z",
+			"endsAt": "2026-11-02T00:00:00.000Z",
+			"progress": 0
+		}
+	],
+	"pages": [
+		{
+			"issues": [
+				{
+					"id": "issue-3",
+					"identifier": "ENG-3",
+					"title": "Test cycle rollover",
+					"url": "https://linear.app/example/issue/ENG-3",
+					"status": "Todo",
+					"statusType": "unstarted",
+					"priority": 4,
+					"estimate": 1,
+					"assigneeId": "user-me",
+					"teamId": "team-child",
+					"cycleId": "cycle-2",
+					"gitBranchName": "eng-3-rollover",
+					"updatedAt": "2026-10-19T00:00:01.000Z"
+				}
+			],
+			"hasNextPage": false,
+			"cursor": null
+		}
+	]
+}

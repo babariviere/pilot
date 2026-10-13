@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
-import { decodeMcpResult, dedicatedSourceTool } from "./source-mcp.ts";
+import { decodeMcpResult, dedicatedSourceTool, sourceRateLimit, SourceRateLimited } from "./source-mcp.ts";
 
 interface Connection {
 	state: string;
@@ -48,7 +48,7 @@ parentPort!.on("message", () => {
 	controller.abort(new Error("MCP request cancelled or timed out"));
 	void close();
 });
-let reply: { value?: ReturnType<typeof decodeMcpResult>; error?: string; signIn?: boolean };
+let reply: { value?: ReturnType<typeof decodeMcpResult>; error?: string; signIn?: boolean; retryAfterMs?: number };
 try {
 	const { kind, tool: logicalTool, args } = workerData;
 	const name = dedicatedSourceTool(kind, logicalTool);
@@ -80,6 +80,7 @@ try {
 	const result = await connection.callTool(name, args, { signal: controller.signal, timeoutMs: 30_000 });
 	reply = { value: decodeMcpResult(result) };
 } catch (error) {
+	const limited = error instanceof SourceRateLimited ? error : sourceRateLimit(error);
 	// Never forward external tool text, config values, or transport errors that can contain secrets.
 	reply = {
 		error:
@@ -87,6 +88,7 @@ try {
 				? "Sign in required"
 				: "MCP request failed. Check pi mcp list and the source tool configuration.",
 		signIn: connection?.state === "needs-auth",
+		...(limited ? { retryAfterMs: limited.retryAfterMs } : {}),
 	};
 } finally {
 	await close();

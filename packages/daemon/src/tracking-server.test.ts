@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,7 @@ import { SourceRegistry } from "./sources.ts";
 import { SourceSignInRequired } from "./source-mcp.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
+import { pollLinear } from "./linear-source.ts";
 
 test("tracking HTTP, WS invalidation and DashboardProviders.tracked share project-scoped data", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-tracking-server-"));
@@ -129,4 +130,81 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	assert.equal((await (await api(`/tracked-items?projectId=${project.id}&dismissed=true`)).json()).total, 1);
 	assert.equal(tracking.dashboard(project.id)[0]?.total, 7);
 	assert.equal((await (await api(`/tracked-items?projectId=${other.id}`)).json()).total, 0);
+});
+
+test("Linear cycle/fallback and transient prefill are exposed through the tracking and dashboard HTTP APIs", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-linear-api-"));
+	const projects = new ProjectStore(home);
+	await projects.load();
+	const project = await projects.create({ path: home, tracking: { slackChannels: [], linearTeam: "team-root" } });
+	const items = new TrackedItemStore(join(home, "tracked.sqlite"));
+	await items.load([project.id]);
+	const recording = JSON.parse(await readFile(new URL("./fixtures/linear-current.json", import.meta.url), "utf8"));
+	let fallback = false;
+	const tracking = new SourceRegistry(projects, items, {
+		async call(kind, tool, args) {
+			assert.equal(kind, "linear");
+			if (tool === "cycles") return fallback ? [] : recording.cycles;
+			if (tool === "issue") return recording.issue;
+			assert.equal(tool, "issues");
+			assert.equal(args.assignee, "me");
+			assert.equal(args.team, "team-root");
+			assert.equal(args.includeSubTeams, true);
+			const page = recording.pages[args.cursor ? 1 : 0];
+			return args.state
+				? {
+						...page,
+						issues: page.issues.filter((issue: { statusType: string }) => issue.statusType === args.state),
+					}
+				: page;
+		},
+	});
+	tracking.register("linear", pollLinear);
+	const sessions = {
+		list: () => [],
+		get: () => undefined,
+		onChange: () => () => {},
+		onArtifactsChanged: () => () => {},
+		setWorkspaceProcessGuard() {},
+	} as unknown as SessionManager;
+	const server = createDaemonServer(
+		{ home, host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		{} as ModelCatalog,
+		{ isRunning: () => false } as unknown as TerminalManager,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		tracking,
+	);
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	t.after(async () => {
+		server.closeAllConnections();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+		await tracking.stop();
+		await items.close();
+		await rm(home, { recursive: true, force: true });
+	});
+	const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api`;
+	const poll = await fetch(`${root}/sources/${project.id}:linear/poll`, { method: "POST" });
+	assert.equal(poll.status, 200);
+	assert.equal((await poll.json()).linear.currentCycle.progress, 0.5);
+	const dashboard = await (await fetch(`${root}/projects/${project.id}/dashboard`)).json();
+	assert.equal(dashboard.tracked[0].linear.currentCycle.id, "cycle-1");
+	assert.equal(dashboard.tracked[0].items.length, 2);
+	const page = await (await fetch(`${root}/tracked-items?projectId=${project.id}&kind=linear`)).json();
+	const item = page.items.find((item: { externalId: string }) => item.externalId === "issue-1");
+	const prefill = await fetch(`${root}/tracked-items/${item.id}/prefill`);
+	assert.equal(prefill.status, 200);
+	assert.equal((await prefill.json()).gitBranchName, "eng-1-settings-refresh");
+	assert.equal((await fetch(`${root}/tracked-items/missing/prefill`)).status, 404);
+	assert.ok(!JSON.stringify(await items.require(item.id)).includes("description"));
+	fallback = true;
+	await tracking.poll(`${project.id}:linear`);
+	const status = tracking.require(`${project.id}:linear`);
+	assert.equal(status.linear?.cycleStatus, "no_active_cycle");
+	assert.equal((await tracking.listItems({ projectId: project.id })).total, 1);
 });

@@ -15,6 +15,7 @@ import { ScheduleService } from "./schedules.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { SourceRegistry } from "./sources.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
+import { pollLinear } from "./linear-source.ts";
 
 const config = loadConfig();
 // Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
@@ -25,6 +26,8 @@ await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
 await trackedItems.load(projects.list().map((project) => project.id));
 const tracking = new SourceRegistry(projects, trackedItems, new PiSourceMcpClient(config.agentDir));
+tracking.register("linear", pollLinear);
+tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
 const memory = new ProjectMemoryService(config.home, (prompt, signal) => models.summarizeMemory(prompt, signal));
 // Load metadata and resume pending compaction, but a damaged/busy memory store cannot stop pilotd.

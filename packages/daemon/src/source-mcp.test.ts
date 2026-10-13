@@ -7,7 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { decodeMcpResult, PiSourceMcpClient, SourceSignInRequired } from "./source-mcp.ts";
+import {
+	decodeMcpResult,
+	dedicatedSourceTool,
+	PiSourceMcpClient,
+	sourceRateLimit,
+	SourceRateLimited,
+	SourceSignInRequired,
+} from "./source-mcp.ts";
 
 test("MCP decoding accepts structured data or JSON envelopes, not markdown or error results", () => {
 	assert.deepEqual(
@@ -23,6 +30,22 @@ test("MCP decoding accepts structured data or JSON envelopes, not markdown or er
 	assert.throws(() => decodeMcpResult({ content: [{ type: "text", text: "# Issues\n1. example" }] }));
 	assert.throws(() => decodeMcpResult({ isError: true, structuredContent: { secret: "do not display" } }), /error/);
 	assert.throws(() => decodeMcpResult({ structuredContent: { text: "x".repeat(513 * 1024) } }), /512/);
+});
+
+test("Linear exposes only fixed read tools and preserves sanitized retry-after timing", () => {
+	assert.equal(dedicatedSourceTool("linear", "cycles"), "list_cycles");
+	assert.equal(dedicatedSourceTool("linear", "issue"), "get_issue");
+	assert.equal(dedicatedSourceTool("linear", "issues"), "list_issues");
+	assert.equal(dedicatedSourceTool("linear", "update_issue"), undefined);
+	assert.equal(dedicatedSourceTool("slack", "issue"), undefined);
+	assert.equal(sourceRateLimit({ status: 429, headers: { "retry-after": "120" } })?.retryAfterMs, 120_000);
+	assert.equal(sourceRateLimit(new Error("Too many requests"))?.retryAfterMs, 60_000);
+	assert.throws(
+		() =>
+			decodeMcpResult({ isError: true, content: [{ type: "text", text: "Rate limited; retry-after: 90; secret" }] }),
+		(error) =>
+			error instanceof SourceRateLimited && error.retryAfterMs === 90_000 && !error.message.includes("secret"),
+	);
 });
 
 test("in-flight stdio cancellation waits for process-group shutdown before returning", async () => {
@@ -106,7 +129,8 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 	const seen: Array<{ auth?: string; method: string; params?: unknown }> = [];
 	let needsAuth = false,
 		writes = false,
-		hanging = false;
+		hanging = false,
+		limited = false;
 	let called!: () => void;
 	const server = createServer(async (req, res) => {
 		if (needsAuth) {
@@ -137,17 +161,22 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 			};
 		if (message.method === "tools/list")
 			result = {
-				tools: ["list_issues", "slack_read_channel", "slack_read_thread"].map((name) => ({
-					name,
-					inputSchema: { type: "object" },
-					annotations: { readOnlyHint: !writes },
-				})),
+				tools: ["list_issues", "list_cycles", "get_issue", "slack_read_channel", "slack_read_thread"].map(
+					(name) => ({
+						name,
+						inputSchema: { type: "object" },
+						annotations: { readOnlyHint: !writes },
+					}),
+				),
 			};
 		if (message.method === "tools/call" && hanging) {
 			called();
 			return;
 		}
-		if (message.method === "tools/call") result = { content: [{ type: "text", text: '{"issues":[]}' }] };
+		if (message.method === "tools/call")
+			result = limited
+				? { isError: true, content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }] }
+				: { content: [{ type: "text", text: '{"issues":[]}' }] };
 		res.writeHead(200, { "content-type": "application/json" });
 		res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 	});
@@ -189,6 +218,25 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 				{ name: "slack_read_thread", arguments: { channel_id: "C1", message_ts: "1.2" } },
 			],
 		);
+		await client.call("linear", "cycles", { teamId: "ENG", type: "current" }, signal);
+		await client.call("linear", "issue", { id: "issue-1", fields: ["description"] }, signal);
+		assert.deepEqual(
+			seen
+				.filter((request) => request.method === "tools/call")
+				.slice(-2)
+				.map((request) => request.params),
+			[
+				{ name: "list_cycles", arguments: { teamId: "ENG", type: "current" } },
+				{ name: "get_issue", arguments: { id: "issue-1", fields: ["description"] } },
+			],
+		);
+		limited = true;
+		await assert.rejects(
+			client.call("linear", "cycles", { teamId: "ENG", type: "current" }, signal),
+			(error) =>
+				error instanceof SourceRateLimited && error.retryAfterMs === 120_000 && !error.message.includes("secret"),
+		);
+		limited = false;
 		await assert.rejects(client.call("alternative" as never, "issues", {}, signal), /Unknown dedicated MCP/);
 		await assert.rejects(client.call("linear", "history", {}, signal), /Unknown dedicated MCP/);
 		needsAuth = true;
@@ -200,7 +248,8 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		needsAuth = false;
 		writes = true;
 		const before = seen.filter((request) => request.method === "tools/call").length;
-		await assert.rejects(client.call("linear", "issues", {}, signal), /MCP request failed/);
+		for (const tool of ["issues", "cycles", "issue"])
+			await assert.rejects(client.call("linear", tool, {}, signal), /MCP request failed/);
 		assert.equal(
 			seen.filter((request) => request.method === "tools/call").length,
 			before,

@@ -261,7 +261,7 @@ export function createDaemonServer(
 					return json(
 						res,
 						200,
-						await tracking.items.list({
+						await tracking.listItems({
 							projectId,
 							kind,
 							dismissed: dismissed === "true",
@@ -270,6 +270,8 @@ export function createDaemonServer(
 						}),
 					);
 				}
+				if (parts.length === 4 && parts[3] === "prefill" && req.method === "GET")
+					return json(res, 200, await tracking.prefill(decodeURIComponent(parts[2]!)));
 				if (parts.length === 3 && req.method === "PATCH") {
 					const item = await tracking.items.require(parts[2]!);
 					projects.require(item.projectId);
