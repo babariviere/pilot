@@ -33,7 +33,7 @@ struct ProjectPage: View {
                     }
                     .sheet(item: $fullList) { list in
                         ProjectFullListSheet(project: project, list: list, dashboard: fullListDashboard,
-                                             error: fullListError, isReviewed: isReviewed) {
+                                             error: fullListError) {
                             Task { await loadFullList(projectId: project.id) }
                         }
                         .task { await loadFullList(projectId: project.id) }
@@ -74,7 +74,7 @@ struct ProjectPage: View {
                 }
             } else {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
-                                     needsYou: ProjectPageNeeds.visible(dashboard.needsYou, isReviewed: isReviewed),
+                                     needsYou: dashboard.needsYou,
                                      banner: banner, showFullList: showFullList)
             }
         } else if let error = client.dashboardErrors[projectId] {
@@ -89,12 +89,6 @@ struct ProjectPage: View {
     /// Live updates have stopped: the socket is down, or an explicit refresh failed.
     private var stale: Bool {
         !client.connected || client.dashboardErrors[projectId] != nil
-    }
-
-    /// Until review marks reach pilotd, the app's own review state hides results the user has seen.
-    private func isReviewed(_ sessionId: String) -> Bool {
-        guard let session = client.session(sessionId), session.visibleOutcomeAt != nil else { return false }
-        return !model.isUnread(session)
     }
 
     private func retry() {
@@ -336,7 +330,6 @@ private struct ProjectFullListSheet: View {
     let list: ProjectFullList
     let dashboard: ProjectDashboard?
     let error: String?
-    let isReviewed: (String) -> Bool
     let retry: () -> Void
     @EnvironmentObject private var model: AppModel
 
@@ -348,7 +341,7 @@ private struct ProjectFullListSheet: View {
                     VStack(alignment: .leading, spacing: 4) {
                         switch list {
                         case .needsYou:
-                            let visible = ProjectPageNeeds.visible(dashboard.needsYou, isReviewed: isReviewed)
+                            let visible = dashboard.needsYou
                             ForEach(Array(visible.items.enumerated()), id: \.element.id) { index, item in
                                 if index > 0 { HairlineDivider(leading: 34) }
                                 ProjectNeedsYouRow(item: item, now: Date())
@@ -826,19 +819,6 @@ enum ProjectPageText {
         formatter.unitsStyle = .full
         formatter.dateTimeStyle = .named
         return formatter.localizedString(for: date, relativeTo: now)
-    }
-}
-
-/// Bridges the app's review state into the dashboard's Needs you list until pilotd receives review marks.
-enum ProjectPageNeeds {
-    static func visible(_ section: DashboardSection<DashboardNeedsYouItem>,
-                        isReviewed: (String) -> Bool) -> DashboardSection<DashboardNeedsYouItem> {
-        let items = section.items.filter { item in
-            guard item.kind == .unread || item.kind == .failed, let id = item.sessionId else { return true }
-            return !isReviewed(id)
-        }
-        let removed = section.items.count - items.count
-        return DashboardSection(total: max(items.count, section.total - removed), items: items)
     }
 }
 

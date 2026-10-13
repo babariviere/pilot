@@ -68,6 +68,21 @@ public final class SessionAttention {
     private var observed: [String: Double]
     private var receivedSnapshot = false
 
+    /// Fired only when a review high-water mark advances, for explicit and visible reviews alike.
+    public var onReview: ((ReviewRequest.Mark) -> Void)?
+
+    /// One bounded launch backfill. Prefer recent reviews, with stable ordering for equal versions.
+    @MainActor public func reviewMarks() async -> [ReviewRequest.Mark] {
+        // Snapshot on the client's executor; selection from a large history must not block the UI.
+        let marks = reviewed
+        return await Task.detached(priority: .utility) {
+            marks.filter { $0.value.isFinite }
+                .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+                .prefix(ReviewRequest.maxMarks)
+                .map { ReviewRequest.Mark(sessionId: $0.key, outcomeAt: $0.value) }
+        }.value
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         reviewed = defaults.dictionary(forKey: reviewedKey) as? [String: Double] ?? [:]
@@ -85,6 +100,7 @@ public final class SessionAttention {
         guard explicit || (chatVisible && appActive), isUnread(session), let version = session.visibleOutcomeAt else { return false }
         reviewed[session.id] = version
         defaults.set(reviewed, forKey: reviewedKey)
+        onReview?(ReviewRequest.Mark(sessionId: session.id, outcomeAt: version))
         return true
     }
 

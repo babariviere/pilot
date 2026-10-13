@@ -47,26 +47,6 @@ enum SidebarSelection: Equatable {
 
 /// Working and needs-you figures for the scope switcher, the Home badge and the Elsewhere line.
 enum SidebarScopeCounts {
-    /// pilotd's per-project counts (WS `dashboard.counts`). Until review marks reach pilotd, it counts every
-    /// result it has no mark for, so results the app has already reviewed are taken off here: the same
-    /// bridge the project page applies to its Needs you rows. Remove it once pilotd receives the marks.
-    static func corrected(_ counts: ProjectDashboardCounts, activeSessions: [SessionSummary],
-                          isUnread: (SessionSummary) -> Bool) -> [String: ProjectDashboardCount] {
-        var reviewed: [String: Int] = [:]
-        for session in activeSessions where session.visibleOutcomeAt != nil && !session.hasTerminalPullRequest {
-            guard let projectId = session.projectId, counts.projects[projectId] != nil, !isUnread(session) else { continue }
-            reviewed[projectId, default: 0] += 1
-        }
-        var result: [String: ProjectDashboardCount] = [:]
-        for (projectId, count) in counts.projects {
-            let needsYou = max(0, count.needsYou - reviewed[projectId, default: 0])
-            if count.working > 0 || needsYou > 0 {
-                result[projectId] = ProjectDashboardCount(working: count.working, needsYou: needsYou)
-            }
-        }
-        return result
-    }
-
     /// Every project's counts added up, optionally leaving one project out.
     static func total(_ counts: [String: ProjectDashboardCount], excluding projectId: String? = nil)
         -> ProjectDashboardCount {

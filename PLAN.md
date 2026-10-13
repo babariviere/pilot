@@ -706,6 +706,10 @@ reports), producing a morning summary in the app and Slack.
 - The chat transcript shows an activity indicator while the agent is working, but no settled
   status icon or outcome-reason footer. Reaching the transcript end in the active window still
   marks the latest settled outcome as reviewed; status icons remain elsewhere in the app.
+  Explicit and visible reviews persist locally and forward to `POST /api/reviews`. After the first
+  connection snapshot per app launch, the newest local marks are backfilled in one request (at most
+  1000). Delivery is serial and coalesced; failed marks retry on the next review or reconnect, without
+  polling. Project Needs you and sidebar scope counts use daemon state, without local subtraction.
 - Private-branch sessions show a linked colored PR icon and number independently of run outcome;
   open PRs share the three-node Git branch glyph with the base-branch selector, retaining their green color.
   Tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.

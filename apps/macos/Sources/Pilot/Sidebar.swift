@@ -15,8 +15,7 @@ struct SessionSidebar: View {
         let visible = client.activeSessions.filter(matches)
         let searching = !model.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty
         let unassigned = visible.filter { $0.projectId.map { !known.contains($0) } ?? true }
-        let counts = SidebarScopeCounts.corrected(client.projectCounts, activeSessions: client.activeSessions,
-                                                  isUnread: model.isUnread)
+        let counts = client.projectCounts.projects
         let focused = model.focusedProject
         List(selection: $model.selectedSessionId) {
             if let focused {
