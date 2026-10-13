@@ -1008,6 +1008,7 @@ export interface RemoveQueuedMessageResponse {
 
 /** Client to daemon, over /api/ws. */
 export type ClientMessage =
+	/** Legacy transcript stream on the shared socket. Clients should open a chat socket instead (see ChatServerMessage). */
 	| { type: "subscribe"; sessionId: string }
 	| { type: "unsubscribe"; sessionId: string }
 	/**
@@ -1062,6 +1063,15 @@ export type ServerMessage =
 	/** Replaces the transcript when it contains a snapshot (or is empty); otherwise appends entries. */
 	| { type: "subagent.events"; sessionId: string; name: string; events: AgentEvent[] }
 	| { type: "error"; sessionId?: string; name?: string; message: string };
+
+/**
+ * Daemon to client, over a chat socket at /api/sessions/:id/ws, one per open chat. Opening the socket subscribes
+ * and closing it unsubscribes; clients send nothing. Events start with a snapshot on every connection, then
+ * incremental batches. Artifact index updates for the session are repeated here so they stay ordered with the
+ * initial index. Close codes: 4404 for an unknown session (do not reconnect), 1013 to reconnect for a fresh
+ * snapshot (overload, or a temporary refusal such as a pending update).
+ */
+export type ChatServerMessage = Extract<ServerMessage, { type: "events" | "artifacts" | "error" }>;
 
 export const DEFAULT_PORT = 4319;
 export type * from "./memory.ts";

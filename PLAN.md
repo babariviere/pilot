@@ -526,6 +526,9 @@ the isolated working copy is ready.
   the daemon. The SDK retains ownership of settings parsing, migrations and global/project merging.
 - Slow WebSocket clients are disconnected explicitly and resynchronize from snapshots, never silently
   lose arbitrary deltas. Internal worker activity watches project only run/inbox state, not history.
+- Each open chat streams on its own WebSocket with its own send queue, beside one control socket for lists,
+  dashboards, missions and terminals. A large snapshot or slow chat delays and resynchronizes only itself.
+  The app decodes every socket on its own background queue and hands ordered batches to the main actor.
 - pilotd never spawns Git, jj or gh on its event loop. `spawn` blocks its thread until the child starts
   (hundreds of milliseconds on a saturated machine), so a small bounded worker-thread pool
   (`packages/daemon/src/subprocess.ts`) owns these processes and keeps admission, kernel IPC and
@@ -1226,6 +1229,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/sessions/:id/artifacts`, `GET /api/projects/:id/artifacts` | Session and project artifact indexes |
 | `GET /api/sessions/:id/artifacts/:artifactId?revision=N` | Read a pinned revision (latest when omitted) |
 | `GET /api/artifact-libraries/:name`, WS `artifacts` | Read-only offline library assets and live session artifact indexes |
+| WS `/api/sessions/:id/ws`, `ChatServerMessage` | One socket per open chat: a transcript snapshot on every connection, then live event batches and the session's artifact indexes. Close code 4404 for unknown sessions, 1013 to reconnect. The control socket's `subscribe` remains for older clients (done) |
 | `SessionSummary.origin`, `.binding`, `.outcome`, `state: "waiting"` | Origin-aware lists and badges |
 | `SessionSummary.pullRequest`, `.pullRequests`, `.pullRequestError` | Branch-linked GitHub PR status (current branch, and every PR the session opened) and cached-lookup errors (done for private manual sessions) |
 | `SessionPullRequest.readiness` | Cached merge readiness (`state`, structured `reasons`, health `checkedAt`), shared by session and mission-linked PRs. Reasons carry failing check names, unresolved thread count or raw blocking state, never comment bodies. Absent until first successful health lookup and on terminal PRs |

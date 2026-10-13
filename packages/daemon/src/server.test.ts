@@ -12,7 +12,7 @@ import { RepositoryChanges } from "./changes.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
-import { SessionManager } from "./sessions.ts";
+import { NotFound, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
 test("repository invalidation ignores title and quota updates, but preserves work and workspace refreshes", (t) => {
@@ -277,6 +277,107 @@ test("websocket overload closes with a reconnect instruction and resubscription 
 	// The server close event releases the subscription before the next connection subscribes.
 	await subscribe();
 	assert.equal(unsubscribed, 1);
+});
+
+test("chat sockets stream one session each, isolate overload and release their subscription on close", {
+	timeout: 30_000,
+}, async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const snapshot: AgentEvent = {
+		type: "snapshot",
+		entries: [],
+		tools: [],
+		compactions: [],
+		inbox: [],
+		agent: {},
+		usage: { models: {}, tools: {} },
+	};
+	const deliver = new Map<string, Parameters<SessionManager["subscribe"]>[1]>();
+	const unsubscribed: string[] = [];
+	t.mock.method(sessions, "subscribe", (id: string, listener: Parameters<SessionManager["subscribe"]>[1]) => {
+		if (id === "missing") throw new NotFound(`Unknown session: ${id}`);
+		deliver.set(id, listener);
+		listener([snapshot]);
+		return () => {
+			unsubscribed.push(id);
+		};
+	});
+	t.mock.method(sessions, "artifacts", async () => []);
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		new TerminalManager(),
+	);
+	const sockets: WebSocket[] = [];
+	t.after(async () => {
+		for (const socket of sockets) socket.terminate();
+		await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `ws://127.0.0.1:${(server.address() as AddressInfo).port}`;
+	const open = (path: string) => {
+		const socket = new WebSocket(`${base}${path}`);
+		sockets.push(socket);
+		const messages: ServerMessage[] = [];
+		socket.on("message", (data) => messages.push(JSON.parse(String(data)) as ServerMessage));
+		const until = async (predicate: (message: ServerMessage) => boolean) => {
+			while (!messages.some(predicate)) await new Promise((resolve) => setTimeout(resolve, 5));
+			return messages.find(predicate)!;
+		};
+		return { socket, messages, until };
+	};
+
+	const a = open("/api/sessions/session-a/ws");
+	const b = open(`/api/sessions/${encodeURIComponent("session b")}/ws`);
+	assert.deepEqual(await a.until((m) => m.type === "events"), {
+		type: "events",
+		sessionId: "session-a",
+		events: [snapshot],
+	});
+	assert.deepEqual(await b.until((m) => m.type === "events"), {
+		type: "events",
+		sessionId: "session b",
+		events: [snapshot],
+	});
+	assert.deepEqual(await a.until((m) => m.type === "artifacts"), {
+		type: "artifacts",
+		sessionId: "session-a",
+		artifacts: [],
+	});
+
+	// Overload on one chat socket resynchronizes only that chat.
+	const closed = once(a.socket, "close");
+	const buffered = t.mock.getter(WebSocket.prototype, "bufferedAmount", () => 128 * 1024 * 1024);
+	deliver.get("session-a")!([{ type: "queue_update", items: [] }]);
+	buffered.mock.restore();
+	const [code, reason] = await closed;
+	assert.equal(code, 1013);
+	assert.match(String(reason), /Reconnect.*snapshot/);
+	while (!unsubscribed.length) await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.deepEqual(unsubscribed, ["session-a"]);
+	deliver.get("session b")!([{ type: "queue_update", items: [] }]);
+	assert.deepEqual(await b.until((m) => m.type === "events" && m.events[0]?.type === "queue_update"), {
+		type: "events",
+		sessionId: "session b",
+		events: [{ type: "queue_update", items: [] }],
+	});
+
+	// An unknown session is final, and a malformed path never upgrades.
+	const missing = open("/api/sessions/missing/ws");
+	const [missingCode] = await once(missing.socket, "close");
+	assert.equal(missingCode, 4404);
+	assert.deepEqual(missing.messages, [{ type: "error", sessionId: "missing", message: "Unknown session: missing" }]);
+	const invalid = open("/api/sessions/a/b/ws");
+	await once(invalid.socket, "error");
+
+	b.socket.close();
+	await once(b.socket, "close");
+	while (unsubscribed.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
+	assert.deepEqual(unsubscribed, ["session-a", "session b"]);
 });
 
 test("queued message PATCH forwards the message ID and content and reports stale edits", async (t) => {
