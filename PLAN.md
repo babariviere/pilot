@@ -610,6 +610,16 @@ reports), producing a morning summary in the app and Slack.
   committed branch sources show their pinned revision in the chat. Build exposes a per-chat workspace
   choice. Ask chats hide terminal/change actions and offer an explicit Start a Build chat handoff.
 - Sidebar grouped by origin and state; badges for `waiting` sessions (they need you).
+- Project page: clicking a project name in the sidebar (the chevron still folds its chats) or on the Home
+  Projects card opens a calm status page for that project, built like the mission Overview. The toolbar
+  carries the project name and path, New chat (New mission in its menu) and an actions menu (project
+  settings, Finder, archived chats, artifacts). The body is one reading column: a headline sentence and
+  meta line, then Needs you (always shown), Working now, Pull requests (readiness when pilotd reports it,
+  otherwise plain Open or Draft), Missions with task progress and Recent, each at most 5 rows plus
+  "N more". Data is the daemon's project dashboard, subscribed while the page is visible and updated in
+  place over the WebSocket. First open shows a spinner; a lost connection or failed Retry keeps the last
+  data under a banner. Until review marks reach pilotd, the app's own review state hides results the user
+  has already reviewed. Scheduled and Tracked sections are added with those features.
 - Projects can be grouped into user-created, collapsible sidebar folders. Create, rename and delete
   folders, and move projects via their context menu. Ungrouped projects remain visible; deleting a
   folder only ungroups its projects. Folder membership and collapse state are local app preferences

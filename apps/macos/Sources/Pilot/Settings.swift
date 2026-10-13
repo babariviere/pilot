@@ -107,17 +107,27 @@ extension EnvironmentValues {
 
 // MARK: - Settings window
 
+enum SettingsTab: Hashable {
+    case appearance, terminal, projects, updates
+}
+
 struct SettingsView: View {
+    @EnvironmentObject private var model: AppModel
+
     var body: some View {
-        TabView {
+        TabView(selection: $model.settingsTab) {
             AppearanceSettings()
                 .tabItem { Label("Appearance", systemImage: "textformat") }
+                .tag(SettingsTab.appearance)
             TerminalSettings()
                 .tabItem { Label("Terminal", systemImage: "terminal") }
+                .tag(SettingsTab.terminal)
             ProjectSettings()
                 .tabItem { Label("Projects", systemImage: "folder") }
+                .tag(SettingsTab.projects)
             UpdateSettings()
                 .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
+                .tag(SettingsTab.updates)
         }
         .frame(width: 560, height: 420)
     }
@@ -243,6 +253,7 @@ final class ProjectEditor: ObservableObject {
 
 private struct ProjectSettings: View {
     @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var model = AppModel.shared
     @StateObject private var editor = ProjectEditor()
 
     var body: some View {
@@ -300,6 +311,15 @@ private struct ProjectSettings: View {
             }
             .frame(minWidth: 280)
         }
+        .onAppear(perform: selectRequestedProject)
+        .onChange(of: model.settingsProjectId) { _, _ in selectRequestedProject() }
+    }
+
+    /// "Project Settings…" on a project page asks for its project once.
+    private func selectRequestedProject() {
+        guard let id = model.settingsProjectId else { return }
+        editor.selection = id
+        model.settingsProjectId = nil
     }
 
     private func save(_ project: Project) async {

@@ -21,7 +21,12 @@ final class PilotClient: ObservableObject {
     @Published private(set) var projectDashboards: [String: ProjectDashboard] = [:]
     /// Working and needs-you counts per project, for the sidebar scope switcher.
     @Published private(set) var projectCounts = ProjectDashboardCounts()
+    /// When each subscribed dashboard last arrived, to say how old shown data is after a failed refresh.
+    @Published private(set) var dashboardReceivedAt: [String: Date] = [:]
+    /// The last failed explicit refresh per subscribed project. Cleared by the next dashboard.
+    @Published private(set) var dashboardErrors: [String: String] = [:]
     private var dashboardRefs: [String: Int] = [:]
+    private var fixtureDashboards = false
     private var fixtureMissions = false
     private var fixtureSessions = false
     @Published private(set) var connected = false
@@ -98,6 +103,15 @@ final class PilotClient: ObservableObject {
         fixtureMissions = true
         missions = details.map(\.mission)
         missionDetails = Dictionary(uniqueKeysWithValues: details.map { ($0.mission.id, $0) })
+    }
+
+    /// Static project dashboards for snapshots and previews, served without subscriptions.
+    func loadDashboardFixture(_ dashboards: [ProjectDashboard], receivedAt: Date = Date(),
+                              errors: [String: String] = [:]) {
+        fixtureDashboards = true
+        projectDashboards = Dictionary(uniqueKeysWithValues: dashboards.map { ($0.projectId, $0) })
+        dashboardReceivedAt = projectDashboards.mapValues { _ in receivedAt }
+        dashboardErrors = errors
     }
 
     // MARK: Commands
@@ -511,7 +525,7 @@ final class PilotClient: ObservableObject {
     /// Keeps a project's dashboard live while a view shows it. Balance with `releaseDashboard`.
     func retainDashboard(_ projectId: String) {
         dashboardRefs[projectId, default: 0] += 1
-        if dashboardRefs[projectId] == 1 {
+        if dashboardRefs[projectId] == 1, !fixtureDashboards {
             post(["type": .string("dashboard.subscribe"), "projectId": .string(projectId)])
         }
     }
@@ -520,8 +534,31 @@ final class PilotClient: ObservableObject {
         guard let count = dashboardRefs[projectId] else { return }
         if count > 1 { dashboardRefs[projectId] = count - 1; return }
         dashboardRefs[projectId] = nil
+        guard !fixtureDashboards else { return }
         projectDashboards[projectId] = nil
+        dashboardReceivedAt[projectId] = nil
+        dashboardErrors[projectId] = nil
         post(["type": .string("dashboard.unsubscribe"), "projectId": .string(projectId)])
+    }
+
+    /// One explicit read of a subscribed dashboard, for Retry. Live updates still come over the socket.
+    func refreshDashboard(_ projectId: String) async {
+        guard dashboardRefs[projectId] != nil, !fixtureDashboards else { return }
+        do {
+            let url = try missionURL(["projects", projectId, "dashboard"])
+            let dashboard: ProjectDashboard = try await call(URLRequest(url: url))
+            guard dashboardRefs[projectId] != nil else { return }
+            receive(dashboard)
+        } catch {
+            guard dashboardRefs[projectId] != nil else { return }
+            dashboardErrors[projectId] = error.localizedDescription
+        }
+    }
+
+    private func receive(_ dashboard: ProjectDashboard) {
+        projectDashboards[dashboard.projectId] = dashboard
+        dashboardReceivedAt[dashboard.projectId] = Date()
+        dashboardErrors[dashboard.projectId] = nil
     }
 
     /// Keeps a mission's detail live while a view shows it. Balance with `releaseMission`.
@@ -914,7 +951,7 @@ final class PilotClient: ObservableObject {
             upsert(detail.mission)
         case let .dashboard(dashboard):
             guard dashboardRefs[dashboard.projectId] != nil else { break }
-            projectDashboards[dashboard.projectId] = dashboard
+            receive(dashboard)
         case let .dashboardCounts(counts):
             projectCounts = counts
         case let .terminalData(id, data):

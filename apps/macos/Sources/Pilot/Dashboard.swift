@@ -164,7 +164,7 @@ private struct ProjectsCard: View {
             if projects.isEmpty { EmptyLine(text: "Add a project to group sessions by repository.") }
             ForEach(projects.prefix(6)) { project in
                 let owned = sessions.filter { $0.projectId == project.id }
-                Button { app.newSession(in: project.id) } label: {
+                Button { app.openProject(project.id) } label: {
                     HStack(spacing: 8) {
                         Circle().fill(owned.contains(where: \.isWorking) ? Theme.success : Theme.faintForeground.opacity(0.5))
                             .frame(width: 6, height: 6)
@@ -180,6 +180,11 @@ private struct ProjectsCard: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help("Open \(project.name)")
+                .contextMenu {
+                    Button("Open Project") { app.openProject(project.id) }
+                    Button("New Chat") { app.newSession(in: project.id) }
+                }
             }
             Button { app.addProject() } label: {
                 Label("Add project", systemImage: "plus").font(.pilot(.label))
