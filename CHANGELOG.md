@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.25.2](https://github.com/babariviere/pilot/compare/v1.25.1...v1.25.2) (2026-10-13)
+
+
+### Bug Fixes
+
+* **daemon:** remove assignments from expressions ([04b6337](https://github.com/babariviere/pilot/commit/04b63373245d6329340470efa15613ae81fde5d6))
+
 ## [1.25.1](https://github.com/babariviere/pilot/compare/v1.25.0...v1.25.1) (2026-10-13)
 
 
