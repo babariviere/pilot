@@ -75,6 +75,12 @@ extension AppModel {
         missionAction { [client] in try await client.leaveMission(sessionId) }
     }
 
+    /// Opens the Tasks tab on a task. The tab unfolds its group and scrolls to it.
+    func showMissionTask(_ taskId: String) {
+        revealedMissionTaskId = taskId
+        missionTab = .tasks
+    }
+
     func setCoordinator(_ sessionId: String?, missionId: String) {
         missionAction { [client] in
             try await client.updateMission(missionId, UpdateMissionRequest(
