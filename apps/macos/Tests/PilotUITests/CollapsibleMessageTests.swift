@@ -4,6 +4,14 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
+@MainActor private func waitForMessageLayout(_ condition: () -> Bool) throws {
+    let deadline = Date().addingTimeInterval(2)
+    while !condition(), Date() < deadline {
+        RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+    }
+    try #require(condition(), "Message layout did not settle")
+}
+
 @Test @MainActor func clickingFoldedMessageExpandsItAndPausesFollow() throws {
     _ = NSApplication.shared
     let expansion = ExpansionState()
@@ -81,10 +89,12 @@ import Testing
     #expect(fullContentBuilds == 0)
     expansion.expanded = true
     host.layoutSubtreeIfNeeded()
+    try waitForMessageLayout { host.fittingSize.height > foldedHeight + 500 && fullContentBuilds > 0 }
     #expect(host.fittingSize.height > foldedHeight + 500)
     #expect(fullContentBuilds > 0)
     expansion.expanded = false
     host.layoutSubtreeIfNeeded()
+    try waitForMessageLayout { host.fittingSize.height == foldedHeight }
     #expect(host.fittingSize.height == foldedHeight)
 }
 
