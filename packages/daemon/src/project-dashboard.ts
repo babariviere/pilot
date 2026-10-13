@@ -238,7 +238,10 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		needsYou: section(needsYou, limit),
 		working: section(working, limit),
 		pullRequests: section(pullRequests, limit),
-		missions: section(missions.map(({ updatedAt: _updatedAt, ...mission }) => mission), limit),
+		missions: section(
+			missions.map(({ updatedAt: _updatedAt, ...mission }) => mission),
+			limit,
+		),
 		scheduled: section(pending, limit),
 		tracked: (input.tracked ?? []).map((source) => ({
 			...source,
@@ -333,15 +336,18 @@ export class ProjectDashboardService {
 		limit = DASHBOARD_SECTION_LIMIT,
 	): ProjectDashboard {
 		const { reviews, providers } = this.deps;
-		return buildProjectDashboard({
-			projectId,
-			sessions,
-			missions,
-			progress,
-			isUnread: (id, at) => reviews.isUnread(id, at),
-			scheduled: providers?.scheduled?.(projectId),
-			tracked: providers?.tracked?.(projectId),
-			memory: providers?.memory?.(projectId),
-		}, limit);
+		return buildProjectDashboard(
+			{
+				projectId,
+				sessions,
+				missions,
+				progress,
+				isUnread: (id, at) => reviews.isUnread(id, at),
+				scheduled: providers?.scheduled?.(projectId),
+				tracked: providers?.tracked?.(projectId),
+				memory: providers?.memory?.(projectId),
+			},
+			limit,
+		);
 	}
 }
