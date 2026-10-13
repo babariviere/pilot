@@ -148,6 +148,28 @@ function isMissionClientMessage(value: unknown): value is MissionClientMessage {
 	);
 }
 
+/** Close code for a chat socket whose session does not exist. Clients must not reconnect. */
+export const CHAT_NOT_FOUND = 4404;
+
+/** The session ID of a `/api/sessions/:id/ws` chat socket path, if valid. */
+export function chatSocketSession(pathname: string): string | undefined {
+	const match = /^\/api\/sessions\/([^/]+)\/ws$/.exec(pathname);
+	if (!match) return undefined;
+	try {
+		const id = decodeURIComponent(match[1]!);
+		return id.trim() && id.length <= 128 && !id.includes("/") ? id : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** WebSocket close reasons are limited to 123 UTF-8 bytes. */
+function closeReason(message: string): string {
+	let reason = message.slice(0, 123);
+	while (Buffer.byteLength(reason) > 123) reason = reason.slice(0, -1);
+	return reason;
+}
+
 /** Treat WebSocket JSON as untrusted input, not as an already-validated protocol union. */
 function isClientMessage(value: unknown): value is SessionClientMessage {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
@@ -609,16 +631,30 @@ export function createDaemonServer(
 
 	// Large enough for terminal pastes.
 	const wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024 });
+	// Chat sockets are server-to-client only. Each has its own send queue, so one chat's large snapshot or slow
+	// reader never delays another chat or the sidebar, and overload resynchronizes only that chat.
+	const chatWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 	server.on("upgrade", (req, socket, head) => {
 		const { pathname } = new URL(req.url ?? "/", "http://localhost");
-		if (pathname !== "/api/ws" || !isAllowedOrigin(req.headers.origin)) {
+		if (!isAllowedOrigin(req.headers.origin)) {
 			socket.destroy();
 			return;
 		}
-		wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+		if (pathname === "/api/ws") {
+			wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
+			return;
+		}
+		const sessionId = chatSocketSession(pathname);
+		if (!sessionId) {
+			socket.destroy();
+			return;
+		}
+		chatWss.handleUpgrade(req, socket, head, (ws) => openChat(ws, sessionId));
 	});
 
 	const clients = new Map<WebSocket, (data: string) => void>();
+	/** Open chat sockets per session, for artifact index updates that must stay ordered with the initial index. */
+	const chatSenders = new Map<string, Set<(data: string) => void>>();
 	const repositoryVersions = new Map(
 		sessions
 			.list({ archived: "all" })
@@ -679,7 +715,13 @@ export function createDaemonServer(
 	});
 	sessions.onArtifactsChanged((sessionId, artifacts) => {
 		artifactVersions.set(sessionId, (artifactVersions.get(sessionId) ?? 0) + 1);
-		broadcast({ type: "artifacts", sessionId, artifacts });
+		const message: ServerMessage = { type: "artifacts", sessionId, artifacts };
+		broadcast(message);
+		const chats = chatSenders.get(sessionId);
+		if (chats?.size) {
+			const data = JSON.stringify(message);
+			for (const send of chats) send(data);
+		}
 	});
 	/** Subscribed sockets per mission. Detail is read once per change and shared. */
 	const missionSubscribers = new Map<string, Set<WebSocket>>();
@@ -916,6 +958,51 @@ export function createDaemonServer(
 			for (const detach of attachedTerminals.values()) detach();
 		});
 	});
+
+	/** Stream one session's transcript on its own socket: a snapshot first, then live batches, until close. */
+	function openChat(ws: WebSocket, sessionId: string): void {
+		const sendData = boundedSender(ws);
+		const send = (message: ServerMessage) => sendData(JSON.stringify(message));
+		let unsubscribe: (() => void) | undefined;
+		let closed = false;
+		ws.on("message", () => undefined);
+		ws.on("close", () => {
+			closed = true;
+			unsubscribe?.();
+			const chats = chatSenders.get(sessionId);
+			chats?.delete(sendData);
+			if (chats && !chats.size) chatSenders.delete(sessionId);
+		});
+		try {
+			unsubscribe = sessions.subscribe(sessionId, (events) => send({ type: "events", sessionId, events }));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			send({ type: "error", sessionId, message });
+			// Unknown sessions are final. Anything else (an update in progress, shutdown) is worth a retry.
+			ws.close(error instanceof NotFound ? CHAT_NOT_FOUND : 1013, closeReason(message));
+			return;
+		}
+		let chats = chatSenders.get(sessionId);
+		if (!chats) {
+			chats = new Set();
+			chatSenders.set(sessionId, chats);
+		}
+		chats.add(sendData);
+		// An opened chat should show a fresh PR badge.
+		sessions.focusPullRequests([sessionId]);
+		const version = artifactVersions.get(sessionId);
+		void sessions.artifacts(sessionId).then(
+			(artifacts) => {
+				// An update already sent on this socket supersedes an older in-flight index.
+				if (!closed && artifactVersions.get(sessionId) === version)
+					send({ type: "artifacts", sessionId, artifacts });
+			},
+			(error: unknown) => {
+				if (!closed)
+					send({ type: "error", sessionId, message: error instanceof Error ? error.message : String(error) });
+			},
+		);
+	}
 
 	function handleTerminal(message: SessionClientMessage, attached: Map<string, () => void>, ws: WebSocket): void {
 		const { sessionId } = message;

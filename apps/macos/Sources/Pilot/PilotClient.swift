@@ -2,8 +2,8 @@ import AppKit
 import Foundation
 import PilotCore
 
-/// pilotd client: REST commands plus one reconnecting WebSocket for the session list and
-/// per-session agent event streams.
+/// pilotd client: REST commands, one reconnecting control WebSocket for lists, dashboards, missions and
+/// terminals, and one reconnecting WebSocket per open chat for its agent event stream.
 @MainActor
 final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
@@ -63,12 +63,27 @@ final class PilotClient: ObservableObject {
         }
     }
     private var activationObserver: NSObjectProtocol?
-    private var task: URLSessionWebSocketTask?
+    private var control: SocketReader?
     private var retry = 0
     private var awaitingList: [String: SessionSummary] = [:]
     private var listeners: [String: [UUID: ([JSONValue]) -> Void]] = [:]
+    private var chats: [String: ChatConnection] = [:]
     private var subagentListeners: [SubagentKey: [UUID: SubagentListener]] = [:]
     private var terminals: [String: TerminalAttachment] = [:]
+
+    /// One open chat's socket, or its pending reconnect.
+    private final class ChatConnection {
+        var reader: SocketReader?
+        var retry = 0
+        var reconnect: Task<Void, Never>?
+    }
+
+    /// Dedicated to WebSockets, so every open chat gets its own connection rather than waiting for a slot.
+    private static let socketSession: URLSession = {
+        let configuration = URLSessionConfiguration.default
+        configuration.httpMaximumConnectionsPerHost = 64
+        return URLSession(configuration: configuration)
+    }()
 
     /// One app-side terminal attached to a daemon-owned shell.
     struct TerminalAttachment {
@@ -84,6 +99,7 @@ final class PilotClient: ObservableObject {
         fixtureSessions = false
         self.baseURL = baseURL
         open()
+        for id in listeners.keys { openChat(id) }
     }
 
     func session(_ id: String) -> SessionSummary? {
@@ -922,12 +938,13 @@ final class PilotClient: ObservableObject {
 
     // MARK: Event streams
 
-    /// The first batch delivered is always a snapshot, including after reconnects.
+    /// The first batch delivered is always a snapshot, including after reconnects. Each subscribed chat has
+    /// its own socket, so a large or slow chat never delays another.
     func subscribe(_ sessionId: String, _ listener: @escaping ([JSONValue]) -> Void) -> UUID {
         let token = UUID()
         let first = listeners[sessionId]?.isEmpty ?? true
         listeners[sessionId, default: [:]][token] = listener
-        if first { post(["type": .string("subscribe"), "sessionId": .string(sessionId)]) }
+        if first { openChat(sessionId) }
         return token
     }
 
@@ -935,8 +952,69 @@ final class PilotClient: ObservableObject {
         listeners[sessionId]?[token] = nil
         if listeners[sessionId]?.isEmpty ?? false {
             listeners[sessionId] = nil
-            post(["type": .string("unsubscribe"), "sessionId": .string(sessionId)])
+            closeChat(sessionId)
         }
+    }
+
+    private func openChat(_ sessionId: String) {
+        guard listeners[sessionId] != nil, let url = socketURL(chatPath(sessionId)) else { return }
+        let chat = chats[sessionId] ?? ChatConnection()
+        chats[sessionId] = chat
+        chat.reconnect?.cancel()
+        chat.reconnect = nil
+        chat.reader?.cancel()
+        let task = Self.socketSession.webSocketTask(with: url)
+        // Snapshots of long transcripts exceed the 1 MiB default.
+        task.maximumMessageSize = 64 * 1024 * 1024
+        let reader = SocketReader(
+            task: task, label: "pilot.chat-socket",
+            deliver: { [weak self] reader, updates in
+                guard let self, let chat = self.chats[sessionId], chat.reader === reader else { return }
+                chat.retry = 0
+                // Only this chat's transcript and artifact index travel on its socket.
+                for case let update? in updates {
+                    switch update {
+                    case let .events(id, _): if id == sessionId { self.handle(update) }
+                    case let .artifacts(message): if message.sessionId == sessionId { self.handle(update) }
+                    default: break
+                    }
+                }
+            },
+            failed: { [weak self] reader in
+                guard let self, let chat = self.chats[sessionId], chat.reader === reader else { return }
+                chat.reader = nil
+                // The session no longer exists. Reconnecting cannot help.
+                if reader.task.closeCode.rawValue == 4404 { return }
+                let delay = min(10.0, 0.5 * pow(2.0, Double(chat.retry)))
+                chat.retry += 1
+                chat.reconnect = Task { [weak self] in
+                    try? await Task.sleep(for: .seconds(delay))
+                    guard !Task.isCancelled, let self, self.chats[sessionId] === chat, chat.reader == nil else { return }
+                    self.openChat(sessionId)
+                }
+            }
+        )
+        chat.reader = reader
+        reader.start()
+    }
+
+    private func closeChat(_ sessionId: String) {
+        guard let chat = chats.removeValue(forKey: sessionId) else { return }
+        chat.reconnect?.cancel()
+        chat.reader?.cancel()
+    }
+
+    private func chatPath(_ sessionId: String) -> String {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove("/")
+        return "/api/sessions/\(sessionId.addingPercentEncoding(withAllowedCharacters: allowed) ?? sessionId)/ws"
+    }
+
+    private func socketURL(_ percentEncodedPath: String) -> URL? {
+        guard let baseURL, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return nil }
+        components.scheme = components.scheme == "https" ? "wss" : "ws"
+        components.percentEncodedPath = percentEncodedPath
+        return components.url
     }
 
     /// Ask the daemon to recheck pull requests of the chats currently open in the app.
@@ -983,73 +1061,57 @@ final class PilotClient: ObservableObject {
     }
 
     private func post(_ message: [String: JSONValue]) {
-        guard connected, let task, let data = try? JSONEncoder().encode(JSONValue.object(message)) else { return }
-        task.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
+        guard connected, let control, let data = try? JSONEncoder().encode(JSONValue.object(message)) else { return }
+        control.task.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
     }
 
     private func open() {
-        guard let baseURL, var components = URLComponents(url: baseURL, resolvingAgainstBaseURL: false) else { return }
-        components.scheme = components.scheme == "https" ? "wss" : "ws"
-        components.path = "/api/ws"
-        guard let url = components.url else { return }
-        let task = URLSession.shared.webSocketTask(with: url)
+        control?.cancel()
+        control = nil
+        guard let url = socketURL("/api/ws") else { return }
+        let task = Self.socketSession.webSocketTask(with: url)
         // Snapshots of long transcripts exceed the 1 MiB default.
         task.maximumMessageSize = 64 * 1024 * 1024
-        self.task = task
-        task.resume()
-        receive(on: task)
+        let reader = SocketReader(
+            task: task, label: "pilot.control-socket",
+            deliver: { [weak self] reader, updates in
+                guard let self, self.control === reader else { return }
+                if !self.connected { self.didConnect() }
+                for case let update? in updates { self.handle(update) }
+            },
+            failed: { [weak self] reader in
+                guard let self, self.control === reader else { return }
+                self.connected = false
+                self.scheduleReconnect()
+            }
+        )
+        control = reader
+        reader.start()
     }
 
-    private func receive(on task: URLSessionWebSocketTask) {
-        task.receive { [weak self] result in
-            Task { @MainActor in
-                guard let self, self.task === task else { return }
-                switch result {
-                case let .success(message):
-                    let decoded = await Task.detached(priority: .userInitiated) {
-                        let data: Data
-                        switch message {
-                        case let .string(text): data = Data(text.utf8)
-                        case let .data(value): data = value
-                        @unknown default: return ServerUpdate?.none
-                        }
-                        return try? ServerUpdate.decode(data)
-                    }.value
-                    // A reconnect may have replaced this socket while decoding a large snapshot.
-                    guard self.task === task else { return }
-                    if !self.connected {
-                        self.connected = true
-                        self.retry = 0
-                        // The daemon sends a fresh snapshot per subscription, so reconnects resync.
-                        for id in self.listeners.keys { self.post(["type": .string("subscribe"), "sessionId": .string(id)]) }
-                        for key in self.subagentListeners.keys { self.postSubagent("subagent.subscribe", key) }
-                        for id in self.missionRefs.keys {
-                            self.post(["type": .string("mission.subscribe"), "missionId": .string(id)])
-                        }
-                        for id in self.dashboardRefs.keys {
-                            self.post(["type": .string("dashboard.subscribe"), "projectId": .string(id)])
-                        }
-                        for id in self.terminals.keys { self.sendAttach(id, restart: false) }
-                    }
-                    if let decoded { self.handle(decoded) }
-                    // Receive serially so snapshots and following deltas cannot be reordered.
-                    self.receive(on: task)
-                case .failure:
-                    self.connected = false
-                    self.scheduleReconnect()
-                }
-            }
+    private func didConnect() {
+        connected = true
+        retry = 0
+        // The daemon sends a fresh snapshot per subscription, so reconnects resync.
+        for key in subagentListeners.keys { postSubagent("subagent.subscribe", key) }
+        for id in missionRefs.keys { post(["type": .string("mission.subscribe"), "missionId": .string(id)]) }
+        for id in dashboardRefs.keys { post(["type": .string("dashboard.subscribe"), "projectId": .string(id)]) }
+        for id in terminals.keys { sendAttach(id, restart: false) }
+        // pilotd is back: chats waiting out a reconnect delay retry now.
+        for (id, chat) in chats where chat.reader == nil {
+            chat.retry = 0
+            openChat(id)
         }
     }
 
     private func scheduleReconnect() {
-        task?.cancel()
-        task = nil
+        control?.cancel()
+        control = nil
         let delay = min(10.0, 0.5 * pow(2.0, Double(retry)))
         retry += 1
         Task {
             try? await Task.sleep(for: .seconds(delay))
-            if self.task == nil { self.open() }
+            if self.control == nil { self.open() }
         }
     }
 
