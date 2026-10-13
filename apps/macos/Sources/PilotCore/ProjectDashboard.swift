@@ -316,15 +316,20 @@ public struct DashboardTrackedSource: Codable, Identifiable, Equatable, Sendable
     public let label: String
     public let status: DashboardSourceStatus
     public let error: String?
+    /// Every active item, including those in `done`.
     public let total: Int
+    /// Latest first. Linear lists open issues only: in progress, then to do, each by priority.
     public let items: [DashboardTrackedItem]
+    /// Linear only: completed and canceled issues, latest first, shown collapsed.
+    public let done: DashboardSection<DashboardTrackedItem>?
     public let linear: LinearSourceSummary?
 
     public var id: String { source }
 
     public init(
         source: String, label: String, status: DashboardSourceStatus = .ok, error: String? = nil, total: Int = 0,
-        items: [DashboardTrackedItem] = [], linear: LinearSourceSummary? = nil
+        items: [DashboardTrackedItem] = [], done: DashboardSection<DashboardTrackedItem>? = nil,
+        linear: LinearSourceSummary? = nil
     ) {
         self.source = source
         self.label = label
@@ -332,6 +337,7 @@ public struct DashboardTrackedSource: Codable, Identifiable, Equatable, Sendable
         self.error = error
         self.total = total
         self.items = items
+        self.done = done
         self.linear = linear
     }
 }

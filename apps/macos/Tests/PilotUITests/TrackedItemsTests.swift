@@ -122,6 +122,28 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.cycleProgress(cycle) == "4 of 8 done · 2 in progress")
 }
 
+@Test func projectPageTrackingLinesReadNaturally() {
+    let cycle = LinearCycleSummary(id: "c", number: 12, startsAt: "2026-10-05T00:00:00Z", endsAt: "2026-10-19T00:00:00Z",
+                                   progress: 1, total: 2, done: 2, inProgress: 0, todo: 0)
+    let current = LinearSourceSummary(cycleStatus: .current, currentCycle: cycle)
+    let none = LinearSourceSummary(cycleStatus: .noActiveCycle, statusMessage: "Showing your open issues.")
+    #expect(TrackedItemText.allIssues(1) == "1 issue")
+    #expect(TrackedItemText.allIssues(12) == "All 12 issues")
+    #expect(TrackedItemText.linearEmpty(current, status: .ok, doneCount: 0) == "No issues assigned to you in this cycle.")
+    #expect(TrackedItemText.linearEmpty(current, status: .ok, doneCount: 2)
+        == "Everything assigned to you in this cycle is done.")
+    #expect(TrackedItemText.linearEmpty(none, status: .ok, doneCount: 0) == "No open issues assigned to you in this team.")
+    // Before the first sync or while signed out, the status line says enough.
+    #expect(TrackedItemText.linearEmpty(nil, status: .idle, doneCount: 0) == nil)
+    #expect(TrackedItemText.linearEmpty(nil, status: .signInRequired, doneCount: 0) == nil)
+    #expect(TrackedItemText.sourceTitle(.linear, teamName: "Platform") == "Linear · Platform")
+    #expect(TrackedItemText.sourceTitle(.slack, teamName: "Platform") == "Slack bug reports")
+    #expect(TrackedSheetScope.all.kinds == [.linear, .slack])
+    #expect(TrackedSheetScope.linear.kinds == [.linear])
+    #expect(TrackedSheetScope.only(.slack).id == "slack")
+}
+
+
 @Test @MainActor func startChatPrefillsTheComposerAndLocksTheProjectToTheTicket() {
     let model = AppModel(projectFolderDefaults: UserDefaults(suiteName: "tracked-\(UUID())")!)
     model.client.loadFixture(projects: [Project(id: "p", name: "Repo", path: "/repo", createdAt: 1),

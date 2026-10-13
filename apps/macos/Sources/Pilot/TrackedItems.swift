@@ -153,6 +153,41 @@ enum TrackedItemText {
         return cycle.inProgress > 0 ? "\(done) · \(cycle.inProgress) in progress" : done
     }
 
+    /// The full-list link of the project page's Current cycle section.
+    static func allIssues(_ total: Int) -> String {
+        total == 1 ? "1 issue" : "All \(total) issues"
+    }
+
+    /// "Linear · Platform" or "Slack bug reports".
+    static func sourceTitle(_ kind: TrackedKind, teamName: String?) -> String {
+        switch kind {
+        case .linear: teamName.map { "Linear · \($0)" } ?? "Linear"
+        case .slack: "Slack bug reports"
+        }
+    }
+
+    /// The quiet line of a synced source with nothing to show.
+    static func emptySource(_ source: TrackingSource, project: Project) -> String {
+        switch source.kind {
+        case .linear:
+            return source.linear?.currentCycle != nil ? "No issues assigned to you in this cycle."
+                : "No open issues assigned to you in this team."
+        case .slack:
+            let count = source.channels?.count ?? project.tracking?.slackChannels.count ?? 0
+            return count == 1 ? "No bug reports found in 1 channel." : "No bug reports found in \(count) channels."
+        }
+    }
+
+    /// The one quiet line of a Linear source with no rows to show, or nil when its status line says enough.
+    static func linearEmpty(_ linear: LinearSourceSummary?, status: DashboardSourceStatus, doneCount: Int) -> String? {
+        guard status == .ok || status == .syncing || linear != nil else { return nil }
+        if linear?.currentCycle != nil {
+            return doneCount > 0 ? "Everything assigned to you in this cycle is done."
+                : "No issues assigned to you in this cycle."
+        }
+        return "No open issues assigned to you in this team."
+    }
+
     private static func date(_ value: String) -> Date? {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -647,12 +682,81 @@ struct LinearCycleHeader: View {
     }
 }
 
+/// My Linear issues by status: In progress and To do as rows, Done collapsed behind a disclosure.
+/// Shared by the project page's Current cycle section and the tracked items sheet.
+struct LinearIssueGroups: View {
+    /// In progress and to do issues, in display order.
+    let open: [TrackedItem]
+    /// Done or canceled issues, shown when expanded.
+    let done: [TrackedItem]
+    /// Done issues in total, which can exceed the rows in `done`.
+    let doneCount: Int
+    @Binding var showDone: Bool
+    @ObservedObject var actions: TrackedItemActions
+    var now = Date()
+    /// Called after a dismiss or link, so lists can refresh.
+    var changed: () -> Void = {}
+    /// Opens the full list when Done holds more issues than rows.
+    var showAllDone: (() -> Void)? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach([TrackedItemText.LinearGroup.inProgress, .todo], id: \.self) { group in
+                let items = open.filter { TrackedItemText.linearGroup($0) == group }
+                if !items.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        SectionLabel(title: group.title, count: items.count).padding(.horizontal, 8).padding(.top, 6)
+                        rows(items)
+                    }
+                }
+            }
+            if doneCount > 0 {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button { withAnimation(Theme.Motion.quick) { showDone.toggle() } } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
+                                .rotationEffect(.degrees(showDone ? 90 : 0))
+                            Text(TrackedItemText.LinearGroup.done.title).font(.pilot(.label, weight: .medium))
+                            CountBadge(count: doneCount)
+                        }
+                        .foregroundStyle(Theme.mutedForeground)
+                        .padding(.horizontal, 8).padding(.top, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Done, \(doneCount)")
+                    .accessibilityHint(showDone ? "Hides done issues" : "Shows done issues")
+                    if showDone {
+                        rows(done)
+                        if doneCount > done.count, let showAllDone {
+                            Button("Show all \(doneCount) done", action: showAllDone)
+                                .buttonStyle(.plain)
+                                .font(.pilot(.caption))
+                                .foregroundStyle(Theme.faintForeground)
+                                .padding(.leading, 34)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func rows(_ items: [TrackedItem]) -> some View {
+        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+            if index > 0 { HairlineDivider(leading: 34) }
+            TrackedItemRow(item: item, actions: actions, now: now, changed: changed)
+        }
+    }
+}
+
 // MARK: Inbox
 
 /// Loads a bounded page of each source's items and refreshes on WebSocket invalidation, coalesced.
 @MainActor
 final class TrackedInboxModel: ObservableObject {
     let projectId: String
+    /// Sources to load. The project page opens the sheet on one source from its sections.
+    let kinds: [TrackedKind]
     @Published var dismissed = false { didSet { if dismissed != oldValue { reload() } } }
     @Published private(set) var lists: [TrackedKind: TrackedItemList] = [:]
     @Published private(set) var loaded = false
@@ -663,7 +767,10 @@ final class TrackedInboxModel: ObservableObject {
 
     static let pageSize = 100
 
-    init(projectId: String) { self.projectId = projectId }
+    init(projectId: String, kinds: [TrackedKind] = [.linear, .slack]) {
+        self.projectId = projectId
+        self.kinds = kinds
+    }
 
     func start(client: PilotClient) {
         self.client = client
@@ -689,12 +796,17 @@ final class TrackedInboxModel: ObservableObject {
             if delay > .zero { try? await Task.sleep(for: delay) }
             guard !Task.isCancelled, let self, let client = self.client else { return }
             let dismissed = self.dismissed
+            let kinds = self.kinds
             do {
-                async let linear = client.trackedItems(projectId: self.projectId, kind: .linear, dismissed: dismissed,
-                                                       limit: Self.pageSize)
-                async let slack = client.trackedItems(projectId: self.projectId, kind: .slack, dismissed: dismissed,
-                                                      limit: Self.pageSize)
-                let next: [TrackedKind: TrackedItemList] = [.linear: try await linear, .slack: try await slack]
+                async let linear = kinds.contains(.linear)
+                    ? client.trackedItems(projectId: self.projectId, kind: .linear, dismissed: dismissed,
+                                          limit: Self.pageSize) : nil
+                async let slack = kinds.contains(.slack)
+                    ? client.trackedItems(projectId: self.projectId, kind: .slack, dismissed: dismissed,
+                                          limit: Self.pageSize) : nil
+                var next: [TrackedKind: TrackedItemList] = [:]
+                next[.linear] = try await linear
+                next[.slack] = try await slack
                 guard !Task.isCancelled, dismissed == self.dismissed else { return }
                 if self.lists != next { self.lists = next }
                 self.error = nil
@@ -710,6 +822,7 @@ final class TrackedInboxModel: ObservableObject {
 /// Every tracked item of a project, one section per configured source, with its own status.
 struct TrackedInboxSheet: View {
     let project: Project
+    let kinds: [TrackedKind]
     @StateObject private var inbox: TrackedInboxModel
     @StateObject private var actions = TrackedItemActions()
     @State private var showDone = false
@@ -719,22 +832,25 @@ struct TrackedInboxSheet: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
-    init(project: Project, openSettings: @escaping () -> Void, finish: @escaping (@escaping () -> Void) -> Void) {
+    init(project: Project, kinds: [TrackedKind] = [.linear, .slack], openSettings: @escaping () -> Void,
+         finish: @escaping (@escaping () -> Void) -> Void) {
         self.project = project
+        self.kinds = kinds
         self.openSettings = openSettings
         self.finish = finish
-        _inbox = StateObject(wrappedValue: TrackedInboxModel(projectId: project.id))
+        _inbox = StateObject(wrappedValue: TrackedInboxModel(projectId: project.id, kinds: kinds))
     }
 
     private var sources: [TrackingSource] {
-        client.trackingSources.filter { $0.projectId == project.id && $0.configured }
+        client.trackingSources.filter { $0.projectId == project.id && $0.configured && kinds.contains($0.kind) }
             .sorted { $0.kind == .linear && $1.kind != .linear }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(project.name) · Tracked").font(.pilot(.title)).foregroundStyle(Theme.foreground).lineLimit(1)
+                Text("\(project.name) · \(kinds == [.linear] ? "Current cycle" : "Tracked")").font(.pilot(.title))
+                    .foregroundStyle(Theme.foreground).lineLimit(1)
                 Spacer(minLength: 8)
                 Button("Tracking Settings…") { finish(openSettings) }
                     .buttonStyle(.plain).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
@@ -797,41 +913,16 @@ struct TrackedInboxSheet: View {
                     .font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
                     .padding(.horizontal, 8).padding(.vertical, 4)
             } else if source.kind == .linear && !inbox.dismissed {
-                ForEach(TrackedItemText.LinearGroup.allCases, id: \.self) { group in
-                    let items = list.items.filter { TrackedItemText.linearGroup($0) == group }
-                    if !items.isEmpty { linearGroup(group, items: items, now: now) }
-                }
+                let done = list.items.filter { TrackedItemText.linearGroup($0) == .done }
+                LinearIssueGroups(open: list.items.filter { TrackedItemText.linearGroup($0) != .done }, done: done,
+                                  doneCount: done.count, showDone: $showDone, actions: actions, now: now,
+                                  changed: { inbox.reload() })
             } else {
                 rows(list.items, now: now)
             }
             if list.total > list.items.count {
                 Text("Showing the latest \(list.items.count) of \(list.total).")
                     .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).padding(.leading, 34)
-            }
-        }
-    }
-
-    @ViewBuilder private func linearGroup(_ group: TrackedItemText.LinearGroup, items: [TrackedItem], now: Date) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if group == .done {
-                Button { withAnimation(Theme.Motion.quick) { showDone.toggle() } } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
-                            .rotationEffect(.degrees(showDone ? 90 : 0))
-                        Text(group.title).font(.pilot(.label, weight: .medium))
-                        CountBadge(count: items.count)
-                    }
-                    .foregroundStyle(Theme.mutedForeground)
-                    .padding(.horizontal, 8).padding(.top, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("\(group.title), \(items.count)")
-                .accessibilityHint(showDone ? "Hides done issues" : "Shows done issues")
-                if showDone { rows(items, now: now) }
-            } else {
-                SectionLabel(title: group.title, count: items.count).padding(.horizontal, 8).padding(.top, 6)
-                rows(items, now: now)
             }
         }
     }
@@ -844,21 +935,11 @@ struct TrackedInboxSheet: View {
     }
 
     private func sourceTitle(_ source: TrackingSource) -> String {
-        switch source.kind {
-        case .linear: project.tracking?.linearTeamName.map { "Linear · \($0)" } ?? "Linear"
-        case .slack: "Slack bug reports"
-        }
+        TrackedItemText.sourceTitle(source.kind, teamName: project.tracking?.linearTeamName)
     }
 
     private func emptyText(_ source: TrackingSource) -> String {
         if inbox.dismissed { return "Nothing dismissed." }
-        switch source.kind {
-        case .linear:
-            return source.linear?.currentCycle != nil ? "No issues assigned to you in this cycle."
-                : "No open issues assigned to you in this team."
-        case .slack:
-            let count = source.channels?.count ?? project.tracking?.slackChannels.count ?? 0
-            return count == 1 ? "No bug reports found in 1 channel." : "No bug reports found in \(count) channels."
-        }
+        return TrackedItemText.emptySource(source, project: project)
     }
 }

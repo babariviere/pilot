@@ -841,7 +841,14 @@ reports), producing a morning summary in the app and Slack.
   (up to 100 rows); live updates on the page remain on the WebSocket, with no polling. First open shows a spinner; a lost connection or failed Retry keeps the last
   data under a banner. Until review marks reach pilotd, the app's own review state hides results the user
   has already reviewed. Scheduled lists pending scheduled items after Missions; Tracked is added with
-  that feature.
+  that feature. Current cycle follows Scheduled: with a Linear team attached, it shows my issues in the
+  team's current cycle (cycle name, dates, days left and a progress bar over my issues), open ones grouped
+  In progress / To do (at most 5, by priority) and Done collapsed, with "All N issues" opening the tracked
+  items sheet on Linear. With no active cycle it says so and lists my open issues in the team; with no team
+  attached it is one quiet line. Tracked follows with one group per other source (Slack bug reports today),
+  each with its own sync, sign-in or error status, 5 rows and "Show all N", or one line until a source is
+  configured. Rows reuse the tracked items sheet's row: Start chat and a menu on hover, or the linked chat
+  or mission's status. The dashboard's Linear group carries open issues in `items` and done ones in `done`.
 - Sidebar scope: a switcher at the top of the sidebar lists every project ("All projects", the default) or
   focuses on one project (View menu, ⌘0 for all and ⌘1…⌘9 for the first nine projects in sidebar order). The
   switcher shows working and needs-you counts per project from `dashboard.counts` (no polling), and its
@@ -1265,7 +1272,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or bind a chat/mission (each link joins a bounded history, latest shown; null clears that kind). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
 | `GET /api/tracked-items/:id/prefill` | Transient Linear ticket prefill after fresh mine/team membership verification; bounded description and quoted external JSON prompt, gitBranchName, no storage or automatic start |
 | `GET /api/tracking/linear/teams?query=...`, `GET /api/tracking/slack/channels?query=...` | Read-only settings lookups through the dedicated servers (`list_teams`; `slack_search_channels` with a query, else `slack_list_user_channels`). Returns `{status: ok/sign_in_required/error, items, more?, error?, signInCommand?}`; latest wins per source |
-| `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first, with cached blocker labels), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
+| `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first, with cached blocker labels), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status; Linear lists open issues by status and priority, done ones apart in `done`) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
 | `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |
 | `GET .../memory/wake?lines=96`, `GET .../memory/recall?regex=…&lines=96` | Bounded wake view (nodes and prompt text), streamed newest-match recall (entries, matches, truncated); no model dependency |

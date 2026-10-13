@@ -997,6 +997,91 @@ enum Snapshot {
             .formStyle(.grouped),
                      size: CGSize(width: 560, height: 640), to: directory.appending(path: "tracking-settings-search.png"))
 
+        // The project page's Current cycle and Tracked sections: live rows, no cycle, sign-in and nothing attached.
+        func row(_ item: TrackedItem) -> DashboardTrackedItem {
+            DashboardTrackedItem(id: item.id, title: item.title, url: item.url, status: item.status,
+                                 updatedAt: item.updatedAt, externalId: item.externalId, metadata: item.metadata,
+                                 sessionId: item.sessionId, missionId: item.missionId, sessionIds: item.sessionIds,
+                                 missionIds: item.missionIds)
+        }
+        let longIssue = linear(431, "Quotes with more than two hundred line items time out while exporting to PDF and "
+            + "the retry silently drops the attachments", "unstarted", "Todo", priority: 2, ago: 40 * minute)
+        let openIssues = [items[0], items[1], longIssue, items[2], items[3]]
+        let doneIssues = [items[5], items[6]]
+        let reports = Array(items[7...9])
+        func pageDashboard(_ projectId: String, tracked: [DashboardTrackedSource]) -> ProjectDashboard {
+            ProjectDashboard(
+                projectId: projectId,
+                summary: ProjectDashboardSummary(chats: 4, working: 1, needsYou: 1),
+                needsYou: DashboardSection(total: 1, items: [
+                    DashboardNeedsYouItem(kind: .failed, id: "session:f1", title: "Flaky workspace lifecycle test",
+                                          sessionId: "f1", outcome: .failed, reason: "workspace lifecycle did not settle",
+                                          at: now - 5 * minute),
+                ]),
+                working: DashboardSection(total: 1, items: [
+                    DashboardWorkingItem(sessionId: "w1", title: "ENG-412 export crash", model: "anthropic/claude-opus-5-5",
+                                         branch: "eng-412-export-crash", startedAt: now - 20 * minute),
+                ]),
+                tracked: tracked)
+        }
+        let cycleGroup = DashboardTrackedSource(
+            source: "linear", label: "Linear", status: .ok, total: 7, items: openIssues.map(row),
+            done: DashboardSection(total: 2, items: doneIssues.map(row)), linear: linearSource.linear)
+        let slackGroup = DashboardTrackedSource(source: "slack", label: "Slack", status: .error, error: slackSource.error,
+                                                total: 9, items: reports.map(row))
+        model.client.loadTrackingFixture(TrackingFixture(sources: [linearSource, slackSource], items: items))
+        model.client.loadDashboardFixture([pageDashboard("p1", tracked: [cycleGroup, slackGroup])])
+        await render(ProjectPage(projectId: "p1"), size: CGSize(width: 900, height: 1180),
+                     to: directory.appending(path: "project-tracking.png"))
+
+        // No active cycle: my open issues in the team. Slack synced with nothing found.
+        let noCycle = LinearSourceSummary(cycleStatus: .noActiveCycle,
+                                          statusMessage: "Cycles are disabled or no cycle is active. Showing your open issues.")
+        let quietSlack = TrackingSource(id: "p1:slack", projectId: "p1", kind: .slack, label: "Slack", configured: true,
+                                        status: .ok, lastPolledAt: now - minute, channels: slackSource.channels)
+        model.client.loadTrackingFixture(TrackingFixture(sources: [
+            TrackingSource(id: "p1:linear", projectId: "p1", kind: .linear, label: "Linear", configured: true,
+                           status: .ok, lastPolledAt: now - 2 * minute, linear: noCycle),
+            quietSlack,
+        ], items: items))
+        model.client.loadDashboardFixture([pageDashboard("p1", tracked: [
+            DashboardTrackedSource(source: "linear", label: "Linear", status: .ok, total: 3,
+                                   items: [items[2], items[3], items[4]].map(row),
+                                   done: DashboardSection(total: 0, items: []), linear: noCycle),
+            DashboardTrackedSource(source: "slack", label: "Slack", status: .ok, total: 0),
+        ])])
+        await render(ProjectPage(projectId: "p1"), size: CGSize(width: 900, height: 820),
+                     to: directory.appending(path: "project-tracking-no-cycle.png"))
+
+        // Sign-in required for Linear (cached rows stay), and a project with nothing attached.
+        model.client.loadTrackingFixture(TrackingFixture(sources: [
+            TrackingSource(id: "p1:linear", projectId: "p1", kind: .linear, label: "Linear", configured: true,
+                           status: .signInRequired, error: "Sign in required", signInCommand: "pi mcp login linear",
+                           linear: linearSource.linear),
+            quietSlack,
+        ], items: items))
+        let quietProject = ProjectDashboard(
+            projectId: "p2", summary: ProjectDashboardSummary(chats: 2),
+            recent: DashboardSection(total: 1, items: [
+                DashboardRecentItem(sessionId: "d9", title: "Update Ghostty config", outcome: .done,
+                                    outcomeAt: now - 26 * 60 * minute),
+            ]))
+        model.client.loadDashboardFixture([
+            pageDashboard("p1", tracked: [
+                DashboardTrackedSource(source: "linear", label: "Linear", status: .signInRequired,
+                                       error: "Sign in required", total: 7, items: [items[0], items[1], items[2]].map(row),
+                                       done: DashboardSection(total: 2, items: doneIssues.map(row)),
+                                       linear: linearSource.linear),
+                DashboardTrackedSource(source: "slack", label: "Slack", status: .ok, total: 0),
+            ]),
+            quietProject,
+        ])
+        await render(ProjectPage(projectId: "p1"), size: CGSize(width: 900, height: 640),
+                     to: directory.appending(path: "project-tracking-signin.png"))
+        await render(ProjectPage(projectId: "p2"), size: CGSize(width: 900, height: 470),
+                     to: directory.appending(path: "project-tracking-none.png"))
+
+
         // Start chat and Start mission, prefilled from a ticket.
         let prefill = TrackedItemPrefill(
             itemId: "l418", identifier: "ENG-418", title: "Retry webhook delivery after a 502 from the billing provider",

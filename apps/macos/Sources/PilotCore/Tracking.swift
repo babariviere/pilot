@@ -86,6 +86,15 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
         self.sessionIds = sessionIds ?? sessionId.map { [$0] }
         self.missionIds = missionIds ?? missionId.map { [$0] }
     }
+
+    /// A project dashboard row as a full item, so pages reuse the tracked row and its actions.
+    /// Dashboard rows are never dismissed; fields the dashboard omits read as empty.
+    public init(dashboard row: DashboardTrackedItem, projectId: String, kind: TrackedKind) {
+        self.init(id: row.id, projectId: projectId, kind: kind, externalId: row.externalId ?? row.id,
+                  title: row.title, url: row.url ?? "", status: row.status ?? "", metadata: row.metadata ?? [:],
+                  sessionId: row.sessionId, missionId: row.missionId, sessionIds: row.sessionIds,
+                  missionIds: row.missionIds, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
+    }
 }
 public struct TrackedItemList: Codable, Equatable, Sendable {
     public let items: [TrackedItem]

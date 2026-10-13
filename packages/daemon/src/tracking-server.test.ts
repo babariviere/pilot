@@ -203,7 +203,10 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	assert.equal((await poll.json()).linear.currentCycle.progress, 0.5);
 	const dashboard = await (await fetch(`${root}/projects/${project.id}/dashboard`)).json();
 	assert.equal(dashboard.tracked[0].linear.currentCycle.id, "cycle-1");
-	assert.equal(dashboard.tracked[0].items.length, 2);
+	// Open issues lead; done ones are a separate, collapsed group.
+	assert.equal(dashboard.tracked[0].total, 2);
+	assert.equal(dashboard.tracked[0].items.length, 1);
+	assert.equal(dashboard.tracked[0].done.total, 1);
 	const page = await (await fetch(`${root}/tracked-items?projectId=${project.id}&kind=linear`)).json();
 	const item = page.items.find((item: { externalId: string }) => item.externalId === "issue-1");
 	const prefill = await fetch(`${root}/tracked-items/${item.id}/prefill`);
