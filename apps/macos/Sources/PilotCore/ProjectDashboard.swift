@@ -354,6 +354,8 @@ public struct ProjectDashboard: Codable, Equatable, Sendable {
     public let missions: DashboardSection<DashboardMission>
     public let scheduled: DashboardSection<DashboardScheduledItem>
     public let tracked: [DashboardTrackedSource]
+    /// Optional provider extension point. The app can render this after Missions without another fetch.
+    public let memory: ProjectMemorySummary?
     public let recent: DashboardSection<DashboardRecentItem>
 
     public init(
@@ -364,6 +366,7 @@ public struct ProjectDashboard: Codable, Equatable, Sendable {
         missions: DashboardSection<DashboardMission> = .init(total: 0, items: []),
         scheduled: DashboardSection<DashboardScheduledItem> = .init(total: 0, items: []),
         tracked: [DashboardTrackedSource] = [],
+        memory: ProjectMemorySummary? = nil,
         recent: DashboardSection<DashboardRecentItem> = .init(total: 0, items: [])
     ) {
         self.projectId = projectId
@@ -374,6 +377,7 @@ public struct ProjectDashboard: Codable, Equatable, Sendable {
         self.missions = missions
         self.scheduled = scheduled
         self.tracked = tracked
+        self.memory = memory
         self.recent = recent
     }
 }

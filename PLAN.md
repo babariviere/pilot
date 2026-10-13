@@ -441,6 +441,44 @@ The bare word "mission" is allowed so work on mission features themselves stays 
    confirmation, task-level Linear issues closed on merge, importing an epic's issues as tasks, and
    posting mission updates to Linear. Validation step per milestone.
 
+### 5.8 Project memory
+
+Daemon foundation implemented. Each project has an OptMem-style append-only log and a rebuildable
+aligned power-of-two summary tree under `PILOT_HOME/memory/<project-id>`. Notes are one line, at most
+280 UTF-8 bytes, with a stable UUID, device UUID, timestamp and origin chat. Only explicit agent notes
+write memory. No automatic outcome or handoff notes, and no multi-device sync yet.
+
+Records are 2048-byte checksummed JSON slots (including padding for worst-case JSON escaping), so log
+entries and summary nodes use direct positional reads without indexes. Appends and truncations fsync.
+Startup repairs partial or checksum-invalid crash tails; cache parents whose children were lost are
+invalidated. A per-project SQLite exclusive transaction is the advisory ownership lock, released by
+the OS even on process death. All storage, repair and fsync work runs in a dedicated worker thread;
+the daemon's RPC queue is capped at 64. The log is the only memory source of truth.
+
+Wake uses OptMem's age-weighted cover (default 96 memory lines, maximum 256). Missing summaries fall
+back to available finer nodes and raw entries within the budget; an omitted older prefix is explicit
+in both `omittedBefore` and the rendered text. Wake and zoom perform O(output lines) disk seeks, not
+log scans. Zoom opens an inclusive aligned `lo-hi` block into its two halves, reporting missing
+summaries as pending. Recall streams a snapshot in 64-record batches, retains only newest matches
+(default 96, maximum 256, also capped at 20 KB), and reports the full match count. Regex matching runs
+in separate workers, at most two concurrently, terminated after five seconds so pathological searches
+cannot stall writes, wake, or the daemon event loop.
+
+The background compactor uses existing model plumbing with authenticated `openai-codex/gpt-6-luna`,
+thinking off and no tools. It builds dense level prefixes smallest first, from raw notes for blocks
+up to 16 entries and from the two child summaries above that. One call per project, at most two
+globally; notes coalesce work, failures back off from 30 seconds to 30 minutes, calls have a 60-second
+deadline, and shutdown cancels work. Notes and wake never await compaction. Forget truncates a
+summary level's suffix and every ancestor suffix, ancestors first, leaving the log unchanged;
+generation checks discard compactions begun before forget. Background rebuilding resumes on restart.
+Removing a project cancels its background work and releases its file descriptors and advisory lock;
+the durable memory log is retained.
+
+Protocol and PilotCore mirror the memory APIs and optional `ProjectDashboard.memory` provider (count,
+five recent entries, pending/running/backoff/error status). Changes flow through existing dashboard
+subscriptions, without app polling. Kernel tools/wake injection and the project-page browser remain
+separate consumers of this foundation.
+
 ## 6. Integrations
 
 ### 6.1 Manual sessions (M1)
@@ -943,6 +981,9 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/sources`, `POST /api/sources/:id/poll` | Trigger source status and manual poll |
 | `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first once readiness exists), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
+| `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |
+| `GET .../memory/wake?lines=96`, `GET .../memory/recall?regex=…&lines=96` | Bounded wake view (nodes and prompt text), streamed newest-match recall (entries, matches, truncated); no model dependency |
+| `GET .../memory/zoom?lo=0&hi=31`, `POST .../memory/forget` (`{ lo, hi }`) | Inclusive aligned power-of-two range. Zoom returns two children; forget drops cache suffixes and ancestors, returning `{ ok: true }` |
 | `POST /api/reviews` (`{ marks: [{ sessionId, outcomeAt }] }`) | Daemon-side record of reviewed chat results (`reviews.json`, marks only move forward, at most 1000 per request), so "unread" in the dashboard and counts matches what the user has seen. Clients forward their reviews, and may backfill their local marks once |
 | `GET /api/audit` | External effects log |
 | WS `questions` | Push new questions to clients |

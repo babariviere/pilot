@@ -14,6 +14,7 @@ import {
 	type Mission,
 	type ProjectDashboard,
 	type ProjectDashboardCounts,
+	type ProjectMemorySummary,
 	type SessionPullRequest,
 	type SessionSummary,
 } from "@pilot/protocol";
@@ -22,13 +23,15 @@ import type { ProjectStore } from "./projects.ts";
 import type { ReviewStore } from "./reviews.ts";
 import { NotFound } from "./errors.ts";
 
-/** Data other features contribute. Both are optional: until they exist, their sections are empty. */
+/** Optional data providers. Until registered, their sections are empty or absent. */
 export interface DashboardProviders {
 	/** Pending and failed scheduled items of a project. Failed ones are listed under Needs you. */
 	scheduled?: (projectId: string) => DashboardScheduledItem[];
 	/** One group per configured tracking source of a project. */
 	tracked?: (projectId: string) => DashboardTrackedSource[];
-	/** Subscribe to changes of either, so the dashboard updates without polling. */
+	/** Cached count, recent notes and background compaction health. No disk I/O while building a dashboard. */
+	memory?: (projectId: string) => ProjectMemorySummary;
+	/** Subscribe to provider changes so the dashboard updates without polling. */
 	onChange?: (listener: () => void) => () => void;
 }
 
@@ -43,6 +46,7 @@ export interface DashboardInput {
 	isUnread: (sessionId: string, outcomeAt: number) => boolean;
 	scheduled?: DashboardScheduledItem[];
 	tracked?: DashboardTrackedSource[];
+	memory?: ProjectMemorySummary;
 }
 
 const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, unread: 3 } as const;
@@ -241,6 +245,7 @@ export function buildProjectDashboard(input: DashboardInput): ProjectDashboard {
 			items: source.items.slice(0, DASHBOARD_SECTION_LIMIT),
 		})),
 		recent: section(recent),
+		...(input.memory ? { memory: input.memory } : {}),
 	};
 }
 
@@ -334,6 +339,7 @@ export class ProjectDashboardService {
 			isUnread: (id, at) => reviews.isUnread(id, at),
 			scheduled: providers?.scheduled?.(projectId),
 			tracked: providers?.tracked?.(projectId),
+			memory: providers?.memory?.(projectId),
 		});
 	}
 }

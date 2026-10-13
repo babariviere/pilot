@@ -16,6 +16,8 @@ import type {
 	MissionEventWrite,
 	MissionResourceWrite,
 	MissionTaskWrite,
+	MemoryNoteRequest,
+	MemoryRange,
 	ProjectRequest,
 	ReviewRequest,
 	RewindRequest,
@@ -45,6 +47,7 @@ import { type DashboardProviders, ProjectDashboardService } from "./project-dash
 import { ReviewStore } from "./reviews.ts";
 import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import type { ProjectMemoryService } from "./project-memory.ts";
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
@@ -177,6 +180,7 @@ export function createDaemonServer(
 	terminals: TerminalManager,
 	missions?: { service: MissionService; store: MissionStore },
 	dashboardProviders?: DashboardProviders,
+	memory?: ProjectMemoryService,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -185,7 +189,16 @@ export function createDaemonServer(
 		projects,
 		reviews,
 		...(missions ? { missions: missions.store } : {}),
-		...(dashboardProviders ? { providers: dashboardProviders } : {}),
+		providers: {
+			...dashboardProviders,
+			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
+			onChange(listener) {
+				const stops = [dashboardProviders?.onChange?.(listener), memory?.onChange(listener)];
+				return () => {
+					for (const stop of stops) stop?.();
+				};
+			},
+		},
 	});
 	const repositoryChanges = new RepositoryChanges();
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
@@ -194,6 +207,39 @@ export function createDaemonServer(
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
+		if (parts[1] === "projects" && parts[3] === "memory" && parts.length <= 5) {
+			const id = parts[2]!;
+			projects.require(id);
+			if (!memory) throw new ServiceUnavailable("Project memory is unavailable");
+			const action = parts[4];
+			const lines = url.searchParams.has("lines") ? Number(url.searchParams.get("lines")) : 96;
+			if (!action && req.method === "GET") return json(res, 200, await memory.load(id));
+			if (action === "note" && req.method === "POST") {
+				const body = await readJson<MemoryNoteRequest>(req);
+				const session = typeof body?.sessionId === "string" ? sessions.get(body.sessionId) : undefined;
+				if (!session || session.projectId !== id)
+					throw new HttpError(400, "Origin chat must belong to this project");
+				return json(res, 201, await memory.note(id, body.text, body.sessionId));
+			}
+			if (action === "wake" && req.method === "GET") return json(res, 200, await memory.wake(id, lines));
+			if (action === "recall" && req.method === "GET")
+				return json(res, 200, await memory.recall(id, url.searchParams.get("regex") ?? "", lines));
+			if (action === "zoom" && req.method === "GET")
+				return json(
+					res,
+					200,
+					await memory.zoom(
+						id,
+						Number(url.searchParams.get("lo") ?? NaN),
+						Number(url.searchParams.get("hi") ?? NaN),
+					),
+				);
+			if (action === "forget" && req.method === "POST") {
+				const body = await readJson<MemoryRange>(req);
+				return json(res, 200, await memory.forget(id, body?.lo, body?.hi));
+			}
+			throw new HttpError(404, "Unknown memory operation");
+		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {

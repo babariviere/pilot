@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -15,6 +16,7 @@ import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { ProjectMemoryService } from "./project-memory.ts";
 
 async function until<T>(check: () => T | undefined | false): Promise<T> {
 	const deadline = Date.now() + 3_000;
@@ -63,6 +65,7 @@ async function fixture(t: TestContext) {
 		return value;
 	};
 	const providerListeners = new Set<() => void>();
+	const memory = new ProjectMemoryService(join(home, "data"));
 	let pending = [] as Array<{ id: string; title: string; kind: "chat"; trigger: "on_back"; state: "pending" }>;
 	const server = createDaemonServer(
 		{ home: join(home, "data"), host: "127.0.0.1", port: 0 },
@@ -78,6 +81,7 @@ async function fixture(t: TestContext) {
 				return () => providerListeners.delete(listener);
 			},
 		},
+		memory,
 	);
 	server.listen(0, "127.0.0.1");
 	await once(server, "listening");
@@ -88,6 +92,7 @@ async function fixture(t: TestContext) {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 		store.close();
+		await memory.stop();
 		await rm(home, { recursive: true, force: true });
 	});
 	const api = (path: string, init?: RequestInit) =>
@@ -104,7 +109,9 @@ async function fixture(t: TestContext) {
 		return { ws, messages };
 	};
 	return {
+		home,
 		project,
+		memory,
 		store,
 		put,
 		api,
@@ -188,6 +195,14 @@ test("POST /api/reviews moves a result from needs you to recent and rejects bad 
 		(await post({ marks: Array.from({ length: 1001 }, () => ({ sessionId: "done", outcomeAt: 1 })) })).status,
 		400,
 	);
+	// Review persistence is asynchronous. Wait for its final snapshot before deleting this fixture's directory.
+	await until(() => {
+		try {
+			return JSON.parse(readFileSync(join(f.home, "data", "reviews.json"), "utf8")).done === 20;
+		} catch {
+			return false;
+		}
+	});
 });
 
 test("WebSocket pushes counts on connect and dashboards on change, without duplicates", async (t) => {
@@ -238,4 +253,39 @@ test("WebSocket pushes counts on connect and dashboards on change, without dupli
 
 	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: "missing" }));
 	await until(() => messages.some((m) => m.type === "error" && /Unknown project/.test(m.message)));
+});
+
+test("memory API validates project/origin and pushes its dashboard provider without polling", async (t) => {
+	const f = await fixture(t);
+	f.put({ id: "origin" });
+	f.put({ id: "elsewhere", projectId: "other" });
+	const path = `/projects/${f.project.id}/memory`;
+	assert.equal((await f.api("/projects/unknown/memory/wake")).status, 404);
+	assert.equal(
+		(await f.api(`${path}/note`, { method: "POST", body: JSON.stringify({ text: "fact", sessionId: "elsewhere" }) }))
+			.status,
+		400,
+	);
+	const { ws, messages } = await f.connect();
+	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: f.project.id }));
+	await until(() => messages.some((m) => m.type === "dashboard"));
+	const response = await f.api(`${path}/note`, {
+		method: "POST",
+		body: JSON.stringify({ text: "lasting fact", sessionId: "origin" }),
+	});
+	assert.equal(response.status, 201);
+	await until(() => messages.some((m) => m.type === "dashboard" && m.dashboard.memory?.count === 1));
+	const summary = await (await f.api(path)).json();
+	assert.equal(summary.recent[0].text, "lasting fact");
+	const wake = await (await f.api(`${path}/wake`)).json();
+	assert.match(wake.text, /#0 .*lasting fact/);
+	assert.equal((await (await f.api(`${path}/recall?regex=lasting`)).json()).matches, 1);
+	for (const suffix of ["/wake?lines=0", "/zoom?lo=0&hi=2", "/zoom", "/recall?regex=%5B"])
+		assert.equal((await f.api(path + suffix)).status, 400);
+	await f.api(`${path}/note`, { method: "POST", body: JSON.stringify({ text: "second", sessionId: "origin" }) });
+	assert.equal((await (await f.api(`${path}/zoom?lo=0&hi=1`)).json())[1].entry.index, 1);
+	assert.equal(
+		(await f.api(`${path}/forget`, { method: "POST", body: JSON.stringify({ lo: 0, hi: 1 }) })).status,
+		400,
+	);
 });
