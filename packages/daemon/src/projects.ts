@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
-import type { Project, ProjectRequest, RemoteBranchList } from "@pilot/protocol";
+import type { Project, ProjectRequest, ProjectTrackingConfig, RemoteBranchList } from "@pilot/protocol";
 import { NotFound } from "./errors.ts";
 import { listRemoteBranches } from "./workspaces.ts";
 
@@ -68,6 +68,7 @@ export class ProjectStore {
 
 	async create(request: ProjectRequest): Promise<Project> {
 		validatePullRequestSetting(request);
+		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		if (typeof request.path !== "string" || !request.path.trim()) throw new Error("path is required");
 		const path = await requireDirectory(request.path);
 		if (this.projects.some((project) => project.path === path)) throw new Error(`A project already uses ${path}`);
@@ -76,6 +77,7 @@ export class ProjectStore {
 			name: request.name?.trim() || basename(path),
 			path,
 			createdAt: Date.now(),
+			...(tracking ? { tracking } : {}),
 			...(request.model?.trim() ? { model: request.model.trim() } : {}),
 			...(request.workspace === "direct" ? { workspace: "direct" } : {}),
 			...(request.requirePullRequest !== undefined ? { requirePullRequest: request.requirePullRequest } : {}),
@@ -87,8 +89,10 @@ export class ProjectStore {
 
 	async update(id: string, request: Partial<ProjectRequest>): Promise<Project> {
 		validatePullRequestSetting(request);
+		const tracking = request.tracking === undefined ? undefined : validateTrackingConfig(request.tracking);
 		const project = this.require(id);
 		const next: Project = { ...project };
+		if (tracking) next.tracking = tracking;
 		if (request.name !== undefined) {
 			if (!request.name.trim()) throw new Error("name cannot be empty");
 			next.name = request.name.trim();
@@ -133,4 +137,62 @@ export class ProjectStore {
 function validatePullRequestSetting(request: Partial<ProjectRequest>): void {
 	if (request.requirePullRequest !== undefined && typeof request.requirePullRequest !== "boolean")
 		throw new Error("requirePullRequest must be a boolean");
+}
+
+/** Validate before mutation. Tracking config is replaced, not recursively merged. */
+export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tracking must be an object");
+	const config = value as ProjectTrackingConfig;
+	if (
+		!Array.isArray(config.slackChannels) ||
+		config.slackChannels.length > 100 ||
+		config.slackChannels.some((channel) => typeof channel !== "string" || !channel.trim() || channel.length > 200)
+	)
+		throw new Error("slackChannels must contain at most 100 non-empty channel names or IDs");
+	if (config.linearTeam !== undefined && (typeof config.linearTeam !== "string" || config.linearTeam.length > 200))
+		throw new Error("linearTeam must be a string of at most 200 characters");
+	const result: ProjectTrackingConfig = {
+		slackChannels: [...new Set(config.slackChannels.map((channel) => channel.trim()))],
+		...(config.linearTeam?.trim() ? { linearTeam: config.linearTeam.trim() } : {}),
+	};
+	if (config.mcp !== undefined) {
+		if (!config.mcp || typeof config.mcp !== "object" || Array.isArray(config.mcp))
+			throw new Error("mcp must be an object");
+		result.mcp = {};
+		for (const [kind, binding] of Object.entries(config.mcp)) {
+			if (kind !== "linear" && kind !== "slack") throw new Error("Unknown tracking source");
+			if (
+				!binding ||
+				typeof binding !== "object" ||
+				typeof binding.server !== "string" ||
+				!/^[a-zA-Z0-9_-]{1,100}$/.test(binding.server) ||
+				!binding.tools ||
+				typeof binding.tools !== "object" ||
+				Array.isArray(binding.tools)
+			)
+				throw new Error("Invalid MCP source binding");
+			const names = Object.entries(binding.tools);
+			if (
+				names.length > 20 ||
+				names.some(
+					([key, name]) =>
+						!/^[a-zA-Z0-9_]{1,100}$/.test(key) || typeof name !== "string" || !name.trim() || name.length > 200,
+				)
+			)
+				throw new Error("Invalid MCP tool names");
+			if (
+				binding.dispatchTool !== undefined &&
+				(typeof binding.dispatchTool !== "string" ||
+					!binding.dispatchTool.trim() ||
+					binding.dispatchTool.length > 200)
+			)
+				throw new Error("Invalid MCP dispatcher");
+			result.mcp[kind] = {
+				server: binding.server,
+				tools: Object.fromEntries(names),
+				...(binding.dispatchTool ? { dispatchTool: binding.dispatchTool } : {}),
+			};
+		}
+	}
+	return result;
 }

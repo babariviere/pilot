@@ -1,6 +1,7 @@
 /** Wire protocol between pilotd and its clients. Types only, safe to import from the browser. */
 import type { UserMessage } from "@earendil-works/pi-ai";
 import type { AgentEvent as DurableAgentEvent, EntryRecord } from "@earendil-works/pi-durable";
+import type { ProjectTrackingConfig, TrackingSource } from "./tracking.ts";
 
 export type { AssistantMessage, Message, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 export type {
@@ -268,6 +269,7 @@ export interface Project {
 	workspace?: WorkspaceMode;
 	/** Require branch/PR delivery. Defaults to true; false permits direct default-branch pushes. */
 	requirePullRequest?: boolean;
+	tracking?: ProjectTrackingConfig;
 	createdAt: number;
 }
 
@@ -330,6 +332,7 @@ export interface ProjectRequest {
 	model?: string;
 	workspace?: WorkspaceMode;
 	requirePullRequest?: boolean;
+	tracking?: ProjectTrackingConfig;
 }
 
 /** Missions (PLAN.md §5.7): a goal spanning several chats of one project. State is daemon-owned. */
@@ -732,7 +735,7 @@ export interface DashboardScheduledItem {
 }
 
 /** Health of one tracked-item source. */
-export type DashboardSourceStatus = "ok" | "syncing" | "sign_in_required" | "error";
+export type DashboardSourceStatus = import("./tracking.ts").SourceStatus;
 
 export interface DashboardTrackedItem {
 	id: string;
@@ -996,6 +999,9 @@ export type ServerMessage =
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| { type: "session"; session: SessionSummary }
 	| { type: "projects"; projects: Project[] }
+	| { type: "sources"; sources: TrackingSource[] }
+	/** Invalidation only; clients fetch a bounded list. Dashboards use their existing subscription. */
+	| { type: "tracked.changed"; projectId: string }
 	| { type: "artifacts"; sessionId: string; artifacts: ArtifactSummary[] }
 	/** All missions, including done and archived ones, so clients can filter locally. */
 	| { type: "missions"; missions: Mission[] }
@@ -1016,3 +1022,4 @@ export type ServerMessage =
 export const DEFAULT_PORT = 4319;
 export type * from "./memory.ts";
 export type * from "./schedules.ts";
+export type * from "./tracking.ts";

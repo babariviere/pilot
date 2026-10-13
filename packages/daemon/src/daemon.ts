@@ -12,6 +12,9 @@ import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
+import { SourceRegistry } from "./sources.ts";
+import { PiSourceMcpClient } from "./source-mcp.ts";
 
 const config = loadConfig();
 // Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
@@ -19,6 +22,9 @@ const watchdog = new EventLoopWatchdog();
 watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();
+const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
+await trackedItems.load(projects.list().map((project) => project.id));
+const tracking = new SourceRegistry(projects, trackedItems, new PiSourceMcpClient(config.agentDir));
 const models = new ModelCatalog(config.agentDir);
 const memory = new ProjectMemoryService(config.home, (prompt, signal) => models.summarizeMemory(prompt, signal));
 // Load metadata and resume pending compaction, but a damaged/busy memory store cannot stop pilotd.
@@ -83,6 +89,7 @@ const server = createDaemonServer(
 	undefined,
 	memory,
 	schedules,
+	tracking,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -98,6 +105,8 @@ async function stop(): Promise<void> {
 	await schedules.stop();
 	await scheduleStore.close();
 	stopMemoryProjects();
+	await tracking.stop();
+	await trackedItems.close();
 	await memory.stop();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();

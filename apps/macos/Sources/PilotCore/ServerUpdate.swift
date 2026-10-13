@@ -4,6 +4,8 @@ import Foundation
 public enum ServerUpdate: Sendable {
     case schedules([ScheduledItem])
     case projects([Project])
+    case sources([TrackingSource])
+    case trackedChanged(projectId: String)
     case sessions([SessionSummary])
     case session(SessionSummary)
     case events(sessionId: String, events: [JSONValue])
@@ -28,6 +30,12 @@ public enum ServerUpdate: Sendable {
         case "schedules":
             guard let list = json["schedules"] else { return nil }
             return .schedules(try list.decode([ScheduledItem].self))
+        case "sources":
+            guard let list = json["sources"] else { return nil }
+            return .sources(try list.decode([TrackingSource].self))
+        case "tracked.changed":
+            guard let id = json["projectId"]?.string else { return nil }
+            return .trackedChanged(projectId: id)
         case "projects":
             guard let list = json["projects"] else { return nil }
             return .projects(try list.decode([Project].self).sorted {

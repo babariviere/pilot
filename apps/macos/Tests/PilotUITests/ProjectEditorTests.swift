@@ -31,3 +31,19 @@ import Testing
     #expect(editor.request.requirePullRequest == true)
     #expect(editor.request.workspace == "clone")
 }
+
+@Test @MainActor func projectEditorRoundTripsTrackingAndKeepsMcpOverrides() {
+    let editor = ProjectEditor()
+    let binding = SourceMcpConfig(server: "custom", tools: ["issues": "list"], dispatchTool: "CALL_TOOL")
+    editor.load(Project(id: "p", name: "Repo", path: "/repo",
+                        tracking: .init(slackChannels: ["C1"], linearTeam: "ENG", mcp: ["linear": binding]), createdAt: 1))
+    #expect(editor.slackChannels == "C1")
+    editor.slackChannels = " C1, C2 , , bugs "
+    editor.linearTeam = " "
+    #expect(editor.request.tracking?.slackChannels == ["C1", "C2", "bugs"])
+    #expect(editor.request.tracking?.linearTeam == "")
+    #expect(editor.request.tracking?.mcp?["linear"] == binding)
+    editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))
+    #expect(editor.request.tracking?.slackChannels == [])
+    #expect(editor.request.tracking?.mcp == nil)
+}

@@ -51,6 +51,8 @@ import { NotFound, type SessionManager } from "./sessions.ts";
 import type { TerminalManager } from "./terminals.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import type { ScheduleService } from "./schedules.ts";
+import type { SourceRegistry } from "./sources.ts";
+import { validatePatch } from "./tracked-items.ts";
 
 const MAX_BODY = 1024 * 1024;
 const HISTORY_PAGE_DEFAULT = 100;
@@ -189,6 +191,7 @@ export function createDaemonServer(
 	dashboardProviders?: DashboardProviders,
 	memory?: ProjectMemoryService,
 	schedules?: ScheduleService,
+	tracking?: SourceRegistry,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -199,6 +202,7 @@ export function createDaemonServer(
 		...(missions ? { missions: missions.store } : {}),
 		providers: {
 			...dashboardProviders,
+			...(tracking ? { tracked: (id: string) => tracking.dashboard(id) } : {}),
 			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
 			...(schedules ? { scheduled: (id: string) => schedules.dashboard(id) } : {}),
 			onChange(listener) {
@@ -206,6 +210,7 @@ export function createDaemonServer(
 					dashboardProviders?.onChange?.(listener),
 					memory?.onChange(listener),
 					schedules?.onChange(listener),
+					tracking?.onChange(listener),
 				];
 				return () => {
 					for (const stop of stops) stop?.();
@@ -234,6 +239,50 @@ export function createDaemonServer(
 				return json(res, 200, { ok: true });
 			}
 			throw new HttpError(404, "Unknown schedule operation");
+		}
+		if (parts[1] === "sources" || parts[1] === "tracked-items") {
+			if (!tracking) throw new ServiceUnavailable("Tracking is unavailable");
+			if (parts[1] === "sources") {
+				if (parts.length === 2 && req.method === "GET")
+					return json(res, 200, tracking.list(url.searchParams.get("projectId") ?? undefined));
+				if (parts.length === 4 && parts[3] === "poll" && req.method === "POST")
+					return json(res, 200, await tracking.poll(decodeURIComponent(parts[2]!)));
+			} else {
+				if (parts.length === 2 && req.method === "GET") {
+					const projectId = url.searchParams.get("projectId");
+					if (!projectId) throw new HttpError(400, "projectId is required");
+					projects.require(projectId);
+					const kind = url.searchParams.get("kind") ?? undefined;
+					if (kind !== undefined && kind !== "linear" && kind !== "slack")
+						throw new HttpError(400, "Unknown tracking kind");
+					const dismissed = url.searchParams.get("dismissed");
+					if (dismissed !== null && dismissed !== "true" && dismissed !== "false")
+						throw new HttpError(400, "Invalid dismissed filter");
+					return json(
+						res,
+						200,
+						await tracking.items.list({
+							projectId,
+							kind,
+							dismissed: dismissed === "true",
+							limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 100,
+							offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : 0,
+						}),
+					);
+				}
+				if (parts.length === 3 && req.method === "PATCH") {
+					const item = await tracking.items.require(parts[2]!);
+					projects.require(item.projectId);
+					const patch: unknown = await readJson(req);
+					validatePatch(patch);
+					if (patch.sessionId && sessions.get(patch.sessionId)?.projectId !== item.projectId)
+						throw new HttpError(400, "Chat must belong to this project");
+					if (patch.missionId && missions?.store.get(patch.missionId)?.projectId !== item.projectId)
+						throw new HttpError(400, "Mission must belong to this project");
+					return json(res, 200, await tracking.items.patch(item.id, patch));
+				}
+			}
+			throw new HttpError(404, "Unknown tracking operation");
 		}
 		if (missions && (await missionRoute(missions, parts, url, req, res))) return;
 		if (parts[1] === "projects" && parts[3] === "memory" && parts.length <= 5) {
@@ -598,6 +647,25 @@ export function createDaemonServer(
 		stopSchedulesWatch?.();
 		clearTimeout(schedulesTimer);
 	});
+	// Coalesce source status changes and send list invalidations, never unbounded external text.
+	let sourceTimer: NodeJS.Timeout | undefined;
+	const changedTrackingProjects = new Set<string>();
+	const stopTrackingWatch = tracking?.onChange((change) => {
+		if (clients.size === 0) return;
+		if (change.type === "items") changedTrackingProjects.add(change.projectId);
+		if (sourceTimer) return;
+		sourceTimer = setTimeout(() => {
+			sourceTimer = undefined;
+			broadcast({ type: "sources", sources: tracking.list() });
+			for (const projectId of changedTrackingProjects) broadcast({ type: "tracked.changed", projectId });
+			changedTrackingProjects.clear();
+		}, DASHBOARD_DEBOUNCE_MS);
+		sourceTimer.unref();
+	});
+	server.on("close", () => {
+		stopTrackingWatch?.();
+		clearTimeout(sourceTimer);
+	});
 	projects.onChange((list) => {
 		broadcast({ type: "projects", projects: list });
 	});
@@ -711,6 +779,7 @@ export function createDaemonServer(
 				})
 				.catch((error) => send(ws, { type: "error", message: String(error) }));
 		}
+		if (tracking) send(ws, { type: "sources", sources: tracking.list() });
 		send(ws, { type: "sessions", sessions: sessions.list({ archived: "all" }) });
 		if (missions) send(ws, { type: "missions", missions: missions.store.list() });
 		sendCounts(ws);
