@@ -915,6 +915,18 @@ export class SharedWorkspaceStore {
 	private async inspect(cwd: string, jj = true): Promise<Record<string, string>> {
 		if (jj && (await this.jj(["--ignore-working-copy", "sparse", "list"], cwd)) !== ".")
 			throw new Error("Automatic cleanup requires a full (non-sparse) jj workspace");
+		// Child snapshots avoid importing Git refs, so newly added gitlinks may not be in jj's tree yet.
+		const gitFields = (await this.runner("git", ["ls-files", "--stage", "-z"], cwd))
+			.split("\0")
+			.filter(Boolean)
+			.flatMap((line) => [
+				line.slice(line.indexOf("\t") + 1),
+				line.startsWith("160000 ") ? "git-submodule" : "file",
+			]);
+		for (let index = 0; index + 1 < gitFields.length; index += 2) {
+			if (gitFields[index + 1] === "git-submodule")
+				throw new Error(`Submodule prevents automatic cleanup: ${gitFields[index]}`);
+		}
 		const fields = jj
 			? (
 					await this.jj(
@@ -922,13 +934,7 @@ export class SharedWorkspaceStore {
 						cwd,
 					)
 				).split("\0")
-			: (await this.runner("git", ["ls-files", "--stage", "-z"], cwd))
-					.split("\0")
-					.filter(Boolean)
-					.flatMap((line) => [
-						line.slice(line.indexOf("\t") + 1),
-						line.startsWith("160000 ") ? "git-submodule" : "file",
-					]);
+			: gitFields;
 		const tracked = new Set<string>();
 		for (let index = 0; index + 1 < fields.length; index += 2) {
 			if (fields[index + 1] === "git-submodule")
