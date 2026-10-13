@@ -112,6 +112,7 @@ export interface SessionMissionBridge {
 	pullRequestsDiscovered?(sessionId: string, urls: string[]): void;
 	linkedPullRequests?(): Iterable<LinkedPullRequest>;
 	pullRequestUpdated?(pr: SessionPullRequest): void;
+	workspaceBehind?(sessionId: string, text: string): void;
 }
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
@@ -204,6 +205,12 @@ interface SessionMeta extends OutcomeMeta {
 	projectId?: string;
 	/** Private clone the session works in (its cwd), and where it came from. */
 	workspace?: WorkspaceContext;
+	workspaceCheckedAt?: number;
+	workspaceUpdatedAt?: number;
+	workspaceRefreshDue?: boolean;
+	workspaceBehind?: string;
+	coordinatorBookmarkDetached?: boolean;
+	coordinatorDetachedBookmark?: string;
 	/** Persisted before removal. Never discard this record until restoration has succeeded. */
 	workspaceRecovery?: WorkspaceRecovery & { phase: "removing" | "reclaimed" | "restoring" };
 	workspaceReclaimedAt?: number;
@@ -676,6 +683,7 @@ export class SessionManager {
 	private readonly workerOptions: WorkerOptions;
 	private readonly workspaceRetentionMs: number;
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
+	private readonly workspaceRefreshes = new Map<string, Promise<void>>();
 	private hasWorkspaceProcess: (id: string) => boolean = () => false;
 	/** Queued opposite archive transitions must not release a workspace's capability lock. */
 	private readonly workspaceMaintenance = new Map<string, number>();
@@ -783,6 +791,9 @@ export class SessionManager {
 			}
 		}
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
+		for (const meta of this.metas.values())
+			if (this.missions && (this.isActiveMissionCoordinator(meta.id) || meta.coordinatorBookmarkDetached))
+				this.missionChanged(meta.id);
 		for (const meta of this.metas.values()) if (meta.titlePending) this.generateTitle(meta);
 		for (const meta of this.metas.values())
 			if (
@@ -825,6 +836,7 @@ export class SessionManager {
 			!this.sending.has(id) &&
 			!this.changingModels.has(id) &&
 			!this.archiveTransitions.has(id) &&
+			!this.workspaceRefreshes.has(id) &&
 			!meta.pending?.length &&
 			!meta.initializing &&
 			!meta.working &&
@@ -1139,6 +1151,7 @@ export class SessionManager {
 			this.sending.has(meta.id) ||
 			this.changingModels.has(meta.id) ||
 			this.watchers.get(meta.id)?.size ||
+			this.workspaceRefreshes.has(meta.id) ||
 			this.hasWorkspaceProcess(meta.id) ||
 			(worker && (worker.state === "working" || worker.state === "starting" || (worker.busy ?? true)))
 		)
@@ -1213,6 +1226,8 @@ export class SessionManager {
 
 	setMissionBridge(bridge: SessionMissionBridge): void {
 		this.missions = bridge;
+		for (const meta of this.metas.values())
+			if (this.isActiveMissionCoordinator(meta.id) || meta.coordinatorBookmarkDetached) this.missionChanged(meta.id);
 		this.refreshMissionPullRequests();
 	}
 
@@ -1231,6 +1246,16 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id)): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
+		if (context?.coordinator === "self" && !meta.coordinatorBookmarkDetached) {
+			meta.coordinatorBookmarkDetached = true;
+			meta.coordinatorDetachedBookmark = meta.workspace?.branch;
+			if (meta.workspace) delete meta.workspace.branch;
+			void this.save(meta);
+		} else if (context?.coordinator !== "self" && meta.coordinatorBookmarkDetached) {
+			delete meta.coordinatorBookmarkDetached;
+			delete meta.coordinatorDetachedBookmark;
+			void this.save(meta);
+		}
 		this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
 		this.emit(meta);
 		// A role/status change can release a persisted merge deadline without another GitHub lookup.
@@ -1242,6 +1267,86 @@ export class SessionManager {
 	private isActiveMissionCoordinator(id: string): boolean {
 		const membership = this.missions?.membership(id);
 		return membership?.active === true && membership.coordinator === true;
+	}
+
+	/** Merge-triggered updates bypass the turn throttle, but wait for a safe boundary if busy. */
+	coordinatorBaseMerged(id: string): void {
+		const meta = this.metas.get(id);
+		if (!meta || !this.isActiveMissionCoordinator(id)) return;
+		meta.workspaceRefreshDue = true;
+		void this.save(meta);
+		void this.refreshCoordinatorWorkspace(id).catch((error: unknown) =>
+			console.warn(`pilotd: base refresh failed: ${error}`),
+		);
+	}
+
+	async refreshCoordinatorWorkspace(id: string, turnBoundary = false): Promise<void> {
+		const existing = this.workspaceRefreshes.get(id);
+		if (existing) return existing;
+		const meta = this.metas.get(id);
+		const workspace = meta?.workspace;
+		const worker = this.workers.get(id);
+		if (
+			!meta ||
+			!workspace?.shared ||
+			!this.isActiveMissionCoordinator(id) ||
+			this.closing ||
+			meta.archivedAt !== undefined ||
+			meta.workspaceRecovery ||
+			this.workspaceMaintenance.has(id) ||
+			meta.preparing ||
+			this.hasWorkspaceProcess(id) ||
+			meta.subagents?.some((child) => child.state === "working") ||
+			(!turnBoundary &&
+				(meta.working || meta.initializing || worker?.busy || (worker && worker.state !== "idle"))) ||
+			(!meta.workspaceRefreshDue && Date.now() - (meta.workspaceCheckedAt ?? 0) < 10 * 60_000)
+		)
+			return;
+		const end = this.updateGate.begin();
+		// Publish the barrier before any I/O. Queued turns await it too.
+		const release = this.holdWorkspace(id);
+		const task = Promise.resolve()
+			.then(async () => {
+				meta.workspaceCheckedAt = Date.now();
+				delete meta.workspaceRefreshDue;
+				await this.save(meta);
+				try {
+					const result = await this.sharedWorkspaces.refreshBase(
+						meta.cwd,
+						workspace.shared!,
+						workspace.source,
+						workspace.base,
+						workspace.baseBranch,
+					);
+					if ("behind" in result) {
+						const text = `Coordinator workspace is behind ${workspace.baseBranch ?? "the base branch"} @ ${result.target?.slice(0, 8)}. ${result.behind} Its changes were left in place.`;
+						if (meta.workspaceBehind !== text) this.missions?.workspaceBehind?.(id, text);
+						meta.workspaceBehind = text;
+					} else {
+						workspace.base = result.base;
+						meta.workspaceUpdatedAt = Date.now();
+						delete meta.workspaceBehind;
+					}
+				} catch (error) {
+					const text = `Coordinator workspace could not update and may be behind: ${error instanceof Error ? error.message : String(error)}`;
+					if (meta.workspaceBehind !== text) this.missions?.workspaceBehind?.(id, text);
+					meta.workspaceBehind = text;
+				}
+				await this.save(meta);
+				this.emit(meta);
+			})
+			.finally(() => {
+				this.workspaceRefreshes.delete(id);
+				release();
+				end();
+				// A merge arriving during the fetch gets one more event-driven pass, not an idle timer.
+				if (meta.workspaceRefreshDue && !this.closing)
+					void this.refreshCoordinatorWorkspace(id).catch((error: unknown) =>
+						console.warn(`pilotd: base refresh failed: ${error}`),
+					);
+			});
+		this.workspaceRefreshes.set(id, task);
+		return task;
 	}
 
 	private missionSummary(id: string): Pick<SessionSummary, "missionId" | "activeMissionCoordinator"> {
@@ -2111,6 +2216,8 @@ export class SessionManager {
 				meta.updatedAt = Date.now();
 				await this.save(meta);
 				await this.unparked(id);
+				const refresh = !this.workers.has(id) ? this.workspaceRefreshes.get(id) : undefined;
+				if (refresh) await refresh;
 				if (this.closing) throw new Error("pilotd is shutting down");
 				worker = this.ensureWorker(id);
 				await worker.ready;
@@ -2470,6 +2577,7 @@ export class SessionManager {
 		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
+		await Promise.allSettled(this.workspaceRefreshes.values());
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
@@ -2552,6 +2660,9 @@ export class SessionManager {
 					}
 				}
 				await this.unparked(id);
+				if (this.closing) return;
+				const refresh = !this.workers.has(id) ? this.workspaceRefreshes.get(id) : undefined;
+				if (refresh) await refresh;
 				if (this.closing) return;
 				const worker = this.ensureWorker(id);
 				await worker.ready;
@@ -2806,6 +2917,26 @@ export class SessionManager {
 			);
 			return;
 		}
+		if (packet.type === "workspace.prepare") {
+			if (this.workers.get(meta.id) !== worker) return;
+			const prepare = async () => {
+				await this.refreshCoordinatorWorkspace(meta.id, true);
+				// A merge received during an idle refresh can start a second pass in its finalizer.
+				// Keep the first-request barrier until every such pass has finished.
+				while (this.workspaceRefreshes.has(meta.id)) await this.workspaceRefreshes.get(meta.id);
+			};
+			void prepare()
+				.catch((error: unknown) => console.warn(`pilotd: workspace preparation failed: ${error}`))
+				.finally(() => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "workspace.prepared",
+							callId: packet.callId,
+							...(meta.workspace ? { workspace: meta.workspace } : {}),
+						});
+				});
+			return;
+		}
 		if (packet.type === "artifacts.changed") {
 			const next = (this.artifactNotifications.get(meta.id) ?? Promise.resolve())
 				.then(async () => {
@@ -2888,6 +3019,10 @@ export class SessionManager {
 				void this.save(meta);
 			}
 			if (!packet.working && (wasWorking || (changed && packet.completion))) void this.pullRequests.refresh(meta);
+			if (!packet.working && meta.workspaceRefreshDue)
+				void this.refreshCoordinatorWorkspace(meta.id).catch((error: unknown) =>
+					console.warn(`pilotd: base refresh failed: ${error}`),
+				);
 			// A finished turn may have added work after a merge, or published it.
 			if (!packet.working && wasWorking && hasSettledPullRequests(meta)) this.checkUnpublishedWork(meta, 0);
 		} else if (packet.type === "error" && !packet.requestId && worker.state === "failed" && !this.closing) {
@@ -2922,6 +3057,13 @@ export class SessionManager {
 			...(meta.pinned ? { pinned: true } : {}),
 			...this.missionSummary(meta.id),
 			...(meta.workspace?.shared ? { workspaceStorage: "shared" as const } : {}),
+			...(this.isActiveMissionCoordinator(meta.id) && meta.workspace
+				? {
+						workspaceBase: meta.workspace.base,
+						...(meta.workspaceUpdatedAt !== undefined ? { workspaceUpdatedAt: meta.workspaceUpdatedAt } : {}),
+						...(meta.workspaceBehind ? { workspaceBehind: meta.workspaceBehind } : {}),
+					}
+				: {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
 			state: meta.failure
@@ -2980,6 +3122,9 @@ export class SessionManager {
 		result: PullRequestResult,
 		health?: { context: FollowUpContext; checks: HealthCheck[] },
 	): Promise<void> {
+		// Retain old PR history, not a task bookmark association.
+		if (meta.coordinatorDetachedBookmark && result.branch === meta.coordinatorDetachedBookmark)
+			result = { ...result, branch: undefined };
 		// Only discovery changes the branch and PRs, and it never overlaps itself. Anything else is a stale lookup.
 		const healthFresh = health !== undefined && health.context.recorded === followUpState(meta);
 		const previousBranch = meta.workspace?.branch;

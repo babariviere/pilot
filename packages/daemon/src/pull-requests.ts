@@ -159,6 +159,47 @@ interface Operation {
 	bookmarks: boolean;
 }
 
+const workspaceChanges = new Map<string, { head: string; changes: Set<string> }>();
+
+/** Only changes first introduced by this workspace, not revisions it borrowed or rewrote. */
+export async function workspaceChangeIds(cwd: string, workspace: string, runner: Runner = run): Promise<Set<string>> {
+	const key = `${cwd}\0${workspace}`;
+	const seen = workspaceChanges.get(key);
+	let ops = await operations(cwd, runner, 32);
+	let stop = seen ? ops.findIndex((op) => op.id === seen.head) : -1;
+	if (stop < 0 && ops.length === 32) {
+		ops = await operations(cwd, runner, 2048);
+		stop = seen ? ops.findIndex((op) => op.id === seen.head) : -1;
+	}
+	const changes = new Set(stop >= 0 ? seen!.changes : []);
+	for (const op of ops.slice(0, stop >= 0 ? stop : undefined)) {
+		if (op.workspace !== workspace && op.workspace !== `${workspace}@`) continue;
+		const diff = await runner(
+			"jj",
+			[
+				"--ignore-working-copy",
+				"op",
+				"show",
+				"--no-graph",
+				"-T",
+				"",
+				'--config=templates.commit_summary="change_id ++ \\" \\" ++ commit_id"',
+				op.id,
+			],
+			cwd,
+			10_000,
+		);
+		const commits = diff.split("Changed commits:\n")[1]?.split(/\nChanged /)[0] ?? "";
+		const added = [...commits.matchAll(/^\+ ([k-z]+) /gm)].map((match) => match[1]!);
+		const removed = new Set([...commits.matchAll(/^- ([k-z]+) /gm)].map((match) => match[1]!));
+		for (const id of added) if (!removed.has(id)) changes.add(id);
+	}
+	// A truncated history deliberately underclaims ownership, so refresh leaves uncertain work alone.
+	if (workspaceChanges.size >= 128) workspaceChanges.delete(workspaceChanges.keys().next().value!);
+	if (ops[0] && changes.size <= 1024) workspaceChanges.set(key, { head: ops[0].id, changes });
+	return changes;
+}
+
 /** Newest operation and the names it implies, per workspace. Operations are immutable. */
 const scannedOperations = new Map<string, { head: string; names: string[] }>();
 

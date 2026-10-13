@@ -1415,6 +1415,16 @@ export class MissionStore {
 	}
 
 	/** Persist a fresh result for all copies of this URL and reconcile affected tasks together. */
+	newlyMergedCoordinators(pr: SessionPullRequest): string[] {
+		if (pr.state !== "merged") return [];
+		return this.all(
+			`SELECT DISTINCT m.coordinator_session_id FROM resources r JOIN missions m ON m.id = r.mission_id
+			WHERE r.kind = 'github.pr' AND r.url = ? COLLATE NOCASE AND m.status = 'active'
+			AND m.coordinator_session_id IS NOT NULL AND json_extract(r.pull_request, '$.state') IS NOT 'merged'`,
+			pr.url,
+		).map((row) => str(row.coordinator_session_id!));
+	}
+
 	updatePullRequest(pr: SessionPullRequest): void {
 		const rows = this.all(
 			"SELECT DISTINCT mission_id FROM resources WHERE kind = 'github.pr' AND url = ? COLLATE NOCASE",

@@ -100,6 +100,10 @@ export interface SessionSummary {
 	workspace?: WorkspaceMode;
 	/** Shared jj repository storage. Omitted for legacy clones and direct checkouts. */
 	workspaceStorage?: "shared";
+	/** Current coordinator base and successful refresh time (epoch milliseconds). */
+	workspaceBase?: string;
+	workspaceUpdatedAt?: number;
+	workspaceBehind?: string;
 	/** Epoch ms when the working directory was reclaimed. Its pinned jj snapshot can be restored on resume. */
 	workspaceReclaimedAt?: number;
 	/** Last safe-cleanup failure. History remains available and the workspace is not discarded unsafely. */

@@ -143,7 +143,15 @@ export class MissionService {
 							.resources.filter((resource) => resource.taskId && resource.kind === "github.pr")
 							.map((resource) => ({ url: resource.url, cwd: project.path, pullRequest: resource.pullRequest }));
 					}),
-			pullRequestUpdated: (pr) => store.updatePullRequest(pr),
+			workspaceBehind: (sessionId, text) => {
+				const id = store.missionOf(sessionId);
+				if (id) store.addComment(id, { text }, { sessionId });
+			},
+			pullRequestUpdated: (pr) => {
+				const merged = store.newlyMergedCoordinators(pr);
+				store.updatePullRequest(pr);
+				for (const sessionId of merged) sessions.coordinatorBaseMerged(sessionId);
+			},
 		});
 		store.onMembershipChange((sessionId) => {
 			const context = this.context(sessionId);

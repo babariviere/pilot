@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { test } from "node:test";
 import type { ToolHooks } from "@earendil-works/pi-durable";
 import {
@@ -185,6 +186,22 @@ const policy = withPilotPolicy(
 	() => false,
 	() => mission,
 );
+
+test("the base prompt is rendered after turn preparation with the current commit", async () => {
+	const workspace = { source: "/source", base: "old", jj: true, shared: { repository: "/shared", name: "lead" } };
+	const extension = withPilotPolicy(
+		{ name: "test" },
+		{ workspace },
+		() => false,
+		() => undefined,
+		async () => {
+			workspace.base = "current";
+		},
+	);
+	const prompt = await extension.sections![0]!.render(undefined as never, BACKGROUND_CONTEXT);
+	assert.match(prompt!, /starts on base `current`/);
+	assert.doesNotMatch(prompt!, /base `old`/);
+});
 const beforeTool = (policy.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
 function checkTool(name: string, args: Parameters<ToolHooks["beforeTool"]>[0]["arguments"]) {
 	return beforeTool(

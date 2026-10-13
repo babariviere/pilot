@@ -11,7 +11,7 @@ import type {
 } from "@pilot/protocol";
 import type { JsonValue } from "@earendil-works/chord";
 import type { MissionAction } from "./mission-tools.ts";
-import type { MissionContext, PilotContext } from "./policy.ts";
+import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
 
 export type { KernelUsage } from "./usage.ts";
@@ -72,6 +72,7 @@ export type KernelCommand =
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
+	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "shutdown" };
 
 export type KernelPacket =
@@ -99,6 +100,8 @@ export type KernelPacket =
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	/** Read-only linked source lookup. Caller identity comes from the supervised worker, not this packet. */
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
+	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */
+	| { type: "workspace.prepare"; callId: string }
 	| { type: "accepted"; requestId: string }
 	| { type: "aborted"; requestId: string }
 	/**
