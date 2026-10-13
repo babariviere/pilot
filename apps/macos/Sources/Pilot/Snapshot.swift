@@ -375,6 +375,10 @@ enum Snapshot {
         }
 
 
+        if CommandLine.arguments.contains("--tracking-only") {
+            await renderTracking(model: model, to: directory)
+            return
+        }
         if CommandLine.arguments.contains("--project-page-only") || CommandLine.arguments.contains("--sidebar-scope-only") {
             await renderProjectPages(model: model, to: directory)
             return
@@ -851,6 +855,162 @@ enum Snapshot {
         await render(section(details[2]), size: CGSize(width: 720, height: 380), to: directory.appending(path: "mission-links-few.png"))
         await render(section(details[1]), size: CGSize(width: 720, height: 160), to: directory.appending(path: "mission-links-empty.png"))
         await render(section(full, width: 440), size: CGSize(width: 440, height: 980), to: directory.appending(path: "mission-links-narrow.png"))
+    }
+
+    /// Tracked items inbox, its states, the ticket-prefilled composer and mission sheet, and Tracking settings.
+    /// Synthetic data only.
+    private static func renderTracking(model: AppModel, to directory: URL) async {
+        let now = Fixtures.now
+        let minute = 60_000.0
+        let day = 24 * 60 * minute
+        let home = Fixtures.home
+        let tracking = ProjectTrackingConfig(
+            slackChannels: ["C0BUGS0001", "C0SUPPORT2", "C0QAREPRT3"],
+            slackChannelNames: ["C0BUGS0001": "bugs", "C0SUPPORT2": "support-escalations", "C0QAREPRT3": "qa-reports"],
+            linearTeam: "team-platform", linearTeamName: "Platform")
+        let projects = [
+            Project(id: "p1", name: "pilot", path: "\(home)/src/github.com/babariviere/pilot", tracking: tracking,
+                    createdAt: now),
+            Project(id: "p2", name: "dotfiles", path: "\(home)/src/github.com/babariviere/dotfiles", createdAt: now),
+        ]
+        func session(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,
+                     pr: Int? = nil) -> SessionSummary {
+            SessionSummary(id: id, title: title, cwd: projects[0].path, projectId: "p1", createdAt: now - 30 * minute,
+                           updatedAt: now - 5 * minute, state: state, outcome: outcome, outcomeAt: now - 5 * minute,
+                           pullRequest: pr.map {
+                               SessionPullRequest(number: $0, url: "https://github.com/babariviere/pilot/pull/\($0)",
+                                                  title: "fix: currency", state: .open, checkedAt: now)
+                           })
+        }
+        model.client.loadFixture(projects: projects, sessions: [
+            session("w1", "ENG-412 export crash", state: "working"),
+            session("f1", "Flaky workspace lifecycle test", outcome: .failed),
+            session("d1", "Archive shortcut", outcome: .done),
+            session("pr1", "Swiss invoice currency", outcome: .done, pr: 431),
+        ])
+        let missionJSON = """
+        [{"mission":{"id":"m1","projectId":"p1","title":"Keyboard shortcuts pass","goal":"","status":"active",
+        "briefRevision":1,"createdAt":\(now),"updatedAt":\(now)},"decisions":[],"comments":[],"tasks":[],
+        "artifacts":[],"resources":[],"events":[]}]
+        """
+        if let missions = try? JSONDecoder().decode([MissionDetail].self, from: Data(missionJSON.utf8)) {
+            model.client.loadMissionFixture(missions)
+        }
+        for id in ["d1", "pr1"] { if let session = model.client.session(id) { model.review(session, explicit: true) } }
+        func linear(_ number: Int, _ title: String, _ type: String, _ state: String, priority: Double, ago: Double,
+                    sessions: [String]? = nil, missions: [String]? = nil) -> TrackedItem {
+            TrackedItem(id: "l\(number)", projectId: "p1", kind: .linear, externalId: "uuid-\(number)", title: title,
+                        url: "https://linear.app/acme/issue/ENG-\(number)", status: state,
+                        metadata: ["identifier": .string("ENG-\(number)"), "statusType": .string(type),
+                                   "priority": .number(priority)],
+                        sessionId: sessions?.last, missionId: missions?.last, sessionIds: sessions, missionIds: missions,
+                        createdAt: now - ago, updatedAt: now - ago)
+        }
+        func slack(_ id: String, _ title: String, channel: String, severity: String, ago: Double,
+                   sessions: [String]? = nil) -> TrackedItem {
+            TrackedItem(id: id, projectId: "p1", kind: .slack, externalId: "C/\(id)", title: title,
+                        url: "https://slack.com/archives/C0BUGS0001/p1791892800000001", status: "bug_report",
+                        metadata: ["channelName": .string(channel), "severity": .string(severity)],
+                        sessionId: sessions?.last, sessionIds: sessions, createdAt: now - ago, updatedAt: now - ago)
+        }
+        let items = [
+            linear(412, "Export crashes when a quote has more than 200 lines", "started", "In Progress", priority: 1,
+                   ago: 20 * minute, sessions: ["w1"]),
+            linear(418, "Retry webhook delivery after a 502 from the billing provider", "started", "In Review",
+                   priority: 2, ago: 3 * 60 * minute),
+            linear(388, "Flaky test: workspace lifecycle does not settle", "unstarted", "Todo", priority: 2,
+                   ago: 5 * 60 * minute, sessions: ["f1"]),
+            linear(397, "Add a keyboard shortcut to archive a chat", "unstarted", "Todo", priority: 3, ago: day,
+                   sessions: ["d1"], missions: ["m1"]),
+            linear(420, "Settings window forgets its size between launches", "backlog", "Backlog", priority: 4,
+                   ago: 2 * day),
+            linear(371, "Upgrade the daemon to Node 24", "completed", "Done", priority: 3, ago: 3 * day),
+            linear(366, "Document the release process", "completed", "Done", priority: 0, ago: 4 * day),
+            slack("s1", "Checkout button does nothing on Safari 18", channel: "bugs", severity: "high", ago: 12 * minute),
+            slack("s2", "Invoices show the wrong currency for Swiss customers", channel: "support-escalations",
+                  severity: "medium", ago: 2 * 60 * minute, sessions: ["pr1"]),
+            slack("s3", "Login loops back to the sign-in page after a password reset", channel: "bugs",
+                  severity: "critical", ago: day),
+        ]
+        let iso = ISO8601DateFormatter()
+        let cycle = LinearCycleSummary(id: "c42", number: 42,
+                                       startsAt: iso.string(from: Date(timeIntervalSince1970: (now - 7 * day) / 1000)),
+                                       endsAt: iso.string(from: Date(timeIntervalSince1970: (now + 6 * day) / 1000)),
+                                       progress: 2 / 7, total: 7, done: 2, inProgress: 2, todo: 3)
+        let linearSource = TrackingSource(
+            id: "p1:linear", projectId: "p1", kind: .linear, label: "Linear", configured: true, status: .ok,
+            lastPolledAt: now - 3 * minute, linear: LinearSourceSummary(cycleStatus: .current, currentCycle: cycle))
+        let slackSource = TrackingSource(
+            id: "p1:slack", projectId: "p1", kind: .slack, label: "Slack", configured: true, status: .error,
+            lastPolledAt: now - 4 * minute,
+            error: "A Slack channel could not be read. Check its access in Tracking settings.",
+            channels: [
+                SlackChannelStatus(id: "C0BUGS0001", name: "bugs", status: .ok, lastPulledAt: now - 4 * minute),
+                SlackChannelStatus(id: "C0SUPPORT2", name: "support-escalations", status: .ok,
+                                   lastPulledAt: now - 9 * minute),
+                SlackChannelStatus(id: "C0QAREPRT3", name: "qa-reports", status: .error,
+                                   error: "Couldn't read this channel. Check that you can open it in Slack."),
+            ])
+        let channels = TrackingLookup(status: .ok, items: [
+            SlackChannelOption(id: "C0GENERAL1", name: "general"),
+            SlackChannelOption(id: "C0BUGS0001", name: "bugs"),
+            SlackChannelOption(id: "G0INCIDNT1", name: "incidents", isPrivate: true),
+            SlackChannelOption(id: "C0RELEASE1", name: "releases"),
+        ])
+        model.client.loadTrackingFixture(TrackingFixture(
+            sources: [linearSource, slackSource], items: items,
+            teams: TrackingLookup(status: .ok, items: [
+                LinearTeamOption(id: "team-root", name: "Engineering", key: "ENG"),
+                LinearTeamOption(id: "team-platform", name: "Platform", key: "PLT", parentId: "team-root"),
+                LinearTeamOption(id: "team-web", name: "Web", key: "WEB", parentId: "team-root"),
+            ]),
+            myChannels: channels, searchChannels: channels))
+        let inbox = TrackedInboxSheet(project: projects[0], openSettings: {}) { _ in }
+        await render(inbox, size: CGSize(width: 680, height: 1000), to: directory.appending(path: "tracked-inbox.png"))
+
+        // Sign-in required for Linear, an empty Slack page, and a project that tracks nothing.
+        model.client.loadTrackingFixture(TrackingFixture(
+            sources: [
+                TrackingSource(id: "p1:linear", projectId: "p1", kind: .linear, label: "Linear", configured: true,
+                               status: .signInRequired, error: "Sign in required", signInCommand: "pi mcp login linear"),
+                TrackingSource(id: "p1:slack", projectId: "p1", kind: .slack, label: "Slack", configured: true,
+                               status: .ok, lastPolledAt: now - minute, channels: slackSource.channels),
+            ], items: []))
+        await render(TrackedInboxSheet(project: projects[0], openSettings: {}) { _ in },
+                     size: CGSize(width: 680, height: 420), to: directory.appending(path: "tracked-inbox-signin.png"))
+        await render(TrackedInboxSheet(project: projects[1], openSettings: {}) { _ in },
+                     size: CGSize(width: 680, height: 420), to: directory.appending(path: "tracked-inbox-empty.png"))
+
+        // Settings: team picker, channels with per-channel status (one added but not saved yet).
+        model.client.loadTrackingFixture(TrackingFixture(
+            sources: [linearSource, slackSource], items: items,
+            teams: TrackingLookup(status: .ok, items: [
+                LinearTeamOption(id: "team-platform", name: "Platform", key: "PLT"),
+            ]),
+            myChannels: channels, searchChannels: channels))
+        let editor = ProjectEditor()
+        editor.load(projects[0])
+        editor.addChannel(SlackChannelOption(id: "G0INCIDNT1", name: "incidents", isPrivate: true))
+        await render(Form { TrackingSettingsSection(project: projects[0], editor: editor) }.formStyle(.grouped),
+                     size: CGSize(width: 560, height: 520), to: directory.appending(path: "tracking-settings.png"))
+        await render(Form { TrackingSettingsSection(project: projects[0], editor: editor, channelQuery: "re") }
+            .formStyle(.grouped),
+                     size: CGSize(width: 560, height: 640), to: directory.appending(path: "tracking-settings-search.png"))
+
+        // Start chat and Start mission, prefilled from a ticket.
+        let prefill = TrackedItemPrefill(
+            itemId: "l418", identifier: "ENG-418", title: "Retry webhook delivery after a 502 from the billing provider",
+            url: "https://linear.app/acme/issue/ENG-418",
+            description: "Webhooks to the billing provider fail permanently on a single 502. Retry with backoff.",
+            gitBranchName: "eng-418-retry-webhook-delivery", prompt: "")
+        model.startChat(from: items[1], prefill: prefill)
+        await render(TaskComposer(form: model.newSessionForm, client: model.client).padding(24),
+                     size: CGSize(width: 700, height: 420), to: directory.appending(path: "tracked-start-chat.png"))
+        await render(CreateMissionSheet(projectId: "p1", sourceSessionId: nil,
+                                        tracked: TrackedItemText.missionDraft(items[1], prefill: prefill)),
+                     size: CGSize(width: 500, height: 640), to: directory.appending(path: "tracked-start-mission.png"))
+        print("snapshots written to \(directory.path)")
+        exit(0)
     }
 
     private static func renderProjectPages(model: AppModel, to directory: URL) async {

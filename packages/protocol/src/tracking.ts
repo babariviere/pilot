@@ -3,9 +3,14 @@ export type TrackedKind = "linear" | "slack";
 export type TrackingJson = null | boolean | number | string | TrackingJson[] | { [key: string]: TrackingJson };
 
 export interface ProjectTrackingConfig {
+	/** Slack channel IDs from the channel picker. Older configs may hold names. */
 	slackChannels: string[];
-	/** Empty string in a settings request clears the team. */
+	/** Display names by channel ID, for settings and rows. Never part of the poll scope. */
+	slackChannelNames?: Record<string, string>;
+	/** Linear team ID from list_teams. Empty string in a settings request clears the team. */
 	linearTeam?: string;
+	/** Display name of the attached team. */
+	linearTeamName?: string;
 }
 export interface TrackedItem {
 	id: string;
@@ -17,12 +22,17 @@ export interface TrackedItem {
 	status: string;
 	metadata: Record<string, TrackingJson>;
 	dismissed: boolean;
+	/** Latest chat and mission started from (or linked to) this item. */
 	sessionId?: string;
 	missionId?: string;
+	/** Every bound chat and mission, oldest first, bounded. Present when at least one is bound. */
+	sessionIds?: string[];
+	missionIds?: string[];
 	createdAt: number;
 	updatedAt: number;
 }
-/** Local actions only; null clears a link. Source refreshes never overwrite these fields. */
+/** Local actions only. A link adds to the item's bound chats or missions; null clears them all.
+ * Source refreshes never overwrite these fields. */
 export interface TrackedItemPatch {
 	dismissed?: boolean;
 	sessionId?: string | null;
@@ -63,6 +73,16 @@ export interface TrackedItemPrefill {
 	/** Explicitly quoted external content. User confirmation is required before starting work. */
 	prompt: string;
 }
+/** Per-channel health of a configured Slack channel. */
+export interface SlackChannelStatus {
+	/** As configured: a channel ID, or a name in older configs. */
+	id: string;
+	name?: string;
+	/** pending: not pulled since it was added. */
+	status: "pending" | "ok" | "error" | "sign_in_required";
+	lastPulledAt?: number;
+	error?: string;
+}
 export interface TrackingSource {
 	/** Stable project-scoped identifier, <projectId>:<kind>. */
 	id: string;
@@ -76,4 +96,30 @@ export interface TrackingSource {
 	signInCommand?: string;
 	nextPollAt?: number;
 	linear?: LinearSourceSummary;
+	/** Slack only: one entry per configured channel, in configuration order. */
+	channels?: SlackChannelStatus[];
+}
+/** A team from the dedicated linear server's list_teams, for the project settings picker. */
+export interface LinearTeamOption {
+	id: string;
+	name: string;
+	key: string;
+	/** Parent team ID when the team is a sub-team. */
+	parentId?: string;
+}
+/** A channel from slack_search_channels or slack_list_user_channels. */
+export interface SlackChannelOption {
+	id: string;
+	name: string;
+	private: boolean;
+}
+/** GET /api/tracking/linear/teams?query=... and GET /api/tracking/slack/channels?query=...
+ * Read-only lookups for project settings. A missing query lists my channels (Slack) or all teams (Linear). */
+export interface TrackingLookup<T> {
+	status: "ok" | "sign_in_required" | "error";
+	items: T[];
+	/** More results exist than were returned. Refine the query. */
+	more?: boolean;
+	error?: string;
+	signInCommand?: string;
 }

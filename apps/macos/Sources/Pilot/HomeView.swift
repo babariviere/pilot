@@ -21,12 +21,18 @@ final class NewSessionForm: ObservableObject {
     @Published var workspace: WorkspaceMode? { didSet { onDraftChanged?() } }
     @Published var pendingBaseBranch: String? { didSet { onDraftChanged?() } }
     @Published var mission: Mission? { didSet { onDraftChanged?() } }
+    /// The tracked ticket this chat starts from. Bound to the chat once it starts; the project is locked to it.
+    @Published var trackedItem: TrackedItemBinding?
     private var draftRevision = 0
 
-    var hasUnsubmittedDraft: Bool { !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || mission != nil || busy }
+    var hasUnsubmittedDraft: Bool {
+        !message.isEmpty || !attachments.items.isEmpty || pendingBaseBranch != nil || mission != nil || trackedItem != nil
+            || busy
+    }
 
     func resetChatContext() {
         mission = nil
+        trackedItem = nil
         mode = .build
         workspace = nil
         pendingBaseBranch = nil
@@ -67,7 +73,9 @@ final class NewSessionForm: ObservableObject {
             branches.selection(for: scope) == branch && branches.list.branches.contains(branch)
                 && branches.error == nil && !branches.loading
         } ?? true
-        let destinationReady = mission.map { project?.id == $0.projectId } ?? (project != nil || !folder.isEmpty)
+        let destinationReady = mission.map { project?.id == $0.projectId }
+            ?? trackedItem.map { project?.id == $0.projectId }
+            ?? (project != nil || !folder.isEmpty)
         return !busy && destinationReady && sourceReady
             && (!message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.items.isEmpty)
     }
@@ -252,6 +260,21 @@ struct TaskComposer: View {
                         .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
                         .help("This new chat will join the mission, with no task attached.")
                 }
+                if let tracked = form.trackedItem {
+                    HStack(spacing: 4) {
+                        Label(tracked.label, systemImage: "link").lineLimit(1)
+                        Button { form.trackedItem = nil } label: { Image(systemName: "xmark").font(.pilot(.glyph, weight: .bold)) }
+                            .buttonStyle(.plain)
+                            .disabled(form.busy)
+                            .help("Don't link this chat to \(tracked.label)")
+                            .accessibilityLabel("Unlink \(tracked.label)")
+                    }
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
+                    .help("This chat will be linked to \(tracked.label) when it starts. Pilot never changes the ticket.")
+                }
                 ProjectMenu(selected: project, folder: form.folder, projects: client.projects) { choice in
                     switch choice {
                     case let .project(id):
@@ -269,8 +292,9 @@ struct TaskComposer: View {
                         app.addProject()
                     }
                 }
-                .disabled(form.busy || form.mission != nil)
-                .help(form.mission != nil ? "The project is locked to this mission." : "Choose a project")
+                .disabled(form.busy || form.mission != nil || form.trackedItem != nil)
+                .help(form.mission != nil ? "The project is locked to this mission."
+                    : form.trackedItem != nil ? "The project is locked to the linked ticket." : "Choose a project")
                 if let scope = branchScopeKey {
                     BranchMenu(state: branches, scope: scope, mode: form.mode, onSelect: form.chooseBaseBranch) {
                         Task { await loadBranches() }
@@ -295,7 +319,8 @@ struct TaskComposer: View {
                 }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
-                SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat)
+                // A scheduled chat has no ID until it starts, so it could not be linked to the ticket.
+                SendLaterMenu(disabled: !canStart || form.trackedItem != nil, schedule: scheduleNewChat)
                 Button(action: start) { Image(systemName: "arrow.up") }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
@@ -373,11 +398,13 @@ struct TaskComposer: View {
             return
         }
         let request = form.spawnRequest(in: project, branches: branches)
+        let tracked = form.trackedItem
         Task {
             defer { form.busy = false }
             do {
                 let session = try await app.client.spawn(request)
                 if let id = request.projectId { lastProjectId = id }
+                if let tracked { await app.bindTrackedItem(tracked.itemId, label: tracked.label, sessionId: session.id) }
                 if form.completeSubmission(revision: revision) { app.selectedSessionId = session.id }
             } catch {
                 if form.revision == revision { form.error = error.localizedDescription }

@@ -10,6 +10,8 @@ import { SlackFormatChanged } from "./slack-format.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { createSlackPoller, SLACK_BATCH_SIZE } from "./slack-source.ts";
+import { slackChannelProgress } from "./slack-source.ts";
+import { SourceToolError } from "./source-mcp.ts";
 import { SourceRegistry, type SourcePollContext } from "./sources.ts";
 import { SLACK_DAILY_BUDGET } from "./tracked-items-disk.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
@@ -159,8 +161,10 @@ test("daily budget defers the page without losing cursor; next UTC day resumes; 
 	const limited = await poll(context);
 	assert.equal(limited.issue, "slack_budget");
 	assert.equal(calls, 0);
-	const cursor = limited.cursor as { channels: Array<[string, string | null, string | null]> };
-	assert.notEqual(cursor.channels[0]?.[0], cursor.channels[0]?.[1]);
+	const cursor = limited.cursor as { channels: Record<string, [string, string | null, string | null]> };
+	const [pinned] = Object.values(cursor.channels);
+	assert.ok(pinned?.[1]);
+	assert.notEqual(pinned?.[0], pinned?.[1]);
 	clock += 86_400_000;
 	const resumed = await poll({ ...context, cursor: limited.cursor });
 	assert.equal(resumed.issue, "slack_classification");
@@ -328,22 +332,143 @@ test("maximum configured channel count and pagination cursors fit the store's ch
 	const f = await fixture(t);
 	const names = Array.from({ length: 100 }, (_, n) => `C${String(n).padStart(199, "0")}`);
 	const poll = createSlackPoller(f.store, { classifySlack: async () => bug }, () => now);
-	const result = await poll({
+	const context = {
 		...f.context,
 		config: { slackChannels: names },
-		cursor: {
-			version: 1,
-			index: 0,
-			channels: names.map(() => ["1791800000.000000", "1791892800.000000", "x".repeat(96)]),
-		},
-		call: async () => ({
-			messages: `Channel: #bugs (${names[0]})\n\n`,
+		call: async (_tool: string, args: Record<string, unknown>) => ({
+			messages: `Channel: #bugs (${args.channel_id})\n\n`,
 			pagination_info: "There are no more messages available.\n",
 		}),
-	});
+	};
+	const first = (await poll(context)).cursor as { channels: Record<string, unknown> };
+	const worst = {
+		...first,
+		channels: Object.fromEntries(
+			Object.keys(first.channels).map((key) => [
+				key,
+				["1791800000.000000", "1791892800.000000", "x".repeat(96), now, now + 1],
+			]),
+		),
+	};
+	const result = await poll({ ...context, cursor: worst as unknown as TrackingJson });
 	const checkpoint = { configKey: "x".repeat(64), lastPolledAt: now, cursor: result.cursor };
-	assert.ok(Buffer.byteLength(JSON.stringify(checkpoint)) < 16 * 1024);
+	assert.ok(Buffer.byteLength(JSON.stringify(checkpoint)) < 32 * 1024);
 	await f.store.commit(f.project.id, "slack", [], checkpoint);
+});
+
+test("editing the channel list keeps other channels' progress; a refused channel is skipped and reported", async (t) => {
+	const f = await fixture(t);
+	await f.store.load([]);
+	let clock = now;
+	const poll = createSlackPoller(f.store, { classifySlack: async () => bug }, () => clock);
+	const refused = new Set<string>();
+	const read: string[] = [];
+	const context = (channels: string[], cursor?: TrackingJson): SourcePollContext => ({
+		...f.context,
+		config: { slackChannels: channels },
+		...(cursor !== undefined ? { cursor } : {}),
+		call: async (_tool, args) => {
+			const channel = String(args.channel_id);
+			read.push(`${channel}@${args.oldest}`);
+			if (refused.has(channel)) throw new SourceToolError("MCP tool returned an error");
+			return { ...standalone(channel, 0), pagination_info: "There are no more messages available.\n" };
+		},
+	});
+	const first = await poll(context(["C1", "C2"]));
+	assert.deepEqual(read, [`C1@${Math.floor((now - 7 * 86_400_000) / 1000)}.000000`]);
+	assert.deepEqual(slackChannelProgress(first.cursor, ["C1", "C2"]), [{ pulledAt: now }, {}]);
+	clock += 60_000;
+	// Adding C3 keeps C1's position and progress; the next turn goes to C2, then C3.
+	const second = await poll(context(["C1", "C2", "C3"], first.cursor));
+	assert.match(read[1]!, /^C2@/);
+	refused.add("C3");
+	clock += 60_000;
+	const third = await poll(context(["C1", "C2", "C3"], second.cursor));
+	assert.equal(third.issue, "slack_channel");
+	assert.deepEqual(third.items, []);
+	assert.deepEqual(slackChannelProgress(third.cursor, ["C1", "C2", "C3"]), [
+		{ pulledAt: now },
+		{ pulledAt: now + 60_000 },
+		{ failedAt: now + 120_000 },
+	]);
+	clock += 60_000;
+	// C1 resumes from where it stopped, not from the initial lookback.
+	const fourth = await poll(context(["C1", "C2", "C3"], third.cursor));
+	assert.equal(read[3], `C1@${Math.floor(now / 1000)}.000000`);
+	// Removing C2 drops it; C3 recovers on its next turn.
+	refused.clear();
+	const fifth = await poll(context(["C1", "C3"], fourth.cursor));
+	assert.match(read[4]!, /^C3@/);
+	assert.deepEqual(slackChannelProgress(fifth.cursor, ["C1", "C3"])[1], { pulledAt: clock });
+	assert.equal(Object.keys((fifth.cursor as { channels: object }).channels).length, 2);
+	// Old positional checkpoints restart once instead of failing the source.
+	await poll(context(["C1"], { version: 1, index: 0, channels: [] }));
+	assert.deepEqual(slackChannelProgress({ version: 1 }, ["C1"]), [{}]);
+	// Sign-in or connection failures are never blamed on a channel.
+	await assert.rejects(
+		poll({
+			...context(["C1"]),
+			call: async () => {
+				throw new Error("MCP request failed");
+			},
+		}),
+		/MCP request failed/,
+	);
+});
+
+test("registry reports per-channel status and hides items of removed channels without losing links", async (t) => {
+	const f = await fixture(t);
+	const projects = new ProjectStore(f.home);
+	await projects.load();
+	const project = await projects.create({
+		path: f.home,
+		tracking: { slackChannels: ["C000000001", "C2"], slackChannelNames: { C000000001: "#bugs", C3: "gone" } },
+	});
+	assert.deepEqual(projects.require(project.id).tracking?.slackChannelNames, { C000000001: "bugs" });
+	await f.store.load([project.id]);
+	const registry = new SourceRegistry(projects, f.store, {
+		call: async (_kind, tool, args) => {
+			if (args.channel_id === "C2") throw new SourceToolError("MCP tool returned an error");
+			return tool === "history" ? standalone(String(args.channel_id)) : slackThreadFixture;
+		},
+	});
+	t.after(() => registry.stop());
+	registry.register(
+		"slack",
+		createSlackPoller(f.store, { classifySlack: async () => bug }, () => now),
+	);
+	const id = `${project.id}:slack`;
+	assert.deepEqual(
+		registry.require(id).channels?.map((channel) => [channel.id, channel.name, channel.status]),
+		[
+			["C000000001", "bugs", "pending"],
+			["C2", undefined, "pending"],
+		],
+	);
+	const first = await registry.poll(id);
+	assert.equal(first.status, "ok");
+	assert.equal(first.channels?.[0]?.status, "ok");
+	const [item] = (await registry.listItems({ projectId: project.id })).items;
+	assert.equal(item?.metadata.channelName, "bugs");
+	await f.store.patch(item!.id, { sessionId: "s1" });
+	const failed = await registry.poll(id);
+	assert.equal(failed.status, "error");
+	assert.match(failed.error!, /channel could not be read/);
+	assert.deepEqual(
+		failed.channels?.map((channel) => channel.status),
+		["ok", "error"],
+	);
+	assert.match(failed.channels?.[1]?.error ?? "", /Couldn't read this channel/);
+	await projects.update(project.id, { tracking: { slackChannels: ["C2"] } });
+	const hidden = async () => (await registry.listItems({ projectId: project.id })).total;
+	for (let i = 0; i < 100 && (await hidden()) !== 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+	assert.equal(await hidden(), 0, "removed channel items are hidden");
+	assert.equal(registry.require(id).channels?.[0]?.status, "error", "remaining channel keeps its progress");
+	await projects.update(project.id, { tracking: { slackChannels: ["C2", "C000000001"] } });
+	for (let i = 0; i < 100 && (await hidden()) !== 1; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+	const [restored] = (await registry.listItems({ projectId: project.id })).items;
+	assert.equal(restored?.sessionId, "s1", "re-adding shows the item with its links");
+	assert.equal(registry.require(id).channels?.[1]?.status, "ok");
 });
 
 test("shared scheduler polls Slack only when configured, preserves partial checkpoints, and resumes a budget pause at UTC midnight", async (t) => {

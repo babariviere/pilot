@@ -13,6 +13,9 @@ struct ProjectPage: View {
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
     @State private var showingMemory = false
+    @State private var showingTracked = false
+    /// Navigation requested from the tracked items sheet, run once it has closed.
+    @State private var afterTracked: (() -> Void)?
     @State private var retrying = false
     @State private var fullList: ProjectFullList?
     @State private var fullListDashboard: ProjectDashboard?
@@ -27,13 +30,24 @@ struct ProjectPage: View {
                     .toolbar {
                         ProjectToolbar(project: project, model: model,
                                        openSettings: { openProjectSettings(project) },
-                                       showArtifacts: { showingArtifacts = true })
+                                       showArtifacts: { showingArtifacts = true },
+                                       showTracked: { showingTracked = true })
                     }
                     .sheet(isPresented: $showingArtifacts) {
                         ProjectArtifactsBrowser(project: project, client: client)
                     }
                     .sheet(isPresented: $showingMemory) {
                         ProjectMemoryBrowser(project: project, client: client)
+                    }
+                    .sheet(isPresented: $showingTracked, onDismiss: {
+                        let next = afterTracked
+                        afterTracked = nil
+                        next?()
+                    }) {
+                        TrackedInboxSheet(project: project, openSettings: { openProjectSettings(project) }) { next in
+                            afterTracked = next
+                            showingTracked = false
+                        }
                     }
                     .sheet(item: $fullList) { list in
                         ProjectFullListSheet(project: project, list: list, dashboard: fullListDashboard,
@@ -139,6 +153,7 @@ private struct ProjectToolbar: ToolbarContent {
     let model: AppModel
     let openSettings: () -> Void
     let showArtifacts: () -> Void
+    let showTracked: () -> Void
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
@@ -157,6 +172,7 @@ private struct ProjectToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
+                Button(action: showTracked) { Label("Tracked Items…", systemImage: "tray") }
                 Button(action: openSettings) { Label("Project Settings…", systemImage: "gearshape") }
                 Button { NSWorkspace.shared.open(URL(filePath: project.path)) } label: {
                     Label("Open in Finder", systemImage: "folder")

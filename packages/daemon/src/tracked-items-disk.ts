@@ -35,6 +35,7 @@ type Row = {
 	dismissed: number;
 	session_id: string | null;
 	mission_id: string | null;
+	links: string | null;
 	created_at: number;
 	updated_at: number;
 };
@@ -78,6 +79,13 @@ export class TrackedItemDisk {
 				.some((column) => column.name === "active")
 		)
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN active INTEGER NOT NULL DEFAULT 1");
+		if (
+			!this.db
+				.prepare("PRAGMA table_info(tracked_items)")
+				.all()
+				.some((column) => column.name === "links")
+		)
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN links TEXT");
 		this.db.exec(`
 			CREATE INDEX IF NOT EXISTS tracked_active_project_kind ON tracked_items(project_id, kind, dismissed, updated_at DESC, id) WHERE active=1;
 			CREATE INDEX IF NOT EXISTS tracked_active_project ON tracked_items(project_id, dismissed, updated_at DESC, id) WHERE active=1;
@@ -184,17 +192,33 @@ export class TrackedItemDisk {
 			label: kind === "linear" ? "Linear" : "Slack",
 			status: "idle",
 			total: page.total,
-			items: page.items.map(({ id, title, url, status, updatedAt, externalId, metadata, sessionId, missionId }) => ({
-				id,
-				title,
-				url,
-				status,
-				updatedAt,
-				externalId,
-				metadata,
-				...(sessionId ? { sessionId } : {}),
-				...(missionId ? { missionId } : {}),
-			})),
+			items: page.items.map(
+				({
+					id,
+					title,
+					url,
+					status,
+					updatedAt,
+					externalId,
+					metadata,
+					sessionId,
+					missionId,
+					sessionIds,
+					missionIds,
+				}) => ({
+					id,
+					title,
+					url,
+					status,
+					updatedAt,
+					externalId,
+					metadata,
+					...(sessionId ? { sessionId } : {}),
+					...(missionId ? { missionId } : {}),
+					...(sessionIds ? { sessionIds } : {}),
+					...(missionIds ? { missionIds } : {}),
+				}),
+			),
 		};
 	}
 	/** Bounded, atomic commit of a poll page and its cursor. Validate the whole page first. */
@@ -210,7 +234,7 @@ export class TrackedItemDisk {
 		if (Buffer.byteLength(JSON.stringify(items)) > 1024 * 1024) throw new Error("Poll batch exceeds 1 MiB");
 		if (activeIds && (activeIds.length > 500 || activeIds.some((id) => typeof id !== "string" || id.length > 500)))
 			throw new Error("Invalid active issue set");
-		if (checkpoint && Buffer.byteLength(JSON.stringify(checkpoint)) > 16 * 1024)
+		if (checkpoint && Buffer.byteLength(JSON.stringify(checkpoint)) > 32 * 1024)
 			throw new Error("Checkpoint too large");
 		const put = this.db.prepare(`INSERT INTO tracked_items
 		 (id, project_id, kind, external_id, title, url, status, metadata, created_at, updated_at)
@@ -265,18 +289,44 @@ export class TrackedItemDisk {
 	patch(id: string, patch: TrackedItemPatch): TrackedItem {
 		validatePatch(patch);
 		const item = this.require(id);
+		const sessions = bind(item.sessionIds ?? [], patch.sessionId),
+			missions = bind(item.missionIds ?? [], patch.missionId);
 		const next = {
 			dismissed: patch.dismissed ?? item.dismissed,
-			sessionId: patch.sessionId === undefined ? item.sessionId : (patch.sessionId ?? undefined),
-			missionId: patch.missionId === undefined ? item.missionId : (patch.missionId ?? undefined),
+			sessionId: sessions.at(-1),
+			missionId: missions.at(-1),
 		};
-		if (next.dismissed !== item.dismissed || next.sessionId !== item.sessionId || next.missionId !== item.missionId) {
+		const links = JSON.stringify({ sessions, missions });
+		if (
+			next.dismissed !== item.dismissed ||
+			links !== JSON.stringify({ sessions: item.sessionIds ?? [], missions: item.missionIds ?? [] })
+		) {
 			this.db
-				.prepare("UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=? WHERE id=?")
-				.run(next.dismissed ? 1 : 0, next.sessionId ?? null, next.missionId ?? null, id);
+				.prepare("UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=?, links=? WHERE id=?")
+				.run(next.dismissed ? 1 : 0, next.sessionId ?? null, next.missionId ?? null, links, id);
 			this.emit(item.projectId);
 		}
-		return { ...item, ...next };
+		return this.require(id);
+	}
+	/** Slack rows stay stored when a channel is removed, with their links, and show again if it is re-added. */
+	retainSlack(projectId: string, channels: string[]): void {
+		if (!Array.isArray(channels) || channels.length > 100 || channels.some((channel) => typeof channel !== "string"))
+			throw new Error("Invalid Slack channel list");
+		const scope = JSON.stringify(channels.map((channel) => channel.replace(/^#/, "")));
+		const match = `(json_extract(metadata, '$.channel') IN (SELECT value FROM json_each(?))
+		 OR json_extract(metadata, '$.channelName') IN (SELECT value FROM json_each(?)))`;
+		let changed = false;
+		for (const [next, previous, condition] of [
+			[0, 1, `NOT ${match}`],
+			[1, 0, match],
+		] as const)
+			changed =
+				!!this.db
+					.prepare(
+						`UPDATE tracked_items SET active=? WHERE project_id=? AND kind='slack' AND active=? AND ${condition}`,
+					)
+					.run(next, projectId, previous, scope, scope).changes || changed;
+		if (changed) this.emit(projectId);
 	}
 	private emit(projectId: string): void {
 		for (const listener of this.listeners) listener(projectId);
@@ -292,6 +342,10 @@ function validateSlackKey(channel: string, ts: string): void {
 		throw new Error("Invalid Slack thread key");
 }
 function decode(row: Row): TrackedItem {
+	const links = row.links ? (JSON.parse(row.links) as { sessions?: string[]; missions?: string[] }) : {};
+	// Rows linked before link history existed have only their single latest link.
+	const sessionIds = links.sessions ?? (row.session_id ? [row.session_id] : []),
+		missionIds = links.missions ?? (row.mission_id ? [row.mission_id] : []);
 	return {
 		id: row.id,
 		projectId: row.project_id,
@@ -304,9 +358,18 @@ function decode(row: Row): TrackedItem {
 		dismissed: !!row.dismissed,
 		...(row.session_id ? { sessionId: row.session_id } : {}),
 		...(row.mission_id ? { missionId: row.mission_id } : {}),
+		...(sessionIds.length ? { sessionIds } : {}),
+		...(missionIds.length ? { missionIds } : {}),
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
+}
+const LINK_LIMIT = 20;
+/** A new link moves to the end (latest). null clears every link of that kind. */
+function bind(current: string[], link: string | null | undefined): string[] {
+	if (link === undefined) return current;
+	if (link === null) return [];
+	return [...current.filter((id) => id !== link), link].slice(-LINK_LIMIT);
 }
 function validateInput(item: TrackedInput): void {
 	for (const [value, max] of [

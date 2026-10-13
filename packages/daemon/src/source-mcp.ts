@@ -6,12 +6,17 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	if (kind === "linear" && tool === "issues") return "list_issues";
 	if (kind === "linear" && tool === "cycles") return "list_cycles";
 	if (kind === "linear" && tool === "issue") return "get_issue";
+	if (kind === "linear" && tool === "teams") return "list_teams";
 	if (kind === "slack" && tool === "history") return "slack_read_channel";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
+	if (kind === "slack" && tool === "searchChannels") return "slack_search_channels";
+	if (kind === "slack" && tool === "myChannels") return "slack_list_user_channels";
 	return undefined;
 }
 
 export class SourceSignInRequired extends Error {}
+/** The tool itself reported an error (for example, no access to one channel). The server was reachable. */
+export class SourceToolError extends Error {}
 export class SourceRateLimited extends Error {
 	readonly retryAfterMs: number;
 	constructor(retryAfterMs = 60_000) {
@@ -90,7 +95,13 @@ export class PiSourceMcpClient implements SourceMcpClient {
 			signal.addEventListener("abort", abort, { once: true });
 			worker.once(
 				"message",
-				(reply: { value?: TrackingJson; error?: string; signIn?: boolean; retryAfterMs?: number }) => {
+				(reply: {
+					value?: TrackingJson;
+					error?: string;
+					signIn?: boolean;
+					retryAfterMs?: number;
+					toolError?: boolean;
+				}) => {
 					replied = true;
 					// Worker posts only after connection.close() and OAuth writes have settled.
 					this.running.delete(worker);
@@ -101,7 +112,9 @@ export class PiSourceMcpClient implements SourceMcpClient {
 								? new SourceSignInRequired(reply.error)
 								: reply.retryAfterMs
 									? new SourceRateLimited(reply.retryAfterMs)
-									: new Error(reply.error),
+									: reply.toolError
+										? new SourceToolError(reply.error)
+										: new Error(reply.error),
 						);
 					else resolve(reply.value!);
 				},
@@ -136,7 +149,7 @@ export function decodeMcpResult(result: {
 	content?: Array<{ type: string; text?: string }>;
 	isError?: boolean;
 }): TrackingJson {
-	if (result.isError) throw sourceRateLimit(result) ?? new Error("MCP tool returned an error");
+	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error");
 	const value =
 		result.structuredContent ??
 		(() => {
