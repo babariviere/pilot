@@ -368,7 +368,7 @@ enum Snapshot {
         }
 
 
-        if CommandLine.arguments.contains("--project-page-only") {
+        if CommandLine.arguments.contains("--project-page-only") || CommandLine.arguments.contains("--sidebar-scope-only") {
             await renderProjectPages(model: model, to: directory)
             return
         }
@@ -892,6 +892,11 @@ enum Snapshot {
             ]))
         let fresh = ProjectDashboard(projectId: "p3")
         let pageSize = CGSize(width: 900, height: 900)
+        if CommandLine.arguments.contains("--sidebar-scope-only") {
+            await renderSidebarScope(model: model, projects: projects, sessions: sessions, dashboard: populated,
+                                     to: directory)
+            return
+        }
         func page(_ id: String, _ name: String, height: CGFloat = 900) async {
             await render(ProjectPage(projectId: id), size: CGSize(width: pageSize.width, height: height),
                          to: directory.appending(path: "project-\(name).png"))
@@ -959,6 +964,89 @@ enum Snapshot {
             for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
             snapshot(frame, to: directory.appending(path: "project-window-\(Int(width)).png"))
         }
+        print("snapshots written to \(directory.path)")
+        exit(0)
+    }
+
+    /// The sidebar scope switcher: the real window focused on one project and listing every project,
+    /// and the open switcher with counts and shortcuts.
+    private static func renderSidebarScope(model: AppModel, projects: [Project], sessions: [SessionSummary],
+                                           dashboard: ProjectDashboard, to directory: URL) async {
+        let now = Fixtures.now
+        let minute = 60_000.0
+        let platform = projects[3]
+        func other(_ id: String, _ title: String, state: String = "idle", outcome: SessionOutcome? = nil,
+                   ago: Double) -> SessionSummary {
+            SessionSummary(id: id, title: title, cwd: platform.path, projectId: platform.id, createdAt: now - ago,
+                           updatedAt: now - ago, state: state, model: "anthropic/claude-opus-5-5", outcome: outcome,
+                           outcomeAt: outcome == nil ? nil : now - ago)
+        }
+        let all = sessions + [
+            other("o1", "Upgrade to Node 24", state: "working", ago: 48 * minute),
+            other("o2", "Quote export review", outcome: .done, ago: 60 * minute),
+            other("o3", "Explain the quoting pipeline", outcome: .done, ago: 26 * 60 * minute),
+        ]
+        func mission(_ id: String, _ project: String, _ title: String, needsYou: Int = 0) -> String {
+            """
+            {"mission":{"id":"\(id)","projectId":"\(project)","title":"\(title)","goal":"","status":"active",
+            "needsYouCount":\(needsYou),"briefRevision":1,"createdAt":\(now),"updatedAt":\(now)},"decisions":[],
+            "comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]}
+            """
+        }
+        let json = "[" + [
+            mission("m1", "p1", "Project Dashboard and Task Scheduling", needsYou: 1),
+            mission("m2", "p1", "Artifact renderer hardening"),
+            mission("m3", "p4", "Underwriting migration", needsYou: 1),
+        ].joined(separator: ",") + "]"
+        guard let missions = try? JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8)) else {
+            print("Invalid mission fixture")
+            exit(1)
+        }
+        model.client.loadFixture(projects: projects, sessions: all)
+        model.client.loadMissionFixture(missions)
+        model.client.loadDashboardFixture([dashboard])
+        model.client.loadCountsFixture(ProjectDashboardCounts(projects: [
+            "p1": ProjectDashboardCount(working: 3, needsYou: 3),
+            "p4": ProjectDashboardCount(working: 1, needsYou: 2),
+        ]))
+        model.collapsedProjects = ["p2", "p3"]
+
+        let counts = SidebarScopeCounts.corrected(model.client.projectCounts, activeSessions: model.client.activeSessions,
+                                                  isUnread: model.isUnread)
+        await render(SidebarScopeList(projects: model.orderedProjects, scope: nil, counts: counts,
+                                      choose: { _ in }, addProject: {}, newFolder: {})
+                        .background(Theme.background),
+                     size: CGSize(width: 300, height: 220), to: directory.appending(path: "scope-switcher.png"))
+
+        model.selectedSessionId = nil
+        model.focus(on: "p1")
+        for (name, scope) in [("focused", "p1"), ("all", nil)] as [(String, String?)] {
+            model.focus(on: scope)
+            await render(SessionSidebar(model: model, client: model.client), size: CGSize(width: 280, height: 760),
+                         to: directory.appending(path: "scope-sidebar-\(name).png"))
+        }
+        model.focus(on: "p1")
+        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+        guard let window = NSApp.windows.first(where: { $0.toolbar != nil }),
+              let frame = window.contentView?.superview else {
+            print("No native toolbar window available")
+            exit(1)
+        }
+        window.setFrameOrigin(NSPoint(x: 100, y: 100))
+        window.makeKeyAndOrderFront(nil)
+        window.setContentSize(CGSize(width: 1360, height: 860))
+        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+        snapshot(frame, to: directory.appending(path: "scope-focused-window.png"))
+
+        model.focus(on: nil)
+        model.openScopeHome()
+        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+        snapshot(frame, to: directory.appending(path: "scope-all-window.png"))
+
+        // Clicking a project name in All projects opens its page without changing scope.
+        model.openProject("p1")
+        for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
+        snapshot(frame, to: directory.appending(path: "scope-all-project-window.png"))
         print("snapshots written to \(directory.path)")
         exit(0)
     }

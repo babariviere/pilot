@@ -47,6 +47,11 @@ final class AppModel: ObservableObject {
     @Published var selectedProjectId: String? {
         didSet { if selectedProjectId != nil, selectedMissionId != nil { selectedMissionId = nil } }
     }
+    /// What the sidebar lists: nil for every project (the default), or one focused project's id.
+    /// Change it with `focus(on:)`, which remembers the selection of the scope being left.
+    @Published private(set) var sidebarScope: String?
+    /// The last selection in each scope, restored when the user switches back. Keyed by `scopeKey`.
+    var scopeSelections: [String: SidebarSelection] = [:]
     /// Settings tab to show next, and a project to select there ("Project Settings…").
     @Published var settingsTab: SettingsTab = .appearance
     @Published var settingsProjectId: String?
@@ -224,6 +229,7 @@ final class AppModel: ObservableObject {
         }
         notifier.onOpenSession = { [weak self] id in self?.open(session: id) }
         notifier.requestAuthorization()
+        restoreSidebarScope()
         client.onSessionsChanged = { [weak self] sessions, snapshot in
             guard let self else { return }
             for notification in self.attention.observe(sessions, snapshot: snapshot) {
@@ -388,6 +394,102 @@ final class AppModel: ObservableObject {
         selectedProjectId = id
     }
 
+    // MARK: Sidebar scope
+
+    private static let sidebarScopeKey = "pilot.sidebarScope"
+
+    /// The focused project, once it is known to exist. nil while listing every project.
+    var focusedProject: Project? { client.project(sidebarScope) }
+
+    /// Projects in sidebar order (folders first, then ungrouped), which is also the ⌘1…⌘9 order.
+    var orderedProjects: [Project] {
+        let grouped = projectFolders.folders.flatMap { folder in
+            client.projects.filter { projectFolders.folderId(for: $0.id) == folder.id }
+        }
+        let ids = Set(grouped.map(\.id))
+        return grouped + client.projects.filter { !ids.contains($0.id) }
+    }
+
+    /// The current selection, as remembered per scope.
+    var currentSelection: SidebarSelection {
+        if let id = selectedSessionId { return .session(id) }
+        if let id = selectedMissionId { return .mission(id) }
+        if let id = selectedProjectId { return .project(id) }
+        if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
+        return .home
+    }
+
+    /// Lists every project (nil) or focuses the sidebar on one. Remembers the selection of the scope being
+    /// left and restores the last selection of the new scope; a scope seen for the first time opens its Home.
+    func focus(on projectId: String?) {
+        let target = projectId.flatMap { client.project($0)?.id }
+        guard projectId == nil || target != nil, target != sidebarScope else { return }
+        scopeSelections[SidebarSelection.scopeKey(sidebarScope)] = currentSelection
+        sidebarScope = target
+        saveSidebarScope()
+        let saved = scopeSelections[SidebarSelection.scopeKey(target)]
+        apply(SidebarSelection.restoring(saved, in: target, sessions: client.sessions, missions: client.missions,
+                                         projectIds: Set(client.projects.map(\.id))))
+    }
+
+    /// Home for the current scope: today's Home with every project, the project page when focused.
+    func openScopeHome() {
+        if let project = focusedProject {
+            openProject(project.id)
+        } else {
+            newSession(in: draftProjectId)
+        }
+    }
+
+    /// A new chat in the focused project, or in the last chosen project otherwise.
+    func newChatInScope() {
+        newSession(in: focusedProject?.id ?? draftProjectId)
+    }
+
+    /// Falls back to every project once the project list shows the focused one is gone.
+    func validateSidebarScope() {
+        guard let scope = sidebarScope, client.hasProjectSnapshot, client.project(scope) == nil else { return }
+        scopeSelections[SidebarSelection.scopeKey(scope)] = nil
+        sidebarScope = nil
+        saveSidebarScope()
+        if selectedProjectId == scope { selectedProjectId = nil }
+    }
+
+    private func apply(_ selection: SidebarSelection) {
+        switch selection {
+        case .home:
+            if let scope = sidebarScope {
+                openProject(scope)
+            } else {
+                showingArchive = false
+                selectedSessionId = nil
+                selectedMissionId = nil
+                selectedProjectId = nil
+            }
+        case let .session(id):
+            showingArchive = false
+            selectedSessionId = id
+        case let .mission(id):
+            openMission(id)
+        case let .project(id):
+            openProject(id)
+        case let .archive(projectId, missionId):
+            showArchive(in: projectId, missionId: missionId)
+        }
+    }
+
+    /// The live app reopens in the last scope. Snapshots and tests never read or write it.
+    private func restoreSidebarScope() {
+        guard let scope = projectFolderDefaults.string(forKey: Self.sidebarScopeKey) else { return }
+        sidebarScope = scope
+        if currentSelection == .home { openProject(scope) }
+    }
+
+    private func saveSidebarScope() {
+        guard started else { return }
+        projectFolderDefaults.set(sidebarScope, forKey: Self.sidebarScopeKey)
+    }
+
     func setPinned(_ pinned: Bool, sessionId: String) {
         guard !pendingSessionActions.contains(sessionId) else { return }
         pendingSessionActions.insert(sessionId)
@@ -485,8 +587,17 @@ final class AppModel: ObservableObject {
     }
 
     func open(session id: String) {
-        selectedSessionId = id
+        reveal(session: id)
         showMainWindow()
+    }
+
+    /// Selects a chat from outside the sidebar, such as a notification or the menu bar.
+    func reveal(session id: String) {
+        // Notifications stay global: a chat outside the focused project widens the sidebar to all projects.
+        if let scope = sidebarScope, let session = client.session(id), session.projectId != scope {
+            focus(on: nil)
+        }
+        selectedSessionId = id
     }
 
     func showMainWindow() {
