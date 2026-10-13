@@ -229,6 +229,7 @@ public enum DashboardScheduledKind: String, LenientStringEnum {
 }
 
 public enum DashboardScheduledTrigger: String, LenientStringEnum {
+    case onWake = "on_wake"
     case onBack = "on_back"
     case onOnline = "on_online"
     case at

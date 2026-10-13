@@ -1,0 +1,371 @@
+import { randomUUID } from "node:crypto";
+import type {
+	DashboardScheduledItem,
+	SchedulePatch,
+	ScheduleRequest,
+	ScheduledItem,
+	ScheduleTarget,
+	SpawnRequest,
+} from "@pilot/protocol";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
+import type { ProjectStore } from "./projects.ts";
+import type { MissionStore } from "./missions.ts";
+import { ScheduleStore } from "./schedule-store.ts";
+
+/** Detection plugs in here. Initial online state is not an offline→online edge. */
+export type ScheduleTriggerEvent = { type: "wake" } | { type: "online"; online: boolean; initial?: boolean };
+export interface ScheduleTriggerSource {
+	readonly online: boolean;
+	/** Use online events with initial:true to resynchronize a suspended detector without inventing an edge. */
+	subscribe(listener: (event: ScheduleTriggerEvent) => void): () => void;
+	/** Detection can suspend its probes when no pending schedules remain. */
+	setActive?(active: boolean): void;
+}
+export interface ScheduleClock {
+	now(): number;
+	setTimeout(callback: () => void, delayMs: number): () => void;
+}
+const clock: ScheduleClock = {
+	now: Date.now,
+	setTimeout(callback, ms) {
+		const timer = setTimeout(callback, ms);
+		timer.unref();
+		return () => clearTimeout(timer);
+	},
+};
+export interface ScheduleDispatch {
+	spawn(request: SpawnRequest): Promise<{ id: string }>;
+	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
+	get(id: string): { projectId?: string } | undefined;
+}
+export interface ScheduleServiceDeps {
+	sessions: ScheduleDispatch;
+	projects: Pick<ProjectStore, "require">;
+	missions?: Pick<MissionStore, "require">;
+	clock?: ScheduleClock;
+	triggers?: ScheduleTriggerSource;
+}
+/** One serial dispatcher. No detection/polling here; one nearest-deadline timer while online. */
+export class ScheduleService {
+	private readonly time: ScheduleClock;
+	private online = false;
+	private started = false;
+	private stopped = false;
+	private tail: Promise<void> = Promise.resolve();
+	private queued = 0;
+	private sweepQueued = false;
+	private cancelTimer?: () => void;
+	private disposers: Array<() => void> = [];
+	readonly store: ScheduleStore;
+	private readonly deps: ScheduleServiceDeps;
+	constructor(store: ScheduleStore, deps: ScheduleServiceDeps) {
+		this.store = store;
+		this.deps = deps;
+		this.time = deps.clock ?? clock;
+	}
+	async load(): Promise<void> {
+		await this.store.load(this.time.now());
+	}
+	start(): void {
+		if (this.started || this.stopped) return;
+		this.started = true;
+		this.online = this.deps.triggers?.online ?? false;
+		this.disposers.push(this.store.onChange(() => this.requestSweep()));
+		if (this.deps.triggers)
+			this.disposers.push(
+				this.deps.triggers.subscribe((event) => {
+					void this.signal(event).catch((error) => console.warn(`pilotd: schedule trigger: ${error}`));
+				}),
+			);
+		this.requestSweep();
+	}
+	private enqueue(work: () => Promise<void>): Promise<void> {
+		if (this.stopped) return Promise.reject(new ServiceUnavailable("Scheduler stopped"));
+		if (this.queued >= 64) return Promise.reject(new ServiceUnavailable("Scheduler busy; retry shortly"));
+		this.queued++;
+		const next = this.tail.then(work);
+		this.tail = next
+			.catch(() => {})
+			.finally(() => {
+				this.queued--;
+			});
+		return next;
+	}
+	private requestSweep(): void {
+		if (!this.started || this.stopped || this.sweepQueued) return;
+		this.sweepQueued = true;
+		void this.enqueue(async () => {
+			this.sweepQueued = false;
+			await this.sweep();
+		}).catch((error) => {
+			this.sweepQueued = false;
+			console.warn(`pilotd: schedule dispatch: ${error}`);
+		});
+	}
+	/** Injectable fast path for daemon detectors (not an HTTP endpoint). */
+	signal(event: ScheduleTriggerEvent): Promise<void> {
+		if (!this.started || this.stopped) return Promise.reject(new ServiceUnavailable("Scheduler not running"));
+		if (this.queued >= 64) return Promise.reject(new ServiceUnavailable("Scheduler busy; retry shortly"));
+		// Capture candidates now: a schedule created after the event must wait for the next one.
+		const candidates = this.store.pendingItems();
+		const becameOnline = event.type === "online" && event.online && !this.online && !event.initial;
+		if (event.type === "online") this.online = event.online;
+		return this.enqueue(async () => {
+			for (const candidate of candidates) {
+				try {
+					const item = this.store.require(candidate.id);
+					if (item.state !== "pending" || item.revision !== candidate.revision) continue;
+					if (event.type === "wake" && item.trigger === "on_back" && !item.wakeObserved)
+						await this.store.replace(item, { ...item, wakeObserved: true, updatedAt: this.time.now() });
+					else if (
+						(event.type === "wake" && item.trigger === "on_wake") ||
+						(becameOnline && item.trigger === "on_online")
+					)
+						await this.fire(item);
+				} catch (error) {
+					if (!(error instanceof Conflict || error instanceof NotFound)) throw error;
+				}
+			}
+			await this.sweep();
+		});
+	}
+	private async sweep(): Promise<void> {
+		this.cancelTimer?.();
+		this.cancelTimer = undefined;
+		for (const item of this.store.pendingItems()) {
+			if (this.stopped) break;
+			if (!this.online) continue;
+			if (
+				(item.trigger === "at" && item.at! <= this.time.now()) ||
+				(item.trigger === "on_back" && item.wakeObserved)
+			) {
+				try {
+					const current = this.store.require(item.id);
+					if (current.state === "pending" && current.revision === item.revision) await this.fire(current);
+				} catch (error) {
+					if (!(error instanceof NotFound)) throw error;
+				}
+			}
+		}
+		this.arm();
+	}
+	private arm(): void {
+		const pending = this.store.pendingItems();
+		this.deps.triggers?.setActive?.(!this.stopped && pending.length > 0);
+		if (this.stopped || !this.online) return;
+		const next = Math.min(...pending.filter((item) => item.trigger === "at").map((item) => item.at!));
+		if (Number.isFinite(next))
+			this.cancelTimer = this.time.setTimeout(
+				() => {
+					this.cancelTimer = undefined;
+					this.requestSweep();
+				},
+				Math.min(2_147_483_647, Math.max(0, next - this.time.now())),
+			);
+	}
+	private async fire(item: ScheduledItem): Promise<void> {
+		if (this.stopped) return;
+		let claimed: ScheduledItem;
+		try {
+			claimed = await this.store.replace(item, {
+				...item,
+				state: "dispatching",
+				claimedAt: this.time.now(),
+				updatedAt: this.time.now(),
+			});
+		} catch (error) {
+			if (error instanceof Conflict || error instanceof NotFound) return;
+			throw error;
+		}
+		let next: ScheduledItem;
+		try {
+			let sessionId: string;
+			if (claimed.target.kind === "chat") {
+				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn)).id;
+			} else {
+				sessionId = claimed.target.sessionId;
+				if (!this.deps.sessions.get(sessionId)) throw new NotFound("Target chat was deleted");
+				await this.deps.sessions.send(sessionId, claimed.target.message, "followUp", `schedule:${claimed.id}`);
+			}
+			next = { ...claimed, sessionId, state: "fired", firedAt: this.time.now(), updatedAt: this.time.now() };
+		} catch (error) {
+			next = {
+				...claimed,
+				state: "failed",
+				error: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+				updatedAt: this.time.now(),
+			};
+		}
+		// A persistence failure leaves the durable claim intact. Never redispatch automatically.
+		await this.store.replace(claimed, next);
+	}
+	async create(request: ScheduleRequest): Promise<ScheduledItem> {
+		this.assertOpen();
+		const data = this.validate(request);
+		const now = this.time.now();
+		return this.store.create({
+			...data,
+			id: randomUUID(),
+			revision: 1,
+			state: "pending",
+			createdAt: now,
+			updatedAt: now,
+		});
+	}
+	async update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
+		this.assertOpen();
+		if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Schedule patch is required");
+		for (const key of ["title", "trigger", "at", "target", "expectedRevision"] as const)
+			if (patch[key] === null) throw new Error(`${key} cannot be null`);
+		if (
+			patch.expectedRevision !== undefined &&
+			(!Number.isSafeInteger(patch.expectedRevision) || patch.expectedRevision < 1)
+		)
+			throw new Error("expectedRevision must be a positive integer");
+		const old = this.store.require(id);
+		if (old.state !== "pending") throw new Conflict("Only pending schedules can be edited");
+		if (patch.expectedRevision !== undefined && patch.expectedRevision !== old.revision)
+			throw new Conflict("Schedule changed; reload before editing");
+		const trigger = patch.trigger ?? old.trigger;
+		const data = this.validate({
+			title: patch.title ?? old.title,
+			trigger,
+			at: trigger === "at" ? (patch.at ?? old.at) : patch.at,
+			target: patch.target ?? old.target,
+		});
+		return this.store.replace(old, {
+			...old,
+			...data,
+			at: data.at,
+			projectId: data.projectId,
+			sessionId: data.sessionId,
+			wakeObserved: trigger === old.trigger ? old.wakeObserved : undefined,
+			updatedAt: this.time.now(),
+		});
+	}
+	/** Pending rows are cancelled, terminal rows dismissed. In-flight claims cannot be cancelled. */
+	async remove(id: string): Promise<void> {
+		this.assertOpen();
+		const old = this.store.require(id);
+		if (old.state === "dispatching") throw new Conflict("Schedule is already dispatching");
+		if (old.state === "pending")
+			await this.store.replace(old, { ...old, state: "cancelled", updatedAt: this.time.now() });
+		else await this.store.remove(old);
+	}
+	list(projectId?: string): ScheduledItem[] {
+		return this.store.list(projectId);
+	}
+	snapshot(projectId?: string, ws = false): Promise<string> {
+		return this.store.snapshot(projectId, ws);
+	}
+	require(id: string): ScheduledItem {
+		return this.store.require(id);
+	}
+	onChange(listener: () => void): () => void {
+		return this.store.onChange(listener);
+	}
+	dashboard(projectId: string): DashboardScheduledItem[] {
+		return this.store.dashboard(projectId);
+	}
+	async stop(): Promise<void> {
+		this.stopped = true;
+		this.cancelTimer?.();
+		for (const dispose of this.disposers.splice(0)) dispose();
+		this.deps.triggers?.setActive?.(false);
+		await this.tail;
+	}
+	private assertOpen(): void {
+		if (this.stopped) throw new ServiceUnavailable("Scheduler stopped");
+	}
+	private validate(
+		request: ScheduleRequest,
+	): Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId"> {
+		if (!request || typeof request !== "object" || Array.isArray(request))
+			throw new Error("Schedule request is required");
+		const trigger = request.trigger === undefined ? "on_back" : request.trigger;
+		if (!["on_back", "on_wake", "on_online", "at"].includes(trigger)) throw new Error("Invalid schedule trigger");
+		if (trigger === "at") {
+			if (
+				typeof request.at !== "number" ||
+				!Number.isSafeInteger(request.at) ||
+				request.at < 0 ||
+				request.at > 8.64e15
+			)
+				throw new Error("at must be epoch milliseconds");
+		} else if (request.at !== undefined) throw new Error("at is only valid for an at trigger");
+		if (
+			request.title !== undefined &&
+			(typeof request.title !== "string" || !request.title.trim() || request.title.length > 200)
+		)
+			throw new Error("title must be 1 to 200 characters");
+		const raw = request.target;
+		if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("target is required");
+		let target: ScheduleTarget, projectId: string | undefined, sessionId: string | undefined, message: string;
+		if (raw.kind === "chat") {
+			const spawn = raw.spawn;
+			if (!spawn || typeof spawn !== "object" || Array.isArray(spawn)) throw new Error("spawn is required");
+			const copy: SpawnRequest = { message: spawn.message };
+			for (const key of [
+				"missionId",
+				"projectId",
+				"cwd",
+				"title",
+				"model",
+				"thinking",
+				"baseBranch",
+				"mode",
+				"workspace",
+			] as const) {
+				const value = spawn[key];
+				if (value !== undefined) {
+					if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be a non-empty string`);
+					(copy as unknown as Record<string, string>)[key] = value;
+				}
+			}
+			if (copy.mode !== undefined && !["build", "ask"].includes(copy.mode)) throw new Error("Invalid chat mode");
+			if (copy.workspace !== undefined && !["clone", "direct"].includes(copy.workspace))
+				throw new Error("Invalid workspace");
+			projectId = copy.projectId;
+			if (copy.missionId) {
+				if (!this.deps.missions) throw new NotFound("Unknown mission");
+				const mission = this.deps.missions.require(copy.missionId);
+				if (mission.status !== "active") throw new Conflict("Mission is not active");
+				if (projectId && projectId !== mission.projectId) throw new Conflict("Mission belongs to another project");
+				if (copy.cwd !== undefined) throw new Error("missionId does not allow cwd");
+				projectId = mission.projectId;
+			}
+			const project = projectId ? this.deps.projects.require(projectId) : undefined;
+			if (!projectId && !copy.cwd) throw new Error("projectId, missionId or cwd is required");
+			if (copy.workspace && (copy.mode === "ask" || !project || copy.cwd))
+				throw new Error("workspace override requires a Build project without cwd");
+			if (
+				copy.baseBranch &&
+				(!project || copy.cwd || (copy.mode !== "ask" && (copy.workspace ?? project.workspace) === "direct"))
+			)
+				throw new Error("baseBranch requires a branch-backed project");
+			target = { kind: "chat", spawn: copy };
+			message = copy.message;
+		} else if (raw.kind === "message") {
+			if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) throw new Error("sessionId is required");
+			const session = this.deps.sessions.get(raw.sessionId);
+			if (!session) throw new NotFound("Unknown target chat");
+			sessionId = raw.sessionId;
+			projectId = session.projectId;
+			target = { kind: "message", sessionId, message: raw.message };
+			message = raw.message;
+		} else throw new Error("target kind must be chat or message");
+		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
+		if (Buffer.byteLength(JSON.stringify(target)) > 16_384) throw new Error("Schedule target exceeds 16 KiB");
+		return {
+			title:
+				request.title?.trim() ??
+				(target.kind === "chat" ? target.spawn.title?.trim().slice(0, 200) : undefined) ??
+				message.trim().split("\n")[0].slice(0, 200),
+			trigger,
+			at: request.at,
+			target,
+			projectId,
+			sessionId,
+		};
+	}
+}

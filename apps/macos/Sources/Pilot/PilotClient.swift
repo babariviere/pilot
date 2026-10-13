@@ -8,6 +8,7 @@ import PilotCore
 final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var projects: [Project] = []
+    @Published private(set) var schedules: [ScheduledItem] = []
     @Published private(set) var hasProjectSnapshot = false
     @Published private(set) var artifacts: [String: [ArtifactSummary]] = [:]
     private var artifactVersions: [String: Int] = [:]
@@ -139,6 +140,18 @@ final class PilotClient: ObservableObject {
             update(session)
         }
         return session
+    }
+
+    func createSchedule(_ request: ScheduleRequest) async throws -> ScheduledItem {
+        try await call("api/schedules", body: request)
+    }
+
+    func updateSchedule(_ id: String, _ request: SchedulePatch) async throws -> ScheduledItem {
+        try await call("api/schedules/\(id)", method: "PATCH", body: request)
+    }
+
+    func deleteSchedule(_ id: String) async throws {
+        let _: Ack = try await call("api/schedules/\(id)", method: "DELETE")
     }
 
     func send(_ sessionId: String, message: String, mode: DeliveryMode) async throws {
@@ -928,6 +941,8 @@ final class PilotClient: ObservableObject {
     /// Internal, not private, so tests can deliver decoded updates without a socket.
     func handle(_ message: ServerUpdate) {
         switch message {
+        case let .schedules(list):
+            schedules = list
         case let .projects(list):
             projects = list
             hasProjectSnapshot = true
