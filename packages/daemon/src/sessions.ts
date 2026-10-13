@@ -2011,14 +2011,20 @@ export class SessionManager {
 		try {
 			const starting = meta.initializing;
 			let admission = this.start(id);
-			let rejected = await admission;
-			if (rejected.has(requestId)) throw rejected.get(requestId);
-			// An existing drain can finish just before observing the abort saved above.
-			// Await it first so start() can register a fresh drain for that still-pending abort.
-			if (starting && meta.pending?.some((command) => command.requestId === requestId)) {
-				admission = this.start(id);
-				rejected = await admission;
+			// Do not make Stop wait for startup preparation, worker readiness, or an in-flight command
+			// acknowledgement. Those are deliberately released by the caller after Stop returns. Their
+			// existing drain will see the persisted abort; a settled drain can be awaited and retried below.
+			const worker = this.workers.get(id);
+			if (!meta.preparing && !this.delivering.has(id) && worker?.state !== "starting") {
+				let rejected = await admission;
 				if (rejected.has(requestId)) throw rejected.get(requestId);
+				// An existing drain can finish just before observing the abort saved above.
+				// Await it first so start() can register a fresh drain for that still-pending abort.
+				if (starting && meta.pending?.some((command) => command.requestId === requestId)) {
+					admission = this.start(id);
+					rejected = await admission;
+					if (rejected.has(requestId)) throw rejected.get(requestId);
+				}
 			}
 			// Kernel messages were admitted before anything still waiting here.
 			const withdrawn = this.stopResults.get(requestId) ?? [];
