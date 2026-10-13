@@ -36,6 +36,19 @@ export class ProjectStore {
 		try {
 			const parsed = JSON.parse(await readFile(this.file, "utf8")) as Project[];
 			this.projects = Array.isArray(parsed) ? parsed : [];
+			let migrated = false;
+			this.projects = this.projects.map((project) => {
+				if (!project.tracking || !Object.hasOwn(project.tracking, "mcp")) return project;
+				migrated = true;
+				return {
+					...project,
+					tracking: validateTrackingConfig({
+						slackChannels: project.tracking.slackChannels,
+						linearTeam: project.tracking.linearTeam,
+					}),
+				};
+			});
+			if (migrated) await this.persist();
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 		}
@@ -143,6 +156,8 @@ function validatePullRequestSetting(request: Partial<ProjectRequest>): void {
 export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tracking must be an object");
 	const config = value as ProjectTrackingConfig;
+	if (Object.keys(config).some((key) => key !== "slackChannels" && key !== "linearTeam"))
+		throw new Error("Tracking supports only slackChannels and linearTeam");
 	if (
 		!Array.isArray(config.slackChannels) ||
 		config.slackChannels.length > 100 ||
@@ -155,44 +170,5 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		slackChannels: [...new Set(config.slackChannels.map((channel) => channel.trim()))],
 		...(config.linearTeam?.trim() ? { linearTeam: config.linearTeam.trim() } : {}),
 	};
-	if (config.mcp !== undefined) {
-		if (!config.mcp || typeof config.mcp !== "object" || Array.isArray(config.mcp))
-			throw new Error("mcp must be an object");
-		result.mcp = {};
-		for (const [kind, binding] of Object.entries(config.mcp)) {
-			if (kind !== "linear" && kind !== "slack") throw new Error("Unknown tracking source");
-			if (
-				!binding ||
-				typeof binding !== "object" ||
-				typeof binding.server !== "string" ||
-				!/^[a-zA-Z0-9_-]{1,100}$/.test(binding.server) ||
-				!binding.tools ||
-				typeof binding.tools !== "object" ||
-				Array.isArray(binding.tools)
-			)
-				throw new Error("Invalid MCP source binding");
-			const names = Object.entries(binding.tools);
-			if (
-				names.length > 20 ||
-				names.some(
-					([key, name]) =>
-						!/^[a-zA-Z0-9_]{1,100}$/.test(key) || typeof name !== "string" || !name.trim() || name.length > 200,
-				)
-			)
-				throw new Error("Invalid MCP tool names");
-			if (
-				binding.dispatchTool !== undefined &&
-				(typeof binding.dispatchTool !== "string" ||
-					!binding.dispatchTool.trim() ||
-					binding.dispatchTool.length > 200)
-			)
-				throw new Error("Invalid MCP dispatcher");
-			result.mcp[kind] = {
-				server: binding.server,
-				tools: Object.fromEntries(names),
-				...(binding.dispatchTool ? { dispatchTool: binding.dispatchTool } : {}),
-			};
-		}
-	}
 	return result;
 }

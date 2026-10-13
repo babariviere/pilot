@@ -2,7 +2,6 @@ import type {
 	DashboardTrackedSource,
 	Project,
 	ProjectTrackingConfig,
-	SourceMcpConfig,
 	TrackedKind,
 	TrackingJson,
 	TrackingSource,
@@ -13,16 +12,12 @@ import type { ProjectStore } from "./projects.ts";
 import { SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 
-export const DEFAULT_SOURCE_MCP: Record<TrackedKind, SourceMcpConfig> = {
-	linear: { server: "linear", tools: { issues: "list_issues" } },
-	slack: { server: "slack", tools: { history: "slack_read_channel", thread: "slack_read_thread" } },
-};
 export interface SourcePollContext {
 	project: Project;
 	config: ProjectTrackingConfig;
 	cursor?: TrackingJson;
 	signal: AbortSignal;
-	/** Logical tool name, resolved using this project's binding. No model in the fetch path. */
+	/** Logical tool name, resolved to a fixed dedicated tool. No model in the fetch path. */
 	call(tool: string, args: Record<string, unknown>): Promise<TrackingJson>;
 }
 export interface SourcePollResult {
@@ -113,7 +108,7 @@ export class SourceRegistry {
 				config: project.tracking!,
 				signal: controller.signal,
 				...(checkpoint?.configKey === key && checkpoint.cursor !== undefined ? { cursor: checkpoint.cursor } : {}),
-				call: (tool, args) => this.mcp.call(source.mcp, tool, args, controller.signal),
+				call: (tool, args) => this.mcp.call(source.kind, tool, args, controller.signal),
 			}),
 		);
 		run.promise = abortable(work, controller.signal)
@@ -185,7 +180,6 @@ export class SourceRegistry {
 					: checkpoint?.configKey === key
 						? "ok"
 						: "idle";
-		const mcp = structuredClone(project.tracking?.mcp?.[kind] ?? DEFAULT_SOURCE_MCP[kind]);
 		return {
 			id,
 			projectId: project.id,
@@ -193,10 +187,9 @@ export class SourceRegistry {
 			label: kind === "linear" ? "Linear" : "Slack",
 			configured,
 			status,
-			mcp,
 			...(checkpoint?.configKey === key ? { lastPolledAt: checkpoint.lastPolledAt } : {}),
 			...(health?.key === key && health.error ? { error: health.error } : {}),
-			...(status === "sign_in_required" ? { signInCommand: `pi mcp login ${mcp.server}` } : {}),
+			...(status === "sign_in_required" ? { signInCommand: `pi mcp login ${kind}` } : {}),
 		};
 	}
 	private currentKey(id: string): string | undefined {
@@ -216,7 +209,8 @@ function configKey(project: Project, kind: TrackedKind): string {
 		.update(
 			JSON.stringify([
 				kind === "linear" ? project.tracking?.linearTeam : project.tracking?.slackChannels,
-				project.tracking?.mcp?.[kind] ?? DEFAULT_SOURCE_MCP[kind],
+				kind,
+				"dedicated-v1",
 			]),
 		)
 		.digest("hex");

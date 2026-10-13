@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
@@ -38,7 +38,7 @@ async function fixture(t: TestContext) {
 	});
 	return { home, projects, project, items, registry, calls };
 }
-test("sources are opt-in and preserve validated settings and configurable MCP bindings", async (t) => {
+test("sources are opt-in and call only their dedicated server", async (t) => {
 	const f = await fixture(t);
 	assert.equal(f.registry.dashboard(f.project.id).length, 0);
 	assert.ok(f.registry.list().every((source) => source.status === "not_configured"));
@@ -48,7 +48,6 @@ test("sources are opt-in and preserve validated settings and configurable MCP bi
 		tracking: {
 			slackChannels: [" C1 ", "C1"],
 			linearTeam: " ENG ",
-			mcp: { linear: { server: "unified", tools: { issues: "LINEAR_LIST" }, dispatchTool: "CALL_TOOL" } },
 		},
 	});
 	assert.deepEqual(f.projects.require(f.project.id).tracking?.slackChannels, ["C1"]);
@@ -62,24 +61,65 @@ test("sources are opt-in and preserve validated settings and configurable MCP bi
 	);
 	await assert.rejects(
 		f.projects.update(f.project.id, {
-			tracking: { slackChannels: [], mcp: { linear: { server: "bad;cmd", tools: {} } } },
+			tracking: { slackChannels: [], mcp: { linear: { server: "alternative", tools: {} } } } as never,
 		}),
-		/binding/,
+		/only slackChannels and linearTeam/,
 	);
 	f.registry.register("linear", async (context) => {
 		await context.call("issues", { team: context.config.linearTeam });
 		return { items: [item], cursor: "next" };
 	});
 	await f.registry.poll(`${f.project.id}:linear`);
-	assert.deepEqual(f.calls[0], [
-		{ server: "unified", tools: { issues: "LINEAR_LIST" }, dispatchTool: "CALL_TOOL" },
-		"issues",
-		{ team: "ENG" },
-	]);
+	assert.deepEqual(f.calls[0], ["linear", "issues", { team: "ENG" }]);
 	assert.equal(f.registry.dashboard(f.project.id)[0]?.total, 1);
 	await f.projects.update(f.project.id, { tracking: { slackChannels: [], linearTeam: "" } });
 	assert.deepEqual(f.registry.dashboard(f.project.id), []);
 	assert.equal(f.calls.length, 1);
+});
+
+test("legacy project overrides are discarded durably without losing opt-in settings", async (t) => {
+	const f = await fixture(t);
+	await writeFile(
+		join(f.home, "projects.json"),
+		JSON.stringify([
+			{
+				...f.project,
+				tracking: {
+					slackChannels: ["C1"],
+					linearTeam: "ENG",
+					mcp: { linear: { server: "alternative", tools: { issues: "old_issues" } } },
+				},
+			},
+		]),
+	);
+	const reopened = new ProjectStore(f.home);
+	await reopened.load();
+	assert.deepEqual(reopened.require(f.project.id).tracking, { slackChannels: ["C1"], linearTeam: "ENG" });
+	assert.deepEqual(JSON.parse(await readFile(join(f.home, "projects.json"), "utf8"))[0].tracking, {
+		slackChannels: ["C1"],
+		linearTeam: "ENG",
+	});
+	const registry = new SourceRegistry(reopened, f.items, {
+		async call(kind, tool) {
+			assert.equal(kind, "linear");
+			assert.equal(tool, "issues");
+			return { issues: [] };
+		},
+	});
+	t.after(() => registry.stop());
+	await f.items.commit(f.project.id, "linear", [item], {
+		configKey: "legacy-binding",
+		lastPolledAt: 1,
+		cursor: "old-cursor",
+	});
+	registry.register("linear", async (context) => {
+		assert.equal(context.cursor, undefined);
+		await context.call("issues", {});
+		return { items: [], cursor: "dedicated-cursor" };
+	});
+	await registry.poll(`${f.project.id}:linear`);
+	assert.equal(f.items.checkpoint(`${f.project.id}:linear`)?.cursor, "dedicated-cursor");
+	assert.equal((await f.items.list({ projectId: f.project.id })).total, 1);
 });
 test("single flight, cursor commit, failures and sign-in status are isolated per source", async (t) => {
 	const f = await fixture(t);

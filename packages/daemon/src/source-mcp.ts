@@ -1,15 +1,18 @@
 import { Worker } from "node:worker_threads";
-import type { SourceMcpConfig, TrackingJson } from "@pilot/protocol";
+import type { TrackedKind, TrackingJson } from "@pilot/protocol";
+
+/** Fixed read-only tools on the dedicated server named by kind. No overrides or fallback. */
+export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
+	if (kind === "linear" && tool === "issues") return "list_issues";
+	if (kind === "slack" && tool === "history") return "slack_read_channel";
+	if (kind === "slack" && tool === "thread") return "slack_read_thread";
+	return undefined;
+}
 
 export class SourceSignInRequired extends Error {}
 export interface SourceMcpClient {
 	close?(): Promise<void>;
-	call(
-		binding: SourceMcpConfig,
-		tool: string,
-		args: Record<string, unknown>,
-		signal: AbortSignal,
-	): Promise<TrackingJson>;
+	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson>;
 }
 /** No session, model, or separate tokens. Only the selected server connects, off the daemon event loop. */
 export class PiSourceMcpClient implements SourceMcpClient {
@@ -19,21 +22,15 @@ export class PiSourceMcpClient implements SourceMcpClient {
 	constructor(agentDir?: string) {
 		this.agentDir = agentDir;
 	}
-	call(
-		binding: SourceMcpConfig,
-		tool: string,
-		args: Record<string, unknown>,
-		signal: AbortSignal,
-	): Promise<TrackingJson> {
+	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson> {
 		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
 		if (signal.aborted) return Promise.reject(signal.reason);
 		if (Buffer.byteLength(JSON.stringify(args)) > 256 * 1024)
 			return Promise.reject(new Error("MCP arguments exceed 256 KiB"));
 		if (this.running.size >= 2) return Promise.reject(new Error("MCP client busy, retry shortly"));
-		const name = binding.tools[tool];
-		if (!name) return Promise.reject(new Error(`No MCP tool configured for ${tool}`));
+		if (!dedicatedSourceTool(kind, tool)) return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = new Worker(new URL("./source-mcp-worker.ts", import.meta.url), {
-			workerData: { agentDir: this.agentDir, binding, name, args },
+			workerData: { agentDir: this.agentDir, kind, tool, args },
 		});
 		this.running.add(worker);
 		return new Promise((resolve, reject) => {

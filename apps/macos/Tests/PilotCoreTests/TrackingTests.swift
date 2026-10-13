@@ -5,11 +5,18 @@ import Testing
 @Test func trackingDecodesLegacyProjectsAndConfiguration() throws {
     let old = try JSONDecoder().decode(Project.self, from: Data(#"{"id":"p","name":"Repo","path":"/repo","createdAt":1}"#.utf8))
     #expect(old.tracking == nil)
-    let request = ProjectRequest(tracking: .init(slackChannels: ["C1", "bugs"], linearTeam: "ENG",
-        mcp: ["linear": .init(server: "unified", tools: ["issues": "LINEAR_LIST"], dispatchTool: "CALL_TOOL")]))
+    let request = ProjectRequest(tracking: .init(slackChannels: ["C1", "bugs"], linearTeam: "ENG"))
     let json = try JSONValue.decode(JSONEncoder().encode(request))
     #expect(json["tracking"]?["slackChannels"]?.array?.count == 2)
-    #expect(json["tracking"]?["mcp"]?["linear"]?["server"]?.string == "unified")
+    #expect(json["tracking"]?["linearTeam"]?.string == "ENG")
+    #expect(json["tracking"]?["mcp"] == nil)
+    let legacy = try JSONDecoder().decode(Project.self, from: Data(#"""
+    {"id":"p","name":"Repo","path":"/repo","createdAt":1,
+     "tracking":{"slackChannels":["C1"],"linearTeam":"ENG",
+                 "mcp":{"linear":{"server":"alternative","tools":{"issues":"old_issues"}}}}}
+    """#.utf8))
+    #expect(legacy.tracking?.linearTeam == "ENG")
+    #expect(try JSONValue.decode(JSONEncoder().encode(legacy))["tracking"]?["mcp"] == nil)
 }
 
 @Test func trackingDecodesItemsStatusAndWebSocketChanges() throws {
@@ -24,7 +31,7 @@ import Testing
     #expect(list.items[0].missionId == "m")
     let source = Data(#"""
     {"type":"sources","sources":[{"id":"p:linear","projectId":"p","kind":"linear","label":"Linear","configured":true,
-      "status":"sign_in_required","mcp":{"server":"linear","tools":{"issues":"list_issues"}},"signInCommand":"pi mcp login linear"}]}
+      "status":"sign_in_required","signInCommand":"pi mcp login linear"}]}
     """#.utf8)
     guard case let .sources(sources) = try ServerUpdate.decode(source) else { Issue.record("Expected sources"); return }
     #expect(sources[0].status == .signInRequired)
