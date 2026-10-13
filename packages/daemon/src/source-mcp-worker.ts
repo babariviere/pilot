@@ -5,7 +5,7 @@
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
-import { decodeMcpResult } from "./source-mcp.ts";
+import { decodeMcpResult, dedicatedSourceTool } from "./source-mcp.ts";
 
 interface Connection {
 	state: string;
@@ -50,15 +50,16 @@ parentPort!.on("message", () => {
 });
 let reply: { value?: ReturnType<typeof decodeMcpResult>; error?: string; signIn?: boolean };
 try {
-	const { binding, name, args } = workerData;
+	const { kind, tool: logicalTool, args } = workerData;
+	const name = dedicatedSourceTool(kind, logicalTool);
+	if (!name) throw new Error("Unknown dedicated MCP source tool");
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
 	// Global user config only. A repository cannot execute a new MCP server through tracking settings.
 	const loaded = config.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false });
-	const entry = loaded.servers.find((entry) => entry.name === binding.server);
-	if (!entry) throw new Error(`MCP server ${binding.server} is not configured in pi`);
+	const entry = loaded.servers.find((entry) => entry.name === kind);
+	if (!entry) throw new Error("Dedicated MCP server is not configured in pi");
 	if (entry.config.enabled === false) throw new Error("MCP server is disabled or hidden");
-	if (config.getMcpToolExposure(entry.config, binding.dispatchTool ?? name) === "hidden")
-		throw new Error("MCP tool is hidden");
+	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new Error("MCP tool is hidden");
 	if ("url" in entry.config && entry.config.auth)
 		throw new Error("Tracking requires MCP OAuth or configured headers, not a model provider login");
 	connection = new runtime.McpServerConnection({
@@ -73,14 +74,10 @@ try {
 	});
 	if (controller.signal.aborted) throw controller.signal.reason;
 	await connection.getClient();
-	const tool = connection.tools.find((tool) => tool.name === (binding.dispatchTool ?? name));
+	const tool = connection.tools.find((tool) => tool.name === name);
 	if (!tool || tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true)
 		throw new Error("Tracking tool is missing or advertises writes");
-	const result = await connection.callTool(
-		binding.dispatchTool ?? name,
-		binding.dispatchTool ? { name, arguments: args } : args,
-		{ signal: controller.signal, timeoutMs: 30_000 },
-	);
+	const result = await connection.callTool(name, args, { signal: controller.signal, timeoutMs: 30_000 });
 	reply = { value: decodeMcpResult(result) };
 } catch (error) {
 	// Never forward external tool text, config values, or transport errors that can contain secrets.

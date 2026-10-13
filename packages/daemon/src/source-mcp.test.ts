@@ -44,7 +44,7 @@ for await (const line of createInterface({input:process.stdin})) {
  if (message.id === undefined) continue;
  let result = {};
  if (message.method === "initialize") result = {protocolVersion:"2025-11-25",capabilities:{tools:{}},serverInfo:{name:"fixture",version:"1"}};
- if (message.method === "tools/list") result = {tools:[{name:"history",inputSchema:{type:"object"},annotations:{readOnlyHint:true}}]};
+ if (message.method === "tools/list") result = {tools:[{name:"slack_read_channel",inputSchema:{type:"object"},annotations:{readOnlyHint:true}}]};
  if (message.method === "tools/call") {
   const child = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], {stdio:"ignore"});
   writeFileSync(process.argv[2], JSON.stringify([process.pid,child.pid]));
@@ -59,17 +59,12 @@ setInterval(()=>{},1000);
 			join(home, "mcp.json"),
 			JSON.stringify({
 				mcpServers: {
-					fixture: { command: process.execPath, args: [server, marker] },
+					slack: { command: process.execPath, args: [server, marker] },
 				},
 			}),
 		);
 		const controller = new AbortController();
-		const pending = client.call(
-			{ server: "fixture", tools: { history: "history" } },
-			"history",
-			{},
-			controller.signal,
-		);
+		const pending = client.call("slack", "history", {}, controller.signal);
 		// Attach the rejection handler immediately, even if fixture startup unexpectedly fails.
 		const settled = assert.rejects(pending, /cancel/);
 		for (let i = 0; i < 1000; i++) {
@@ -106,7 +101,7 @@ setInterval(()=>{},1000);
 		await rm(home, { recursive: true, force: true });
 	}
 });
-test("pinned SDK wrapper reuses stored OAuth, dispatcher/tool bindings and detects required sign-in", async () => {
+test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects required sign-in", async () => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-mcp-"));
 	const seen: Array<{ auth?: string; method: string; params?: unknown }> = [];
 	let needsAuth = false,
@@ -142,7 +137,11 @@ test("pinned SDK wrapper reuses stored OAuth, dispatcher/tool bindings and detec
 			};
 		if (message.method === "tools/list")
 			result = {
-				tools: [{ name: "CALL_TOOL", inputSchema: { type: "object" }, annotations: { readOnlyHint: !writes } }],
+				tools: ["list_issues", "slack_read_channel", "slack_read_thread"].map((name) => ({
+					name,
+					inputSchema: { type: "object" },
+					annotations: { readOnlyHint: !writes },
+				})),
 			};
 		if (message.method === "tools/call" && hanging) {
 			called();
@@ -158,12 +157,12 @@ test("pinned SDK wrapper reuses stored OAuth, dispatcher/tool bindings and detec
 	try {
 		await writeFile(
 			join(home, "mcp.json"),
-			JSON.stringify({ mcpServers: { fixture: { url }, unused: { command: "must-not-start" } } }),
+			JSON.stringify({ mcpServers: { linear: { url }, slack: { url }, unused: { command: "must-not-start" } } }),
 		);
 		await writeFile(
 			join(home, "mcp-auth.json"),
 			JSON.stringify({
-				[`mcp__fixture|${url}`]: {
+				[`mcp__linear|${url}`]: {
 					tokens: { access_token: "fixture-token", token_type: "Bearer" },
 					tokensExpireAt: Date.now() + 3600000,
 				},
@@ -171,43 +170,67 @@ test("pinned SDK wrapper reuses stored OAuth, dispatcher/tool bindings and detec
 		);
 		const client = new PiSourceMcpClient(home),
 			signal = new AbortController().signal;
-		const binding = { server: "fixture", tools: { issues: "LINEAR_LIST" }, dispatchTool: "CALL_TOOL" };
-		assert.deepEqual(await client.call(binding, "issues", { team: "ENG" }, signal), { issues: [] });
+		assert.deepEqual(await client.call("linear", "issues", { team: "ENG" }, signal), { issues: [] });
 		assert.ok(
 			seen.some((request) => request.auth === "Bearer fixture-token"),
 			"pi OAuth key format is shared",
 		);
 		assert.deepEqual(seen.find((request) => request.method === "tools/call")?.params, {
-			name: "CALL_TOOL",
-			arguments: { name: "LINEAR_LIST", arguments: { team: "ENG" } },
+			name: "list_issues",
+			arguments: { team: "ENG" },
 		});
+		await client.call("slack", "history", { channel_id: "C1" }, signal);
+		await client.call("slack", "thread", { channel_id: "C1", message_ts: "1.2" }, signal);
+		assert.deepEqual(
+			seen.filter((request) => request.method === "tools/call").map((request) => request.params),
+			[
+				{ name: "list_issues", arguments: { team: "ENG" } },
+				{ name: "slack_read_channel", arguments: { channel_id: "C1" } },
+				{ name: "slack_read_thread", arguments: { channel_id: "C1", message_ts: "1.2" } },
+			],
+		);
+		await assert.rejects(client.call("alternative" as never, "issues", {}, signal), /Unknown dedicated MCP/);
+		await assert.rejects(client.call("linear", "history", {}, signal), /Unknown dedicated MCP/);
 		needsAuth = true;
-		await assert.rejects(client.call(binding, "issues", {}, signal), SourceSignInRequired);
-		await assert.rejects(client.call(binding, "missing", {}, signal), /No MCP tool/);
+		await assert.rejects(client.call("linear", "issues", {}, signal), SourceSignInRequired);
+		await assert.rejects(client.call("linear", "missing", {}, signal), /Unknown dedicated MCP/);
 		const abort = new AbortController();
 		abort.abort(new Error("cancel"));
-		await assert.rejects(client.call(binding, "issues", {}, abort.signal), /cancel/);
+		await assert.rejects(client.call("linear", "issues", {}, abort.signal), /cancel/);
 		needsAuth = false;
 		writes = true;
 		const before = seen.filter((request) => request.method === "tools/call").length;
-		await assert.rejects(client.call(binding, "issues", {}, signal), /MCP request failed/);
+		await assert.rejects(client.call("linear", "issues", {}, signal), /MCP request failed/);
 		assert.equal(
 			seen.filter((request) => request.method === "tools/call").length,
 			before,
 			"write-annotated tools never execute",
 		);
 		writes = false;
+		const requestsBeforeMissing = seen.length;
+		await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { alternative: { url } } }));
+		await assert.rejects(client.call("linear", "issues", {}, signal), /MCP request failed/);
+		assert.equal(seen.length, requestsBeforeMissing, "a different server is never a fallback");
+		await writeFile(
+			join(home, "mcp.json"),
+			JSON.stringify({
+				mcpServers: { linear: { url, enabled: false }, alternative: { url } },
+			}),
+		);
+		await assert.rejects(client.call("linear", "issues", {}, signal), /MCP request failed/);
+		assert.equal(seen.length, requestsBeforeMissing, "a disabled dedicated server is not substituted");
+		await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { linear: { url } } }));
 		hanging = true;
 		const received = new Promise<void>((resolve) => {
 			called = resolve;
 		});
 		const controller = new AbortController();
-		const pending = client.call(binding, "issues", {}, controller.signal);
+		const pending = client.call("linear", "issues", {}, controller.signal);
 		await received;
 		controller.abort(new Error("cancel in flight"));
 		await assert.rejects(pending, /cancel in flight/);
 		await client.close();
-		await assert.rejects(client.call(binding, "issues", {}, signal), /stopped/);
+		await assert.rejects(client.call("linear", "issues", {}, signal), /stopped/);
 	} finally {
 		server.closeAllConnections();
 		await new Promise<void>((resolve) => server.close(() => resolve()));

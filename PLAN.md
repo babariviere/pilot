@@ -635,24 +635,25 @@ last data on error. There is no background polling yet.
 isolates the pinned internal compatibility boundary in `source-mcp-worker.ts` (covered by a real
 local MCP/OAuth fixture). It connects only the selected server per call and closes it afterward.
 Repository-local MCP files are not loaded by tracking. Disabled/hidden servers/tools are not called.
-Optional per-project `tracking.mcp.linear/slack` bindings override `server`, logical `tools`
-(Linear: `issues`; Slack: `history`, `thread`) and an optional `dispatchTool` such as `CALL_TOOL`.
-Overrides are API-configurable and preserved by Project settings.
+Tracking connects only the dedicated servers named `linear` and `slack`, with fixed tools:
+`list_issues`, `slack_read_channel` and `slack_read_thread`. There are no server/tool overrides,
+dispatchers, fallback servers or auto-detection. Project settings accept only Slack channels and
+a Linear team. Legacy project MCP overrides are discarded on load while preserving those settings;
+checkpoint fingerprints change so old cursors are not reused.
 
-**Payload verification (2026-10-13, read-only).** Prefer dedicated `linear/list_issues`: JSON
-`issues`, `hasNextPage`, `cursor` and requested fields. Prefer dedicated
+**Payload verification (2026-10-13, read-only).** Dedicated `linear/list_issues` returns JSON
+`issues`, `hasNextPage`, `cursor` and requested fields. Dedicated
 `slack/slack_read_channel` and `slack_read_thread`: channel history returns a JSON envelope with
 formatted `messages` text (message TS and thread delimiters) and `pagination_info`, not structured
 message rows. Public search similarly wraps formatted `results` text. Slack normalization must
 explicitly validate/parse that format; the framework JSON decoder deliberately does not invent
-structured records from markdown. Dedicated defaults remain configurable; payloads from other MCP
-servers have not been verified.
+structured records from markdown.
 Actual Linear polling and Slack parsing/classification, scheduling and inbox actions remain follow-up
 work; the framework ships no source pollers and reports an unavailable adapter on manual poll until
 one is registered. It never posts to Linear or Slack.
 
 **Verification.** Store/restart/dedupe/action tests, config/cursor/cancellation/concurrency tests, HTTP/WS
-dashboard integration, a local real MCP fixture (stored OAuth, required sign-in, dispatcher, write-tool
+dashboard integration, a local real MCP fixture (stored OAuth, required sign-in, fixed tools, write-tool
 refusal and cancellation), and Swift decoding/editor tests cover the foundation. A 10,000-item disk
 run (100 pages, ~700 bytes metadata/item) took 2.923 s, with 127.8 ms p95 commit RPC latency and
 12.67 ms daemon event-loop p99; an idle baseline under concurrent builds measured 19.91 ms p99

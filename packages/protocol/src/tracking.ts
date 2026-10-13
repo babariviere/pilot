@@ -2,18 +2,10 @@
 export type TrackedKind = "linear" | "slack";
 export type TrackingJson = null | boolean | number | string | TrackingJson[] | { [key: string]: TrackingJson };
 
-/** Logical tool names are adapter-defined (issues, history, thread). Use raw MCP tool names. */
-export interface SourceMcpConfig {
-	server: string;
-	tools: Record<string, string>;
-	/** Optional dispatcher, e.g. CALL_TOOL on a unified server. */
-	dispatchTool?: string;
-}
 export interface ProjectTrackingConfig {
 	slackChannels: string[];
 	/** Empty string in a settings request clears the team. */
 	linearTeam?: string;
-	mcp?: Partial<Record<TrackedKind, SourceMcpConfig>>;
 }
 export interface TrackedItem {
 	id: string;
@@ -50,7 +42,6 @@ export interface TrackingSource {
 	label: string;
 	configured: boolean;
 	status: SourceStatus;
-	mcp: SourceMcpConfig;
 	lastPolledAt?: number;
 	error?: string;
 	signInCommand?: string;

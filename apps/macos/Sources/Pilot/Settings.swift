@@ -249,7 +249,6 @@ final class ProjectEditor: ObservableObject {
     @Published var requirePullRequest = true
     @Published var slackChannels = ""
     @Published var linearTeam = ""
-    private var trackingMcp: [String: SourceMcpConfig]?
     @Published var error: String?
 
     func load(_ project: Project) {
@@ -259,7 +258,6 @@ final class ProjectEditor: ObservableObject {
         requirePullRequest = project.effectiveRequirePullRequest
         slackChannels = project.tracking?.slackChannels.joined(separator: ", ") ?? ""
         linearTeam = project.tracking?.linearTeam ?? ""
-        trackingMcp = project.tracking?.mcp
         error = nil
     }
 
@@ -270,8 +268,7 @@ final class ProjectEditor: ObservableObject {
             tracking: ProjectTrackingConfig(
                 slackChannels: slackChannels.components(separatedBy: CharacterSet(charactersIn: ",\n"))
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty },
-                linearTeam: linearTeam.trimmingCharacters(in: .whitespacesAndNewlines),
-                mcp: trackingMcp
+                linearTeam: linearTeam.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         )
     }

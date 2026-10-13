@@ -2,21 +2,11 @@ import Foundation
 
 // Mirrors packages/protocol/src/tracking.ts.
 public enum TrackedKind: String, Codable, Hashable, Sendable { case linear, slack }
-public struct SourceMcpConfig: Codable, Equatable, Hashable, Sendable {
-    public var server: String
-    public var tools: [String: String]
-    public var dispatchTool: String?
-    public init(server: String, tools: [String: String], dispatchTool: String? = nil) {
-        self.server = server; self.tools = tools; self.dispatchTool = dispatchTool
-    }
-}
 public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     public var slackChannels: [String]
     public var linearTeam: String?
-    /// Keys are "linear" and "slack". A string dictionary encodes as a JSON object.
-    public var mcp: [String: SourceMcpConfig]?
-    public init(slackChannels: [String] = [], linearTeam: String? = nil, mcp: [String: SourceMcpConfig]? = nil) {
-        self.slackChannels = slackChannels; self.linearTeam = linearTeam; self.mcp = mcp
+    public init(slackChannels: [String] = [], linearTeam: String? = nil) {
+        self.slackChannels = slackChannels; self.linearTeam = linearTeam
     }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
@@ -74,15 +64,14 @@ public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let label: String
     public let configured: Bool
     public let status: DashboardSourceStatus
-    public let mcp: SourceMcpConfig
     public let lastPolledAt: Double?
     public let error: String?
     public let signInCommand: String?
     public init(id: String, projectId: String, kind: TrackedKind, label: String, configured: Bool,
-                status: DashboardSourceStatus, mcp: SourceMcpConfig, lastPolledAt: Double? = nil,
+                status: DashboardSourceStatus, lastPolledAt: Double? = nil,
                 error: String? = nil, signInCommand: String? = nil) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.label = label; self.configured = configured
-        self.status = status; self.mcp = mcp; self.lastPolledAt = lastPolledAt; self.error = error
+        self.status = status; self.lastPolledAt = lastPolledAt; self.error = error
         self.signInCommand = signInCommand
     }
 }
