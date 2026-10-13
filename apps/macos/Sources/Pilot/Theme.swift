@@ -54,6 +54,7 @@ enum Theme {
     ///
     /// - `display`: one large figure per card, such as a total.
     /// - `title`: large decorative symbols, such as empty-state icons.
+    /// - `headline`: the lead line of a status page, such as a mission goal.
     /// - `body`: primary row text, titles and empty-state messages.
     /// - `label`: pane headers, controls and short supporting text.
     /// - `caption`: metadata, secondary row lines, paths and inline errors.
@@ -61,12 +62,13 @@ enum Theme {
     /// - `micro`: chart axes and small inline symbols, such as disclosure chevrons.
     /// - `glyph`: the smallest inline symbols inside pills. Never use it for words.
     enum TextRole: CaseIterable {
-        case display, title, body, label, caption, small, micro, glyph
+        case display, title, headline, body, label, caption, small, micro, glyph
 
         var size: CGFloat {
             switch self {
             case .display: 26
             case .title: 22
+            case .headline: 15
             case .body: 13
             case .label: 12
             case .caption: 11

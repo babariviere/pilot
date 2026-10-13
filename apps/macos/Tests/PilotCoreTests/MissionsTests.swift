@@ -320,3 +320,27 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     #expect(MissionTaskOwnerLabel.text(task: task, chatTitle: nil) == "Chat")
     #expect(MissionTaskOwnerLabel.help(chatTitle: "Cursor pagination") == "Open the chat “Cursor pagination”")
 }
+
+@Test func milestoneProgressKeepsTaskOrderAndGroupsUnnamedTasksLast() {
+    let tasks = [
+        MissionTask(id: "a", number: 1, title: "A", status: .done, order: 1, milestone: "Foundations"),
+        MissionTask(id: "b", number: 2, title: "B", status: .inProgress, order: 2, milestone: "Endpoints"),
+        MissionTask(id: "c", number: 3, title: "C", status: .todo, order: 3),
+        MissionTask(id: "d", number: 4, title: "D", status: .blocked, order: 4, milestone: "Foundations"),
+        MissionTask(id: "e", number: 5, title: "E", status: .dropped, order: 5, milestone: "Release"),
+        MissionTask(id: "f", number: 6, title: "F", status: .todo, order: 6, milestone: "  "),
+    ]
+    let progress = MissionMilestones.progress(tasks)
+    #expect(progress.map(\.name) == ["Foundations", "Endpoints", nil], "dropped-only milestones are omitted")
+    #expect(progress[0].counts.done == 1)
+    #expect(progress[0].counts.total == 2)
+    #expect(progress[0].counts[.blocked] == 1)
+    #expect(progress[2].counts.total == 2, "blank milestones count as unnamed")
+    #expect(MissionMilestones.progress(tasks.map {
+        MissionTask(id: $0.id, number: $0.number, title: $0.title, status: $0.status, order: $0.order)
+    }).isEmpty, "no milestones, no phase lines")
+    let counts = MissionTaskCounts(tasks)
+    #expect(counts.total == 5)
+    #expect(counts[.todo] == 2)
+    #expect(counts[.dropped] == 0)
+}

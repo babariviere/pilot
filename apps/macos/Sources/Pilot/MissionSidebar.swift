@@ -1,7 +1,8 @@
 import PilotCore
 import SwiftUI
 
-/// A mission in the sidebar: opens the mission page, and expands to its chats.
+/// A mission in the sidebar: opens the mission page, and expands to its chats. The needs-you badge is
+/// always visible; New chat and the disclosure chevron appear on hover (the chevron also while expanded).
 struct MissionSidebarRow: View {
     let mission: Mission
     let needsYou: Int
@@ -10,23 +11,25 @@ struct MissionSidebarRow: View {
     let selected: Bool
     @Binding var isExpanded: Bool
     @EnvironmentObject private var model: AppModel
+    @State private var hovered = false
 
     var body: some View {
         HStack(spacing: 6) {
             Button { model.openMission(mission.id) } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "scope")
-                        .font(.system(size: 12))
+                        .font(.pilot(.label))
                         .foregroundStyle(mission.status == .active ? Theme.foreground : Theme.faintForeground)
                         .frame(width: 14)
                     Text(mission.title)
-                        .font(.system(size: 13))
+                        .font(.pilot(.body, weight: .medium))
                         .foregroundStyle(mission.status == .active ? Theme.foreground : Theme.mutedForeground)
                         .lineLimit(1)
                     Spacer(minLength: 0)
-                    if working > 0 {
+                    if working > 0, !hovered {
                         CountBadge(count: working)
                             .help("\(working) working")
+                            .accessibilityLabel("\(working) working")
                     }
                     if needsYou > 0 {
                         CountBadge(count: needsYou, style: .attention)
@@ -38,34 +41,31 @@ struct MissionSidebarRow: View {
             }
             .buttonStyle(.plain)
             if mission.status == .active {
-                Button { model.newSession(in: mission) } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(width: 16, height: 16)
-                }
-                .buttonStyle(.borderless)
-                .help("New chat in \(mission.title)")
-                .accessibilityLabel("New chat in \(mission.title)")
+                Button { model.newSession(in: mission) } label: { Image(systemName: "plus") }
+                    .buttonStyle(QuietIconButtonStyle())
+                    .help("New chat in \(mission.title)")
+                    .accessibilityLabel("New chat in \(mission.title)")
+                    .revealed(hovered)
             }
             Button { isExpanded.toggle() } label: {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .frame(width: 16, height: 16)
             }
-            .buttonStyle(.borderless)
+            .buttonStyle(QuietIconButtonStyle())
             .help("\(isExpanded ? "Hide" : "Show") \(chatCount) chat\(chatCount == 1 ? "" : "s")")
             .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(mission.title)")
+            .revealed(hovered || isExpanded)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
         .padding(.horizontal, 4)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.selected : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.selected : (hovered ? Theme.muted : Color.clear)))
+        .onHover { hovered = $0 }
         .contextMenu {
-            Button("New chat") { model.newSession(in: mission) }
+            Button("New Chat") { model.newSession(in: mission) }
                 .disabled(mission.status != .active)
-            Menu("Add existing chat…") { MissionExistingChatItems(mission: mission) }
+            Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
             Divider()
             Button("Open Mission") { model.openMission(mission.id) }
+            Button(isExpanded ? "Hide Chats" : "Show Chats") { isExpanded.toggle() }
             Button("Edit Title and Goal…") { model.missionSheet = .edit(missionId: mission.id) }
             Divider()
             if mission.status != .done {
@@ -87,7 +87,7 @@ struct MissionSidebarRow: View {
     }
 }
 
-/// Secondary action shared by the Chats tab and sidebar group.
+/// Secondary action shared by the toolbar, Chats tab and sidebar group.
 struct MissionExistingChatItems: View {
     let mission: Mission
     @EnvironmentObject private var model: AppModel
@@ -106,3 +106,4 @@ struct MissionExistingChatItems: View {
         if candidates.isEmpty { Text("No other chats in this project") }
     }
 }
+

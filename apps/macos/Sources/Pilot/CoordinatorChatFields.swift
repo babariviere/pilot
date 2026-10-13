@@ -18,7 +18,8 @@ struct CoordinatorChatForm {
     }
 }
 
-/// Shared new-coordinator controls. Fetch only on project changes, never on typing.
+/// Shared new-coordinator controls: what to plan, in a composer tray, with model and thinking chips.
+/// Fetch only on project changes, never on typing.
 /// ModelMenu keeps the same scope presentation as New chat; the daemon also applies the task-start cap.
 struct CoordinatorChatFields: View {
     let projectId: String?
@@ -31,46 +32,68 @@ struct CoordinatorChatFields: View {
     }
 
     var body: some View {
-        HStack {
-            ModelMenu(model: $form.model, projectDefault: projectId.flatMap { client.project($0)?.model }, list: form.models)
-                .disabled(form.loading)
-            Picker("Thinking", selection: $form.thinking) {
-                Text("Default").tag("")
-                ForEach(option?.thinkingLevels ?? ["off"], id: \.self) { Text($0.capitalized).tag($0) }
-            }
-            .disabled(form.loading)
-        }
         VStack(alignment: .leading, spacing: 6) {
-            Text("What should it do? (optional)").font(.callout)
-            TextEditor(text: $form.message)
-                .font(.body)
-                .frame(height: 100)
-                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.border))
-                .accessibilityLabel("What should it do?")
-            Text("Add context, links or constraints. The chat drafts the brief and tasks for your review.")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        if form.loading { ProgressView("Loading models…").controlSize(.small) }
-        if let error = form.error {
-            Text(error).font(.callout).foregroundStyle(Theme.destructive)
-            Button("Retry loading models") { Task { await load() } }
-        }
-        if !form.loading && form.error == nil && form.models.models.isEmpty {
-            Text("No models available in this project's scope and price cap.")
-                .font(.callout).foregroundStyle(.secondary)
-        }
-        Color.clear.frame(height: 0)
-            .task(id: projectId) {
-                if form.loadedProjectId != projectId {
-                    form.loadedProjectId = projectId
-                    form.model = ""
-                    form.thinking = ""
-                    form.models = ModelList(models: [])
+            ComposerTray {
+                TextField("Tell it what to plan: links, constraints, what done looks like…", text: $form.message, axis: .vertical)
+                    .lineLimit(4 ... 8)
+                    .accessibilityLabel("What should it do?")
+            } controls: {
+                ModelMenu(model: $form.model, projectDefault: projectId.flatMap { client.project($0)?.model }, list: form.models)
+                    .disabled(form.loading)
+                thinkingMenu
+                    .disabled(form.loading)
+                if form.loading {
+                    ProgressView().controlSize(.mini)
+                    Text("Loading models…").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
-                await load()
+                Spacer()
             }
-            .onChange(of: form.model) { _, _ in form.thinking = "" }
+            if let error = form.error {
+                HStack(spacing: 8) {
+                    Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
+                    Button("Retry") { Task { await load() } }.controlSize(.small)
+                }
+            }
+            if !form.loading && form.error == nil && form.models.models.isEmpty {
+                Text("No models available in this project's scope and price cap.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+            }
+        }
+        .task(id: projectId) {
+            if form.loadedProjectId != projectId {
+                form.loadedProjectId = projectId
+                form.model = ""
+                form.thinking = ""
+                form.models = ModelList(models: [])
+            }
+            await load()
+        }
+        .onChange(of: form.model) { _, _ in form.thinking = "" }
     }
+
+    private var thinkingMenu: some View {
+        let levels = option?.thinkingLevels ?? ["off"]
+        return Menu {
+            Button { form.thinking = "" } label: {
+                if form.thinking.isEmpty { Label("Default", systemImage: "checkmark") } else { Text("Default") }
+            }
+            ForEach(levels, id: \.self) { level in
+                Button { form.thinking = level } label: {
+                    if form.thinking == level { Label(thinkingLabel(level), systemImage: "checkmark") }
+                    else { Text(thinkingLabel(level)) }
+                }
+            }
+        } label: {
+            ChipLabel(title: form.thinking.isEmpty ? "Thinking: default" : "Thinking: \(thinkingLabel(form.thinking))",
+                      icon: "brain")
+        }
+        .chipMenuStyle()
+        .fixedSize()
+        .help("Thinking level for the coordinator")
+        .accessibilityLabel("Thinking: \(form.thinking.isEmpty ? "default" : thinkingLabel(form.thinking))")
+    }
+
+    private func thinkingLabel(_ level: String) -> String { level == "xhigh" ? "XHigh" : level.capitalized }
 
     private func load() async {
         form.loading = true
@@ -99,23 +122,26 @@ struct StartCoordinatorSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Start a coordinator").font(.headline)
-            Text(client.mission(missionId)?.title ?? "Mission").font(.callout).foregroundStyle(.secondary)
-            Form {
-                CoordinatorChatFields(projectId: client.mission(missionId)?.projectId, form: $form)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Start a coordinator").font(.pilot(.body, weight: .semibold))
+                Text(client.mission(missionId)?.title ?? "Mission").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
             }
-            .formStyle(.grouped).disabled(saving)
-            if let error { Text(error).font(.callout).foregroundStyle(Theme.destructive) }
+            Text("It drafts the brief and tasks for your review, and can start and message mission chats. It does not implement tasks itself.")
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            CoordinatorChatFields(projectId: client.mission(missionId)?.projectId, form: $form)
+                .disabled(saving)
+            if let error { Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled) }
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(saving ? "Starting…" : "Start coordinator", action: start)
+                Button(saving ? "Starting…" : "Start Coordinator", action: start)
                     .keyboardShortcut(.defaultAction)
                     .disabled(saving || !form.canStart || client.mission(missionId)?.status != .active
                               || client.mission(missionId)?.coordinatorSessionId != nil)
             }
         }
-        .padding(20).frame(width: 480)
+        .padding(20).frame(width: 500)
     }
 
     private func start() {

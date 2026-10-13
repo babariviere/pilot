@@ -14,7 +14,8 @@ final class BriefEditorState: ObservableObject {
     @Published var error: String?
     /// Latest revision known when a save was rejected as stale.
     @Published var conflict: Int?
-    @Published var preview = false
+    /// The brief reads as rendered Markdown until the user chooses Edit.
+    @Published var editing = false
     @Published var revisions: [MissionBriefRevision] = []
     @Published var viewing: MissionBrief?
     private var loaded = false
@@ -30,6 +31,15 @@ final class BriefEditorState: ObservableObject {
         conflict = nil
     }
 
+    /// Leaves edit mode without saving.
+    func discard(latest: MissionBrief?) {
+        text = loadedText
+        editing = false
+        conflict = nil
+        error = nil
+        sync(latest)
+    }
+
     func save(missionId: String, client: PilotClient) async {
         saving = true
         error = nil
@@ -40,6 +50,7 @@ final class BriefEditorState: ObservableObject {
             loadedText = markdown
             baseRevision = brief.revision
             conflict = nil
+            editing = false
             await loadRevisions(missionId: missionId, client: client)
         } catch let failure as ClientError where failure.status == 409 {
             conflict = client.mission(missionId)?.briefRevision ?? baseRevision + 1
@@ -63,6 +74,7 @@ final class BriefEditorState: ObservableObject {
     }
 }
 
+/// Decisions first (they override the brief), then the brief itself, read-first, then comments.
 struct MissionBriefTab: View {
     let mission: Mission
     let detail: MissionDetail
@@ -74,14 +86,14 @@ struct MissionBriefTab: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 28) {
                 decisions
-                briefEditor
+                briefSection
                 comments
-                revisions
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .onAppear { editor.sync(detail.brief) }
@@ -92,165 +104,222 @@ struct MissionBriefTab: View {
         }
     }
 
-    // Decisions are binding and shown above the brief.
+    // MARK: Decisions
+
     private var decisions: some View {
-        MissionSection("Decisions") {
+        VStack(alignment: .leading, spacing: 4) {
+            PageSectionHeader(title: "Decisions", count: detail.decisions.count)
+            Text("Binding. They override the brief.")
+                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                .padding(.bottom, 4)
             ForEach(detail.decisions) { item in
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "checkmark.seal").foregroundStyle(Theme.success).frame(width: 16)
-                    if decision.editingId == item.id {
-                        TextField("Decision", text: $decision.secondary, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit { saveDecision(item) }
-                        Button("Save") { saveDecision(item) }
-                        Button("Cancel") { decision.editingId = nil }
-                    } else {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                            Text(missionAuthorName(item.authorSessionId, client: client))
-                                .font(.caption).foregroundStyle(Theme.mutedForeground)
-                        }
-                        Spacer()
-                        Button { decision.secondary = item.text; decision.editingId = item.id } label: { Image(systemName: "pencil") }
-                            .buttonStyle(.borderless).help("Edit decision")
-                        Button {
-                            model.missionAction { [client, id = mission.id] in
-                                try await client.deleteMissionDecision(id, decisionId: item.id)
-                            }
-                        } label: { Image(systemName: "trash") }
-                            .buttonStyle(.borderless).help("Remove decision")
-                    }
+                decisionRow(item)
+            }
+            if decision.confirming {
+                HStack(spacing: 8) {
+                    TextField("Record a decision", text: $decision.text)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit(addDecision)
+                        .onExitCommand { decision.confirming = false }
+                    Button("Cancel") { decision.confirming = false; decision.text = "" }
+                    Button("Add", action: addDecision)
+                        .disabled(decision.busy || decision.trimmed(decision.text).isEmpty)
                 }
-                .font(.callout)
-                .padding(10)
-                MissionRowDivider()
+                .padding(.leading, 8)
+                .padding(.top, 4)
+            } else {
+                QuietAddButton(title: "Record a decision") { decision.confirming = true }
+                    .padding(.leading, 8)
+                    .padding(.top, 2)
             }
-            HStack(spacing: 8) {
-                TextField("Record a decision", text: $decision.text).textFieldStyle(.roundedBorder).onSubmit(addDecision)
-                Button("Add", action: addDecision).disabled(decision.busy || decision.trimmed(decision.text).isEmpty)
-            }
-            .padding(10)
         }
     }
 
-    private var briefEditor: some View {
-        MissionSection("Brief", accessory: {
-            HStack(spacing: 8) {
-                Text(editor.baseRevision == 0 ? "No revisions yet" : "Revision \(editor.baseRevision)")
-                    .font(.caption).foregroundStyle(Theme.faintForeground)
-                Picker("", selection: $editor.preview) {
-                    Text("Edit").tag(false)
-                    Text("Preview").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                Button(editor.saving ? "Saving…" : "Save") {
-                    Task { await editor.save(missionId: mission.id, client: client) }
-                }
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(!editor.dirty || editor.saving)
-            }
-        }) {
-            if let conflict = editor.conflict {
-                HStack(alignment: .top, spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Revision \(conflict) was saved while you were editing, so your changes were not saved.")
-                            .font(.callout.weight(.medium))
-                        Text("Copy your text, reload the latest brief and reapply your edits.")
-                            .font(.caption).foregroundStyle(Theme.mutedForeground)
-                        HStack {
-                            Button("Copy my text") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(editor.text, forType: .string)
-                            }
-                            Button("Reload latest") { Task { await editor.reload(missionId: mission.id, client: client) } }
+    private func decisionRow(_ item: MissionDecision) -> some View {
+        HoverRow(verticalPadding: 5) { hovered in
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Image(systemName: "checkmark.seal.fill").font(.pilot(.caption)).foregroundStyle(Theme.success).frame(width: 16)
+                if decision.editingId == item.id {
+                    TextField("Decision", text: $decision.secondary, axis: .vertical)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { saveDecision(item) }
+                    Button("Cancel") { decision.editingId = nil }
+                    Button("Save") { saveDecision(item) }
+                } else {
+                    Text(item.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    ZStack(alignment: .trailing) {
+                        Text(missionAuthorName(item.authorSessionId, client: client))
+                            .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                            .opacity(hovered ? 0 : 1)
+                        HStack(spacing: 2) {
+                            Button { editDecision(item) } label: { Image(systemName: "pencil") }
+                                .buttonStyle(QuietIconButtonStyle())
+                                .help("Edit decision").accessibilityLabel("Edit decision")
+                            Button { removeDecision(item) } label: { Image(systemName: "trash") }
+                                .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                                .help("Remove decision").accessibilityLabel("Remove decision")
                         }
-                        .controlSize(.small)
+                        .revealed(hovered)
                     }
                 }
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.warning.opacity(0.08))
-                MissionRowDivider()
-            } else if editor.dirty, let latest = detail.brief?.revision, latest > editor.baseRevision {
-                Text("Revision \(latest) arrived while you were editing. Saving will be rejected until you reload.")
-                    .font(.caption).foregroundStyle(Theme.warning).padding(10)
-                MissionRowDivider()
             }
-            if let error = editor.error {
-                Text(error).font(.caption).foregroundStyle(Theme.destructive).padding(10)
-                MissionRowDivider()
-            }
-            if editor.preview {
-                ScrollView {
-                    MarkdownView(text: editor.text.isEmpty ? "_The brief is empty._" : editor.text)
-                        .padding(14)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .contextMenu {
+            Button("Edit Decision") { editDecision(item) }
+            Button("Remove Decision", role: .destructive) { removeDecision(item) }
+        }
+    }
+
+    // MARK: Brief
+
+    private var briefSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("Brief").font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    .accessibilityAddTraits(.isHeader)
+                revisionMenu
+                Spacer(minLength: 8)
+                if editor.editing {
+                    Button("Cancel") { editor.discard(latest: detail.brief) }
+                        .keyboardShortcut(.cancelAction)
+                    Button(editor.saving ? "Saving…" : "Save") {
+                        Task { await editor.save(missionId: mission.id, client: client) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut("s", modifiers: .command)
+                    .disabled(!editor.dirty || editor.saving)
+                } else if !editor.text.isEmpty {
+                    Button { editor.editing = true } label: { Label("Edit", systemImage: "pencil") }
+                        .help("Edit the brief. Saving creates a new revision.")
                 }
-                .frame(minHeight: 360)
-            } else {
+            }
+            HairlineDivider()
+            notices
+            if editor.editing {
                 TextEditor(text: $editor.text)
                     .font(.system(size: 13, design: .monospaced))
                     .scrollContentBackground(.hidden)
                     .padding(10)
-                    .frame(minHeight: 360)
+                    .frame(minHeight: 420)
+                    .card(radius: 8)
+                    .accessibilityLabel("Brief Markdown")
+            } else if editor.text.isEmpty {
+                EmptyStateView(icon: "doc.text", title: "No brief yet",
+                               message: "The brief is the shared spec every mission chat reads.") {
+                    Button { editor.editing = true } label: { Label("Write the Brief", systemImage: "pencil") }
+                        .buttonStyle(.borderedProminent)
+                }
+            } else {
+                MarkdownView(text: editor.text)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
             }
         }
     }
+
+    @ViewBuilder private var notices: some View {
+        if let conflict = editor.conflict {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Revision \(conflict) was saved while you were editing, so your changes were not saved.")
+                        .font(.pilot(.body, weight: .medium))
+                    Text("Copy your text, reload the latest brief and reapply your edits.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    HStack {
+                        Button("Copy My Text") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(editor.text, forType: .string)
+                        }
+                        Button("Reload Latest") { Task { await editor.reload(missionId: mission.id, client: client) } }
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.warning.opacity(0.08)))
+        } else if editor.dirty, let latest = detail.brief?.revision, latest > editor.baseRevision {
+            Text("Revision \(latest) arrived while you were editing. Saving will be rejected until you reload.")
+                .font(.pilot(.caption)).foregroundStyle(Theme.warning)
+        }
+        if let error = editor.error {
+            Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
+        }
+    }
+
+    private var revisionMenu: some View {
+        Menu {
+            ForEach(editor.revisions, id: \.revision) { revision in
+                Button("Revision \(revision.revision) · \(missionAuthorName(revision.authorSessionId, client: client)) · \(missionRelativeTime(revision.createdAt))") {
+                    Task { await editor.view(revision.revision, missionId: mission.id, client: client) }
+                }
+            }
+            if editor.revisions.isEmpty { Text("No revisions yet") }
+        } label: {
+            ChipLabel(title: editor.baseRevision == 0 ? "No revisions" : "Revision \(editor.baseRevision)",
+                      icon: "clock.arrow.circlepath")
+        }
+        .chipMenuStyle()
+        .fixedSize()
+        .help("Revision history")
+        .accessibilityLabel(editor.baseRevision == 0 ? "No revisions" : "Revision \(editor.baseRevision), history")
+    }
+
+    // MARK: Comments
 
     private var comments: some View {
         let open = detail.comments.filter(\.isOpen)
         let resolved = detail.comments.filter { !$0.isOpen }
-        return MissionSection("Comments") {
+        let members = model.members(of: mission).filter { !$0.isArchived }
+        let recipient = comment.option.flatMap { id in members.first { $0.id == id }?.title }
+            ?? (mission.coordinatorSessionId == nil ? "Anyone" : "Coordinator")
+        return VStack(alignment: .leading, spacing: 8) {
+            PageSectionHeader(title: "Comments", count: open.count)
             ForEach(open + resolved) { item in
                 CommentRow(comment: item, missionId: mission.id)
-                MissionRowDivider()
             }
-            VStack(alignment: .leading, spacing: 6) {
-                TextField("Quote from the brief (optional)", text: $comment.secondary).textFieldStyle(.roundedBorder)
-                HStack(spacing: 8) {
-                    TextField("Add a comment", text: $comment.text).textFieldStyle(.roundedBorder).onSubmit(addComment)
-                    Picker("To", selection: $comment.option) {
-                        Text(mission.coordinatorSessionId == nil ? "Anyone" : "Coordinator").tag(String?.none)
-                        ForEach(model.members(of: mission).filter { !$0.isArchived }) { Text($0.title).tag(Optional($0.id)) }
+            ComposerTray {
+                VStack(alignment: .leading, spacing: 6) {
+                    if comment.confirming {
+                        TextField("Quote from the brief", text: $comment.secondary)
+                            .font(.pilot(.caption)).italic()
+                            .padding(.leading, 8)
+                            .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 2) }
                     }
-                    .frame(maxWidth: 200)
-                    Button("Comment", action: addComment).disabled(comment.busy || comment.trimmed(comment.text).isEmpty)
+                    TextField("Comment on the brief…", text: $comment.text, axis: .vertical)
+                        .lineLimit(1 ... 5)
+                        .onSubmit(addComment)
+                        .accessibilityLabel("Comment")
                 }
+            } controls: {
+                Button { comment.confirming.toggle() } label: { Image(systemName: "text.quote") }
+                    .buttonStyle(QuietIconButtonStyle())
+                    .help(comment.confirming ? "Remove the quote" : "Quote a passage of the brief")
+                    .accessibilityLabel(comment.confirming ? "Remove quote" : "Add quote")
+                Menu {
+                    Button(mission.coordinatorSessionId == nil ? "Anyone" : "Coordinator") { comment.option = nil }
+                    if !members.isEmpty { Divider() }
+                    ForEach(members) { session in Button(session.title) { comment.option = session.id } }
+                } label: {
+                    ChipLabel(title: "To \(recipient)", icon: "arrowshape.turn.up.right", maxTitleWidth: 200)
+                }
+                .chipMenuStyle()
+                .fixedSize()
+                .help("Who should read this comment")
+                Spacer()
+                Button(action: addComment) { Image(systemName: "arrow.up") }
+                    .buttonStyle(CircleIconButtonStyle())
+                    .disabled(comment.busy || comment.trimmed(comment.text).isEmpty)
+                    .help("Post comment")
+                    .accessibilityLabel("Post comment")
             }
-            .padding(10)
         }
     }
 
-    private var revisions: some View {
-        MissionSection("Revision history") {
-            if editor.revisions.isEmpty {
-                Text("No revisions yet").font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
-            }
-            ForEach(Array(editor.revisions.enumerated()), id: \.element.revision) { index, revision in
-                if index > 0 { MissionRowDivider() }
-                Button {
-                    Task { await editor.view(revision.revision, missionId: mission.id, client: client) }
-                } label: {
-                    HStack {
-                        Text("Revision \(revision.revision)").monospacedDigit()
-                        Text(missionAuthorName(revision.authorSessionId, client: client))
-                            .foregroundStyle(Theme.mutedForeground).lineLimit(1)
-                        Spacer()
-                        Text(missionRelativeTime(revision.createdAt)).foregroundStyle(Theme.faintForeground)
-                    }
-                    .font(.callout)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Show revision \(revision.revision)")
-            }
-        }
-    }
+    // MARK: Actions
 
     private func addDecision() {
         let text = decision.trimmed(decision.text)
@@ -260,6 +329,18 @@ struct MissionBriefTab: View {
             defer { decision.busy = false }
             try await client.addMissionDecision(id, text: text)
             decision.text = ""
+            decision.confirming = false
+        }
+    }
+
+    private func editDecision(_ item: MissionDecision) {
+        decision.secondary = item.text
+        decision.editingId = item.id
+    }
+
+    private func removeDecision(_ item: MissionDecision) {
+        model.missionAction { [client, id = mission.id] in
+            try await client.deleteMissionDecision(id, decisionId: item.id)
         }
     }
 
@@ -275,7 +356,7 @@ struct MissionBriefTab: View {
     private func addComment() {
         let text = comment.trimmed(comment.text)
         guard !text.isEmpty, !comment.busy else { return }
-        let anchor = comment.trimmed(comment.secondary)
+        let anchor = comment.confirming ? comment.trimmed(comment.secondary) : ""
         let target = comment.option
         comment.busy = true
         model.missionAction { [client, id = mission.id] in
@@ -284,7 +365,27 @@ struct MissionBriefTab: View {
                                                                        targetSessionId: target))
             comment.text = ""
             comment.secondary = ""
+            comment.confirming = false
         }
+    }
+}
+
+/// "+ Title" in muted text, for adding an item at the end of a list.
+struct QuietAddButton: View {
+    let title: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "plus").font(.pilot(.micro, weight: .semibold))
+                Text(title)
+            }
+            .font(.pilot(.label))
+            .foregroundStyle(Theme.mutedForeground)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -308,9 +409,9 @@ private struct BriefRevisionViewer: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Copy into editor") {
+                Button("Copy into Editor") {
                     editor.text = brief.markdown
-                    editor.preview = false
+                    editor.editing = true
                     dismiss()
                 }
                 .help("Replace the editor text with this revision. Saving creates a new revision.")
@@ -333,34 +434,46 @@ private struct CommentRow: View {
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: comment.isOpen ? "text.bubble" : "checkmark.bubble")
-                .foregroundStyle(comment.isOpen ? Theme.info : Theme.faintForeground).frame(width: 16)
-            VStack(alignment: .leading, spacing: 4) {
-                if let anchor = comment.anchor, !anchor.isEmpty {
-                    Text(anchor)
-                        .font(.caption).italic().foregroundStyle(Theme.mutedForeground).lineLimit(3)
-                        .padding(.leading, 8)
-                        .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 2) }
+        HoverRow(verticalPadding: 7) { hovered in
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: comment.isOpen ? "text.bubble" : "checkmark.bubble")
+                    .font(.pilot(.label))
+                    .foregroundStyle(comment.isOpen ? Theme.info : Theme.faintForeground).frame(width: 16)
+                VStack(alignment: .leading, spacing: 4) {
+                    if let anchor = comment.anchor, !anchor.isEmpty {
+                        Text(anchor)
+                            .font(.pilot(.caption)).italic().foregroundStyle(Theme.mutedForeground).lineLimit(3)
+                            .padding(.leading, 8)
+                            .overlay(alignment: .leading) { Rectangle().fill(Theme.border).frame(width: 2) }
+                    }
+                    Text(comment.text).font(.pilot(.body)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(comment.isOpen ? Theme.foreground : Theme.mutedForeground)
+                    Text(byline).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
-                Text(comment.text).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    .foregroundStyle(comment.isOpen ? Theme.foreground : Theme.mutedForeground)
-                Text(byline).font(.caption).foregroundStyle(Theme.mutedForeground)
-            }
-            Spacer()
-            if comment.isOpen {
-                Button("Resolve") {
-                    model.missionAction { [client] in try await client.resolveMissionComment(missionId, commentId: comment.id) }
+                Spacer(minLength: 8)
+                HStack(spacing: 4) {
+                    if comment.isOpen {
+                        Button("Resolve", action: resolve).controlSize(.small)
+                    }
+                    Button(action: delete) { Image(systemName: "trash") }
+                        .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                        .help("Delete comment").accessibilityLabel("Delete comment")
                 }
-                .controlSize(.small)
+                .revealed(hovered)
             }
-            Button {
-                model.missionAction { [client] in try await client.deleteMissionComment(missionId, commentId: comment.id) }
-            } label: { Image(systemName: "trash") }
-                .buttonStyle(.borderless).help("Delete comment")
         }
-        .font(.callout)
-        .padding(10)
+        .contextMenu {
+            if comment.isOpen { Button("Resolve", action: resolve) }
+            Button("Delete Comment", role: .destructive, action: delete)
+        }
+    }
+
+    private func resolve() {
+        model.missionAction { [client] in try await client.resolveMissionComment(missionId, commentId: comment.id) }
+    }
+
+    private func delete() {
+        model.missionAction { [client] in try await client.deleteMissionComment(missionId, commentId: comment.id) }
     }
 
     private var byline: String {
@@ -381,33 +494,90 @@ struct MissionTasksTab: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @State private var input = MissionInput()
+    /// Closed groups start folded.
+    @State private var collapsed: Set<MissionTaskStatus> = [.done, .dropped]
 
     var body: some View {
         let groups = MissionTaskOrdering.groups(detail.tasks)
+        let counts = MissionTaskCounts(detail.tasks)
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                MissionProgressBar(done: detail.progress.done, total: detail.progress.total)
-                HStack(spacing: 8) {
-                    TextField("New task", text: $input.text).textFieldStyle(.roundedBorder).onSubmit(add)
-                    Button("Add task", action: add).disabled(input.busy || input.trimmed(input.text).isEmpty)
+            VStack(alignment: .leading, spacing: 0) {
+                if counts.total > 0 {
+                    MissionTaskProgress(counts: counts, compact: true)
+                        .frame(maxWidth: 280, alignment: .leading)
+                        .padding(.bottom, 12)
                 }
+                addField
                 if groups.isEmpty {
-                    Text("No tasks yet. Add one, or ask a mission chat to plan them.")
-                        .font(.callout).foregroundStyle(Theme.faintForeground)
+                    EmptyStateView(icon: "checklist", title: "No tasks yet",
+                                   message: "Add the first task above, or ask a mission chat to plan them.")
+                } else if counts.total > 0, counts.done == counts.total, mission.status == .active {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle").foregroundStyle(Theme.success)
+                        Text("Every task is done.").foregroundStyle(Theme.mutedForeground)
+                        Button("Mark Mission as Done") {
+                            model.missionAction { [client, id = mission.id] in
+                                try await client.updateMission(id, UpdateMissionRequest(status: .done))
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                    .font(.pilot(.body))
+                    .padding(.top, 16)
                 }
                 ForEach(groups) { group in
-                    MissionSection("\(group.status.label) · \(group.tasks.count)") {
+                    groupHeader(group)
+                    if !collapsed.contains(group.status) {
                         ForEach(Array(group.tasks.enumerated()), id: \.element.id) { index, task in
-                            if index > 0 { MissionRowDivider() }
+                            if index > 0 { HairlineDivider(leading: 58) }
                             MissionTaskRow(task: task, mission: mission, siblings: group.tasks)
                         }
                     }
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
+    }
+
+    private var addField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "plus").font(.pilot(.body)).foregroundStyle(Theme.mutedForeground).frame(width: 16)
+            TextField("Add a task", text: $input.text)
+                .textFieldStyle(.plain)
+                .font(.pilot(.body))
+                .onSubmit(add)
+                .disabled(input.busy)
+                .accessibilityLabel("New task title")
+            if !input.trimmed(input.text).isEmpty { KeyHint(key: "↩", label: "add") }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
+    }
+
+    private func groupHeader(_ group: MissionTaskGroup) -> some View {
+        let folded = collapsed.contains(group.status)
+        return Button {
+            if folded { collapsed.remove(group.status) } else { collapsed.insert(group.status) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: folded ? "chevron.right" : "chevron.down")
+                    .font(.pilot(.micro, weight: .semibold)).foregroundStyle(Theme.faintForeground).frame(width: 12)
+                Text(group.status.label).font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
+                Text("\(group.tasks.count)").font(.pilot(.label)).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                Spacer()
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 20)
+        .padding(.bottom, 4)
+        .accessibilityLabel("\(group.status.label), \(group.tasks.count) task\(group.tasks.count == 1 ? "" : "s")")
+        .accessibilityValue(folded ? "Collapsed" : "Expanded")
+        .accessibilityAddTraits(.isHeader)
     }
 
     private func add() {
@@ -429,6 +599,8 @@ private final class TaskTitleState: ObservableObject {
     init(_ title: String) { self.title = title }
 }
 
+/// One task: status, number, editable title, description and links. Start chat and the actions menu
+/// appear on hover; the context menu has every action.
 struct MissionTaskRow: View {
     let task: MissionTask
     let mission: Mission
@@ -437,7 +609,7 @@ struct MissionTaskRow: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
-    @State private var resource = MissionInput()
+    @State private var addingLink = false
     @StateObject private var artifacts = MissionArtifactsState()
 
     init(task: MissionTask, mission: Mission, siblings: [MissionTask]) {
@@ -448,106 +620,126 @@ struct MissionTaskRow: View {
     }
 
     var body: some View {
-        let index = siblings.firstIndex { $0.id == task.id } ?? 0
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            MissionTaskStatusMenu(task: task, missionId: mission.id)
-            Text("#\(task.number)").font(.caption.monospacedDigit()).foregroundStyle(Theme.faintForeground)
-            VStack(alignment: .leading, spacing: 2) {
-                TextField("Title", text: $title.title)
-                    .textFieldStyle(.plain)
-                    .onSubmit(saveTitle)
-                MissionTaskDescription(task: task)
-                ForEach(client.missionDetails[mission.id]?.resources.filter { $0.taskId == task.id } ?? []) { item in
-                    ResourceRow(resource: item, missionId: mission.id, compact: true)
-                }
-                ForEach(client.missionDetails[mission.id]?.artifacts.filter { $0.taskId == task.id } ?? []) { item in
-                    Button {
-                        artifacts.selected = MissionArtifactSelection(
-                            reference: ArtifactReference(id: item.artifactId, sessionId: item.sessionId,
-                                                         title: item.title, revision: item.revision ?? 0),
-                            latest: item.revision == nil)
-                    } label: {
-                        Label("\(item.title) · \(item.kind.uppercased()) · \(item.revision.map { "r\($0)" } ?? "latest")",
-                              systemImage: item.kind == "image" ? "photo" : "cube.transparent")
-                            .lineLimit(1)
+        let detail = client.missionDetails[mission.id]
+        let resources = detail?.resources.filter { $0.taskId == task.id } ?? []
+        let links = detail?.artifacts.filter { $0.taskId == task.id } ?? []
+        HoverRow(verticalPadding: 7) { hovered in
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                MissionTaskStatusMenu(task: task, missionId: mission.id)
+                Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                    .frame(minWidth: 20, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    TextField("Title", text: $title.title)
+                        .textFieldStyle(.plain)
+                        .font(.pilot(.body))
+                        .strikethrough(task.status.isClosed)
+                        .foregroundStyle(task.status.isClosed ? Theme.mutedForeground : Theme.foreground)
+                        .onSubmit(saveTitle)
+                        .accessibilityLabel("Task \(task.number) title")
+                    MissionTaskDescription(task: task, collapsedLineLimit: 2)
+                    if !resources.isEmpty || !links.isEmpty {
+                        ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
+                            ForEach(resources) { item in
+                                MissionLinkChip(resource: item, missionId: mission.id, compact: true)
+                            }
+                            ForEach(links) { item in
+                                Button { open(item) } label: {
+                                    Label("\(item.title) · \(item.revision.map { "r\($0)" } ?? "latest")",
+                                          systemImage: item.kind == "image" ? "photo" : "cube.transparent")
+                                        .lineLimit(1)
+                                        .font(.pilot(.caption))
+                                        .foregroundStyle(Theme.mutedForeground)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Open \(item.title)")
+                            }
+                        }
+                        .padding(.top, 1)
                     }
-                    .buttonStyle(.link).font(.caption)
-                    .help("Open \(item.title)")
                 }
-                Button("Add link…") { resource.editingId = task.id }
-                    .buttonStyle(.link).font(.caption)
-                    .popover(isPresented: Binding(get: { resource.editingId != nil }, set: { if !$0 { resource.editingId = nil } })) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Link to task #\(task.number)").font(.headline)
-                            TextField("URL", text: $resource.text).textFieldStyle(.roundedBorder).onSubmit(addResource)
-                            TextField("Title (optional)", text: $resource.secondary).textFieldStyle(.roundedBorder).onSubmit(addResource)
-                            Button("Add", action: addResource).disabled(resource.busy || URL(string: resource.text)?.scheme == nil)
-                        }.padding(14).frame(width: 340)
+                Spacer(minLength: 8)
+                if let sessionId = task.sessionId {
+                    let chat = client.session(sessionId)?.title
+                    Button { model.selectedSessionId = sessionId } label: {
+                        Label(MissionTaskOwnerLabel.text(task: task, chatTitle: chat), systemImage: "bubble.left")
+                            .lineLimit(1).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: 180, alignment: .trailing)
+                    .help(MissionTaskOwnerLabel.help(chatTitle: chat))
+                }
+                HStack(spacing: 4) {
+                    if task.sessionId == nil, !task.status.isClosed {
+                        MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
+                    }
+                    Menu { menuItems } label: { Image(systemName: "ellipsis") }
+                        .menuStyle(.button)
+                        .buttonStyle(QuietIconButtonStyle())
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("Task actions")
+                        .accessibilityLabel("Actions for task \(task.number)")
+                }
+                .revealed(hovered)
             }
-            Spacer(minLength: 8)
-            owner
-            if task.sessionId == nil, !task.status.isClosed {
-                MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
-            }
-            Button { move(-1) } label: { Image(systemName: "chevron.up") }
-                .buttonStyle(.borderless).disabled(index == 0).help("Move up")
-            Button { move(1) } label: { Image(systemName: "chevron.down") }
-                .buttonStyle(.borderless).disabled(index == siblings.count - 1).help("Move down")
         }
-        .font(.callout)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
         .onChange(of: task.title) { _, value in title.title = value }
+        .contextMenu { menuItems }
+        .popover(isPresented: $addingLink, arrowEdge: .bottom) {
+            MissionAddLinkForm(missionId: mission.id, taskId: task.id, title: "Link to task #\(task.number)") {
+                addingLink = false
+            }
+        }
         .sheet(item: $artifacts.selected) { selection in
             ArtifactViewer(reference: selection.reference, latest: selection.latest)
         }
-        .contextMenu {
-            Button("Delete task", role: .destructive) {
-                model.missionAction { [client, id = mission.id] in try await client.deleteMissionTask(id, taskId: task.id) }
-            }
-        }
     }
 
-    private var owner: some View {
+    @ViewBuilder private var menuItems: some View {
         let members = model.members(of: mission).filter { !$0.isArchived }
-        return Menu {
-            if let sessionId = task.sessionId {
-                Button("Open chat") { model.selectedSessionId = sessionId }
-                Button("Release") { assign(nil) }
-                Divider()
-            }
+        let index = siblings.firstIndex { $0.id == task.id } ?? 0
+        if let sessionId = task.sessionId {
+            Button("Open Chat") { model.selectedSessionId = sessionId }
+        } else if !task.status.isClosed {
+            Button("Start Chat") { model.startChat(for: task, missionId: mission.id) }
+                .disabled(mission.status != .active)
+        }
+        Menu("Assign To") {
             ForEach(members) { session in
                 Button(session.title) { assign(session.id) }.disabled(session.id == task.sessionId)
             }
             if members.isEmpty { Text("No mission chats") }
-        } label: {
-            Label(task.sessionId.map { MissionTaskOwnerLabel.text(task: task, chatTitle: client.session($0)?.title) }
-                    ?? "Unassigned",
-                  systemImage: task.sessionId == nil ? "person.crop.circle.dashed" : "bubble.left")
-                .lineLimit(1)
-                .font(.caption)
+            if task.sessionId != nil {
+                Divider()
+                Button("Release") { assign(nil) }
+            }
         }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .frame(maxWidth: 200, alignment: .trailing)
-        .foregroundStyle(Theme.mutedForeground)
-        .help(task.sessionId.map { "Assigned to “\(client.session($0)?.title ?? "a chat")”. Click to reassign." }
-              ?? "Assign this task to a mission chat")
+        Menu("Status") {
+            ForEach(MissionTaskStatus.allCases, id: \.self) { status in
+                Button { setStatus(status) } label: { Label(status.label, systemImage: status.symbol) }
+                    .disabled(status == task.status)
+            }
+        }
+        Divider()
+        Button("Add Link…") { addingLink = true }
+        Button("Copy Reference") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString("#\(task.number) \(task.title)", forType: .string)
+        }
+        Divider()
+        Button("Move Up") { move(-1) }.disabled(index == 0)
+        Button("Move Down") { move(1) }.disabled(index >= siblings.count - 1)
+        Divider()
+        Button("Delete Task", role: .destructive) {
+            model.missionAction { [client, id = mission.id] in try await client.deleteMissionTask(id, taskId: task.id) }
+        }
     }
 
-    private func addResource() {
-        let url = resource.trimmed(resource.text)
-        guard !resource.busy, URL(string: url)?.scheme != nil else { return }
-        let value = resource.trimmed(resource.secondary)
-        resource.busy = true
-        model.missionAction { [client, id = mission.id, taskId = task.id] in
-            defer { resource.busy = false }
-            try await client.addMissionResource(id, MissionResourceWrite(url: url, title: value.isEmpty ? nil : value, taskId: taskId))
-            resource.text = ""
-            resource.secondary = ""
-            resource.editingId = nil
-        }
+    private func open(_ item: MissionArtifactLink) {
+        artifacts.selected = MissionArtifactSelection(
+            reference: ArtifactReference(id: item.artifactId, sessionId: item.sessionId,
+                                         title: item.title, revision: item.revision ?? 0),
+            latest: item.revision == nil)
     }
 
     private func saveTitle() {
@@ -555,6 +747,12 @@ struct MissionTaskRow: View {
         guard !value.isEmpty, value != task.title else { title.title = task.title; return }
         model.missionAction { [client, id = mission.id] in
             try await client.updateMissionTask(id, taskId: task.id, MissionTaskWrite(title: value))
+        }
+    }
+
+    private func setStatus(_ status: MissionTaskStatus) {
+        model.missionAction { [client, id = mission.id] in
+            try await client.updateMissionTask(id, taskId: task.id, MissionTaskWrite(status: status))
         }
     }
 
@@ -589,6 +787,8 @@ struct MissionTaskStartButton: View {
     }
 }
 
+/// The task's status icon, in its colour, opening a status menu. A plain menu style keeps the colour
+/// (borderless pop-ups redraw the label as a template image).
 struct MissionTaskStatusMenu: View {
     let task: MissionTask
     let missionId: String
@@ -602,11 +802,13 @@ struct MissionTaskStatusMenu: View {
             }
         } label: {
             Image(systemName: task.status.symbol)
+                .font(.pilot(.body, weight: .medium))
+                .foregroundStyle(task.status.color)
+                .frame(width: 16)
+                .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
+        .chipMenuStyle()
         .fixedSize()
-        .foregroundStyle(task.status.color)
         .help("Status: \(task.status.label)")
         .accessibilityLabel("Status \(task.status.label)")
     }
@@ -639,55 +841,55 @@ struct MissionChatsTab: View {
     @StateObject private var state = MissionChatsState()
 
     var body: some View {
-        let members = model.members(of: mission).filter { session in
-            switch state.filter {
-            case .active: !session.isArchived
-            case .archived: session.isArchived
-            case .all: true
-            }
+        let all = model.members(of: mission)
+        let active = all.filter { !$0.isArchived }
+        let archived = all.filter(\.isArchived)
+        let members = switch state.filter {
+        case .active: active
+        case .archived: archived
+        case .all: all
         }
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Picker("", selection: $state.filter) {
-                        ForEach(MissionChatFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            VStack(alignment: .leading, spacing: 8) {
+                if !all.isEmpty {
+                    Picker("Show", selection: $state.filter) {
+                        Text(active.isEmpty ? "Active" : "Active \(active.count)").tag(MissionChatFilter.active)
+                        Text(archived.isEmpty ? "Archived" : "Archived \(archived.count)").tag(MissionChatFilter.archived)
+                        Text("All").tag(MissionChatFilter.all)
                     }
-                    .pickerStyle(.segmented).labelsHidden().fixedSize()
-                    Spacer()
-                    Button { model.newSession(in: mission) } label: {
-                        Label("New chat", systemImage: "plus")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(mission.status != .active)
-                    .help("Open a new chat in this mission, with no task attached")
-                    Menu {
-                        Menu("Add existing chat…") { MissionExistingChatItems(mission: mission) }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                    }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-                    .help("More chat actions")
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                    .padding(.bottom, 6)
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    if members.isEmpty {
-                        Text(state.filter == .archived ? "No archived chats" : "No chats in this mission yet")
-                            .font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
+                if all.isEmpty || (members.isEmpty && state.filter == .active) {
+                    EmptyStateView(icon: "bubble.left.and.bubble.right", title: "No chats yet",
+                                   message: "Start a chat to work on the mission, or bring in a chat from this project.") {
+                        Button { model.newSession(in: mission) } label: { Label("New Chat", systemImage: "plus") }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(mission.status != .active)
+                        Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
+                            .fixedSize()
                     }
-                    ForEach(Array(members.enumerated()), id: \.element.id) { index, session in
-                        if index > 0 { MissionRowDivider() }
-                        MissionChatRow(session: session, mission: mission,
-                                       tasks: detail.tasks.filter { $0.sessionId == session.id })
-                    }
+                } else if members.isEmpty {
+                    Text("No archived chats").font(.pilot(.body)).foregroundStyle(Theme.faintForeground)
+                        .padding(.horizontal, 8)
                 }
-                .card()
+                ForEach(Array(members.enumerated()), id: \.element.id) { index, session in
+                    if index > 0 { HairlineDivider(leading: 34) }
+                    MissionChatRow(session: session, mission: mission,
+                                   tasks: detail.tasks.filter { $0.sessionId == session.id })
+                }
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
     }
 }
 
+/// A member chat. The whole row opens it; actions sit in a menu shown on hover and in the context menu.
 private struct MissionChatRow: View {
     let session: SessionSummary
     let mission: Mission
@@ -696,50 +898,59 @@ private struct MissionChatRow: View {
 
     var body: some View {
         let coordinator = mission.coordinatorSessionId == session.id
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            if !session.isActiveMissionCoordinator || session.isWorking { SessionStatusIcon(status: session.status) }
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(session.title).lineLimit(1)
-                    if model.isUnread(session) { UnreadBadge() }
-                    if coordinator {
-                        MissionCoordinatorIndicator(showsLabel: true)
+        let unread = model.isUnread(session)
+        HoverRow(verticalPadding: 7) { hovered in
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                // An active coordinator is never shown as done.
+                SessionStatusIcon(status: session.isActiveMissionCoordinator && !session.isWorking ? .idle : session.status)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
+                        Text(session.title).font(.pilot(.body, weight: unread ? .semibold : .regular))
+                            .foregroundStyle(Theme.foreground).lineLimit(1)
+                        if coordinator { MissionCoordinatorIndicator(showsLabel: true) }
+                        if session.isArchived {
+                            Text("Archived").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
+                        }
                     }
-                    if session.isArchived {
-                        Text("Archived").font(.caption2).foregroundStyle(Theme.faintForeground)
+                    if !tasks.isEmpty {
+                        Text(tasks.map { "#\($0.number) \($0.title)" }.joined(separator: ", "))
+                            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                     }
                 }
-                if !tasks.isEmpty {
-                    Text(tasks.map { "#\($0.number) \($0.title)" }.joined(separator: ", "))
-                        .font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                Spacer(minLength: 8)
+                if unread { UnreadBadge() }
+                ZStack(alignment: .trailing) {
+                    Text(SessionTimeFormatting.relative(session.listActivityAt))
+                        .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                        .opacity(hovered ? 0 : 1)
+                    Menu { actions(coordinator: coordinator) } label: { Image(systemName: "ellipsis") }
+                        .menuStyle(.button)
+                        .buttonStyle(QuietIconButtonStyle())
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .help("Chat actions")
+                        .accessibilityLabel("Actions for \(session.title)")
+                        .revealed(hovered)
                 }
             }
-            Spacer(minLength: 8)
-            Text(SessionTimeFormatting.relative(session.listActivityAt))
-                .font(.caption).monospacedDigit().foregroundStyle(Theme.faintForeground)
-            Button("Open") { model.selectedSessionId = session.id }.controlSize(.small)
-            Menu {
-                if coordinator {
-                    Button("Coordinate it yourself") { model.setCoordinator(nil, missionId: mission.id) }
-                } else {
-                    Button("Make coordinator") { model.setCoordinator(session.id, missionId: mission.id) }
-                }
-                Divider()
-                Button("Remove from mission", role: .destructive) { model.removeFromMission(session.id) }
-            } label: {
-                Image(systemName: "ellipsis")
-            }
-            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
-            .help("Chat actions")
         }
-        .font(.callout)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .contextMenu {
-            Button("Open") { model.selectedSessionId = session.id }
-            if !coordinator { Button("Make coordinator") { model.setCoordinator(session.id, missionId: mission.id) } }
-            Button("Remove from mission") { model.removeFromMission(session.id) }
+        .onTapGesture { model.selectedSessionId = session.id }
+        .contextMenu { actions(coordinator: coordinator) }
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { model.selectedSessionId = session.id }
+        .help("Open “\(session.title)”")
+    }
+
+    @ViewBuilder private func actions(coordinator: Bool) -> some View {
+        Button("Open Chat") { model.selectedSessionId = session.id }
+        if coordinator {
+            Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
+        } else if !session.isArchived {
+            Button("Make Coordinator") { model.setCoordinator(session.id, missionId: mission.id) }
         }
+        Divider()
+        Button("Remove from Mission", role: .destructive) { model.removeFromMission(session.id) }
     }
 }
 
@@ -765,76 +976,59 @@ struct MissionArtifactsTab: View {
 
     var body: some View {
         let members = model.members(of: mission).filter { !$0.isArchived }
-        let linked = Set(detail.artifacts.filter { $0.taskId == nil }.map(\.artifactId))
-        let linkable = members.flatMap { client.artifacts[$0.id] ?? [] }.filter { !linked.contains($0.id) }
         let taskNumbers = Dictionary(uniqueKeysWithValues: detail.tasks.map { ($0.id, $0.number) })
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline) {
                     Text("Artifacts stay owned by their chat. Linking makes them part of the mission.")
-                        .font(.caption).foregroundStyle(Theme.mutedForeground)
-                    Spacer()
-                    Menu {
-                        ForEach(linkable) { artifact in
-                            Button("\(artifact.title) · \(client.session(artifact.sessionId)?.title ?? "chat")") {
-                                model.missionAction { [client, id = mission.id] in
-                                    try await client.linkMissionArtifact(id, MissionArtifactLinkWrite(
-                                        sessionId: artifact.sessionId, artifactId: artifact.id))
-                                }
-                            }
-                        }
-                        if linkable.isEmpty { Text("No unlinked artifacts in mission chats") }
-                    } label: {
-                        Label("Link artifact", systemImage: "link")
-                    }
-                    .fixedSize()
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    Spacer(minLength: 8)
+                    if !detail.artifacts.isEmpty { linkMenu(members: members) }
                 }
-                VStack(alignment: .leading, spacing: 0) {
-                    if detail.artifacts.isEmpty {
-                        Text("No linked artifacts yet").font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
+                .padding(.bottom, 6)
+                if detail.artifacts.isEmpty {
+                    EmptyStateView(icon: "cube.transparent", title: "No linked artifacts",
+                                   message: "Link a chat's mockups, diagrams or reports so every mission chat can find them.") {
+                        linkMenu(members: members)
                     }
-                    ForEach(Array(detail.artifacts.enumerated()), id: \.element.id) { index, link in
-                        if index > 0 { MissionRowDivider() }
+                }
+                ForEach(Array(detail.artifacts.enumerated()), id: \.element.id) { index, link in
+                    if index > 0 { HairlineDivider(leading: 34) }
+                    HoverRow(verticalPadding: 7) { hovered in
                         HStack(spacing: 10) {
-                            Button {
-                                state.selected = MissionArtifactSelection(
-                                    reference: ArtifactReference(id: link.artifactId, sessionId: link.sessionId,
-                                                                 title: link.title, revision: link.revision ?? 0),
-                                    latest: link.revision == nil)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: link.kind == "image" ? "photo" : "cube.transparent")
-                                        .foregroundStyle(Theme.mutedForeground)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(link.title).lineLimit(1)
-                                        Text([client.session(link.sessionId)?.title ?? "Chat",
-                                              link.taskId.flatMap { taskNumbers[$0] }.map { "Task #\($0)" }]
-                                            .compactMap { $0 }.joined(separator: " · "))
-                                            .font(.caption).foregroundStyle(Theme.mutedForeground).lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Text("\(link.kind.uppercased()) · \(link.revision.map { "r\($0)" } ?? "latest")")
-                                        .font(.caption.monospaced()).foregroundStyle(Theme.mutedForeground)
-                                }
-                                .contentShape(Rectangle())
+                            Image(systemName: link.kind == "image" ? "photo" : "cube.transparent")
+                                .foregroundStyle(Theme.mutedForeground).frame(width: 16)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(link.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                                Text([client.session(link.sessionId)?.title ?? "Chat",
+                                      link.taskId.flatMap { taskNumbers[$0] }.map { "Task #\($0)" }]
+                                    .compactMap { $0 }.joined(separator: " · "))
+                                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                             }
-                            .buttonStyle(.plain)
-                            .help("Open \(link.title)")
-                            Button {
-                                model.missionAction { [client, id = mission.id] in
-                                    try await client.unlinkMissionArtifact(id, artifactId: link.artifactId, taskId: link.taskId)
-                                }
-                            } label: { Image(systemName: "xmark") }
-                                .buttonStyle(.borderless).help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
+                            Spacer(minLength: 8)
+                            Text("\(link.kind.uppercased()) · \(link.revision.map { "r\($0)" } ?? "latest")")
+                                .font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
+                            Button { unlink(link) } label: { Image(systemName: "xmark") }
+                                .buttonStyle(QuietIconButtonStyle())
+                                .help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
+                                .accessibilityLabel("Unlink \(link.title)")
+                                .revealed(hovered)
                         }
-                        .font(.callout)
-                        .padding(12)
                     }
+                    .onTapGesture { open(link) }
+                    .contextMenu {
+                        Button("Open") { open(link) }
+                        Button("Unlink", role: .destructive) { unlink(link) }
+                    }
+                    .accessibilityElement(children: .contain)
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { open(link) }
+                    .help("Open \(link.title)")
                 }
-                .card()
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
         }
         .task(id: mission.id) {
@@ -844,6 +1038,39 @@ struct MissionArtifactsTab: View {
         }
         .sheet(item: $state.selected) { selection in
             ArtifactViewer(reference: selection.reference, latest: selection.latest)
+        }
+    }
+
+    private func linkMenu(members: [SessionSummary]) -> some View {
+        let linked = Set(detail.artifacts.filter { $0.taskId == nil }.map(\.artifactId))
+        let linkable = members.flatMap { client.artifacts[$0.id] ?? [] }.filter { !linked.contains($0.id) }
+        return Menu {
+            ForEach(linkable) { artifact in
+                Button("\(artifact.title) · \(client.session(artifact.sessionId)?.title ?? "chat")") {
+                    model.missionAction { [client, id = mission.id] in
+                        try await client.linkMissionArtifact(id, MissionArtifactLinkWrite(
+                            sessionId: artifact.sessionId, artifactId: artifact.id))
+                    }
+                }
+            }
+            if linkable.isEmpty { Text("No unlinked artifacts in mission chats") }
+        } label: {
+            ChipLabel(title: "Link artifact", icon: "link")
+        }
+        .chipMenuStyle()
+        .fixedSize()
+    }
+
+    private func open(_ link: MissionArtifactLink) {
+        state.selected = MissionArtifactSelection(
+            reference: ArtifactReference(id: link.artifactId, sessionId: link.sessionId,
+                                         title: link.title, revision: link.revision ?? 0),
+            latest: link.revision == nil)
+    }
+
+    private func unlink(_ link: MissionArtifactLink) {
+        model.missionAction { [client, id = mission.id] in
+            try await client.unlinkMissionArtifact(id, artifactId: link.artifactId, taskId: link.taskId)
         }
     }
 }
@@ -870,47 +1097,75 @@ struct MissionActivityTab: View {
         let recentIds = Set(detail.events.map(\.id))
         let events = detail.events + state.older.filter { !recentIds.contains($0.id) }
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Post an update or handoff for agents to read", text: $input.text, axis: .vertical)
-                        .textFieldStyle(.roundedBorder).lineLimit(2 ... 6)
-                    HStack(spacing: 10) {
-                        Picker("", selection: $state.kind) {
-                            Text("Update").tag(MissionEventWriteKind.update)
-                            Text("Handoff").tag(MissionEventWriteKind.handoff)
-                        }
-                        .pickerStyle(.segmented).labelsHidden().fixedSize()
-                        Picker("Health", selection: $state.health) {
-                            Text("No health").tag(MissionHealth?.none)
-                            ForEach([MissionHealth.onTrack, .atRisk, .offTrack], id: \.self) {
-                                Text($0.label).tag(Optional($0))
+            VStack(alignment: .leading, spacing: 20) {
+                composer
+                if events.isEmpty {
+                    EmptyStateView(icon: "clock", title: "No activity yet",
+                                   message: "Updates, handoffs, task changes and brief revisions appear here.")
+                }
+                ForEach(MissionActivityDay.group(events)) { day in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(day.title).font(.pilot(.caption, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
+                            .accessibilityAddTraits(.isHeader)
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(day.events.enumerated()), id: \.element.id) { index, event in
+                                MissionTimelineRow(event: event, last: index == day.events.count - 1)
                             }
                         }
-                        .fixedSize()
-                        Spacer()
-                        Button("Post", action: post).disabled(input.busy || input.trimmed(input.text).isEmpty)
                     }
                 }
-                .padding(12)
-                .card()
-                VStack(alignment: .leading, spacing: 0) {
-                    if events.isEmpty {
-                        Text("No activity yet").font(.callout).foregroundStyle(Theme.faintForeground).padding(12)
-                    }
-                    ForEach(Array(events.enumerated()), id: \.element.id) { index, event in
-                        if index > 0 { MissionRowDivider() }
-                        MissionEventRow(event: event)
-                    }
-                }
-                .card()
                 if !events.isEmpty, !state.exhausted {
                     Button(state.loading ? "Loading…" : "Load older activity") { loadOlder(before: events.last?.id) }
+                        .buttonStyle(.plain)
+                        .font(.pilot(.label))
+                        .foregroundStyle(Theme.mutedForeground)
                         .disabled(state.loading)
+                        .frame(maxWidth: .infinity)
                 }
             }
-            .padding(24)
-            .frame(maxWidth: 900, alignment: .leading)
+            .padding(.horizontal, 32)
+            .padding(.vertical, 24)
+            .frame(maxWidth: Theme.column, alignment: .leading)
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var composer: some View {
+        ComposerTray {
+            TextField("Post an update or handoff for the mission chats…", text: $input.text, axis: .vertical)
+                .lineLimit(2 ... 6)
+                .accessibilityLabel("Update text")
+        } controls: {
+            Menu {
+                Button { state.kind = .update } label: { Label("Update", systemImage: "text.bubble") }
+                Button { state.kind = .handoff } label: { Label("Handoff", systemImage: "arrow.right.circle") }
+            } label: {
+                ChipLabel(title: state.kind == .handoff ? "Handoff" : "Update",
+                          icon: state.kind == .handoff ? "arrow.right.circle" : "text.bubble")
+            }
+            .chipMenuStyle()
+            .fixedSize()
+            .help("A status update, or a handoff note for whoever continues the work")
+            Menu {
+                Button("No Health") { state.health = nil }
+                Divider()
+                ForEach([MissionHealth.onTrack, .atRisk, .offTrack], id: \.self) { health in
+                    Button(health.label) { state.health = health }
+                }
+            } label: {
+                ChipLabel(title: state.health?.label ?? "Health", icon: state.health == nil ? "circle.dotted" : nil,
+                          dot: state.health?.color)
+            }
+            .chipMenuStyle()
+            .fixedSize()
+            .help("Optional mission health")
+            Spacer()
+            Button(action: post) { Image(systemName: "arrow.up") }
+                .buttonStyle(CircleIconButtonStyle())
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(input.busy || input.trimmed(input.text).isEmpty)
+                .help("Post (⌘↩)")
+                .accessibilityLabel("Post")
         }
     }
 
@@ -934,6 +1189,73 @@ struct MissionActivityTab: View {
             let page = try await client.missionEvents(id, before: before)
             if page.isEmpty { state.exhausted = true }
             state.older += page
+        }
+    }
+}
+
+/// Activity entries of one calendar day, newest first.
+struct MissionActivityDay: Identifiable {
+    let id: Date
+    let title: String
+    let events: [MissionEvent]
+
+    static func group(_ events: [MissionEvent], now: Date = Date(), calendar: Calendar = .current) -> [MissionActivityDay] {
+        var days: [MissionActivityDay] = []
+        for event in events {
+            let day = calendar.startOfDay(for: Date(timeIntervalSince1970: event.at / 1000))
+            if let last = days.last, last.id == day {
+                days[days.count - 1] = MissionActivityDay(id: day, title: last.title, events: last.events + [event])
+            } else {
+                days.append(MissionActivityDay(id: day, title: title(day, now: now, calendar: calendar), events: [event]))
+            }
+        }
+        return days
+    }
+
+    static func title(_ day: Date, now: Date, calendar: Calendar) -> String {
+        if calendar.isDate(day, inSameDayAs: now) { return "Today" }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(day, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+        let sameYear = calendar.component(.year, from: day) == calendar.component(.year, from: now)
+        return day.formatted(sameYear ? .dateTime.weekday(.wide).day().month(.wide)
+                                      : .dateTime.day().month(.wide).year())
+    }
+}
+
+/// One activity entry on the timeline: an icon on a thread line, the text and its byline.
+private struct MissionTimelineRow: View {
+    let event: MissionEvent
+    let last: Bool
+
+    var body: some View {
+        let handoff = event.kind == .handoff
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: event.kind.symbol)
+                .font(.pilot(.small, weight: .semibold))
+                .foregroundStyle(handoff ? Theme.info : Theme.mutedForeground)
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(handoff ? Theme.info.opacity(0.14) : Theme.muted))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                if handoff {
+                    Text("Handoff").font(.pilot(.small, weight: .semibold)).foregroundStyle(Theme.info)
+                }
+                Text(event.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    MissionEventByline(event: event, time: missionRelativeTime(event.at, now: context.date))
+                }
+            }
+            .padding(.top, 3)
+            .padding(.bottom, last ? 0 : 16)
+            Spacer(minLength: 0)
+        }
+        .background(alignment: .topLeading) {
+            if !last {
+                Rectangle().fill(Theme.border).frame(width: 1)
+                    .padding(.leading, 10.5).padding(.top, 24).padding(.bottom, 2)
+            }
         }
     }
 }

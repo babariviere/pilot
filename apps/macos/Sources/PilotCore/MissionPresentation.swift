@@ -124,6 +124,51 @@ public extension Collection where Element == Mission {
     var sidebarOrder: [Mission] { sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) } }
 }
 
+/// Task counts by status. Dropped tasks are excluded, as in `MissionDetail.progress`.
+public struct MissionTaskCounts: Equatable, Sendable {
+    public let byStatus: [MissionTaskStatus: Int]
+
+    public init(_ tasks: [MissionTask]) {
+        var counts: [MissionTaskStatus: Int] = [:]
+        for task in tasks where task.status != .dropped { counts[task.status, default: 0] += 1 }
+        byStatus = counts
+    }
+
+    public var done: Int { byStatus[.done] ?? 0 }
+    public var total: Int { byStatus.values.reduce(0, +) }
+    public subscript(status: MissionTaskStatus) -> Int { byStatus[status] ?? 0 }
+
+    /// Progress bar order: finished work first, then review, active, blocked and waiting work.
+    public static let barOrder: [MissionTaskStatus] = [.done, .inReview, .inProgress, .blocked, .todo]
+}
+
+/// Progress of one milestone (a phase, until phases are first-class).
+public struct MissionMilestoneProgress: Identifiable, Equatable, Sendable {
+    /// Nil groups tasks without a milestone.
+    public let name: String?
+    public let counts: MissionTaskCounts
+    public var id: String { name ?? "" }
+}
+
+public enum MissionMilestones {
+    /// Milestones in the order their first task appears. Empty unless at least one task names a milestone;
+    /// tasks without one are then grouped last. Milestones whose tasks are all dropped are omitted.
+    public static func progress(_ tasks: [MissionTask]) -> [MissionMilestoneProgress] {
+        let ordered = MissionTaskOrdering.sorted(tasks)
+        func name(_ task: MissionTask) -> String? {
+            task.milestone.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        }
+        var names: [String] = []
+        for task in ordered { if let name = name(task), !names.contains(name) { names.append(name) } }
+        guard !names.isEmpty else { return [] }
+        let named = names.map { milestone in
+            MissionMilestoneProgress(name: milestone, counts: MissionTaskCounts(ordered.filter { name($0) == milestone }))
+        }
+        let rest = MissionMilestoneProgress(name: nil, counts: MissionTaskCounts(ordered.filter { name($0) == nil }))
+        return (named + [rest]).filter { $0.counts.total > 0 }
+    }
+}
+
 public enum MissionMembers {
     /// An active mission's coordinator precedes pins, PR state and activity; otherwise use session order.
     /// Only orders the supplied members, so filtered or archived chats are not reintroduced.
