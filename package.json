@@ -17,7 +17,7 @@
 		"artifacts:browser": "pnpm --filter @pilot/artifacts exec playwright install chromium",
 		"artifacts:libraries": "node packages/artifacts/scripts/build-libraries.ts",
 		"typecheck": "tsgo -p tsconfig.json",
-		"test": "node --import tsx --test --test-force-exit --test-concurrency=${PILOT_TEST_CONCURRENCY:-2} 'packages/*/src/**/*.test.ts'",
+		"test": "node --import tsx --test --test-force-exit --test-timeout=${PILOT_TEST_TIMEOUT_MS:-120000} --test-concurrency=${PILOT_TEST_CONCURRENCY:-2} 'packages/*/src/**/*.test.ts'",
 		"bench:workspace": "node scripts/bench/workspace.ts",
 		"bench:reopen": "node scripts/bench/reopen.ts",
 		"bench:daemon-reopen": "node scripts/bench/daemon-reopen.ts",
