@@ -1023,7 +1023,7 @@ reports), producing a morning summary in the app and Slack.
   `POST /api/update/prepare`, stops the launch agent, installs and relaunches. Terminal shells close,
   durable history remains. One-time key configuration and initial installation: [UPDATES.md](apps/macos/UPDATES.md).
 
-### Scheduled chats and follow-ups (store and dispatch implemented)
+### Scheduled chats and follow-ups (store, dispatch and detection implemented)
 
 - `pilotd` owns `schedules.sqlite`. A new-chat target retains the complete `SpawnRequest`;
   a message target retains its chat ID and follow-up text. Triggers are `at` (epoch milliseconds),
@@ -1044,10 +1044,40 @@ reports), producing a morning summary in the app and Slack.
   worker, not on the event loop; updates coalesce at 250 ms. One nearest-deadline
   timer runs only while online; all timers/subscriptions stop on shutdown, and detectors get an
   active/inactive hint so they can suspend probes when no pending items remain.
-- `ScheduleTriggerSource` injects initial reachability and wake/online events; `ScheduleClock`
-  provides fake-clock testing. OS wake and network detection is still a separate implementation.
-  Until a detector is registered in `daemon.ts`, reachability is unknown and network-gated items
-  stay pending. Composer/list UI and fired notifications remain separate work.
+- `ScheduleDetection` is registered in `daemon.ts` and works with the app closed. While pending
+  items exist it samples wake every 30 seconds. On macOS an off-thread, bounded `sysctl
+  kern.waketime` read detects changes to the kernel wake timestamp. Node 24's macOS hrtime uses
+  `mach_continuous_time` (includes sleep), so wall-clock minus hrtime drift would miss wakes.
+  On Linux the sleep-excluding monotonic clock permits drift detection (5-second threshold);
+  late ticks with equal wall/monotonic advancement are not wakes. Wall-clock adjustments can
+  look like sleep on this fallback, but not on macOS. Repeated wake observations are debounced.
+- Wake invalidates cached reachability before recording the durable wake latch. A credential-free
+  HTTPS HEAD to `https://www.gstatic.com/generate_204` must return 204 (5-second timeout, no redirect
+  following), so captive-portal pages are not success. This endpoint being blocked can keep work
+  pending even with other network access; it is a connectivity check, not provider availability.
+  Successful probes repeat every 30 seconds; offline retries back off through 5, 10, 20, 40 and
+  60 seconds. Due `at`/wake-latched dispatch also validates reachability, instead of using a
+  pre-sleep probe. Wake alone never invents an offline-to-online edge; an actual failed probe is
+  required. Initial/re-activated detection synchronizes state without firing `on_online`.
+- Detection is independent of app lifetime. It holds at most one current wake sample and probe;
+  when there are no pending items or on shutdown it cancels timers and aborts in-flight work,
+  rejects stale results, and releases its sampler worker. `ScheduleTriggerSource` and
+  `ScheduleClock` provide fake-clock tests for drift, debounce, offline wake, cancellation and
+  deadline catch-up. No app fast path or HTTP trigger endpoint is needed for correctness.
+  Composer/list UI and fired notifications remain separate work.
+- Incremental detector measurement: `node scripts/bench/schedule-detection.ts 65 all` on Apple
+  Silicon, Node 24.21.0/macOS 27, with other builds/tests running. Idle: 3.8 ms process CPU
+  (0.006%), zero samples/probes/timer callbacks. Online: 313.8 ms (0.475%), 3 samples, 3 probes,
+  4 detector timer callbacks. Injected offline: 101.8 ms (0.157%), 3 samples, 4 probes, 5 callbacks.
+  All phases ended with zero retained detector timers. These cold-start-inclusive process CPU
+  figures include worker threads, not child `sysctl` CPU; callbacks measure timer-induced work.
+  macOS `proc_pid_rusage` over middle 65-second windows of separate 70-second runs measured
+  idle/online/offline process CPU at 0.02/4.29/0.36 ms and interrupt wakeups at 18/100/61.
+  Package-idle wakeups were zero in all phases on the busy host. These process counters include
+  runtime/I/O wakeups, not just detector timers; reproduce with
+  `python3 scripts/bench/schedule-wakeups.py`. Actual sleep/resume and whole-machine energy need
+  a manual run on an otherwise idle machine (the automated check reads the real kernel timestamp
+  without putting the shared development host to sleep).
 - The server registers `DashboardProviders.scheduled` and its change subscription, so pending
   items populate Scheduled and failures populate Needs you without app polling. Protocol and
   PilotCore mirror CRUD payloads, targets, lifecycle and WS snapshots; the app retains the index

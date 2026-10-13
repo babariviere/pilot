@@ -10,12 +10,14 @@ import type {
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { MissionStore } from "./missions.ts";
-import { ScheduleStore } from "./schedule-store.ts";
+import type { ScheduleStore } from "./schedule-store.ts";
 
 /** Detection plugs in here. Initial online state is not an offline→online edge. */
 export type ScheduleTriggerEvent = { type: "wake" } | { type: "online"; online: boolean; initial?: boolean };
 export interface ScheduleTriggerSource {
 	readonly online: boolean;
+	/** Validate cached reachability before dispatching due work. */
+	refreshOnline?(): Promise<boolean>;
 	/** Use online events with initial:true to resynchronize a suspended detector without inventing an edge. */
 	subscribe(listener: (event: ScheduleTriggerEvent) => void): () => void;
 	/** Detection can suspend its probes when no pending schedules remain. */
@@ -70,7 +72,13 @@ export class ScheduleService {
 		if (this.started || this.stopped) return;
 		this.started = true;
 		this.online = this.deps.triggers?.online ?? false;
-		this.disposers.push(this.store.onChange(() => this.requestSweep()));
+		this.disposers.push(
+			this.store.onChange(() => {
+				// A durable claim removes the last pending item before admission can take a long time.
+				if (this.store.pendingItems().length === 0) this.deps.triggers?.setActive?.(false);
+				this.requestSweep();
+			}),
+		);
 		if (this.deps.triggers)
 			this.disposers.push(
 				this.deps.triggers.subscribe((event) => {
@@ -132,7 +140,18 @@ export class ScheduleService {
 	private async sweep(): Promise<void> {
 		this.cancelTimer?.();
 		this.cancelTimer = undefined;
-		for (const item of this.store.pendingItems()) {
+		const pending = this.store.pendingItems();
+		if (
+			this.online &&
+			this.deps.triggers?.refreshOnline &&
+			pending.some(
+				(item) =>
+					(item.trigger === "at" && item.at! <= this.time.now()) ||
+					(item.trigger === "on_back" && item.wakeObserved),
+			)
+		)
+			this.online = await this.deps.triggers.refreshOnline();
+		for (const item of pending) {
 			if (this.stopped) break;
 			if (!this.online) continue;
 			if (
