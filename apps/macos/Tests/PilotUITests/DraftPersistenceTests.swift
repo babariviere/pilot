@@ -330,7 +330,6 @@ private func restoreDraftWrites(_ root: URL) throws {
     #expect(try persistenceStore(root).load().newTask.baseBranch == "release")
     app.client.loadFixture(projects: [Project(id: "project", name: "Project", path: "/tmp/project", createdAt: 1)], sessions: [])
     try await waitForDraftUI { app.draftProjectId == "project" }
-    hosting.layoutSubtreeIfNeeded()
     #expect(app.newSessionForm.branches.selected == "release")
     #expect(app.draftProjectId == "project")
     app.flushDrafts()
