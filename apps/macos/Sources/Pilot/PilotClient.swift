@@ -114,6 +114,11 @@ final class PilotClient: ObservableObject {
         dashboardErrors = errors
     }
 
+    /// Static sidebar counts for snapshots and previews.
+    func loadCountsFixture(_ counts: ProjectDashboardCounts) {
+        projectCounts = counts
+    }
+
     // MARK: Commands
 
     /// A bounded, cancellable request on filter changes. Live updates still come from the list stream.

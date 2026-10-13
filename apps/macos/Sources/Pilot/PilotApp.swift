@@ -22,7 +22,7 @@ struct PilotApp: App {
                     .disabled(!updater.canCheck)
             }
             CommandGroup(replacing: .newItem) {
-                Button("New Session") { model.newSession(in: model.draftProjectId) }
+                Button("New Session") { model.newChatInScope() }
                     .keyboardShortcut("n", modifiers: .command)
                 Button("Add Project…") { model.addProject() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -37,6 +37,7 @@ struct PilotApp: App {
                 Button("Toggle Artifacts") { model.toggleInspector(.artifacts) }
                     .disabled(model.selectedSessionId == nil)
             }
+            SidebarScopeCommands(model: model, client: model.client)
         }
 
         Settings {

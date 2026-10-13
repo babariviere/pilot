@@ -620,6 +620,17 @@ reports), producing a morning summary in the app and Slack.
   place over the WebSocket. First open shows a spinner; a lost connection or failed Retry keeps the last
   data under a banner. Until review marks reach pilotd, the app's own review state hides results the user
   has already reviewed. Scheduled and Tracked sections are added with those features.
+- Sidebar scope: a switcher at the top of the sidebar lists every project ("All projects", the default) or
+  focuses on one project (View menu, ⌘0 for all and ⌘1…⌘9 for the first nine projects in sidebar order). The
+  switcher shows working and needs-you counts per project from `dashboard.counts` (no polling), and its
+  compose button starts a chat in the current scope (New mission in its menu). Below it, Home opens today's
+  Home with every project, or the project page as "Project home" when focused; its badge counts what needs
+  the user in that scope. Focused, the sidebar lists only that project's missions and chats without project
+  headers, archived chats are filtered to it, and an "Elsewhere: N working · N need you" line appears when
+  other projects have activity (clicking it opens the switcher). Notifications stay global: opening a chat
+  from another project returns to All projects. Each scope remembers its last selection, and the live app
+  reopens in the last scope. In All projects, clicking a project name still opens its page without
+  changing scope.
 - Projects can be grouped into user-created, collapsible sidebar folders. Create, rename and delete
   folders, and move projects via their context menu. Ungrouped projects remain visible; deleting a
   folder only ungroups its projects. Folder membership and collapse state are local app preferences

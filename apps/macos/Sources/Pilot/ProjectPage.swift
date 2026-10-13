@@ -136,6 +136,16 @@ private struct ProjectToolbar: ToolbarContent {
                     Label("Browse Archived Chats", systemImage: "archivebox")
                 }
                 Button(action: showArtifacts) { Label("Artifacts…", systemImage: "cube.transparent") }
+                Divider()
+                if model.sidebarScope == project.id {
+                    Button { model.focus(on: nil) } label: {
+                        Label("Show All Projects", systemImage: "square.grid.2x2")
+                    }
+                } else {
+                    Button { model.focus(on: project.id) } label: {
+                        Label("Focus on This Project", systemImage: "sidebar.left")
+                    }
+                }
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -746,4 +756,3 @@ extension View {
         modifier(DashboardSubscription(projectId: projectId, client: client))
     }
 }
-
