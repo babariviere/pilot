@@ -560,6 +560,14 @@ final class PilotClient: ObservableObject {
         }
     }
 
+    /// A one-time bounded read for a project section's full-list destination. Live updates remain on WS.
+    func fullProjectDashboard(_ projectId: String) async throws -> ProjectDashboard {
+        let url = try missionURL(["projects", projectId, "dashboard"])
+        var request = URLRequest(url: url)
+        request.url?.append(queryItems: [URLQueryItem(name: "limit", value: "100")])
+        return try await call(request)
+    }
+
     private func receive(_ dashboard: ProjectDashboard) {
         projectDashboards[dashboard.projectId] = dashboard
         dashboardReceivedAt[dashboard.projectId] = Date()

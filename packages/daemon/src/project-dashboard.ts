@@ -59,8 +59,8 @@ function hasTerminalPullRequest(session: SessionSummary): boolean {
 	return isTerminal(session.pullRequest) && (session.pullRequests ?? []).every(isTerminal);
 }
 
-function section<T>(items: T[]): DashboardSection<T> {
-	return { total: items.length, items: items.slice(0, DASHBOARD_SECTION_LIMIT) };
+function section<T>(items: T[], limit = DASHBOARD_SECTION_LIMIT): DashboardSection<T> {
+	return { total: items.length, items: items.slice(0, limit) };
 }
 
 function oneLine(text: string | undefined): string | undefined {
@@ -93,7 +93,7 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 const failed = (session: SessionSummary) =>
 	session.outcome === "failed" || (!session.outcome && session.state === "failed");
 
-export function buildProjectDashboard(input: DashboardInput): ProjectDashboard {
+export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_SECTION_LIMIT): ProjectDashboard {
 	const { projectId, sessions, isUnread } = input;
 	const missionTitles = new Map(input.missions.map((mission) => [mission.id, mission.title]));
 	const scheduled = input.scheduled ?? [];
@@ -235,16 +235,16 @@ export function buildProjectDashboard(input: DashboardInput): ProjectDashboard {
 			readyPullRequests: pullRequests.filter(isReady).length,
 			activeMissions: missions.length,
 		},
-		needsYou: section(needsYou),
-		working: section(working),
-		pullRequests: section(pullRequests),
-		missions: section(missions.map(({ updatedAt: _updatedAt, ...mission }) => mission)),
-		scheduled: section(pending),
+		needsYou: section(needsYou, limit),
+		working: section(working, limit),
+		pullRequests: section(pullRequests, limit),
+		missions: section(missions.map(({ updatedAt: _updatedAt, ...mission }) => mission), limit),
+		scheduled: section(pending, limit),
 		tracked: (input.tracked ?? []).map((source) => ({
 			...source,
-			items: source.items.slice(0, DASHBOARD_SECTION_LIMIT),
+			items: source.items.slice(0, limit),
 		})),
-		recent: section(recent),
+		recent: section(recent, limit),
 		...(input.memory ? { memory: input.memory } : {}),
 	};
 }
@@ -269,13 +269,14 @@ export class ProjectDashboardService {
 	}
 
 	/** Throws NotFound for an unknown project. */
-	dashboard(projectId: string): ProjectDashboard {
+	dashboard(projectId: string, limit = DASHBOARD_SECTION_LIMIT): ProjectDashboard {
 		this.deps.projects.require(projectId);
 		return this.build(
 			projectId,
 			this.deps.sessions.list({ archived: "false", projectId }),
 			this.deps.missions?.list(projectId) ?? [],
 			this.deps.missions?.taskProgress(projectId) ?? new Map(),
+			limit,
 		);
 	}
 
@@ -329,6 +330,7 @@ export class ProjectDashboardService {
 		sessions: SessionSummary[],
 		missions: Mission[],
 		progress: Map<string, { done: number; total: number }>,
+		limit = DASHBOARD_SECTION_LIMIT,
 	): ProjectDashboard {
 		const { reviews, providers } = this.deps;
 		return buildProjectDashboard({
@@ -340,6 +342,6 @@ export class ProjectDashboardService {
 			scheduled: providers?.scheduled?.(projectId),
 			tracked: providers?.tracked?.(projectId),
 			memory: providers?.memory?.(projectId),
-		});
+		}, limit);
 	}
 }

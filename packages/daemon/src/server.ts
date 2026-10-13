@@ -280,8 +280,12 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "artifacts" && req.method === "GET")
 			return json(res, 200, await sessions.projectArtifacts(parts[2]!));
-		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "dashboard" && req.method === "GET")
-			return json(res, 200, dashboards.dashboard(parts[2]!));
+		if (parts[1] === "projects" && parts.length === 4 && parts[3] === "dashboard" && req.method === "GET") {
+			const rawLimit = url.searchParams.get("limit");
+			if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || Number(rawLimit) < 1 || Number(rawLimit) > 100))
+				throw new HttpError(400, "limit must be between 1 and 100");
+			return json(res, 200, dashboards.dashboard(parts[2]!, rawLimit === null ? undefined : Number(rawLimit)));
+		}
 		if (parts[1] === "dashboard" && parts[2] === "counts" && parts.length === 3 && req.method === "GET")
 			return json(res, 200, dashboards.counts());
 		if (parts[1] === "reviews" && parts.length === 2 && req.method === "POST") {
