@@ -84,6 +84,7 @@ const schedules = new ScheduleService(scheduleStore, {
 	sessions,
 	projects,
 	missions: missionStore,
+	trackedItems,
 	triggers: scheduleDetection,
 });
 await schedules.load();

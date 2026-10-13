@@ -34,6 +34,8 @@ struct StoredTaskDraft: Codable {
     var pendingCwd: String? = nil
     var pendingWorkspace: WorkspaceMode? = nil
     var mission: Mission? = nil
+    /// Optional so draft files from before ticket binding persistence still decode without a ticket.
+    var trackedItem: TrackedItemBinding? = nil
 }
 
 struct StoredImage: Codable {

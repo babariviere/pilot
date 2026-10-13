@@ -22,7 +22,7 @@ final class NewSessionForm: ObservableObject {
     @Published var pendingBaseBranch: String? { didSet { onDraftChanged?() } }
     @Published var mission: Mission? { didSet { onDraftChanged?() } }
     /// The tracked ticket this chat starts from. Bound to the chat once it starts; the project is locked to it.
-    @Published var trackedItem: TrackedItemBinding?
+    @Published var trackedItem: TrackedItemBinding? { didSet { onDraftChanged?() } }
     private var draftRevision = 0
 
     var hasUnsubmittedDraft: Bool {
@@ -130,6 +130,11 @@ final class NewSessionForm: ObservableObject {
             workspace: mode == .build && project != nil ? workspace : nil,
             missionId: mission?.id
         )
+    }
+
+    /// A scheduled chat carries its ticket so pilotd can bind the chat when it starts.
+    func scheduleTarget(_ request: SpawnRequest) -> ScheduleTarget {
+        .chat(request, trackedItemId: trackedItem?.itemId)
     }
 }
 
@@ -319,8 +324,7 @@ struct TaskComposer: View {
                 }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
-                // A scheduled chat has no ID until it starts, so it could not be linked to the ticket.
-                SendLaterMenu(disabled: !canStart || form.trackedItem != nil, schedule: scheduleNewChat)
+                SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat)
                 Button(action: start) { Image(systemName: "arrow.up") }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
@@ -425,12 +429,14 @@ struct TaskComposer: View {
             return
         }
         let request = form.spawnRequest(in: project, branches: branches)
+        // Capture the ticket now: the form may be reset or edited before the request returns.
+        let target = form.scheduleTarget(request)
         let title = ScheduleText.title(form.message, fallback: "New chat")
         Task {
             defer { form.busy = false }
             do {
                 _ = try await client.createSchedule(ScheduleRequest(
-                    title: title, trigger: trigger, at: at, target: .chat(request)
+                    title: title, trigger: trigger, at: at, target: target
                 ))
                 if let id = request.projectId { lastProjectId = id }
                 _ = form.completeSubmission(revision: revision)

@@ -161,6 +161,7 @@ final class AppModel: ObservableObject {
         newSessionForm.workspace = task.workspace
         newSessionForm.pendingBaseBranch = task.pendingBaseBranch
         newSessionForm.mission = task.mission
+        newSessionForm.trackedItem = task.trackedItem
         newSessionForm.branches.restoreSelection(scope: task.branchScope, branch: task.baseBranch, mode: task.mode ?? .build)
         draftProjectId = task.projectId
         draftMessage = task.pendingMessage
@@ -206,7 +207,8 @@ final class AppModel: ObservableObject {
                                         baseBranch: form.branches.selected, runningTab: form.tab == .running,
                                         mode: form.mode, workspace: form.workspace,
                                         pendingBaseBranch: draftMessage == nil ? form.pendingBaseBranch : draftBaseBranch,
-                                        pendingCwd: draftCwd, pendingWorkspace: draftWorkspace, mission: form.mission)
+                                        pendingCwd: draftCwd, pendingWorkspace: draftWorkspace, mission: form.mission,
+                                        trackedItem: form.trackedItem)
         do {
             try draftStore.scheduleSave(drafts) { [weak self, draftImages] result in
                 switch result {

@@ -13,15 +13,18 @@ public enum ScheduleState: String, Codable, Sendable {
 
 /// Mirrors the discriminated target in packages/protocol/src/schedules.ts.
 public enum ScheduleTarget: Codable, Sendable {
-    case chat(SpawnRequest)
+    case chat(SpawnRequest, trackedItemId: String? = nil)
     case message(sessionId: String, message: String)
 
-    private enum Keys: String, CodingKey { case kind, spawn, sessionId, message }
+    private enum Keys: String, CodingKey { case kind, spawn, sessionId, message, trackedItemId }
     private enum Kind: String, Codable { case chat, message }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         switch try c.decode(Kind.self, forKey: .kind) {
-        case .chat: self = .chat(try c.decode(SpawnRequest.self, forKey: .spawn))
+        case .chat: self = .chat(
+            try c.decode(SpawnRequest.self, forKey: .spawn),
+            trackedItemId: try c.decodeIfPresent(String.self, forKey: .trackedItemId)
+        )
         case .message: self = .message(
             sessionId: try c.decode(String.self, forKey: .sessionId),
             message: try c.decode(String.self, forKey: .message)
@@ -31,9 +34,10 @@ public enum ScheduleTarget: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: Keys.self)
         switch self {
-        case let .chat(spawn):
+        case let .chat(spawn, trackedItemId):
             try c.encode(Kind.chat, forKey: .kind)
             try c.encode(spawn, forKey: .spawn)
+            try c.encodeIfPresent(trackedItemId, forKey: .trackedItemId)
         case let .message(sessionId, message):
             try c.encode(Kind.message, forKey: .kind)
             try c.encode(sessionId, forKey: .sessionId)
