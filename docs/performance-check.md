@@ -1,5 +1,7 @@
 # CPU and memory audit
 
+For the later repository polling and streaming WAL audit, see [I/O amplification audit](io-performance-check.md).
+
 ## Scope and observations
 
 Checked the native UI, transcript reducer/caches, daemon polling and worker lifecycle,

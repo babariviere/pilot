@@ -33,6 +33,21 @@ test("execFileOffThread rejects like execFile, with exit code and stdout", async
 	);
 });
 
+test("streams bounded NUL-delimited stdin and tolerates an early reader exit", async (t) => {
+	const pool = new SubprocessPool();
+	t.after(() => pool.close());
+	const input = "a\0tabs\tand\nnewlines\0";
+	const result = await pool.run("cat", [], { stdin: input, maxBytes: 1024, overflow: "fail" });
+	assert.equal(result.code, 0);
+	assert.equal(result.stdout.toString(), input);
+	const early = await pool.run("true", [], { stdin: "x".repeat(1024 * 1024), maxBytes: 1, overflow: "fail" });
+	assert.equal(early.code, 0);
+	await assert.rejects(
+		pool.run("cat", [], { stdin: "x".repeat(32 * 1024 * 1024 + 1), maxBytes: 1, overflow: "fail" }),
+		/exceeds 32 MiB/,
+	);
+});
+
 test("bounds output: truncate keeps a prefix, fail reports overflow", async (t) => {
 	const pool = new SubprocessPool();
 	t.after(() => pool.close());

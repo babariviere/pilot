@@ -12,6 +12,8 @@ export interface ProcessRequest {
 	args: string[];
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
+	/** Bounded input owned by the caller, e.g. NUL-delimited Git attribute paths. */
+	stdin?: string;
 	/** Kill after this long and report `timedOut`. */
 	timeoutMs?: number;
 	/** First signal for timeout, abort and overflow. Escalates to SIGKILL after `forceKillMs`. */
@@ -75,6 +77,8 @@ export class SubprocessPool {
 	}
 
 	run(file: string, args: string[], options: ProcessOptions): Promise<ProcessResult> {
+		if (options.stdin !== undefined && Buffer.byteLength(options.stdin) > 32 * 1024 * 1024)
+			return Promise.reject(new Error("Subprocess input exceeds 32 MiB"));
 		const { signal, ...rest } = options;
 		if (signal?.aborted) return Promise.reject(abortError(signal));
 		const id = this.nextId++;

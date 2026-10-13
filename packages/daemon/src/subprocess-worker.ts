@@ -20,7 +20,7 @@ function start(request: ProcessRequest): void {
 			...(request.cwd !== undefined ? { cwd: request.cwd } : {}),
 			...(request.env !== undefined ? { env: request.env } : {}),
 			detached: request.detached === true,
-			stdio: ["ignore", "pipe", "pipe"],
+			stdio: [request.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 		});
 	} catch (error) {
 		const failure = error as NodeJS.ErrnoException;
@@ -33,6 +33,9 @@ function start(request: ProcessRequest): void {
 		return;
 	}
 	const stdout: Buffer[] = [];
+	// Early child exit may close stdin before it consumes every path. The exit status reports failure.
+	child.stdin?.on("error", () => {});
+	if (request.stdin !== undefined) child.stdin!.end(request.stdin);
 	let stdoutBytes = 0;
 	let stderr = "";
 	let truncated = false;

@@ -18,6 +18,7 @@ import { SourceRegistry } from "./sources.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
 import { pollLinear } from "./linear-source.ts";
 import { createSlackPoller } from "./slack-source.ts";
+import { untrackedStats } from "./untracked-stats.ts";
 
 const config = loadConfig();
 // Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
@@ -122,6 +123,7 @@ async function stop(): Promise<void> {
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
+	await untrackedStats.close();
 	missionStore.close();
 	process.exit(0);
 }

@@ -46,11 +46,16 @@ final class ChangesModel: ObservableObject {
 struct ChangesPane: View {
     let session: SessionSummary
     var isVisible = true
+    @Environment(\.repositoryPollingVisible) private var windowVisible
     @StateObject private var model: ChangesModel
     init(session: SessionSummary, isVisible: Bool = true) {
         self.session = session
         self.isVisible = isVisible
         _model = StateObject(wrappedValue: ChangesModel(sessionId: session.id))
+    }
+
+    private var pollingKey: RepositoryPollingKey {
+        RepositoryPollingKey(visible: isVisible && windowVisible, state: session.state, updatedAt: session.updatedAt)
     }
 
     var body: some View {
@@ -62,11 +67,11 @@ struct ChangesPane: View {
             content
         }
         .background(Theme.background)
-        .task(id: ChangesPollingKey(visible: isVisible, state: session.state)) {
-            guard isVisible, session.state != "starting" else { return }
+        .task(id: pollingKey) {
+            guard pollingKey.enabled else { return }
             while !Task.isCancelled {
                 await model.load()
-                do { try await Task.sleep(for: .seconds(4)) }
+                do { try await Task.sleep(for: .seconds(RepositoryPolling.interval(working: session.isWorking, fullDiff: true))) }
                 catch { return }
             }
         }
@@ -293,11 +298,6 @@ private struct PullRequestPill: View {
         .fixedSize()
         .accessibilityLabel("Pull request \(pr.number), \(stale ? "last known " : "")\(pr.state.label)\(pr.browserURL == nil ? ", invalid link" : "")")
     }
-}
-
-private struct ChangesPollingKey: Equatable {
-    let visible: Bool
-    let state: String
 }
 
 private struct FileRow: View {

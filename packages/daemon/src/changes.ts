@@ -2,6 +2,7 @@
 import type { ChangedFile, SessionChangeSummary, SessionChanges } from "@pilot/protocol";
 import { ProcessFailed, subprocesses } from "./subprocess.ts";
 import { TtlCache } from "./ttl-cache.ts";
+import { type LineStat, type UntrackedFile, untrackedStats } from "./untracked-stats.ts";
 import { workspaceBranch } from "./workspaces.ts";
 
 const MAX_DIFF = 1024 * 1024;
@@ -61,6 +62,15 @@ async function gitPatch(cwd: string, args: string[], maxBytes: number, allowExit
 
 /** TTL revalidation intentionally runs Git again, so external editors, commits and refs remain visible. */
 export class RepositoryChanges {
+	// Both endpoints share the same base, paths and line counts, including concurrent first reads.
+	private readonly metadata = new TtlCache<ChangeMetadata>({
+		ttlMs: 1000,
+		maxEntries: 128,
+		maxBytes: 8 * 1024 * 1024,
+		maxPending: 16,
+		busyMessage: "Repository changes are busy. Retry shortly.",
+		weight: (value) => Buffer.byteLength(JSON.stringify(value)),
+	});
 	private readonly cache = new TtlCache<SessionChanges | SessionChangeSummary>({
 		ttlMs: 1000,
 		maxEntries: 128,
@@ -72,24 +82,32 @@ export class RepositoryChanges {
 
 	changes(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChanges> {
 		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "full"]), () =>
-			collectChanges(cwd, base, baseBranch),
+			this.readMetadata(cwd, base, baseBranch).then((metadata) => collectPatch(cwd, metadata)),
 		) as Promise<SessionChanges>;
 	}
 
 	summary(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChangeSummary> {
 		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "summary"]), () =>
-			collectChangeSummary(cwd, base, baseBranch),
+			this.readMetadata(cwd, base, baseBranch).then(summarize),
 		) as Promise<SessionChangeSummary>;
 	}
 
 	invalidate(cwd: string): void {
 		this.cache.invalidate((key) => (JSON.parse(key) as string[])[0] === cwd);
+		this.metadata.invalidate((key) => (JSON.parse(key) as string[])[0] === cwd);
+	}
+
+	private readMetadata(cwd: string, base: string, baseBranch?: string): Promise<ChangeMetadata> {
+		return this.metadata.get(JSON.stringify([cwd, base, baseBranch ?? null]), () =>
+			collectMetadata(cwd, base, baseBranch),
+		);
 	}
 }
 
-async function git(cwd: string, args: string[], allowExitOne = false): Promise<string> {
+async function git(cwd: string, args: string[], allowExitOne = false, stdin?: string): Promise<string> {
 	const result = await subprocesses.run("git", args, {
 		cwd,
+		...(stdin !== undefined ? { stdin } : {}),
 		timeoutMs: 30_000,
 		maxBytes: 32 * 1024 * 1024,
 		overflow: "fail",
@@ -144,7 +162,7 @@ async function changeBase(cwd: string, base: string, baseBranch?: string) {
 }
 
 /** Read NUL-delimited numstat records without interpreting tabs or newlines in filenames. */
-function numstat(output: string): Map<string, { additions: number; deletions: number }> {
+function numstat(output: string): Map<string, LineStat> {
 	const records = output.split("\0");
 	const files = new Map<string, { additions: number; deletions: number }>();
 	for (let i = 0; i < records.length; i++) {
@@ -168,20 +186,44 @@ function numstat(output: string): Map<string, { additions: number; deletions: nu
 	return files;
 }
 
+async function untrackedModes(cwd: string, paths: string[]): Promise<UntrackedFile[]> {
+	if (!paths.length) return [];
+	// Attributes and custom driver's binary flag affect --no-index numstat too. Preserve them without
+	// invoking Git once per file, and use stdin so long filenames cannot overflow the argument limit.
+	const attrs = (await git(cwd, ["check-attr", "-z", "--stdin", "diff"], false, `${paths.join("\0")}\0`)).split("\0");
+	const configuredThreshold = (
+		await git(cwd, ["config", "--type=int", "--get", "core.bigFileThreshold"], true)
+	).trim();
+	const bigFileThreshold = configuredThreshold ? Number(configuredThreshold) : 512 * 1024 * 1024;
+	if (!Number.isSafeInteger(bigFileThreshold) || bigFileThreshold < 0) throw new Error("Invalid Git bigFileThreshold");
+	const values = new Map<string, string>();
+	for (let i = 0; i + 2 < attrs.length; i += 3) values.set(attrs[i]!, attrs[i + 2]!);
+	const drivers = new Map<string, UntrackedFile["binary"]>();
+	if ([...values.values()].some((value) => !["set", "unset", "unspecified"].includes(value))) {
+		const config = await git(cwd, ["config", "--null", "--type=bool", "--get-regexp", "^diff\\..*\\.binary$"], true);
+		for (const entry of config.split("\0")) {
+			const match = /^diff\.(.*)\.binary\n(true|false)$/.exec(entry);
+			if (match) drivers.set(match[1]!, match[2] === "true" ? "binary" : "text");
+		}
+	}
+	return paths.map((path) => {
+		const value = values.get(path);
+		return {
+			path,
+			binary: value === "set" ? "text" : value === "unset" ? "binary" : (drivers.get(value ?? "") ?? "auto"),
+			bigFileThreshold,
+		};
+	});
+}
+
 async function lineStats(cwd: string, mergeBase: string, untracked: string[]) {
 	const stats = numstat(
 		await git(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "-M", mergeBase, "--"]),
 	);
-	for (const path of untracked) {
-		const untrackedStats = numstat(
-			await git(
-				cwd,
-				["diff", "--no-ext-diff", "--no-textconv", "--numstat", "-z", "--no-index", "--", "/dev/null", path],
-				true,
-			),
-		);
+	const additions = await untrackedStats.read(cwd, await untrackedModes(cwd, untracked));
+	for (let i = 0; i < untracked.length; i++) {
 		// Recreated untracked paths replace staged deletions. Errors must not become fabricated zero counts.
-		stats.set(path, [...untrackedStats.values()][0] ?? { additions: 0, deletions: 0 });
+		stats.set(untracked[i]!, additions[i]!);
 	}
 	return stats;
 }
@@ -192,19 +234,25 @@ export async function collectChangeSummary(
 	base = "HEAD",
 	baseBranch?: string,
 ): Promise<SessionChangeSummary> {
-	const { mergeBase, ...metadata } = await changeBase(cwd, base, baseBranch);
-	const tracked = await git(cwd, ["diff", "--name-only", "-z", "-M", mergeBase, "--"]);
-	const untracked = await git(cwd, ["ls-files", "--others", "--exclude-standard", "-z"]);
-	// NUL records preserve tabs, newlines and quoted/non-ASCII filenames. A rename emits only its destination.
-	const paths = new Set([...tracked.split("\0"), ...untracked.split("\0")].filter(Boolean));
-	const stats = await lineStats(cwd, mergeBase, untracked.split("\0").filter(Boolean));
+	return summarize(await collectMetadata(cwd, base, baseBranch));
+}
+
+interface ChangeMetadata {
+	mergeBase: string;
+	base: string;
+	branch?: string;
+	files: ChangedFile[];
+	untracked: string[];
+}
+
+function summarize({ base, branch, files }: ChangeMetadata): SessionChangeSummary {
 	let additions = 0;
 	let deletions = 0;
-	for (const stat of stats.values()) {
+	for (const stat of files) {
 		additions += stat.additions;
 		deletions += stat.deletions;
 	}
-	return { ...metadata, fileCount: paths.size, additions, deletions };
+	return { base, ...(branch ? { branch } : {}), fileCount: files.length, additions, deletions };
 }
 
 /**
@@ -213,6 +261,10 @@ export async function collectChangeSummary(
  * a session rebased onto a newer `origin/<baseBranch>` is compared against that newer merge base instead.
  */
 export async function collectChanges(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChanges> {
+	return collectPatch(cwd, await collectMetadata(cwd, base, baseBranch));
+}
+
+async function collectMetadata(cwd: string, base: string, baseBranch?: string): Promise<ChangeMetadata> {
 	const { mergeBase, ...metadata } = await changeBase(cwd, base, baseBranch);
 
 	const files = new Map<string, ChangedFile>();
@@ -240,7 +292,18 @@ export async function collectChanges(cwd: string, base = "HEAD", baseBranch?: st
 		const file = files.get(path);
 		if (file) Object.assign(file, stat);
 	}
+	return {
+		mergeBase,
+		...metadata,
+		files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)),
+		untracked,
+	};
+}
 
+async function collectPatch(
+	cwd: string,
+	{ mergeBase, untracked, files, ...metadata }: ChangeMetadata,
+): Promise<SessionChanges> {
 	const tracked = await gitPatch(cwd, [...PATCH_ARGS, "-M", mergeBase, "--"], MAX_DIFF);
 	const patches = [tracked.patch];
 	let size = tracked.patch.length;
@@ -266,7 +329,7 @@ export async function collectChanges(cwd: string, base = "HEAD", baseBranch?: st
 	if (truncated) diff = completePatchPrefix(diff);
 	return {
 		...metadata,
-		files: [...files.values()].sort((a, b) => a.path.localeCompare(b.path)),
+		files,
 		diff,
 		truncated,
 	};

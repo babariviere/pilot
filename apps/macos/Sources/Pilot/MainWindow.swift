@@ -9,6 +9,7 @@ struct MainWindow: View {
     @ObservedObject private var daemon = AppModel.shared.daemon
     @ObservedObject private var client = AppModel.shared.client
     @Environment(\.openWindow) private var openWindow
+    @State private var repositoryPollingVisible = false
 
     var body: some View {
         NavigationSplitView {
@@ -41,6 +42,11 @@ struct MainWindow: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .environment(\.repositoryPollingVisible, repositoryPollingVisible)
+        .background(RepositoryWindowVisibility { visible in
+            if visible { client.refreshRepositoryCaches() }
+            repositoryPollingVisible = visible
+        }.frame(width: 0, height: 0))
         .alert("Session action failed", isPresented: Binding(
             get: { model.sessionActionError != nil },
             set: { if !$0 { model.sessionActionError = nil } }

@@ -509,9 +509,19 @@ the isolated working copy is ready.
 - Markdown/inline styling and syntax highlighting are prepared off the UI actor in bounded caches.
   Fenced-code parsing and entry deduplication are linear; metadata-only/ignored batches reuse rows,
   and streamed text reuses committed history. JSON trees decode directly without a second encode/parse.
-- Repository reads are short-lived, coalesced and bounded. Hidden changes tabs stop polling, cancelled
-  sidebar requests leave the admission queue promptly, and unchanged metadata is not republished.
-  Diff collection bounds subprocess output, rather than generating an unlimited patch before clipping.
+- Repository reads are short-lived, coalesced and bounded. Hidden/occluded/minimized windows and hidden
+  Changes tabs stop polling. Working chats refresh sidebar stats every 10 seconds and full diffs every
+  4 seconds; idle chats back off to 60 and 30 seconds. Return/activity triggers an immediate read, manual
+  Changes refresh remains available, and external editor changes use the periodic fallback. Cancelled
+  requests leave the shared admission queue promptly, and unchanged metadata is not republished.
+  Sidebar and Changes reads share daemon metadata. Untracked numstat uses one reader thread, not a
+  Git process per file; its 64 KiB buffer, 1,024-entry inode/size/nanosecond metadata cache, 16-request
+  queue and 30-second idle reclamation bound resources. Git binary attributes/drivers, large-file
+  thresholds and symlink text remain respected. Diff subprocess output is bounded before clipping.
+- Model and tool progress checkpoint at most every 250 ms rather than every 100 ms, bounding SQLite
+  page-write amplification. Admissions and final results/terminal transitions remain immediate. A
+  worker crash can lose the uncheckpointed progress suffix, up to one interval during a healthy stream;
+  final results and replay-unsafe tool recovery keep their existing durable semantics.
 - Model-catalog settings use asynchronous file reads and SDK-compatible lock waits, without busy-spinning
   the daemon. The SDK retains ownership of settings parsing, migrations and global/project merging.
 - Slow WebSocket clients are disconnected explicitly and resynchronize from snapshots, never silently
