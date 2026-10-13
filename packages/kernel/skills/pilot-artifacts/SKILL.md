@@ -20,7 +20,10 @@ Use the `artifact` tool for session-local, offline artifacts. Author directly in
 - `create`: provide `title`, `kind`, `source`, and optional `libraries`. Titles are 1–160 characters. Returns a compact pinned artifact reference, not compiled HTML.
 - `list`: inspect current session summaries without source or compiled HTML.
 - `get`: supply `id` to read editable source and metadata. Omit `revision` for latest, or supply a revision number for historical source. Never returns compiled HTML.
+- Linked mission/task artifact IDs are also readable with `get`, but read-only. Omit `revision` to use the link's pin, or latest for unpinned links. Conflicting links require an explicit revision; pinned-only links cannot read unlinked revisions. Access is checked by the daemon on every read.
 - `update`: supply `id` and the complete replacement `title`, `kind`, `source`, and `libraries`, not a patch. Prefer revising an existing artifact over creating duplicates. First `get` its latest source, then pass its revision as `expectedRevision` to reject stale writes. If rejected, get the latest again and reconcile rather than overwriting blindly.
+
+Ownership, `update` and `list` remain session-local. Reading another chat's reference does not copy it into this chat or grant editing rights.
 
 Codemode example (use an existing artifact ID and your edited source):
 

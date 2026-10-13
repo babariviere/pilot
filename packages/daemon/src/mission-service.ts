@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { MissionAction, MissionContext } from "@pilot/kernel";
 import type {
+	ArtifactRevision,
 	CreateMissionRequest,
 	JoinMissionRequest,
 	MissionArtifactLinkWrite,
@@ -127,6 +128,7 @@ export class MissionService {
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
+			readArtifactReference: (sessionId, id, revision) => this.readArtifactReference(sessionId, id, revision),
 			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
 			pullRequestsDiscovered: (sessionId, urls) => this.linkPullRequests(sessionId, urls),
 			linkedPullRequests: () =>
@@ -159,6 +161,48 @@ export class MissionService {
 				sessions.missionChanged(sessionId, context);
 			}
 		});
+	}
+
+	/** Resolve only persisted links. Never scan member stores or trust a worker-supplied owner/path. */
+	async readArtifactReference(
+		sessionId: string,
+		id: string,
+		revision?: number,
+	): Promise<Omit<ArtifactRevision, "html">> {
+		if (typeof id !== "string" || !id || id.length > 128) throw new Error("Artifact reference is not authorized");
+		if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1))
+			throw new Error("revision must be a positive integer");
+		const authorize = () => {
+			const missionId = this.store.missionOf(sessionId);
+			if (!missionId) throw new Error("Artifact reference is not authorized");
+			this.assertSameProject(sessionId, missionId);
+			const refs = this.store.artifactReferences(missionId, id);
+			if (!refs.length) throw new Error("Artifact reference is not authorized");
+			const owners = new Set(refs.map((ref) => ref.sessionId));
+			if (owners.size !== 1) throw new Error("Artifact reference has conflicting owners");
+			const owner = refs[0]!.sessionId;
+			// Existing links remain readable when their author leaves, but never across projects.
+			this.assertSameProject(owner, missionId);
+			const unpinned = refs.some((ref) => ref.revision === undefined);
+			const pins = new Set(refs.map((ref) => ref.revision));
+			if (revision !== undefined && !unpinned && !pins.has(revision))
+				throw new Error("Artifact revision is not linked");
+			if (revision === undefined && pins.size > 1)
+				throw new Error("Artifact reference has conflicting revisions; specify a linked revision");
+			return { missionId, owner, revision: revision ?? refs[0]!.revision };
+		};
+		const allowed = authorize();
+		const value = await this.sessions.artifact(allowed.owner, id, allowed.revision);
+		// Membership or links can change while filesystem I/O is pending. Do not disclose stale access.
+		const current = authorize();
+		if (
+			current.missionId !== allowed.missionId ||
+			current.owner !== allowed.owner ||
+			current.revision !== allowed.revision
+		)
+			throw new Conflict("Artifact reference changed while reading; retry");
+		const { html: _html, ...source } = value;
+		return source;
 	}
 
 	context(sessionId: string): MissionContext | undefined {

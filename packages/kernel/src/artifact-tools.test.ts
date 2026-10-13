@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { validateToolArguments } from "@earendil-works/pi-ai";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { isArtifactPreviewAvailable } from "@pilot/artifacts";
+import { ArtifactNotFound, isArtifactPreviewAvailable } from "@pilot/artifacts";
 import type { ArtifactRevision, ArtifactWrite } from "@pilot/protocol";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
@@ -66,6 +66,58 @@ function fixture(overrides: Partial<ArtifactToolOptions> = {}) {
 function execute(tool: ToolDefinition, args: unknown, signal?: AbortSignal) {
 	return tool.execute("call-1", args, signal, undefined, { cwd: process.cwd() } as ExtensionToolContext);
 }
+
+for (const ask of [false, true]) {
+	test(`get falls back to read-only references, never update or list (ask=${ask})`, async () => {
+		const reads: unknown[][] = [];
+		const f = fixture({
+			ask,
+			readReference: async (...args) => {
+				reads.push(args);
+				return { ...revision, sessionId: "author" };
+			},
+		});
+		await f.call("get", { id: revision.id });
+		assert.deepEqual(reads, [], "owned artifacts retain local read semantics");
+		f.store.get = async () => {
+			throw new ArtifactNotFound("Unknown artifact");
+		};
+		const result = await f.call("get", { id: revision.id, revision: 2 });
+		assert.deepEqual(reads, [[revision.id, 2]]);
+		assert.equal(
+			(result.structuredContent as unknown as { artifact: ArtifactRevision }).artifact.sessionId,
+			"author",
+		);
+		assert.doesNotMatch(JSON.stringify(result), /COMPILED_HTML/);
+		assert.equal(f.notifications, 0);
+		f.store.update = async () => {
+			throw new ArtifactNotFound("Unknown artifact");
+		};
+		await assert.rejects(f.call("update", { id: revision.id, ...write }), ArtifactNotFound);
+		await f.call("list", {});
+		assert.equal(reads.length, 1, "update and list cannot access foreign stores");
+	});
+}
+
+test("reference reads propagate authorization failures and do not mask damaged local stores", async () => {
+	let reads = 0;
+	const f = fixture({
+		readReference: async () => {
+			reads++;
+			throw new Error("Artifact reference is not authorized");
+		},
+	});
+	f.store.get = async () => {
+		throw new ArtifactNotFound("Unknown artifact");
+	};
+	await assert.rejects(f.call("get", { id: "foreign" }), /not authorized/);
+	assert.equal(reads, 1);
+	f.store.get = async () => {
+		throw new SyntaxError("Damaged store");
+	};
+	await assert.rejects(f.call("get", { id: revision.id }), /Damaged store/);
+	assert.equal(reads, 1);
+});
 
 test("artifact tools declare structured output, sequential execution and a compact namespaced skill pointer", () => {
 	const f = fixture();

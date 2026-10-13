@@ -107,6 +107,7 @@ export interface SessionMissionBridge {
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
+	readArtifactReference?(sessionId: string, id: string, revision?: number): Promise<Omit<ArtifactRevision, "html">>;
 	pullRequestCreated?(sessionId: string, url: string): void;
 	pullRequestsDiscovered?(sessionId: string, urls: string[]): void;
 	linkedPullRequests?(): Iterable<LinkedPullRequest>;
@@ -2776,6 +2777,21 @@ export class SessionManager {
 			this.workers.get(meta.id) === worker
 		)
 			this.lastUse.set(meta.id, Date.now());
+		if (packet.type === "artifact.reference.get") {
+			const reply = (result: { result?: Omit<ArtifactRevision, "html">; error?: string }) => {
+				if (this.workers.get(meta.id) === worker)
+					worker.send({ type: "artifact.reference.result", callId: packet.callId, ...result });
+			};
+			const call = Promise.resolve().then(() => {
+				if (!this.missions?.readArtifactReference) throw new Error("Artifact reference is not authorized");
+				return this.missions.readArtifactReference(meta.id, packet.id, packet.revision);
+			});
+			void call.then(
+				(result) => reply({ result }),
+				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+			);
+			return;
+		}
 		if (packet.type === "mission.call") {
 			const reply = (result: { result?: unknown; error?: string }) => {
 				if (this.workers.get(meta.id) === worker)

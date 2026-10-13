@@ -3,6 +3,7 @@ import type { JsonValue } from "@earendil-works/chord";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { type AgentToolResult, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
+	ArtifactNotFound,
 	type ArtifactStore,
 	isBrowserPreviewAvailable,
 	isArtifactPreviewAvailable,
@@ -55,6 +56,8 @@ const diagnosticsProperties = {
 
 export interface ArtifactToolOptions {
 	store: Pick<ArtifactStore, "create" | "update" | "get" | "list">;
+	/** Read-only daemon lookup for references linked to the caller's current mission. */
+	readReference?: (id: string, revision?: number) => Promise<Omit<ArtifactRevision, "html"> | undefined>;
 	/** Persist a display-only transcript reference, including publications nested inside codemode. */
 	onArtifactPublished?: (artifact: ArtifactReference) => Promise<void>;
 	onArtifactsChanged?: () => void;
@@ -164,7 +167,7 @@ export function createArtifactTools(options: ArtifactToolOptions): ToolDefinitio
 			description: `Publish and inspect session-local offline artifacts. Read the pilot-artifacts skill before authoring.
 - create: publish title, kind, source and optional libraries; returns a compact pinned reference.
 - update: replace the complete document by id, not a patch; expectedRevision rejects stale updates.
-- get: read editable source and metadata by id, optionally at a historical revision; omitting revision reads latest.
+- get: read source and metadata by id, optionally at a historical revision. Local artifacts read latest when revision is omitted. Linked mission/task references are read-only: omission uses the pinned revision, or latest for unpinned links; conflicting pins require an explicit linked revision.
 - list: list current session summaries without source.
 ${previewDescription}Source must be self-contained and offline. Text source: 512 KiB UTF-8 max; images: 16 MiB decoded max.
 ${options.ask ? "Ask images accept only inline base64 data:image/... URLs, never file paths." : "Images accept local PNG, JPEG, GIF or WebP paths, or inline data URLs; never remote URLs."}
@@ -243,7 +246,14 @@ Get the current source before updating, and pass its revision as expectedRevisio
 					throw new Error(`Artifact ${action} requires id`);
 				switch (action) {
 					case "get": {
-						const value = await store.get(id!, params.revision);
+						let value: Omit<ArtifactRevision, "html"> | undefined;
+						try {
+							value = await store.get(id!, params.revision);
+						} catch (error) {
+							if (!(error instanceof ArtifactNotFound)) throw error;
+						}
+						if (!value) value = await options.readReference?.(id!, params.revision);
+						signal?.throwIfAborted();
 						if (!value) throw new Error(`Artifact not found: ${id}`);
 						return dataResult({
 							artifact: {
