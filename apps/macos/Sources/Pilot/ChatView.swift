@@ -514,7 +514,7 @@ private struct ThinkingRow: View {
             }
             .buttonStyle(.plain)
             if expansion.expanded {
-                MarkdownView(text: text)
+                MarkdownView(text: text, textColor: .secondaryLabelColor)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 12)
                     .overlay(alignment: .leading) {

@@ -86,11 +86,25 @@ struct PilotFonts: Equatable {
     /// AppKit font for text views (chat size).
     var nsBody: NSFont { nsChat(chatSize) }
 
+    var nsMono: NSFont {
+        guard codeFamily != AppSettings.systemMono,
+              let font = NSFontManager.shared.font(withFamily: codeFamily, traits: [], weight: 5, size: codeSize)
+        else { return .monospacedSystemFont(ofSize: codeSize, weight: .regular) }
+        return font
+    }
+
     func nsChat(_ size: Double) -> NSFont {
         guard chatFamily != AppSettings.systemFont,
               let font = NSFontManager.shared.font(withFamily: chatFamily, traits: [], weight: 5, size: size)
         else { return .systemFont(ofSize: size) }
         return font
+    }
+
+    func nsChat(_ size: Double, weight: NSFont.Weight) -> NSFont {
+        let descriptor = nsChat(size).fontDescriptor.addingAttributes([
+            .traits: [NSFontDescriptor.TraitKey.weight: weight.rawValue],
+        ])
+        return NSFont(descriptor: descriptor, size: size) ?? nsChat(size)
     }
 }
 

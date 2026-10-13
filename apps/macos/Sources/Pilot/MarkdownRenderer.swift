@@ -103,6 +103,7 @@ actor MarkdownRenderer {
 
 @MainActor
 final class MarkdownRenderState: ObservableObject {
+    let selection = MessageTextSelection()
     @Published var blocks: [PreparedMarkdownBlock] = []
     @Published var highlighted: AttributedString?
     var source: String?
@@ -112,6 +113,7 @@ final class MarkdownRenderState: ObservableObject {
     /// Lazy transcript rows are rebuilt whenever they scroll back into view. Seeding from the
     /// main-actor cache gives them their final height on the first frame instead of 0 points.
     init(markdown text: String) {
+        selection.source = text
         if let blocks = PreparedMarkdownCache.shared.blocks(for: text) {
             self.blocks = blocks
             source = text

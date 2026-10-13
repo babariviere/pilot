@@ -6,12 +6,14 @@ import SwiftUI
 /// from `AttributedString`.
 struct MarkdownView: View {
     let text: String
+    let textColor: NSColor
     @StateObject private var state: MarkdownRenderState
     @Environment(\.transcriptContentPrepared) private var contentPrepared
     @Environment(\.pilotFonts) private var fonts
 
-    init(text: String) {
+    init(text: String, textColor: NSColor = .labelColor) {
         self.text = text
+        self.textColor = textColor
         _state = StateObject(wrappedValue: MarkdownRenderState(markdown: text))
     }
 
@@ -20,16 +22,19 @@ struct MarkdownView: View {
             if state.source == nil {
                 // Not prepared yet: plain text keeps the row near its final height, so the
                 // lazy transcript does not jump when the formatted blocks arrive.
-                Text(text).font(fonts.body).lineSpacing(3)
+                SelectableMessageText(text: AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono)
             } else {
-                ForEach(Array(state.blocks.enumerated()), id: \.offset) { _, block in
+                ForEach(Array(state.blocks.enumerated()), id: \.offset) { index, block in
                     BlockView(block: block)
+                        .environment(\.messageSelectionBlock, index)
                 }
             }
         }
-        .textSelection(.enabled)
+        .environment(\.messageTextSelection, state.selection)
+        .environment(\.messageSelectionColor, textColor)
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: text) {
+            state.selection.source = text
             guard state.source != text else { return }
             do {
                 let blocks = try await MarkdownRenderer.shared.prepare(text)
@@ -50,20 +55,23 @@ private struct BlockView: View {
     var body: some View {
         switch block.block {
         case let .heading(level, text):
-            Text(block.inline ?? AttributedString(text))
-                .font(fonts.chat(fonts.chatSize + (level == 1 ? 6 : level == 2 ? 3 : 1), weight: .semibold))
+            SelectableMessageText(text: block.inline ?? AttributedString(text),
+                font: fonts.nsChat(fonts.chatSize + (level == 1 ? 6 : level == 2 ? 3 : 1), weight: .semibold),
+                monoFont: fonts.nsMono, lineSpacing: 0)
                 .padding(.top, 4)
         case let .paragraph(text):
-            Text(block.inline ?? AttributedString(text)).font(fonts.body).lineSpacing(3)
+            SelectableMessageText(text: block.inline ?? AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono)
         case let .list(ordered, start, items):
             VStack(alignment: .leading, spacing: 5) {
-                ForEach(Array(items.enumerated()), id: \.offset) { index, item in
+                ForEach(Array(items.enumerated()), id: \.offset) { index, _ in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(ordered ? "\(start + index)." : "•")
                             .font(fonts.body.monospacedDigit())
                             .foregroundStyle(.secondary)
                             .frame(minWidth: 14, alignment: .trailing)
-                        Text(block.items[index]).font(fonts.body).lineSpacing(3)
+                        SelectableMessageText(text: block.items[index], font: fonts.nsBody, monoFont: fonts.nsMono, item: index,
+                                              copyPrefix: ordered ? "\(start + index). " : "• ")
+                            .alignmentGuide(.firstTextBaseline) { _ in fonts.nsBody.ascender }
                     }
                 }
             }
@@ -74,11 +82,12 @@ private struct BlockView: View {
         case let .quote(text):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1).fill(.tertiary).frame(width: 3)
-                Text(block.inline ?? AttributedString(text)).font(fonts.body).foregroundStyle(.secondary)
+                SelectableMessageText(text: block.inline ?? AttributedString(text), font: fonts.nsBody,
+                                      monoFont: fonts.nsMono, color: .secondaryLabelColor, lineSpacing: 0)
             }
         case let .table(rows):
-            Text(rows.joined(separator: "\n"))
-                .font(fonts.mono)
+            SelectableMessageText(text: AttributedString(rows.joined(separator: "\n")),
+                                  font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Theme.subtleFill))
@@ -90,6 +99,7 @@ private struct BlockView: View {
 
 struct CodeBlock: View {
     @Environment(\.pilotFonts) private var fonts
+    @Environment(\.messageTextSelection) private var selection
     let language: String?
     let text: String
     var prepared: AttributedString? = nil
@@ -107,11 +117,17 @@ struct CodeBlock: View {
             .padding(.vertical, 5)
             .background(Theme.subtleFill)
             ScrollView(.horizontal, showsIndicators: false) {
-                Text(prepared ?? state.highlighted ?? AttributedString(text))
-                    .font(fonts.mono)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(10)
+                Group {
+                    if selection != nil {
+                        SelectableMessageText(text: prepared ?? state.highlighted ?? AttributedString(text),
+                                              font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0, unwrapped: true)
+                    } else {
+                        Text(prepared ?? state.highlighted ?? AttributedString(text))
+                            .font(fonts.mono)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }.padding(10)
             }
         }
         .background(Theme.codeBackground)
