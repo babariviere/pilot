@@ -12,6 +12,7 @@ import { SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
+import { ScheduleDetection } from "./schedule-detection.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { SourceRegistry } from "./sources.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
@@ -71,10 +72,14 @@ missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
-const schedules = new ScheduleService(scheduleStore, { sessions, projects, missions: missionStore });
+const scheduleDetection = new ScheduleDetection();
+const schedules = new ScheduleService(scheduleStore, {
+	sessions,
+	projects,
+	missions: missionStore,
+	triggers: scheduleDetection,
+});
 await schedules.load();
-// The daemon trigger detector supplies wake/reachability through ScheduleTriggerSource.
-// Until registered, online is unknown and network-gated schedules stay pending.
 schedules.start();
 const server = createDaemonServer(
 	config,
