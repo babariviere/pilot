@@ -34,6 +34,84 @@ function completion(outcome: SessionSummary["outcome"], outcomeAt: number): Sess
 	};
 }
 
+test("lead settlements never create activity or pending notices", () => {
+	const { store, id } = setup();
+	try {
+		const before = store.events(id);
+		store.recordMemberCompletion({ ...completion("done", 50), id: "lead" });
+		store.recordMemberCompletion({ ...completion("failed", 51), id: "lead" });
+		assert.deepEqual(store.events(id), before);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+	} finally {
+		store.close();
+	}
+});
+
+test("PR transitions are recorded once, without repeating unchanged PR states", () => {
+	const { store, id } = setup();
+	try {
+		const now = Date.now();
+		const open = completion("done", now + 1);
+		store.recordMemberCompletion(open);
+		const merged = {
+			...open,
+			outcomeAt: now + 3,
+			pullRequest: { ...open.pullRequest!, state: "merged" as const, mergedAt: now + 2 },
+		};
+		store.recordMemberCompletion(merged);
+		assert.match(store.events(id)[0]!.text, /PR #12 merged/);
+		const before = store.events(id);
+		store.recordMemberCompletion({ ...merged, outcomeAt: now + 4 });
+		assert.deepEqual(store.events(id), before);
+		store.recordMemberCompletion({ ...merged, outcomeAt: now + 5, outcomeReason: "New information" });
+		assert.match(store.events(id)[0]!.text, /New information/);
+		assert.doesNotMatch(store.events(id)[0]!.text, /PR #12/);
+		assert.equal(store.events(id).filter((event) => event.text.includes("PR #12 merged")).length, 1);
+	} finally {
+		store.close();
+	}
+});
+
+test("a run containing only already completed tasks carries no new activity", () => {
+	const { store, id } = setup();
+	try {
+		store.updateTask(id, "1", { status: "done" });
+		store.recordMemberRun({ ...completion("done", 1), state: "working" });
+		const before = store.events(id);
+		store.recordMemberCompletion(completion("done", Date.now() + 1));
+		assert.deepEqual(store.events(id), before);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+	} finally {
+		store.close();
+	}
+});
+
+test("settles omit old completed work while retaining work completed during this run", () => {
+	const { store, id } = setup();
+	try {
+		store.updateTask(id, "1", { status: "done" });
+		const next = store.addTask(id, { title: "Next" });
+		store.claimTask(id, next.id, "member");
+		const old = completion("done", 1).pullRequest!;
+		store.addResource(id, { url: old.url, taskId: store.resolveTask(id, "1").id });
+		store.recordMemberRun({ ...completion("done", 1), state: "working" });
+		store.updateTask(id, next.id, { status: "done" });
+		const now = Date.now();
+		store.recordMemberCompletion({
+			...completion("done", now + 1),
+			pullRequests: [
+				old,
+				{ ...old, number: 13, url: "https://github.com/o/r/pull/13", state: "merged", mergedAt: now },
+			],
+		});
+		const event = store.events(id)[0]!;
+		assert.match(event.text, /#2 Next: chat finished, PR #13 merged/);
+		assert.doesNotMatch(event.text, /Pagination|PR #12/);
+	} finally {
+		store.close();
+	}
+});
+
 test("acknowledged states stay consumed across restart, even with newer snapshot versions", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-notice-dedupe-"));
 	t.after(() => rm(home, { recursive: true, force: true }));
@@ -543,6 +621,8 @@ test("legacy queued events migrate into groups, and legacy consumed states do no
 	f.store.recordMemberCompletion(completion("done", 2));
 	f.store.close();
 	const legacy = new DatabaseSync(file);
+	// Older writers included unchanged PRs in every activity entry.
+	legacy.exec("UPDATE events SET text = text || ', PR #12 open' WHERE text LIKE '%chat finished'");
 	legacy.exec("DROP TABLE pending_notice_summaries; ALTER TABLE member_completions DROP COLUMN signature");
 	legacy.close();
 	const store = new MissionStore(file);

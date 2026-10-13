@@ -40,7 +40,8 @@ export class MissionNotices {
 		const key = `${session.state}:${session.outcomeAt}:${session.archivedAt}:${session.missionId}`;
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
-		if (session.missionId && session.outcome) this.store.recordMemberCompletion(session, recovering);
+		if (session.state === "working" || session.state === "starting") this.store.recordMemberRun(session);
+		else if (session.outcome) this.store.recordMemberCompletion(session, recovering);
 		if (!recovering) this.refreshActivity(session.missionId);
 		this.schedule();
 	}
