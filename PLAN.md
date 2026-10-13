@@ -897,11 +897,13 @@ reports), producing a morning summary in the app and Slack.
   order and ahead of any text typed since. Automatic input is dropped as before.
   Removal errors are dismissible inline warnings that clear after five seconds or when leaving the
   chat, without changing drafts.
-- Message times: user bubbles and assistant text reveal a muted date/time footer only on click.
-  Click again or elsewhere in the window to dismiss. Use the original pi-ai epoch-millisecond
-  timestamp in local time, with exact date, seconds and timezone in the tooltip and accessibility
-  label. Missing or invalid legacy timestamps stay hidden. Native text selection and message
-  controls remain usable; revealing a footer pauses bottom-follow like expanding a message.
+- Message actions: hovering a user bubble or assistant text reveals a muted footer below it. User
+  messages show the sent time, copy and edit (trailing, under the bubble); assistant text shows copy
+  and the time (leading). Keyboard focus reveals it too. The footer's slot is always laid out, so
+  hover never reflows the transcript or disturbs bottom-follow. Use the original pi-ai
+  epoch-millisecond timestamp in local time, with exact date, seconds and timezone in the tooltip.
+  Missing or invalid legacy timestamps stay hidden. Copy and edit stay reachable without hover
+  through accessibility actions and the context menu.
 - Keep unsent text, image attachments and queued-message edits per chat when navigating between
   chats, Home and archives or reopening the window. Keep the new-task form and its base-branch
   selection too. Save drafts atomically to a private local JSON file in

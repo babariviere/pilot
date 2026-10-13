@@ -154,7 +154,6 @@ struct ChatView: View {
     @StateObject private var preparedAction = TranscriptPreparedAction()
     @StateObject private var toolExpansions = TranscriptExpansions()
     @StateObject private var messageExpansions = TranscriptExpansions()
-    @StateObject private var messageTimestamps = MessageTimestampSelection()
     @StateObject private var slashCommands = SlashCommandSource()
     @StateObject private var rewind = TranscriptRewind()
     private let bottomPadding: CGFloat = 8
@@ -236,8 +235,6 @@ struct ChatView: View {
                 proxy.scrollTo("bottom", anchor: .bottom)
             }
         }
-        .environment(\.messageTimestampSelection, messageTimestamps)
-        .background(MessageTimestampClickObserver(selection: messageTimestamps, onToggle: scroll.messageToggled))
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if session.isAsk {
@@ -304,7 +301,6 @@ struct ChatView: View {
             retryEntryID: session.isArchived ? nil : transcript.retryEntryID
         ))
         .onDisappear {
-            messageTimestamps.dismiss()
             feed.onEventsApplied = nil
             feed.stop(); scroll.cancelPreparedScroll(); preparedAction.action = nil
         }
@@ -465,20 +461,20 @@ struct RowView: View, Equatable {
                 SubagentAnswerRow(notification: notification)
             } else {
                 UserMessage(text: text, expansion: messageExpansions?.state(for: id),
-                            messageID: id, timestamp: timestamp, entryID: row.entryID)
+                            timestamp: timestamp, entryID: row.entryID)
                     .rewindMenu(for: row)
             }
         case let .automatic(id, text, origin, timestamp):
             if let notification = SubagentNotification(message: text) {
                 SubagentAnswerRow(notification: notification)
             } else {
-                MessageTimestamp(rowID: id, milliseconds: timestamp) {
+                MessageWithActions(text: text, milliseconds: timestamp) {
                     AutomaticMessageRow(text: text, origin: origin, expansion: messageExpansions?.state(for: id))
                 }
             }
-        case let .text(id, text, timestamp):
+        case let .text(_, text, timestamp):
             // Agent replies are always shown in full. Only user bubbles fold.
-            MessageTimestamp(rowID: id, milliseconds: timestamp) { MarkdownView(text: text) }
+            MessageWithActions(text: text, milliseconds: timestamp) { MarkdownView(text: text) }
                 .rewindMenu(for: row)
         case let .thinking(_, text, streaming):
             ThinkingRow(text: text, streaming: streaming)
@@ -500,38 +496,20 @@ struct RowView: View, Equatable {
 
 struct UserMessage: View {
     @Environment(\.pilotFonts) private var fonts
-    @Environment(\.transcriptRewind) private var rewind
-    @State private var bubbleHovered = false
-    @State private var gutterHovered = false
     let text: String
     var expansion: ExpansionState? = nil
-    var messageID: String = ""
     var timestamp: Double? = nil
     var entryID: Int? = nil
 
     var body: some View {
-        HStack {
-            Spacer(minLength: 72)
-            MessageTimestamp(rowID: messageID, milliseconds: timestamp, trailing: true) {
+        MessageWithActions(text: text, milliseconds: timestamp, trailing: true, entryID: entryID) {
+            HStack {
+                Spacer(minLength: 72)
                 CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
                     Text(text)
                         .font(fonts.body)
                         .lineSpacing(3)
                         .textSelection(.enabled)
-                }
-            }
-            .contentShape(Rectangle())
-            .onHover { bubbleHovered = $0 }
-            .overlay(alignment: .topTrailing) {
-                // The edit action hangs in the transcript margin so the bubble stays flush with the column edge.
-                if let entryID, let rewind {
-                    MessageEditButton(entryID: entryID, rewind: rewind, isHovered: bubbleHovered || gutterHovered)
-                        .padding(.top, 10)
-                        .padding(.leading, 8)
-                        .frame(maxHeight: .infinity, alignment: .top)
-                        .contentShape(Rectangle())
-                        .onHover { gutterHovered = $0 }
-                        .alignmentGuide(.trailing) { $0[.leading] }
                 }
             }
         }
