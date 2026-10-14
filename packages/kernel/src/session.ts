@@ -24,6 +24,7 @@ import {
 	type ModelRef,
 	ROOT_CONVERSATION_ID,
 	type Storage,
+	type SubmissionId,
 	watchEvents,
 } from "@earendil-works/pi-durable";
 import { ArtifactStore } from "@pilot/artifacts";
@@ -52,9 +53,10 @@ import {
 import { reconcileCompletion } from "./attention.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
+import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { JobsMonitor } from "./jobs.ts";
-import { InputOrigins } from "./input-origin.ts";
+import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
@@ -70,7 +72,6 @@ import {
 	removeQueuedMessage,
 	type WithdrawnMessage,
 	watchQueue,
-	withdrawUserMessages,
 } from "./queue.ts";
 import { refActivity } from "./ref-activity.ts";
 import { openSessionStorage } from "./storage.ts";
@@ -106,6 +107,7 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
+	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(working: boolean, completion?: SessionCompletion): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
 	onUsageChanged?(usage: KernelUsage): void;
@@ -158,6 +160,18 @@ export class KernelSession {
 	private readonly subagents: SubagentBridge;
 	private readonly callMission?: MissionCall;
 	private readonly callMemory?: MemoryCall;
+	private onSystemMessageState?: KernelSessionHooks["onSystemMessageState"];
+	private inputOperations: Promise<void> = Promise.resolve();
+
+	/** Native notifications and daemon commands share admission/Stop ordering. */
+	private serializeInput<T>(perform: () => Promise<T>): Promise<T> {
+		const result = this.inputOperations.then(perform);
+		this.inputOperations = result.then(
+			() => {},
+			() => {},
+		);
+		return result;
+	}
 
 	private constructor(
 		harness: Harness,
@@ -475,14 +489,24 @@ export class KernelSession {
 				}
 			});
 			await adapter.refreshUsage(context);
+			await harness.commit(async (tx) => {
+				await tx.doc(HeldInputsDoc, conversation.id);
+			}, context);
 			harness.resume();
 			// Extension messages that start a turn (subagent answers) become durable follow-ups.
+			session.onSystemMessageState = hooks.onSystemMessageState;
+			await session.publishSystemMessageStates();
 			adapter.onExtensionInput = (input) => {
-				void conversation
-					.submit(
-						{ type: "input", content: input.content, requestId: input.requestId, whenBusy: input.mode },
-						context,
-					)
+				void session
+					.serializeInput(async () => {
+						const admission = await admitWithHeld(session.harness, conversation.id, input, context);
+						if (admission) await session.publishSystemMessageStates();
+						else
+							await conversation.submit(
+								{ type: "input", content: input.content, requestId: input.requestId, whenBusy: input.mode },
+								context,
+							);
+					})
 					.catch((error: unknown) => console.warn("pilot: could not admit extension input", error));
 			};
 			return session;
@@ -580,6 +604,9 @@ export class KernelSession {
 	/** Joining, leaving or a mission change. Applies from the next model request. */
 	setMission(context: MissionContext | undefined): void {
 		if (this.#closing) return;
+		void this.publishSystemMessageStates().catch((error) =>
+			console.warn("pilot: could not replay message states", error),
+		);
 		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
 		const previous = this.#mission.current;
 		if (previous && context && previous.id === context.id && !coordinatorChanged) {
@@ -629,7 +656,17 @@ export class KernelSession {
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
-	async submit(
+	submit(
+		requestId: string,
+		content: string,
+		mode: DeliveryMode,
+		onlyIfIdle = false,
+		reportDelivery = false,
+	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
+		return this.serializeInput(() => this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery));
+	}
+
+	private async submitInput(
 		requestId: string,
 		content: string,
 		mode: DeliveryMode,
@@ -642,6 +679,27 @@ export class KernelSession {
 		try {
 			// Native input handlers (prompt templates, skill commands) expand the text first.
 			const prepared = await this.adapter.prepareInput(content);
+			const heldAdmission = await admitWithHeld(
+				this.harness,
+				this.conversation.id,
+				{ requestId, content: prepared, mode },
+				context,
+				onlyIfIdle,
+			);
+			if (heldAdmission) {
+				await this.publishSystemMessageStates();
+				if (heldAdmission.started) this.harness.resume();
+				if (!reportDelivery) return;
+				if (heldAdmission.held) return { delivery: "queued" };
+				const submission = heldAdmission.id ? await this.harness.submission(heldAdmission.id, context) : undefined;
+				const status = await submission?.status(context);
+				if (status?.status === "unanswered")
+					return {
+						delivery: "not_started",
+						reason: status.reason === "aborted" || status.reason === "reset" ? "stopped" : "failed",
+					};
+				return { delivery: status?.status === "queued" ? "queued" : "delivered" };
+			}
 			if (onlyIfIdle) {
 				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context);
 				return { delivery: "delivered" };
@@ -668,6 +726,8 @@ export class KernelSession {
 	/** Edit in place only if the input is still queued when the commit runs. */
 	async editQueuedMessage(submissionId: number, content: string, mode?: DeliveryMode): Promise<void> {
 		if (this.#moving) throw new ConversationBusy(this.conversation.id);
+		if (inputOrigin((await this.#storage.submission(submissionId as SubmissionId, context))?.requestId))
+			throw new Error("Waiting system messages are read-only");
 		const prepared = await this.adapter.prepareInput(content);
 		await editQueuedMessage(this.harness, this.conversation.id, submissionId, prepared, context, mode);
 	}
@@ -675,6 +735,13 @@ export class KernelSession {
 	/** Withdraw one queued input without stopping the active run. */
 	async removeQueuedMessage(submissionId: number): Promise<void> {
 		if (this.#moving) throw new ConversationBusy(this.conversation.id);
+		if (
+			inputOrigin(
+				(await this.#storage.submission(submissionId as import("@earendil-works/pi-durable").SubmissionId, context))
+					?.requestId,
+			)
+		)
+			throw new Error("Waiting system messages are read-only");
 		await removeQueuedMessage(this.harness, this.conversation.id, submissionId, context);
 	}
 
@@ -702,23 +769,54 @@ export class KernelSession {
 	 * Withdraw queued input and abort the current run. The conversation stays usable. Returns the user's own withdrawn
 	 * messages so Stop can restore them to the composer.
 	 */
-	async abort(): Promise<WithdrawnMessage[]> {
-		let withdrawn: WithdrawnMessage[] = [];
-		try {
-			const inbox = await this.harness.snapshot(InboxDoc, this.conversation.id, context);
-			withdrawn = await withdrawUserMessages(
-				this.harness,
-				this.conversation.id,
-				inbox ?? null,
-				(id) => this.#storage.submission(id, context),
-				context,
-			);
-		} catch (error) {
-			// Stop must still stop. The abort below withdraws whatever is left.
-			console.warn(`pilot: could not keep queued messages on Stop: ${error}`);
-		}
+	abort(): Promise<WithdrawnMessage[]> {
+		return this.serializeInput(() => this.abortInput());
+	}
+
+	private async abortInput(): Promise<WithdrawnMessage[]> {
+		const withdrawn = await holdOnStop(
+			this.harness,
+			this.conversation.id,
+			(id) => this.#storage.submission(id, context),
+			context,
+		);
+		await this.publishSystemMessageStates();
 		await this.conversation.abort(context, { background: true });
 		return withdrawn;
+	}
+
+	sendHeldMessages(): Promise<void> {
+		return this.serializeInput(() => this.sendHeld());
+	}
+
+	private async sendHeld(): Promise<void> {
+		if (this.#closing || this.#moving) throw new ConversationBusy(this.conversation.id);
+		const admission = await admitWithHeld(this.harness, this.conversation.id, undefined, context);
+		if (admission?.started) this.harness.resume();
+	}
+
+	async discardHeldMessages(submissionId?: number): Promise<void> {
+		if (this.#moving) throw new ConversationBusy(this.conversation.id);
+		await discardHeld(
+			this.harness,
+			this.conversation.id,
+			(id) => this.#storage.submission(id, context),
+			context,
+			submissionId,
+		);
+		await this.publishSystemMessageStates();
+	}
+
+	async publishSystemMessageStates(): Promise<void> {
+		const held = await this.harness.snapshot(HeldInputsDoc, this.conversation.id, context);
+		for (const event of held?.events ?? []) this.onSystemMessageState?.(event);
+	}
+
+	async acknowledgeSystemMessageState(id: string): Promise<void> {
+		await this.harness.commit(async (tx) => {
+			const held = await tx.doc(HeldInputsDoc, this.conversation.id);
+			held.events = held.events.filter((event) => event.id !== id);
+		}, context);
 	}
 
 	get #moving(): boolean {
@@ -849,7 +947,7 @@ export class KernelSession {
 			return;
 		}
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
-		const displayQueue = (inbox: Readonly<InboxState> | null) =>
+		const displayQueue = async (inbox: Readonly<InboxState> | null) =>
 			queueUpdateForDisplay(
 				inbox,
 				async (id) => {
@@ -857,14 +955,18 @@ export class KernelSession {
 					return submission?.status(context);
 				},
 				this.#automaticSince,
+				Date.now(),
+				(await this.harness.snapshot(HeldInputsDoc, this.conversation.id, context)) ?? null,
 			);
 		let queue: DocumentWatch<InboxState>;
+		let heldQueue: Awaited<ReturnType<typeof this.harness.watchDoc>> | undefined;
 		let audit: DocumentWatch<{ actions: GitHubAction[] }> | undefined;
 		try {
+			heldQueue = (await this.harness.watchDoc(HeldInputsDoc, this.conversation.id, context)) ?? undefined;
 			audit = (await this.harness.watchDoc(GitHubActionsDoc, context)) ?? undefined;
 			queue = await watchQueue(this.harness, this.conversation.id, context);
 		} catch (error) {
-			await audit?.stop();
+			await Promise.all([heldQueue?.stop(), audit?.stop()]);
 			await stream.stop();
 			throw error;
 		}
@@ -874,7 +976,7 @@ export class KernelSession {
 			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
 			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
 		} catch (error) {
-			await Promise.all([stream.stop(), queue.stop(), audit?.stop()]);
+			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop()]);
 			throw error;
 		}
 		const stopTodos =
@@ -887,13 +989,16 @@ export class KernelSession {
 				: () => {};
 		this.#watches.set(watchId, async () => {
 			stopTodos();
-			await Promise.all([stream.stop(), queue.stop(), audit?.stop()]);
+			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop()]);
 		});
 		stream.start(async (events) => {
 			await listener(await this.#origins.events(events));
 		});
 		queue.start(async (inbox) => {
 			await listener([await displayQueue(inbox)]);
+		});
+		heldQueue?.start(async () => {
+			await listener([await displayQueue(queue.value)]);
 		});
 		audit?.start(async (state) => {
 			await listener([{ type: "github_actions_update", actions: [...(state?.actions ?? [])] }]);

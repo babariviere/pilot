@@ -333,6 +333,9 @@ export class MissionStore {
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
+		this.db.exec(
+			"CREATE TABLE IF NOT EXISTS system_message_events (session_id TEXT NOT NULL, event_id TEXT NOT NULL, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, PRIMARY KEY (session_id, event_id))",
+		);
 		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "audience"))
 			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
@@ -2249,6 +2252,43 @@ export class MissionStore {
 		);
 		this.changed(id);
 		return event;
+	}
+
+	/** A durable dedupe key makes kernel outbox replay safe across daemon restarts. */
+	recordSystemMessageState(
+		sessionId: string,
+		event: { id: string; requestId: string; state: "held" | "discarded"; preview: string },
+	): void {
+		// New sends carry their original mission identity, even if the recipient later leaves or moves.
+		const parts = event.requestId.split(":");
+		const id = parts.length === 4 ? parts[2] : this.missionOf(sessionId);
+		if (!id || !this.get(id)) return;
+		const changed = this.transaction(() => {
+			if (
+				this.one(
+					"SELECT event_id FROM system_message_events WHERE session_id = ? AND event_id = ?",
+					sessionId,
+					event.id,
+				)
+			)
+				return false;
+			this.run(
+				"INSERT INTO system_message_events (session_id, event_id, mission_id) VALUES (?, ?, ?)",
+				sessionId,
+				event.id,
+				id,
+			);
+			const text = `Message ${event.requestId} (${JSON.stringify(event.preview)}) to chat ${sessionId} ${event.state === "held" ? "held because the user stopped the chat" : "discarded by the user"}.`;
+			this.event(
+				id,
+				"update",
+				text,
+				{ sessionId },
+				{ wake: true, noticeSummaries: [{ key: `message:${sessionId}:${event.requestId}:${event.state}`, text }] },
+			);
+			return true;
+		});
+		if (changed) this.changed(id);
 	}
 
 	/** Automatic start activity is task activity, not an authored user note. */

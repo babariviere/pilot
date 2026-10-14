@@ -34,6 +34,7 @@ final class ComposerState: ObservableObject {
         set { draftState.height = newValue }
     }
     @Published var queueEditing = QueuedMessageEditing() { didSet { onDraftChanged?() } }
+    @Published var mutatingHeldMessages = false
     @Published var savingQueueEdit = false
     @Published var removingQueuedMessage: Int?
     @Published private(set) var removedQueuedMessages: Set<Int> = []
@@ -93,6 +94,20 @@ final class ComposerState: ObservableObject {
         dismissQueueRemovalError()
     }
 
+    /// Held actions never touch the user's drafts or editable queue.
+    func performHeldAction(_ perform: () async throws -> Void) async {
+        guard !mutatingHeldMessages else { return }
+        mutatingHeldMessages = true
+        error = nil
+        defer { mutatingHeldMessages = false }
+        do { try await perform() }
+        catch { error = error.localizedDescription }
+    }
+
+    func discardHeldMessages(_ id: Int?, perform: (Int?) async throws -> Void) async {
+        await performHeldAction { try await perform(id) }
+    }
+
     func removeQueuedMessage(_ id: Int, perform: (Int) async throws -> Void) async {
         guard !mutatingQueue else { return }
         removingQueuedMessage = id
@@ -131,6 +146,8 @@ struct Composer: View {
     let onStop: () -> Void
     let onEditQueuedMessage: (Int, String, DeliveryMode) async throws -> Void
     let onRemoveQueuedMessage: (Int) async throws -> Void
+    let onSendHeld: (() async throws -> Void)?
+    let onDiscardHeld: ((Int?) async throws -> Void)?
     var session: SessionSummary? = nil
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
@@ -149,6 +166,8 @@ struct Composer: View {
         onStop: @escaping () -> Void,
         onEditQueuedMessage: @escaping (Int, String, DeliveryMode) async throws -> Void,
         onRemoveQueuedMessage: @escaping (Int) async throws -> Void,
+        onSendHeld: (() async throws -> Void)? = nil,
+        onDiscardHeld: ((Int?) async throws -> Void)? = nil,
         session: SessionSummary? = nil,
         slashCommands: [SlashCommand]? = nil,
         onSlashCommandsNeeded: (() -> Void)? = nil,
@@ -163,6 +182,8 @@ struct Composer: View {
         self.onStop = onStop
         self.onEditQueuedMessage = onEditQueuedMessage
         self.onRemoveQueuedMessage = onRemoveQueuedMessage
+        self.onSendHeld = onSendHeld
+        self.onDiscardHeld = onDiscardHeld
         self.session = session
         self.slashCommands = slashCommands
         self.onSlashCommandsNeeded = onSlashCommandsNeeded
@@ -190,7 +211,17 @@ struct Composer: View {
                 }
                 if !systemMessages.isEmpty {
                     VStack(spacing: 2) {
-                        SystemMessagesStrip(inputs: systemMessages)
+                        SystemMessagesStrip(inputs: systemMessages,
+                                            onSendHeld: onSendHeld.map { send -> () -> Void in
+                                                { Task { await state.performHeldAction(send) } }
+                                            },
+                                            onDiscardHeld: onDiscardHeld.map { discard -> () -> Void in
+                                                { Task { await state.discardHeldMessages(nil, perform: discard) } }
+                                            },
+                                            onDiscardRow: onDiscardHeld.map { discard -> (Int) -> Void in
+                                                { id in Task { await state.discardHeldMessages(id, perform: discard) } }
+                                            })
+                            .disabled(state.mutatingHeldMessages)
                         if showsQueue {
                             Rectangle().fill(Theme.border).frame(height: 1).padding(.horizontal, 8)
                         }

@@ -12,13 +12,16 @@ struct SystemMessagesStrip: View {
     let inputs: [PendingAutomaticInput]
     var onSendHeld: (() -> Void)? = nil
     var onDiscardHeld: (() -> Void)? = nil
+    var onDiscardRow: ((Int) -> Void)? = nil
     @State private var expanded: Bool
 
     init(inputs: [PendingAutomaticInput], expanded: Bool = false,
-         onSendHeld: (() -> Void)? = nil, onDiscardHeld: (() -> Void)? = nil) {
+         onSendHeld: (() -> Void)? = nil, onDiscardHeld: (() -> Void)? = nil,
+         onDiscardRow: ((Int) -> Void)? = nil) {
         self.inputs = inputs
         self.onSendHeld = onSendHeld
         self.onDiscardHeld = onDiscardHeld
+        self.onDiscardRow = onDiscardRow
         _expanded = State(initialValue: expanded)
     }
 
@@ -52,7 +55,8 @@ struct SystemMessagesStrip: View {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(inputs) { input in
-                            SystemMessageRow(input: input, now: context.date)
+                            SystemMessageRow(input: input, now: context.date,
+                                             onDiscard: input.held ? onDiscardRow.map { action in { action(input.id) } } : nil)
                                 .transition(Theme.Motion.insertion(reduceMotion: reduceMotion))
                         }
                     }
@@ -150,6 +154,7 @@ struct SystemMessagesStrip: View {
 private struct SystemMessageRow: View {
     let input: PendingAutomaticInput
     let now: Date
+    let onDiscard: (() -> Void)?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -175,6 +180,14 @@ private struct SystemMessageRow: View {
                     .foregroundStyle(Theme.faintForeground)
                     .lineLimit(1)
                     .fixedSize()
+            }
+            if let onDiscard {
+                Button(action: onDiscard) {
+                    Image(systemName: "xmark").font(.pilot(.micro))
+                }
+                .buttonStyle(.plain)
+                .help("Discard this held system message")
+                .accessibilityLabel("Discard held message: \(input.preview)")
             }
         }
         // The mode symbol sits under the summary's title.

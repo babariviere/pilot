@@ -312,6 +312,8 @@ struct ChatView: View {
                         onRemoveQueuedMessage: { id in
                             try await AppModel.shared.client.removeQueuedMessage(session.id, submissionId: id)
                         },
+                        onSendHeld: { try await AppModel.shared.client.sendHeldMessages(session.id) },
+                        onDiscardHeld: { id in try await AppModel.shared.client.discardHeldMessages(session.id, submissionId: id) },
                         session: session,
                         slashCommands: slashCommands.commands,
                         onSlashCommandsNeeded: { [sessionId = session.id] in

@@ -15,6 +15,7 @@ import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { GitHubActionsDoc } from "./github-actions.ts";
+import { HeldInputsDoc } from "./held-inputs.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
@@ -74,7 +75,13 @@ async function conversationView(
 		const audit = await session.snapshot(GitHubActionsDoc, context);
 		const events: AgentEvent[] = [
 			snapshot,
-			await queueUpdateForDisplay(inbox ?? null, (id) => storage.submission(id, context)),
+			await queueUpdateForDisplay(
+				inbox ?? null,
+				(id) => storage.submission(id, context),
+				undefined,
+				Date.now(),
+				(await session.snapshot(HeldInputsDoc, id, context)) ?? null,
+			),
 			{ type: "github_actions_update", actions: [...(audit?.actions ?? [])] },
 		];
 		if (!live?.run && attention?.completion) {

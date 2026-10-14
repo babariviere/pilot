@@ -70,7 +70,7 @@ Actions:
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
 - start (coordinator only): start an unclaimed task (id, optional message/model/thinking/artifacts/links). References attach to the task; artifacts must be linked or member-owned. Opening text, task body and reference list must fit 4000 characters. Durable context belongs in the brief, decisions or task links. Model defaults to project; validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only when asked.
-- send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, returns delivery delivered/queued/not_started with reason; restore archived chats first.
+- send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, optional mode steer for corrections that change current work, followUp (default) for anything that can wait. Steer joins a running turn at its next step; either mode starts an idle chat. Returns delivery delivered/queued/rejected, mode and reason; restore archived chats first.
 - status (coordinator only): summarize members: state, outcome, branch, compact PR states, tasks and finishedWithoutPR (idle claimed work lacking open/draft/merged PR). targetSessionId returns one member plus lastAssistantReply (1500 chars). Never starts workers. Status/start include cached read-only subscriptionUsage per provider (window percent/reset; stale or unknown labelled).
 - bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
 - unbindPr (coordinator only): detach url from targetSessionId, stopping tracking/pushes/follow-ups and removing unfinished ownership links. References/branches stay. Returns {changed, previousOwner, taskLinkRemoved}.`
@@ -130,6 +130,11 @@ Actions:
 			),
 			...(coordinator
 				? {
+						mode: Type.Optional(
+							StringEnum(["steer", "followUp"] as const, {
+								description: "For send: steer changes current work; followUp can wait (default).",
+							}),
+						),
 						order: Type.Optional(
 							Type.Number({
 								description: "Task sort key (task): lower first, ties by task number. Fractions allowed.",

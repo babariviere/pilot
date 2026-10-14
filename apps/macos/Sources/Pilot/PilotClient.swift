@@ -374,6 +374,15 @@ final class PilotClient: ObservableObject {
         )
     }
 
+    func sendHeldMessages(_ sessionId: String) async throws {
+        let _: HeldMessagesResponse = try await call("api/sessions/\(sessionId)/held/send")
+    }
+
+    func discardHeldMessages(_ sessionId: String, submissionId: Int? = nil) async throws {
+        let suffix = submissionId.map { "/\($0)" } ?? ""
+        let _: HeldMessagesResponse = try await call("api/sessions/\(sessionId)/held\(suffix)", method: "DELETE", body: [String: String]())
+    }
+
     @discardableResult
     func pin(_ sessionId: String) async throws -> SessionSummary {
         let session: SessionSummary = try await call("api/sessions/\(sessionId)/pin")

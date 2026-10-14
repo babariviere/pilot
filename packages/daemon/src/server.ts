@@ -673,6 +673,27 @@ export function createDaemonServer(
 			await sessions.editQueuedMessage(parts[2]!, Number(parts[4]), body.message, body.mode);
 			return json(res, 200, { ok: true });
 		}
+		if (
+			parts[1] === "sessions" &&
+			parts[3] === "held" &&
+			parts.length === 5 &&
+			req.method === "POST" &&
+			parts[4] === "send"
+		) {
+			await sessions.heldMessages(parts[2]!, "send");
+			return json(res, 200, { ok: true });
+		}
+		if (
+			parts[1] === "sessions" &&
+			parts[3] === "held" &&
+			(parts.length === 4 || parts.length === 5) &&
+			req.method === "DELETE"
+		) {
+			if (parts.length === 5 && (!/^[1-9]\d*$/.test(parts[4]!) || !Number.isSafeInteger(Number(parts[4]))))
+				throw new HttpError(400, "Invalid held message ID");
+			await sessions.heldMessages(parts[2]!, "discard", parts.length === 5 ? Number(parts[4]) : undefined);
+			return json(res, 200, { ok: true });
+		}
 		if (parts[1] === "sessions" && parts.length === 5 && parts[3] === "queue" && req.method === "DELETE") {
 			if (!/^[1-9]\d*$/.test(parts[4]!) || !Number.isSafeInteger(Number(parts[4])))
 				throw new HttpError(400, "Invalid queued message ID");

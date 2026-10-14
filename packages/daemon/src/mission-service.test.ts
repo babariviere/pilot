@@ -189,6 +189,7 @@ class FakeWorker implements SessionWorker {
 	state: SessionState = "idle";
 	error?: string;
 	busy = false;
+	stopped = false;
 	readonly sent: KernelCommand[] = [];
 	readonly requests: KernelCommand[] = [];
 	readonly spec: KernelSpec;
@@ -202,12 +203,15 @@ class FakeWorker implements SessionWorker {
 	}
 	async request(command: KernelCommand): Promise<void> {
 		this.requests.push(command);
-		if (command.type === "input")
+		if (command.type === "abort") this.stopped = true;
+		if (command.type === "input") {
+			if (!command.requestId.startsWith("mission:send:")) this.stopped = false;
 			this.onPacket({
 				type: "accepted",
 				requestId: command.requestId,
-				delivery: this.state === "working" ? "queued" : "delivered",
+				delivery: this.state === "working" || this.stopped ? "queued" : "delivered",
 			});
+		}
 	}
 	async close(): Promise<void> {}
 }
@@ -1559,7 +1563,7 @@ test("agent calls run against the chat's mission and update its context", async 
 	assert.equal(started.missionId, mission.id);
 	const memberWorker = await until(() => f.workers.get(started.id));
 	const sent = await call("send", { targetSessionId: started.id, message: "Cover error cases" });
-	assert.deepEqual(sent.result, { sessionId: started.id, sent: true, delivery: "delivered" });
+	assert.deepEqual(sent.result, { sessionId: started.id, sent: true, delivery: "delivered", mode: "followUp" });
 	await until(() =>
 		memberWorker.requests.find((command) => command.type === "input" && command.content === "Cover error cases"),
 	);
@@ -2464,24 +2468,33 @@ test("coordinator send admits follow-ups only to member chats and propagates del
 			f.service.call(coordinator.id, "send", { targetSessionId: member.id, message }),
 			/requires message/,
 		);
+	await assert.rejects(
+		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Text", mode: "bad" }),
+		/mode must be/,
+	);
 	const worker = f.workers.get(member.id)!;
 	await until(() => worker.requests.find((command) => command.type === "input"));
-	for (const state of ["idle", "working"] as const) {
+	for (const [state, mode] of [
+		["idle", "steer"],
+		["working", "steer"],
+		["working", "followUp"],
+	] as const) {
 		worker.state = state;
 		worker.onPacket({ type: "working", working: state === "working" });
-		const message = `Continue while ${state}`;
-		const result = await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message });
+		const message = `Continue while ${state} ${mode}`;
+		const result = await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message, mode });
 		assert.deepEqual(result, {
 			sessionId: member.id,
 			sent: true,
 			delivery: state === "working" ? "queued" : "delivered",
+			mode,
 		});
 		const input = await until(() =>
 			worker.requests.find((command) => command.type === "input" && command.content === message),
 		);
 		assert.ok(input?.type === "input");
 		assert.equal(input.content, message);
-		assert.equal(input.mode, "followUp");
+		assert.equal(input.mode, mode);
 	}
 	worker.state = "idle";
 	worker.onPacket({ type: "working", working: false });
@@ -2490,7 +2503,8 @@ test("coordinator send admits follow-ups only to member chats and propagates del
 	assert.deepEqual(await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }), {
 		sessionId: member.id,
 		sent: false,
-		delivery: "not_started",
+		delivery: "rejected",
+		mode: "followUp",
 		reason: "archived",
 		error: "Restore the archived session before sending a message",
 	});
@@ -2531,7 +2545,7 @@ for (const acknowledgement of ["queued", "missing"] as const) {
 		});
 		const sent = f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" });
 		if (acknowledgement === "queued")
-			assert.deepEqual(await sent, { sessionId: member.id, sent: true, delivery: "queued" });
+			assert.deepEqual(await sent, { sessionId: member.id, sent: true, delivery: "queued", mode: "followUp" });
 		else await assert.rejects(sent, /acknowledgement is uncertain/);
 		assert.equal(f.sessions["deliveryReports"].size, 0);
 	});
@@ -2594,8 +2608,13 @@ for (const outcome of ["failed", "archived", "stopped", "parked"] as const) {
 			release();
 		}
 		const result = await sent;
-		if (outcome === "parked") {
-			assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "delivered" });
+		if (outcome === "stopped") {
+			assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "queued", mode: "followUp" });
+			assert.ok(
+				worker.requests.slice(before).some((command) => command.type === "input" && command.content === "Continue"),
+			);
+		} else if (outcome === "parked") {
+			assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "delivered", mode: "followUp" });
 			assert.notEqual(f.workers.get(member.id), worker);
 			assert.ok(
 				f.workers
@@ -2606,7 +2625,8 @@ for (const outcome of ["failed", "archived", "stopped", "parked"] as const) {
 			assert.deepEqual(result, {
 				sessionId: member.id,
 				sent: false,
-				delivery: "not_started",
+				delivery: "rejected",
+				mode: "followUp",
 				reason: outcome,
 				...(outcome === "failed" ? { error: "Model unavailable" } : {}),
 				...(outcome === "archived" ? { error: "Restore the archived session before sending a message" } : {}),
@@ -2622,7 +2642,7 @@ for (const outcome of ["failed", "archived", "stopped", "parked"] as const) {
 			await f.sessions.restore(member.id);
 			assert.deepEqual(
 				await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Restored" }),
-				{ sessionId: member.id, sent: true, delivery: "delivered" },
+				{ sessionId: member.id, sent: true, delivery: "delivered", mode: "followUp" },
 			);
 		}
 	});
@@ -3175,4 +3195,45 @@ test("targeted status reads only one member and a truncated last assistant reply
 		requests,
 	);
 	assert.deepEqual(f.store.events(mission.id), events);
+});
+
+test("held and discarded message events wake the lead once, survive outbox replay, and never re-send the message", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const worker = f.workers.get(member.id)!;
+	const initial = worker.requests.length;
+	const held = {
+		id: "1:1",
+		requestId: `mission:send:${mission.id}:example`,
+		state: "held",
+		preview: "Fix the edge case",
+	} as const;
+	const discarded = { ...held, id: "1:2", state: "discarded" } as const;
+	for (const event of [held, held, discarded, discarded]) worker.onPacket({ type: "systemMessageState", event });
+	const updates = f.store.detail(mission.id).events.filter((event) => event.text.includes(":example"));
+	assert.equal(updates.length, 2);
+	assert.ok(updates.some((event) => event.text.includes("held because the user stopped the chat")));
+	assert.ok(updates.some((event) => event.text.includes("discarded by the user")));
+	assert.equal(worker.sent.filter((command) => command.type === "systemMessageState.ack").length, 4);
+	const now = Date.now() + 60_000;
+	f.store.setNoticeActivity(mission.id, false, now - 60_000);
+	const notice = f.store.prepareNotice(mission.id, coordinator.id, now);
+	assert.match(notice!.content, /held because the user stopped the chat/);
+	assert.match(notice!.content, /discarded by the user/);
+	assert.equal(worker.requests.length, initial, "lifecycle events must not auto-requeue input");
+	await f.sessions.heldMessages(member.id, "send");
+	await f.sessions.heldMessages(member.id, "discard");
+	await f.sessions.heldMessages(member.id, "discard", 42);
+	assert.deepEqual(
+		worker.requests.slice(initial).map((command) => command.type),
+		["sendHeldMessages", "discardHeldMessages", "discardHeldMessages"],
+	);
 });

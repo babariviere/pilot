@@ -143,6 +143,7 @@ export interface SessionMissionBridge {
 	): { missionId: string; taskId?: string } | undefined;
 	applyPullRequestBinding?(operation: PullRequestBinding): { changed: boolean; taskLinkRemoved: boolean } | void;
 	workspaceBehind?(sessionId: string, text: string): void;
+	systemMessageState?(sessionId: string, event: import("@pilot/kernel").SystemMessageStateEvent): void;
 }
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
@@ -2258,27 +2259,40 @@ export class SessionManager {
 	}
 
 	/** Explicit agent follow-ups use user admission, but report the kernel's durable placement. */
-	async sendReported(id: string, message: string, requestId: string): Promise<MessageDelivery> {
+	async sendReported(
+		id: string,
+		message: string,
+		requestId: string,
+		mode: DeliveryMode = "followUp",
+	): Promise<
+		({ delivery: "delivered" | "queued" } | { delivery: "rejected"; reason: string; error?: string }) & {
+			mode: DeliveryMode;
+		}
+	> {
 		const end = this.updateGate.begin();
 		this.deliveryReports.set(requestId, undefined);
 		try {
 			const worker = this.workers.get(id);
 			if (worker?.state === "failed")
-				return { delivery: "not_started", reason: "failed", error: worker.error ?? "Chat failed" };
-			await this.sendAdmitted(id, message, "followUp", requestId, true);
+				return { delivery: "rejected", mode, reason: "failed", error: worker.error ?? "Chat failed" };
+			await this.sendAdmitted(id, message, mode, requestId, true);
 			const report = this.deliveryReports.get(requestId);
-			if (report) return report;
+			if (report)
+				return report.delivery === "not_started" ? { ...report, delivery: "rejected", mode } : { ...report, mode };
 			const meta = this.require(id);
 			throw new WorkerUnavailable(meta.inputError ?? "Message admission acknowledgement is uncertain");
 		} catch (error) {
 			const meta = this.require(id);
 			if (meta.archivedAt !== undefined)
 				return {
-					delivery: "not_started",
+					delivery: "rejected",
+					mode,
 					reason: "archived",
 					error: "Restore the archived session before sending a message",
 				};
-			if (meta.failure) return { delivery: "not_started", reason: "failed", error: meta.failure };
+			if (meta.failure) return { delivery: "rejected", mode, reason: "failed", error: meta.failure };
+			if (error instanceof CommandRejected)
+				return { delivery: "rejected", mode, reason: error.code ?? "rejected", error: error.message };
 			throw error;
 		} finally {
 			this.deliveryReports.delete(requestId);
@@ -2430,6 +2444,7 @@ export class SessionManager {
 			if (
 				command.type === "input" &&
 				command.requestId !== delivering &&
+				inputOrigin(command.requestId) === undefined &&
 				this.deliveryReports.has(command.requestId) &&
 				!this.deliveryReports.get(command.requestId)
 			)
@@ -2445,7 +2460,15 @@ export class SessionManager {
 				: [],
 		);
 		const requestId = randomUUID();
-		meta.pending = [{ type: "abort", requestId }];
+		const automatic = (meta.pending ?? [])
+			.filter(
+				(command) =>
+					command.type === "input" &&
+					command.requestId !== delivering &&
+					inputOrigin(command.requestId) !== undefined,
+			)
+			.map((command) => ({ ...command, onlyIfIdle: false }));
+		meta.pending = [{ type: "abort", requestId }, ...automatic];
 		if (meta.preparing) meta.cancelled = true;
 		await this.save(meta);
 		if (meta.preparing) for (const listener of this.watchers.get(id)?.values() ?? []) listener([emptySnapshot]);
@@ -2629,6 +2652,41 @@ export class SessionManager {
 				throw error;
 			}
 			this.lastUse.set(id, Date.now());
+		} finally {
+			if (admitted) {
+				const count = (this.sending.get(id) ?? 1) - 1;
+				if (count) this.sending.set(id, count);
+				else this.sending.delete(id);
+			}
+			end();
+		}
+	}
+
+	/** Explicit user actions, only over the held automatic input. */
+	async heldMessages(id: string, action: "send" | "discard", submissionId?: number): Promise<void> {
+		const end = this.updateGate.begin();
+		let admitted = false;
+		try {
+			const meta = this.require(id);
+			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
+			admitted = true;
+			const transition = this.archiveTransitions.get(id);
+			if (transition) await transition.promise;
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session first");
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
+			await this.start(id);
+			await this.unparked(id);
+			const worker = this.ensureWorker(id);
+			await worker.ready;
+			await worker.request(
+				action === "send"
+					? { type: "sendHeldMessages", requestId: randomUUID() }
+					: {
+							type: "discardHeldMessages",
+							requestId: randomUUID(),
+							...(submissionId !== undefined ? { submissionId } : {}),
+						},
+			);
 		} finally {
 			if (admitted) {
 				const count = (this.sending.get(id) ?? 1) - 1;
@@ -3421,6 +3479,15 @@ export class SessionManager {
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;
+		if (packet.type === "systemMessageState") {
+			try {
+				if (!this.missions?.systemMessageState) return;
+				this.missions.systemMessageState(meta.id, packet.event);
+				worker.send({ type: "systemMessageState.ack", id: packet.event.id });
+			} catch (error) {
+				console.warn("pilotd: could not record system message state", error);
+			}
+		}
 		if (packet.type === "aborted" && packet.withdrawn?.length && this.stopResults.has(packet.requestId)) {
 			this.stopResults.set(packet.requestId, packet.withdrawn);
 		}

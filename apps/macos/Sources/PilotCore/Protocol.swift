@@ -620,6 +620,11 @@ public struct EditQueuedMessageRequest: Codable, Sendable {
     }
 }
 
+/// Send or discard held automatic input. Waiting messages stay read-only.
+public struct HeldMessagesResponse: Codable, Sendable {
+    public let ok: Bool
+}
+
 /// DELETE /api/sessions/:id/queue/:submissionId. Only withdraws a still-queued input.
 public struct RemoveQueuedMessageResponse: Codable, Sendable {
     public let ok: Bool
