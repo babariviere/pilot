@@ -306,21 +306,11 @@ struct ChatView: View {
         }
     }
 
-    private func isToolRow(_ row: ChatRow) -> Bool {
-        if case .tools = row { return true }
-        return false
-    }
-
-    /// A running tool row already shows its own spinner, so the transcript needs no second
-    /// "Working…" line under it. Retries always show, since they explain the wait.
+    /// "Working…" stays under the transcript for the whole run, including while text streams
+    /// and tools run, so activity never looks like it stopped. A manual compaction can run
+    /// while idle, so it shows too. A starting session shows it once the loading spinner is gone.
     private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
-        // A manual compaction can run while idle, and explains a pause while working.
-        if transcript.compacting && !transcript.streaming { return true }
-        guard transcript.working else { return false }
-        if transcript.retry != nil { return true }
-        let last = transcript.liveRows.last ?? transcript.historyRows.last
-        if let last, case let .tools(_, items) = last, items.last?.status == .running { return false }
-        return !transcript.streaming || last.map(isToolRow) == true
+        transcript.working || transcript.compacting || (session.state == "starting" && !feed.loading)
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {
