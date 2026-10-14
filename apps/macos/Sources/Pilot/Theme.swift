@@ -357,6 +357,19 @@ extension ScheduleState {
     }
 }
 
+/// Severity dot of a Slack message in triage, Inbox and tracked rows. Only critical and high take a signal
+/// colour; always pair the dot with the severity in text or VoiceOver.
+extension SlackSeverity {
+    var color: Color {
+        switch self {
+        case .critical: Theme.destructive
+        case .high: Theme.warning
+        case .medium: Theme.mutedForeground
+        case .low: Theme.faintForeground.opacity(0.6)
+        }
+    }
+}
+
 // MARK: - Motion
 
 extension Theme {

@@ -457,8 +457,7 @@ final class ProjectEditor: ObservableObject {
     @Published var privateClones = true
     @Published var requirePullRequest = true
     @Published var slackChannels: [TrackedChannelRef] = []
-    // Preserve daemon-configured labels until the label editor is available.
-    private var slackLabels: [SlackProjectLabel]?
+    @Published var slackLabels: [EditableSlackLabel] = []
     @Published var linearTeam: TrackedTeamRef?
     @Published var error: String?
     @Published private var loaded: Fields?
@@ -471,11 +470,17 @@ final class ProjectEditor: ObservableObject {
         var requirePullRequest: Bool
         var channels: [String]
         var team: String?
+        var labels: [SlackProjectLabel]
     }
 
     private var fields: Fields {
         Fields(name: name, model: model, privateClones: privateClones, requirePullRequest: requirePullRequest,
-               channels: slackChannels.map(\.id), team: linearTeam?.id)
+               channels: slackChannels.map(\.id), team: linearTeam?.id, labels: savedLabels)
+    }
+
+    /// Labels as saved. Unnamed labels are drafts and are left out.
+    private var savedLabels: [SlackProjectLabel] {
+        slackLabels.map(\.label).filter { !$0.name.isEmpty }
     }
 
     var hasChanges: Bool { loaded != nil && loaded != fields }
@@ -486,7 +491,7 @@ final class ProjectEditor: ObservableObject {
         privateClones = project.usesPrivateClones
         requirePullRequest = project.effectiveRequirePullRequest
         let tracking = project.tracking
-        slackLabels = tracking?.slackLabels
+        slackLabels = (tracking?.slackLabels ?? []).map(EditableSlackLabel.init)
         slackChannels = (tracking?.slackChannels ?? []).map { TrackedChannelRef(id: $0, name: tracking?.slackChannelNames?[$0]) }
         linearTeam = tracking?.linearTeam.flatMap { $0.isEmpty ? nil : TrackedTeamRef(id: $0, name: tracking?.linearTeamName) }
         error = nil
@@ -502,9 +507,18 @@ final class ProjectEditor: ObservableObject {
         slackChannels.removeAll { $0.id == id }
     }
 
+    func addLabel() {
+        slackLabels.append(EditableSlackLabel(SlackProjectLabel(name: "", description: "")))
+    }
+
+    func removeLabel(_ id: UUID) {
+        slackLabels.removeAll { $0.id == id }
+    }
+
     var request: ProjectRequest {
         let names = Dictionary(slackChannels.compactMap { channel in channel.name.map { (channel.id, $0) } },
                                uniquingKeysWith: { first, _ in first })
+        let labels = savedLabels
         return ProjectRequest(
             name: name, model: model, workspace: privateClones ? "clone" : "direct",
             requirePullRequest: requirePullRequest,
@@ -513,7 +527,7 @@ final class ProjectEditor: ObservableObject {
                 slackChannelNames: names.isEmpty ? nil : names,
                 linearTeam: linearTeam?.id ?? "",
                 linearTeamName: linearTeam?.name,
-                slackLabels: slackLabels
+                slackLabels: labels.isEmpty ? nil : labels
             )
         )
     }

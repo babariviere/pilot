@@ -26,7 +26,7 @@ import Testing
       "missions": {"total": 1, "items": [{"id":"m1","title":"API v2","tasksDone":2,"tasksTotal":5,"working":1,"needsYou":3,"coordinatorSessionId":"s9"}]},
       "scheduled": {"total": 1, "items": [{"id":"x","title":"Plan","kind":"chat","trigger":"on_back","state":"pending"}]},
       "tracked": [{"source":"linear","label":"Linear","status":"sign_in_required","total":0,"items":[]},
-                  {"source":"slack","label":"Slack","status":"brand_new","error":"boom","total":9,"items":[{"id":"1","title":"Bug","status":"bug report"}]}],
+                  {"source":"slack","label":"Slack","status":"brand_new","error":"boom","total":9,"items":[{"id":"1","title":"Bug","status":"open"}]}],
       "recent": {"total": 6, "items": [{"sessionId":"s5","title":"Done","outcome":"done","outcomeAt":5,"branch":"b"}]}
     }
     """#.utf8))

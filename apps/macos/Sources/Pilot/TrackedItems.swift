@@ -2,8 +2,8 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-// Tracked items: Linear tickets assigned to me and Slack bug reports, per project. Read-only: rows open the
-// source, start a chat or mission only after the user confirms it in the normal composer or mission sheet,
+// Tracked items: Linear tickets assigned to me and classified Slack messages, per project. Read-only: rows open
+// the source, start a chat or mission only after the user confirms it in the normal composer or mission sheet,
 // and bind the item to what it started. Nothing here writes to Linear or Slack.
 
 /// Snapshot data for tracked items and the settings pickers. Never used by the live app.
@@ -13,6 +13,7 @@ struct TrackingFixture {
     var teams = TrackingLookup<LinearTeamOption>(status: .ok)
     var myChannels = TrackingLookup<SlackChannelOption>(status: .ok)
     var searchChannels = TrackingLookup<SlackChannelOption>(status: .ok)
+    var corrections: [SlackCorrection] = []
 }
 
 /// Binds a new chat to the tracked item it was started from. Shown as a chip in the composer.
@@ -94,6 +95,7 @@ enum TrackedItemText {
     }
 
     static func severity(_ item: TrackedItem) -> String? {
+        if item.kind == .slack { return "\(SlackTriageText.triage(item).severity.title) severity" }
         guard let severity = item.metadata["severity"]?.string, !severity.isEmpty else { return nil }
         return "\(severity.prefix(1).uppercased())\(severity.dropFirst()) severity"
     }
@@ -108,7 +110,9 @@ enum TrackedItemText {
                 ? nil : item.status
             return [status, notablePriority(item), when].compactMap { $0 }.joined(separator: " · ")
         case .slack:
-            return [identifier(item), severity(item), when].compactMap { $0 }.joined(separator: " · ")
+            let type = SlackTriageText.triage(item).type
+            return [identifier(item), type == .unknown ? nil : type.title, severity(item), when].compactMap { $0 }
+                .joined(separator: " · ")
         }
     }
 
@@ -186,11 +190,11 @@ enum TrackedItemText {
         total == 1 ? "1 issue" : "All \(total) issues"
     }
 
-    /// "Linear · Platform" or "Slack bug reports".
+    /// "Linear · Platform" or "Slack messages".
     static func sourceTitle(_ kind: TrackedKind, teamName: String?) -> String {
         switch kind {
         case .linear: teamName.map { "Linear · \($0)" } ?? "Linear"
-        case .slack: "Slack bug reports"
+        case .slack: "Slack messages"
         }
     }
 
@@ -202,7 +206,7 @@ enum TrackedItemText {
                 : "No open issues assigned to you in this team."
         case .slack:
             let count = source.channels?.count ?? project.tracking?.slackChannels.count ?? 0
-            return count == 1 ? "No bug reports found in 1 channel." : "No bug reports found in \(count) channels."
+            return count == 1 ? "No new messages in 1 channel." : "No new messages in \(count) channels."
         }
     }
 
@@ -226,9 +230,12 @@ enum TrackedItemText {
 
     /// The new-chat prompt. Ticket text is quoted as untrusted JSON, never as instructions.
     static func chatPrompt(_ item: TrackedItem, prefill: TrackedItemPrefill?) -> String {
-        let lead = item.kind == .linear
-            ? "Please work on this ticket."
-            : "Please investigate and fix this bug report from Slack."
+        let lead = switch item.kind {
+        case .linear: "Please work on this ticket."
+        case .slack: SlackTriageText.triage(item).type == .bug
+            ? "Please investigate and fix this bug reported in Slack."
+            : "Please look into this Slack message and help resolve it."
+        }
         return prompt(lead: lead, item: item, prefill: prefill)
     }
 
@@ -236,9 +243,12 @@ enum TrackedItemText {
         let label = identifier(item)
         let title = prefill?.title ?? item.title
         let fullTitle = item.kind == .linear ? "\(prefill?.identifier ?? label): \(title)" : title
-        let goal = item.kind == .linear
-            ? "Resolve \(prefill?.identifier ?? label): \(title)"
-            : "Fix the bug reported in \(label): \(title)"
+        let goal = switch item.kind {
+        case .linear: "Resolve \(prefill?.identifier ?? label): \(title)"
+        case .slack: SlackTriageText.triage(item).type == .bug
+            ? "Fix the bug reported in \(label): \(title)"
+            : "Follow up on the message in \(label): \(title)"
+        }
         return TrackedMissionDraft(
             itemId: item.id, projectId: item.projectId, label: label,
             title: String(fullTitle.prefix(200)), goal: goal,
@@ -255,7 +265,9 @@ enum TrackedItemText {
             fields.append(("identifier", prefill?.identifier ?? identifier(item)))
         case .slack:
             fields.append(("channel", identifier(item)))
-            if let severity = item.metadata["severity"]?.string { fields.append(("severity", severity)) }
+            let triage = SlackTriageText.triage(item)
+            fields.append(("type", triage.type.rawValue))
+            fields.append(("severity", triage.severity.rawValue))
         }
         fields.append(("title", prefill?.title ?? item.title))
         fields.append(("url", prefill?.url ?? item.url))
@@ -441,7 +453,7 @@ final class TrackedItemActions: ObservableObject {
 
 // MARK: Rows
 
-/// One tracked ticket or bug report. Clicking opens it in the browser. The trailing area shows what the
+/// One tracked ticket or Slack message. Clicking opens it in the browser. The trailing area shows what the
 /// item started (with Open chat / Open mission) or, on hover, Start chat. Everything is also in the
 /// context menu and as VoiceOver actions.
 struct TrackedItemRow: View {
@@ -625,13 +637,14 @@ struct TrackedLinkButton: View {
     }
 }
 
-/// Linear workflow state or a Slack bug report, in one quiet symbol family.
+/// Linear workflow state or a Slack message type, in one quiet symbol family.
 struct TrackedItemIcon: View {
     let item: TrackedItem
 
     var body: some View {
+        let type = item.kind == .slack ? SlackTriageText.triage(item).type : nil
         let (symbol, color): (String, Color) = switch item.kind {
-        case .slack: ("ladybug", Theme.mutedForeground)
+        case .slack: (type?.symbolName ?? "bubble.left", Theme.mutedForeground)
         case .linear:
             switch item.metadata["statusType"]?.string {
             case "started": ("circle.lefthalf.filled", Theme.foreground)
@@ -641,7 +654,7 @@ struct TrackedItemIcon: View {
             }
         }
         Image(systemName: symbol).font(.pilot(.label)).foregroundStyle(color)
-            .accessibilityLabel(item.kind == .slack ? "Bug report" : item.status)
+            .accessibilityLabel(type.map { "Slack \($0.title.lowercased())" } ?? item.status)
     }
 }
 
@@ -949,7 +962,7 @@ struct TrackedInboxSheet: View {
     @ViewBuilder private var content: some View {
         if sources.isEmpty {
             EmptyStateView(icon: "tray", title: "Nothing is tracked yet",
-                           message: "Attach a Linear team or Slack channels to see your tickets and bug reports here. Pilot only reads them.") {
+                           message: "Attach a Linear team or Slack channels to see your tickets and messages here. Pilot only reads them.") {
                 Button("Tracking Settings…") { finish(openSettings) }.buttonStyle(.borderedProminent)
             }
             .frame(maxHeight: .infinity)

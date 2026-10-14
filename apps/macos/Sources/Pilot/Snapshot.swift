@@ -437,6 +437,11 @@ enum Snapshot {
             await renderTracking(model: model, to: directory)
             return
         }
+        if CommandLine.arguments.contains("--slack-triage-only") {
+            await renderSlackTriage(model: model, to: directory)
+            NSApp.terminate(nil)
+            return
+        }
         if CommandLine.arguments.contains("--project-page-only") || CommandLine.arguments.contains("--sidebar-scope-only") {
             await renderProjectPages(model: model, to: directory)
             return
@@ -972,7 +977,7 @@ enum Snapshot {
         func slack(_ id: String, _ title: String, channel: String, severity: String, ago: Double,
                    sessions: [String]? = nil) -> TrackedItem {
             TrackedItem(id: id, projectId: "p1", kind: .slack, externalId: "C/\(id)", title: title,
-                        url: "https://slack.com/archives/C0BUGS0001/p1791892800000001", status: "bug_report",
+                        url: "https://slack.com/archives/C0BUGS0001/p1791892800000001", status: "open",
                         metadata: ["channelName": .string(channel), "severity": .string(severity)],
                         sessionId: sessions?.last, sessionIds: sessions, createdAt: now - ago, updatedAt: now - ago)
         }
@@ -1638,7 +1643,7 @@ enum Snapshot {
         try? rep.representation(using: .png, properties: [:])?.write(to: url)
     }
 
-    private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false,
+    static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false,
                                        completionText: String? = nil,
                                        scrollEditorToEnd: Bool = false, scrollTranscriptUp: Bool = false,
                                        appearance: NSAppearance.Name = .aqua) async {

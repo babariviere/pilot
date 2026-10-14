@@ -25,8 +25,13 @@ struct MainWindow: View {
                     MissionPage(missionId: missionId)
                         .id(missionId)
                 } else if let projectId = model.selectedProjectId {
-                    ProjectPage(projectId: projectId)
-                        .id(projectId)
+                    if model.slackTriageProjectId == projectId {
+                        SlackTriagePage(projectId: projectId)
+                            .id("slack-triage-\(projectId)")
+                    } else {
+                        ProjectPage(projectId: projectId)
+                            .id(projectId)
+                    }
                 } else if model.showingArchive {
                     ArchiveView()
                 } else {
