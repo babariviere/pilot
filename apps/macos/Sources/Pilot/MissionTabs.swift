@@ -727,7 +727,7 @@ struct MissionTaskRow: View {
                             ForEach(artifactLinks) { item in
                                 Button { open(item) } label: {
                                     Label("\(item.title) · \(item.revision.map { "r\($0)" } ?? "latest")",
-                                          systemImage: item.kind == "image" ? "photo" : "cube.transparent")
+                                          systemImage: item.kind == "image" ? "photo" : ArtifactSymbol.name)
                                         .lineLimit(1)
                                         .font(.pilot(.caption))
                                         .foregroundStyle(Theme.mutedForeground)
@@ -1113,7 +1113,7 @@ struct MissionArtifactsTab: View {
             }
             .padding(.bottom, 6)
             if detail.artifacts.isEmpty {
-                EmptyStateView(icon: "cube.transparent", title: "No linked artifacts",
+                EmptyStateView(icon: ArtifactSymbol.name, title: "No linked artifacts",
                                message: "Link a chat's mockups, diagrams or reports so every mission chat can find them.") {
                     linkMenu(members: members)
                 }
@@ -1122,7 +1122,7 @@ struct MissionArtifactsTab: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 HoverRow(verticalPadding: 7) { hovered in
                     HStack(spacing: 10) {
-                        Image(systemName: link.kind == "image" ? "photo" : "cube.transparent")
+                        Image(systemName: link.kind == "image" ? "photo" : ArtifactSymbol.name)
                             .foregroundStyle(Theme.mutedForeground).frame(width: 16)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(link.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)

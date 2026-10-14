@@ -2,6 +2,12 @@ import AppKit
 import PilotCore
 import SwiftUI
 
+/// The one artifact mark, everywhere an artifact appears (inspector, lists, mission tabs, menus). Image
+/// artifacts use `photo` instead.
+enum ArtifactSymbol {
+    static let name = "rectangle.on.rectangle.angled"
+}
+
 @MainActor
 final class ArtifactViewState: ObservableObject {
     @Published var preview = true
@@ -395,7 +401,7 @@ struct SessionArtifactsPane: View {
                 ProgressView("Loading artifacts…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if artifacts.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "cube.transparent").font(.title2).foregroundStyle(Theme.faintForeground)
+                    Image(systemName: ArtifactSymbol.name).font(.title2).foregroundStyle(Theme.faintForeground)
                     Text(state.error == nil ? "No artifacts yet" : "Artifacts unavailable")
                         .font(.callout).foregroundStyle(Theme.mutedForeground)
                 }
@@ -406,7 +412,7 @@ struct SessionArtifactsPane: View {
                         ForEach(artifacts) { artifact in
                             Button { state.selected = artifact.reference } label: {
                                 HStack(spacing: 10) {
-                                    Image(systemName: artifact.kind == .image ? "photo" : "cube.transparent")
+                                    Image(systemName: artifact.kind == .image ? "photo" : ArtifactSymbol.name)
                                         .foregroundStyle(Theme.mutedForeground)
                                     Text(artifact.title).font(.callout).lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -457,7 +463,7 @@ struct ProjectArtifactsButton: View {
 
     var body: some View {
         Button { state.viewer = true } label: {
-            Image(systemName: "cube.transparent")
+            Image(systemName: ArtifactSymbol.name)
         }
         .buttonStyle(.borderless)
         .help("Browse artifacts in \(project.name)")
@@ -496,7 +502,7 @@ struct ProjectArtifactsBrowser: View {
                 HStack {
                     Button { state.selected = artifact.reference } label: {
                         HStack {
-                            Label(artifact.title, systemImage: "cube.transparent")
+                            Label(artifact.title, systemImage: ArtifactSymbol.name)
                             Spacer()
                             Text("r\(artifact.revision)").font(.caption.monospaced()).foregroundStyle(.secondary)
                         }

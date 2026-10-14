@@ -17,7 +17,7 @@ struct MissionSidebarRow: View {
         HStack(spacing: 6) {
             Button { model.openMission(mission.id) } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "scope")
+                    Image(systemName: MissionSymbol.name)
                         .font(.pilot(.label))
                         .foregroundStyle(mission.status == .active ? Theme.foreground : Theme.faintForeground)
                         .frame(width: 14)
