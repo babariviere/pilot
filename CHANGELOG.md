@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.26.0](https://github.com/babariviere/pilot/compare/v1.25.2...v1.26.0) (2026-10-14)
+
+
+### Features
+
+* **macos:** add Send later and scheduled item lists ([a9c0cb3](https://github.com/babariviere/pilot/commit/a9c0cb359696cf55c628489037ef57d1f3b77ce1))
+* **macos:** show time, copy and edit on message hover ([febff73](https://github.com/babariviere/pilot/commit/febff736378cc058607079100201bb8b82d44a16))
+* **project-page:** add Current cycle and Tracked sections ([dc570ec](https://github.com/babariviere/pilot/commit/dc570ec38cb9c152620632c6c2acd77b040d93dd))
+* **tracking:** add tracked items inbox, ticket actions and tracking pickers ([b878bd7](https://github.com/babariviere/pilot/commit/b878bd7d257bda496b2997d1f41ff79e968a5539))
+
+
+### Bug Fixes
+
+* **macos:** compact PR badges and use GitHub state icons ([1ef8889](https://github.com/babariviere/pilot/commit/1ef88894854a0f1f9914ee702106fc671e010494))
+* **macos:** unify message selection highlight and stop streaming reflow ([76671c4](https://github.com/babariviere/pilot/commit/76671c4d35237e3d3beb5c06bfbe4859172082b4))
+* **test:** disable git auto maintenance in test seeds ([f2648f5](https://github.com/babariviere/pilot/commit/f2648f50ebbc4e3581b386f7564107d205bf7d74))
+* **tracking:** retain ticket links in scheduled chats and drafts ([50ed5b3](https://github.com/babariviere/pilot/commit/50ed5b3bd808c6f16dfe428578baee5493f3895a))
+
+
+### Performance Improvements
+
+* resumable chat streams, tail-first snapshots and dedicated terminal and subagent sockets ([e2cb72c](https://github.com/babariviere/pilot/commit/e2cb72c896dfb48b693fd043d188a0b8e53a59ab))
+* stream each open chat on its own WebSocket ([1c6ed81](https://github.com/babariviere/pilot/commit/1c6ed81485bf1cea32884e4ea68cd51283f29c36))
+* **test:** speed up offline feedback and full-suite execution ([a00a301](https://github.com/babariviere/pilot/commit/a00a301cb31a100afc98930ebb99811d67a7c900))
+
 ## [1.25.2](https://github.com/babariviere/pilot/compare/v1.25.1...v1.25.2) (2026-10-13)
 
 
