@@ -14,9 +14,15 @@ public struct MemoryEntry: Codable, Equatable, Sendable, Identifiable {
     public let at: Double
     public let sessionId: String
     public let text: String
-    public init(index: Int, id: String, deviceId: String, at: Double, sessionId: String, text: String) {
+    /// Stable ids of earlier notes this one corrects.
+    public let replaces: [String]?
+    /// Derived by the daemon on read: index of the latest note that corrects this one.
+    public let replacedBy: Int?
+    public init(index: Int, id: String, deviceId: String, at: Double, sessionId: String, text: String,
+                replaces: [String]? = nil, replacedBy: Int? = nil) {
         self.index = index; self.id = id; self.deviceId = deviceId
         self.at = at; self.sessionId = sessionId; self.text = text
+        self.replaces = replaces; self.replacedBy = replacedBy
     }
 }
 
@@ -26,8 +32,12 @@ public struct MemoryNode: Codable, Equatable, Sendable {
     public let text: String?
     public let entry: MemoryEntry?
     public let pending: Bool?
-    public init(lo: Int, hi: Int, text: String? = nil, entry: MemoryEntry? = nil, pending: Bool? = nil) {
+    /// A replaced note, or a summary whose notes were all replaced. Wake hides these; zoom still returns them.
+    public let replaced: Bool?
+    public init(lo: Int, hi: Int, text: String? = nil, entry: MemoryEntry? = nil, pending: Bool? = nil,
+                replaced: Bool? = nil) {
         self.lo = lo; self.hi = hi; self.text = text; self.entry = entry; self.pending = pending
+        self.replaced = replaced
     }
 }
 
@@ -75,5 +85,9 @@ public struct ProjectMemorySummary: Codable, Equatable, Sendable {
 public struct MemoryNoteRequest: Codable, Equatable, Sendable {
     public let text: String
     public let sessionId: String
-    public init(text: String, sessionId: String) { self.text = text; self.sessionId = sessionId }
+    /// Indices of notes this one corrects.
+    public let replaces: [Int]?
+    public init(text: String, sessionId: String, replaces: [Int]? = nil) {
+        self.text = text; self.sessionId = sessionId; self.replaces = replaces
+    }
 }

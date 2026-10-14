@@ -17,4 +17,24 @@ import Testing
     #expect(try JSONDecoder().decode(MemoryRange.self, from: JSONEncoder().encode(range)) == range)
     let request = MemoryNoteRequest(text: "A fact", sessionId: "chat")
     #expect(try JSONDecoder().decode(MemoryNoteRequest.self, from: JSONEncoder().encode(request)) == request)
+    let correction = MemoryNoteRequest(text: "A corrected fact", sessionId: "chat", replaces: [3])
+    #expect(try JSONDecoder().decode(MemoryNoteRequest.self, from: JSONEncoder().encode(correction)) == correction)
+}
+
+@Test func memoryModelsDecodeCorrections() throws {
+    let json = """
+    [{"lo":2,"hi":2,"text":"Old fact","replaced":true,
+      "entry":{"index":2,"id":"a","deviceId":"d","at":1,"sessionId":"s","text":"Old fact","replacedBy":5}},
+     {"lo":4,"hi":5,"replaced":true},
+     {"lo":5,"hi":5,"text":"New fact",
+      "entry":{"index":5,"id":"b","deviceId":"d","at":2,"sessionId":"s","text":"New fact","replaces":["a"]}}]
+    """
+    let nodes = try JSONDecoder().decode([MemoryNode].self, from: Data(json.utf8))
+    #expect(nodes[0].replaced == true)
+    #expect(nodes[0].entry?.replacedBy == 5)
+    #expect(nodes[1].replaced == true)
+    #expect(nodes[1].text == nil)
+    #expect(nodes[2].replaced == nil)
+    #expect(nodes[2].entry?.replaces == ["a"])
+    #expect(nodes[2].entry?.replacedBy == nil)
 }

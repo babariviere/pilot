@@ -111,19 +111,22 @@ struct ProjectMemoryBrowser: View {
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 8) {
                 Button { Task { await state.expand(node) } } label: {
-                    Image(systemName: canExpand ? (state.expanded.contains(node.key) ? "chevron.down" : "chevron.right") : "circle.fill")
+                    Image(systemName: canExpand ? (state.expanded.contains(node.key) ? "chevron.down" : "chevron.right") :
+                          (node.isReplaced ? "circle" : "circle.fill"))
                         .font(.pilot(.glyph)).foregroundStyle(Theme.faintForeground).frame(width: 14)
                 }
                 .buttonStyle(.plain).disabled(!canExpand || state.busy)
                 .accessibilityLabel(state.expanded.contains(node.key) ? "Collapse entries \(node.lo) through \(node.hi)" :
                                     "Expand entries \(node.lo) through \(node.hi)")
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(node.entry?.text ?? node.text ?? (node.pending == true ? "Summary is being built…" : "Memory range"))
-                        .font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                    Text(node.title)
+                        .font(.pilot(.body)).foregroundStyle(node.isReplaced ? Theme.mutedForeground : Theme.foreground)
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    Text(node.entry.map { "#\($0.index) · \(Date(timeIntervalSince1970: $0.at / 1000).formatted(date: .abbreviated, time: .shortened))" }
-                         ?? "Entries \(node.lo)–\(node.hi)")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                    if let entry = node.entry {
+                        MemoryEntryMeta(entry: entry)
+                    } else {
+                        Text("Entries \(node.lo)–\(node.hi)").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                    }
                 }
                 Spacer(minLength: 4)
                 if node.text != nil {
@@ -142,14 +145,46 @@ struct ProjectMemoryBrowser: View {
 
     private func memoryEntry(_ entry: MemoryEntry) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(entry.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+            Text(entry.text).font(.pilot(.body))
+                .foregroundStyle(entry.replacedBy == nil ? Theme.foreground : Theme.mutedForeground)
                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-            Text("#\(entry.index) · \(Date(timeIntervalSince1970: entry.at / 1000).formatted(date: .abbreviated, time: .shortened))")
-                .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+            MemoryEntryMeta(entry: entry)
         }.padding(.horizontal, 8).padding(.vertical, 8)
+    }
+}
+
+/// "#7 · date", followed by a quiet "Replaced by #n" when a later note corrects this one.
+private struct MemoryEntryMeta: View {
+    let entry: MemoryEntry
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text("#\(entry.index) · \(Date(timeIntervalSince1970: entry.at / 1000).formatted(date: .abbreviated, time: .shortened))")
+                .foregroundStyle(Theme.faintForeground)
+            if let label = entry.replacedLabel {
+                Text(" · \(label)").foregroundStyle(Theme.mutedForeground)
+            }
+        }
+        .font(.pilot(.caption)).lineLimit(1)
+        .accessibilityElement(children: .combine)
     }
 }
 
 extension MemoryNode {
     var key: String { "\(lo)-\(hi)" }
+
+    /// A replaced note, or a summary whose notes were all replaced by later corrections.
+    var isReplaced: Bool { replaced == true || entry?.replacedBy != nil }
+
+    /// Primary line: the note or summary text, otherwise a plain description of the range.
+    var title: String {
+        if let text = entry?.text ?? text { return text }
+        if replaced == true { return "All notes here were replaced by later corrections" }
+        if pending == true { return "Summary is being built…" }
+        return "Memory range"
+    }
+}
+
+extension MemoryEntry {
+    var replacedLabel: String? { replacedBy.map { "Replaced by #\($0)" } }
 }
