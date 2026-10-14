@@ -990,13 +990,16 @@ final class PilotClient: ObservableObject {
     }
 
     @discardableResult
-    func addMissionDecision(_ id: String, text: String) async throws -> MissionDecision {
-        try await missionRequest(["missions", id, "decisions"], body: MissionDecisionWrite(text: text))
+    func addMissionDecision(_ id: String, text: String,
+                            audience: MissionDecisionAudience = .reference) async throws -> MissionDecision {
+        try await missionRequest(["missions", id, "decisions"], body: MissionDecisionWrite(text: text, audience: audience))
     }
 
     @discardableResult
-    func updateMissionDecision(_ id: String, decisionId: String, text: String) async throws -> MissionDecision {
-        try await missionRequest(["missions", id, "decisions", decisionId], method: "PATCH", body: MissionDecisionWrite(text: text))
+    func updateMissionDecision(_ id: String, decisionId: String, text: String? = nil,
+                               audience: MissionDecisionAudience? = nil) async throws -> MissionDecision {
+        try await missionRequest(["missions", id, "decisions", decisionId], method: "PATCH",
+                                 body: MissionDecisionWrite(text: text, audience: audience))
     }
 
     func deleteMissionDecision(_ id: String, decisionId: String) async throws {

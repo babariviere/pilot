@@ -74,7 +74,12 @@ import WebKit
     #expect(editor.viewing?.markdown.contains("Live draft") == true)
 
     let decision = try await client.addMissionDecision(id, text: "New user decision")
-    _ = try await client.updateMissionDecision(id, decisionId: decision.id, text: "Edited user decision")
+    #expect(decision.audience == .reference)
+    let edited = try await client.updateMissionDecision(id, decisionId: decision.id, text: "Edited user decision", audience: .all)
+    #expect(edited.audience == .all)
+    let retagged = try await client.updateMissionDecision(id, decisionId: decision.id, audience: .coordinator)
+    #expect(retagged.text == edited.text)
+    #expect(retagged.audience == .coordinator)
     #expect(try await client.missionDetail(id).decisions.contains { $0.text == "Edited user decision" })
     try await client.deleteMissionDecision(id, decisionId: decision.id)
     let comment = try await client.addMissionComment(id, MissionCommentWrite(text: "Please clarify", anchor: "Concurrent edit",
