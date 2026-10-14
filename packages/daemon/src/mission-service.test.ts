@@ -1251,6 +1251,117 @@ test("fresh owning-chat discovery links and reconciles PR state through sessions
 	assert.equal(f.store.resolveTask(id, "1").status, "done");
 });
 
+test("a task-linked PR merge after the member finishes queues one grouped notice", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	await f.sessions.rename(member.id, "Implementation");
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Foundation" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	f.service.notices.start();
+	const open = {
+		number: 42,
+		url: "https://github.com/octo/repo/pull/42",
+		title: "Foundation",
+		state: "open" as const,
+		checkedAt: Date.now(),
+	};
+	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), { pullRequest: open });
+	const settledAt = Date.now();
+	f.workers
+		.get(member.id)!
+		.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: settledAt } });
+	const merged = { ...open, state: "merged" as const, mergedAt: Date.now(), checkedAt: Date.now() };
+	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), {
+		pullRequest: merged,
+		mergedAt: merged.mergedAt,
+	});
+	assert.equal(f.sessions.get(member.id)!.outcomeAt, settledAt);
+	assert.equal(f.store.resolveTask(mission.id, "1").status, "done");
+	assert.equal(f.store.events(mission.id).filter((event) => /PR #42 .*merged/.test(event.text)).length, 1);
+	assert.equal(
+		f.workers
+			.get(lead.id)!
+			.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"))
+			.length,
+		0,
+	);
+	const now = Date.now() + 30_000;
+	t.mock.method(Date, "now", () => now);
+	await f.service.notices.flush(now);
+	const notices = f.workers
+		.get(lead.id)!
+		.requests.filter((command) => command.type === "input" && command.requestId.startsWith("mission-notice:"));
+	assert.equal(notices.length, 1);
+	assert.match(
+		(notices[0] as Extract<KernelCommand, { type: "input" }>).content,
+		/PR #42 Foundation merged \(chat Implementation, task #1 marked done\)/,
+	);
+	await f.sessions["applyPullRequest"](f.sessions["require"](member.id), {
+		pullRequest: { ...merged, checkedAt: now },
+		mergedAt: merged.mergedAt,
+	});
+	assert.deepEqual(f.store.noticeDeadlines(now), []);
+});
+
+test("bound chat-only PRs are polled even while archived; references neither poll nor wake", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const meta = f.sessions["require"](member.id);
+	meta.workspace = {
+		source: f.project.path,
+		upstream: "git@github.com:octo/repo.git",
+		branch: "feat/owned",
+		base: "origin/main",
+		jj: false,
+	};
+	const url = "https://github.com/octo/repo/pull/42";
+	await f.sessions.bindPullRequest(member.id, url);
+	assert.ok(
+		[...f.sessions["missions"]!.linkedPullRequests!()].some((target) => target.url === url),
+		"unknown bindings are linked polling targets",
+	);
+	const open = { number: 42, url, title: "Chat-only", state: "open" as const, checkedAt: Date.now() };
+	await f.sessions["applyPullRequest"](meta, { pullRequest: open });
+	const referenceUrl = "https://github.com/octo/repo/pull/43";
+	f.store.addResource(mission.id, { url: referenceUrl });
+	f.sessions["missions"]!.pullRequestUpdated!({
+		...open,
+		number: 43,
+		url: referenceUrl,
+		state: "merged",
+		mergedAt: Date.now(),
+	});
+	assert.deepEqual(f.store.noticeDeadlines(Date.now()), []);
+	await f.sessions.archive(member.id);
+	assert.equal(f.store.detail(mission.id).resources.filter((r) => r.relationship === "ownership").length, 0);
+	const targets = [...f.sessions["missions"]!.linkedPullRequests!()];
+	assert.ok(targets.some((target) => target.url === url));
+	assert.ok(!targets.some((target) => target.url === referenceUrl));
+	const merged = { ...open, state: "merged" as const, checkedAt: Date.now() + 1, mergedAt: Date.now() };
+	f.sessions["missions"]!.pullRequestUpdated!(merged);
+	assert.match(f.store.prepareNotice(mission.id, lead.id, Date.now() + 30_000)!.content, /PR #42 Chat-only merged/);
+	assert.equal(
+		[...f.sessions["missions"]!.linkedPullRequests!()].find((target) => target.url === url)!.pullRequest!.state,
+		"merged",
+		"durable cache settles linked polling without mutating archived metadata",
+	);
+});
+
 test("discovery of several heads links every PR before completing a task", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();

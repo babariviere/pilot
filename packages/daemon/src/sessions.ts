@@ -1862,6 +1862,19 @@ export class SessionManager {
 		return promise;
 	}
 
+	/** Bound/agent-owned PRs only. A discovered reference is not attached work. */
+	ownedPullRequests(id: string): SessionPullRequest[] {
+		const meta = this.metas.get(id);
+		if (!meta) return [];
+		const owned = new Set(
+			[...(meta.agentPullRequests ?? []), ...(meta.boundPullRequests ?? [])].map((url) => url.toLowerCase()),
+		);
+		return sessionPullRequests(meta).filter(
+			(pr) =>
+				owned.has(pr.url.toLowerCase()) && (this.boundPullRequestOwners.get(pr.url.toLowerCase()) ?? id) === id,
+		);
+	}
+
 	get(id: string): SessionSummary | undefined {
 		const meta = this.metas.get(id);
 		return meta && this.summary(meta);
@@ -3756,7 +3769,6 @@ export class SessionManager {
 		}
 		// A handoff can commit during metadata I/O. Its task links must not be recreated by this old result.
 		if (meta.prBindingOperation !== bindingOperation) return;
-		if (fresh || changed) this.emit(meta);
 		const discovered = [next, ...(result.others ?? [])]
 			.filter(
 				(pr): pr is SessionPullRequest =>
@@ -3774,6 +3786,8 @@ export class SessionManager {
 			);
 		else for (const pr of discovered) this.missions?.pullRequestCreated?.(meta.id, pr.url);
 		for (const pr of [next, ...(result.others ?? [])]) if (pr) this.missions?.pullRequestUpdated?.(pr);
+		// Observers announce terminal PRs only after every discovered head is linked and reconciled.
+		if (fresh || changed) this.emit(meta);
 		// Health was looked up by the sync before this result was applied. Stale lookups are dropped here.
 		if (!result.error && healthFresh && health.checks.length)
 			await this.followUpPullRequests(meta, health.context.branch, health.context.generation, health.checks);
@@ -3907,7 +3921,7 @@ export class SessionManager {
 	}
 
 	/** The one session owning a PR, archived ones included, so a restored session resumes its own PRs. */
-	private pullRequestOwner(url: string): string | undefined {
+	pullRequestOwner(url: string): string | undefined {
 		const bound = this.boundPullRequestOwners.get(url.toLowerCase());
 		if (bound !== undefined) return bound;
 		for (const meta of this.metas.values())
