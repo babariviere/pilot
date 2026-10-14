@@ -152,6 +152,33 @@ test("the mission tool forwards actions with only the supplied arguments", async
 	);
 });
 
+test("targeted task and activity selectors are declared and forwarded for every role", async () => {
+	for (const coordinator of [false, true]) {
+		const calls: unknown[] = [];
+		const tool = createMissionTool(async (action, args) => {
+			calls.push([action, args]);
+			return { ok: true };
+		}, coordinator);
+		const schema = tool.parameters as {
+			properties: Record<string, { minimum?: number; maximum?: number; enum?: string[] }>;
+		};
+		assert.equal(schema.properties.limit.maximum, 100);
+		assert.equal(schema.properties.cursor.minimum, 1);
+		assert.ok(schema.properties.kind.enum?.includes("task"));
+		assert.match(tool.description, /Prefer this targeted read/);
+		assert.match(tool.description, /same filters for older events/);
+		for (const input of [
+			{ action: "get", id: "#3" },
+			{ action: "activity", taskId: "task-id", kind: "claim", since: 12, cursor: 50, limit: 10 },
+			{ action: "activity", since: "2026-10-14T12:00:00Z" },
+		]) {
+			await tool.execute("read", input as never, undefined, undefined, {} as never);
+			const { action, ...args } = input;
+			assert.deepEqual(calls.at(-1), [action, args]);
+		}
+	}
+});
+
 test("the mission tool declares and forwards batch task claims for members and coordinators", async () => {
 	for (const coordinator of [false, true]) {
 		const calls: unknown[] = [];
@@ -542,8 +569,11 @@ for (const ask of [false, true]) {
 					.join("\n");
 				if (role !== undefined) {
 					assert.ok(!result.isError, description);
+					// Activity kinds can share names with privileged actions (for example status).
+					const actions = description.match(/\baction: ([^;]+);/)?.[1];
+					assert.ok(actions, description);
 					for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"])
-						assert.equal(description.includes(`"${action}"`), coordinator, description);
+						assert.equal(actions.includes(`"${action}"`), coordinator, description);
 				} else assert.doesNotMatch(description, /- start \(coordinator only\)/);
 				let requestChecked = false;
 				let requestFailure: unknown;

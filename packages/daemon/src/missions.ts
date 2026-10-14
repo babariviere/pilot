@@ -37,6 +37,16 @@ export interface MissionActor {
 	sessionId?: string;
 }
 
+/** Activity selectors are applied in SQLite before limiting or paging. */
+export interface MissionActivityQuery {
+	taskId?: string;
+	kind?: MissionEventKind;
+	sinceEventId?: number;
+	sinceAt?: number;
+	before?: number;
+	limit: number;
+}
+
 const USER: MissionActor = {};
 const STATUSES: MissionStatus[] = ["active", "done", "archived"];
 const TASK_STATUSES: MissionTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "dropped"];
@@ -141,6 +151,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_by_mission ON events (mission_id, id);
 CREATE INDEX IF NOT EXISTS events_by_mission_kind ON events (mission_id, kind, id);
+CREATE INDEX IF NOT EXISTS events_by_mission_task ON events (mission_id, task_id, id);
 CREATE TABLE IF NOT EXISTS github_action_events (
 	session_id TEXT NOT NULL,
 	action_id TEXT NOT NULL,
@@ -2222,6 +2233,28 @@ export class MissionStore {
 						limit,
 					);
 		return rows.map(eventFrom);
+	}
+
+	activity(id: string, query: MissionActivityQuery): MissionEvent[] {
+		this.require(id);
+		const where = ["mission_id = ?"];
+		const values: SQLInputValue[] = [id];
+		for (const [column, operator, value] of [
+			["task_id", "=", query.taskId],
+			["kind", "=", query.kind],
+			["id", ">", query.sinceEventId],
+			["at", ">", query.sinceAt],
+			["id", "<", query.before],
+		] as const) {
+			if (value === undefined) continue;
+			where.push(`${column} ${operator} ?`);
+			values.push(value);
+		}
+		return this.all(
+			`SELECT * FROM events WHERE ${where.join(" AND ")} ORDER BY id DESC LIMIT ?`,
+			...values,
+			query.limit,
+		).map(eventFrom);
 	}
 
 	log(id: string, write: MissionEventWrite, actor: MissionActor = USER): MissionEvent {

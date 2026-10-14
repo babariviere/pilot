@@ -49,13 +49,14 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: compact goal/status/brief revision, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you and PRs in review. No history. Read before work and handoff.
+- get: without id, compact goal/status/brief revision, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you and PRs in review. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
-- comments, activity: open comments or recent activity and user notes on demand.
+- comments: open comments on demand.
+- activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
 - brief: read a revision, or replace with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
-- tasks: list tasks, filter open (default), done or all, mine and milestone. task: id alone reads one full task; title creates one, other fields update it (body, status, milestone, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
+- tasks: list tasks, filter open (default), done or all, mine and milestone. Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, milestone, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
 - decide: record a decision, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
@@ -85,8 +86,8 @@ Actions:
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number (task, claim, release, delete, start), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both."
-						: "Task ID or number (task, claim, release), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
+						? "Task ID or number (get, task, claim, release, delete, start), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both."
+						: "Task ID or number (get, task, claim, release), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
 				}),
 			),
 			ids: Type.Optional(
@@ -187,11 +188,43 @@ Actions:
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number for link, unlink, attach or bindPr (owning task disambiguation)."
-						: "Task ID or number for link, unlink or attach.",
+						? "Task ID or number for activity, link, unlink, attach or bindPr (owning task disambiguation)."
+						: "Task ID or number for activity, link, unlink or attach.",
 				}),
 			),
-			kind: Type.Optional(StringEnum(["update", "handoff"] as const)),
+			kind: Type.Optional(
+				StringEnum(
+					[
+						"created",
+						"status",
+						"handoff",
+						"update",
+						"brief",
+						"decision",
+						"comment",
+						"task",
+						"claim",
+						"artifact",
+						"resource",
+						"member",
+						"coordinator",
+						"github",
+					] as const,
+					{ description: "Activity event kind; log accepts only update or handoff." },
+				),
+			),
+			since: Type.Optional(
+				Type.Union([
+					Type.String({ maxLength: 64, description: "activity: exclusive ISO timestamp with timezone." }),
+					Type.Integer({ minimum: 0, description: "activity: exclusive event ID lower bound." }),
+				]),
+			),
+			cursor: Type.Optional(
+				Type.Integer({ minimum: 1, description: "activity: cursor from the previous page, for older events." }),
+			),
+			limit: Type.Optional(
+				Type.Integer({ minimum: 1, maximum: 100, description: "activity: page size (default 15)." }),
+			),
 			health: Type.Optional(StringEnum(["on_track", "at_risk", "off_track"] as const)),
 		}),
 		// The daemon owns the action-specific result shapes; every action returns a JSON object.

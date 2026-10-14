@@ -8,6 +8,8 @@ import type {
 	MissionArtifactLink,
 	MissionArtifactLinkWrite,
 	MissionDetail,
+	MissionEvent,
+	MissionEventKind,
 	MissionResource,
 	MissionTask,
 	SessionSummary,
@@ -18,7 +20,7 @@ import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
-import { type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
+import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
@@ -591,6 +593,7 @@ export class MissionService {
 				};
 			}
 			case "get": {
+				if (args.id !== undefined) return this.taskDetail(missionId, args.id, sessionId);
 				const detail = this.store.detail(missionId, false);
 				const view = new MissionAgentView(detail, sessionId, this.sessions);
 				const open = detail.tasks.filter(isOpen);
@@ -698,22 +701,30 @@ export class MissionService {
 						.map(({ id, text, audience }) => ({ id, text, audience })),
 				};
 			}
-			case "activity":
+			case "activity": {
+				const query = readActivityQuery(args);
+				if (args.taskId !== undefined) query.taskId = this.store.resolveTask(missionId, args.taskId).id;
+				const events = this.store.activity(missionId, { ...query, limit: query.limit + 1 });
+				const page = events.slice(0, query.limit);
 				return {
-					recentUserNotes: this.store.userNotes(missionId, 15).map((event) => ({
-						kind: event.kind,
-						text: event.text,
-						by: "user",
-						at: new Date(event.at).toISOString(),
-						...(event.health ? { health: event.health } : {}),
-					})),
-					recentActivity: this.store.events(missionId, undefined, 15).map((event) => ({
-						kind: event.kind,
-						text: event.text,
-						by: who(event.sessionId),
-						at: new Date(event.at).toISOString(),
-					})),
+					...(args.taskId === undefined &&
+					args.kind === undefined &&
+					args.since === undefined &&
+					args.cursor === undefined
+						? {
+								recentUserNotes: this.store.userNotes(missionId, query.limit).map((event) => ({
+									kind: event.kind,
+									text: event.text,
+									by: "user",
+									at: new Date(event.at).toISOString(),
+									...(event.health ? { health: event.health } : {}),
+								})),
+							}
+						: {}),
+					recentActivity: page.map((event) => activityEvent(event, sessionId)),
+					cursor: events.length > query.limit ? page.at(-1)!.id : null,
 				};
+			}
 			case "comments":
 				return { comments: this.store.detail(missionId, false).comments };
 			case "brief": {
@@ -771,11 +782,7 @@ export class MissionService {
 					...(args.decisionIds !== undefined ? { decisionIds: args.decisionIds } : {}),
 				} as Parameters<MissionStore["addTask"]>[1];
 				if (args.id !== undefined && !Object.keys(write).length) {
-					const detail = this.store.detail(missionId, false);
-					return new MissionAgentView(detail, sessionId, this.sessions).task(
-						this.store.resolveTask(missionId, args.id),
-						true,
-					);
+					return this.taskDetail(missionId, args.id, sessionId);
 				}
 				return args.id === undefined
 					? this.store.addTask(missionId, write, actor)
@@ -860,6 +867,91 @@ export class MissionService {
 				throw new Error(`Unknown mission action: ${String(action)}`);
 		}
 	}
+
+	private taskDetail(missionId: string, ref: unknown, sessionId: string) {
+		const task = this.store.resolveTask(missionId, ref);
+		const detail = this.store.detail(missionId, false);
+		const view = new MissionAgentView(detail, sessionId, this.sessions);
+		const assignee = task.sessionId ? this.sessions.get(task.sessionId) : undefined;
+		const events = this.store.activity(missionId, { taskId: task.id, limit: 16 });
+		return {
+			...view.task(task, true),
+			id: task.id,
+			body: task.body ?? "",
+			dependsOn: view.dependencies(task),
+			dependents: detail.tasks.filter((item) => item.dependsOn?.includes(task.id)).map((item) => item.number),
+			assignee: task.sessionId
+				? {
+						id: task.sessionId,
+						title: assignee?.title ?? "Unknown chat",
+						...(assignee ? { state: assignee.state } : {}),
+						...(assignee?.archivedAt !== undefined ? { archived: true } : {}),
+					}
+				: null,
+			recentActivity: events.slice(0, 15).map((event) => activityEvent(event, sessionId)),
+			activityCursor: events.length > 15 ? events[14]!.id : null,
+		};
+	}
+}
+
+const ACTIVITY_KINDS: MissionEventKind[] = [
+	"created",
+	"status",
+	"handoff",
+	"update",
+	"brief",
+	"decision",
+	"comment",
+	"task",
+	"claim",
+	"artifact",
+	"resource",
+	"member",
+	"coordinator",
+	"github",
+];
+
+function readActivityQuery(args: Record<string, unknown>): MissionActivityQuery {
+	const limit = args.limit === undefined ? 15 : args.limit;
+	if (typeof limit !== "number" || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+		throw new Error("limit must be an integer from 1 to 100");
+	if (args.kind !== undefined && !ACTIVITY_KINDS.includes(args.kind as MissionEventKind))
+		throw new Error(`activity kind must be one of: ${ACTIVITY_KINDS.join(", ")}`);
+	const query: MissionActivityQuery = {
+		limit,
+		...(args.kind !== undefined ? { kind: args.kind as MissionEventKind } : {}),
+	};
+	if (args.cursor !== undefined) {
+		if (typeof args.cursor !== "number" || !Number.isSafeInteger(args.cursor) || args.cursor < 1)
+			throw new Error("cursor must be a positive event ID");
+		query.before = args.cursor;
+	}
+	if (args.since !== undefined) {
+		if (typeof args.since === "number" && Number.isSafeInteger(args.since) && args.since >= 0) {
+			query.sinceEventId = args.since;
+		} else if (
+			typeof args.since === "string" &&
+			/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(args.since) &&
+			Number.isFinite(Date.parse(args.since))
+		) {
+			query.sinceAt = Date.parse(args.since);
+		} else {
+			throw new Error("since must be an ISO timestamp with timezone or a nonnegative event ID");
+		}
+	}
+	return query;
+}
+
+function activityEvent(event: MissionEvent, sessionId: string) {
+	return {
+		id: event.id,
+		kind: event.kind,
+		text: event.text,
+		by: event.sessionId === undefined ? "user" : event.sessionId === sessionId ? "you" : event.sessionId,
+		at: new Date(event.at).toISOString(),
+		...(event.taskId ? { taskId: event.taskId } : {}),
+		...(event.health ? { health: event.health } : {}),
+	};
 }
 
 function isOpen(task: MissionTask): boolean {
@@ -892,6 +984,7 @@ class MissionAgentView {
 		const owner = ref.kind === "github.pr" ? this.sessions.pullRequestOwnerSummary(ref.url) : undefined;
 		return {
 			url: ref.url,
+			kind: ref.kind,
 			...(ref.title || pr?.title ? { title: ref.title ?? pr?.title } : {}),
 			...(ref.taskId ? { task: this.numbers.get(ref.taskId) } : {}),
 			relationship: ref.relationship,
