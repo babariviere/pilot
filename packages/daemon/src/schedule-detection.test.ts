@@ -17,6 +17,7 @@ import {
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService, type ScheduleClock, type ScheduleTriggerEvent } from "./schedules.ts";
 import { SubprocessPool } from "./subprocess.ts";
+import { parseSystemPowerState, type SystemPowerState, type SystemPowerSource } from "./system-power.ts";
 
 class FakeClock implements ScheduleClock {
 	time = 0;
@@ -45,6 +46,7 @@ function fixture() {
 	const clock = new FakeClock();
 	let token = "1:0",
 		reachable = true,
+		sleepAt = 0,
 		samples = 0,
 		probes = 0;
 	const events: ScheduleTriggerEvent[] = [];
@@ -52,7 +54,7 @@ function fixture() {
 		clock,
 		sampleWake: async () => {
 			samples++;
-			return { wallMs: clock.time, monotonicMs: clock.time, wakeToken: token };
+			return { wallMs: clock.time, monotonicMs: clock.time, wakeToken: token, sleepAt, fullWake: true };
 		},
 		probe: async () => {
 			probes++;
@@ -71,6 +73,7 @@ function fixture() {
 			return probes;
 		},
 		wake: () => {
+			sleepAt = clock.time + 1;
 			token = `${Number(token.split(":")[0]) + 1}:0`;
 		},
 		reach: (online: boolean) => {
@@ -114,8 +117,9 @@ test("idle has zero work, activation is not an online edge, wake invalidates cac
 	f.clock.advance(WAKE_SAMPLE_MS);
 	await flush();
 	assert.deepEqual(f.events, [
+		{ type: "sleep", at: 300001 },
 		{ type: "online", online: false, initial: true },
-		{ type: "wake" },
+		{ type: "wake", full: true },
 		{ type: "online", online: true, initial: true },
 	]);
 	f.clock.advance(WAKE_SAMPLE_MS);
@@ -201,7 +205,7 @@ test("cancelled and superseded probes cannot publish stale success or rearm time
 	assert.equal(clock.timers.size, 0);
 });
 
-test("wake debounce consumes duplicate observations without swallowing a later wake", async () => {
+test("full wake consumes one sleep cycle, not duplicate observations", async () => {
 	const clock = new FakeClock();
 	let sample: WakeSample = { wallMs: 0, monotonicMs: 0, wakeToken: "1:0" };
 	const detector = new ScheduleDetection({ clock, sampleWake: async () => sample, probe: async () => false });
@@ -214,7 +218,7 @@ test("wake debounce consumes duplicate observations without swallowing a later w
 		[30_001, "3:0"],
 		[60_000, "4:0"],
 	] as const) {
-		sample = { wallMs: ms, monotonicMs: ms, wakeToken: token };
+		sample = { wallMs: ms, monotonicMs: ms, wakeToken: token, sleepAt: ms < 60000 ? 1 : 2, fullWake: true };
 		clock.advance(WAKE_SAMPLE_MS);
 		await flush();
 	}
@@ -458,4 +462,131 @@ test("claiming the last item stops detection even while session admission is sti
 	release();
 	await service.signal({ type: "online", online: false, initial: true });
 	assert.equal(service.require(item.id).state, "fired");
+});
+
+class FakePower implements SystemPowerSource {
+	listeners = new Set<(state: SystemPowerState) => void>();
+	active = false;
+	subscribePower(listener: (state: SystemPowerState) => void) {
+		this.listeners.add(listener);
+		return () => {
+			this.listeners.delete(listener);
+		};
+	}
+	setPowerActive(active: boolean) {
+		this.active = active;
+	}
+	emit(state: SystemPowerState) {
+		for (const listener of this.listeners) listener(state);
+	}
+}
+test("helper sleep, dark wake and dark-to-full promotion are event-driven, deduped, and release fallback sampling", async () => {
+	const f = fixture();
+	const power = new FakePower();
+	let samples = 0;
+	const detector = new ScheduleDetection({
+		clock: f.clock,
+		power,
+		sampleWake: async () => {
+			samples++;
+			return { wallMs: 0, monotonicMs: 0 };
+		},
+		probe: async () => true,
+	});
+	const events: ScheduleTriggerEvent[] = [];
+	detector.subscribe((event) => events.push(event));
+	detector.setActive(true);
+	await flush();
+	power.emit({ available: true, fullWake: true }); // Awake baseline, no sleep.
+	assert.equal(events.filter((e) => e.type === "wake").length, 0);
+	power.emit({ available: true, sleepAt: 1, fullWake: false });
+	power.emit({ available: true, sleepAt: 1, wakeToken: "2:0", fullWake: false });
+	assert.deepEqual(
+		events.filter((e) => e.type === "sleep"),
+		[{ type: "sleep", at: 1 }],
+	);
+	assert.equal(events.filter((e) => e.type === "wake").length, 0);
+	f.clock.advance(WAKE_SAMPLE_MS * 4);
+	await flush();
+	assert.equal(samples, 1); // No kernel timer while the helper is healthy.
+	power.emit({ available: true, sleepAt: 1, wakeToken: "2:0", fullWake: true });
+	power.emit({ available: true, sleepAt: 1, wakeToken: "2:0", fullWake: true });
+	await flush();
+	assert.deepEqual(
+		events.filter((e) => e.type === "wake"),
+		[{ type: "wake", full: true }],
+	);
+	power.emit({ available: false, fullWake: false });
+	await flush();
+	assert.equal(samples, 2); // Loss reactivates fallback immediately.
+	detector.setActive(false);
+	assert.equal(power.active, false);
+	assert.equal(power.listeners.size, 0);
+	assert.equal(f.clock.timers.size, 0);
+});
+test("fallback recovers sleep at startup and waits for display-on even if kern.waketime never changes", async () => {
+	const clock = new FakeClock();
+	let fullWake = false;
+	const detector = new ScheduleDetection({
+		clock,
+		sampleWake: async () => ({
+			wallMs: clock.time,
+			monotonicMs: clock.time,
+			sleepAt: 100,
+			wakeToken: "2:0",
+			fullWake,
+		}),
+		probe: async () => false,
+	});
+	const events: ScheduleTriggerEvent[] = [];
+	detector.subscribe((e) => events.push(e));
+	detector.setActive(true);
+	await flush();
+	assert.deepEqual(
+		events.filter((e) => e.type === "sleep"),
+		[{ type: "sleep", at: 100 }],
+	);
+	assert.equal(events.filter((e) => e.type === "wake").length, 0);
+	clock.advance(WAKE_SAMPLE_MS);
+	await flush();
+	fullWake = true;
+	clock.advance(WAKE_SAMPLE_MS);
+	await flush();
+	assert.equal(events.filter((e) => e.type === "wake").length, 1);
+	detector.setActive(false);
+});
+test("power frames validate timestamps, full state and tokens; unknown state fails closed", () => {
+	for (const value of [
+		null,
+		{},
+		{ type: "power", available: true, fullWake: "yes" },
+		{ type: "power", available: true, fullWake: true, sleepAt: NaN },
+		{ type: "power", available: true, fullWake: true, wakeToken: "bad" },
+	])
+		assert.equal(parseSystemPowerState(value), undefined);
+	assert.equal(parseSystemPowerState({ type: "power", available: false, fullWake: true })?.fullWake, false);
+});
+
+test("a cancelled fallback result cannot rearm a second sampler after helper loss", async () => {
+	const clock = new FakeClock();
+	const power = new FakePower();
+	const pending: Array<(sample: WakeSample) => void> = [];
+	const detector = new ScheduleDetection({
+		clock,
+		power,
+		probe: async () => false,
+		sampleWake: () => new Promise((resolve) => pending.push(resolve)),
+	});
+	detector.setActive(true);
+	power.emit({ available: true, fullWake: false });
+	power.emit({ available: false, fullWake: false });
+	assert.equal(pending.length, 2);
+	pending[0]({ wallMs: 0, monotonicMs: 0, sleepAt: 1, fullWake: true });
+	await flush();
+	assert.equal(clock.timers.size, 1); // Reachability only, no stale wake timer.
+	pending[1]({ wallMs: 0, monotonicMs: 0 });
+	await flush();
+	assert.equal(clock.timers.size, 2); // Exactly one wake sampler plus reachability.
+	detector.setActive(false);
+	assert.equal(clock.timers.size, 0);
 });

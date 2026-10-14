@@ -33,12 +33,12 @@ import Testing
     #expect(decoded.expectedRevision == 2)
 }
 
-@Test func scheduleWebSocketDecodesStatesAndWakeLatch() throws {
+@Test func scheduleWebSocketDecodesStatesAndSleepWakeLatches() throws {
     let json = #"""
     {"type":"schedules","schedules":[
       {"id":"x","revision":2,"title":"Plan","projectId":"p","trigger":"on_back",
        "target":{"kind":"chat","spawn":{"projectId":"p","message":"Work","mode":"build","workspace":"clone"}},
-       "state":"pending","createdAt":1000,"updatedAt":2000,"wakeObserved":true},
+       "state":"pending","createdAt":1000,"updatedAt":2000,"wakeObserved":true,"sleepObserved":true},
       {"id":"y","revision":3,"title":"Continue","trigger":"on_wake","target":{"kind":"message","sessionId":"s","message":"Continue"},
        "state":"failed","createdAt":1000,"updatedAt":3000,"claimedAt":2500,"error":"Target chat was deleted","sessionId":"s"}
     ]}
@@ -48,6 +48,8 @@ import Testing
     }
     #expect(items.count == 2)
     #expect(items[0].wakeObserved == true)
+    #expect(items[0].sleepObserved == true)
+    #expect(items[1].sleepObserved == nil)
     guard case let .chat(_, trackedItemId) = items[0].target else {
         Issue.record("Expected chat target"); return
     }
@@ -58,6 +60,7 @@ import Testing
     #expect(items[1].claimedAt == 2500)
     #expect(items[1].sessionId == "s")
     let roundTrip = try JSONDecoder().decode([ScheduledItem].self, from: JSONEncoder().encode(items))
+    #expect(roundTrip[0].sleepObserved == true)
     #expect(roundTrip[1].error == "Target chat was deleted")
     #expect(try JSONDecoder().decode(ScheduleTrigger.self, from: Data(#""on_online""#.utf8)) == .onOnline)
     #expect(try JSONDecoder().decode(DashboardScheduledTrigger.self, from: Data(#""on_wake""#.utf8)) == .onWake)

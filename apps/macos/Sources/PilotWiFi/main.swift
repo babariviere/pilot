@@ -4,7 +4,7 @@ import CoreWLAN
 import Network
 
 // An independent accessory application. No location coordinates, scans, passwords or disk storage.
-final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, CWEventDelegate {
+final class SystemEventsAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegate, CWEventDelegate {
     private let location = CLLocationManager()
     private let wifi = CWWiFiClient.shared()
     private let work = DispatchQueue(label: "pilot.wifi")
@@ -14,6 +14,7 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
     private var monitorError = false
     private var authorizationRequested = false
     private var wakeObserver: NSObjectProtocol?
+    private var power: SystemPowerMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard CommandLine.arguments.count == 3,
@@ -25,8 +26,10 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
             switch state {
             case .ready:
                 self?.send(["token": CommandLine.arguments[2]])
+                self?.power = SystemPowerMonitor { [weak self] value in self?.send(value) }
                 self?.receive()
                 self?.sample()
+                self?.power?.report()
             case .failed, .cancelled: exit(0)
             default: break
             }
@@ -59,6 +62,7 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
                 let line = self.input.prefix(upTo: newline)
                 self.input.removeSubrange(...newline)
                 guard let command = try? JSONSerialization.jsonObject(with: line) as? [String: Bool] else { exit(1) }
+                if command["power"] == true { self.power?.report() }
                 if command["authorize"] == true && self.location.authorizationStatus == .notDetermined {
                     // CoreLocation ignores requests from an app not currently in use.
                     // Foreground only in response to the app's explicit user action, never on GET/startup.
@@ -138,6 +142,6 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
-let agent = WiFiAgent()
+let agent = SystemEventsAgent()
 app.delegate = agent
 app.run()

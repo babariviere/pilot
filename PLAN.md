@@ -1287,7 +1287,16 @@ reports), producing a morning summary in the app and Slack.
 - `pilotd` owns `schedules.sqlite`. A new-chat target retains the complete `SpawnRequest`;
   a message target retains its chat ID and follow-up text. Triggers are `at` (epoch milliseconds),
   `on_wake`, `on_online` (next offline-to-online edge), and default `on_back` ("When I'm back":
-  next wake, then network reachable). `at` defers while offline and catches up when online.
+  a sleep after save/edit, then a full wake, then network reachable). `at` defers while offline
+  and catches up when online.
+- `on_wake` and `on_back` persist `sleepObserved` per item. Full wakes require graphics capability
+  and an awake display; dark wakes never set `wakeObserved` or dispatch. Every edit clears both
+  observations, even a title-only edit. Observation writes advance the CAS revision without
+  changing the save/edit timestamp, so queued sleep→wake events survive internal latch writes
+  while edits/cancels remain barriers. A historical sleep sample only arms items saved before it.
+  Restart during sleep retains the latch; kernel sleep timestamps also recover a sleep whose
+  helper frame could not reach durable storage before suspension. Legacy wake-only latches are
+  cleared on load because they are not evidence of either sleep or a full wake.
 - Wi-Fi triggers: `on_join_network` and `on_leave_network`, with `networkNames` (1–32 exact,
   case-sensitive names, each 1–32 UTF-8 bytes, deduplicated without trimming). One-shot, like the
   other triggers. Already being connected when saved does not fire. A→B leaves A and joins B;
@@ -1303,13 +1312,18 @@ reports), producing a morning summary in the app and Slack.
   `Pilot.app/Contents/Helpers/PilotWiFi.app`, launched by pilotd via LaunchServices (`open`), not
   by directly executing a Node child. This isolates its Location authorization from Node and from
   the main app's lifetime. No root access, CLI scraping, location-coordinate collection or scans.
-- `Pilot Wi-Fi` owns CoreLocation authorization and CoreWLAN SSID/power/link delegates. Reads
+- The helper is generalized internally (`SystemEventsAgent`, `SystemEventsDetection`,
+  `system-events-helper.ts`) to share one authenticated connection for Wi-Fi and system power.
+  Keep the existing `PilotWiFi.app` executable/bundle ID and **Pilot Wi-Fi** Location entry to
+  preserve TCC identity across updates, rather than requesting authorization under a new name.
+  It owns CoreLocation authorization and CoreWLAN SSID/power/link delegates. Reads
   and profile enumeration run on a serial background queue, coalesced for 150 ms; there is no
   Wi-Fi sampling timer. Wake also requests one sample. Known networks come from
   `CWConfiguration.networkProfiles`, plus the current network, bounded to 256. An authenticated
   random-token loopback stream reports state only to pilotd; JSON frames and connection count
   are bounded. Closing the stream terminates the helper. pilotd keeps it alive only for pending
-  Wi-Fi items or a short picker/authorization lease (30/120 seconds). Crashes reconnect with
+  Wi-Fi items, active system detection, or a short picker/authorization lease (30/120 seconds).
+  Power events do not request Location permission. Crashes reconnect with
   bounded backoff (1–60 seconds); shutdown closes sockets and cancels timers. No durable SSID cache.
 - Startup, reconnect, reactivation and authorization recovery establish a baseline, never an edge.
   Denied/disabled/restricted authorization or an associated interface with a redacted SSID invalidates
@@ -1349,7 +1363,7 @@ reports), producing a morning summary in the app and Slack.
   one winner. Dispatch is serial and follow-ups use the durable input key `schedule:<id>`.
   Success records the created/target chat; admission errors (including deleted/archived targets)
   become failures under the project's Needs you section. Fired means admitted, not agent completion.
-- Restarts retain pending items and the wake-observed latch. An interrupted claim becomes an
+- Restarts retain pending items and both sleep/full-wake observation latches. An interrupted claim becomes an
   explicit uncertain-delivery failure, never an automatic replay: users should check chats before
   rescheduling. This guarantees one dispatch attempt, not transactionally exactly-once delivery
   across the scheduler and session stores. Terminal records can be dismissed with DELETE.
@@ -1359,13 +1373,29 @@ reports), producing a morning summary in the app and Slack.
   worker, not on the event loop; updates coalesce at 250 ms. One nearest-deadline
   timer runs only while online; all timers/subscriptions stop on shutdown, and detectors get an
   active/inactive hint so they can suspend probes when no pending items remain.
-- `ScheduleDetection` is registered in `daemon.ts` and works with the app closed. While pending
-  items exist it samples wake every 30 seconds. On macOS an off-thread, bounded `sysctl
-  kern.waketime` read detects changes to the kernel wake timestamp. Node 24's macOS hrtime uses
-  `mach_continuous_time` (includes sleep), so wall-clock minus hrtime drift would miss wakes.
-  On Linux the sleep-excluding monotonic clock permits drift detection (5-second threshold);
-  late ticks with equal wall/monotonic advancement are not wakes. Wall-clock adjustments can
-  look like sleep on this fallback, but not on macOS. Repeated wake observations are debounced.
+- `ScheduleDetection` is registered in `daemon.ts` and works with the app closed. Preferred
+  macOS detection is event-driven in the independent helper: `IORegisterForSystemPower` observes
+  non-abortable `SystemWillSleep` (not `CanSystemSleep`), and acknowledges immediately without
+  vetoing or delaying sleep. `gIOPriorityPowerStateInterest` reports completed system-capability
+  changes (`kIOPMSystemCapabilityDidChange`); `kIOPMSystemCapabilityGraphics` distinguishes full
+  from dark wakes. Require an active, non-asleep CoreGraphics display as well. Workspace
+  screens-did-wake notifications recheck display readiness and dark→full promotion, not user
+  unlock/activity. Initial/reconnected snapshots read `kern.sleeptime`, `kern.waketime` and the
+  root domain's `System Capabilities`. Events contain only power state/timestamps, never hardware
+  identifiers. Unknown capability/display state fails closed. No power assertions or polling
+  in the helper; it exits when the daemon closes the stream.
+- While the helper is missing, incompatible or disconnected, a bounded off-thread fallback
+  samples every 30 seconds: `sysctl kern.sleeptime kern.waketime`, the root domain graphics
+  capability via `ioreg`, and main-display active/asleep state via CoreGraphics in JXA
+  (`osascript`, no Apple Events/System Events or Accessibility permission). The fallback is
+  deliberately conservative for unusual multi-display arrangements: only the main display
+  counts, whereas the helper checks all online displays. A changed `kern.waketime` alone never
+  fires. Dark→full promotion can count with an unchanged wake token; dedupe is per sleep cycle.
+  Node 24's macOS hrtime includes sleep, so drift is not a reliable macOS signal. The drift
+  utility remains for sleep-excluding clocks, but without full/display evidence non-macOS
+  sampling cannot dispatch wake triggers. Healthy helper frames cancel fallback timers and
+  subprocess work; disconnect resumes fallback immediately. Generation checks reject stale
+  results during handoff, restart and shutdown.
 - Wake invalidates cached reachability before recording the durable wake latch. A credential-free
   HTTPS HEAD to `https://www.gstatic.com/generate_204` must return 204 (5-second timeout, no redirect
   following), so captive-portal pages are not success. This endpoint being blocked can keep work
@@ -1378,7 +1408,9 @@ reports), producing a morning summary in the app and Slack.
   when there are no pending items or on shutdown it cancels timers and aborts in-flight work,
   rejects stale results, and releases its sampler worker. `ScheduleTriggerSource` and
   `ScheduleClock` provide fake-clock tests for drift, debounce, offline wake, cancellation and
-  deadline catch-up. No app fast path or HTTP trigger endpoint is needed for correctness.
+  deadline catch-up, awake saves with no sleep, sleep→dark→full transitions, edits, queued
+  observation writes, helper handoff, and restart while asleep. No main-app fast path or HTTP
+  trigger endpoint is needed for correctness.
 - App UI: Send later is a quiet clock menu beside each composer's Send button (When I'm back,
   When online, When I join…, When I leave… and At a time…, the last three opening a sheet with
   the trigger and its time or networks). A new chat schedules
@@ -1399,7 +1431,7 @@ reports), producing a morning summary in the app and Slack.
   Send now, which runs the composer's normal send. "When I leave…" preselects the connected
   network for a new item. Rows read "When I join Office", "… or Home", "… or 2 others"; tooltips
   and VoiceOver list every name.
-- Incremental detector measurement: `node scripts/bench/schedule-detection.ts 65 all` on Apple
+- Earlier kernel-only baseline: `node scripts/bench/schedule-detection.ts 65 all` on Apple
   Silicon, Node 24.21.0/macOS 27, with other builds/tests running. Idle: 3.8 ms process CPU
   (0.006%), zero samples/probes/timer callbacks. Online: 313.8 ms (0.475%), 3 samples, 3 probes,
   4 detector timer callbacks. Injected offline: 101.8 ms (0.157%), 3 samples, 4 probes, 5 callbacks.
@@ -1412,6 +1444,16 @@ reports), producing a morning summary in the app and Slack.
   `python3 scripts/bench/schedule-wakeups.py`. Actual sleep/resume and whole-machine energy need
   a manual run on an otherwise idle machine (the automated check reads the real kernel timestamp
   without putting the shared development host to sleep).
+- Full-wake detector recheck: `node scripts/bench/schedule-detection.ts 65 online fallback`
+  and `… 65 online helper` on the same busy host. Fallback: 269.8 ms Node CPU (0.415%),
+  3 samples, 4 probes, 4 timer callbacks. Helper: 281.3 ms (0.433%), one startup sample
+  cancelled after the native power frame, 4 probes, 2 callbacks, no steady-state kernel sampling.
+  Both released all detector timers. These cold-start-inclusive Node counters exclude native
+  helper/child process CPU, so they demonstrate removed polling, not a whole-machine CPU win.
+  Native LaunchServices smoke reported available power monitoring and an awake display without
+  requesting Location permission; closing the stream left no helper process. Physical
+  sleep→dark→full wake, external displays, and idle energy still need manual verification.
+  Automated tests never sleep the shared host or change its network.
 - The server registers `DashboardProviders.scheduled` and its change subscription, so pending
   items populate Scheduled and failures populate Needs you without app polling. Protocol and
   PilotCore mirror CRUD payloads, targets, lifecycle and WS snapshots; the app keeps the index

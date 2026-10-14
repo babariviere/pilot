@@ -16,7 +16,8 @@ import type { WiFiDetector } from "./wifi-detection.ts";
 
 /** Detection plugs in here. Initial online state is not an offline→online edge. */
 export type ScheduleTriggerEvent =
-	| { type: "wake" }
+	| { type: "sleep"; at: number }
+	| { type: "wake"; full: boolean }
 	| { type: "online"; online: boolean; initial?: boolean }
 	| { type: "network"; previous: string | null; current: string | null };
 export interface ScheduleTriggerSource {
@@ -40,6 +41,10 @@ const clock: ScheduleClock = {
 		return () => clearTimeout(timer);
 	},
 };
+// Each durable observation increments the CAS revision exactly once. Discount only those
+// writes when comparing queued events; a user edit clears both latches and remains a barrier.
+const saveRevision = (row: Pick<ScheduledItem, "revision" | "sleepObserved" | "wakeObserved">) =>
+	row.revision - Number(!!row.sleepObserved) - Number(!!row.wakeObserved);
 export interface ScheduleDispatch {
 	spawn(request: SpawnRequest): Promise<{ id: string }>;
 	send(id: string, message: string, mode: "followUp", requestId: string): Promise<void>;
@@ -140,11 +145,26 @@ export class ScheduleService {
 			for (const candidate of candidates) {
 				try {
 					const item = this.store.require(candidate.id);
-					if (item.state !== "pending" || item.revision !== candidate.revision) continue;
-					if (event.type === "wake" && item.trigger === "on_back" && !item.wakeObserved)
-						await this.store.replace(item, { ...item, wakeObserved: true, updatedAt: this.time.now() });
+					// Latch writes advance the CAS revision, but must not invalidate already queued
+					// sleep→wake events. Every edit clears both latches and advances this save revision.
+					if (item.state !== "pending" || saveRevision(item) !== saveRevision(candidate)) continue;
+					if (
+						event.type === "sleep" &&
+						Math.floor(event.at) > item.updatedAt &&
+						(item.trigger === "on_wake" || item.trigger === "on_back") &&
+						!item.sleepObserved
+					)
+						await this.store.replace(item, { ...item, sleepObserved: true });
 					else if (
-						(event.type === "wake" && item.trigger === "on_wake") ||
+						event.type === "wake" &&
+						event.full &&
+						item.sleepObserved &&
+						item.trigger === "on_back" &&
+						!item.wakeObserved
+					)
+						await this.store.replace(item, { ...item, wakeObserved: true });
+					else if (
+						(event.type === "wake" && event.full && item.sleepObserved && item.trigger === "on_wake") ||
 						(becameOnline && item.trigger === "on_online") ||
 						(event.type === "network" &&
 							item.trigger === "on_join_network" &&
@@ -175,7 +195,7 @@ export class ScheduleService {
 			pending.some(
 				(item) =>
 					(item.trigger === "at" && item.at! <= this.time.now()) ||
-					(item.trigger === "on_back" && item.wakeObserved),
+					(item.trigger === "on_back" && item.sleepObserved && item.wakeObserved),
 			)
 		)
 			this.online = await this.deps.triggers.refreshOnline();
@@ -184,7 +204,7 @@ export class ScheduleService {
 			if (!this.online) continue;
 			if (
 				(item.trigger === "at" && item.at! <= this.time.now()) ||
-				(item.trigger === "on_back" && item.wakeObserved)
+				(item.trigger === "on_back" && item.sleepObserved && item.wakeObserved)
 			) {
 				try {
 					const current = this.store.require(item.id);
@@ -302,7 +322,8 @@ export class ScheduleService {
 			networkNames: data.networkNames,
 			projectId: data.projectId,
 			sessionId: data.sessionId,
-			wakeObserved: trigger === old.trigger ? old.wakeObserved : undefined,
+			wakeObserved: undefined,
+			sleepObserved: undefined,
 			updatedAt: this.time.now(),
 		});
 	}
