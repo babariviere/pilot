@@ -20,7 +20,7 @@ on:
 permissions:
   contents: read
 
-# A PR run is cancelled by a newer push to the same PR, or by ci-pr-closed.yml when the PR closes.
+# A newer push to the same PR cancels its previous run.
 # Other runs get a unique group here. Main pushes are cancelled per job below to protect releases.
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pilot-ci-pr-{0}', github.event.pull_request.number) || format('pilot-ci-run-{0}', github.run_id) }}
