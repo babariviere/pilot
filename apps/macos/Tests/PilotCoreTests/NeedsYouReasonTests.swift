@@ -50,6 +50,32 @@ private let reasonNow = Date(timeIntervalSince1970: 1_000)
     #expect(InboxText.needsYouSummary([]) == "0 need you")
 }
 
+@Test func subscriptionLimitsReadAsLimitReachedWithWhenTheyResume() throws {
+    let now = Date(timeIntervalSince1970: 1_781_524_800) // Monday 15 June 2026, 12:00 UTC
+    let reset = "2026-06-15T18:00:00Z"
+    let resumes = try #require(UsageFormatting.resetDate(reset)).timeIntervalSince1970 * 1000
+    #expect(NeedsYouReason(kind: .limit).label(at: 0) == "Limit reached")
+    let label = NeedsYouReason(kind: .limit, resumesAt: resumes).label(at: 0, now: now)
+    #expect(label == "Limit reached · resumes \(UsageFormatting.clock(Date(timeIntervalSince1970: resumes / 1000), now: now))")
+    #expect(label.hasPrefix("Limit reached · resumes at "))
+    let decoded = try JSONDecoder().decode(NeedsYouReason.self, from: Data(#"{"kind":"limit","resumesAt":\#(resumes)}"#.utf8))
+    #expect(decoded == NeedsYouReason(kind: .limit, resumesAt: resumes))
+
+    func chat(error: String, windows: [SubscriptionWindow] = []) -> SessionSummary {
+        SessionSummary(id: "s", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle", error: error,
+                       usage: SessionUsage(subscription: SubscriptionUsage(fetchedAt: 1, provider: .anthropic, windows: windows)),
+                       outcome: .failed)
+    }
+    let exhausted = chat(error: "Request failed", windows: [SubscriptionWindow(label: "5h", usedPercent: 100, resetsAt: reset)])
+    #expect(exhausted.needsYouReason(unread: true, now: now) == NeedsYouReason(kind: .limit, resumesAt: resumes))
+    #expect(chat(error: "429 Claude AI usage limit reached").needsYouReason(unread: true, now: now)
+        == NeedsYouReason(kind: .limit))
+    #expect(chat(error: "Tests failed", windows: [SubscriptionWindow(label: "5h", usedPercent: 99)])
+        .needsYouReason(unread: true, now: now)?.kind == .failed)
+    #expect(InboxText.needsYouSummary([ProjectDashboardCount(needsYou: 2, needsYouReasons: ["limit": 1, "failed": 1])])
+        == "2 need you: 1 failed, 1 limit reached")
+}
+
 @Test func missionNeedsYouRowsReuseTheReasonVocabulary() throws {
     let task = MissionTask(id: "t", number: 3, title: "Approve rollout", status: .blocked)
     #expect(MissionNeedsYouItem.blockedTask(task).needsYouLabel() == "Mission: Blocked: #3 Approve rollout")

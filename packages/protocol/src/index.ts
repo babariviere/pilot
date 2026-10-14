@@ -809,13 +809,18 @@ export interface DashboardSection<T> {
  */
 export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "unread";
 
-export type NeedsYouReasonKind = "failed" | "asks" | "not_reviewed" | "couldnt_start" | "mission";
+export type NeedsYouReasonKind = "failed" | "asks" | "not_reviewed" | "couldnt_start" | "mission" | "limit";
 
-/** One reason per row. Not-reviewed age is formatted by clients from the row's `at`. */
+/**
+ * One reason per row. Not-reviewed age is formatted by clients from the row's `at`.
+ * `limit`: a failed chat stopped by a subscription limit ("Limit reached · resumes at 18:00").
+ */
 export interface NeedsYouReason {
 	kind: NeedsYouReasonKind;
-	/** First non-empty line, at most 200 characters. Omitted for not_reviewed. */
+	/** First non-empty line, at most 200 characters. Omitted for not_reviewed and limit. */
 	detail?: string;
+	/** `limit`: epoch ms when the exhausted subscription window resets, when known. */
+	resumesAt?: number;
 }
 
 export interface DashboardNeedsYouItem {

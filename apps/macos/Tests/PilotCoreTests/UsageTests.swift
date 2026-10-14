@@ -86,23 +86,14 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
 @Test func subscriptionAvailabilityAndProviderLabelsAreHonest() {
     let missing = SubscriptionUsage(fetchedAt: 0, windows: [])
     #expect(missing.providerLabel == "Subscription")
-    #expect(missing.availabilityLabel == "No limits reported")
     let failed = SubscriptionUsage(fetchedAt: 0, provider: .anthropic, windows: [], error: "Unauthorized")
-    #expect(failed.availabilityLabel == "Unavailable")
     #expect(failed.helpText.contains("Update error: Unauthorized"))
     #expect(failed.helpText.contains("No usage windows reported."))
     let retained = SubscriptionUsage(fetchedAt: 0, provider: .openai,
                                      windows: [SubscriptionWindow(label: "5h", usedPercent: 0)], error: "Timed out")
     #expect(retained.providerLabel == "Codex")
-    #expect(retained.availabilityLabel == "Update failed")
     #expect(retained.windows[0].percentLabel == "0%")
     #expect(retained.helpText.contains("5h: 0% used"))
-}
-
-@Test func extraUsageFooterLabelShowsOnlySpentAmount() {
-    #expect(SubscriptionWindow(label: "Extra [on] 0.00/200.00", usedPercent: 0).footerLabel == "Extra $0.00")
-    #expect(SubscriptionWindow(label: "Extra [active] 12.50", usedPercent: 6).footerLabel == "Extra $12.50")
-    #expect(SubscriptionWindow(label: "Week", usedPercent: 26).footerLabel == "Week 26%")
 }
 
 @Test func parsesResetTimesAndDisplaysSnapshotFreshness() throws {
@@ -131,52 +122,16 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
                                   windows: [SubscriptionWindow(label: "5h", usedPercent: 12)])
     let recent = fetched.addingTimeInterval(SubscriptionUsage.staleAfter)
     #expect(!usage.isStale(now: recent))
-    #expect(usage.displayAvailabilityLabel(now: recent) == nil)
     #expect(usage.displayHelpText(now: recent) == usage.helpText)
     let old = recent.addingTimeInterval(1)
     #expect(usage.isStale(now: old))
-    #expect(usage.displayAvailabilityLabel(now: old) == "Not recent")
     #expect(usage.displayHelpText(now: old).contains("Not updated recently"))
-    let failed = SubscriptionUsage(fetchedAt: usage.fetchedAt, windows: [], error: "Unauthorized")
-    #expect(failed.displayAvailabilityLabel(now: old) == "Unavailable", "errors take precedence over age")
     #expect(!SubscriptionUsage(fetchedAt: .nan, windows: []).isStale(now: old))
 }
 
-@Test func providerlessEmptySnapshotClearsSubscriptionWithoutTakingSpace() {
-    let cleared = SubscriptionUsage(fetchedAt: 1_710_000_000_000, windows: [])
-    #expect(!cleared.hasDisplayData)
-    #expect(!SessionUsage(subscription: cleared).hasDisplayData)
-    #expect(!SessionUsage().hasDisplayData)
-    #expect(SessionUsage(context: ContextUsage(contextWindow: 200_000), subscription: cleared).hasDisplayData)
-    #expect(SubscriptionUsage(fetchedAt: 0, provider: .openai, windows: []).hasDisplayData)
-    #expect(SubscriptionUsage(fetchedAt: 0, windows: [], error: "Unavailable").hasDisplayData)
-    #expect(SubscriptionUsage(fetchedAt: 0, windows: [SubscriptionWindow(label: "5h", usedPercent: 12)]).hasDisplayData)
-}
-
-@Test func missingSubscriptionShowsAnHonestProviderFallback() {
-    let missing = SessionUsage()
-    #expect(missing.fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == .openai)
-    #expect(missing.fallbackSubscriptionProvider(model: "anthropic/claude-sonnet-5") == .anthropic)
+@Test func providerNames() {
     #expect(SubscriptionProvider.openai.displayName == "Codex")
     #expect(SubscriptionProvider.anthropic.displayName == "Claude")
-    #expect(SubscriptionProvider.openai.unavailableHelpText.contains("No usage snapshot is available."))
-    #expect(!SubscriptionProvider.openai.unavailableHelpText.contains("0%"))
-    let contextOnly = SessionUsage(context: ContextUsage(tokens: 0, contextWindow: 200_000))
-    #expect(contextOnly.fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == .openai)
-    for model in [nil, "", "openai/gpt-6", "router/auto", "custom/claude", "claude-sonnet-5"] {
-        #expect(missing.fallbackSubscriptionProvider(model: model) == nil)
-    }
-}
-
-@Test func realOrClearedSnapshotsNeverUseAModelFallback() {
-    for subscription in [
-        SubscriptionUsage(fetchedAt: 1, windows: []),
-        SubscriptionUsage(fetchedAt: 1, provider: .anthropic, windows: []),
-        SubscriptionUsage(fetchedAt: 1, windows: [], error: "Sign in required"),
-        SubscriptionUsage(fetchedAt: 1, provider: .openai, windows: [SubscriptionWindow(label: "5h", usedPercent: 0)]),
-    ] {
-        #expect(SessionUsage(subscription: subscription).fallbackSubscriptionProvider(model: "openai-codex/gpt-6.1-sol") == nil)
-    }
 }
 
 @Test func subscriptionGaugesClampOnlyTheirDrawing() {
@@ -189,6 +144,53 @@ private func decodeUsageSession(_ usage: String = "") throws -> SessionSummary {
     #expect(overflow.percentLabel == "123%")
     #expect(UsageFormatting.gaugeFraction(.nan) == nil)
     #expect(UsageFormatting.gaugeFraction(-1) == nil)
+}
+
+private let utc = TimeZone(secondsFromGMT: 0)!
+private let british = Locale(identifier: "en_GB")
+/// Monday 15 June 2026, 12:00 UTC.
+private let usageNow = Date(timeIntervalSince1970: 1_781_524_800)
+
+@Test func clockPhrasesReadAsPartOfASentence() {
+    func clock(_ offset: TimeInterval) -> String {
+        UsageFormatting.clock(usageNow.addingTimeInterval(offset), now: usageNow, locale: british, timeZone: utc)
+    }
+    #expect(clock(6 * 3_600) == "at 18:00")
+    #expect(clock(21 * 3_600) == "tomorrow at 09:00")
+    #expect(clock(3 * 86_400) == "on Thu at 12:00")
+    #expect(clock(10 * 86_400) == "on 25 Jun at 12:00")
+}
+
+@Test func chatsMentionSubscriptionUsageOnlyPast80PercentOrWhenLimited() {
+    func notice(_ windows: [SubscriptionWindow], provider: SubscriptionProvider = .anthropic) -> String? {
+        SubscriptionUsage(fetchedAt: usageNow.timeIntervalSince1970 * 1_000, provider: provider, windows: windows)
+            .notice(now: usageNow, locale: british, timeZone: utc)?.text
+    }
+    #expect(notice([SubscriptionWindow(label: "5h", usedPercent: 79.4), SubscriptionWindow(label: "Week", usedPercent: 12)]) == nil)
+    #expect(notice([SubscriptionWindow(label: "5h", usedPercent: 86, resetsAt: "2026-06-15T18:00:00Z")])
+        == "Claude 5-hour limit at 86% · resets at 18:00")
+    // The most used window wins; a used-up one reads as reached.
+    #expect(notice([SubscriptionWindow(label: "5h", usedPercent: 82),
+                    SubscriptionWindow(label: "Week", usedPercent: 100, resetsAt: "2026-06-16T09:00:00Z")], provider: .openai)
+        == "Codex weekly limit reached · resets tomorrow at 09:00")
+    // Extra-usage spend and windows that already reset are not limits.
+    #expect(notice([SubscriptionWindow(label: "Extra [on] 190.00/200.00", usedPercent: 95)]) == nil)
+    #expect(notice([SubscriptionWindow(label: "5h", usedPercent: 100, resetsAt: "2026-06-15T11:00:00Z")]) == nil)
+    let limited = SubscriptionUsage(fetchedAt: 1, provider: .anthropic, windows: [SubscriptionWindow(label: "5h", usedPercent: 100)])
+        .notice(now: usageNow)
+    #expect(limited?.limited == true && limited?.text == "Claude 5-hour limit reached")
+    #expect(limited?.help.contains("Not updated recently") == true)
+}
+
+@Test func windowLabelsForSentencesAndBars() {
+    #expect(SubscriptionWindow(label: "5h", usedPercent: 1).limitName == "5-hour")
+    #expect(SubscriptionWindow(label: "5h", usedPercent: 1).shortLabel == "5 h")
+    #expect(SubscriptionWindow(label: "Week", usedPercent: 1).limitName == "weekly")
+    #expect(SubscriptionWindow(label: "Week", usedPercent: 1).shortLabel == "week")
+    #expect(SubscriptionWindow(label: "Session", usedPercent: 1).limitName == "session")
+    let usage = SubscriptionUsage(fetchedAt: 1, windows: [SubscriptionWindow(label: "5h", usedPercent: 1),
+                                                          SubscriptionWindow(label: "Extra [on] 1.00/200.00", usedPercent: 1)])
+    #expect(usage.limitWindows.map(\.label) == ["5h"])
 }
 
 @Test func chatModelNamesUseTheCatalogAndFallbackToTheId() throws {

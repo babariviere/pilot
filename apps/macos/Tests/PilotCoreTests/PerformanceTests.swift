@@ -125,7 +125,7 @@ private func event(_ text: String) -> JSONValue { try! JSONValue.decode(Data(tex
     #expect(!result.working && result.rows.isEmpty)
 }
 
-@Test func backgroundSessionDecodingPreservesUsageFooterData() throws {
+@Test func backgroundSessionDecodingPreservesUsageData() throws {
     let data = Data(#"{"type":"session","session":{"id":"s","title":"Usage","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"working","usage":{"context":{"tokens":100,"contextWindow":200000,"percent":0.05},"subscription":{"fetchedAt":1,"provider":"anthropic","windows":[{"label":"5h","usedPercent":25}]}}}}"#.utf8)
     guard case let .session(session)? = try ServerUpdate.decode(data) else { Issue.record("expected session"); return }
     #expect(session.usage?.context?.tokens == 100)

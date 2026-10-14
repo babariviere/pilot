@@ -87,6 +87,7 @@ enum SidebarScopeCounts {
         let parts = [
             reasons.questions > 0 ? "\(reasons.questions) \(reasons.questions == 1 ? "question" : "questions")" : nil,
             reasons.failed > 0 ? "\(reasons.failed) failed" : nil,
+            reasons.limited > 0 ? "\(reasons.limited) \(reasons.limited == 1 ? "limit" : "limits") reached" : nil,
             reasons.notReviewed > 0 ? "\(reasons.notReviewed) not reviewed" : nil,
         ].compactMap { $0 }
         guard !parts.isEmpty, reasons.total == total else { return needsYou(total) }
@@ -99,20 +100,24 @@ struct NeedsYouReasons: Equatable {
     var questions = 0
     var failed = 0
     var notReviewed = 0
+    /// Failed chats stopped by a subscription limit.
+    var limited = 0
 
-    var total: Int { questions + failed + notReviewed }
+    var total: Int { questions + failed + notReviewed + limited }
 
-    init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0) {
+    init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0, limited: Int = 0) {
         self.questions = questions
         self.failed = failed
         self.notReviewed = notReviewed
+        self.limited = limited
     }
 
     /// Counts the Needs you group of `SidebarUrgency.groups` by reason.
     init(_ needsYou: [SessionSummary], unread: (SessionSummary) -> Bool) {
         for session in needsYou {
             switch session.signal(unread: unread(session)) {
-            case .failed: failed += 1
+            case .failed:
+                if session.subscriptionLimit() != nil { limited += 1 } else { failed += 1 }
             case .needsYou where session.status == .question: questions += 1
             default: notReviewed += 1
             }

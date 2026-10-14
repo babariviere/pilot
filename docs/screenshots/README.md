@@ -127,10 +127,10 @@ cp /tmp/pilot-todos-screenshots/session.png docs/screenshots/tasks-chat.png
 
 ## Chat usage screenshots
 
-- `usage-composer.png`: the subtle model picker, context, 5h and weekly gauges below the chat box.
+- `usage-composer.png`: the model picker and the context gauge in the composer bar.
 - `usage-composer-narrow.png`: the controls row wrapping in a narrow chat column.
-- `usage-footers.png`: Claude/Codex usage windows, refresh errors, and missing-snapshot states.
-- `usage-footer-narrow.png`: the compact usage indicators in a narrow column.
+- `usage-indicators.png`: the subscription line above the composer (past 80% and limited), context gauges, and
+  Home's subscription bars.
 
 These also use deterministic fixtures. Regenerate with the snapshot command above, then copy
 the `usage-*.png` images from its output directory.
