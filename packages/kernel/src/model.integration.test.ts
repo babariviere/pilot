@@ -1784,3 +1784,192 @@ test("performance timings isolate a failed preparation hook from the subsequent 
 	assert.equal(f.a.state.callCount, 1);
 	assert.doesNotMatch(JSON.stringify(records), /sensitive/);
 });
+
+async function seedCompaction(session: KernelSession) {
+	await session.conversation.commit(async (tx) => {
+		for (let i = 0; i < 30; i++) {
+			await tx.appendEntry(session.conversation.id, {
+				kind: "pi.user",
+				model: [{ role: "user", content: "Old context. ".repeat(500), timestamp: i }],
+			});
+			await tx.appendEntry(session.conversation.id, {
+				kind: "pi.assistant",
+				model: [fauxAssistantMessage("Recent answer")],
+			});
+		}
+	}, context);
+}
+
+for (const mode of ["steer", "followUp"] as const) {
+	test(`idle compaction queues ${mode} immediately, shows it on reconnect, and uses the summary before replying`, {
+		timeout: 15000,
+	}, async (t) => {
+		const f = await fixture(t);
+		const session = await f.open();
+		f.adapters.at(-1)!.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+		await seedCompaction(session);
+		const entered = deferred();
+		const summary = deferred<ReturnType<typeof fauxAssistantMessage>>();
+		t.after(() => summary.resolve(fauxAssistantMessage("Checkpoint summary")));
+		f.a.setResponses([
+			async (_messages, options) => {
+				options?.signal?.addEventListener(
+					"abort",
+					() => summary.resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+					{ once: true },
+				);
+				entered.resolve();
+				return summary.promise;
+			},
+			(messages) => {
+				assert.ok(
+					messages.messages.some((m) => JSON.stringify(m).includes("Checkpoint summary")),
+					"first request must see compacted context",
+				);
+				assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Edited follow-up")));
+				return fauxAssistantMessage("Done");
+			},
+		]);
+		const compact = session.compact("Keep next steps");
+		const sending = session.submit("during-compaction", "Original follow-up", mode, false, true);
+		await compact;
+		assert.deepEqual(await sending, { delivery: "queued" });
+		await entered.promise;
+		assert.equal(f.a.state.callCount, 1, "only summarization runs while input waits");
+		assert.equal(f.adapters[0]!.session.isIdle, false);
+		await session.submit("during-compaction", "Retry must not replace", mode);
+		await assert.rejects(session.submit("idle-only", "Must reject", mode, true), ConversationBusy);
+		const inbox = await session.harness.snapshot(InboxDoc, session.conversation.id, context);
+
+		assert.equal(inbox!.items.length, 1);
+		const snapshot = (await readSessionSnapshot(f.spec.storageDir, f.spec.cwd)).events.find(
+			(e) => e.type === "snapshot",
+		);
+		assert.ok(snapshot && snapshot.type === "snapshot");
+		assert.equal(snapshot.compactions.length, 1);
+		assert.equal(snapshot.run, undefined, "no hidden generation or fake run during compaction");
+		await session.editQueuedMessage(inbox!.items[0]!.id, "Edited follow-up");
+		summary.resolve(fauxAssistantMessage("Checkpoint summary"));
+		await session.conversation.waitForIdle(context);
+		assert.equal(f.a.state.callCount, 2);
+		const entries = (await session.conversation.entries({}, 100, undefined, context)).items.toReversed();
+		const checkpoint = entries.findIndex((e) => e.kind === "pi.compaction");
+		const input = entries.findIndex((e) => userText(e) === "Edited follow-up");
+		assert.ok(checkpoint >= 0 && input > checkpoint, "summary is placed before user input");
+		assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
+	});
+}
+
+for (const result of ["failure", "no-op"] as const) {
+	test(`idle compaction ${result} does not strand queued input`, { timeout: 15000 }, async (t) => {
+		const f = await fixture(t);
+		const session = await f.open();
+		f.adapters.at(-1)!.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+		if (result === "failure") await seedCompaction(session);
+		const entered = deferred();
+		const summary = deferred<ReturnType<typeof fauxAssistantMessage>>();
+		t.after(() =>
+			summary.resolve(fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid request" })),
+		);
+		f.a.setResponses(
+			result === "failure"
+				? [
+						async (_messages, options) => {
+							options?.signal?.addEventListener(
+								"abort",
+								() => summary.resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+								{ once: true },
+							);
+							entered.resolve();
+							return summary.promise;
+						},
+						fauxAssistantMessage("Still answered"),
+					]
+				: [fauxAssistantMessage("Still answered")],
+		);
+		const compact = session.compact();
+		await session.submit("waiting", "Answer after compact", "followUp");
+		await compact;
+		if (result === "failure") {
+			await entered.promise;
+			summary.resolve(fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid request" }));
+		}
+		await session.conversation.waitForIdle(context);
+		await f.completed;
+		const live = await session.harness.snapshot(LiveDoc, session.conversation.id, context);
+		assert.equal(live!.run, undefined);
+		assert.equal(live!.compactions, undefined);
+		assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
+		assert.equal(
+			(await session.conversation.context(context)).entries.some((e) => e.kind === "pi.compaction"),
+			false,
+		);
+		assert.equal(f.a.state.callCount, result === "failure" ? 2 : 1);
+	});
+}
+
+test("Stop during idle compaction returns waiting user input without sending it", { timeout: 15000 }, async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	f.adapters.at(-1)!.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+	await seedCompaction(session);
+	const entered = deferred();
+	const summary = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => summary.resolve(fauxAssistantMessage("Cancelled")));
+	f.a.setResponses([
+		async (_messages, options) => {
+			options?.signal?.addEventListener(
+				"abort",
+				() => summary.resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+				{ once: true },
+			);
+			entered.resolve();
+			return summary.promise;
+		},
+	]);
+	await session.compact();
+	await entered.promise;
+	await session.submit("stopped-input", "Restore my draft", "steer");
+	assert.deepEqual(await session.abort(), [{ requestId: "stopped-input", content: "Restore my draft" }]);
+	await session.conversation.waitForIdle(context);
+	assert.equal(f.a.state.callCount, 1);
+	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
+});
+
+test("queued compaction input survives close and reopen exactly once", { timeout: 15000 }, async (t) => {
+	const f = await fixture(t);
+	let session = await f.open();
+	f.adapters.at(-1)!.models.getModel("pilot-model-a", "one")!.contextWindow = 128000;
+	await seedCompaction(session);
+	const entered = deferred();
+	const summary = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => summary.resolve(fauxAssistantMessage("Interrupted")));
+	f.a.setResponses([
+		async (_messages, options) => {
+			options?.signal?.addEventListener(
+				"abort",
+				() => summary.resolve(fauxAssistantMessage("", { stopReason: "aborted" })),
+				{ once: true },
+			);
+			entered.resolve();
+			return summary.promise;
+		},
+	]);
+	await session.compact();
+	await entered.promise;
+	await session.submit("durable-wait", "Reply after restart", "followUp");
+	await session.close();
+	f.a.setResponses([
+		fauxAssistantMessage("Recovered checkpoint"),
+		(messages) => {
+			assert.ok(messages.messages.some((m) => JSON.stringify(m).includes("Recovered checkpoint")));
+			return fauxAssistantMessage("Recovered reply");
+		},
+	]);
+	session = await f.open();
+	await session.conversation.waitForIdle(context);
+	const entries = (await session.conversation.entries({}, 100, undefined, context)).items;
+	assert.equal(entries.filter((e) => userText(e) === "Reply after restart").length, 1);
+	assert.equal(entries.filter((e) => e.kind === "pi.compaction").length, 1);
+	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))!.items.length, 0);
+});

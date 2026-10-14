@@ -60,6 +60,7 @@ import { submitIdleInput } from "./idle-input.ts";
 import { continueModelInPlace } from "./model-continuation.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
+import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
@@ -144,6 +145,7 @@ export interface KernelSessionHooks {
 
 export class KernelSession {
 	readonly #ask: boolean;
+	#compactSession!: ReturnType<typeof createManualCompaction>["compactSession"];
 	readonly #watches = new Map<string, () => Promise<void>>();
 	#origins!: InputOrigins;
 	/** When each waiting automatic input was first seen, shared by every watch. Pruned to the inbox on each update. */
@@ -430,6 +432,20 @@ export class KernelSession {
 				);
 			};
 			const registry = createRegistry();
+			let serializeCompaction = (work: () => Promise<boolean>) => work();
+			const compaction = createManualCompaction(async (id, requestId, context) => {
+				return serializeCompaction(async () => {
+					const target = await harness!.conversation(id, context);
+					if ((await harness!.snapshot(LiveDoc, id, context))?.compactions?.length) return false;
+					if (!target) throw new Error("Compaction conversation is missing");
+					await target.submit(
+						{ type: "write", requestId, entry: { kind: "pilot.compaction-boundary", model: [] } },
+						context,
+					);
+					return true;
+				});
+			});
+			registry.install(compaction.extension);
 			registry.install(prepare(adapter.extension));
 			harness = await Harness.open(
 				owned.storage,
@@ -512,6 +528,8 @@ export class KernelSession {
 			openedSession = session;
 			session.todoBridge = todoBridge;
 			session.#openTodoCount = openTodoCount;
+			session.#compactSession = compaction.compactSession;
+			serializeCompaction = (work) => session.serializeInput(work);
 			session.jobsMonitor = jobs;
 			await jobs.refresh();
 			session.#reportedWorking = status.snapshot.run !== undefined;
@@ -585,7 +603,16 @@ export class KernelSession {
 					.serializeInput(async () => {
 						const admission = await admitWithHeld(session.harness, conversation.id, input, context);
 						if (admission) await session.publishSystemMessageStates();
-						else
+						else if (
+							!(await queueDuringCompaction(
+								session.harness,
+								conversation,
+								input.requestId,
+								input.content,
+								input.mode,
+								context,
+							))
+						)
 							await conversation.submit(
 								{ type: "input", content: input.content, requestId: input.requestId, whenBusy: input.mode },
 								context,
@@ -810,10 +837,9 @@ export class KernelSession {
 				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context, event);
 				return { delivery: "delivered" };
 			}
-			const submission = await this.conversation.submit(
-				{ type: "input", content: prepared, requestId, whenBusy: mode },
-				context,
-			);
+			const submission =
+				(await queueDuringCompaction(this.harness, this.conversation, requestId, prepared, mode, context)) ??
+				(await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context));
 			// Ordinary user/automatic admission needs no extra storage read.
 			if (!reportDelivery) return;
 			const status = await submission.status(context);
@@ -869,13 +895,20 @@ export class KernelSession {
 	}
 
 	/**
-	 * Queue a manual compaction. Returns once its task is committed; the summary is placed when idle or at the next
-	 * turn boundary, and `abort()` cancels it.
+	 * Queue a manual compaction. Idle compaction queues new input until its summary is placed. Active runs
+	 * retain SDK turn-boundary placement. Returns once admitted; `abort()` cancels it.
 	 */
 	async compact(instructions?: string): Promise<void> {
 		if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
-		const trimmed = instructions?.trim();
-		await this.conversation.compact(trimmed || undefined, context);
+		this.#admissions++;
+		await this.serializeInput(async () => {
+			try {
+				if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
+				await this.#compactSession(this.harness, this.conversation, instructions?.trim() || undefined, context);
+			} finally {
+				this.#admissions--;
+			}
+		});
 	}
 
 	/**
