@@ -26,14 +26,14 @@ import Testing
     app.client.loadFixture(projects: Fixtures.projects, sessions: [session])
     app.selectedSessionId = session.id
 
-    for tab in [InspectorTab.changes, .terminal, .agents, .artifacts] {
+    for tab in [InspectorTab.changes, .terminal, .agents, .artifacts, .links] {
         let selection = InspectorToggle.selection(for: tab, in: app)
         selection.wrappedValue = true
         #expect(app.inspectorVisible && app.inspectorTab == tab)
         #expect(selection.wrappedValue)
         selection.wrappedValue = true
         #expect(app.inspectorVisible)
-        for other in [InspectorTab.changes, .terminal, .agents, .artifacts] where other != tab {
+        for other in [InspectorTab.changes, .terminal, .agents, .artifacts, .links] where other != tab {
             #expect(!InspectorToggle.selection(for: other, in: app).wrappedValue)
         }
         selection.wrappedValue = false

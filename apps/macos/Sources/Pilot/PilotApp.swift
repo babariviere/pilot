@@ -37,6 +37,8 @@ struct PilotApp: App {
                     .disabled(model.selectedSessionId == nil || model.selectedSession?.isAsk == true)
                 Button("Toggle Artifacts") { model.toggleInspector(.artifacts) }
                     .disabled(model.selectedSessionId == nil)
+                Button("Toggle Links") { model.toggleInspector(.links) }
+                    .disabled(model.selectedSessionId == nil)
             }
             SidebarScopeCommands(model: model, client: model.client)
         }

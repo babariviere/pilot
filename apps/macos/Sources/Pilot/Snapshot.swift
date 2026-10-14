@@ -218,7 +218,7 @@ enum Snapshot {
                 NSApp.activate(ignoringOtherApps: true)
                 for appearance in [NSAppearance.Name.aqua, .darkAqua] {
                     NSApp.appearance = NSAppearance(named: appearance)
-                    for tab in [InspectorTab.changes, .terminal, .agents, .artifacts] {
+                    for tab in [InspectorTab.changes, .terminal, .agents, .artifacts, .links] {
                         model.inspectorTab = tab
                         model.inspectorVisible = true
                         for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }

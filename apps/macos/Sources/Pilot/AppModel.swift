@@ -8,10 +8,11 @@ enum InspectorTab: Hashable {
     case artifacts
     case agents
     case mission
+    case links
 
     func isAvailable(for session: SessionSummary) -> Bool {
         if self == .mission { return session.missionId != nil }
-        return !session.isAsk || self == .artifacts
+        return !session.isAsk || self == .artifacts || self == .links
     }
 }
 
