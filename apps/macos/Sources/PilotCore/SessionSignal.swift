@@ -51,7 +51,7 @@ extension SessionSummary {
 /// The All projects sidebar grouped by urgency instead of by project.
 public enum SidebarUrgency {
     public struct Groups: Equatable, Sendable {
-        /// Failed chats first, then unread results, each in list order.
+        /// Failed chats first, then agent questions, then unread results, each in list order.
         public var needsYou: [SessionSummary] = []
         public var working: [SessionSummary] = []
         /// Everything else, in list order (pinned first).
@@ -69,17 +69,19 @@ public enum SidebarUrgency {
     /// One pass over `sessions`, which are already in sidebar list order.
     public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool) -> Groups {
         var failed: [SessionSummary] = []
+        var questions: [SessionSummary] = []
         var waiting: [SessionSummary] = []
         var groups = Groups()
         for session in sessions {
             switch session.signal(unread: unread(session)) {
             case .working: groups.working.append(session)
             case .failed: failed.append(session)
+            case .needsYou where session.status == .question: questions.append(session)
             case .needsYou: waiting.append(session)
             case .readyToMerge, nil: groups.recent.append(session)
             }
         }
-        groups.needsYou = failed + waiting
+        groups.needsYou = failed + questions + waiting
         return groups
     }
 }
