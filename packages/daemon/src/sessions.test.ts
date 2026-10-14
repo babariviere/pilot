@@ -2163,6 +2163,8 @@ test("live job snapshots clear on worker exit and daemon restart, ignoring a rep
 		await reopened.load();
 		try {
 			assert.equal(reopened.get(meta.id)?.runningJobs, undefined);
+			assert.equal(reopened.get(meta.id)?.attentionReason, undefined);
+			assert.equal(reopened.get(meta.id)?.attentionAt, undefined);
 			assert.equal(reopened.get(meta.id)?.working, false);
 		} finally {
 			await reopened.shutdown();
