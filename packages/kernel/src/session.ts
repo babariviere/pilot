@@ -227,7 +227,7 @@ export class KernelSession {
 					: undefined;
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage, active), detectGhStack(spec.cwd)]);
-			const pilot = { ...spec.pilot, ghStack };
+			const pilot = { ...spec.pilot, ghStack, projectMemory: !!spec.projectId && !!hooks.callMemory };
 			const prepareWorkspace = hooks.prepareWorkspace
 				? turnPreparation(
 						owned.storage,

@@ -143,6 +143,22 @@ test("Build prompts define completion; Ask prompts do not", () => {
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /finish with a working change/);
 });
 
+test("memory guidance is short and limited to project chats with memory, never Ask", () => {
+	const prompt = pilotPrompt({ projectMemory: true });
+	assert.match(
+		prompt,
+		/Use memory_note for lasting decisions, user preferences\/corrections, non-obvious facts and hard-won outcomes/,
+	);
+	assert.match(prompt, /never task status, secrets or what memory already says/);
+	assert.match(
+		prompt,
+		/Before finishing a turn that ends a task, consider whether you learned anything lasting worth saving/,
+	);
+	assert.equal(prompt.split("\n").length - pilotPrompt({}).split("\n").length, 2);
+	for (const context of [{}, { projectMemory: false }, { projectMemory: true, ask: { source: "/source" } }])
+		assert.doesNotMatch(pilotPrompt(context), /memory_note|anything lasting worth saving/);
+});
+
 test("Ask permits proactive session-local diagrams and sandboxed previews without repository mutation", () => {
 	const prompt = pilotPrompt({ ask: { source: "/source" } }, true);
 	assert.match(prompt, /without being asked/);

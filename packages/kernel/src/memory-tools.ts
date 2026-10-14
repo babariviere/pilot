@@ -4,6 +4,8 @@ import type { JsonValue } from "@earendil-works/chord";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 
+export const MEMORY_TOOL_NAMES: readonly string[] = ["memory_note", "memory_recall", "memory_zoom"];
+
 export type MemoryCall = (
 	action: "wake" | "note" | "recall" | "zoom",
 	args: Record<string, JsonValue>,
@@ -15,7 +17,7 @@ export function createMemoryTools(call: MemoryCall, sessionId: string): ToolDefi
 			name: "memory_note",
 			label: "Note project memory",
 			description:
-				"Save one durable, project-wide fact, decision, user preference, or hard-won outcome. Note only lasting information that will help future chats. Do not repeat or paraphrase facts already present in project memory. Never store secrets, temporary status, task instructions, or speculation.",
+				"Save one lasting project fact, decision, user preference/correction or hard-won outcome. Never store secrets, task status/instructions, speculation or what memory already says.",
 			parameters: Type.Object({
 				text: Type.String({
 					minLength: 1,

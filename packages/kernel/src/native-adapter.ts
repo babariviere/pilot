@@ -66,6 +66,7 @@ import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
+import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
@@ -802,7 +803,10 @@ export class NativeAdapter {
 			for (const name of changes?.hiddenDeclarations ?? []) hidden.add(name);
 		}
 		const tools: ToolRegistration[] = this.session.agent.state.tools
-			.filter((tool) => !hidden.has(tool.name) && (!this.#ask || ASK_TOOL_NAMES.includes(tool.name)))
+			// Codemode-only hides direct tools, then budgets its listing cheapest-first. Memory
+			// must stay declared even when that listing drops the longer note schema (or all tools).
+			.filter((tool) => !hidden.has(tool.name) || MEMORY_TOOL_NAMES.includes(tool.name))
+			.filter((tool) => !this.#ask || ASK_TOOL_NAMES.includes(tool.name))
 			.map((tool) => ({
 				name: tool.name,
 				description: tool.description,
