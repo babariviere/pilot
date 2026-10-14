@@ -72,6 +72,186 @@ test("decision audiences and task pins select prompts and avoid duplicate detail
 	);
 });
 
+test("single-task get includes dependencies, chat, cached links, artifacts and bounded activity", async (t) => {
+	const f = await fixture(t);
+	t.mock.method(f.sessions, "refreshMissionPullRequests", () => {});
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const dependency = f.store.addTask(mission.id, { title: "Foundation", status: "done" });
+	const task = f.store.addTask(mission.id, {
+		title: "Implement",
+		body: "Acceptance criteria",
+		milestone: "Delivery",
+		dependsOn: [dependency.id],
+	});
+	const dependent = f.store.addTask(mission.id, { title: "Verify", dependsOn: [task.id] });
+	f.store.claimTask(mission.id, task.id, worker.id);
+	const url = "https://github.com/octo/repo/pull/42";
+	f.store.addResource(mission.id, { url, taskId: task.id, relationship: "reference" });
+	f.store.updatePullRequest({ number: 42, url, title: "Cached PR", state: "draft", checkedAt: Date.now() });
+	f.store.addResource(mission.id, { url: "https://example.com/spec", taskId: task.id });
+	f.store.addResource(mission.id, { url: "https://example.com/unrelated", taskId: dependent.id });
+	f.store.linkArtifact(mission.id, {
+		artifactId: "mock-layout",
+		sessionId: worker.id,
+		title: "Layout",
+		kind: "html",
+		revision: 2,
+		taskId: task.id,
+	});
+	for (let i = 0; i < 20; i++)
+		f.store.updateTask(mission.id, task.id, { title: `Implement ${i}` }, { sessionId: worker.id });
+	f.store.updateTask(mission.id, dependent.id, { title: "Unrelated activity" });
+	t.mock.method(f.store, "brief", () => assert.fail("targeted task must not read the brief"));
+	t.mock.method(f.store, "events", () => assert.fail("targeted task must not scan unfiltered activity"));
+	const read = async (id: string | number, action: "get" | "task" = "get") =>
+		(await f.service.call(lead.id, action, { id })) as {
+			id: string;
+			number: number;
+			body: string;
+			milestone: string;
+			dependsOn: number[];
+			dependents: number[];
+			assignee: { id: string; title: string; state: string } | null;
+			resources: { url: string; kind: string; state?: string; relationship: string }[];
+			artifacts: { artifactId: string; revision: number; kind: string }[];
+			recentActivity: { id: number; taskId: string; by: string }[];
+			activityCursor: number | null;
+		};
+	const full = await read(task.id);
+	assert.deepEqual(await read(`#${task.number}`), full);
+	assert.deepEqual(await read(task.number), full);
+	assert.deepEqual(await read(String(task.number), "task"), full);
+	assert.equal(full.id, task.id);
+	assert.equal(full.body, "Acceptance criteria");
+	assert.equal(full.milestone, "Delivery");
+	assert.deepEqual(full.dependsOn, [dependency.number]);
+	assert.deepEqual(full.dependents, [dependent.number]);
+	assert.deepEqual(full.assignee, { id: worker.id, title: worker.title, state: "idle" });
+	assert.equal(full.resources.length, 2);
+	assert.ok(
+		full.resources.some(
+			(ref) =>
+				ref.url === url && ref.kind === "github.pr" && ref.state === "draft" && ref.relationship === "reference",
+		),
+	);
+	assert.ok(full.resources.some((ref) => ref.kind === "url"));
+	assert.equal(full.artifacts[0]?.artifactId, "mock-layout");
+	assert.equal(full.artifacts[0]?.revision, 2);
+	assert.equal(full.artifacts[0]?.kind, "html");
+	assert.equal(full.recentActivity.length, 15);
+	assert.ok(full.recentActivity.every((event) => event.taskId === task.id && event.by === worker.id));
+	assert.equal(full.activityCursor, full.recentActivity.at(-1)?.id);
+	const older = (await f.service.call(lead.id, "activity", {
+		taskId: String(task.number),
+		cursor: full.activityCursor,
+	})) as { recentActivity: { id: number; taskId: string }[] };
+	assert.ok(older.recentActivity.every((event) => event.id < full.activityCursor! && event.taskId === task.id));
+	const empty = await read(dependency.id);
+	assert.equal(empty.body, "");
+	assert.equal(empty.assignee, null);
+	assert.deepEqual(empty.dependsOn, []);
+	assert.deepEqual(empty.dependents, [task.number]);
+	assert.equal(empty.activityCursor, null);
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other", tasks: [{ title: "Private" }] });
+	for (const id of ["999", f.store.tasks(foreign.id)[0]!.id, "", null])
+		await assert.rejects(f.service.call(lead.id, "get", { id }), /Unknown task|task id/);
+});
+
+test("activity filters precede limits and page stably through interleaved and new events", async (t) => {
+	const f = await fixture(t);
+	const worker = await f.spawn();
+	const outsider = await f.spawn();
+	const at = Date.parse("2026-10-14T12:00:00Z");
+	let now = at - 2000;
+	t.mock.method(Date, "now", () => now);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: worker.id,
+		draft: false,
+	});
+	const task = f.store.addTask(mission.id, { title: "Target" });
+	const other = f.store.addTask(mission.id, { title: "Other" });
+	const foreign = f.store.create({ projectId: f.project.id, title: "Elsewhere", tasks: [{ title: "Foreign" }] });
+	// All events share a timestamp, so only the event cursor gives lossless boundaries.
+	now = at;
+	const since = f.store.events(mission.id)[0]!.id;
+	for (let i = 0; i < 6; i++) {
+		f.store.updateTask(mission.id, task.id, { title: `Target ${i}` });
+		f.store.updateTask(mission.id, other.id, { title: `Noise ${i}` });
+		f.store.log(mission.id, { text: `Noise note ${i}` });
+		f.store.updateTask(foreign.id, f.store.tasks(foreign.id)[0]!.id, { title: `Foreign ${i}` });
+	}
+	type Page = {
+		recentActivity: { id: number; kind: string; taskId?: string; health?: string }[];
+		cursor: number | null;
+		recentUserNotes?: unknown[];
+	};
+	const read = async (args: Record<string, unknown> = {}) =>
+		(await f.service.call(worker.id, "activity", args)) as Page;
+	const filters = { taskId: `#${task.number}`, kind: "task", since, limit: 2 };
+	const first = await read(filters);
+	assert.equal(first.recentActivity.length, 2);
+	assert.equal(first.recentUserNotes, undefined);
+	assert.equal(first.cursor, first.recentActivity.at(-1)?.id);
+	f.store.updateTask(mission.id, task.id, { title: "Inserted after first page" });
+	const second = await read({ ...filters, cursor: first.cursor });
+	const last = await read({ ...filters, cursor: second.cursor });
+	assert.equal(last.cursor, null);
+	const ids = [...first.recentActivity, ...second.recentActivity, ...last.recentActivity].map((event) => event.id);
+	assert.equal(ids.length, 6);
+	assert.equal(new Set(ids).size, 6);
+	assert.deepEqual(
+		ids,
+		ids.toSorted((a, b) => b - a),
+	);
+	assert.ok(
+		[...first.recentActivity, ...second.recentActivity, ...last.recentActivity].every(
+			(event) => event.kind === "task" && event.taskId === task.id,
+		),
+	);
+	assert.deepEqual((await read({ taskId: task.id, since: "2026-10-14T12:00:00Z" })).recentActivity, []);
+	assert.equal((await read({ taskId: task.id, since: "2026-10-14T13:59:59+02:00" })).recentActivity.length, 7);
+	assert.deepEqual(
+		(await read({ taskId: task.id, since: first.recentActivity[0]!.id })).recentActivity.map((event) => event.kind),
+		["task"],
+	);
+	const note = f.store.log(mission.id, { text: "Health", health: "at_risk" });
+	assert.equal((await read({ kind: "update", limit: 1 })).recentActivity[0]?.health, "at_risk");
+	assert.equal((await read({ kind: "update", limit: 1 })).recentActivity[0]?.id, note.id);
+	assert.deepEqual(await read({ kind: "github" }), { recentActivity: [], cursor: null });
+	for (const args of [
+		{ limit: 0 },
+		{ limit: null },
+		{ limit: 101 },
+		{ limit: 1.5 },
+		{ limit: "2" },
+		{ cursor: 0 },
+		{ cursor: "1" },
+		{ since: "yesterday" },
+		{ since: "2026-10-14" },
+		{ since: -1 },
+		{ since: 1.5 },
+		{ since: null },
+		{ kind: "unknown" },
+	])
+		await assert.rejects(read(args), /limit|cursor|since|kind/);
+	await assert.rejects(read({ taskId: f.store.tasks(foreign.id)[0]!.id }), /Unknown task/);
+	await assert.rejects(f.service.call(outsider.id, "activity", {}), /not part of a mission/);
+	await assert.rejects(
+		f.service.call(worker.id, "log", { kind: "task", text: "Invalid log" }),
+		/kind must be update or handoff/,
+	);
+});
+
 test("compact get stays within estimated token budgets on a large fixture, with detail on demand", async (t) => {
 	const f = await fixture(t);
 	// No GitHub fetch or kernel wake-up is needed for agent reads.

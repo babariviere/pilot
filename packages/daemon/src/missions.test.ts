@@ -1257,6 +1257,86 @@ test("user notes survive reopening an existing database and use a bounded indexe
 	}
 });
 
+test("targeted activity stays indexed and bounded in a large persisted history", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-activity-query-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "Shared", tasks: [{ title: "Target" }] });
+		const task = missions.tasks(id)[0]!;
+		const other = missions.create({ projectId: "p", title: "Other" });
+		missions.close();
+		const db = new DatabaseSync(file);
+		try {
+			// Synthetic automatic activity, not real account data or provider calls.
+			db.prepare(`WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 10000)
+				INSERT INTO events (mission_id, kind, text, task_id, at)
+				SELECT ?, CASE WHEN n % 100 = 0 THEN 'task' ELSE 'update' END, 'Synthetic event ' || n,
+				CASE WHEN n % 100 = 0 THEN ? ELSE NULL END, n FROM seq`).run(id, task.id);
+			db.prepare(
+				"INSERT INTO events (mission_id, kind, text, task_id, at) VALUES (?, 'task', 'Foreign', ?, 9999)",
+			).run(other.id, task.id);
+			// Simulate upgrading an existing database without the new index.
+			db.exec("DROP INDEX events_by_mission_task");
+		} finally {
+			db.close();
+		}
+		missions = new MissionStore(file);
+		const all = missions.events(id, undefined, 20000);
+		const expected = all
+			.filter(
+				(event) =>
+					event.taskId === task.id &&
+					event.kind === "task" &&
+					event.at > 5000 &&
+					event.id > 6000 &&
+					event.id < 9000,
+			)
+			.slice(0, 15);
+		const query = {
+			taskId: task.id,
+			kind: "task" as const,
+			sinceAt: 5000,
+			sinceEventId: 6000,
+			before: 9000,
+			limit: 15,
+		};
+		assert.deepEqual(missions.activity(id, query), expected);
+		assert.equal(missions.activity(id, { taskId: task.id, kind: "update", limit: 15 }).length, 0);
+		assert.throws(() => missions.activity("missing", { limit: 15 }), /Unknown mission/);
+		const check = new DatabaseSync(file);
+		try {
+			const plan = check
+				.prepare(
+					"EXPLAIN QUERY PLAN SELECT * FROM events WHERE mission_id = ? AND task_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+				)
+				.all(id, task.id, 9000, 15);
+			assert.match(JSON.stringify(plan), /USING INDEX events_by_mission_task/);
+			assert.doesNotMatch(JSON.stringify(plan), /TEMP B-TREE|SCAN events/);
+		} finally {
+			check.close();
+		}
+		const measure = (read: () => unknown) => {
+			const start = performance.now();
+			for (let i = 0; i < 20; i++) read();
+			return (performance.now() - start).toFixed(2);
+		};
+		const scannedMs = measure(() =>
+			missions
+				.events(id, undefined, 20000)
+				.filter((event) => event.taskId === task.id)
+				.slice(0, 15),
+		);
+		const targetedMs = measure(() => missions.activity(id, { taskId: task.id, limit: 15 }));
+		t.diagnostic(
+			`10,000 events, 20 reads: list/filter ${scannedMs} ms; indexed task activity ${targetedMs} ms (timing is informational)`,
+		);
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("status updates, events paging and deletion detach members", () => {
 	const missions = store();
 	const { id } = missions.create({ projectId: "p", title: "M" });
