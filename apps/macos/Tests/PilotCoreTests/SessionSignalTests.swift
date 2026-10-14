@@ -40,8 +40,30 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     let groups = SidebarUrgency.groups(sessions) { $0.id == "unread" }
     #expect(groups.needsYou.map(\.id) == ["failed", "unread"])
     #expect(groups.working.map(\.id) == ["working", "working-2"])
-    #expect(groups.recent.map(\.id) == ["quiet", "ready"])
+    #expect(groups.readyToMerge.map(\.id) == ["ready"])
+    #expect(groups.recent.map(\.id) == ["quiet"])
     #expect(SidebarUrgency.groups([]) { _ in false }.isEmpty)
+}
+
+@Test func readyToMergeIsItsOwnGroupBelowNeedsYou() {
+    let sessions = [
+        session("ready", outcome: .done, pr: .open, readiness: .ready),
+        session("pending", outcome: .done, pr: .open, readiness: .pending),
+        session("draft", outcome: .done, pr: .draft, readiness: .ready),
+        session("merged", outcome: .done, pr: .merged, readiness: .ready),
+        session("ready-unread", outcome: .done, pr: .open, readiness: .ready),
+        session("ready-viewed", outcome: .done, pr: .open, readiness: .ready),
+        session("ready-working", state: "working", pr: .open, readiness: .ready),
+        session("ready-2", outcome: .done, pr: .open, readiness: .ready),
+    ]
+    let groups = SidebarUrgency.groups(sessions, unread: { $0.id == "ready-unread" },
+                                       awaitingReply: { $0.id == "ready-viewed" })
+    // Unread or unanswered results need the user first; live work stays under Working.
+    #expect(groups.needsYou.map(\.id) == ["ready-unread", "ready-viewed"])
+    #expect(groups.readyToMerge.map(\.id) == ["ready", "ready-2"])
+    #expect(groups.working.map(\.id) == ["ready-working"])
+    #expect(groups.recent.map(\.id) == ["pending", "draft", "merged"])
+    #expect(!SidebarUrgency.Groups(readyToMerge: [sessions[0]]).isEmpty)
 }
 
 @Test func urgencyGroupsPutQuestionsBetweenFailuresAndUnreadResults() {

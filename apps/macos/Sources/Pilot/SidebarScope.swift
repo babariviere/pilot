@@ -341,7 +341,7 @@ struct SidebarScopeList: View {
             SidebarScopeRow(title: "Search chats", icon: "magnifyingglass", shortcut: "⌘F", action: search)
             if scope == nil {
                 SidebarScopeRow(title: "Group chats by urgency", icon: "list.bullet.indent", checked: groupsByUrgency,
-                                help: "List Needs you, Working and Recent instead of projects and folders",
+                                help: "List Needs you, Ready to merge, Working and Recent instead of projects and folders",
                                 action: toggleGrouping)
             }
             HairlineDivider().padding(.vertical, 4)
@@ -415,7 +415,9 @@ struct SidebarScopeCommands: Commands {
             Divider()
             Button("Search Chats") { model.showSidebarSearch() }
                 .keyboardShortcut("f", modifiers: .command)
+            // A focused project always groups its chats by urgency; the choice applies to All projects.
             Toggle("Group Chats by Urgency", isOn: $model.sidebarGroupsByUrgency)
+                .disabled(model.focusedProject != nil)
             Divider()
             Toggle("All Projects", isOn: binding(nil))
                 .keyboardShortcut("0", modifiers: .command)
