@@ -8,19 +8,23 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	fauxAssistantMessage,
 	fauxProvider,
+	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
 	Type,
 } from "@earendil-works/pi-ai";
 import {
 	createEventBus,
+	createCodemodeExtension,
 	type ExtensionContext,
 	type ExtensionFactory,
 	ModelRuntime,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import type { SessionCompletion } from "@pilot/protocol";
 import { userText } from "./attempts.ts";
+import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
@@ -169,16 +173,191 @@ async function fixture(
 		model: first,
 	};
 	const changes: KernelUsage[] = [];
+	const completed = deferred<SessionCompletion>();
 	const open = async (model = first) => {
 		const session = await KernelSession.open(
 			{ ...spec, model },
-			{ onWorking: () => {}, onUsageChanged: (usage) => changes.push(usage) },
+			{
+				onWorking: (_working, completion) => {
+					if (completion) completed.resolve(completion);
+				},
+				onUsageChanged: (usage) => changes.push(usage),
+			},
 		);
 		sessions.push(session);
 		return session;
 	};
-	return { open, a, b, bus, changes, adapters, spec };
+	return { open, a, b, bus, changes, adapters, spec, completed: completed.promise };
 }
+
+test("fetch causes survive provider flattening, completion persistence and cold reopen", async (t) => {
+	const f = await fixture(t);
+	const network = Object.assign(new Error("connect failed token=private-cause"), {
+		code: "ECONNRESET",
+		hostname: "api.example.com",
+		syscall: "connect",
+	});
+	const error = new TypeError("fetch failed", { cause: new Error("socket closed", { cause: network }) });
+	t.mock.method(globalThis, "fetch", async () => {
+		throw error;
+	});
+	f.a.setResponses(
+		Array.from({ length: 10 }, () => async (_messages, options) => {
+			// Like the real SDK provider: catch the raw error and publish just .message.
+			try {
+				await options!.fetch!("https://api.example.com");
+			} catch (caught) {
+				return fauxAssistantMessage("", { stopReason: "error", errorMessage: (caught as Error).message });
+			}
+			throw new Error("expected offline fetch failure");
+		}),
+	);
+	const session = await f.open();
+	await session.submit("fail-fetch", "Request a response", "followUp");
+	await session.conversation.waitForIdle(context);
+	await f.completed;
+	await session.close();
+	const cold = await readSessionSnapshot(f.spec.storageDir, f.spec.cwd);
+	assert.equal(cold.completion?.outcome, "failed");
+	const reason = cold.completion!.outcomeReason!;
+	assert.match(reason, /Model request \(pilot-model-a\/one\): Retryable network error/);
+	assert.match(reason, /ECONNRESET; hostname=api.example.com; syscall=connect/);
+	assert.doesNotMatch(reason, /private-cause/);
+	assert.ok(reason.length <= MAX_FAILURE_CHARS);
+	const message = cold.events
+		.flatMap((event) => (event.type === "snapshot" ? event.entries : []))
+		.flatMap((entry) => entry.model ?? [])
+		.find((message) => message.role === "assistant");
+	assert.ok(message?.role === "assistant");
+	assert.equal(message.errorMessage, reason, "the banner and persisted status have the same diagnostic");
+});
+
+test("recovered fetch retries and parallel requests do not attach stale network causes", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const adapter = f.adapters[0]!;
+	f.a.setResponses([
+		async (_messages, options) => {
+			await assert.rejects(options!.fetch!("https://example.com"));
+			await options!.fetch!("https://example.com");
+			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "Invalid request" });
+		},
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: "Authentication failed" }),
+	]);
+	let calls = 0;
+	const fetch: typeof globalThis.fetch = async () => {
+		if (++calls === 1) throw Object.assign(new Error("fetch failed"), { code: "ECONNRESET" });
+		return new Response("ok");
+	};
+	const results = await Promise.all([
+		adapter.models.completeSimple(f.a.getModel(), { messages: [] }, { fetch }),
+		adapter.models.completeSimple(f.a.getModel(), { messages: [] }),
+	]);
+	assert.match(results[0]!.errorMessage!, /Invalid request/);
+	assert.match(results[1]!.errorMessage!, /Authentication failed/);
+	for (const result of results) assert.doesNotMatch(result.errorMessage!, /ECONNRESET|Retryable/);
+	await session.close();
+});
+
+test("the real OpenAI SDK retains fetch causes even when it emits only Connection error", async (t) => {
+	const f = await fixture(t);
+	await f.open();
+	const adapter = f.adapters[0]!;
+	const model = adapter.models.getModel("openai", "gpt-4.1-mini");
+	assert.ok(model);
+	let calls = 0;
+	const result = await adapter.models.completeSimple(
+		model,
+		{ messages: [] },
+		{
+			apiKey: "offline-test-key",
+			maxRetries: 0,
+			fetch: async () => {
+				calls++;
+				throw new TypeError("fetch failed", {
+					cause: Object.assign(new Error("connect failed"), {
+						code: "ECONNRESET",
+						hostname: "api.example.com",
+						syscall: "connect",
+					}),
+				});
+			},
+		},
+	);
+	assert.ok(calls > 0);
+	assert.equal(result.stopReason, "error");
+	assert.match(result.errorMessage!, /Model request \(openai\/gpt-4.1-mini\).*ECONNRESET.*api.example.com.*connect/);
+});
+
+test("bash nonzero exits retain command, output and their structured contract without failing the chat", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	f.adapters[0]!.setToolActive("bash", true);
+	f.a.setResponses([
+		fauxAssistantMessage(fauxToolCall("bash", { command: "printf diagnostic; exit 7" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage("Recovered"),
+	]);
+	await session.submit("bash-failure", "Run a failing command", "followUp");
+	await session.conversation.waitForIdle(context);
+	await f.completed;
+	const messages = (await session.conversation.context(context)).messages;
+	const result = messages.find((message) => message.role === "toolResult" && message.toolName === "bash");
+	assert.ok(result?.role === "toolResult" && result.isError);
+	assert.match(JSON.stringify(result.content), /Tool bash \(printf diagnostic; exit 7\)/);
+	assert.match(JSON.stringify(result.content), /diagnostic/);
+	assert.match(JSON.stringify(result.details), /"exit_code":7/);
+	assert.equal(session.completion?.outcome, "done");
+});
+
+test("direct and nested tool exceptions keep step and command without turning a recovered run into failure", async (t) => {
+	const f = await fixture(t, [
+		createCodemodeExtension({ mode: "on" }),
+		(pi) => {
+			pi.registerTool({
+				name: "broken",
+				label: "Broken",
+				description: "Offline failing tool",
+				parameters: Type.Object({ command: Type.String() }),
+				execute: async () => {
+					throw new Error("operation failed", {
+						cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" }),
+					});
+				},
+			});
+		},
+	]);
+	const session = await f.open();
+	f.adapters[0]!.setToolActive("codemode", true);
+	f.a.setResponses([
+		fauxAssistantMessage(fauxToolCall("broken", { command: "push --token secret-value" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage(
+			fauxToolCall("codemode", { code: 'await tools.broken({command: "push --password another-secret"})' }),
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Recovered"),
+	]);
+	await session.submit("tools", "Try both failing tools", "followUp");
+	await session.conversation.waitForIdle(context);
+	await f.completed;
+	const entries = (await session.conversation.entries({}, 100, undefined, context)).items;
+	const direct = entries
+		.flatMap((entry) => entry.model ?? [])
+		.find((message) => message.role === "toolResult" && message.toolName === "broken");
+	assert.ok(direct?.role === "toolResult" && direct.isError);
+	const text = JSON.stringify(direct);
+	assert.match(text, /Tool broken \(push --token/);
+	assert.match(text, /ECONNRESET/);
+	assert.doesNotMatch(text, /secret-value/);
+	const nested = entries
+		.flatMap((entry) => entry.model ?? [])
+		.find((message) => message.role === "toolResult" && message.toolName === "codemode");
+	assert.ok(nested);
+	assert.match(JSON.stringify(nested), /Tool broken/);
+	assert.ok(nested.role === "toolResult");
+	assert.doesNotMatch(JSON.stringify(nested.content), /another-secret/);
+	await session.close();
+	assert.equal((await readSessionSnapshot(f.spec.storageDir, f.spec.cwd)).completion?.outcome, "done");
+});
 
 test("daemon activity is durable, idempotent and never starts a model turn", async (t) => {
 	const f = await fixture(t);
@@ -819,7 +998,7 @@ test("retry, edit and restore continue from earlier points in attempts that surv
 		"user:first",
 		"pi.assistant:Answer one",
 		"user:second",
-		"pi.assistant:Invalid request",
+		`pi.assistant:Model request (${first}): Invalid request`,
 	]);
 	// The user switches model to get past the failure; the retry keeps that choice.
 	await session.changeModel(second);

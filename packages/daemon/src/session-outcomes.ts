@@ -1,4 +1,5 @@
 import type { SessionCompletion, SessionOutcome } from "@pilot/protocol";
+import { safeFailureText } from "@pilot/kernel";
 
 export interface OutcomeMeta {
 	/** Last known activity, so interrupted work can resume after a restart. */
@@ -43,7 +44,7 @@ export function applyActivity(meta: OutcomeMeta, working: boolean, completion?: 
 		meta.outcomeAt = Math.max(completion.outcomeAt, last + 1);
 		meta.lastOutcomeAt = meta.outcomeAt;
 		meta.lastCompletionAt = completion.outcomeAt;
-		if (completion.outcomeReason !== undefined) meta.outcomeReason = completion.outcomeReason;
+		if (completion.outcomeReason !== undefined) meta.outcomeReason = safeFailureText(completion.outcomeReason);
 		else delete meta.outcomeReason;
 		changed = true;
 	}
@@ -52,6 +53,7 @@ export function applyActivity(meta: OutcomeMeta, working: boolean, completion?: 
 
 /** Daemon-generated failures get a version newer than any completion we have observed. */
 export function applyFailure(meta: OutcomeMeta, reason: string, now: number): boolean {
+	reason = safeFailureText(reason);
 	if (meta.outcome === "failed" && meta.outcomeReason === reason && !meta.working) return false;
 	meta.lastCompletionAt ??= meta.outcomeAt ?? -1;
 	meta.working = false;

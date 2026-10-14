@@ -204,7 +204,7 @@ struct ChatView: View {
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
-                    if let error = session.error, transcript.error == nil {
+                    if let error = transcript.failureBannerText(for: session) {
                         ErrorRow(text: error)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)

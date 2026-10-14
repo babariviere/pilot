@@ -64,6 +64,7 @@ import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.
 import { loadAskExtensionTools } from "./ask-extension-tools.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
+import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
@@ -265,10 +266,10 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							() =>
+							(observe) =>
 								session.extensionRunner
 									.getModelRegistry()
-									.streamSimple(model, context, this.requestOptions(options)),
+									.streamSimple(model, context, this.requestOptions(options, observe, model.api)),
 							model,
 							options?.signal,
 						);
@@ -281,11 +282,15 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							() =>
+							(observe) =>
 								// Instrument shared fields; the spread preserves provider-specific options unchanged.
 								session.extensionRunner
 									.getModelRegistry()
-									.stream(model, context, this.requestOptions(options as ModelsSimpleStreamOptions)),
+									.stream(
+										model,
+										context,
+										this.requestOptions(options as ModelsSimpleStreamOptions, observe, model.api),
+									),
 							model,
 							options?.signal,
 						);
@@ -748,6 +753,36 @@ export class NativeAdapter {
 		// Reapply public presentation hooks only to discover hidden declarations. SDK already
 		// applies the descriptions to its wrapped AgentTools; callable native tools remain intact.
 		const infos = this.session.getAllTools();
+		// Definitions are shared by direct and nested (codemode) wrappers. Instrument once,
+		// before either runtime flattens exceptions. Do not change tool success or replay semantics.
+		for (const info of infos) {
+			const definition = this.session.getToolDefinition(info.name);
+			if (!definition || this.#diagnosticTools.has(definition)) continue;
+			this.#diagnosticTools.add(definition);
+			const execute = definition.execute;
+			definition.execute = async (...args) => {
+				try {
+					const result = await execute.apply(definition, args);
+					if (!result.isError) return result;
+					return {
+						...result,
+						// Keep the tool's output and structured contract (notably bash exit_code/output).
+						// Only the added diagnostic is small; do not discard useful failing-command output.
+						content: [
+							{ type: "text", text: safeFailureText(toolFailureStep(definition.name, args[1]), 220) },
+							...result.content.map((block) =>
+								block.type === "text"
+									? { ...block, text: safeFailureText(block.text, block.text.length) }
+									: block,
+							),
+						],
+					};
+				} catch (error) {
+					if (args[2]?.aborted) throw error;
+					throw new Error(formatFailure(error, toolFailureStep(definition.name, args[1])));
+				}
+			};
+		}
 		const registered = infos.flatMap((info) => {
 			const definition = this.session.getToolDefinition(info.name);
 			return definition
@@ -885,20 +920,40 @@ export class NativeAdapter {
 		return this.extension;
 	}
 
+	#diagnosticTools = new WeakSet<ToolDefinition>();
+
 	private requestStream(
-		dispatch: () => AssistantMessageEventStream,
+		dispatch: (observe: (error: unknown) => void) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
 	): AssistantMessageEventStream {
 		const stream = createAssistantMessageEventStream();
+		// Request-local, so recovered retries and parallel model calls cannot leak an old cause.
+		let fetchError: unknown;
+		const step = `Model request (${model.provider}/${model.id})`;
+		const diagnose = (message: AssistantMessage) => {
+			if (message.stopReason === "error" && !message.errorMessage?.startsWith(`${step}: `)) {
+				const text = message.errorMessage ?? "Unknown model error";
+				message.errorMessage =
+					fetchError === undefined
+						? safeFailureText(`${step}: ${text}`)
+						: formatFailure(new Error(text, { cause: fetchError }), step);
+			}
+			return message;
+		};
 		void (async () => {
 			try {
 				if (this.#harness)
 					await this.sync(signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT);
 				this.assertOpen();
-				const source = dispatch();
-				for await (const event of source) stream.push(event);
-				stream.end(await source.result());
+				const source = dispatch((error) => {
+					fetchError = error;
+				});
+				for await (const event of source) {
+					if (event.type === "error") diagnose(event.error);
+					stream.push(event);
+				}
+				stream.end(diagnose(await source.result()));
 			} catch (error) {
 				const message: AssistantMessage = {
 					role: "assistant",
@@ -908,7 +963,7 @@ export class NativeAdapter {
 					model: model.id,
 					stopReason: signal?.aborted ? "aborted" : "error",
 					timestamp: Date.now(),
-					errorMessage: error instanceof Error ? error.message : String(error),
+					errorMessage: formatFailure(error, step),
 					usage: {
 						input: 0,
 						output: 0,
@@ -925,12 +980,20 @@ export class NativeAdapter {
 		return stream;
 	}
 
-	private requestOptions(options: ModelsSimpleStreamOptions = {}): ModelsSimpleStreamOptions {
+	private requestOptions(
+		options: ModelsSimpleStreamOptions = {},
+		observe: (error: unknown) => void,
+		api: string,
+	): ModelsSimpleStreamOptions {
 		const runner = this.session.extensionRunner;
 		const settings = this.session.settingsManager;
 		const retry = settings.getProviderRetrySettings();
 		return {
 			...options,
+			// Google adapters explicitly reject custom fetch. Virtual routing may pick one of them.
+			...(!["google-generative-ai", "google-vertex", "pi-virtual"].includes(api)
+				? { fetch: diagnosticFetch(options.fetch ?? globalThis.fetch, observe) }
+				: {}),
 			transport: options.transport ?? this.session.agent.transport,
 			thinkingBudgets: options.thinkingBudgets ?? this.session.agent.thinkingBudgets,
 			timeoutMs: options.timeoutMs ?? retry.timeoutMs ?? (settings.getHttpIdleTimeoutMs() || 2147483647),

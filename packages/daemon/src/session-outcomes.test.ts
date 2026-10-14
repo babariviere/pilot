@@ -1,7 +1,33 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionCompletion, SessionOutcome } from "@pilot/protocol";
+import { formatFailure } from "@pilot/kernel";
 import { applyActivity, applyFailure, normalizeLegacyOutcome, type OutcomeMeta } from "./session-outcomes.ts";
+
+test("diagnostic completions persist redacted causes, survive JSON reload and clear on new work", () => {
+	const reason = formatFailure(
+		new TypeError("fetch failed", {
+			cause: Object.assign(new Error("connect token=hidden"), {
+				code: "ECONNRESET",
+				host: "api.example.com",
+				syscall: "connect",
+			}),
+		}),
+		"Model request",
+	);
+	const meta: OutcomeMeta = {};
+	applyActivity(meta, false, { outcome: "failed", outcomeAt: 42, outcomeReason: reason });
+	const reopened: OutcomeMeta = JSON.parse(JSON.stringify(meta));
+	assert.equal(reopened.outcomeReason, reason);
+	assert.match(reopened.outcomeReason!, /Retryable network error.*ECONNRESET.*host=api.example.com.*syscall=connect/);
+	assert.doesNotMatch(reopened.outcomeReason!, /hidden/);
+	assert.equal(applyActivity(reopened, false, { outcome: "failed", outcomeAt: 42, outcomeReason: reason }), false);
+	applyActivity(reopened, true);
+	assert.equal(reopened.outcomeReason, undefined);
+	applyFailure(reopened, `password=hidden ${"x".repeat(2000)}`, 43);
+	assert.doesNotMatch(reopened.outcomeReason!, /hidden/);
+	assert.ok(String(reopened.outcomeReason).length <= 1600);
+});
 
 test("legacy persisted outcomes normalize without changing versions or unrelated metadata", () => {
 	const legacy = {

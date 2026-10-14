@@ -103,6 +103,13 @@ completion version without an obsolete attention reason in current daemon/kernel
 native client's compatibility decoder maps older-daemon outcomes to `done` while retaining any legacy
 reason as notification context.
 
+Failures retain a bounded, redacted diagnostic in the existing completion reason and error fields:
+the failing model request, tool name or worker command and up to four available causes (network code,
+host and syscall). Retryable network failures are labeled; existing retry budgets and tool replay rules remain in force.
+Provider fetch causes are captured before SDK error normalization; already-flattened errors from transports
+that do not use injectable fetch can only retain their supplied text. Tool and bash errors remain recoverable
+tool results, not new fatal chat outcomes. Status and the app's existing error banner show the same diagnostic.
+
 ## 5. Shared machinery
 
 ### 5.1 Human gate (`ask_human` tool)
