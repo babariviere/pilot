@@ -299,37 +299,37 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
         if waitingToInstall {
             // Sparkle disconnecting from a prepared installer does not cancel installation on
             // quit. Keep the marker and safety gate, and allow retrying from Settings.
-            status += " Retry the update in Settings. Quitting still requires an idle daemon shutdown."
+            status += " Retry the update in Settings. Quitting still requires a safe daemon pause and shutdown."
         }
         installTask?.cancel()
     }
 
     func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem, immediateInstallationBlock handler: @escaping () -> Void) -> Bool {
-        installWhenIdle(handler)
+        installAfterPausing(handler)
         return true
     }
 
     func updater(_ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem, untilInvokingBlock handler: @escaping () -> Void) -> Bool {
         if daemonIsStoppedForUpdate { return false }
-        installWhenIdle(handler)
+        installAfterPausing(handler)
         return true
     }
 
-    private func installWhenIdle(_ handler: @escaping () -> Void) {
+    private func installAfterPausing(_ handler: @escaping () -> Void) {
         if daemonIsStoppedForUpdate { handler(); return }
         guard installTask == nil else { return }
         waitingToInstall = true
-        status = "Update downloaded. Waiting for agents to finish. Terminal shells will close on installation."
+        status = "Update downloaded. Pausing agents after active tool calls finish. Terminal shells will close on installation."
         installTask = Task {
             // Keep this task's slot until an uncancelled shutdown verification finishes. No
             // retry may replace it and no older task can clear a newer continuation's slot.
             defer { installTask = nil }
             while !Task.isCancelled {
-                var retryDelay = 15
+                var retryDelay = 1
                 do {
                     let daemon = AppModel.shared.daemon
                     // Check REST, not the possibly stale WebSocket list. Fail closed if unreachable.
-                    if try await daemon.stopIfIdleForUpdate() {
+                    if try await daemon.pauseAndStopForUpdate() {
                         stoppedDaemonGeneration = daemon.lifecycleGeneration
                         if Task.isCancelled {
                             // A prepared helper can still install on quit after an abort. Do not
@@ -358,7 +358,7 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
         guard waitingToInstall && !daemonIsStoppedForUpdate else { return false }
         // Ordinary quit from the manual Ready to Install dialog also needs a safe daemon stop.
         // When an automatic/manual install handler already exists it remains responsible instead.
-        if installTask == nil { installWhenIdle { NSApp.terminate(nil) } }
+        if installTask == nil { installAfterPausing { NSApp.terminate(nil) } }
         return true
     }
 
@@ -393,7 +393,7 @@ struct UpdateSettings: View {
             }
             Toggle(isOn: $updater.automaticChecks) {
                 Text("Check automatically every hour")
-                Text("Updates install when agents are idle and restart Pilot and pilotd. Terminal shells close. An update waiting to install may delay quitting Pilot until agents finish.")
+                Text("Updates wait for active tool calls, pause agents, then restart Pilot and pilotd. Unfinished chats resume automatically. Terminal shells close.")
             }
             .disabled(!updater.configured)
         }

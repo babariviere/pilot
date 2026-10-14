@@ -279,6 +279,8 @@ interface SessionMeta extends OutcomeMeta {
 	thinking?: string;
 	/** Cleared only after initialization and durable input admission. */
 	initializing?: boolean;
+	/** Reopen even an idle parent after an update, so its pending child work recovers too. */
+	updatePaused?: boolean;
 	/** Durable clone recipe, including the selected plain origin branch across restarts. */
 	preparing?: { source: string; baseBranch?: string };
 	pending?: PendingCommand[];
@@ -752,6 +754,8 @@ export class SessionManager {
 	private readonly titleTasks = new Set<Promise<void>>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
+	private updatePauseTimer?: ReturnType<typeof setTimeout>;
+	private readonly updatePausing = new Map<SessionWorker, { id: string; ready: boolean; error?: string }>();
 	/** Admissions waiting for acknowledgement must not race archiving. */
 	private readonly sending = new Map<string, number>();
 	/**
@@ -957,7 +961,7 @@ export class SessionManager {
 			if (
 				meta.archivedAt === undefined &&
 				!meta.failure &&
-				(meta.initializing || meta.pending?.length || meta.working || meta.sleepPaused)
+				(meta.initializing || meta.pending?.length || meta.working || meta.sleepPaused || meta.updatePaused)
 			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
@@ -2357,6 +2361,60 @@ export class SessionManager {
 		return { ready: this.updateGate.prepare(busy) };
 	}
 
+	/** Lease-backed tool drain. Whole runs and durable inboxes may stay unfinished. */
+	pauseForUpdate(): UpdatePreparation {
+		const drained = this.updateGate.pause();
+		clearTimeout(this.updatePauseTimer);
+		this.updatePauseTimer = setTimeout(() => this.resumeAfterUpdate(), 30_000);
+		this.updatePauseTimer.unref();
+		const pending = { ready: false, processId: process.pid };
+		if (
+			this.closing ||
+			!drained ||
+			this.starting.size ||
+			this.preparations.size ||
+			this.parking.size ||
+			this.sleepTransition ||
+			this.sleepResuming
+		)
+			return pending;
+		for (const [sessionId, worker] of this.workers) {
+			if (this.updatePausing.has(worker)) continue;
+			const id = randomUUID();
+			const pause = { id, ready: false, error: undefined as string | undefined };
+			this.updatePausing.set(worker, pause);
+			const meta = this.require(sessionId);
+			meta.updatePaused = true;
+			void this.save(meta).catch((error) => {
+				pause.error = String(error);
+			});
+			worker.send({ type: "update.pause", id });
+		}
+		for (const worker of this.workers.values()) {
+			const pause = this.updatePausing.get(worker)!;
+			if (pause.error) throw new ServiceUnavailable(`Could not pause agents for update: ${pause.error}`);
+			if (!pause.ready) return pending;
+		}
+		return { ready: this.saving.size === 0, processId: process.pid };
+	}
+
+	private resumeAfterUpdate(): void {
+		clearTimeout(this.updatePauseTimer);
+		if (!this.sleepPause)
+			for (const worker of this.workers.values())
+				if (this.updatePausing.has(worker)) worker.send({ type: "update.resume" });
+		this.updatePausing.clear();
+		this.updateGate.release();
+		if (this.sleepPause) return;
+		for (const meta of this.metas.values()) {
+			if (!meta.updatePaused) continue;
+			if (this.workers.has(meta.id)) {
+				delete meta.updatePaused;
+				void this.save(meta).catch((error) => console.warn("pilotd: could not clear update pause", error));
+			} else if (!this.closing && !meta.failure && meta.archivedAt === undefined) void this.start(meta.id);
+		}
+	}
+
 	private async spawnAdmitted(request: SpawnRequest, coordinator: boolean): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
@@ -3546,10 +3604,20 @@ export class SessionManager {
 			this.sleepPause = undefined;
 			for (const meta of this.metas.values()) {
 				if (revision !== this.sleepRevision || this.closing) return;
-				if (!(meta.sleepPaused || meta.working || meta.initializing || meta.pending?.length)) continue;
+				if (!(meta.sleepPaused || meta.updatePaused || meta.working || meta.initializing || meta.pending?.length))
+					continue;
 				if (meta.archivedAt === undefined && !meta.failure) {
-					// Keep the per-chat marker until its new kernel is ready. A second sleep cannot lose parked work.
-					void this.start(meta.id, true).catch((error: unknown) => console.warn(`pilotd: sleep resume: ${error}`));
+					if (this.updateGate.paused) {
+						// Wake must not admit fresh tools into a leased update window. Expiry or
+						// the replacement daemon will reopen this work after the update instead.
+						meta.updatePaused = true;
+						await this.save(meta);
+					} else {
+						// Keep the per-chat marker until its new kernel is ready. A second sleep cannot lose parked work.
+						void this.start(meta.id, true).catch((error: unknown) =>
+							console.warn(`pilotd: sleep resume: ${error}`),
+						);
+					}
 				} else {
 					delete meta.sleepPaused;
 					await this.save(meta);
@@ -3575,6 +3643,7 @@ export class SessionManager {
 
 	async shutdown(): Promise<void> {
 		this.closing = true;
+		clearTimeout(this.updatePauseTimer);
 		clearTimeout(this.archiveTimer);
 		clearTimeout(this.parkTimer);
 		this.pool?.close();
@@ -3689,6 +3758,10 @@ export class SessionManager {
 				await worker.ready;
 				if (this.closing || this.sleepPause) return;
 				delete meta.sleepPaused;
+				if (meta.updatePaused) {
+					delete meta.updatePaused;
+					await this.save(meta);
+				}
 				while (!this.closing && !this.sleepPause && meta.prActivities?.length) {
 					const activity = meta.prActivities[0]!;
 					await worker.request(activity);
@@ -3894,6 +3967,14 @@ export class SessionManager {
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
 		if (this.parked.has(worker)) return;
+		if (packet.type === "update.paused") {
+			const pause = this.updatePausing.get(worker);
+			if (pause?.id === packet.id) {
+				pause.ready = !packet.error;
+				if (packet.error) pause.error = packet.error;
+			}
+			return;
+		}
 		if (
 			packet.type === "accepted" &&
 			packet.delivery &&

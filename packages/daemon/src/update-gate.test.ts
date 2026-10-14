@@ -45,3 +45,14 @@ test("successful preparation retries renew the lease", () => {
 	now = 50_000;
 	gate.begin()();
 });
+
+test("tool-drain preparation freezes new admissions before earlier work settles and can thaw", () => {
+	const gate = new UpdateGate();
+	const finish = gate.begin();
+	assert.equal(gate.pause(), false);
+	assert.throws(() => gate.begin(), ServiceUnavailable);
+	finish();
+	assert.equal(gate.pause(), true);
+	gate.release();
+	gate.begin()();
+});

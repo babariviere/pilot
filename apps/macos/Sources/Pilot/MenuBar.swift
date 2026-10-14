@@ -44,7 +44,7 @@ struct MenuBarContent: View {
             .disabled(menu.snapshot.lifecycleBusy)
         Button("Open pilotd Log") { NSWorkspace.shared.open(model.daemon.logURL) }
         Divider()
-        Button(menu.snapshot.waitingToInstall ? "Quit Pilot (update waits for idle)" : "Quit Pilot (agents keep running)") { NSApp.terminate(nil) }
+        Button(menu.snapshot.waitingToInstall ? "Quit Pilot (pause agents and update)" : "Quit Pilot (agents keep running)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 }

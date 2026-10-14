@@ -72,7 +72,7 @@ export class SubagentBridge {
 	#offs: Array<() => void> = [];
 	#current: KernelSubagent[] = [];
 	#seen = false;
-	readonly #pending = new Map<string, { resolve(): void; reject(error: Error): void; timer: NodeJS.Timeout }>();
+	readonly #pending = new Map<string, { resolve(): void; reject(error: Error): void; timer?: NodeJS.Timeout }>();
 	readonly #onChange?: (subagents: KernelSubagent[]) => void;
 
 	constructor(onChange?: (subagents: KernelSubagent[]) => void) {
@@ -107,6 +107,18 @@ export class SubagentBridge {
 	/** Ask the extension for a fresh snapshot, for example once its session has started. */
 	refresh(): void {
 		this.#events?.emit(SUBAGENTS_REQUEST_SNAPSHOT_EVENT, undefined);
+	}
+
+	/** Host-only lifecycle, deliberately without the ordinary command deadline. */
+	lifecycle(action: "quiesce" | "resumeTools"): Promise<void> {
+		if (!this.#seen) return Promise.resolve();
+		const events = this.#events;
+		if (!events) return Promise.reject(new Error("Subagents are unavailable"));
+		const requestId = randomUUID();
+		return new Promise((resolve, reject) => {
+			this.#pending.set(requestId, { resolve, reject });
+			events.emit(SUBAGENTS_COMMAND_EVENT, { requestId, action });
+		});
 	}
 
 	command(command: SubagentCommand): Promise<void> {

@@ -127,10 +127,14 @@ it does not sign out of `gh` or disable automatic checks.
   selected release's API asset and disables external release notes.
 - Sparkle validates the archive against the public signing key **before extraction**. CI also verifies
   the archive signature against the public key actually embedded in the app before publishing.
-- A downloaded update waits for agents and queued work to finish. The daemon grants a short quiescence
-  lease that pauses new admissions, then the app unloads the launch agent, installs and relaunches.
-- **Terminal shells close on installation.** Durable sessions and history remain. A waiting update can
-  delay quitting Pilot until agents finish; stopping an agent manually is still your choice.
+- A downloaded update freezes new admissions and pauses agents, including subagents, after active tool
+  calls finish and their results are saved. Chats and queued work do not need to finish. The app verifies
+  the paused daemon process, unloads its launch agent, installs both app and runtime, and relaunches.
+  Unfinished work resumes from durable state, without replaying completed tool effects.
+- Preparation uses a renewable 30-second lease. If installation is abandoned or preparation fails,
+  the lease expires and agents resume rather than remaining frozen.
+- **Terminal shells close on installation.** Background subprocesses close too. Durable sessions and history remain. A waiting
+  update can delay quitting Pilot until active tool calls finish, not until chats finish.
 - A failed download or invalid signature does not replace the installed app. A missing/unreachable or
   older daemon cannot grant the lease, so installation waits and Settings shows the problem.
 - If an error happens after installer preparation, Pilot conservatively keeps the quit safety gate,

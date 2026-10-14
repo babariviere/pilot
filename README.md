@@ -61,6 +61,8 @@ unzip it and move `Pilot.app` to Applications.
 These personal builds are ad-hoc signed, not notarized. If macOS blocks the first launch, verify the
 release source before using **System Settings → Privacy & Security → Open Anyway**.
 [Release and update setup](apps/macos/UPDATES.md) explains signing, packaging and automatic updates.
+Updates pause agents after active tool calls finish, update the app and daemon, then resume unfinished
+chats and subagents automatically. They do not wait for entire conversations to finish.
 
 ### Start your first chat
 

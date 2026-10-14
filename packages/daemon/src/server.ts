@@ -391,6 +391,8 @@ export function createDaemonServer(
 			}
 			throw new HttpError(404, "Unknown memory operation");
 		}
+		if (parts[1] === "update" && parts[2] === "pause" && parts.length === 3 && req.method === "POST")
+			return json(res, 200, sessions.pauseForUpdate());
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {

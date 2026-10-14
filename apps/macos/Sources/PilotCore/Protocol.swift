@@ -1,7 +1,8 @@
 import Foundation
 
-/// POST /api/update/prepare: a short quiescence lease, only granted when agents are idle.
+/// Update preparation. The pause endpoint drains tools and identifies its daemon process.
 public struct UpdatePreparation: Codable, Sendable {
+    public var processId: Int32?
     public let ready: Bool
 }
 
