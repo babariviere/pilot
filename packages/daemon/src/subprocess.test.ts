@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer, type Socket } from "node:net";
 import { test } from "node:test";
 import { execFileOffThread, ProcessFailed, SubprocessPool } from "./subprocess.ts";
 
@@ -123,15 +124,44 @@ test("timeouts and aborts stop the child, including its process group", async (t
 test("bounds threads, runs concurrently, and reclaims idle threads", async (t) => {
 	const pool = new SubprocessPool({ maxThreads: 2, idleMs: 1_000 });
 	t.after(() => pool.close());
-	const started = Date.now();
-	const results = await Promise.all(
-		Array.from({ length: 6 }, () => pool.run("sleep", ["0.3"], { maxBytes: 1, overflow: "fail" })),
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const sockets = new Set<Socket>();
+	let allConnected!: () => void;
+	const connected = new Promise<void>((resolve) => {
+		allConnected = resolve;
+	});
+	const server = createServer((socket) => {
+		sockets.add(socket);
+		if (sockets.size === 6) allConnected();
+	});
+	t.after(async () => {
+		for (const socket of sockets) socket.destroy();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	assert.ok(address && typeof address !== "string");
+	const results = Promise.all(
+		Array.from({ length: 6 }, () =>
+			pool.run(process.execPath, ["-e", `require("node:net").connect(${address.port}, "127.0.0.1").resume()`], {
+				maxBytes: 1,
+				overflow: "fail",
+			}),
+		),
 	);
-	assert.ok(results.every((result) => result.code === 0));
+	// Teardown can reject the pool before the connection barrier on a test failure.
+	void results.catch(() => undefined);
+	// None can exit until all six have started, including children sharing a worker thread.
+	await connected;
+	assert.equal(sockets.size, 6);
 	assert.equal(pool.size, 2);
-	// Children run concurrently, even when several share a thread.
-	assert.ok(Date.now() - started < 1_500);
-	await new Promise((resolve) => setTimeout(resolve, 1_500));
+	t.mock.timers.tick(1_500);
+	assert.equal(pool.size, 2, "active threads cannot be reclaimed");
+	for (const socket of sockets) socket.end();
+	assert.ok((await results).every((result) => result.code === 0));
+	t.mock.timers.tick(999);
+	assert.equal(pool.size, 2);
+	t.mock.timers.tick(1);
 	assert.equal(pool.size, 0);
 });
 

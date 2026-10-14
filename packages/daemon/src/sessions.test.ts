@@ -112,32 +112,62 @@ test("intentional close ignores disconnect but waits for confirmed exit", async 
 	assert.deepEqual(child.killed, ["SIGKILL"], "close retains its shutdown deadline");
 });
 
-test("startup deadline terminates a hung worker and rejects readiness as uncertain transport", async (t) => {
-	const { child, worker } = supervisedWorker(t);
-	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
-	t.mock.timers.tick(1_000);
-	await rejected;
-	assert.deepEqual(child.killed, ["SIGTERM"]);
-	assert.equal(worker.state, "failed");
-	assert.equal(worker["killTimer"], undefined, "confirmed exit cancels the forced-retirement timer");
-	t.mock.timers.tick(10_000);
-	assert.deepEqual(child.killed, ["SIGTERM"], "an exited process must never receive the fallback signal");
-	child.emit("message", { type: "ready", model: "late/model", working: false, usage: {} });
-	assert.equal(worker.state, "failed", "late acknowledgement cannot revive a terminated worker");
+test("startup tolerates starvation while the IPC channel and process remain alive", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t);
+	t.mock.timers.tick(120_000);
+	assert.deepEqual(child.killed, []);
+	assert.equal(worker.state, "starting");
+	assert.equal(worker.busy, true);
+	assert.equal(worker.transportUnavailable, false);
+	ready();
+	await worker.ready;
+	t.mock.timers.tick(120_000);
+	assert.equal(worker.state, "idle");
+	assert.deepEqual(child.killed, []);
 });
 
-test("command acknowledgement deadline rejects all uncertain admissions and terminates the worker", async (t) => {
+test("command acknowledgements tolerate starvation without clearing uncertain admissions", async (t) => {
 	const { child, worker, ready } = supervisedWorker(t);
 	ready();
 	await worker.ready;
 	const input = worker.request({ type: "input", requestId: "stable-id", content: "work", mode: "followUp" });
 	const abort = worker.request({ type: "abort", requestId: "abort-id" });
-	const rejected = Promise.all([assert.rejects(input, WorkerUnavailable), assert.rejects(abort, WorkerUnavailable)]);
+	t.mock.timers.tick(120_000);
+	assert.deepEqual(child.killed, []);
+	assert.equal(worker["pending"].size, 2);
+	assert.equal(worker.busy, true, "a slow acknowledgement must still block idle-only work");
+	child.emit("message", { type: "accepted", requestId: "stable-id" });
+	child.emit("message", { type: "aborted", requestId: "abort-id" });
+	await Promise.all([input, abort]);
+	assert.equal(worker["pending"].size, 0);
+});
+
+test("a dead channel rejects readiness and every uncertain command", async (t) => {
+	const { child, worker } = supervisedWorker(t);
+	const input = worker.request({ type: "input", requestId: "stable-id", content: "work", mode: "followUp" });
+	const rejected = Promise.all([
+		assert.rejects(worker.ready, WorkerUnavailable),
+		assert.rejects(input, WorkerUnavailable),
+	]);
+	child.connected = false; // Also covered by the periodic check if a disconnect event was missed.
 	t.mock.timers.tick(1_000);
 	await rejected;
 	assert.deepEqual(child.killed, ["SIGTERM"]);
+	assert.equal(worker.state, "failed");
 	assert.equal(worker["pending"].size, 0);
-	assert.equal(child.sent.find((command) => command.type === "input")?.requestId, "stable-id");
+	assert.equal(worker["killTimer"], undefined);
+	child.emit("message", { type: "ready", model: "late/model", working: false, usage: {} });
+	assert.equal(worker.state, "failed");
+});
+
+test("process exit without a disconnect rejects startup as recoverable transport loss", async (t) => {
+	const { child, worker } = supervisedWorker(t);
+	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
+	child.emit("exit", 1, null);
+	await rejected;
+	await assert.rejects(worker.request({ type: "abort", requestId: "after-exit" }), WorkerUnavailable);
+	t.mock.timers.tick(120_000);
+	assert.deepEqual(child.killed, [], "an exited process does not need a kill deadline");
 });
 
 test("inspection deadline protects the worker without killing it or clearing unrelated admissions", async (t) => {
@@ -231,7 +261,8 @@ test("transport retirement sends SIGTERM first, escalates once after eight secon
 		return true;
 	};
 	const rejected = assert.rejects(worker.ready, WorkerUnavailable);
-	t.mock.timers.tick(1_000);
+	child.connected = false;
+	child.emit("disconnect");
 	await rejected;
 	assert.deepEqual(child.killed, ["SIGTERM"]);
 	let closed = false;
@@ -299,88 +330,95 @@ function deferred() {
 }
 
 for (const phase of ["startup", "ack"] as const) {
-	test(`${phase} deadline retains durable IDs and demand waits for exit without duplicating accepted work`, async (t) => {
-		const f = await fixture(t);
-		t.mock.timers.enable({ apis: ["setTimeout"] });
-		let attempts = 0;
-		let executions = 0;
-		const committed = new Set<string>();
-		const blocked = deferred();
-		let firstChild!: IpcProcess;
-		const sessions = await f.manager(
-			{
-				worker: (spec, onPacket, onExit) => {
-					const attempt = ++attempts;
-					const child = new IpcProcess();
-					if (attempt === 1) {
-						firstChild = child;
-						// Model the gap between SIGTERM and OS-confirmed exit/storage lease release.
-						child.kill = (signal) => {
-							child.killed.push(signal);
-							return true;
+	for (const recovery of ["demand", "automatic"] as const) {
+		test(`${phase} disconnect retains durable IDs and ${recovery} recovery waits for exit without duplicates`, async (t) => {
+			const f = await fixture(t);
+			t.mock.timers.enable({ apis: ["setTimeout"] });
+			let attempts = 0;
+			let executions = 0;
+			const committed = new Set<string>();
+			const blocked = deferred();
+			let firstChild!: IpcProcess;
+			const sessions = await f.manager(
+				{
+					worker: (spec, onPacket, onExit) => {
+						const attempt = ++attempts;
+						const child = new IpcProcess();
+						if (attempt === 1) {
+							firstChild = child;
+							// Model the gap between SIGTERM and OS-confirmed exit/storage lease release.
+							child.kill = (signal) => {
+								child.killed.push(signal);
+								return true;
+							};
+						}
+						const send = child.send.bind(child);
+						child.send = (command, callback) => {
+							const result = send(command, callback);
+							queueMicrotask(() => {
+								if (command.type === "start") {
+									if (attempt === 1 && phase === "startup") {
+										blocked.resolve();
+										return;
+									}
+									child.emit("message", { type: "ready", model: "test/model", working: false, usage: {} });
+								} else if (command.type === "watch") {
+									child.emit("message", { type: "events", watchId: command.watchId, events: [snapshot] });
+								} else if (command.type === "input") {
+									if (!committed.has(command.requestId)) {
+										committed.add(command.requestId);
+										executions++;
+									}
+									if (attempt === 1) {
+										blocked.resolve();
+										return;
+									}
+									child.emit("message", { type: "accepted", requestId: command.requestId });
+								} else if (command.type === "shutdown") child.emit("exit", 0, null);
+							});
+							return result;
 						};
-					}
-					const send = child.send.bind(child);
-					child.send = (command, callback) => {
-						const result = send(command, callback);
-						queueMicrotask(() => {
-							if (command.type === "start") {
-								if (attempt === 1 && phase === "startup") {
-									blocked.resolve();
-									return;
-								}
-								child.emit("message", { type: "ready", model: "test/model", working: false, usage: {} });
-							} else if (command.type === "watch") {
-								child.emit("message", { type: "events", watchId: command.watchId, events: [snapshot] });
-							} else if (command.type === "input") {
-								if (!committed.has(command.requestId)) {
-									committed.add(command.requestId);
-									executions++;
-								}
-								if (attempt === 1) {
-									blocked.resolve();
-									return;
-								}
-								child.emit("message", { type: "accepted", requestId: command.requestId });
-							} else if (command.type === "shutdown") child.emit("exit", 0, null);
+						return new KernelWorker(spec, onPacket, onExit, undefined, {
+							child: child as unknown as ChildProcess,
+							startupTimeoutMs: 1_000,
+							commandTimeoutMs: 1_000,
 						});
-						return result;
-					};
-					return new KernelWorker(spec, onPacket, onExit, undefined, {
-						child: child as unknown as ChildProcess,
-						startupTimeoutMs: 1_000,
-						commandTimeoutMs: 1_000,
-					});
+					},
 				},
-			},
-			{ idleParkMs: Number.POSITIVE_INFINITY },
-		);
-		const created = await sessions.spawn({ cwd: f.source, message: "durable work" });
-		await blocked.promise;
-		const drain = sessions["starting"].get(created.id)!;
-		const original = (await f.stored(created.id)).pending[0]!;
-		t.mock.timers.tick(1_000);
-		await drain;
-		assert.deepEqual(firstChild.killed, ["SIGTERM"]);
-		const timedOut = await f.stored(created.id);
-		assert.equal(timedOut.failure, undefined, "transport deadlines must not permanently disable recovery");
-		assert.deepEqual(timedOut.pending, [original], "uncertain admission preserves ID and payload");
-		assert.match(timedOut.inputError!, /timed out/);
-		const resuming = sessions.send(
-			created.id,
-			"retry payload must not replace original",
-			"followUp",
-			original.requestId,
-		);
-		await Promise.resolve();
-		assert.equal(attempts, 1, "a replacement cannot open while the old process still owns storage");
-		firstChild.connected = false;
-		firstChild.emit("exit", null, "SIGTERM");
-		await resuming;
-		assert.equal(attempts, 2);
-		assert.equal(executions, 1, "a lost acknowledgement retries the durable ID, not a new input");
-		assert.deepEqual((await f.stored(created.id)).pending, []);
-	});
+				{ idleParkMs: Number.POSITIVE_INFINITY },
+			);
+			const created = await sessions.spawn({ cwd: f.source, message: "durable work" });
+			await blocked.promise;
+			const drain = sessions["starting"].get(created.id)!;
+			const original = (await f.stored(created.id)).pending[0]!;
+			t.mock.timers.tick(120_000);
+			assert.deepEqual(firstChild.killed, [], "a slow live writer retains its storage lease");
+			assert.equal(attempts, 1);
+			firstChild.connected = false;
+			firstChild.emit("disconnect");
+			await drain;
+			assert.deepEqual(firstChild.killed, ["SIGTERM"]);
+			const timedOut = await f.stored(created.id);
+			assert.equal(timedOut.failure, undefined, "transport failures must not permanently disable recovery");
+			assert.deepEqual(timedOut.pending, [original], "uncertain admission preserves ID and payload");
+			assert.match(timedOut.inputError!, /disconnected/);
+			const resuming =
+				recovery === "automatic"
+					? Promise.resolve()
+					: sessions.send(created.id, "retry payload must not replace original", "followUp", original.requestId);
+			await Promise.resolve();
+			assert.equal(attempts, 1, "a replacement cannot open while the old process still owns storage");
+			firstChild.connected = false;
+			firstChild.emit("exit", null, "SIGTERM");
+			if (recovery === "automatic") t.mock.timers.tick(20_000);
+			await resuming;
+			await until(() => attempts === 2);
+			await sessions["starting"].get(created.id);
+			assert.equal(attempts, 2);
+			assert.equal(executions, 1, "a lost acknowledgement retries the durable ID, not a new input");
+			assert.deepEqual((await f.stored(created.id)).pending, []);
+		});
+	}
 }
 
 async function waitFor(promise: Promise<void>, signal?: AbortSignal): Promise<void> {
@@ -2040,7 +2078,7 @@ test("uncertain admission after transport failure retains the request ID for res
 	assert.deepEqual(f.workers[1]!.requests, before.pending);
 });
 
-for (const recovery of ["restart", "demand"] as const) {
+for (const recovery of ["restart", "demand", "automatic"] as const) {
 	test(`unexpected live kernel failure after durable admission recovers by ${recovery} without duplicates`, async (t) => {
 		const f = await fixture(t);
 		const warning = mock.method(console, "warn", () => {});
@@ -2056,7 +2094,10 @@ for (const recovery of ["restart", "demand"] as const) {
 			}
 			if (++attempts === 1) await acknowledgement.promise;
 		};
-		const sessions = await f.manager({ worker: f.workerFactory(true, admit) });
+		const sessions = await f.manager(
+			{ worker: f.workerFactory(true, admit) },
+			{ kernelRestartBackoffMs: recovery === "automatic" ? 1 : 15_000 },
+		);
 		const created = await sessions.spawn({ cwd: f.source, message: "admitted before crash" });
 		await until(() => admissions === 1);
 		const before = await f.stored(created.id);
@@ -2069,7 +2110,7 @@ for (const recovery of ["restart", "demand"] as const) {
 		if (recovery === "restart") {
 			await sessions.shutdown();
 			recovered = await f.manager({ worker: f.workerFactory(true, admit) });
-		} else sessions.subscribe(created.id, () => {});
+		} else if (recovery === "demand") sessions.subscribe(created.id, () => {});
 		await until(() => recovered.get(created.id)?.state === "working");
 		assert.equal(admissions, 1);
 		assert.equal(attempts, 2);
@@ -2079,7 +2120,7 @@ for (const recovery of ["restart", "demand"] as const) {
 	});
 }
 
-test("a kernel crash without queued work stays usable and backs off automatic restarts", async (t) => {
+test("a kernel crash without queued input stays usable and backs off automatic restarts", async (t) => {
 	const f = await fixture(t);
 	const warning = mock.method(console, "warn", () => {});
 	t.after(() => warning.mock.restore());
@@ -2101,6 +2142,97 @@ test("a kernel crash without queued work stays usable and backs off automatic re
 	const backoff = sessions["kernelFailures"].get(created.id)!;
 	assert.equal(backoff.failures, 2);
 	assert.ok(backoff.until - backoff.at >= 200, "consecutive failures double the wait");
+});
+
+test("an interrupted run reopens automatically after backoff without submitting a second input", async (t) => {
+	const f = await fixture(t);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	t.mock.method(console, "warn", () => {});
+	const sessions = await f.manager({}, { kernelRestartBackoffMs: 100 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await sessions["starting"].get(created.id);
+	assert.deepEqual((await f.stored(created.id)).pending, []);
+	f.workers[0]!.crash();
+	assert.equal(sessions["metas"].get(created.id)?.kernelRestartPending, true);
+	assert.deepEqual(sessions.prepareUpdate(), { ready: false }, "interrupted work still blocks an idle-only update");
+	t.mock.timers.tick(99);
+	await Promise.resolve();
+	assert.equal(f.workers.length, 1);
+	t.mock.timers.tick(1);
+	await until(() => f.workers.length === 2);
+	await sessions["starting"].get(created.id);
+	assert.equal(f.workers[1]!.spec.storageDir, f.workers[0]!.spec.storageDir);
+	assert.deepEqual(f.workers[1]!.requests, [], "the Harness resumes durable work; the daemon never resubmits it");
+	assert.equal(sessions["metas"].get(created.id)?.kernelRestartPending, undefined);
+	// A late exit cannot touch its replacement or schedule another restart.
+	sessions["onExit"](sessions["metas"].get(created.id)!, f.workers[0]!, 1);
+	assert.equal(sessions.get(created.id)?.state, "idle");
+});
+
+for (const pause of ["sleep", "update", "shutdown"] as const) {
+	test(`automatic crash recovery respects ${pause} and keeps durable recovery intent`, async (t) => {
+		const f = await fixture(t);
+		t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+		t.mock.method(console, "warn", () => {});
+		const sessions = await f.manager({}, { kernelRestartBackoffMs: 100 });
+		const created = await sessions.spawn({ cwd: f.source, message: "work" });
+		await sessions["starting"].get(created.id);
+		f.workers[0]!.crash();
+		if (pause === "sleep") await sessions.pauseForSleep();
+		else if (pause === "update") sessions.pauseForUpdate();
+		else await sessions.shutdown();
+		t.mock.timers.tick(100);
+		// Drain the timer's promise continuations, not a wall-clock delay.
+		for (let i = 0; i < 10; i++) await Promise.resolve();
+		assert.equal(f.workers.length, 1);
+		assert.equal(sessions["metas"].get(created.id)?.kernelRestartPending, true);
+		if (pause === "sleep") await sessions.resumeAfterSleep();
+		else if (pause === "update") t.mock.timers.tick(30_000);
+		else {
+			const reopened = await f.manager();
+			await until(() => f.workers.length === 2);
+			await reopened["starting"].get(created.id);
+		}
+		if (pause !== "shutdown") {
+			await until(() => f.workers.length === 2);
+			await sessions["starting"].get(created.id);
+		}
+	});
+}
+
+test("Stop during crash backoff aborts durable work without later automatic input", async (t) => {
+	const f = await fixture(t);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	t.mock.method(console, "warn", () => {});
+	const sessions = await f.manager({}, { kernelRestartBackoffMs: 100 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await sessions["starting"].get(created.id);
+	f.workers[0]!.crash();
+	await sessions.stop(created.id);
+	assert.equal(f.workers.length, 2);
+	assert.deepEqual(
+		f.workers[1]!.requests.map((command) => command.type),
+		["abort"],
+	);
+	t.mock.timers.tick(10_000);
+	for (let i = 0; i < 10; i++) await Promise.resolve();
+	assert.equal(f.workers.length, 2);
+	assert.equal(sessions["metas"].get(created.id)?.kernelRestartPending, undefined);
+	assert.equal(sessions.get(created.id)?.state, "idle");
+});
+
+test("an idle kernel crash does not schedule a new run", async (t) => {
+	const f = await fixture(t);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	t.mock.method(console, "warn", () => {});
+	const sessions = await f.manager({}, { kernelRestartBackoffMs: 100 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await sessions["starting"].get(created.id);
+	await sessions.stop(created.id);
+	f.workers[0]!.crash();
+	t.mock.timers.tick(10_000);
+	assert.equal(f.workers.length, 1);
+	assert.equal(sessions["metas"].get(created.id)?.kernelRestartPending, undefined);
 });
 
 test("a fresh kernel clears a stale input error when nothing is queued", async (t) => {

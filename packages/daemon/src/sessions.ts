@@ -160,13 +160,13 @@ export class CommandRejected extends Error {
 	}
 }
 
-/** Transport loss/deadline expiry is uncertain admission, never an explicit durable rejection. */
+/** Transport loss is uncertain admission, never an explicit durable rejection. */
 export class WorkerUnavailable extends Error {}
 
 export interface WorkerOptions {
-	/** Bound native extension/package startup. Defaults to two minutes. */
+	/** Startup channel check cadence. A connected, live worker is allowed to be slow. Defaults to two minutes. */
 	startupTimeoutMs?: number;
-	/** Admission acknowledgement, not model/tool execution. Defaults to one minute. */
+	/** Admission channel check cadence, not model/tool execution. Defaults to one minute. */
 	commandTimeoutMs?: number;
 	/** Injectable IPC process for deterministic supervision tests. */
 	child?: ChildProcess;
@@ -236,6 +236,8 @@ export interface SessionFactories {
 interface SessionMeta extends OutcomeMeta {
 	/** Work closed by the system sleep policy, never a user Stop. */
 	sleepPaused?: boolean;
+	/** Interrupted durable work, retained until a replacement kernel is ready. */
+	kernelRestartPending?: boolean;
 	id: string;
 	title: string;
 	/** Latest attempt list reported by the kernel, kept while it is parked. */
@@ -462,6 +464,8 @@ export class Worker implements SessionWorker {
 	error?: string;
 	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
 	usage?: KernelUsage;
+	runningJobs?: SessionJob[];
+	awaitingJobFollowUp?: boolean;
 	private readonly pending = new Map<
 		string,
 		{
@@ -519,11 +523,7 @@ export class Worker implements SessionWorker {
 		});
 		this.ready.catch(() => undefined);
 		this.failReady = markFailed;
-		this.startupTimer = setTimeout(
-			() => this.failTransport(new WorkerUnavailable("Kernel startup timed out")),
-			options.startupTimeoutMs ?? 120_000,
-		);
-		this.startupTimer.unref();
+		this.startupTimer = this.checkChannel(options.startupTimeoutMs ?? 120_000);
 		const handle = (message: unknown) => {
 			if (this.unavailable || this.exited) return;
 			const packet = message as KernelPacket;
@@ -595,13 +595,25 @@ export class Worker implements SessionWorker {
 			this.killTimer = undefined;
 			const error =
 				this.unavailable ??
-				new Error(signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
+				new WorkerUnavailable(signal ? `Kernel exited with signal ${signal}` : `Kernel exited with code ${code}`);
 			markFailed(error);
 			for (const id of [...this.pending.keys()]) this.settle(id, error);
 			onExit(this, code, signal);
 		});
 		this.send({ type: "start", spec });
 		this.refreshActivity();
+	}
+
+	/** Only OS/channel evidence can retire a writer. Starvation cannot revoke its storage lease. */
+	private checkChannel(intervalMs: number): ReturnType<typeof setTimeout> {
+		const timer = setTimeout(() => {
+			if (this.unavailable || this.exited || this.shutdownRequested) return;
+			if (!this.child.connected || this.child.exitCode !== null || this.child.signalCode != null)
+				this.failTransport(new WorkerUnavailable("Kernel IPC disconnected"));
+			else timer.refresh();
+		}, intervalMs);
+		timer.unref();
+		return timer;
 	}
 
 	private refreshActivity(): void {
@@ -664,19 +676,24 @@ export class Worker implements SessionWorker {
 	/** Send a command and wait for its accepted/aborted/error acknowledgement. */
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void> {
 		if (this.unavailable) return Promise.reject(this.unavailable);
-		if (!this.child.connected) return Promise.reject(new WorkerUnavailable("Kernel is disconnected"));
+		if (this.exited || !this.child.connected) return Promise.reject(new WorkerUnavailable("Kernel is disconnected"));
 		return new Promise((resolve, reject) => {
-			// A slow or rejected job command concerns that job, not the worker's transport or session error.
+			// Job-stop errors and delays belong to that job, not the session transport.
 			const inspection =
 				command.type === "inspectChildren" || command.type === "inspectJobs" || command.type === "stopJob";
-			const timer = setTimeout(
-				() => {
-					const error = new WorkerUnavailable(`Kernel ${command.type} acknowledgement timed out`);
-					if (inspection) this.settle(command.requestId, error);
-					else this.failTransport(error);
-				},
-				inspection ? Math.min(this.commandTimeoutMs, 10_000) : this.commandTimeoutMs,
-			);
+			// Inspections and job controls retain their bounded deadline and conservative busy fallback.
+			// Mutations must retain their waiter/ID until acknowledged or the peer actually dies.
+			const timer = inspection
+				? setTimeout(
+						() => {
+							this.settle(
+								command.requestId,
+								new WorkerUnavailable(`Kernel ${command.type} acknowledgement timed out`),
+							);
+						},
+						Math.min(this.commandTimeoutMs, 10_000),
+					)
+				: this.checkChannel(this.commandTimeoutMs);
 			timer.unref();
 			this.pending.set(command.requestId, {
 				resolve,
@@ -860,6 +877,8 @@ export class SessionManager {
 	/** Last kernel crash or IPC failure, shown until the next kernel is ready. Not uncertain admission. */
 	private readonly kernelErrors = new Map<string, string>();
 	private readonly kernelRestartBackoffMs: number;
+	private readonly kernelRestarts = new Map<string, ReturnType<typeof setTimeout>>();
+	private readonly retiring = new WeakSet<SessionWorker>();
 
 	private sleepPause?: { since: number; wakeToken?: string };
 	private sleepTransition?: Promise<void>;
@@ -981,7 +1000,12 @@ export class SessionManager {
 			if (
 				meta.archivedAt === undefined &&
 				!meta.failure &&
-				(meta.initializing || meta.pending?.length || meta.working || meta.sleepPaused || meta.updatePaused)
+				(meta.initializing ||
+					meta.pending?.length ||
+					meta.working ||
+					meta.sleepPaused ||
+					meta.updatePaused ||
+					meta.kernelRestartPending)
 			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
@@ -1075,6 +1099,55 @@ export class SessionManager {
 	private kernelBackingOff(id: string): boolean {
 		const backoff = this.kernelFailures.get(id);
 		return backoff !== undefined && Date.now() < backoff.until;
+	}
+
+	/** Confirmed exit is the storage-lease barrier. Reopen durable work, never replay a tool ourselves. */
+	private scheduleKernelRestart(meta: SessionMeta): void {
+		if (
+			this.closing ||
+			this.sleepPause ||
+			!meta.kernelRestartPending ||
+			meta.failure ||
+			meta.archivedAt !== undefined ||
+			this.workers.has(meta.id) ||
+			this.kernelRestarts.has(meta.id)
+		)
+			return;
+		const delay = Math.max(
+			0,
+			(this.kernelFailures.get(meta.id)?.until ?? 0) - Date.now(),
+			this.updateGate.paused ? 30_000 : 0,
+		);
+		const timer = setTimeout(() => {
+			const resume = async () => {
+				await this.starting.get(meta.id);
+				await this.unparked(meta.id);
+				if (
+					this.closing ||
+					this.sleepPause ||
+					!meta.kernelRestartPending ||
+					meta.failure ||
+					meta.archivedAt !== undefined ||
+					this.workers.has(meta.id) ||
+					this.updateGate.paused
+				)
+					return;
+				const end = this.updateGate.begin();
+				try {
+					await this.start(meta.id, true);
+				} finally {
+					end();
+				}
+			};
+			void resume()
+				.catch((error: unknown) => console.warn(`pilotd: kernel recovery failed: ${error}`))
+				.finally(() => {
+					this.kernelRestarts.delete(meta.id);
+					this.scheduleKernelRestart(meta);
+				});
+		}, delay);
+		timer.unref();
+		this.kernelRestarts.set(meta.id, timer);
 	}
 
 	private dissociate(meta: SessionMeta): void {
@@ -2537,7 +2610,8 @@ export class SessionManager {
 					meta.working ||
 					// Terminal initialization failure cannot replay these commands. Uncertain admission
 					// uses inputError instead, so its durable outbox continues to block an update.
-					(!meta.failure && (meta.preparing || meta.initializing || meta.pending?.length)),
+					(!meta.failure &&
+						(meta.preparing || meta.initializing || meta.pending?.length || meta.kernelRestartPending)),
 			) ||
 			[...this.workers.values()].some(
 				(worker) =>
@@ -2995,7 +3069,8 @@ export class SessionManager {
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return { ok: true };
-		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length) return { ok: true };
+		if (!meta.initializing && !this.workers.has(id) && !meta.pending?.length && !meta.kernelRestartPending)
+			return { ok: true };
 		// Stop is allowed for an existing worker, but must not reopen a parked worker during a lease.
 		if (!this.workers.has(id)) this.updateGate.assertOpen();
 		// Drop queued input, and abort anything whose acknowledgement was in flight. The user's own undelivered messages
@@ -3810,7 +3885,16 @@ export class SessionManager {
 			this.sleepPause = undefined;
 			for (const meta of this.metas.values()) {
 				if (revision !== this.sleepRevision || this.closing) return;
-				if (!(meta.sleepPaused || meta.updatePaused || meta.working || meta.initializing || meta.pending?.length))
+				if (
+					!(
+						meta.sleepPaused ||
+						meta.updatePaused ||
+						meta.working ||
+						meta.initializing ||
+						meta.pending?.length ||
+						meta.kernelRestartPending
+					)
+				)
 					continue;
 				if (meta.archivedAt === undefined && !meta.failure) {
 					if (this.updateGate.paused) {
@@ -3851,6 +3935,8 @@ export class SessionManager {
 		this.closing = true;
 		this.longJobTimers.close();
 		clearTimeout(this.updatePauseTimer);
+		for (const timer of this.kernelRestarts.values()) clearTimeout(timer);
+		this.kernelRestarts.clear();
 		clearTimeout(this.archiveTimer);
 		clearTimeout(this.parkTimer);
 		this.pool?.close();
@@ -3971,6 +4057,7 @@ export class SessionManager {
 				const worker = this.ensureWorker(id);
 				await worker.ready;
 				if (this.closing || this.sleepPause) return;
+				if (this.workers.get(id) !== worker) throw new WorkerUnavailable("Kernel exited during startup");
 				delete meta.sleepPaused;
 				if (meta.updatePaused) {
 					delete meta.updatePaused;
@@ -4161,9 +4248,21 @@ export class SessionManager {
 		code: number | null,
 		signal: NodeJS.Signals | null = null,
 	): void {
-		if (this.workers.get(meta.id) === exited) this.workers.delete(meta.id);
+		const current = this.workers.get(meta.id);
+		// A late exit from a replaced worker cannot fail or resume its successor.
+		if (current && current !== exited) return;
+		const owned = current === exited || this.retiring.has(exited);
+		if (current === exited) this.workers.delete(meta.id);
 		// An inactivity close is not a failure, even if a slow shutdown had to be forced.
 		if (!this.closing && !this.parked.has(exited)) {
+			if (
+				owned &&
+				(exited.state === "failed" || code !== 0 || signal !== null) &&
+				(meta.working || meta.initializing || meta.pending?.length || exited.awaitingJobFollowUp)
+			) {
+				meta.kernelRestartPending = true;
+				void this.save(meta);
+			}
 			if (exited.state === "failed" || code !== 0 || signal !== null) this.recordKernelFailure(meta.id, exited);
 			if (exited.state === "failed") {
 				// Preserve performance recovery: transport failures do not permanently disable the session.
@@ -4185,6 +4284,7 @@ export class SessionManager {
 		}
 		// Never publish the exited worker's stale lifecycle state or usage.
 		this.emit(meta);
+		if (owned && !this.parked.has(exited)) this.scheduleKernelRestart(meta);
 	}
 
 	private fail(meta: SessionMeta, reason: string): void {
@@ -4240,7 +4340,10 @@ export class SessionManager {
 			worker.transportUnavailable &&
 			this.workers.get(meta.id) === worker
 		) {
-			// A timed-out writer must exit before a demand can reopen its storage. This is recovery,
+			if (meta.working || meta.initializing || meta.pending?.length || worker.awaitingJobFollowUp)
+				meta.kernelRestartPending = true;
+			this.retiring.add(worker);
+			// A disconnected writer must exit before a demand can reopen its storage. This is recovery,
 			// not intentional parking: preserve the visible failure outcome and uncertain durable IDs.
 			this.workers.delete(meta.id);
 			this.lastUse.delete(meta.id);
@@ -4445,6 +4548,7 @@ export class SessionManager {
 				worker.awaitingJobFollowUp = false;
 			const changed = applyActivity(meta, packet.working, packet.completion, worker.awaitingJobFollowUp);
 			if (packet.type === "ready") {
+				if (this.workers.get(meta.id) === worker) delete meta.kernelRestartPending;
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
 				if (packet.thinking !== undefined) meta.thinking = packet.thinking;
@@ -4492,7 +4596,7 @@ export class SessionManager {
 			!!this.sleepPause &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
-			!!(meta.sleepPaused || meta.working || meta.initializing || meta.pending?.length);
+			!!(meta.sleepPaused || meta.working || meta.initializing || meta.pending?.length || meta.kernelRestartPending);
 		const usage = this.usage(meta, worker);
 		const state = paused
 			? "parked"

@@ -314,7 +314,8 @@ They stay outside the transcript, have bounded private storage, and are never ex
 - **Keep the daemon local.** It binds to `127.0.0.1`, rejects requests with an `Origin` header and has no
   authentication. Do not expose it to a network.
 - **Durability is not tool replay.** If a native tool is interrupted by a crash, it is reported as
-  interrupted rather than automatically rerun.
+  interrupted rather than automatically rerun. After an unexpected kernel exit, interrupted chats reopen
+  automatically with crash backoff. A slow but connected kernel is not treated as dead.
 - **Extensions must fit the host.** Extensions that replace the SDK session or start their own model loop
   are unsupported. Subagent controls require a pi-extensions version with the `subagents:*` host events.
 - **Project trust still applies.** Project-local `.pi` resources load only for directories pi trusts

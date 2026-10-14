@@ -91,12 +91,20 @@ export class IpcSender {
 		if (report) this.onFailure(error);
 	}
 
+	/** A live peer may be CPU-starved indefinitely. Time alone is not transport failure. */
+	private checkChannel(): void {
+		this.timer = setTimeout(() => {
+			if (!this.channel.connected) this.fail(new Error("Kernel IPC disconnected"));
+			else this.checkChannel();
+		}, this.options.timeoutMs);
+		this.timer.unref();
+	}
+
 	private drain(): void {
 		if (this.failure || this.inFlight || !this.waiting.length) return;
 		const job = this.waiting.shift()!;
 		this.inFlight = job;
-		this.timer = setTimeout(() => this.fail(new Error("Kernel IPC send timed out")), this.options.timeoutMs);
-		this.timer.unref();
+		this.checkChannel();
 		try {
 			// A false return is pressure, not failure. Await the callback before sending the next packet.
 			this.channel.send(job.packet, (error) => {
