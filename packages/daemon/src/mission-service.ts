@@ -564,10 +564,20 @@ export class MissionService {
 				return { sessionId: args.targetSessionId, sent: result.delivery !== "not_started", ...result };
 			}
 			case "status": {
+				const target = args.targetSessionId;
+				if (target !== undefined && (typeof target !== "string" || !target.trim()))
+					throw new Error("status requires a non-empty targetSessionId");
+				if (typeof target === "string" && this.store.missionOf(target) !== missionId)
+					throw new Conflict("That chat is not in this mission");
 				const tasks = this.store.tasks(missionId);
-				return {
-					subscriptionUsage: this.sessions.subscriptionUsageSnapshot(),
-					members: this.sessions.list({ missionId, archived: "all" }).map((member) => ({
+				const selected =
+					typeof target === "string"
+						? [this.sessions.get(target)].filter((member): member is SessionSummary => member !== undefined)
+						: this.sessions.list({ missionId, archived: "all" });
+				const members = selected.map((member) => {
+					const claimed = tasks.filter((task) => task.sessionId === member.id);
+					const prs = member.pullRequests ?? (member.pullRequest ? [member.pullRequest] : []);
+					return {
 						id: member.id,
 						title: member.title,
 						coordinator: member.id === mission.coordinatorSessionId,
@@ -576,19 +586,44 @@ export class MissionService {
 								? "waiting on background job"
 								: member.state,
 						...(member.runningJobs?.length
-							? { runningJobs: member.runningJobs.map(({ id, name, startedAt }) => ({ id, name, startedAt })) }
+							? {
+									runningJobs: member.runningJobs.map(({ id, name, startedAt }) => ({
+										id,
+										name,
+										startedAt,
+									})),
+								}
 							: {}),
+						...(member.branch ? { branch: member.branch } : {}),
 						boundPullRequests: member.boundPullRequests ?? [],
+						pullRequests: prs.map(({ number, state }) => ({ number, state, draft: state === "draft" })),
+						finishedWithoutPR:
+							member.id !== mission.coordinatorSessionId &&
+							member.state === "idle" &&
+							member.archivedAt === undefined &&
+							!member.runningJobs?.length &&
+							claimed.some(
+								(task) =>
+									task.status === "in_progress" || (member.outcome === "done" && task.status !== "dropped"),
+							) &&
+							!prs.some((pr) => pr.state === "open" || pr.state === "draft" || pr.state === "merged"),
 						...(!member.runningJobs?.length && member.outcome !== undefined ? { outcome: member.outcome } : {}),
 						...(member.outcomeAt !== undefined ? { outcomeAt: member.outcomeAt } : {}),
 						...(member.outcomeReason !== undefined ? { outcomeReason: member.outcomeReason } : {}),
 						...(member.archivedAt !== undefined ? { archivedAt: member.archivedAt } : {}),
 						...(member.error !== undefined ? { error: member.error } : {}),
-						tasks: tasks
-							.filter((task) => task.sessionId === member.id)
-							.map((task) => ({ number: task.number, title: task.title, status: task.status })),
-					})),
-				};
+						tasks: claimed.map((task) => ({ number: task.number, title: task.title, status: task.status })),
+					};
+				});
+				if (typeof target === "string") {
+					const member = members[0];
+					if (!member) throw new NotFound("Member chat not found");
+					return {
+						subscriptionUsage: this.sessions.subscriptionUsageSnapshot(),
+						member: { ...member, lastAssistantReply: await this.sessions.lastAssistantReply(target, 1500) },
+					};
+				}
+				return { subscriptionUsage: this.sessions.subscriptionUsageSnapshot(), members };
 			}
 			case "get": {
 				const detail = this.store.detail(missionId, false);

@@ -3022,3 +3022,157 @@ test("release accepts claim selectors, enforces ownership and reads claimant tit
 		[3],
 	);
 });
+
+test("status flags idle claimed work without a viable PR, excluding inactive and busy chats", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	const base = { ...f.sessions.get(member.id)!, state: "idle" as const, branch: "feat/example" };
+	const coordinator = { ...f.sessions.get(lead.id)!, state: "idle" as const, outcome: "done" as const };
+	f.store.addTask(mission.id, { title: "Lead work", sessionId: lead.id, status: "in_progress" });
+	let summary: SessionSummary = base;
+	t.mock.method(f.sessions, "list", () => [coordinator, summary]);
+	t.mock.method(f.sessions, "history", () => {
+		throw new Error("Full status must not read history");
+	});
+	const status = async () => {
+		const result = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+		assert.equal(result.members[0]!.finishedWithoutPR, false);
+		return result.members[1]!;
+	};
+	assert.equal((await status()).finishedWithoutPR, true);
+	assert.equal((await status()).branch, "feat/example");
+	for (const state of ["open", "draft", "merged", "closed"] as const) {
+		const pr = {
+			number: 7,
+			url: "https://github.com/octo/repo/pull/7",
+			title: "Verbose PR title",
+			state,
+			checkedAt: 1,
+		};
+		summary = { ...base, pullRequests: [pr] };
+		const row = await status();
+		assert.equal(row.finishedWithoutPR, state === "closed");
+		assert.deepEqual(row.pullRequests, [{ number: 7, state, draft: state === "draft" }]);
+		// Older summaries only have the primary PR.
+		summary = { ...base, pullRequest: pr };
+		assert.equal((await status()).finishedWithoutPR, state === "closed");
+	}
+	for (const overrides of [
+		{ state: "parked" as const, outcome: "done" as const },
+		{ state: "working" as const },
+		{ state: "starting" as const },
+		{ state: "failed" as const },
+		{ archivedAt: 42 },
+		{
+			runningJobs: [
+				{ id: "j1", name: "Test", startedAt: 1, state: "running" as const, outputPath: "/tmp/test.log" },
+			],
+		},
+	]) {
+		summary = { ...base, ...overrides };
+		assert.equal((await status()).finishedWithoutPR, false);
+	}
+	const task = f.store.resolveTask(mission.id, "1");
+	f.store.updateTask(mission.id, task.id, { status: "done" });
+	summary = base;
+	assert.equal((await status()).finishedWithoutPR, false);
+	summary = { ...base, outcome: "done" };
+	assert.equal((await status()).finishedWithoutPR, true);
+	f.store.updateTask(mission.id, task.id, { status: "dropped" });
+	assert.equal((await status()).finishedWithoutPR, false);
+	f.store.releaseTask(mission.id, task.id, { sessionId: member.id });
+	assert.equal((await status()).finishedWithoutPR, false);
+});
+
+test("targeted status reads only one member and a truncated last assistant reply without waking workers", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	f.workers
+		.get(member.id)!
+		.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: 42 } });
+	const requests = [...f.workers.values()].map((worker) => worker.requests.length);
+	const events = f.store.events(mission.id);
+	t.mock.method(f.sessions, "list", () => {
+		throw new Error("Targeted status must not list all chats");
+	});
+	const reply = "A".repeat(1800);
+	let reads = 0;
+	t.mock.method(f.sessions, "history", async (id: string, before: number, limit: number) => {
+		assert.equal(id, member.id);
+		assert.equal(limit, 64);
+		reads++;
+		if (before === Number.MAX_SAFE_INTEGER)
+			return { entries: [{ id: 10, kind: "pi.tool-result", model: [] }], more: true };
+		assert.equal(before, 10);
+		return {
+			entries: [
+				{
+					id: 7,
+					kind: "pi.assistant",
+					model: [{ role: "assistant", content: [{ type: "text", text: "Old reply" }] }],
+				},
+				{
+					id: 8,
+					kind: "pi.assistant",
+					model: [
+						{
+							role: "assistant",
+							content: [
+								{ type: "thinking", thinking: "Do not expose" },
+								{ type: "text", text: reply },
+							],
+						},
+					],
+				},
+				{ id: 9, kind: "pi.user", model: [{ role: "user", content: "Latest user input" }] },
+			],
+			more: false,
+		};
+	});
+	const result = (await f.service.call(lead.id, "status", { targetSessionId: member.id })) as {
+		subscriptionUsage: unknown;
+		member: Record<string, unknown>;
+	};
+	assert.deepEqual(Object.keys(result), ["subscriptionUsage", "member"]);
+	assert.deepEqual(result.subscriptionUsage, f.sessions.subscriptionUsageSnapshot());
+	assert.equal(result.member.id, member.id);
+	assert.equal(result.member.state, "idle");
+	assert.equal(result.member.outcome, "done");
+	assert.equal(result.member.outcomeAt, 42);
+	assert.equal(result.member.lastAssistantReply, reply.slice(0, 1500));
+	assert.equal(result.member.finishedWithoutPR, true);
+	assert.deepEqual(result.member.tasks, [{ number: 1, title: "Implement", status: "in_progress" }]);
+	assert.equal(reads, 2);
+	for (const targetSessionId of [outsider.id, "unknown"])
+		await assert.rejects(f.service.call(lead.id, "status", { targetSessionId }), /not in this mission/);
+	for (const targetSessionId of ["", " ", 1, null])
+		await assert.rejects(f.service.call(lead.id, "status", { targetSessionId }), /non-empty targetSessionId/);
+	await assert.rejects(f.service.call(member.id, "status", { targetSessionId: member.id }), /coordinator/);
+	assert.equal(reads, 2);
+	t.mock.method(f.sessions, "history", async () => ({ entries: [], more: false }));
+	assert.equal(await f.sessions.lastAssistantReply(member.id, 1500), undefined);
+	assert.deepEqual(
+		[...f.workers.values()].map((worker) => worker.requests.length),
+		requests,
+	);
+	assert.deepEqual(f.store.events(mission.id), events);
+});

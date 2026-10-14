@@ -2573,6 +2573,27 @@ export class SessionManager {
 		return { entries: read.entries, more: read.more };
 	}
 
+	/** Read a bounded reply excerpt in paged storage reads, without waking or subscribing to a worker. */
+	async lastAssistantReply(id: string, limit: number): Promise<string | undefined> {
+		let before = Number.MAX_SAFE_INTEGER;
+		for (;;) {
+			const page = await this.history(id, before, 64);
+			for (const entry of page.entries.toReversed()) {
+				if (entry.kind !== "pi.assistant") continue;
+				for (const message of (entry.model ?? []).toReversed()) {
+					if (message.role !== "assistant") continue;
+					const text = message.content
+						.filter((part) => part.type === "text")
+						.map((part) => part.text)
+						.join("\n");
+					if (text.trim()) return text.slice(0, limit);
+				}
+			}
+			if (!page.more || !page.entries.length) return undefined;
+			before = Number(page.entries[0]!.id);
+		}
+	}
+
 	/**
 	 * Queue a manual compaction. Resolves once the kernel has committed its task; the conversation keeps working and
 	 * the summary is placed when idle or at the next turn boundary. Stop cancels it.

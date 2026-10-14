@@ -205,6 +205,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		{ action: "start", id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" },
 		{ action: "send", targetSessionId: "member", message: "Please clarify" },
 		{ action: "status" },
+		{ action: "status", targetSessionId: "member" },
 	])
 		await tool.execute("call", params as never, undefined, undefined, {} as never);
 	assert.deepEqual(calls, [
@@ -214,6 +215,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 		["start", { id: "#3", message: "Focus on tests", model: "test/model", thinking: "high" }],
 		["send", { targetSessionId: "member", message: "Please clarify" }],
 		["status", {}],
+		["status", { targetSessionId: "member" }],
 	]);
 	await assert.rejects(
 		createMissionTool(async () => {
