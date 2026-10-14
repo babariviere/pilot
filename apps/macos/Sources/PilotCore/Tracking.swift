@@ -44,6 +44,18 @@ public struct TrackedItemPrefill: Codable, Equatable, Sendable {
         self.description = description; self.gitBranchName = gitBranchName; self.prompt = prompt
     }
 }
+/// The first message of a Slack thread, read on demand for the triage inspector. Transient: pilotd never stores it.
+/// Plain text, bounded, and empty when the message has no text (for example, only files).
+public struct SlackExcerpt: Codable, Equatable, Sendable {
+    public let itemId: String
+    public let author: String?
+    public let text: String
+    /// The message was longer and was cut, ending with an ellipsis.
+    public let truncated: Bool
+    public init(itemId: String, author: String? = nil, text: String, truncated: Bool = false) {
+        self.itemId = itemId; self.author = author; self.text = text; self.truncated = truncated
+    }
+}
 public enum SlackMessageType: String, Codable, Hashable, Sendable { case bug, question, request, unknown }
 public enum SlackSeverity: String, Codable, Hashable, Sendable { case low, medium, high, critical }
 public enum SlackLocalStatus: String, Codable, Hashable, Sendable {

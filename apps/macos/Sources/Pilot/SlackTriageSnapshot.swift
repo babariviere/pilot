@@ -75,14 +75,31 @@ extension Snapshot {
                                 values: SlackOverrides(label: "Product-owned", severity: .low)),
             ]))
         let size = CGSize(width: 1180, height: 640)
-        await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .table, selection: "m5"), size: size,
+        let excerpts: [String: SlackExcerptState] = [
+            "m5": .loaded(SlackExcerpt(itemId: "m5", author: "Dana Okafor", text: """
+                Customers in Belgium get invoices with our Dutch VAT number instead of their own. \
+                It started after Tuesday's release.
+                Example: invoice INV-20431, the PDF and the email preview both show it.
+                """)),
+            "m1": .loaded(SlackExcerpt(itemId: "m1", author: "Sam Rivera", text: """
+                Checkout fails with a 500 for some customers in Germany and France since about 9:00. \
+                Card payments only, bank transfers still work. Three support tickets so far, \
+                all on the new checkout page. Logs show a timeout talking to the tax service, then \
+                a retry that sends the order twice, so a few customers were charged two times before \
+                the page gave up and showed the error…
+                """, truncated: true)),
+            "m3": .unavailable("Sign in to Slack to read this message."),
+        ]
+        await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .table, selection: "m5",
+                                     excerpts: excerpts), size: size,
                      to: directory.appending(path: "slack-triage-table.png"))
         await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .table, selection: "m3",
-                                     filter: .init(showHidden: true)),
+                                     filter: .init(showHidden: true), excerpts: excerpts),
                      size: size, to: directory.appending(path: "slack-triage-hidden.png"))
         await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .board, selection: "m2"), size: size,
                      to: directory.appending(path: "slack-triage-board.png"))
-        await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .table, selection: "m1"),
+        await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .table, selection: "m1",
+                                     excerpts: excerpts),
                      size: CGSize(width: 820, height: 560), to: directory.appending(path: "slack-triage-narrow.png"))
         await render(SlackTriagePage(projectId: "p1", fixture: items, layout: .table, selection: nil,
                                      filter: .init(type: .question, query: "refund")),

@@ -12,6 +12,7 @@ import type {
 	TrackingLookup,
 	TrackingSource,
 	LinearSourceSummary,
+	SlackExcerpt,
 	TrackedItemPrefill,
 	TrackedItem,
 	TrackedItemPatch,
@@ -22,7 +23,7 @@ import type { ProjectStore } from "./projects.ts";
 import { SourceRateLimited, SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
 import { linearPrefill, linearStart } from "./linear-source.ts";
-import { slackChannelProgress } from "./slack-source.ts";
+import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
@@ -79,6 +80,9 @@ export class SourceRegistry {
 	>();
 	/** Settings lookups, at most one per kind, sharing slots with polls and prefills. */
 	private readonly lookups = new Map<TrackedKind, { controller: AbortController; promise: Promise<unknown> }>();
+	/** The triage inspector's excerpt: latest selection wins, at most one, sharing the two MCP slots. */
+	private excerptRun?: { itemId: string; controller: AbortController; promise: Promise<SlackExcerpt> };
+	private excerptGeneration = 0;
 	/** Configured Slack channels per project, to hide items of removed channels once. */
 	private slackChannels = new Map<string, string>();
 	private readonly projects: Pick<ProjectStore, "list" | "require" | "onChange">;
@@ -377,6 +381,66 @@ export class SourceRegistry {
 		this.details.set(itemId, run);
 		return run.promise;
 	}
+	/** The first message of a Slack item's thread, for the triage inspector. Read on demand, never stored. A newer
+	 * request replaces the one in flight, so moving through the list never queues Slack reads. Failures are plain,
+	 * logged without content, and leave the source's health alone: the inspector shows them quietly. */
+	async slackExcerpt(itemId: string): Promise<SlackExcerpt> {
+		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		const previous = this.excerptRun;
+		if (previous?.itemId === itemId && !previous.controller.signal.aborted) return previous.promise;
+		const generation = ++this.excerptGeneration;
+		if (previous) {
+			previous.controller.abort(new Conflict("Superseded by a newer selection"));
+			await previous.promise.catch(() => {});
+		}
+		const item = await this.items.require(itemId);
+		if (generation !== this.excerptGeneration || this.excerptRun)
+			throw new Conflict("Superseded by a newer selection");
+		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (item.kind !== "slack") throw new Conflict("Only Slack messages have an excerpt");
+		const id = `${item.projectId}:slack`,
+			key = this.currentKey(id);
+		if (!key || this.items.checkpoint(id)?.configKey !== key)
+			throw new Conflict("Sync this project's Slack source first");
+		const health = this.health.get(id);
+		if (health?.key === key && health.failures > 0 && health.nextPollAt > Date.now())
+			throw new ServiceUnavailable("Slack is unavailable right now");
+		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
+		const project = structuredClone(this.projects.require(item.projectId));
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(new Error("Excerpt timed out")), 30_000);
+		const run = { itemId, controller, promise: Promise.resolve({} as SlackExcerpt) };
+		const work = slackExcerpt(
+			{
+				project,
+				config: project.tracking!,
+				signal: controller.signal,
+				call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
+			},
+			item,
+		);
+		run.promise = abortable(work, controller.signal)
+			.then((excerpt) => {
+				if (this.currentKey(id) !== key) throw new Conflict("Tracking configuration changed");
+				return excerpt;
+			})
+			.catch((error: unknown) => {
+				if (error instanceof Conflict) throw error;
+				console.warn(`pilotd: Slack excerpt failed for project ${item.projectId}: ${logCause(error)}`);
+				throw new ServiceUnavailable(
+					error instanceof SourceSignInRequired
+						? "Sign in to Slack to read this message"
+						: "Couldn't read this message from Slack",
+				);
+			})
+			.finally(() => {
+				clearTimeout(timer);
+				if (this.excerptRun === run) this.excerptRun = undefined;
+				this.schedule();
+			});
+		this.excerptRun = run;
+		return run.promise;
+	}
 	/** Binding is local and completes before any remote work. A normal link never writes. */
 	async patch(itemId: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		const before = await this.items.require(itemId);
@@ -448,10 +512,13 @@ export class SourceRegistry {
 		for (const run of this.details.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.starts.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.lookups.values()) run.controller.abort(new Error("Tracking stopped"));
+		const excerpt = this.excerptRun;
+		excerpt?.controller.abort(new Error("Tracking stopped"));
 		await Promise.allSettled([...this.running.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.details.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.lookups.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.starts.values()].map((run) => run.promise));
+		await excerpt?.promise.catch(() => {});
 		await signIns;
 		await this.mcp.close?.();
 		this.listeners.clear();
@@ -541,7 +608,7 @@ export class SourceRegistry {
 		return promise;
 	}
 	private busy(): number {
-		return this.running.size + this.details.size + this.lookups.size + this.starts.size;
+		return this.running.size + this.details.size + this.lookups.size + this.starts.size + (this.excerptRun ? 1 : 0);
 	}
 	private failed(id: string, key: string, error: unknown): void {
 		if (this.currentKey(id) !== key || this.stopped) return;

@@ -148,6 +148,84 @@ export function parseSlackThread(
 	const next = parsePagination(value.pagination_info, true);
 	return { messages, ...(next ? { next } : {}) };
 }
+
+/** Only the parent of a thread read, for the triage inspector. Replies, if any were returned, are ignored, so the
+ * reply limit and pagination do not matter here. The author is the display name, without email or user ID. */
+export function parseSlackThreadParent(value: TrackingJson, parentTs: string): { author?: string; text: string } {
+	const fail = (reason: string) => {
+		throw new SlackFormatChanged(reason);
+	};
+	if (
+		!value ||
+		typeof value !== "object" ||
+		Array.isArray(value) ||
+		typeof value.messages !== "string" ||
+		Buffer.byteLength(value.messages) > 512 * 1024
+	)
+		return fail("thread fields missing or too large");
+	const text = value.messages.replace(/\r\n/g, "\n").trim();
+	const parent =
+		/^=== THREAD PARENT MESSAGE ===[ \t]*\n([\s\S]*?)(?:\n=== THREAD REPLIES \(\d+ total\) ===[ \t]*(?:\n[\s\S]*)?)?$/.exec(
+			text,
+		)?.[1];
+	if (parent === undefined) return fail("thread header");
+	const message = /^\s*From: ([^\n]+)\nTime: [^\n]+\nMessage TS: (\d{1,12}\.\d{6})\n([\s\S]*)$/.exec(parent);
+	if (!message) return fail("thread message fields");
+	if (message[2] !== parentTs) return fail("thread parent timestamp");
+	const body = splitMetadata(message[3]!, false)!.text;
+	if (/^Message TS:|^Thread:|^=== |^--- Reply /m.test(body)) return fail("framing inside a thread message");
+	const author = plainText(
+		message[1]!
+			.replace(/\s*\([A-Z0-9]{1,40}\)\s*$/, "")
+			.replace(/\s*<[^<>\n]*>\s*$/, "")
+			.trim(),
+	)
+		.replace(/\s+/g, " ")
+		.slice(0, 80)
+		.trim();
+	return { ...(author ? { author } : {}), text: body };
+}
+
+// Control and format characters that hide or reorder text (bidi overrides, zero-width spaces). Joiners stay for emoji.
+const HIDDEN =
+	/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/g;
+function plainText(text: string): string {
+	return text.replace(/\t/g, " ").replace(HIDDEN, "");
+}
+
+/** Message text for display: Slack link markup reduced to its label, hidden characters removed, blank runs
+ * collapsed, and at most maxLines lines and maxChars characters, cut at a word where possible. */
+export function slackExcerptText(
+	text: string,
+	maxChars: number,
+	maxLines: number,
+): { text: string; truncated: boolean } {
+	let plain = plainText(text.replace(/\r\n?/g, "\n"))
+		.replace(/<!(here|channel|everyone)(?:\|[^<>\n]*)?>/g, "@$1")
+		.replace(/<([#@])[A-Z0-9]{1,40}\|([^<>\n]{1,200})>/g, "$1$2")
+		.replace(/<(?:https?:|mailto:)[^<>|\s]{1,2000}\|([^<>\n]{1,500})>/g, "$1")
+		.replace(/<((?:https?:|mailto:)[^<>|\s]{1,2000})>/g, "$1")
+		.split("\n")
+		.map((line) => line.trimEnd())
+		.join("\n")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+	let truncated = false;
+	const lines = plain.split("\n");
+	if (lines.length > maxLines) {
+		plain = lines.slice(0, maxLines).join("\n").trimEnd();
+		truncated = true;
+	}
+	if (plain.length > maxChars) {
+		let cut = plain.slice(0, maxChars);
+		// Do not split a UTF-16 surrogate pair, and prefer ending at a word.
+		if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+		const space = cut.search(/\s\S*$/);
+		plain = (space > maxChars * 0.8 ? cut.slice(0, space) : cut).trimEnd();
+		truncated = true;
+	}
+	return { text: truncated ? `${plain}…` : plain, truncated };
+}
 function parsePagination(text: string, thread: boolean): string | undefined {
 	const scope = thread ? "in this thread" : "available";
 	if (text.trim() === `There are no more messages ${scope}.`) return undefined;

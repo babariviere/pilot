@@ -9,9 +9,9 @@ import { slackHistoryFixture, slackThreadFixture } from "./slack-fixtures.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
-import { createSlackPoller, SLACK_BATCH_SIZE } from "./slack-source.ts";
+import { createSlackPoller, SLACK_BATCH_SIZE, SLACK_EXCERPT_LINES } from "./slack-source.ts";
 import { slackChannelProgress } from "./slack-source.ts";
-import { SourceToolError } from "./source-mcp.ts";
+import { SourceSignInRequired, SourceToolError } from "./source-mcp.ts";
 import { SourceRegistry, type SourcePollContext } from "./sources.ts";
 import { SLACK_DAILY_BUDGET } from "./tracked-items-disk.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
@@ -598,4 +598,89 @@ test("cached classification failures commit partial results and keep a bounded s
 	assert.throws(() => registry.poll(failed.id), /backing off/);
 	t.mock.timers.tick(300_000);
 	assert.equal((await registry.poll(failed.id)).nextPollAt, now + 600_000);
+});
+function thread(ts: string, body: string) {
+	return {
+		messages: `=== THREAD PARENT MESSAGE ===\nFrom: Reporter <reporter@example.test> (U000000001)\nTime: 2026-10-13 12:00:00 CEST\nMessage TS: ${ts}\n\n${body}\n\n=== THREAD REPLIES (1 total) ===\n\n--- Reply 1 of 1 ---\nFrom: Helper (U000000002)\nTime: 2026-10-13 12:01:00 CEST\nMessage TS: 1791892900.000001\n\nA reply that is never shown.\n`,
+		pagination_info: "There are more messages in this thread.\n",
+	};
+}
+test("inspector excerpt is read on demand from a tracked channel, latest selection wins, and nothing is stored", async (t) => {
+	const f = await fixture(t);
+	const projects = new ProjectStore(f.home);
+	await projects.load();
+	const project = await projects.create({ path: f.home, tracking: { slackChannels: ["C000000001"] } });
+	await f.store.load([project.id]);
+	const calls: Array<Record<string, unknown>> = [];
+	let gate: (() => void) | undefined;
+	let fail: Error | "malformed" | undefined;
+	const registry = new SourceRegistry(projects, f.store, {
+		call: async (_kind, tool, args, signal) => {
+			if (tool === "history") return standalone("C000000001", 2, "Private body text");
+			calls.push(args);
+			const ts = String(args.message_ts);
+			// The first read of the older message waits, so a newer selection can supersede it.
+			if (ts === "1791892800.000001" && !gate)
+				await new Promise<void>((resolve, reject) => {
+					gate = resolve;
+					signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+				});
+			if (fail === "malformed") return { messages: "Private body text", pagination_info: "" };
+			if (fail) throw fail;
+			return thread(ts, `Export fails for <https://example.test/a|account 42>.\n${"Step.\n".repeat(20)}`);
+		},
+	});
+	t.after(() => registry.stop());
+	registry.register(
+		"slack",
+		createSlackPoller(f.store, { classifySlack: async () => bug }, () => now),
+	);
+	const id = `${project.id}:slack`;
+	await assert.rejects(registry.slackExcerpt("missing"), /Unknown tracked item/);
+	assert.equal((await registry.poll(id)).status, "ok");
+	const items = (await registry.listItems({ projectId: project.id })).items;
+	const [a, b] = items.sort((x, y) => String(x.metadata.thread_ts).localeCompare(String(y.metadata.thread_ts)));
+	assert.ok(a && b);
+	const before = JSON.stringify(await f.store.list({ projectId: project.id }));
+	const pending = registry.slackExcerpt(a.id);
+	for (let i = 0; i < 200 && !gate; i++) await new Promise((resolve) => setTimeout(resolve, 5));
+	const latest = registry.slackExcerpt(b.id);
+	await assert.rejects(pending, /Superseded/);
+	const excerpt = await latest;
+	assert.equal(excerpt.itemId, b.id);
+	assert.equal(excerpt.author, "Reporter");
+	assert.equal(excerpt.truncated, true);
+	assert.match(excerpt.text, /^Export fails for account 42\.\nStep\./);
+	assert.equal(excerpt.text.split("\n").length, SLACK_EXCERPT_LINES);
+	assert.doesNotMatch(excerpt.text, /reply|example\.test/);
+	assert.deepEqual(calls.at(-1), {
+		channel_id: "C000000001",
+		message_ts: b.metadata.thread_ts,
+		limit: 1,
+		response_format: "detailed",
+	});
+	assert.equal(JSON.stringify(await f.store.list({ projectId: project.id })), before, "never stored");
+	// Failures are quiet: a plain message, a log line without content, and the source stays healthy.
+	const warn = t.mock.method(console, "warn", () => {});
+	fail = "malformed";
+	await assert.rejects(registry.slackExcerpt(a.id), /Couldn't read this message from Slack/);
+	assert.equal(warn.mock.callCount(), 1);
+	assert.match(String(warn.mock.calls[0]?.arguments[0]), /Slack excerpt failed .+ format changed \(thread header\)$/);
+	assert.doesNotMatch(String(warn.mock.calls[0]?.arguments[0]), /Private body/);
+	fail = new Error("Request timed out");
+	await assert.rejects(registry.slackExcerpt(a.id), /Couldn't read this message from Slack/);
+	fail = new SourceSignInRequired();
+	await assert.rejects(registry.slackExcerpt(a.id), /Sign in to Slack/);
+	warn.mock.restore();
+	assert.equal(registry.require(id).status, "ok");
+	fail = undefined;
+	assert.equal((await registry.slackExcerpt(a.id)).itemId, a.id);
+	// Only Slack items of a synced, still-tracked channel.
+	await f.store.commit(project.id, "linear", [
+		{ externalId: "issue", title: "Issue", url: "https://example.com/i", status: "open", updatedAt: 1, metadata: {} },
+	]);
+	const linear = (await f.store.list({ projectId: project.id, kind: "linear" })).items[0]!;
+	await assert.rejects(registry.slackExcerpt(linear.id), /Only Slack/);
+	await projects.update(project.id, { tracking: { slackChannels: ["C2"] } });
+	await assert.rejects(registry.slackExcerpt(a.id), /no longer tracked/);
 });

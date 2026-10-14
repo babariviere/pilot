@@ -142,6 +142,12 @@ import Testing
     """#.utf8))
     #expect(prefill.gitBranchName == "eng-1-bug")
     #expect(prefill.description == "External text")
+    let excerpt = try JSONDecoder().decode(SlackExcerpt.self, from: Data(#"""
+    {"itemId":"i","author":"Sam","text":"Export fails…","truncated":true}
+    """#.utf8))
+    #expect(excerpt == SlackExcerpt(itemId: "i", author: "Sam", text: "Export fails…", truncated: true))
+    #expect(try JSONDecoder().decode(SlackExcerpt.self, from: Data(#"{"itemId":"i","text":"","truncated":false}"#.utf8))
+        .author == nil)
 }
 
 @Test func dashboardLinearGroupDecodesDoneAndConvertsRowsToItems() throws {

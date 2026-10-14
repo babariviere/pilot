@@ -1,9 +1,17 @@
 import { createHash } from "node:crypto";
-import type { TrackingJson } from "@pilot/protocol";
+import type { SlackExcerpt, TrackedItem, TrackingJson } from "@pilot/protocol";
+import { Conflict } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
-import { parseSlackPage, parseSlackThread, slackTimestamp, SlackFormatChanged } from "./slack-format.ts";
+import {
+	parseSlackPage,
+	parseSlackThread,
+	parseSlackThreadParent,
+	slackExcerptText,
+	slackTimestamp,
+	SlackFormatChanged,
+} from "./slack-format.ts";
 import { SourceToolError } from "./source-mcp.ts";
-import type { SourcePoller, SourcePollResult } from "./sources.ts";
+import type { SourcePollContext, SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { SlackCache } from "./tracked-items-disk.ts";
 import { parseSlackClassification, type SlackClassifierContext, type SlackClassification } from "./slack-classifier.ts";
@@ -11,6 +19,9 @@ import { parseSlackClassification, type SlackClassifierContext, type SlackClassi
 export const SLACK_CONFIDENCE_THRESHOLD = 0.8;
 export const SLACK_BATCH_SIZE = 8;
 const THREAD_LIMIT = 30;
+/** The inspector's quote: a few lines, enough to recognize the message. Open in Slack shows the rest. */
+export const SLACK_EXCERPT_CHARS = 600;
+export const SLACK_EXCERPT_LINES = 10;
 /** A newly added channel starts this far back. Classification results are cached per thread. */
 const INITIAL_LOOKBACK_MS = 7 * 86_400_000;
 // Compact tuples keyed by a short channel hash, so adding or removing a channel keeps the others' progress.
@@ -194,6 +205,26 @@ export function createSlackPoller(
 }
 function timestamp(now: number): string {
 	return `${Math.floor(now / 1000)}.000000`;
+}
+
+/** Read one thread's first message for the triage inspector, only from a channel the project still tracks.
+ * Plain, bounded text that is returned to the app and never stored. */
+export async function slackExcerpt(context: SourcePollContext, item: TrackedItem): Promise<SlackExcerpt> {
+	const { channel, channelName, thread_ts: ts } = item.metadata;
+	if (typeof channel !== "string" || !/^[CDG][A-Z0-9]{1,199}$/.test(channel) || !slackTimestamp(ts))
+		throw new Conflict("This message can't be read from Slack");
+	const tracked = context.config.slackChannels.some(
+		(configured) =>
+			configured === channel || (typeof channelName === "string" && configured.replace(/^#/, "") === channelName),
+	);
+	if (!tracked) throw new Conflict("This message's channel is no longer tracked");
+	const parent = parseSlackThreadParent(
+		// Only the parent is shown. Fetch as few replies as the tool allows.
+		await context.call("thread", { channel_id: channel, message_ts: ts, limit: 1, response_format: "detailed" }),
+		ts,
+	);
+	const { text, truncated } = slackExcerptText(parent.text, SLACK_EXCERPT_CHARS, SLACK_EXCERPT_LINES);
+	return { itemId: item.id, ...(parent.author ? { author: parent.author } : {}), text, truncated };
 }
 /** Short, stable key. Configured entries can be up to 200 characters; the checkpoint stays small. */
 function channelKey(channel: string): string {

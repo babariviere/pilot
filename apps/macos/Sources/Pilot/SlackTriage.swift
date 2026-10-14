@@ -393,6 +393,65 @@ final class SlackTriageModel: ObservableObject {
     }
 }
 
+/// The inspector's quote of a Slack message.
+enum SlackExcerptState: Equatable {
+    case loading
+    case loaded(SlackExcerpt)
+    /// A plain reason. Selecting the message again, or Try Again, reads it once more.
+    case unavailable(String)
+}
+
+/// Slack messages behind the selected triage items, read from pilotd on demand. Held in memory for this page only
+/// and bounded to the latest reads; nothing is written to disk. pilotd reads one message at a time, latest wins.
+@MainActor
+final class SlackExcerptStore: ObservableObject {
+    @Published private(set) var states: [String: SlackExcerptState] = [:]
+    private var recent: [String] = []
+
+    static let limit = 40
+    /// Moving through the list with the arrow keys reads only the message the selection settles on.
+    static let settle: Duration = .milliseconds(150)
+
+    func state(_ id: String) -> SlackExcerptState { states[id] ?? .loading }
+
+    /// Reads a message unless it is already shown. Call from a task tied to the selection, so a new selection
+    /// cancels the previous read.
+    func load(_ id: String, settle: Duration = SlackExcerptStore.settle,
+              read: (String) async throws -> SlackExcerpt) async {
+        if case .loaded = states[id] { return }
+        if states[id] != nil { states[id] = nil }
+        if settle > .zero { try? await Task.sleep(for: settle) }
+        guard !Task.isCancelled else { return }
+        do {
+            remember(id, .loaded(try await read(id)))
+        } catch {
+            guard !Task.isCancelled else { return }
+            remember(id, .unavailable(Self.reason(error)))
+        }
+    }
+
+    /// Snapshots only.
+    func loadFixture(_ states: [String: SlackExcerptState]) {
+        self.states = states
+        recent = Array(states.keys)
+    }
+
+    private func remember(_ id: String, _ state: SlackExcerptState) {
+        states[id] = state
+        recent.removeAll { $0 == id }
+        recent.append(id)
+        while recent.count > Self.limit { states[recent.removeFirst()] = nil }
+    }
+
+    /// pilotd's own plain reason (sign-in, Slack unreachable, channel no longer tracked), or a generic one.
+    static func reason(_ error: Error) -> String {
+        guard let error = error as? ClientError, error.status == 409 || error.status == 503,
+              !error.message.isEmpty, !error.message.hasPrefix("Superseded")
+        else { return "Couldn't load this message." }
+        return error.message.hasSuffix(".") ? error.message : error.message + "."
+    }
+}
+
 // MARK: Page
 
 /// The triage view in the main window, shown in place of the project page.
@@ -403,19 +462,26 @@ struct SlackTriagePage: View {
     @Environment(\.openSettings) private var openSettings
     @StateObject private var triage: SlackTriageModel
     @StateObject private var actions = TrackedItemActions()
+    @StateObject private var excerpts: SlackExcerptStore
     @AppStorage("pilot.slackTriageLayout") private var layout: SlackTriageLayout = .table
     @State private var filter = SlackTriageText.Filter()
     @State private var selection: String?
+    /// Bumped by the inspector's Try Again, to read the selected message once more.
+    @State private var excerptAttempt = 0
     @FocusState private var listFocused: Bool
     private let fixture: Bool
 
     init(projectId: String, fixture: [TrackedItem]? = nil, layout: SlackTriageLayout? = nil,
-         selection: String? = nil, filter: SlackTriageText.Filter = .init()) {
+         selection: String? = nil, filter: SlackTriageText.Filter = .init(),
+         excerpts: [String: SlackExcerptState] = [:]) {
         self.projectId = projectId
         self.fixture = fixture != nil
         let model = SlackTriageModel(projectId: projectId)
         if let fixture { model.loadFixture(fixture) }
         _triage = StateObject(wrappedValue: model)
+        let store = SlackExcerptStore()
+        store.loadFixture(excerpts)
+        _excerpts = StateObject(wrappedValue: store)
         if let layout { _layout = AppStorage(wrappedValue: layout, "pilot.slackTriageLayout.snapshot") }
         _selection = State(initialValue: selection)
         _filter = State(initialValue: filter)
@@ -522,10 +588,16 @@ struct SlackTriagePage: View {
                     }
                 Rectangle().fill(Theme.border).frame(width: 1)
                 SlackTriageInspector(item: selected, labels: labels, now: now, actions: actions,
-                                     error: selected.flatMap { triage.errors[$0.id] }) { change in
+                                     error: selected.flatMap { triage.errors[$0.id] },
+                                     excerpt: selected.map { excerpts.state($0.id) } ?? .loading,
+                                     retryExcerpt: { excerptAttempt += 1 }) { change in
                     if let selected { update(selected, change, columns: columns) }
                 }
                 .frame(width: 300)
+                .task(id: "\(selected?.id ?? "")#\(excerptAttempt)") {
+                    guard !fixture, let id = selected?.id else { return }
+                    await excerpts.load(id) { try await client.slackExcerpt($0) }
+                }
             }
         }
         .onAppear {
@@ -1050,6 +1122,8 @@ struct SlackTriageInspector: View {
     let now: Date
     @ObservedObject var actions: TrackedItemActions
     let error: String?
+    let excerpt: SlackExcerptState
+    let retryExcerpt: () -> Void
     let update: (SlackOverrides) -> Void
     @EnvironmentObject private var model: AppModel
 
@@ -1080,6 +1154,7 @@ struct SlackTriageInspector: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
             }
+            quote
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 6) {
                 pickerRow("Type") {
                     Picker("Type", selection: Binding(get: { triage.type }, set: { update(SlackOverrides(type: $0)) })) {
@@ -1158,6 +1233,41 @@ struct SlackTriageInspector: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The message itself, below the classifier's summary. Read from Slack when selected, never stored.
+    private var quote: some View {
+        QuoteBlock {
+            switch excerpt {
+            case .loading:
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.mini)
+                    Text("Reading the message…")
+                }
+                .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                .accessibilityElement(children: .combine)
+            case let .loaded(message):
+                if let author = message.author {
+                    Text(author).font(.pilot(.caption, weight: .medium)).foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1)
+                }
+                if message.text.isEmpty {
+                    Text("No text, only attachments.").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                } else {
+                    Text(message.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                        .lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            case let .unavailable(reason):
+                Text(reason).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try Again", action: retryExcerpt)
+                    .buttonStyle(.link).font(.pilot(.caption))
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Slack message")
     }
 
     private func pickerRow<Content: View>(_ title: String, @ViewBuilder picker: () -> Content) -> some View {
