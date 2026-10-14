@@ -2,6 +2,7 @@
 import { Worker } from "node:worker_threads";
 import type {
 	DashboardTrackedSource,
+	SlackCorrection,
 	TrackedItem,
 	TrackedItemList,
 	TrackedItemPatch,
@@ -85,14 +86,17 @@ export class TrackedItemStore {
 	list(query: TrackedQuery): Promise<TrackedItemList> {
 		return this.rpc("list", query);
 	}
-	slackCached(channel: string, ts: string): Promise<SlackCache | undefined> {
-		return this.rpc("slackCached", { channel, ts });
+	slackCached(channel: string, ts: string, projectId: string): Promise<SlackCache | undefined> {
+		return this.rpc("slackCached", { channel, ts, projectId });
 	}
-	reserveSlack(channel: string, ts: string, now: number): Promise<SlackReservation> {
-		return this.rpc("reserveSlack", { channel, ts, now });
+	reserveSlack(channel: string, ts: string, now: number, projectId: string): Promise<SlackReservation> {
+		return this.rpc("reserveSlack", { channel, ts, now, projectId });
 	}
-	finishSlack(channel: string, ts: string, result?: SlackClassification): Promise<void> {
-		return this.rpc("finishSlack", { channel, ts, result });
+	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): Promise<void> {
+		return this.rpc("finishSlack", { channel, ts, result, projectId });
+	}
+	corrections(projectId: string): Promise<SlackCorrection[]> {
+		return this.rpc("corrections", { projectId });
 	}
 	require(id: string): Promise<TrackedItem> {
 		return this.rpc("require", { id });

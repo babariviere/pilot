@@ -44,8 +44,72 @@ public struct TrackedItemPrefill: Codable, Equatable, Sendable {
         self.description = description; self.gitBranchName = gitBranchName; self.prompt = prompt
     }
 }
+public enum SlackMessageType: String, Codable, Hashable, Sendable { case bug, question, request, unknown }
+public enum SlackSeverity: String, Codable, Hashable, Sendable { case low, medium, high, critical }
+public enum SlackLocalStatus: String, Codable, Hashable, Sendable {
+    case open, inProgress = "in_progress", done, dismissed
+}
+public struct SlackProjectLabel: Codable, Equatable, Hashable, Sendable {
+    public var name: String
+    public var description: String
+    public var hideFromInbox: Bool?
+    public init(name: String, description: String, hideFromInbox: Bool? = nil) {
+        self.name = name; self.description = description; self.hideFromInbox = hideFromInbox
+    }
+}
+public struct SlackOverrides: Codable, Equatable, Sendable {
+    public var type: SlackMessageType?
+    public var label: String?
+    public var severity: SlackSeverity?
+    public var status: SlackLocalStatus?
+    /// Explicit null clears a label. Omission preserves the current override.
+    public var clearLabel: Bool
+    public init(type: SlackMessageType? = nil, label: String? = nil, severity: SlackSeverity? = nil,
+                status: SlackLocalStatus? = nil, clearLabel: Bool = false) {
+        self.type = type; self.label = label; self.severity = severity; self.status = status; self.clearLabel = clearLabel
+    }
+    enum CodingKeys: String, CodingKey { case type, label, severity, status }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        type = try values.decodeIfPresent(SlackMessageType.self, forKey: .type)
+        label = try values.decodeIfPresent(String.self, forKey: .label)
+        severity = try values.decodeIfPresent(SlackSeverity.self, forKey: .severity)
+        status = try values.decodeIfPresent(SlackLocalStatus.self, forKey: .status)
+        clearLabel = try values.contains(.label) && values.decodeNil(forKey: .label)
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(type, forKey: .type)
+        if clearLabel { try values.encodeNil(forKey: .label) }
+        else { try values.encodeIfPresent(label, forKey: .label) }
+        try values.encodeIfPresent(severity, forKey: .severity)
+        try values.encodeIfPresent(status, forKey: .status)
+    }
+}
+public struct SlackTriage: Codable, Equatable, Sendable {
+    public let type: SlackMessageType
+    public let label: String?
+    public let severity: SlackSeverity
+    public let status: SlackLocalStatus
+    public let overrides: SlackOverrides
+    public init(type: SlackMessageType, label: String? = nil, severity: SlackSeverity, status: SlackLocalStatus,
+                overrides: SlackOverrides = .init()) {
+        self.type = type; self.label = label; self.severity = severity; self.status = status; self.overrides = overrides
+    }
+}
+public struct SlackCorrection: Codable, Equatable, Sendable {
+    public let itemId: String
+    public let summary: String
+    public let correctedAt: Double
+    public let values: SlackOverrides
+    public init(itemId: String, summary: String, correctedAt: Double, values: SlackOverrides) {
+        self.itemId = itemId; self.summary = summary; self.correctedAt = correctedAt; self.values = values
+    }
+}
+
 public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     /// Channel IDs from the picker. Older configs may hold names.
+    public var slackLabels: [SlackProjectLabel]?
     public var slackChannels: [String]
     /// Display names by channel ID. Never part of the poll scope.
     public var slackChannelNames: [String: String]?
@@ -53,9 +117,9 @@ public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     public var linearTeam: String?
     public var linearTeamName: String?
     public init(slackChannels: [String] = [], slackChannelNames: [String: String]? = nil,
-                linearTeam: String? = nil, linearTeamName: String? = nil) {
+                linearTeam: String? = nil, linearTeamName: String? = nil, slackLabels: [SlackProjectLabel]? = nil) {
         self.slackChannels = slackChannels; self.slackChannelNames = slackChannelNames
-        self.linearTeam = linearTeam; self.linearTeamName = linearTeamName
+        self.linearTeam = linearTeam; self.linearTeamName = linearTeamName; self.slackLabels = slackLabels
     }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
@@ -68,6 +132,7 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let status: String
     public let metadata: [String: JSONValue]
     public let dismissed: Bool
+    public let slack: SlackTriage?
     /// Latest bound chat and mission.
     public let sessionId: String?
     public let missionId: String?
@@ -79,12 +144,12 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public init(id: String, projectId: String, kind: TrackedKind, externalId: String, title: String, url: String,
                 status: String, metadata: [String: JSONValue] = [:], dismissed: Bool = false,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
-                missionIds: [String]? = nil, createdAt: Double, updatedAt: Double) {
+                missionIds: [String]? = nil, slack: SlackTriage? = nil, createdAt: Double, updatedAt: Double) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.externalId = externalId
         self.title = title; self.url = url; self.status = status; self.metadata = metadata; self.dismissed = dismissed
         self.sessionId = sessionId; self.missionId = missionId; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.sessionIds = sessionIds ?? sessionId.map { [$0] }
-        self.missionIds = missionIds ?? missionId.map { [$0] }
+        self.missionIds = missionIds ?? missionId.map { [$0] }; self.slack = slack
     }
 
     /// A project dashboard row as a full item, so pages reuse the tracked row and its actions.
@@ -93,7 +158,7 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
         self.init(id: row.id, projectId: projectId, kind: kind, externalId: row.externalId ?? row.id,
                   title: row.title, url: row.url ?? "", status: row.status ?? "", metadata: row.metadata ?? [:],
                   sessionId: row.sessionId, missionId: row.missionId, sessionIds: row.sessionIds,
-                  missionIds: row.missionIds, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
+                  missionIds: row.missionIds, slack: row.slack, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
     }
 }
 public struct TrackedItemList: Codable, Equatable, Sendable {
@@ -104,21 +169,23 @@ public struct TrackedItemList: Codable, Equatable, Sendable {
 public struct TrackedItemPatch: Encodable, Sendable {
     /// Confirmed Start chat/mission only. Ordinary linking remains read-only.
     public var start: Bool?
+    public var slack: SlackOverrides?
     public var dismissed: Bool?
     public var sessionId: String?
     public var missionId: String?
     public var clearSession: Bool
     public var clearMission: Bool
     public init(dismissed: Bool? = nil, sessionId: String? = nil, missionId: String? = nil,
-                clearSession: Bool = false, clearMission: Bool = false, start: Bool? = nil) {
+                clearSession: Bool = false, clearMission: Bool = false, slack: SlackOverrides? = nil, start: Bool? = nil) {
         self.start = start
         self.dismissed = dismissed; self.sessionId = sessionId; self.missionId = missionId
-        self.clearSession = clearSession; self.clearMission = clearMission
+        self.clearSession = clearSession; self.clearMission = clearMission; self.slack = slack
     }
-    enum CodingKeys: String, CodingKey { case dismissed, sessionId, missionId, start }
+    enum CodingKeys: String, CodingKey { case dismissed, sessionId, missionId, slack, start }
     public func encode(to encoder: any Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encodeIfPresent(start, forKey: .start)
+        try values.encodeIfPresent(slack, forKey: .slack)
         try values.encodeIfPresent(dismissed, forKey: .dismissed)
         if clearSession { try values.encodeNil(forKey: .sessionId) }
         else { try values.encodeIfPresent(sessionId, forKey: .sessionId) }

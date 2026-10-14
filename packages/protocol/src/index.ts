@@ -807,10 +807,11 @@ export interface DashboardScheduledItem {
 export type DashboardSourceStatus = import("./tracking.ts").SourceStatus;
 
 export interface DashboardTrackedItem {
+	slack?: import("./tracking.ts").SlackTriage;
 	id: string;
 	title: string;
 	url?: string;
-	/** Source-specific label, for example a Linear state or "bug report". */
+	/** Source-specific label, for example a Linear state or a local Slack status. */
 	status?: string;
 	updatedAt?: number;
 	externalId?: string;

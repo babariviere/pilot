@@ -37,11 +37,11 @@ test("Slack replay exercises channel history and thread parsing without any mode
 		store,
 		{
 			classifySlack: async (_path, text) => ({
-				isBugReport: text.includes("Export crashes"),
+				type: text.includes("Export crashes") ? "bug" : "unknown",
 				confidence: 0.9,
 				severity: "high",
 				summary: "Export crashes",
-				guessedProject: null,
+				label: null,
 			}),
 		},
 		() => Date.UTC(2026, 9, 13, 12),
@@ -52,7 +52,7 @@ test("Slack replay exercises channel history and thread parsing without any mode
 		signal: new AbortController().signal,
 		call: cassetteSource(cassette),
 	});
-	assert.equal(result.items.length, 1);
+	assert.equal(result.items.length, 2);
 	assert.equal(result.items[0]?.externalId, "C000000001/1791885305.000001");
 	cassette.assertDone();
 });

@@ -156,9 +156,11 @@ function validatePullRequestSetting(request: Partial<ProjectRequest>): void {
 export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tracking must be an object");
 	const config = value as ProjectTrackingConfig;
-	const keys = ["slackChannels", "slackChannelNames", "linearTeam", "linearTeamName"];
+	const keys = ["slackChannels", "slackChannelNames", "slackLabels", "linearTeam", "linearTeamName"];
 	if (Object.keys(config).some((key) => !keys.includes(key)))
-		throw new Error("Tracking supports only slackChannels, slackChannelNames, linearTeam and linearTeamName");
+		throw new Error(
+			"Tracking supports only slackChannels, slackChannelNames, slackLabels, linearTeam and linearTeamName",
+		);
 	if (
 		!Array.isArray(config.slackChannels) ||
 		config.slackChannels.length > 100 ||
@@ -172,6 +174,29 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		(typeof config.linearTeamName !== "string" || config.linearTeamName.length > 200)
 	)
 		throw new Error("linearTeamName must be a string of at most 200 characters");
+	const labels = config.slackLabels;
+	if (
+		labels !== undefined &&
+		(!Array.isArray(labels) ||
+			labels.length > 50 ||
+			labels.some(
+				(label) =>
+					!label ||
+					typeof label !== "object" ||
+					Array.isArray(label) ||
+					Object.keys(label).some((key) => !["name", "description", "hideFromInbox"].includes(key)) ||
+					typeof label.name !== "string" ||
+					!label.name.trim() ||
+					label.name.length > 80 ||
+					/[\x00-\x1f]/.test(label.name) ||
+					typeof label.description !== "string" ||
+					label.description.length > 240 ||
+					/[\x00-\x1f]/.test(label.description) ||
+					(label.hideFromInbox !== undefined && typeof label.hideFromInbox !== "boolean"),
+			) ||
+			new Set(labels.map((label) => label.name.trim())).size !== labels.length)
+	)
+		throw new Error("Invalid Slack labels (at most 50 unique names with one-line descriptions)");
 	const names = config.slackChannelNames;
 	if (
 		names !== undefined &&
@@ -193,6 +218,15 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	const linearTeam = config.linearTeam?.trim();
 	const result: ProjectTrackingConfig = {
 		slackChannels,
+		...(labels
+			? {
+					slackLabels: labels.map((label) => ({
+						...label,
+						name: label.name.trim(),
+						description: label.description.trim(),
+					})),
+				}
+			: {}),
 		...(Object.keys(slackChannelNames).length ? { slackChannelNames } : {}),
 		...(linearTeam ? { linearTeam } : {}),
 		...(linearTeam && config.linearTeamName?.trim() ? { linearTeamName: config.linearTeamName.trim() } : {}),

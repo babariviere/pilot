@@ -2,6 +2,33 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func slackTriageDecodesAndEncodesExplicitOverrides() throws {
+    let config = ProjectTrackingConfig(slackLabels: [.init(name: "Client", description: "App support", hideFromInbox: true)])
+    let roundtrip = try JSONDecoder().decode(ProjectTrackingConfig.self, from: JSONEncoder().encode(config))
+    #expect(roundtrip.slackLabels?.first?.hideFromInbox == true)
+    let triage = try JSONDecoder().decode(SlackTriage.self, from: Data(#"""
+    {"type":"question","label":null,"severity":"low","status":"done",
+     "overrides":{"type":"question","label":null,"severity":"low","status":"done"}}
+    """#.utf8))
+    #expect(triage.type == .question)
+    #expect(triage.status == .done)
+    #expect(triage.overrides.clearLabel)
+    let patch = TrackedItemPatch(slack: .init(type: .request, status: .inProgress, clearLabel: true))
+    let json = try JSONValue.decode(JSONEncoder().encode(patch))
+    #expect(json["slack"]?["type"]?.string == "request")
+    #expect(json["slack"]?["status"]?.string == "in_progress")
+    #expect(json["slack"]?["label"] == .null)
+    let omitted = try JSONValue.decode(JSONEncoder().encode(TrackedItemPatch(slack: .init(severity: .critical))))
+    #expect(omitted["slack"]?["label"] == nil)
+    let correction = try JSONDecoder().decode(SlackCorrection.self, from: Data(#"""
+    {"itemId":"item","summary":"Export help","correctedAt":123,"values":{"type":"question","label":null}}
+    """#.utf8))
+    #expect(correction.values.clearLabel)
+    let row = DashboardTrackedItem(id: "item", title: "Export help", slack: triage)
+    let decodedRow = try JSONDecoder().decode(DashboardTrackedItem.self, from: JSONEncoder().encode(row))
+    #expect(TrackedItem(dashboard: decodedRow, projectId: "p", kind: .slack).slack == triage)
+}
+
 @Test func trackingDecodesLegacyProjectsAndConfiguration() throws {
     let old = try JSONDecoder().decode(Project.self, from: Data(#"{"id":"p","name":"Repo","path":"/repo","createdAt":1}"#.utf8))
     #expect(old.tracking == nil)

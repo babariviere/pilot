@@ -22,7 +22,14 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	const home = await mkdtemp(join(tmpdir(), "pilot-tracking-server-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
-	const project = await projects.create({ path: home, tracking: { slackChannels: ["C1"], linearTeam: "ENG" } });
+	const project = await projects.create({
+		path: home,
+		tracking: {
+			slackChannels: ["C1"],
+			slackLabels: [{ name: "Client", description: "App support", hideFromInbox: true }],
+			linearTeam: "ENG",
+		},
+	});
 	await mkdir(join(home, "other"));
 	const other = await projects.create({ path: join(home, "other") });
 	const items = new TrackedItemStore(join(home, "tracked.sqlite"));
@@ -166,6 +173,74 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	assert.equal((await (await api(`/tracked-items?projectId=${project.id}&dismissed=true`)).json()).total, 1);
 	assert.equal(tracking.dashboard(project.id)[0]?.total, 7);
 	assert.equal((await (await api(`/tracked-items?projectId=${other.id}`)).json()).total, 0);
+	await items.commit(project.id, "slack", [
+		{
+			externalId: "C1/1.000001",
+			title: "Export help",
+			url: "https://example.com/thread",
+			status: "open",
+			updatedAt: 1,
+			metadata: { type: "question", label: null, severity: "low", channel: "C1" },
+		},
+	]);
+	const slack = (await (await api(`/tracked-items?projectId=${project.id}&kind=slack`)).json()).items[0];
+	assert.equal(slack.slack.type, "question");
+	assert.equal(slack.slack.status, "open");
+	assert.equal((await api(`/tracked-items/${id}`, { slack: { type: "bug" } }, "PATCH")).status, 400);
+	assert.equal((await api(`/tracked-items/${slack.id}`, { slack: { label: "Not configured" } }, "PATCH")).status, 400);
+	assert.equal((await api(`/tracked-items/${slack.id}`, { slack: { status: "working" } }, "PATCH")).status, 400);
+	const eventCount = messages.filter((message) => message.type === "tracked.changed").length;
+	const corrected = await (
+		await api(
+			`/tracked-items/${slack.id}`,
+			{ slack: { type: "request", label: "Client", severity: "medium", status: "done" } },
+			"PATCH",
+		)
+	).json();
+	assert.equal(corrected.slack.label, "Client");
+	assert.equal(corrected.status, "done");
+	await until(() => messages.filter((message) => message.type === "tracked.changed").length > eventCount);
+	const cleared = await (await api(`/tracked-items/${slack.id}`, { slack: { label: null } }, "PATCH")).json();
+	assert.equal(cleared.slack.label, null);
+	assert.equal(cleared.slack.overrides.label, null);
+	chats.set("local", { id: "local", projectId: project.id } as SessionSummary);
+	const started = await (await api(`/tracked-items/${slack.id}`, { sessionId: "local", start: true }, "PATCH")).json();
+	assert.equal(started.status, "in_progress");
+	assert.equal(started.slack.overrides.type, "request");
+	const corrections = await (await api(`/tracking/slack/corrections?projectId=${project.id}`)).json();
+	assert.equal(corrections.length, 2);
+	assert.equal(corrections[0].values.label, null);
+	assert.deepEqual(await (await api(`/tracking/slack/corrections?projectId=${other.id}`)).json(), []);
+	assert.equal((await api("/tracking/slack/corrections")).status, 400);
+	assert.equal((await api("/tracking/slack/corrections?projectId=missing")).status, 404);
+	const saved = await (
+		await api(
+			`/projects/${project.id}`,
+			{
+				tracking: {
+					slackChannels: ["C1"],
+					slackLabels: [{ name: "Client", description: "App support", hideFromInbox: true }],
+				},
+			},
+			"PATCH",
+		)
+	).json();
+	assert.equal(saved.tracking.slackLabels[0].hideFromInbox, true);
+	assert.equal(
+		(
+			await api(
+				`/projects/${project.id}`,
+				{
+					tracking: {
+						slackChannels: [],
+						slackLabels: [{ name: "Client", description: "App support", hideFromInbox: 1 }],
+					},
+				},
+				"PATCH",
+			)
+		).status,
+		400,
+	);
 });
 
 test("Linear cycle/fallback and transient prefill are exposed through the tracking and dashboard HTTP APIs", async (t) => {

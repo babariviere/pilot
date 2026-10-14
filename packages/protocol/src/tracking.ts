@@ -2,7 +2,39 @@
 export type TrackedKind = "linear" | "slack";
 export type TrackingJson = null | boolean | number | string | TrackingJson[] | { [key: string]: TrackingJson };
 
+export type SlackMessageType = "bug" | "question" | "request" | "unknown";
+export type SlackSeverity = "low" | "medium" | "high" | "critical";
+export type SlackLocalStatus = "open" | "in_progress" | "done" | "dismissed";
+/** Name is the project-local label identity. No built-in labels. */
+export interface SlackProjectLabel {
+	name: string;
+	description: string;
+	hideFromInbox?: boolean;
+}
+export interface SlackOverrides {
+	type?: SlackMessageType;
+	/** null explicitly clears the label; omission leaves it unchanged. */
+	label?: string | null;
+	severity?: SlackSeverity;
+	status?: SlackLocalStatus;
+}
+/** Effective values after applying durable user overrides. */
+export interface SlackTriage {
+	type: SlackMessageType;
+	label: string | null;
+	severity: SlackSeverity;
+	status: SlackLocalStatus;
+	overrides: SlackOverrides;
+}
+/** GET /api/tracking/slack/corrections?projectId=... (newest first, at most 20). */
+export interface SlackCorrection {
+	itemId: string;
+	summary: string;
+	correctedAt: number;
+	values: SlackOverrides;
+}
 export interface ProjectTrackingConfig {
+	slackLabels?: SlackProjectLabel[];
 	/** Slack channel IDs from the channel picker. Older configs may hold names. */
 	slackChannels: string[];
 	/** Display names by channel ID, for settings and rows. Never part of the poll scope. */
@@ -23,6 +55,7 @@ export interface TrackedItem {
 	/** metadata.linearStart: local { outcome: moved|skipped|error, attemptedAt, error? }, preserved by sync. */
 	metadata: Record<string, TrackingJson>;
 	dismissed: boolean;
+	slack?: SlackTriage;
 	/** Latest chat and mission started from (or linked to) this item. */
 	sessionId?: string;
 	missionId?: string;
@@ -37,6 +70,7 @@ export interface TrackedItem {
 export interface TrackedItemPatch {
 	/** Only on confirmed Start chat/mission, with exactly one new link. Never for ordinary linking. */
 	start?: boolean;
+	slack?: SlackOverrides;
 	dismissed?: boolean;
 	sessionId?: string | null;
 	missionId?: string | null;

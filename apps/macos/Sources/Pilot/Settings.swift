@@ -457,6 +457,8 @@ final class ProjectEditor: ObservableObject {
     @Published var privateClones = true
     @Published var requirePullRequest = true
     @Published var slackChannels: [TrackedChannelRef] = []
+    // Preserve daemon-configured labels until the label editor is available.
+    private var slackLabels: [SlackProjectLabel]?
     @Published var linearTeam: TrackedTeamRef?
     @Published var error: String?
     @Published private var loaded: Fields?
@@ -484,6 +486,7 @@ final class ProjectEditor: ObservableObject {
         privateClones = project.usesPrivateClones
         requirePullRequest = project.effectiveRequirePullRequest
         let tracking = project.tracking
+        slackLabels = tracking?.slackLabels
         slackChannels = (tracking?.slackChannels ?? []).map { TrackedChannelRef(id: $0, name: tracking?.slackChannelNames?[$0]) }
         linearTeam = tracking?.linearTeam.flatMap { $0.isEmpty ? nil : TrackedTeamRef(id: $0, name: tracking?.linearTeamName) }
         error = nil
@@ -509,7 +512,8 @@ final class ProjectEditor: ObservableObject {
                 slackChannels: slackChannels.map(\.id),
                 slackChannelNames: names.isEmpty ? nil : names,
                 linearTeam: linearTeam?.id ?? "",
-                linearTeamName: linearTeam?.name
+                linearTeamName: linearTeam?.name,
+                slackLabels: slackLabels
             )
         )
     }
