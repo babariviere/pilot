@@ -1,5 +1,33 @@
 # UI screenshots
 
+## Main README
+
+The main README uses three captures rendered from the current production SwiftUI views with synthetic
+fixtures, without connecting to a daemon or using live conversations:
+
+- `readme-build.png`: a Build chat, its task checklist and the Changes inspector.
+- `readme-ask.png`: a read-only Ask chat with an implementation plan.
+- `readme-mission.png`: a mission's Tasks page in the native window.
+
+The chat captures use the snapshot renderer's stand-in window header. The mission capture includes the
+real native toolbar. These are view-layout snapshots, not end-to-end agent or scrolling tests.
+
+Regenerate on macOS from the repository root:
+
+```sh
+apps/macos/scripts/build.sh
+captures="$(mktemp -d /tmp/pilot-readme-screenshots.XXXXXX)"
+fixture_home="$(mktemp -d /tmp/pilot-readme-home.XXXXXX)"
+HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/.build/debug/Pilot --snapshot "$captures"
+HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/.build/debug/Pilot --snapshot "$captures" --missions-only
+cp "$captures/session-changes.png" docs/screenshots/readme-build.png
+cp "$captures/ask-chat.png" docs/screenshots/readme-ask.png
+cp "$captures/mission-window-tasks-1360.png" docs/screenshots/readme-mission.png
+```
+
+Inspect all three images before publishing. Copy only these demo captures, never a live window capture
+containing private projects, conversations or credentials.
+
 ## Long chat messages
 
 Render the production message views with synthetic crash-report and assistant fixtures:

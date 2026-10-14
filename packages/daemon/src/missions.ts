@@ -1,4 +1,4 @@
-/** Missions (PLAN.md §5.7): daemon-owned state shared by the chats of one goal. pilotd is the sole writer. */
+/** Missions: daemon-owned state shared by the chats of one goal. pilotd is the sole writer. */
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";

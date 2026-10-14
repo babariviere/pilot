@@ -392,7 +392,7 @@ export interface ProjectRequest {
 	tracking?: ProjectTrackingConfig;
 }
 
-/** Missions (PLAN.md §5.7): a goal spanning several chats of one project. State is daemon-owned. */
+/** Missions: a goal spanning several chats of one project. State is daemon-owned. */
 export type MissionStatus = "active" | "done" | "archived";
 export type MissionTaskStatus = "todo" | "in_progress" | "blocked" | "in_review" | "done" | "dropped";
 export type MissionHealth = "on_track" | "at_risk" | "off_track";

@@ -1,6 +1,6 @@
 import Foundation
 
-// Mirrors packages/protocol missions (PLAN.md §5.7). Keep both sides in sync.
+// Mirrors packages/protocol mission types. Keep both sides in sync.
 
 /// String enums that decode values from newer daemons as a fallback instead of failing the whole payload.
 public protocol LenientStringEnum: RawRepresentable, Codable, Hashable, Sendable where RawValue == String {
