@@ -224,6 +224,18 @@ See [testing](docs/testing.md) for suite selection and offline fixtures, and the
 For agent-side artifact preview screenshots, install the optional renderer with `pnpm artifacts:browser`.
 Publication still works without it.
 
+### Dependency updates
+
+[`renovate.json`](renovate.json) configures reviewed update PRs for pnpm dependencies, including required
+Anthropic auth. Pi SDK packages and workspace overrides update together; `pi-extensions` tracks upstream
+`main` while remaining pinned to a full commit SHA. Renovate refreshes `pnpm-lock.yaml` with those updates.
+Automerge is disabled. Renovate PRs also check an isolated production runtime before and after ZIP
+relocation in the Node CI job. Review those checks and the existing tests before merging.
+
+Enable the [Renovate GitHub App](https://github.com/apps/renovate) for this repository after this config
+lands on `main`. Before enabling digest updates, ensure `pi-extensions/main` includes Pilot's embedding
+exports; an older upstream head is not a compatible replacement for the bundled profile.
+
 ### Architecture
 
 ```text

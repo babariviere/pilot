@@ -1,0 +1,43 @@
+{
+	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
+	"extends": ["config:recommended"],
+	"enabledManagers": ["npm", "custom.regex"],
+	"dependencyDashboard": false,
+	"automerge": false,
+	"prConcurrentLimit": 3,
+	"customManagers": [
+		{
+			"customType": "regex",
+			"description": "Keep pi-extensions pinned to an immutable commit from upstream main",
+			"managerFilePatterns": ["/^packages/kernel/package\\.json$/"],
+			"matchStrings": [
+				"\"@babariviere/pi-extensions\"\\s*:\\s*\"git\\+https://github\\.com/babariviere/pi-extensions\\.git#(?<currentDigest>[a-f0-9]{40})\""
+			],
+			"currentValueTemplate": "main",
+			"depNameTemplate": "@babariviere/pi-extensions",
+			"packageNameTemplate": "https://github.com/babariviere/pi-extensions.git",
+			"datasourceTemplate": "git-refs"
+		}
+	],
+	"packageRules": [
+		{
+			"description": "The custom manager owns the commit pin, not npm's GitHub tag lookup",
+			"matchManagers": ["npm"],
+			"matchDepNames": ["@babariviere/pi-extensions"],
+			"enabled": false
+		},
+		{
+			"description": "Update Pi SDK dependencies and pnpm overrides together",
+			"matchManagers": ["npm"],
+			"matchPackageNames": ["@earendil-works/**"],
+			"groupName": "Pi SDK",
+			"groupSlug": "pi-sdk",
+			"rangeStrategy": "pin",
+			"separateMajorMinor": false
+		},
+		{
+			"matchPackageNames": ["@gotgenes/pi-anthropic-auth"],
+			"rangeStrategy": "pin"
+		}
+	]
+}

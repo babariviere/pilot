@@ -79,6 +79,17 @@ jobs:
           for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
           python3 -B -m unittest discover -s apps/macos/scripts/tests -p 'test_*.py'
           node --test apps/macos/scripts/tests/*.test.mjs
+      - name: Verify packaged dependency updates
+        if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'renovate/')
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d "$RUNNER_TEMP/renovate-runtime.XXXXXX")"
+          trap 'rm -rf "$stage"' EXIT
+          apps/macos/scripts/bundle-runtime.sh "$stage/runtime"
+          ditto -c -k --keepParent "$stage/runtime" "$stage/runtime.zip"
+          mkdir "$stage/relocated"
+          ditto -x -k "$stage/runtime.zip" "$stage/relocated"
+          apps/macos/scripts/check-runtime.sh "$stage/relocated/runtime"
 
   swift-test:
     runs-on: macos-15
