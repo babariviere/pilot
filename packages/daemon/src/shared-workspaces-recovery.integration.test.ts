@@ -168,12 +168,11 @@ test("merge conflicts survive exact recovery", async () => {
 	}
 });
 
-test("unknown ignored files, unsafe local configs and jj-omitted files block automatic cleanup", async () => {
+test("jj-omitted files block cleanup but ignored files and unsafe ignored configs do not", async () => {
 	const f = fixture();
 	try {
 		const w = await f.store.create(f.source, f.path());
 		for (const [name, config] of [
-			[".env", undefined],
 			["huge.txt", "snapshot.max-new-file-size=1"],
 			["not-autotracked.txt", "snapshot.auto-track=none()"],
 		] as const) {
@@ -184,13 +183,21 @@ test("unknown ignored files, unsafe local configs and jj-omitted files block aut
 			rmSync(join(w.path, name));
 		}
 		jj(w.path, "config", "set", "--repo", "snapshot.auto-track", "all()");
+		writeFileSync(join(w.path, ".env"), "discard ignored input\n");
 		symlinkSync(join(f.root, "outside"), join(w.path, "mise.local.toml"));
-		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+		assert.deepEqual((await f.store.snapshot(w.path, w.shared!, f.recovery)).localConfigs, {});
 		rmSync(join(w.path, "mise.local.toml"));
 		mkdirSync(join(f.root, "outside"));
 		writeFileSync(join(f.root, "outside/config.local.toml"), "secret\n");
 		symlinkSync(join(f.root, "outside"), join(w.path, "mise"));
 		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe .*path/);
+		writeFileSync(join(w.path, ".gitignore"), `${readFileSync(join(w.path, ".gitignore"), "utf8")}\nmise\n`);
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, recovery);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(existsSync(join(w.path, ".env")), false);
+		assert.equal(existsSync(join(w.path, "mise")), false);
+		assert.equal(readFileSync(join(f.root, "outside/config.local.toml"), "utf8"), "secret\n");
 	} finally {
 		f.close();
 	}
