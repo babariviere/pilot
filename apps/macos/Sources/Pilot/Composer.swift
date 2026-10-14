@@ -132,8 +132,8 @@ struct Composer: View {
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
     var onSlashCommandsNeeded: (() -> Void)? = nil
-    /// Send later: the message, its trigger and, for At a time, epoch milliseconds. Nil hides the control.
-    var onSchedule: ((String, ScheduleTrigger, Double?) -> Void)? = nil
+    /// Send later: the message and when it starts. Nil hides the control.
+    var onSchedule: ((String, ScheduleWhen) -> Void)? = nil
     @StateObject private var modelPicker: ChatModelPickerState
 
     init(
@@ -148,7 +148,7 @@ struct Composer: View {
         session: SessionSummary? = nil,
         slashCommands: [SlashCommand]? = nil,
         onSlashCommandsNeeded: (() -> Void)? = nil,
-        onSchedule: ((String, ScheduleTrigger, Double?) -> Void)? = nil
+        onSchedule: ((String, ScheduleWhen) -> Void)? = nil
     ) {
         self.state = state
         self.working = working
@@ -256,9 +256,10 @@ struct Composer: View {
             }
             Spacer(minLength: 8)
             if let onSchedule {
-                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker) { trigger, at in
+                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker,
+                                  sendNow: { send(.steer) }) { when in
                     guard state.canSend(changingModel: modelPicker.changing) else { return }
-                    onSchedule(state.attachments.message(text: state.trimmed), trigger, at)
+                    onSchedule(state.attachments.message(text: state.trimmed), when)
                 }
             }
             ComposerSendButtons(state: state, draft: state.draftState, modelPicker: modelPicker,
@@ -369,10 +370,12 @@ private struct ComposerSendLater: View {
     @ObservedObject var state: ComposerState
     @ObservedObject var draft: ComposerDraftState
     @ObservedObject var modelPicker: ChatModelPickerState
-    let schedule: (ScheduleTrigger, Double?) -> Void
+    /// The Send button's action, offered by the Wi-Fi triggers when their condition already holds.
+    let sendNow: () -> Void
+    let schedule: (ScheduleWhen) -> Void
 
     var body: some View {
-        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), schedule: schedule)
+        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), sendNow: sendNow, schedule: schedule)
     }
 }
 
