@@ -469,9 +469,11 @@ export class MissionService {
 				if (this.store.missionOf(target) !== missionId) throw new Conflict("That chat is not in this mission");
 				if (args.taskId !== undefined && typeof args.taskId !== "string")
 					throw new Error("taskId must be a task ID or number");
-				return action === "bindPr"
-					? this.sessions.bindPullRequest(target, url, actor, str("taskId"))
-					: this.sessions.unbindPullRequest(target, url, actor);
+				const { changed, previousOwner, taskLinkRemoved } =
+					action === "bindPr"
+						? await this.sessions.bindPullRequest(target, url, actor, str("taskId"))
+						: await this.sessions.unbindPullRequest(target, url, actor);
+				return { changed, previousOwner, taskLinkRemoved };
 			}
 			case "delete": {
 				if (typeof args.id !== "string" || !args.id.trim())
@@ -521,6 +523,7 @@ export class MissionService {
 						title: member.title,
 						coordinator: member.id === mission.coordinatorSessionId,
 						state: member.state,
+						boundPullRequests: member.boundPullRequests ?? [],
 						...(member.outcome !== undefined ? { outcome: member.outcome } : {}),
 						...(member.outcomeAt !== undefined ? { outcomeAt: member.outcomeAt } : {}),
 						...(member.outcomeReason !== undefined ? { outcomeReason: member.outcomeReason } : {}),
@@ -535,6 +538,15 @@ export class MissionService {
 			case "get": {
 				const detail = this.store.detail(missionId);
 				const { mission } = detail;
+				const owners = new Map(
+					detail.resources
+						.filter((r) => r.kind === "github.pr")
+						.map((r) => [r.url, this.sessions.pullRequestOwnerSummary(r.url)]),
+				);
+				const resources = detail.resources.map((r) => ({
+					...r,
+					...(r.kind === "github.pr" ? { owner: owners.get(r.url) ?? null } : {}),
+				}));
 				const number = new Map(detail.tasks.map((task) => [task.id, task.number]));
 				return {
 					mission: {
@@ -553,7 +565,7 @@ export class MissionService {
 							number: task.number,
 							title: task.title,
 							status: task.status,
-							resources: detail.resources.filter((resource) => resource.taskId === task.id),
+							resources: resources.filter((resource) => resource.taskId === task.id),
 							artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
 							...(task.sessionId ? { owner: who(task.sessionId) } : {}),
 							...(task.milestone ? { milestone: task.milestone } : {}),
@@ -571,7 +583,9 @@ export class MissionService {
 							by: who(comment.authorSessionId),
 							...(comment.targetSessionId ? { to: who(comment.targetSessionId) } : {}),
 						})),
-					resources: detail.resources.map((resource) => ({
+					resources: resources.map((resource) => ({
+						relationship: resource.relationship,
+						...(resource.kind === "github.pr" ? { owner: resource.owner } : {}),
 						...(resource.taskId ? { taskId: resource.taskId } : {}),
 						url: resource.url,
 						kind: resource.kind,
@@ -693,11 +707,19 @@ export class MissionService {
 					},
 					actor,
 				);
+			case "unlink":
+				if (typeof args.url !== "string") throw new Error("unlink requires url");
+				if (args.taskId !== undefined && typeof args.taskId !== "string")
+					throw new Error("taskId must be a task ID or number");
+				return this.store.unlinkResource(missionId, args.url, str("taskId"), actor);
 			case "link":
 				return this.store.addResource(
 					missionId,
 					{
 						url: str("url") as string,
+						...(args.relationship !== undefined
+							? { relationship: args.relationship as "ownership" | "reference" }
+							: {}),
 						...(str("title") ? { title: str("title") } : {}),
 						...(args.taskId !== undefined ? { taskId: args.taskId as string } : {}),
 					},

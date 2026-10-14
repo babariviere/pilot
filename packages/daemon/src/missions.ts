@@ -341,6 +341,13 @@ export class MissionStore {
 			this.db.exec("ALTER TABLE resources ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL");
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "pull_request"))
 			this.db.exec("ALTER TABLE resources ADD COLUMN pull_request TEXT");
+		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "relationship"))
+			this.transaction(() => {
+				this.db.exec("ALTER TABLE resources ADD COLUMN relationship TEXT NOT NULL DEFAULT 'reference'");
+				this.db.exec(
+					"UPDATE resources SET relationship = 'ownership' WHERE kind = 'github.pr' AND task_id IS NOT NULL",
+				);
+			});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
 		if (!this.all("PRAGMA table_info(events)").some((row) => row.name === "is_user_note"))
@@ -513,7 +520,7 @@ export class MissionStore {
 		);
 		const activeTaskIds = new Set(tasks.map((task) => task.id));
 		const linkedPrs = this.all(
-			"SELECT r.url, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id WHERE r.mission_id = ? AND t.session_id = ? AND r.kind = 'github.pr'",
+			"SELECT r.url, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id WHERE r.mission_id = ? AND t.session_id = ? AND r.kind = 'github.pr' AND r.relationship = 'ownership'",
 			id,
 			session.id,
 		);
@@ -1367,7 +1374,7 @@ export class MissionStore {
 		try {
 			this.transaction(() => {
 				for (const item of artifacts) this.linkArtifact(id, { ...item, taskId });
-				for (const item of links) this.addResource(id, { ...item, taskId });
+				for (const item of links) this.addResource(id, { ...item, taskId, relationship: "reference" });
 			});
 		} finally {
 			this.referenceBatch = undefined;
@@ -1379,15 +1386,22 @@ export class MissionStore {
 		this.require(id);
 		const { title, ...parsed } = normalizeResourceWrite(write);
 		const taskId = write.taskId === undefined ? undefined : this.resolveTask(id, write.taskId).id;
+		if (write.relationship !== undefined && write.relationship !== "ownership" && write.relationship !== "reference")
+			throw new Error("Invalid link relationship");
+		const relationship = write.relationship ?? (taskId && parsed.kind === "github.pr" ? "ownership" : "reference");
+		if (relationship === "ownership" && (!taskId || parsed.kind !== "github.pr"))
+			throw new Error("Ownership links require a task and a GitHub PR");
 		const existing = this.one(
-			"SELECT * FROM resources WHERE mission_id = ? AND url = ? AND task_id IS ?",
+			"SELECT * FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS ? AND relationship = ?",
 			id,
 			parsed.url,
 			taskId ?? null,
+			relationship,
 		);
 		if (existing) return resourceFrom(existing);
 		const now = Date.now();
 		const resource: MissionResource = {
+			relationship,
 			id: randomUUID(),
 			...(taskId ? { taskId } : {}),
 			url: parsed.url,
@@ -1399,7 +1413,7 @@ export class MissionStore {
 		};
 		this.transaction(() => {
 			this.run(
-				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at, task_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO resources (id, mission_id, url, title, kind, external_id, added_by_session_id, created_at, task_id, relationship) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				resource.id,
 				id,
 				resource.url,
@@ -1409,6 +1423,7 @@ export class MissionStore {
 				actor.sessionId ?? null,
 				now,
 				taskId ?? null,
+				relationship,
 			);
 			this.event(id, "resource", `Linked ${title ?? parsed.externalId ?? parsed.url}`, actor, { at: now, taskId });
 			const cached = this.one(
@@ -1429,6 +1444,12 @@ export class MissionStore {
 		const row = this.one("SELECT * FROM resources WHERE mission_id = ? AND id = ?", id, resourceId);
 		if (!row) throw new NotFound(`Unknown resource: ${resourceId}`);
 		const resource = resourceFrom(row);
+		if (
+			actor.sessionId &&
+			actor.sessionId !== this.require(id).coordinatorSessionId &&
+			resource.addedBySessionId !== actor.sessionId
+		)
+			throw new Conflict("Members may only remove links they added");
 		this.transaction(() => {
 			this.run("DELETE FROM resources WHERE id = ?", resourceId);
 			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
@@ -1437,6 +1458,32 @@ export class MissionStore {
 			if (resource.taskId) this.reconcileTaskPullRequests(id, resource.taskId);
 		});
 		this.changed(id);
+	}
+
+	/** URL + scope identify one link. Prefer a reference when both kinds share a scope. */
+	unlinkResource(
+		id: string,
+		url: string,
+		taskRef?: string,
+		actor: MissionActor = USER,
+	): { removed: boolean; resource?: MissionResource } {
+		const mission = this.require(id);
+		const parsed = normalizeResourceWrite({ url });
+		const taskId = taskRef === undefined ? undefined : this.resolveTask(id, taskRef).id;
+		const row = this.one(
+			`SELECT * FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND task_id IS ?
+			ORDER BY CASE WHEN ? = 1 OR added_by_session_id = ? THEN 0 ELSE 1 END,
+			relationship DESC, created_at, id LIMIT 1`,
+			id,
+			parsed.url,
+			taskId ?? null,
+			!actor.sessionId || actor.sessionId === mission.coordinatorSessionId ? 1 : 0,
+			actor.sessionId ?? null,
+		);
+		if (!row) return { removed: false };
+		const resource = resourceFrom(row);
+		this.removeResource(id, resource.id, actor);
+		return { removed: true, resource };
 	}
 
 	/** Validate before session metadata is committed. No mission means there is no task link to bind. */
@@ -1468,7 +1515,9 @@ export class MissionStore {
 	}
 
 	/** Explicit handoffs move task links and both sides' activity in one durable, replay-safe transaction. */
-	applyPullRequestBinding(operation: PullRequestBinding): void {
+	applyPullRequestBinding(operation: PullRequestBinding): { changed: boolean; taskLinkRemoved: boolean } {
+		let changed = false;
+		let taskLinkRemoved = false;
 		const affected = new Set<string>();
 		this.transaction(() => {
 			if (this.one("SELECT 1 FROM pull_request_binding_operations WHERE id = ?", operation.id)) return;
@@ -1505,7 +1554,7 @@ export class MissionStore {
 			for (const missionId of missionIds) {
 				const links = this.all(
 					`SELECT r.id, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id
-					WHERE r.mission_id = ? AND r.kind = 'github.pr' AND r.url = ? COLLATE NOCASE
+					WHERE r.mission_id = ? AND r.kind = 'github.pr' AND r.relationship = 'ownership' AND r.url = ? COLLATE NOCASE
 					AND t.status NOT IN ('done', 'dropped')
 					AND (? = 1 OR ((t.session_id = ? OR r.added_by_session_id = ? OR t.id = ?)
 						AND NOT EXISTS (SELECT 1 FROM pull_request_bindings b WHERE b.url = r.url
@@ -1519,9 +1568,12 @@ export class MissionStore {
 					operation.sessionId,
 				);
 				for (const link of links) {
+					if (!operation.bound && operation.changed === false) continue;
 					const taskId = str(link.task_id!);
 					if (operation.bound && targetMissionId === missionId && targetTaskId === taskId) continue;
 					this.run("DELETE FROM resources WHERE id = ?", link.id!);
+					changed = true;
+					taskLinkRemoved = true;
 					tasks.set(taskId, missionId);
 					linkChanges.add(missionId);
 					affected.add(missionId);
@@ -1530,7 +1582,7 @@ export class MissionStore {
 			if (operation.bound && targetMissionId && targetTaskId) {
 				if (
 					!this.one(
-						"SELECT 1 FROM resources WHERE mission_id = ? AND task_id = ? AND url = ? COLLATE NOCASE",
+						"SELECT 1 FROM resources WHERE mission_id = ? AND task_id = ? AND url = ? COLLATE NOCASE AND relationship = 'ownership'",
 						targetMissionId,
 						targetTaskId,
 						parsed.url,
@@ -1538,7 +1590,7 @@ export class MissionStore {
 				) {
 					this.run(
 						`INSERT INTO resources (id, mission_id, task_id, url, kind, external_id,
-						added_by_session_id, created_at, pull_request) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						added_by_session_id, created_at, pull_request, relationship) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'ownership')`,
 						randomUUID(),
 						targetMissionId,
 						targetTaskId,
@@ -1549,6 +1601,7 @@ export class MissionStore {
 						Date.now(),
 						cached ?? null,
 					);
+					changed = true;
 					linkChanges.add(targetMissionId);
 					affected.add(targetMissionId);
 				}
@@ -1611,6 +1664,7 @@ export class MissionStore {
 			);
 		});
 		for (const missionId of affected) this.changed(missionId);
+		return { changed, taskLinkRemoved };
 	}
 
 	/** Persist a fresh result for all copies of this URL and reconcile affected tasks together. */
@@ -1618,7 +1672,7 @@ export class MissionStore {
 		if (pr.state !== "merged") return [];
 		return this.all(
 			`SELECT DISTINCT m.coordinator_session_id FROM resources r JOIN missions m ON m.id = r.mission_id
-			WHERE r.kind = 'github.pr' AND r.url = ? COLLATE NOCASE AND m.status = 'active'
+			WHERE r.kind = 'github.pr' AND r.relationship = 'ownership' AND r.url = ? COLLATE NOCASE AND m.status = 'active'
 			AND m.coordinator_session_id IS NOT NULL AND json_extract(r.pull_request, '$.state') IS NOT 'merged'`,
 			pr.url,
 		).map((row) => str(row.coordinator_session_id!));
@@ -1659,7 +1713,7 @@ export class MissionStore {
 		)
 			return false;
 		const prs = this.all(
-			"SELECT * FROM resources WHERE mission_id = ? AND task_id = ? AND kind = 'github.pr'",
+			"SELECT * FROM resources WHERE mission_id = ? AND task_id = ? AND kind = 'github.pr' AND relationship = 'ownership'",
 			id,
 			taskId,
 		).map((row) => resourceFrom(row).pullRequest);
@@ -1981,6 +2035,7 @@ function artifactFrom(row: Row): MissionArtifactLink {
 function resourceFrom(row: Row): MissionResource {
 	return {
 		id: str(row.id!),
+		relationship: str(row.relationship!) as MissionResource["relationship"],
 		...(row.pull_request ? { pullRequest: JSON.parse(str(row.pull_request)) as SessionPullRequest } : {}),
 		...(row.task_id ? { taskId: str(row.task_id) } : {}),
 		url: str(row.url!),

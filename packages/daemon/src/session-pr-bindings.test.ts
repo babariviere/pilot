@@ -233,6 +233,51 @@ test("direct-project bindings receive durable idle-only follow-ups without chang
 	});
 });
 
+test("binding results distinguish no-ops, discovered ownership and taskless detach across restart", async () => {
+	await fixture(async (f) => {
+		const result = ({
+			changed,
+			previousOwner,
+			taskLinkRemoved,
+		}: Awaited<ReturnType<SessionManager["bindPullRequest"]>>) => ({ changed, previousOwner, taskLinkRemoved });
+		assert.deepEqual(result(await f.manager.unbindPullRequest(f.ids[0], url)), {
+			changed: false,
+			previousOwner: null,
+			taskLinkRemoved: false,
+		});
+		assert.ok((await f.saved()).unboundPullRequests?.includes(url), "even a no-op suppresses future rediscovery");
+		const previous = f.meta(f.ids[1]);
+		previous.agentPullRequests = [url];
+		const owner = { id: previous.id, title: previous.title };
+		assert.deepEqual(f.manager.pullRequestOwnerSummary(url), owner);
+		assert.deepEqual(result(await f.manager.bindPullRequest(f.ids[0], url)), {
+			changed: true,
+			previousOwner: owner,
+			taskLinkRemoved: false,
+		});
+		await f.settle();
+		await f.restart();
+		const currentOwner = { id: f.ids[0], title: f.meta().title };
+		assert.deepEqual(f.manager.pullRequestOwnerSummary(url), currentOwner);
+		assert.deepEqual(result(await f.manager.bindPullRequest(f.ids[0], url)), {
+			changed: false,
+			previousOwner: currentOwner,
+			taskLinkRemoved: false,
+		});
+		assert.deepEqual(result(await f.manager.unbindPullRequest(f.ids[0], url)), {
+			changed: true,
+			previousOwner: currentOwner,
+			taskLinkRemoved: false,
+		});
+		assert.equal(f.manager.pullRequestOwnerSummary(url), undefined);
+		assert.deepEqual(result(await f.manager.unbindPullRequest(f.ids[0], url)), {
+			changed: false,
+			previousOwner: null,
+			taskLinkRemoved: false,
+		});
+	});
+});
+
 test("summaries list explicit bindings until they are detached or moved", async () => {
 	await fixture(async (f) => {
 		assert.equal(f.manager.get(f.ids[0])!.boundPullRequests, undefined);

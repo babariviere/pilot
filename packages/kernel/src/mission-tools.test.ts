@@ -151,14 +151,14 @@ test("coordinator PR binding actions forward targets and optional owning tasks u
 	assert.equal(schema.properties.targetSessionId.maxLength, 128);
 	assert.equal(schema.properties.taskId.maxLength, 128);
 	assert.match(schema.properties.taskId.description!, /bindPr/);
-	assert.match(tool.description, /resource link does not bind a PR to a chat/);
+	assert.match(tool.description, /Links never bind a PR to a chat/);
 	assert.match(tool.description, /The bound chat owns the PR head for follow-ups and pushes/);
 	assert.match(tool.description, /One owner per PR: binding transfers ownership from the previous chat/);
-	assert.match(tool.description, /moves unfinished task links to the selected task/);
+	assert.match(tool.description, /moves unfinished ownership links to the selected task/);
 	assert.match(tool.description, /without changing its branches/);
 	assert.match(tool.description, /Use resource links for dependencies or references, not ownership/);
 	assert.match(tool.description, /stop its tracking, follow-ups and pushes for that chat/);
-	assert.match(tool.description, /Repository branches and mission-level references stay unchanged/);
+	assert.match(tool.description, /removes only unfinished ownership links, preserving references/);
 	const url = "https://github.com/example/repo/pull/7";
 	for (const params of [
 		{ action: "bindPr", targetSessionId: "member", url },
@@ -174,6 +174,28 @@ test("coordinator PR binding actions forward targets and optional owning tasks u
 		["unbindPr", { targetSessionId: "member", url }],
 	]);
 	assert.doesNotMatch(JSON.stringify(createMissionTool(async () => null).parameters), /bindPr|unbindPr/);
+});
+
+test("members can declare reference links and unlink by URL and task scope", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return { removed: true };
+	});
+	const schema = tool.parameters as { properties: { action: { enum: string[] }; relationship: { enum: string[] } } };
+	assert.ok(schema.properties.action.enum.includes("unlink"));
+	assert.deepEqual(schema.properties.relationship.enum, ["ownership", "reference"]);
+	for (const params of [
+		{ action: "link", url: "https://example.com", taskId: "#1", relationship: "reference" },
+		{ action: "unlink", url: "https://example.com", taskId: "#1" },
+		{ action: "unlink", url: "https://example.com" },
+	])
+		await tool.execute("call", params as never, undefined, undefined, {} as never);
+	assert.deepEqual(calls, [
+		["link", { url: "https://example.com", taskId: "#1", relationship: "reference" }],
+		["unlink", { url: "https://example.com", taskId: "#1" }],
+		["unlink", { url: "https://example.com" }],
+	]);
 });
 
 test("coordinator declares bounded start references and forwards them unchanged", async () => {

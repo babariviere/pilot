@@ -17,6 +17,7 @@ const MEMBER_ACTIONS = [
 	"resolve",
 	"attach",
 	"link",
+	"unlink",
 	"log",
 ] as const;
 export const MISSION_ACTIONS = [
@@ -42,7 +43,7 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: goal, decisions, your tasks, open tasks, open comments, links, artifacts, recent user updates and handoffs (separate from recent activity), and the brief's revision and outline. Call it before starting work and before handing off.
+- get: goal, decisions, your tasks, open tasks, open comments, links, artifacts, recent user updates and handoffs (separate from recent activity), the brief's revision and outline, and each PR's owning chat (title and id, null if unbound). Call it before starting work and before handing off.
 - brief: read the brief (optionally an older revision). With markdown and expectedRevision, replace the whole brief; a stale expectedRevision fails, so re-read and reapply your change.
 - update: change the mission title or goal.
 - tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
@@ -50,7 +51,8 @@ Actions:
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
-- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number). A resource link does not bind a PR to a chat.
+- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number). Task PR links default to relationship "ownership" (drive task status); use "reference" for related work. Links never bind a PR to a chat.
+- unlink: remove one link by url and optional taskId (omitted means mission-level). Members can remove their own links; the coordinator can remove any. Prefers a reference when both removable links share that scope. Returns removed:false if absent.
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
 			coordinator
 				? `
@@ -59,9 +61,9 @@ Actions:
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
 - start (coordinator only): start a new chat for an unclaimed task (id or number, optional message, model, thinking, artifacts [{artifactId, revision?}], links [{url, title?}]). Model defaults to the project's default. Allowed models are the project's scoped models within the price cap; start validation errors list allowed model IDs, prices and supported thinking levels. Choose cheaper models for small tasks and the strongest allowed model for hard ones. Thinking must be supported by the chosen model. Artifacts must already be linked to the mission or owned by a member chat. References are attached to the task before starting, so later chats see them too. The opening message lists references without pasting content and must fit 4000 characters including the task body. Durable context belongs in the brief, decisions or task links. Start chats only when the user asks.
 - send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
-- status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.
-- bindPr (coordinator only): bind an existing GitHub PR by url to targetSessionId, a member chat of this mission, without changing its branches. The bound chat owns the PR head for follow-ups and pushes. One owner per PR: binding transfers ownership from the previous chat and moves unfinished task links to the selected task. Use taskId (task ID or number) when the owning task is ambiguous. Use resource links for dependencies or references, not ownership.
-- unbindPr (coordinator only): detach a PR from targetSessionId by url to stop its tracking, follow-ups and pushes for that chat. Suppresses rediscovery and clears unfinished task links. Repository branches and mission-level references stay unchanged.`
+- status (coordinator only): summarize every member chat's state, latest outcome, archive status, boundPullRequests and assigned tasks without starting workers.
+- bindPr (coordinator only): bind an existing GitHub PR by url to targetSessionId, a member chat of this mission, without changing its branches. The bound chat owns the PR head for follow-ups and pushes. One owner per PR: binding transfers ownership from the previous chat and moves unfinished ownership links to the selected task. Returns {changed, previousOwner, taskLinkRemoved}. Use taskId (task ID or number) when the owning task is ambiguous. Use resource links for dependencies or references, not ownership.
+- unbindPr (coordinator only): detach a PR from targetSessionId by url to stop its tracking, follow-ups and pushes for that chat. Suppresses rediscovery and removes only unfinished ownership links, preserving references. Returns {changed, previousOwner, taskLinkRemoved}; already unbound is changed:false. Branches stay unchanged.`
 				: ""
 		}`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
@@ -156,13 +158,18 @@ Actions:
 				: {}),
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
+			relationship: Type.Optional(
+				StringEnum(["ownership", "reference"] as const, {
+					description: "Link role: task PR ownership or related-work reference. Never binds a chat.",
+				}),
+			),
 			url: Type.Optional(Type.String({ maxLength: 2048 })),
 			taskId: Type.Optional(
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number for link, attach or bindPr (owning task disambiguation)."
-						: "Task ID or number for link or attach.",
+						? "Task ID or number for link, unlink, attach or bindPr (owning task disambiguation)."
+						: "Task ID or number for link, unlink or attach.",
 				}),
 			),
 			kind: Type.Optional(StringEnum(["update", "handoff"] as const)),

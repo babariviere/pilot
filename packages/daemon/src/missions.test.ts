@@ -29,6 +29,99 @@ test("task links are scoped, validated and preserved when a task is deleted", ()
 	}
 });
 
+test("resource migration preserves existing task PR ownership and reference roles across restart", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-resource-migration-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
+		const url = pr(1, "open").url;
+		const owned = missions.addResource(id, { url, taskId: "1" });
+		const global = missions.addResource(id, { url });
+		const reference = missions.addResource(id, { url: "https://example.com/spec", taskId: "1" });
+		missions.close();
+		const db = new DatabaseSync(file);
+		db.exec("ALTER TABLE resources DROP COLUMN relationship");
+		db.close();
+		missions = new MissionStore(file);
+		assert.equal(missions.detail(id).resources.find((r) => r.id === owned.id)?.relationship, "ownership");
+		for (const link of [global, reference])
+			assert.equal(missions.detail(id).resources.find((r) => r.id === link.id)?.relationship, "reference");
+		const related = missions.addResource(id, { url, taskId: "1", relationship: "reference" });
+		missions.close();
+		missions = new MissionStore(file);
+		assert.equal(missions.detail(id).resources.find((r) => r.id === related.id)?.relationship, "reference");
+		missions.updatePullRequest(pr(1, "open"));
+		assert.equal(missions.resolveTask(id, "1").status, "in_review");
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reference PRs neither drive nor block task completion and survive ownership handoffs", () => {
+	const missions = new MissionStore(":memory:");
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		missions.join("old", id);
+		missions.join("new", id);
+		const a = missions.claimTask(id, "1", "old");
+		const b = missions.claimTask(id, "2", "new");
+		const url = pr(1, "open").url;
+		const reference = missions.addResource(id, { url, taskId: a.id, relationship: "reference" });
+		missions.updatePullRequest(pr(1, "open"));
+		assert.equal(missions.task(id, a.id).status, "in_progress");
+		const operation = {
+			id: "bind",
+			sessionId: "old",
+			missionId: id,
+			taskId: a.id,
+			url,
+			bound: true,
+			previousSessionIds: [],
+			actor: {},
+		};
+		assert.deepEqual(missions.applyPullRequestBinding(operation), { changed: true, taskLinkRemoved: false });
+		assert.equal(missions.task(id, a.id).status, "in_review");
+		assert.deepEqual(
+			missions.applyPullRequestBinding({
+				...operation,
+				id: "move",
+				sessionId: "new",
+				taskId: b.id,
+				previousSessionIds: ["old"],
+			}),
+			{ changed: true, taskLinkRemoved: true },
+		);
+		assert.equal(missions.task(id, a.id).status, "in_progress");
+		assert.ok(missions.detail(id).resources.some((r) => r.id === reference.id));
+		assert.deepEqual(
+			missions.applyPullRequestBinding({ ...operation, id: "detach", sessionId: "new", bound: false }),
+			{ changed: true, taskLinkRemoved: true },
+		);
+		missions.updatePullRequest(pr(1, "merged"));
+		assert.equal(missions.task(id, a.id).status, "in_progress");
+		missions.addResource(id, { url: pr(2, "open").url, taskId: a.id });
+		missions.addResource(id, { url: pr(3, "open").url, taskId: a.id, relationship: "reference" });
+		missions.updatePullRequest(pr(2, "merged"));
+		assert.equal(missions.task(id, a.id).status, "done", "unknown reference PR does not block completion");
+		assert.throws(() => missions.addResource(id, { url, relationship: "ownership" }), /require a task/);
+		assert.throws(
+			() => missions.addResource(id, { url: "https://example.com", taskId: a.id, relationship: "ownership" }),
+			/GitHub PR/,
+		);
+		assert.throws(
+			() => missions.addResource(id, { url, taskId: a.id, relationship: "invalid" as never }),
+			/Invalid link relationship/,
+		);
+		missions.attachTaskReferences(id, b.id, [], [{ url: pr(4, "open").url }]);
+		missions.updatePullRequest(pr(4, "merged"));
+		assert.equal(missions.task(id, b.id).status, "in_progress", "Start chat PR references never own the task");
+	} finally {
+		missions.close();
+	}
+});
+
 test("bulk milestones publish one committed update, deduplicate aliases and skip no-op writes", () => {
 	const missions = new MissionStore(":memory:");
 	try {

@@ -27,6 +27,7 @@ import type {
 	ArtifactRevision,
 	ArtifactSummary,
 	DeliveryMode,
+	PullRequestBindingResult,
 	RewindAction,
 	RewindResponse,
 	SessionAttempt,
@@ -133,7 +134,7 @@ export interface SessionMissionBridge {
 		url: string,
 		taskId?: string,
 	): { missionId: string; taskId?: string } | undefined;
-	applyPullRequestBinding?(operation: PullRequestBinding): void;
+	applyPullRequestBinding?(operation: PullRequestBinding): { changed: boolean; taskLinkRemoved: boolean } | void;
 	workspaceBehind?(sessionId: string, text: string): void;
 }
 
@@ -1304,16 +1305,20 @@ export class SessionManager {
 		url: string,
 		actor: { sessionId?: string } = {},
 		taskId?: string,
-	): Promise<SessionSummary> {
-		await this.changePullRequestBinding(id, url, true, actor, taskId);
+	): Promise<SessionSummary & PullRequestBindingResult> {
+		const result = await this.changePullRequestBinding(id, url, true, actor, taskId);
 		// Ownership is local and committed already. GitHub rate limits must not hold the API/tool open.
 		void this.pullRequests.refresh(this.require(id));
-		return this.summary(this.require(id));
+		return { ...this.summary(this.require(id)), ...result };
 	}
 
-	async unbindPullRequest(id: string, url: string, actor: { sessionId?: string } = {}): Promise<SessionSummary> {
-		await this.changePullRequestBinding(id, url, false, actor);
-		return this.summary(this.require(id));
+	async unbindPullRequest(
+		id: string,
+		url: string,
+		actor: { sessionId?: string } = {},
+	): Promise<SessionSummary & PullRequestBindingResult> {
+		const result = await this.changePullRequestBinding(id, url, false, actor);
+		return { ...this.summary(this.require(id)), ...result };
 	}
 
 	private changePullRequestBinding(
@@ -1322,7 +1327,7 @@ export class SessionManager {
 		bound: boolean,
 		actor: { sessionId?: string },
 		taskId?: string,
-	): Promise<void> {
+	): Promise<PullRequestBindingResult> {
 		const work = this.bindingQueue
 			.catch(() => undefined)
 			.then(async () => {
@@ -1347,6 +1352,7 @@ export class SessionManager {
 				if (githubRepository(upstream.trim()).identity.toLowerCase() !== parsed.repo.identity.toLowerCase())
 					throw new Error("The pull request must belong to the chat's project repository");
 				const url = `https://${parsed.repo.identity.toLowerCase()}/pull/${parsed.number}`;
+				const previousOwner = this.pullRequestOwnerSummary(url) ?? null;
 				const resolved = bound ? this.missions?.validatePullRequestBinding?.(id, url, taskId) : undefined;
 				const previousSessionIds = bound
 					? [...this.metas.values()]
@@ -1364,7 +1370,7 @@ export class SessionManager {
 						? !meta.boundPullRequests?.some((known) => known.toLowerCase() === url) ||
 							this.excludedPullRequest(meta, url) ||
 							previousSessionIds.length > 0
-						: !this.excludedPullRequest(meta, url) || this.attachedPullRequest(meta, url),
+						: this.attachedPullRequest(meta, url),
 					...(resolved
 						? { missionId: resolved.missionId, ...(resolved.taskId ? { taskId: resolved.taskId } : {}) }
 						: {}),
@@ -1375,11 +1381,23 @@ export class SessionManager {
 				const temp = `${file}.tmp`;
 				await writeFile(temp, JSON.stringify(operation), { mode: 0o600 });
 				await rename(temp, file);
-				await this.applyPullRequestBinding(operation);
+				const links = await this.applyPullRequestBinding(operation);
 				await rm(file);
+				return {
+					changed: !!operation.changed || !!links?.changed,
+					previousOwner,
+					taskLinkRemoved: links?.taskLinkRemoved ?? false,
+				};
 			});
 		this.bindingQueue = work;
 		return work;
+	}
+
+	/** Cached ownership only. Reading it never starts a worker or queries GitHub. */
+	pullRequestOwnerSummary(url: string): { id: string; title: string } | undefined {
+		const id = this.pullRequestOwner(url);
+		const meta = id ? this.metas.get(id) : undefined;
+		return meta ? { id: meta.id, title: meta.title } : undefined;
 	}
 
 	private attachedPullRequest(meta: SessionMeta, url: string): boolean {
@@ -1409,7 +1427,9 @@ export class SessionManager {
 		await rm(file);
 	}
 
-	private async applyPullRequestBinding(operation: PullRequestBinding): Promise<void> {
+	private async applyPullRequestBinding(
+		operation: PullRequestBinding,
+	): Promise<{ changed: boolean; taskLinkRemoved: boolean } | void> {
 		const target = this.require(operation.sessionId);
 		const same = (url: string) => url.toLowerCase() === operation.url.toLowerCase();
 		const previous = operation.previousSessionIds.map((id) => this.require(id));
@@ -1454,9 +1474,10 @@ export class SessionManager {
 		for (const meta of [...previous, target]) meta.prBindingOperation = operation.id;
 		// Move links before yielding to PR sync, so a racing merge cannot complete the old task.
 		// The journal is already durable; a metadata failure rolls this transaction forward on recovery.
-		this.missions?.applyPullRequestBinding?.(operation);
+		const links = this.missions?.applyPullRequestBinding?.(operation);
 		for (const meta of [...previous, target]) await this.save(meta);
 		for (const meta of [...previous, target]) this.emit(meta);
+		return links;
 	}
 
 	/** Newly linked URLs need no owning worker, or even an owning chat. */
