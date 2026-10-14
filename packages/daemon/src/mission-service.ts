@@ -82,6 +82,8 @@ export class MissionService {
 	private readonly projects: ProjectStore;
 	/** Last context sent per member, so unrelated mission changes do not churn kernels or prompts. */
 	private readonly contexts = new Map<string, string>();
+	/** Canonical mission/task keys reserved before any asynchronous start preparation. */
+	private readonly taskStarts = new Set<string>();
 
 	constructor(store: MissionStore, sessions: SessionManager, projects: ProjectStore) {
 		this.store = store;
@@ -96,13 +98,15 @@ export class MissionService {
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				return mission.projectId;
 			},
-			joinSpawn: (sessionId, missionId, coordinator) => {
+			joinSpawn: (sessionId, missionId, coordinator, taskId) => {
 				const mission = store.require(missionId);
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				if (coordinator && mission.coordinatorSessionId)
 					throw new Conflict("The mission already has a coordinator");
 				this.assertSameProject(sessionId, missionId);
 				store.join(sessionId, missionId);
+				// Keep claim conflicts inside spawn admission, where rejected metadata is removed.
+				if (taskId !== undefined) store.claimTask(missionId, taskId, sessionId, {});
 				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
 			membership: (sessionId) => store.membership(sessionId),
@@ -368,6 +372,22 @@ export class MissionService {
 
 	/** A new chat in the mission's project that joins and claims the task before its first turn. */
 	async startTask(missionId: string, taskId: string, request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
+		const task = this.store.resolveTask(missionId, taskId);
+		const key = `${missionId}:${task.id}`;
+		if (this.taskStarts.has(key)) throw new Conflict(`Task #${task.number} is already starting in another chat`);
+		this.taskStarts.add(key);
+		try {
+			return await this.startReservedTask(missionId, task.id, request);
+		} finally {
+			this.taskStarts.delete(key);
+		}
+	}
+
+	private async startReservedTask(
+		missionId: string,
+		taskId: string,
+		request: StartMissionTaskRequest,
+	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 		let task = this.store.resolveTask(missionId, taskId);
@@ -446,16 +466,19 @@ export class MissionService {
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
 		this.store.attachTaskReferences(missionId, task.id, artifacts, newLinks);
-		const session = await this.sessions.spawn({
-			projectId: mission.projectId,
-			missionId,
-			message,
-			title: task.title,
-			...selection,
-			...(request.mode ? { mode: request.mode } : {}),
-			...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
-		});
-		this.store.claimTask(missionId, task.id, session.id, {});
+		const session = await this.sessions.spawn(
+			{
+				projectId: mission.projectId,
+				missionId,
+				message,
+				title: task.title,
+				...selection,
+				...(request.mode ? { mode: request.mode } : {}),
+				...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
+			},
+			false,
+			task.id,
+		);
 		this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
 	}
