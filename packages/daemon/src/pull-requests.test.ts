@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
 	createdBookmarks,
-	discoverLinkedPullRequest as discoverLinked,
 	discoverPullRequest as discover,
+	discoverLinkedPullRequest as discoverLinked,
 	githubRepository,
+	hasPendingBoundPullRequests,
 	type PullRequestSession,
 	repositoryState,
 	sessionBranches,
+	sessionPullRequests,
 	workspaceBookmarks,
 } from "./pull-requests.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
@@ -83,6 +85,218 @@ test("hand-linked fork PR lookup uses an explicit repository and validates ident
 		discoverLinkedPullRequest({ ...target, url: "https://evil.test/octo/repo/pull/42" }, runner),
 		/Invalid linked/,
 	);
+});
+
+test("explicit bindings batch with heads, refresh terminal arbitrary heads and deduplicate results", async () => {
+	const target = session();
+	target.previousBranches = ["earlier"];
+	target.boundPullRequests = [1, 2, 3, 2, 4].map((number) => `https://github.com/octo/repo/pull/${number}`);
+	target.boundPullRequests.push("https://github.com/other/repo/pull/9", "not a PR URL");
+	target.unboundPullRequests = ["https://github.com/octo/repo/pull/4"];
+	target.previousPullRequests = [
+		{
+			number: 3,
+			url: "https://github.com/octo/repo/pull/3",
+			title: "Old",
+			state: "merged",
+			branch: "external",
+			checkedAt: 1,
+		},
+	];
+	let requests = 0;
+	const result = await discover(target, async (file, args) => {
+		if (file === "git") return "";
+		requests++;
+		assert.deepEqual(
+			args.filter((arg) => /^[hn]\d+=/.test(arg)),
+			[`h0=${branch}`, "h1=earlier", "n0=1", "n1=2", "n2=3"],
+		);
+		return JSON.stringify({
+			data: {
+				repository: {
+					o0: { nodes: [candidate()] },
+					a0: { nodes: [] },
+					o1: { nodes: [candidate({ number: 2, headRefName: "earlier" })] },
+					a1: { nodes: [] },
+					n0: candidate(),
+					n1: candidate({ number: 2, headRefName: "earlier" }),
+					n2: candidate({ number: 3, headRefName: "external", isCrossRepository: true }),
+				},
+			},
+		});
+	});
+	assert.equal(requests, 1);
+	assert.equal(result.pullRequest?.number, 1);
+	assert.deepEqual(
+		result.others?.map((pr) => [pr.number, pr.branch, pr.state]),
+		[
+			[2, "earlier", "open"],
+			[3, "external", "open"],
+		],
+	);
+	assert.equal(result.error, undefined);
+});
+
+test("bound PRs are discovered without a local branch or on the default branch", async () => {
+	for (const localBranch of [undefined, "main"]) {
+		const target = session();
+		target.workspace = { upstream: "git@github.com:octo/repo.git", baseBranch: "main", branch: localBranch };
+		target.boundPullRequests = ["https://github.com/octo/repo/pull/42"];
+		const result = await discoverPullRequest(target, async (file, args) => {
+			if (file === "git") return localBranch ?? "";
+			assert.deepEqual(args.slice(0, 3), ["pr", "view", "42"]);
+			return JSON.stringify(candidate({ number: 42, headRefName: "arbitrary", state: "MERGED" }));
+		});
+		assert.equal(result.branch, localBranch);
+		assert.equal(result.pullRequest, undefined);
+		assert.deepEqual(
+			result.others?.map((pr) => [pr.number, pr.state]),
+			[[42, "merged"]],
+		);
+		assert.equal(result.error, undefined);
+	}
+});
+
+test("direct-project bindings only inspect origin and fetch numbers in that repository", async () => {
+	const target = { ...session(), workspace: undefined };
+	target.boundPullRequests = ["https://github.com/octo/repo/pull/42", "https://github.com/other/repo/pull/43"];
+	const calls: string[][] = [];
+	const result = await discoverPullRequest(target, async (file, args, cwd) => {
+		assert.equal(cwd, target.cwd);
+		calls.push(args);
+		if (file === "git") {
+			assert.deepEqual(args, ["remote", "get-url", "origin"]);
+			return "git@github.com:Octo/Repo.git\n";
+		}
+		assert.deepEqual(args.slice(0, 3), ["pr", "view", "42"]);
+		return JSON.stringify(candidate({ number: 42, headRefName: "external", isCrossRepository: true }));
+	});
+	assert.equal(calls.length, 2);
+	assert.equal(result.branch, undefined);
+	assert.equal(result.pullRequest, undefined);
+	assert.deepEqual(
+		result.others?.map((pr) => pr.number),
+		[42],
+	);
+	assert.equal(result.error, undefined);
+	target.unboundPullRequests = [...target.boundPullRequests];
+	assert.deepEqual(
+		await discoverPullRequest(target, async () => {
+			throw new Error("must not inspect");
+		}),
+		{},
+	);
+	delete target.unboundPullRequests;
+	target.workspaceRecovery = { phase: "restoring" };
+	assert.deepEqual(
+		await discoverPullRequest(target, async () => {
+			throw new Error("must not inspect");
+		}),
+		{},
+	);
+});
+
+test("direct-project origin errors never fall back to trusting a bound URL", async () => {
+	const target = { ...session(), workspace: undefined, boundPullRequests: ["https://github.com/octo/repo/pull/42"] };
+	const result = await discoverPullRequest(target, async (file, args) => {
+		assert.equal(file, "git");
+		assert.deepEqual(args, ["remote", "get-url", "origin"]);
+		throw new Error("origin unavailable");
+	});
+	assert.match(result.error!, /origin unavailable/);
+	assert.equal(result.others, undefined);
+});
+
+test("exclusions filter discovered and bound PRs without retaining an excluded missing status", async () => {
+	const target = session();
+	target.pullRequest = {
+		number: 1,
+		url: "https://github.com/octo/repo/pull/1",
+		title: "Excluded",
+		state: "open",
+		branch,
+		checkedAt: 1,
+	};
+	target.boundPullRequests = [target.pullRequest.url, "https://github.com/octo/repo/pull/2"];
+	target.unboundPullRequests = [target.pullRequest.url];
+	for (const rows of [[], [candidate()]]) {
+		const result = await discoverPullRequest(target, async (file, args) => {
+			if (file === "git") return "";
+			if (args[1] === "view") {
+				assert.equal(args[2], "2", "excluded cached and bound PR must not be looked up by number");
+				return JSON.stringify(candidate({ number: 2, headRefName: "other" }));
+			}
+			return JSON.stringify(rows);
+		});
+		assert.equal(result.error, undefined);
+		assert.equal(result.pullRequest, undefined);
+		assert.deepEqual(
+			result.others?.map((pr) => pr.number),
+			[2],
+		);
+	}
+	delete target.boundPullRequests;
+	assert.deepEqual(await discoverPullRequest(target, listing([])), { branch });
+});
+
+test("an inaccessible bound PR does not hide fresh head results", async () => {
+	const target = session();
+	target.boundPullRequests = ["https://github.com/octo/repo/pull/42"];
+	const result = await discoverPullRequest(target, async (file, args) => {
+		if (file === "git") return "";
+		if (args[1] === "view") throw new Error("inaccessible");
+		return JSON.stringify([candidate()]);
+	});
+	assert.equal(result.pullRequest?.number, 1);
+	assert.equal(result.error, undefined);
+});
+
+test("bindings, exclusions and cached terminal states recognize case aliases", async () => {
+	const target = session();
+	target.workspace!.upstream = "git@github.com:Octo/Repo.git";
+	target.boundPullRequests = ["https://github.com/octo/repo/pull/42", "https://github.com/OCTO/REPO/pull/43"];
+	target.unboundPullRequests = ["https://github.com/octo/repo/pull/1", "https://github.com/octo/repo/pull/43"];
+	target.pullRequest = {
+		number: 1,
+		url: "https://github.com/Octo/Repo/pull/1",
+		title: "Excluded",
+		state: "open",
+		branch,
+		checkedAt: 1,
+	};
+	target.previousPullRequests = [
+		{
+			number: 42,
+			url: "https://github.com/Octo/Repo/pull/42",
+			title: "Done",
+			state: "merged",
+			branch: "external",
+			checkedAt: 1,
+		},
+	];
+	assert.equal(hasPendingBoundPullRequests(target), false, "a terminal cache alias does not remain pending");
+	assert.deepEqual(
+		sessionPullRequests(target).map((pr) => pr.number),
+		[42],
+	);
+	const result = await discoverPullRequest(target, async (file, args) => {
+		if (file === "git") return "";
+		if (args[1] === "view") {
+			assert.equal(args[2], "42", "exclusions win over case-aliased bindings and cached PRs");
+			return JSON.stringify(
+				candidate({ number: 42, url: "https://github.com/Octo/Repo/pull/42", headRefName: "external" }),
+			);
+		}
+		assert.ok(args.includes(`--head=${branch}`), "bound-only external heads are never searched");
+		return JSON.stringify([candidate({ url: "https://github.com/Octo/Repo/pull/1" })]);
+	});
+	assert.equal(result.error, undefined);
+	assert.equal(result.pullRequest, undefined);
+	assert.deepEqual(
+		result.others?.map((pr) => pr.number),
+		[42],
+	);
+	assert.equal(hasPendingBoundPullRequests({ ...target, previousPullRequests: result.others }), true);
 });
 
 test("normalizes HTTPS, SSH and enterprise origins, rejecting local paths and option-like identities", () => {

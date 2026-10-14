@@ -296,6 +296,413 @@ const pr = (number: number, state: SessionPullRequest["state"]): SessionPullRequ
 	checkedAt: Date.now(),
 });
 
+test("explicit PR binding validates mission tasks and rejects ambiguous implicit targets without writes", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		const other = missions.create({ projectId: "p", title: "Other", tasks: [{ title: "Other" }] });
+		const url = pr(1, "open").url;
+		assert.equal(missions.validatePullRequestBinding("outside", url), undefined);
+		assert.throws(() => missions.validatePullRequestBinding("outside", url, "1"), /mission chat/);
+		assert.throws(() => missions.validatePullRequestBinding("outside", "https://example.com"), /GitHub/);
+		missions.join("chat", id);
+		assert.deepEqual(missions.validatePullRequestBinding("chat", url), { missionId: id });
+		const a = missions.claimTask(id, "1", "chat");
+		assert.deepEqual(missions.validatePullRequestBinding("chat", `${url}/files`), { missionId: id, taskId: a.id });
+		missions.claimTask(id, "2", "chat");
+		const before = missions.detail(id);
+		assert.throws(() => missions.validatePullRequestBinding("chat", url), /[Aa]mbiguous/);
+		assert.deepEqual(missions.validatePullRequestBinding("chat", url, "#2"), {
+			missionId: id,
+			taskId: missions.resolveTask(id, "2").id,
+		});
+		assert.throws(
+			() => missions.validatePullRequestBinding("chat", url, missions.resolveTask(other.id, "1").id),
+			/Unknown task/,
+		);
+		assert.deepEqual(missions.detail(id), before);
+		missions.updateTask(id, a.id, { status: "done" });
+		assert.throws(() => missions.validatePullRequestBinding("chat", url, a.id), /already done/);
+		missions.updateTask(id, missions.resolveTask(id, "2").id, { status: "dropped" });
+		assert.deepEqual(missions.validatePullRequestBinding("chat", url), { missionId: id });
+	} finally {
+		missions.close();
+	}
+});
+
+test("explicit PR handoff moves links across missions, carries cached state and publishes only committed sides", () => {
+	const missions = store();
+	try {
+		const source = missions.create({ projectId: "p", title: "Source", tasks: [{ title: "A" }] });
+		const target = missions.create({ projectId: "p", title: "Target", tasks: [{ title: "B" }] });
+		missions.join("old", source.id);
+		missions.join("new", target.id);
+		const a = missions.claimTask(source.id, "1", "old");
+		const b = missions.claimTask(target.id, "1", "new");
+		const url = pr(1, "open").url;
+		missions.addResource(source.id, { url, taskId: a.id });
+		missions.updatePullRequest(pr(1, "open"));
+		const updates: string[] = [];
+		missions.onChange((id) => {
+			updates.push(id);
+			assert.equal(missions.detail(source.id).resources.length, 0);
+			assert.equal(missions.detail(target.id).resources[0]?.taskId, b.id);
+			assert.equal(missions.task(source.id, a.id).status, "in_progress");
+			assert.equal(missions.task(target.id, b.id).status, "in_review");
+		});
+		const operation = {
+			id: "move",
+			sessionId: "new",
+			missionId: target.id,
+			taskId: b.id,
+			url: `${url}/files`,
+			bound: true,
+			previousSessionIds: ["old", "old"],
+			actor: { sessionId: "coordinator" },
+		};
+		missions.applyPullRequestBinding(operation);
+		assert.deepEqual(new Set(updates), new Set([source.id, target.id]));
+		assert.equal(updates.length, 2);
+		assert.equal(missions.detail(target.id).resources[0]?.pullRequest?.state, "open");
+		for (const [id, task, action] of [
+			[source.id, a, "unbound"],
+			[target.id, b, "bound"],
+		] as const) {
+			const chat = action === "bound" ? "to chat new" : "from chat old";
+			const event = missions.events(id).find((event) => event.text === `Pull request ${action} ${chat}: ${url}`);
+			assert.equal(event?.sessionId, "coordinator");
+			assert.equal(event?.taskId, task.id);
+		}
+		const before = [missions.detail(source.id), missions.detail(target.id)];
+		missions.applyPullRequestBinding(operation);
+		assert.deepEqual([missions.detail(source.id), missions.detail(target.id)], before);
+		assert.equal(updates.length, 2);
+	} finally {
+		missions.close();
+	}
+});
+
+test("same-mission binding replaces unfinished links but preserves done tasks and mission-level references", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({
+			projectId: "p",
+			title: "M",
+			tasks: [{ title: "Claimed" }, { title: "Unclaimed" }, { title: "Done" }, { title: "Target" }],
+		});
+		missions.join("old", id);
+		missions.join("new", id);
+		const a = missions.claimTask(id, "1", "old");
+		const b = missions.resolveTask(id, "2");
+		const done = missions.updateTask(id, missions.resolveTask(id, "3").id, { status: "done" });
+		const target = missions.resolveTask(id, "4");
+		const url = pr(1, "open").url;
+		for (const task of [a, b, done]) missions.addResource(id, { url, taskId: task.id });
+		const missionLink = missions.addResource(id, { url });
+		missions.updatePullRequest(pr(1, "open"));
+		const doneLink = missions.detail(id).resources.find((link) => link.taskId === done.id);
+		const unrelated = missions.create({ projectId: "p", title: "Unrelated", tasks: [{ title: "U" }] });
+		missions.addResource(unrelated.id, { url, taskId: "1" });
+		const unrelatedBefore = missions.detail(unrelated.id);
+		missions.applyPullRequestBinding({
+			id: "same-mission",
+			sessionId: "new",
+			url,
+			bound: true,
+			taskId: target.id,
+			previousSessionIds: ["old"],
+			actor: {},
+		});
+		assert.equal(missions.task(id, a.id).status, "in_progress");
+		assert.equal(missions.task(id, b.id).status, "todo");
+		assert.equal(missions.task(id, target.id).status, "in_review");
+		assert.deepEqual(missions.task(id, done.id), done);
+		assert.deepEqual(
+			missions.detail(id).resources.find((link) => link.id === doneLink?.id),
+			doneLink,
+		);
+		assert.ok(missions.detail(id).resources.some((link) => link.id === missionLink.id));
+		assert.deepEqual(missions.detail(unrelated.id), unrelatedBefore);
+		missions.updatePullRequest(pr(1, "merged"));
+		assert.equal(missions.task(id, target.id).status, "done", "handoffs do not disable future PR sync");
+		assert.deepEqual(missions.task(id, done.id), done);
+		const completed = missions.task(id, target.id);
+		const links = missions.detail(id).resources;
+		missions.applyPullRequestBinding({
+			id: "unbind-done",
+			sessionId: "new",
+			url,
+			bound: false,
+			previousSessionIds: [],
+			actor: {},
+		});
+		assert.deepEqual(missions.task(id, target.id), completed);
+		assert.deepEqual(missions.detail(id).resources, links, "unbinding never removes completed task links");
+	} finally {
+		missions.close();
+	}
+});
+
+test("explicit unbinding recomputes remaining PRs and bypasses ambiguity and manual PR sync opt-outs", () => {
+	for (const [states, expected] of [
+		[["open", "merged"], "in_review"],
+		[["merged", "closed"], "done"],
+		[["merged", undefined], "in_review"],
+		[["closed"], "in_progress"],
+		[[], "in_progress"],
+	] as const) {
+		const missions = store();
+		try {
+			const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+			missions.join("chat", id);
+			const task = missions.claimTask(id, "1", "chat");
+			missions.claimTask(id, "2", "chat");
+			const url = pr(1, "open").url;
+			missions.addResource(id, { url, taskId: task.id });
+			missions.updatePullRequest(pr(1, "open"));
+			// Disable polling transitions; explicit operations must still reconcile.
+			missions.updateTask(id, task.id, { status: "in_progress" });
+			for (const [i, state] of states.entries()) {
+				missions.addResource(id, { url: pr(i + 2, "open").url, taskId: task.id });
+				if (state) missions.updatePullRequest(pr(i + 2, state));
+			}
+			missions.updateTask(id, task.id, { status: "in_review" });
+			missions.applyPullRequestBinding({
+				id: "unbind",
+				sessionId: "chat",
+				url,
+				bound: false,
+				previousSessionIds: [],
+				actor: {},
+			});
+			assert.equal(missions.task(id, task.id).status, expected, JSON.stringify(states));
+			assert.equal(missions.detail(id).resources.length, states.length);
+			const before = missions.task(id, task.id);
+			missions.updatePullRequest(pr(2, "merged"));
+			assert.deepEqual(missions.task(id, task.id), before, "existing opt-outs remain in effect after a handoff");
+		} finally {
+			missions.close();
+		}
+	}
+});
+
+test("unbinding an unclaimed explicit task with only closed PRs left returns it to todo", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }] });
+		missions.join("chat", id);
+		const task = missions.resolveTask(id, "1");
+		for (const number of [1, 2]) missions.addResource(id, { url: pr(number, "open").url, taskId: task.id });
+		missions.updatePullRequest(pr(1, "open"));
+		missions.updatePullRequest(pr(2, "closed"));
+		const operation = {
+			id: "bind-unclaimed",
+			sessionId: "chat",
+			missionId: id,
+			taskId: task.id,
+			url: pr(1, "open").url,
+			bound: true,
+			previousSessionIds: [],
+			actor: {},
+		};
+		missions.applyPullRequestBinding(operation);
+		missions.applyPullRequestBinding({ ...operation, id: "unbind-unclaimed", bound: false });
+		assert.equal(missions.task(id, task.id).status, "todo");
+		assert.equal(missions.detail(id).resources.length, 1);
+	} finally {
+		missions.close();
+	}
+});
+
+test("binding rollback includes both sides' links, activity and durable replay marker", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-pr-binding-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const source = missions.create({ projectId: "p", title: "Source", tasks: [{ title: "A" }] });
+		const target = missions.create({ projectId: "p", title: "Target", tasks: [{ title: "B" }] });
+		missions.join("old", source.id);
+		missions.join("new", target.id);
+		const task = missions.claimTask(source.id, "1", "old");
+		const targetTask = missions.claimTask(target.id, "1", "new");
+		const url = pr(1, "open").url;
+		missions.addResource(source.id, { url, taskId: task.id });
+		missions.updatePullRequest(pr(1, "open"));
+		const operation = {
+			id: "durable",
+			sessionId: "new",
+			missionId: target.id,
+			taskId: targetTask.id,
+			url,
+			bound: true,
+			previousSessionIds: ["old"],
+			actor: {},
+		};
+		const before = [missions.detail(source.id), missions.detail(target.id)];
+		const db = new DatabaseSync(file);
+		try {
+			db.exec(`CREATE TRIGGER fail_binding BEFORE INSERT ON events
+				WHEN NEW.text LIKE 'Pull request bound to%' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+			let notifications = 0;
+			const unsubscribe = missions.onChange(() => notifications++);
+			assert.throws(() => missions.applyPullRequestBinding(operation), /injected failure/);
+			assert.deepEqual([missions.detail(source.id), missions.detail(target.id)], before);
+			assert.equal(notifications, 0);
+			assert.equal(db.prepare("SELECT COUNT(*) AS n FROM pull_request_binding_operations").get()?.n, 0);
+			db.exec("DROP TRIGGER fail_binding");
+			missions.applyPullRequestBinding(operation);
+			assert.equal(notifications, 2);
+			unsubscribe();
+		} finally {
+			db.close();
+		}
+		const applied = [missions.detail(source.id), missions.detail(target.id)];
+		missions.close();
+		missions = new MissionStore(file);
+		missions.applyPullRequestBinding(operation);
+		assert.deepEqual([missions.detail(source.id), missions.detail(target.id)], applied);
+		// Replay is a no-op even when implicit resolution would now be ambiguous.
+		missions.claimTask(target.id, missions.addTask(target.id, { title: "Extra" }).id, "new");
+		assert.doesNotThrow(() => missions.applyPullRequestBinding(operation));
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("different operation IDs do not duplicate binding activity, including taskless chats and same-mission losers", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M" });
+		for (const chat of ["target", "previous-a", "previous-b"]) missions.join(chat, id);
+		const operation = {
+			id: "first",
+			sessionId: "target",
+			missionId: id,
+			url: pr(1, "open").url,
+			bound: true,
+			previousSessionIds: ["previous-a", "previous-b", "previous-a"],
+			actor: { sessionId: "actor" },
+		};
+		missions.applyPullRequestBinding(operation);
+		const bindingEvents = missions.events(id).filter((event) => event.text.startsWith("Pull request "));
+		assert.equal(bindingEvents.length, 3);
+		for (const chat of ["target", "previous-a", "previous-b"])
+			assert.ok(bindingEvents.some((event) => event.text.includes(`chat ${chat}:`) && event.sessionId === "actor"));
+		assert.equal(missions.detail(id).resources.length, 0);
+		const before = missions.detail(id);
+		missions.applyPullRequestBinding({ ...operation, id: "repeat" });
+		assert.deepEqual(missions.detail(id), before);
+		missions.applyPullRequestBinding({ ...operation, id: "unbind", bound: false, previousSessionIds: [] });
+		const unbound = missions.detail(id);
+		assert.equal(unbound.events.length, before.events.length + 1);
+		missions.applyPullRequestBinding({ ...operation, id: "unbind-again", bound: false, previousSessionIds: [] });
+		assert.deepEqual(missions.detail(id), unbound);
+		missions.applyPullRequestBinding({ ...operation, id: "rebind", previousSessionIds: [] });
+		assert.equal(missions.events(id).length, unbound.events.length + 1);
+	} finally {
+		missions.close();
+	}
+});
+
+test("unbinding an old chat after a same-mission handoff leaves the new owner's task link intact", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		missions.join("old", id);
+		missions.join("new", id);
+		const a = missions.claimTask(id, "1", "old");
+		const b = missions.claimTask(id, "2", "new");
+		const url = pr(1, "open").url;
+		missions.addResource(id, { url, taskId: a.id }, { sessionId: "old" });
+		missions.updatePullRequest(pr(1, "open"));
+		const operation = {
+			id: "handoff",
+			sessionId: "new",
+			missionId: id,
+			taskId: b.id,
+			url,
+			bound: true,
+			previousSessionIds: ["old"],
+			actor: {},
+		};
+		missions.applyPullRequestBinding(operation);
+		const before = missions.detail(id);
+		missions.applyPullRequestBinding({
+			...operation,
+			id: "old-unbind",
+			sessionId: "old",
+			bound: false,
+			previousSessionIds: [],
+		});
+		assert.deepEqual(missions.detail(id), before);
+		// Explicit binding can target another chat's claimed task. The new binding still owns its link.
+		missions.applyPullRequestBinding({ ...operation, id: "old-claimed-task", taskId: a.id });
+		const oldClaim = missions.detail(id);
+		missions.applyPullRequestBinding({
+			...operation,
+			id: "old-unbind-claimed",
+			sessionId: "old",
+			bound: false,
+			previousSessionIds: [],
+		});
+		assert.deepEqual(missions.detail(id), oldClaim);
+		// The explicit owner can unlink the task even though it is claimed by someone else.
+		missions.applyPullRequestBinding({ ...operation, id: "new-unbind", bound: false, previousSessionIds: [] });
+		assert.equal(missions.detail(id).resources.length, 0);
+		assert.equal(missions.task(id, a.id).status, "in_progress");
+		const unbound = missions.detail(id);
+		missions.applyPullRequestBinding({ ...operation, id: "new-unbind-repeat", bound: false, previousSessionIds: [] });
+		assert.deepEqual(missions.detail(id), unbound);
+	} finally {
+		missions.close();
+	}
+});
+
+test("journal application uses pinned task selection and tolerates tasks completed since validation", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		missions.join("chat", id);
+		const url = pr(1, "open").url;
+		const validated = missions.validatePullRequestBinding("chat", url);
+		const a = missions.claimTask(id, "1", "chat");
+		missions.claimTask(id, "2", "chat");
+		const operation = {
+			id: "no-task",
+			sessionId: "chat",
+			url,
+			bound: true,
+			previousSessionIds: [],
+			actor: {},
+			...validated,
+		};
+		assert.doesNotThrow(() => missions.applyPullRequestBinding(operation));
+		assert.equal(missions.detail(id).resources.length, 0, "new claims do not change a taskless validated binding");
+		const selected = missions.validatePullRequestBinding("chat", url, a.id);
+		missions.addResource(id, { url, taskId: a.id });
+		const done = missions.updateTask(id, a.id, { status: "done" });
+		const link = missions.detail(id).resources[0];
+		assert.doesNotThrow(() => missions.applyPullRequestBinding({ ...operation, id: "now-done", ...selected }));
+		assert.deepEqual(missions.task(id, a.id), done);
+		assert.deepEqual(missions.detail(id).resources[0], link);
+		const before = missions.detail(id);
+		missions.applyPullRequestBinding({ ...operation, id: "same-done-new-id", ...selected });
+		assert.deepEqual(missions.detail(id), before);
+		// An unchanged metadata binding does not create a first activity event unless task links changed.
+		const events = missions.events(id).length;
+		missions.applyPullRequestBinding({
+			...operation,
+			id: "already-attached",
+			url: pr(2, "open").url,
+			changed: false,
+		});
+		assert.equal(missions.events(id).length, events);
+	} finally {
+		missions.close();
+	}
+});
+
 test("task links cache stack changes and clear membership without duplicating activity", () => {
 	const missions = store();
 	try {

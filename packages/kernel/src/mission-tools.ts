@@ -19,7 +19,16 @@ const MEMBER_ACTIONS = [
 	"link",
 	"log",
 ] as const;
-export const MISSION_ACTIONS = [...MEMBER_ACTIONS, "delete", "group", "start", "send", "status"] as const;
+export const MISSION_ACTIONS = [
+	...MEMBER_ACTIONS,
+	"delete",
+	"group",
+	"start",
+	"send",
+	"status",
+	"bindPr",
+	"unbindPr",
+] as const;
 export type MissionAction = (typeof MISSION_ACTIONS)[number];
 
 /** Sends one call to pilotd and resolves with its JSON result. */
@@ -41,7 +50,7 @@ Actions:
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
-- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number).
+- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number). A resource link does not bind a PR to a chat.
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
 			coordinator
 				? `
@@ -50,7 +59,9 @@ Actions:
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
 - start (coordinator only): start a new chat for an unclaimed task (id or number, optional message, model, thinking, artifacts [{artifactId, revision?}], links [{url, title?}]). Model defaults to the project's default. Allowed models are the project's scoped models within the price cap; start validation errors list allowed model IDs, prices and supported thinking levels. Choose cheaper models for small tasks and the strongest allowed model for hard ones. Thinking must be supported by the chosen model. Artifacts must already be linked to the mission or owned by a member chat. References are attached to the task before starting, so later chats see them too. The opening message lists references without pasting content and must fit 4000 characters including the task body. Durable context belongs in the brief, decisions or task links. Start chats only when the user asks.
 - send (coordinator only): send message to targetSessionId, a member of this mission, as a follow-up (queued if busy).
-- status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.`
+- status (coordinator only): summarize every member chat's state, latest outcome, archive status and assigned tasks without starting workers.
+- bindPr (coordinator only): bind an existing GitHub PR by url to targetSessionId, a member chat of this mission, without changing its branches. The bound chat owns the PR head for follow-ups and pushes. One owner per PR: binding transfers ownership from the previous chat and moves unfinished task links to the selected task. Use taskId (task ID or number) when the owning task is ambiguous. Use resource links for dependencies or references, not ownership.
+- unbindPr (coordinator only): detach a PR from targetSessionId by url to stop its tracking, follow-ups and pushes for that chat. Suppresses rediscovery and clears unfinished task links. Repository branches and mission-level references stay unchanged.`
 				: ""
 		}`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
@@ -91,7 +102,9 @@ Actions:
 			targetSessionId: Type.Optional(
 				Type.String({
 					maxLength: 128,
-					description: coordinator ? "Member chat for comment or send." : "Member chat for comment.",
+					description: coordinator
+						? "Member chat for comment, send, bindPr or unbindPr."
+						: "Member chat for comment.",
 				}),
 			),
 			...(coordinator
@@ -144,7 +157,14 @@ Actions:
 			artifactId: Type.Optional(Type.String({ maxLength: 128 })),
 			artifactRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 			url: Type.Optional(Type.String({ maxLength: 2048 })),
-			taskId: Type.Optional(Type.String({ maxLength: 128, description: "Task ID or number for link or attach." })),
+			taskId: Type.Optional(
+				Type.String({
+					maxLength: 128,
+					description: coordinator
+						? "Task ID or number for link, attach or bindPr (owning task disambiguation)."
+						: "Task ID or number for link or attach.",
+				}),
+			),
 			kind: Type.Optional(StringEnum(["update", "handoff"] as const)),
 			health: Type.Optional(StringEnum(["on_track", "at_risk", "off_track"] as const)),
 		}),

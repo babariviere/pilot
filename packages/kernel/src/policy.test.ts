@@ -43,7 +43,7 @@ test("coordinator actions are named only for the coordinator and detailed in the
 	for (const coordinator of ["self", "other", "user"] as const) {
 		const prompt = missionPrompt({ ...mission, coordinator });
 		assert.equal(
-			prompt.includes("coordinator actions (delete, group, task order, start, send, status)"),
+			prompt.includes("coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr)"),
 			coordinator === "self",
 		);
 		assert.match(prompt, /dropped when no longer needed/);
@@ -64,7 +64,10 @@ test("multi-task guidance claims requested tasks, orders work, maintains statuse
 		);
 		assert.match(prompt, /Open one pull request per task/);
 		assert.match(prompt, /link it to the task with the link action and taskId/);
-		assert.match(prompt, /Never rewrite or push another chat's branches/);
+		assert.match(prompt, /Resource links are references, not PR ownership/);
+		assert.match(prompt, /Only the user or coordinator binds PRs/);
+		assert.match(prompt, /Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you/);
+		assert.match(prompt, /a PR bound to you is yours, including its head branch, CI\/review follow-ups and pushes/);
 		assert.match(prompt, /post a handoff with log before stopping with unfinished work/);
 	}
 });
@@ -81,7 +84,6 @@ test("stack guidance uses existing PR URLs, preserves sibling work and explains 
 	for (const available of [true, false, undefined]) {
 		const prompt = missionPrompt(mission, available);
 		assert.match(prompt, /base your own bookmark on the dependency's head/);
-		assert.match(prompt, /possibly another chat's/);
 		assert.match(prompt, /--base <dependency-head> --head <own-head>/);
 		if (available === false) {
 			assert.match(prompt, /github\/gh-stack is unavailable: keep plain chained PRs and do not install it/);

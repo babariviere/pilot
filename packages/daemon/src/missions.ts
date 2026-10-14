@@ -29,6 +29,7 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import type { PullRequestBinding } from "./sessions.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
 export interface MissionActor {
@@ -144,6 +145,18 @@ CREATE TABLE IF NOT EXISTS members (
 	joined_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS members_by_mission ON members (mission_id);
+CREATE TABLE IF NOT EXISTS pull_request_binding_operations (
+	id TEXT PRIMARY KEY,
+	applied_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pull_request_bindings (
+	session_id TEXT NOT NULL,
+	url TEXT NOT NULL COLLATE NOCASE,
+	bound INTEGER NOT NULL,
+	mission_id TEXT,
+	task_id TEXT,
+	PRIMARY KEY (session_id, url)
+);
 CREATE TABLE IF NOT EXISTS pending_notices (
 	event_id INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -1426,6 +1439,180 @@ export class MissionStore {
 		this.changed(id);
 	}
 
+	/** Validate before session metadata is committed. No mission means there is no task link to bind. */
+	validatePullRequestBinding(
+		sessionId: string,
+		url: string,
+		taskId?: string,
+	): { missionId: string; taskId?: string } | undefined {
+		const parsed = normalizeResourceWrite({ url });
+		if (parsed.kind !== "github.pr") throw new Error("Expected a GitHub pull request URL");
+		const missionId = this.missionOf(sessionId);
+		if (!missionId) {
+			if (taskId !== undefined) throw new Error("A task binding requires a mission chat");
+			return undefined;
+		}
+		if (taskId !== undefined) {
+			const task = this.resolveTask(missionId, taskId);
+			if (task.status === "done" || task.status === "dropped")
+				throw new Conflict(`Task #${task.number} is already ${task.status}`);
+			return { missionId, taskId: task.id };
+		}
+		const tasks = this.all(
+			"SELECT id FROM tasks WHERE mission_id = ? AND session_id = ? AND status NOT IN ('done', 'dropped') LIMIT 2",
+			missionId,
+			sessionId,
+		);
+		if (tasks.length > 1) throw new Conflict("Ambiguous task binding: specify a taskId");
+		return { missionId, ...(tasks[0] ? { taskId: str(tasks[0].id!) } : {}) };
+	}
+
+	/** Explicit handoffs move task links and both sides' activity in one durable, replay-safe transaction. */
+	applyPullRequestBinding(operation: PullRequestBinding): void {
+		const affected = new Set<string>();
+		this.transaction(() => {
+			if (this.one("SELECT 1 FROM pull_request_binding_operations WHERE id = ?", operation.id)) return;
+			const parsed = normalizeResourceWrite({ url: operation.url });
+			if (parsed.kind !== "github.pr") throw new Error("Expected a GitHub pull request URL");
+			// Validation already resolved the task before the journal commit. Do not resolve an omitted
+			// task again: claims can change while metadata is saved or before crash recovery runs.
+			const targetMissionId = operation.missionId ?? this.missionOf(operation.sessionId);
+			const pinnedTask =
+				operation.bound && targetMissionId && operation.taskId
+					? this.one("SELECT * FROM tasks WHERE mission_id = ? AND id = ?", targetMissionId, operation.taskId)
+					: undefined;
+			const targetTaskId =
+				pinnedTask && pinnedTask.status !== "done" && pinnedTask.status !== "dropped"
+					? str(pinnedTask.id!)
+					: undefined;
+			const missionIds = new Set<string>();
+			if (targetMissionId && this.get(targetMissionId)) missionIds.add(targetMissionId);
+			for (const sessionId of [operation.sessionId, ...operation.previousSessionIds]) {
+				const missionId = this.missionOf(sessionId);
+				if (missionId) missionIds.add(missionId);
+			}
+			const cached = this.one(
+				"SELECT pull_request FROM resources WHERE url = ? COLLATE NOCASE AND pull_request IS NOT NULL LIMIT 1",
+				parsed.url,
+			)?.pull_request;
+			const tasks = new Map<string, string>();
+			const linkChanges = new Set<string>();
+			const currentBinding = this.one(
+				"SELECT task_id FROM pull_request_bindings WHERE session_id = ? AND url = ? AND bound = 1",
+				operation.sessionId,
+				parsed.url,
+			);
+			for (const missionId of missionIds) {
+				const links = this.all(
+					`SELECT r.id, r.task_id FROM resources r JOIN tasks t ON t.id = r.task_id
+					WHERE r.mission_id = ? AND r.kind = 'github.pr' AND r.url = ? COLLATE NOCASE
+					AND t.status NOT IN ('done', 'dropped')
+					AND (? = 1 OR ((t.session_id = ? OR r.added_by_session_id = ? OR t.id = ?)
+						AND NOT EXISTS (SELECT 1 FROM pull_request_bindings b WHERE b.url = r.url
+							AND b.bound = 1 AND b.session_id <> ? AND b.mission_id = r.mission_id AND b.task_id = r.task_id)))`,
+					missionId,
+					parsed.url,
+					operation.bound ? 1 : 0,
+					operation.sessionId,
+					operation.sessionId,
+					currentBinding?.task_id ?? null,
+					operation.sessionId,
+				);
+				for (const link of links) {
+					const taskId = str(link.task_id!);
+					if (operation.bound && targetMissionId === missionId && targetTaskId === taskId) continue;
+					this.run("DELETE FROM resources WHERE id = ?", link.id!);
+					tasks.set(taskId, missionId);
+					linkChanges.add(missionId);
+					affected.add(missionId);
+				}
+			}
+			if (operation.bound && targetMissionId && targetTaskId) {
+				if (
+					!this.one(
+						"SELECT 1 FROM resources WHERE mission_id = ? AND task_id = ? AND url = ? COLLATE NOCASE",
+						targetMissionId,
+						targetTaskId,
+						parsed.url,
+					)
+				) {
+					this.run(
+						`INSERT INTO resources (id, mission_id, task_id, url, kind, external_id,
+						added_by_session_id, created_at, pull_request) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						randomUUID(),
+						targetMissionId,
+						targetTaskId,
+						parsed.url,
+						parsed.kind,
+						parsed.externalId ?? null,
+						operation.actor.sessionId ?? null,
+						Date.now(),
+						cached ?? null,
+					);
+					linkChanges.add(targetMissionId);
+					affected.add(targetMissionId);
+				}
+				tasks.set(targetTaskId, targetMissionId);
+			}
+			const record = (sessionId: string, bound: boolean, missionId: string | undefined, taskId?: string) => {
+				const before = this.one(
+					"SELECT * FROM pull_request_bindings WHERE session_id = ? AND url = ?",
+					sessionId,
+					parsed.url,
+				);
+				const same =
+					before &&
+					Boolean(before.bound) === bound &&
+					before.mission_id === (missionId ?? null) &&
+					before.task_id === (taskId ?? null);
+				const metadataChanged = sessionId === operation.sessionId ? operation.changed : undefined;
+				if (
+					missionId &&
+					this.get(missionId) &&
+					(linkChanges.has(missionId) || metadataChanged === true || (!same && metadataChanged !== false))
+				) {
+					this.event(
+						missionId,
+						"resource",
+						`Pull request ${bound ? "bound to" : "unbound from"} chat ${sessionId}: ${parsed.url}`,
+						operation.actor,
+						{
+							taskId:
+								taskId ??
+								[...tasks].find(
+									([id, mission]) => mission === missionId && this.task(mission, id).sessionId === sessionId,
+								)?.[0],
+						},
+					);
+					affected.add(missionId);
+				}
+				this.run(
+					`INSERT INTO pull_request_bindings (session_id, url, bound, mission_id, task_id) VALUES (?, ?, ?, ?, ?)
+					ON CONFLICT (session_id, url) DO UPDATE SET bound = excluded.bound,
+					mission_id = excluded.mission_id, task_id = excluded.task_id`,
+					sessionId,
+					parsed.url,
+					bound ? 1 : 0,
+					missionId ?? null,
+					taskId ?? null,
+				);
+			};
+			for (const sessionId of new Set(operation.previousSessionIds)) {
+				if (sessionId !== operation.sessionId) record(sessionId, false, this.missionOf(sessionId));
+			}
+			record(operation.sessionId, operation.bound, targetMissionId, operation.bound ? operation.taskId : undefined);
+			for (const [taskId, missionId] of tasks) {
+				if (this.reconcileTaskPullRequests(missionId, taskId, operation.actor)) affected.add(missionId);
+			}
+			this.run(
+				"INSERT INTO pull_request_binding_operations (id, applied_at) VALUES (?, ?)",
+				operation.id,
+				Date.now(),
+			);
+		});
+		for (const missionId of affected) this.changed(missionId);
+	}
+
 	/** Persist a fresh result for all copies of this URL and reconcile affected tasks together. */
 	newlyMergedCoordinators(pr: SessionPullRequest): string[] {
 		if (pr.state !== "merged") return [];
@@ -1462,15 +1649,15 @@ export class MissionStore {
 		}
 	}
 
-	private reconcileTaskPullRequests(id: string, taskId: string): void {
-		if (this.require(id).status !== "active") return;
+	private reconcileTaskPullRequests(id: string, taskId: string, handoffActor?: MissionActor): boolean {
+		if (!handoffActor && this.require(id).status !== "active") return false;
 		const task = this.task(id, taskId);
 		if (
 			task.status === "done" ||
 			task.status === "dropped" ||
-			this.one("SELECT pr_sync_disabled FROM tasks WHERE id = ?", taskId)?.pr_sync_disabled
+			(!handoffActor && this.one("SELECT pr_sync_disabled FROM tasks WHERE id = ?", taskId)?.pr_sync_disabled)
 		)
-			return;
+			return false;
 		const prs = this.all(
 			"SELECT * FROM resources WHERE mission_id = ? AND task_id = ? AND kind = 'github.pr'",
 			id,
@@ -1482,8 +1669,16 @@ export class MissionStore {
 			prs.length > 0 &&
 			prs.every((pr) => pr && pr.state !== "open" && pr.state !== "draft") &&
 			prs.some((pr) => pr?.state === "merged");
-		const status = done ? "done" : open ? "in_review" : undefined;
-		if (!status || task.status === status) return;
+		const status = done
+			? "done"
+			: open
+				? "in_review"
+				: handoffActor && prs.every((pr) => pr?.state === "closed") && task.status === "in_review"
+					? task.sessionId
+						? "in_progress"
+						: "todo"
+					: undefined;
+		if (!status || task.status === status) return false;
 		const now = Date.now();
 		this.run(
 			"UPDATE tasks SET status = ?, updated_at = ?, completed_at = ? WHERE id = ?",
@@ -1495,10 +1690,11 @@ export class MissionStore {
 		this.event(
 			id,
 			"task",
-			`Task #${task.number} ${statusLabel(status)} after linked pull request ${done ? "merge" : "opened"}: ${task.title}`,
-			{},
+			`Task #${task.number} ${statusLabel(status)} after linked pull request ${done ? "merge" : open ? "opened" : "unbound"}: ${task.title}`,
+			handoffActor ?? {},
 			{ taskId, at: now },
 		);
+		return true;
 	}
 
 	linkArtifact(

@@ -16,6 +16,108 @@ import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
+test("PR binding routes use the user actor, return summaries and validate request shape", async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const summary: SessionSummary = {
+		id: "session-1",
+		title: "Chat",
+		cwd: "/work",
+		state: "idle",
+		createdAt: 1,
+		updatedAt: 2,
+	};
+	const calls: unknown[] = [];
+	const bind = t.mock.method(sessions, "bindPullRequest", async (...args: unknown[]) => {
+		calls.push(["bind", ...args]);
+		if (args[0] === "missing") throw new NotFound("Unknown session");
+		if (args[1] === "conflict") throw new Conflict("PR belongs to another chat");
+		return summary;
+	});
+	const unbind = t.mock.method(sessions, "unbindPullRequest", async (...args: unknown[]) => {
+		calls.push(["unbind", ...args]);
+		if (args[0] === "missing") throw new NotFound("Unknown session");
+		return summary;
+	});
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions`;
+	const route = `${base}/session-1/pull-requests`;
+	const url = "https://github.com/example/repo/pull/7";
+	const request = (method: string, body: unknown) => ({
+		method,
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	for (const [method, body] of [
+		["POST", { url }],
+		["POST", { url, taskId: "#3" }],
+		["DELETE", { url }],
+	] as const) {
+		const response = await fetch(route, request(method, body));
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), summary);
+	}
+	assert.deepEqual(calls, [
+		["bind", "session-1", url, {}, undefined],
+		["bind", "session-1", url, {}, "#3"],
+		["unbind", "session-1", url, {}],
+	]);
+	for (const method of ["POST", "DELETE"]) {
+		for (const body of [null, [], {}, { url: 7 }, { url: " " }, { url: "x".repeat(2049) }]) {
+			const rejected = await fetch(route, request(method, body));
+			assert.equal(rejected.status, 400);
+			await rejected.arrayBuffer();
+		}
+	}
+	for (const taskId of [null, 1, "", " ", "x".repeat(129)]) {
+		const rejected = await fetch(route, request("POST", { url, taskId }));
+		assert.equal(rejected.status, 400);
+		await rejected.arrayBuffer();
+	}
+	for (const [path, options, status] of [
+		[route, { method: "POST", body: "{}" }, 415],
+		[route, { ...request("POST", {}), body: "{" }, 400],
+		[route, { method: "GET" }, 404],
+		[route, request("PUT", { url }), 404],
+		[`${route}/extra`, request("POST", { url }), 404],
+		[
+			route,
+			{
+				...request("POST", { url }),
+				headers: { origin: "https://example.com", "content-type": "application/json" },
+			},
+			403,
+		],
+	] as const) {
+		const rejected = await fetch(path, options);
+		assert.equal(rejected.status, status);
+		await rejected.arrayBuffer();
+	}
+	assert.equal(bind.mock.callCount(), 2);
+	assert.equal(unbind.mock.callCount(), 1);
+	for (const method of ["POST", "DELETE"]) {
+		const response = await fetch(`${base}/missing/pull-requests`, request(method, { url }));
+		assert.equal(response.status, 404);
+		await response.arrayBuffer();
+	}
+	const conflict = await fetch(route, request("POST", { url: "conflict" }));
+	assert.equal(conflict.status, 409);
+	assert.deepEqual(await conflict.json(), { error: "PR belongs to another chat" });
+});
+
 test("repository invalidation ignores title and quota updates, but preserves work and workspace refreshes", (t) => {
 	const projects = new ProjectStore("/unused");
 	const sessions = new SessionManager("/unused", projects);

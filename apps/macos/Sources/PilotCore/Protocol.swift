@@ -5,6 +5,27 @@ public struct UpdatePreparation: Codable, Sendable {
     public let ready: Bool
 }
 
+/// POST /api/sessions/:id/pull-requests. Returns SessionSummary.
+public struct BindPullRequestRequest: Codable, Equatable, Sendable {
+    public let url: String
+    /// Optional mission task ID or number to disambiguate the owning task.
+    public let taskId: String?
+
+    public init(url: String, taskId: String? = nil) {
+        self.url = url
+        self.taskId = taskId
+    }
+}
+
+/// DELETE /api/sessions/:id/pull-requests. Detaches the PR from the chat; returns SessionSummary.
+public struct UnbindPullRequestRequest: Codable, Equatable, Sendable {
+    public let url: String
+
+    public init(url: String) {
+        self.url = url
+    }
+}
+
 public enum ChatMode: String, Codable, Hashable, Sendable {
     case build
     case ask
@@ -66,7 +87,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let outcomeAt: Double?
     public let outcomeReason: String?
     public let pullRequest: SessionPullRequest?
-    /// Every PR the session opened, the current branch's first. Omitted when none, or by older daemons.
+    /// Every discovered or explicitly bound PR associated with the session, primary first. Omitted when none, or by older daemons.
     public let pullRequests: [SessionPullRequest]?
     /// Every branch or bookmark the session created or used, the current one first. Omitted when none, or by older daemons.
     public let branches: [String]?

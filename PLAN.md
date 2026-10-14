@@ -281,6 +281,20 @@ the brief into the repository is an explicit user action.
   Links optionally belong to a task, appear on its row and in agent task views, and can be added or
   removed there. Deleting a task keeps its links at mission level. A chat's newly opened PR is linked
   to its unfinished claimed tasks automatically.
+  Resource links are references, not chat PR ownership. The user can explicitly bind an existing PR
+  with `POST /api/sessions/:id/pull-requests` and JSON `{url, taskId?}`, or remove that binding with
+  `DELETE` on the same route and `{url}`. Both return `SessionSummary`; the user actor is `{}`.
+  Only GitHub PRs in the chat's project repository qualify. The bound chat owns the PR head for follow-ups
+  and pushes. One chat owns each PR: binding transfers ownership and unfinished task links to the selected
+  chat and task. Use resource links for dependencies or references, not ownership. Unbinding stops tracking,
+  follow-ups and pushes for that chat, suppresses rediscovery and clears unfinished task links. Repository
+  branches and mission-level references stay unchanged. An optional task ID or number disambiguates
+  the owning mission task; multiple unfinished claims without it are rejected (HTTP 409).
+  Explicit bindings use the existing PR tracker and lifecycle rules, including after a restart.
+  Session metadata keeps `boundPullRequests` and `unboundPullRequests` URL overrides; rebinding clears
+  an exclusion. A daemon write-ahead handoff rolls forward ownership and task links together before
+  restarting workers after a crash. Binding returns after that local commit and refreshes GitHub
+  asynchronously, so rate limits do not hold the API open. Unbinding revokes inputs not yet admitted.
   Task-linked GitHub PRs use the daemon's existing serial PR tracker, including links added by hand
   and PRs unrelated to the owning chat. An open or draft PR moves a task to in_review. It becomes
   done when every linked PR has a known terminal state and at least one merged; closed-unmerged
@@ -382,12 +396,13 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 | `log` | Post a handoff or status update |
 | `update` | Change the mission title or goal |
 | `start`, `send`, `status` | Coordinator only: start a chat for an unclaimed task (`id`, optional `message`, `model`, `thinking`, `artifacts: [{artifactId, revision?}]`, `links: [{url, title?}]`), send a follow-up to a member (`targetSessionId`, `message`), summarise all member states (including archived chats) |
+| `bindPr`, `unbindPr` | Coordinator only: transfer or release PR head ownership (`targetSessionId`, `url`; optional `taskId` for `bindPr`) for a member of this mission, returning its `SessionSummary`. Resource references alone do not confer ownership. |
 
 The tool is registered for every Build and Ask chat but declared to the model only while the chat is a
 member, so other chats pay no prompt cost. pilotd pushes membership and context changes to a live
 kernel, which applies them from the next model request; tool calls travel over the worker's IPC channel
-and pilotd checks membership on every call and the current coordinator role for these three actions.
-These three actions and their guidance are declared only to the coordinator. Changes to membership
+and pilotd checks membership on every call and the current coordinator role for privileged actions.
+Privileged actions and their guidance are declared only to the coordinator. Changes to membership
 or coordinator role refresh the tool in place, including codemode discovery. `start` reuses Start chat
 and requires an active mission. Start model choices use the project's `ModelCatalog.list` scope,
 capped at the highest scoped Claude Opus 5.5 or GPT-6.1 Sol input plus output price per million tokens.

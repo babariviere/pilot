@@ -8,6 +8,7 @@ import {
 	githubRepository,
 	linkedPullRequest,
 	lookupPullRequests,
+	type PullRequestBatch,
 	type RateLimits,
 	type Repository,
 	run,
@@ -30,6 +31,10 @@ export interface PullRequestSession {
 	previousPullRequests?: SessionPullRequest[];
 	/** Earlier session branches without a known PR yet. */
 	previousBranches?: string[];
+	/** Explicit PR links, including heads unrelated to the workspace branch. */
+	boundPullRequests?: string[];
+	/** PR URLs intentionally excluded from automatic discovery. */
+	unboundPullRequests?: string[];
 }
 
 export interface PullRequestResult {
@@ -60,9 +65,48 @@ export function isTerminalPullRequest(pr: SessionPullRequest | undefined): boole
 	return pr?.state === "merged" || pr?.state === "closed";
 }
 
+function hasPullRequestUrl(urls: readonly string[] | undefined, url: string): boolean {
+	return urls?.some((value) => value.toLowerCase() === url.toLowerCase()) ?? false;
+}
+
 /** Current branch PR first, then earlier branches' PRs. */
 export function sessionPullRequests(session: PullRequestSession): SessionPullRequest[] {
-	return [...(session.pullRequest ? [session.pullRequest] : []), ...(session.previousPullRequests ?? [])];
+	return [...(session.pullRequest ? [session.pullRequest] : []), ...(session.previousPullRequests ?? [])].filter(
+		(pr) => !hasPullRequestUrl(session.unboundPullRequests, pr.url),
+	);
+}
+
+/** Valid explicit links in this repository. Exclusions always win over bindings. */
+export function boundPullRequestNumbers(session: PullRequestSession, repo: Repository): number[] {
+	const numbers = new Set<number>();
+	for (const url of session.boundPullRequests ?? []) {
+		if (hasPullRequestUrl(session.unboundPullRequests, url)) continue;
+		try {
+			const link = linkedPullRequest(url);
+			if (link.repo.identity.toLowerCase() === repo.identity.toLowerCase()) numbers.add(link.number);
+		} catch {
+			// Invalid persisted links cannot expand discovery to another repository.
+		}
+	}
+	return [...numbers];
+}
+
+/** Unknown explicit links must be checked even when all cached PRs have settled. */
+export function hasPendingBoundPullRequests(session: PullRequestSession): boolean {
+	if (!session.boundPullRequests?.length) return false;
+	const cached = new Map(sessionPullRequests(session).map((pr) => [pr.url.toLowerCase(), pr]));
+	return (session.boundPullRequests ?? []).some((url) => {
+		if (hasPullRequestUrl(session.unboundPullRequests, url)) return false;
+		try {
+			const link = linkedPullRequest(url);
+			const upstream = session.workspace?.upstream;
+			if (upstream && githubRepository(upstream).identity.toLowerCase() !== link.repo.identity.toLowerCase())
+				return false;
+			return !isTerminalPullRequest(cached.get(url.toLowerCase()));
+		} catch {
+			return false;
+		}
+	});
 }
 
 /** Every branch the session created or used: the current one first, then PR heads, then branches without a PR. */
@@ -282,6 +326,8 @@ export interface WorkspaceInspection {
 	branch?: string;
 	/** The current branch, when it is a PR head (not the base branch). */
 	current?: string;
+	/** Explicit PR numbers, refreshed even when their cached state is terminal. */
+	bound?: number[];
 	/** Other non-terminal heads to check. */
 	others: string[];
 	/** Other branches the session created locally. */
@@ -299,8 +345,22 @@ export async function inspectWorkspace(
 		others: [],
 		created: [],
 	});
-	if (!session.workspace) return none({});
-	if (session.workspaceRecovery) return none(session.workspace.branch ? { branch: session.workspace.branch } : {});
+	if (session.workspaceRecovery) return none(session.workspace?.branch ? { branch: session.workspace.branch } : {});
+	if (!session.workspace) {
+		// Direct-project chats own no local branches. Only explicit bindings are tracked, after
+		// checking the project's origin so a link can never redirect discovery to another repository.
+		if (!session.boundPullRequests?.some((url) => !hasPullRequestUrl(session.unboundPullRequests, url)))
+			return none({});
+		try {
+			const repo = githubRepository(
+				(await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000)).trim(),
+			);
+			const bound = boundPullRequestNumbers(session, repo);
+			return bound.length ? { repo, bound, others: [], created: [] } : none({});
+		} catch (error) {
+			return none({ error: failure(error) });
+		}
+	}
 	const workspace = session.workspace;
 	let branch = workspace.branch;
 	// Direct delivery on the default branch is not a session PR. Avoid matching unrelated
@@ -334,7 +394,11 @@ export async function inspectWorkspace(
 		const local = branch !== undefined && isBase(branch) ? [] : await localBranches(session, runner);
 		inspection.created = local.filter((name) => name !== branch && validBranch(name) && !isBase(name));
 		const names = new Set<string>([
-			...(session.previousPullRequests ?? []).flatMap((pr) => (pr.branch ? [pr.branch] : [])),
+			// A hand-bound PR links the PR, not its arbitrary (possibly fork) head. Local or observed
+			// branches still participate independently, but bindings themselves are refreshed by number.
+			...(session.previousPullRequests ?? []).flatMap((pr) =>
+				pr.branch && !hasPullRequestUrl(session.boundPullRequests, pr.url) ? [pr.branch] : [],
+			),
 			...(session.previousBranches ?? []),
 			...inspection.created,
 		]);
@@ -347,7 +411,11 @@ export async function inspectWorkspace(
 	} catch (error) {
 		inspection.error = failure(error);
 	}
-	if (inspection.current === undefined && !inspection.others.length) {
+	if (
+		inspection.current === undefined &&
+		!inspection.others.length &&
+		!session.boundPullRequests?.some((url) => !hasPullRequestUrl(session.unboundPullRequests, url))
+	) {
 		inspection.result = {
 			...(branch !== undefined ? { branch } : {}),
 			...(inspection.created.length ? { branches: inspection.created } : {}),
@@ -359,6 +427,7 @@ export async function inspectWorkspace(
 		inspection.repo = githubRepository(
 			(workspace.upstream ?? (await runner("git", ["remote", "get-url", "origin"], session.cwd, 10_000))).trim(),
 		);
+		inspection.bound = boundPullRequestNumbers(session, inspection.repo);
 	} catch (error) {
 		inspection.result = { ...(branch ? { branch } : {}), error: failure(error) };
 	}
@@ -379,11 +448,12 @@ export function knownPullRequests(session: PullRequestSession, inspection: Works
 	if (
 		inspection.current !== undefined &&
 		current &&
+		!hasPullRequestUrl(session.unboundPullRequests, current.url) &&
 		!isTerminalPullRequest(current) &&
 		(current.branch ?? session.workspace?.branch) === inspection.current
 	)
 		known.set(inspection.current, current.number);
-	for (const pr of session.previousPullRequests ?? [])
+	for (const pr of sessionPullRequests(session))
 		if (pr.branch && !isTerminalPullRequest(pr) && inspection.others.includes(pr.branch))
 			known.set(pr.branch, pr.number);
 	return known;
@@ -393,41 +463,64 @@ export function knownPullRequests(session: PullRequestSession, inspection: Works
 export function resolvePullRequests(
 	session: PullRequestSession,
 	inspection: WorkspaceInspection,
-	found: ReadonlyMap<string, Candidate | undefined> | Error,
+	found: PullRequestBatch | Error,
 	now = Date.now(),
 ): PullRequestResult {
 	if (inspection.result) return inspection.result;
 	const { branch } = inspection;
 	if (found instanceof Error) return { ...(branch ? { branch } : {}), error: failure(found) };
 	const result: PullRequestResult = branch !== undefined ? { branch } : {};
-	if (inspection.current !== undefined) {
-		const pr = found.get(inspection.current);
-		if (pr) {
-			result.pullRequest = toSessionPullRequest(pr, now);
-			if (result.pullRequest.mergedAt !== undefined) result.mergedAt = result.pullRequest.mergedAt;
-		} else if (session.pullRequest && session.workspace?.branch === branch) {
-			result.error = "No matching pull request found; keeping last known status";
-		}
+	const excluded = new Set(session.unboundPullRequests?.map((url) => url.toLowerCase()));
+	const selected = new Map<string, Candidate>();
+	for (const head of inspectionHeads(inspection)) {
+		const pr = found.heads.get(head);
+		if (pr && !excluded.has(pr.url.toLowerCase())) selected.set(pr.url.toLowerCase(), pr);
+	}
+	for (const number of inspection.bound ?? []) {
+		const pr = found.numbers.get(number);
+		if (pr && !excluded.has(pr.url.toLowerCase())) selected.set(pr.url.toLowerCase(), pr);
+	}
+	const current = inspection.current === undefined ? undefined : found.heads.get(inspection.current);
+	const currentPr =
+		current && !excluded.has(current.url.toLowerCase())
+			? selected.get(current.url.toLowerCase())
+			: [...selected.values()].find((pr) => pr.headRefName === inspection.current);
+	if (currentPr) {
+		result.pullRequest = toSessionPullRequest(currentPr, now);
+		if (result.pullRequest.mergedAt !== undefined) result.mergedAt = result.pullRequest.mergedAt;
+	} else if (
+		inspection.current !== undefined &&
+		session.pullRequest &&
+		!excluded.has(session.pullRequest.url.toLowerCase()) &&
+		!(current && excluded.has(current.url.toLowerCase())) &&
+		session.workspace?.branch === branch
+	) {
+		result.error = "No matching pull request found; keeping last known status";
 	}
 	if (inspection.created.length) result.branches = inspection.created;
-	const others = inspection.others.flatMap((name) => {
-		const pr = found.get(name);
-		return pr ? [toSessionPullRequest(pr, now)] : [];
-	});
+	const others = [...selected.values()].flatMap((pr) =>
+		pr.url === currentPr?.url ? [] : [toSessionPullRequest(pr, now)],
+	);
 	if (others.length) result.others = others;
+	const boundError = (inspection.bound ?? []).map((number) => found.numberErrors.get(number)).find(Boolean);
+	if (boundError && !selected.size) result.error = failure(boundError);
 	if (inspection.error) result.error = inspection.error;
 	return result;
 }
 
 /** Aggregate check state of the inspection's open PRs: pending wins, then failing. */
 export function checksState(
+	session: PullRequestSession,
 	inspection: WorkspaceInspection,
-	found: ReadonlyMap<string, Candidate | undefined>,
+	found: PullRequestBatch,
 ): ChecksState | undefined {
 	let state: ChecksState | undefined;
-	for (const head of inspectionHeads(inspection)) {
-		const pr = found.get(head);
-		if (pr?.state !== "OPEN" || !pr.checks) continue;
+	const prs = [
+		...inspectionHeads(inspection).map((head) => found.heads.get(head)),
+		...(inspection.bound ?? []).map((number) => found.numbers.get(number)),
+	];
+	for (const pr of prs) {
+		if (pr?.state !== "OPEN" || !pr.checks || hasPullRequestUrl(session.unboundPullRequests, pr.url)) continue;
 		if (pr.checks === "pending") return "pending";
 		if (pr.checks === "failing" || !state) state = pr.checks;
 	}
@@ -442,17 +535,19 @@ export async function discoverPullRequest(
 ): Promise<PullRequestResult> {
 	const inspection = await inspectWorkspace(session, runner);
 	if (inspection.result) return inspection.result;
-	let found: ReadonlyMap<string, Candidate | undefined> | Error;
+	let found: PullRequestBatch | Error;
 	try {
-		found = (
-			await lookupPullRequests(
-				inspection.repo!,
-				{ heads: inspectionHeads(inspection), known: knownPullRequests(session, inspection) },
-				session.cwd,
-				runner,
-				limits,
-			)
-		).heads;
+		found = await lookupPullRequests(
+			inspection.repo!,
+			{
+				heads: inspectionHeads(inspection),
+				numbers: inspection.bound,
+				known: knownPullRequests(session, inspection),
+			},
+			session.cwd,
+			runner,
+			limits,
+		);
 	} catch (error) {
 		found = error instanceof Error ? error : new Error(String(error));
 	}
@@ -510,5 +605,7 @@ export function inspectionInputs(session: PullRequestSession): string {
 		!!session.workspaceRecovery,
 		session.previousPullRequests?.map((pr) => [pr.branch, isTerminalPullRequest(pr)]),
 		session.previousBranches,
+		session.boundPullRequests,
+		session.unboundPullRequests,
 	]);
 }

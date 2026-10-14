@@ -150,6 +150,70 @@ test("new mission with start disabled or omitted creates no chat", async (t) => 
 	assert.equal(f.sessions.list().length, 0);
 });
 
+test("PR handoff actions check coordinator role and membership and share task-link behavior with user binds", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Handoff",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.store.join(member.id, mission.id);
+	const url = "https://github.com/octo/repo/pull/12";
+	for (const action of ["bindPr", "unbindPr"] as const) {
+		await assert.rejects(
+			f.service.call(member.id, action, { targetSessionId: member.id, url }),
+			/Only the mission coordinator/,
+		);
+		await assert.rejects(
+			f.service.call(coordinator.id, action, { targetSessionId: outsider.id, url }),
+			/not in this mission/,
+		);
+		await assert.rejects(f.service.call(coordinator.id, action, { url }), /requires targetSessionId and url/);
+	}
+	const meta = f.sessions["metas"].get(member.id)!;
+	meta.workspace = {
+		source: f.project.path,
+		upstream: "git@github.com:octo/repo.git",
+		branch: "feat/other",
+		base: "origin/main",
+		jj: false,
+	};
+	const first = f.store.addTask(mission.id, { title: "First" });
+	f.store.claimTask(mission.id, first.id, member.id);
+	await f.service.call(coordinator.id, "bindPr", { targetSessionId: member.id, url });
+	assert.ok(f.store.detail(mission.id).resources.some((r) => r.url === url && r.taskId === first.id));
+	f.store.updatePullRequest({
+		number: 12,
+		url,
+		title: "Hand-built",
+		state: "open",
+		branch: "feat/other",
+		checkedAt: 1,
+	});
+	assert.equal(f.store.task(mission.id, first.id).status, "in_review");
+	await f.sessions.unbindPullRequest(member.id, url);
+	assert.equal(f.store.detail(mission.id).resources.filter((r) => r.url === url).length, 0);
+	assert.equal(f.store.task(mission.id, first.id).status, "in_progress");
+	const second = f.store.addTask(mission.id, { title: "Second" });
+	f.store.claimTask(mission.id, second.id, member.id);
+	await assert.rejects(f.sessions.bindPullRequest(member.id, url), /Ambiguous.*taskId/);
+	await f.sessions.bindPullRequest(member.id, url, {}, second.id);
+	assert.deepEqual(
+		f.store
+			.detail(mission.id)
+			.resources.filter((r) => r.url === url)
+			.map((r) => r.taskId),
+		[second.id],
+	);
+	const events = f.store.detail(mission.id).events.filter((e) => /Pull request (bound|unbound)/.test(e.text));
+	assert.ok(events.some((e) => e.text.includes("bound") && e.sessionId === coordinator.id));
+	assert.ok(events.some((e) => e.text.includes("unbound") && e.sessionId === undefined));
+});
+
 test("failed coordinator model admission leaves the created mission without a coordinator or chat", async (t) => {
 	const f = await fixture(t);
 	t.mock.method(f.sessions, "selectTaskModel", async () => {

@@ -47,7 +47,7 @@ import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
-import type { PullRequestProblems } from "./github.ts";
+import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { ModelCatalog } from "./models.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -96,6 +96,19 @@ type PendingCommand = Extract<KernelCommand, { type: "input" | "abort" }>;
 type WorkerSpec = Extract<KernelCommand, { type: "start" }>["spec"];
 type MissionCallPacket = Extract<KernelPacket, { type: "mission.call" }>;
 
+/** Write-ahead handoff, replayed before workers or PR discovery start. */
+export interface PullRequestBinding {
+	id: string;
+	sessionId: string;
+	url: string;
+	bound: boolean;
+	taskId?: string;
+	missionId?: string;
+	changed?: boolean;
+	previousSessionIds: string[];
+	actor: { sessionId?: string };
+}
+
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
 	/** Revalidate an automatic notice after persistence/startup, before kernel admission. */
@@ -115,6 +128,12 @@ export interface SessionMissionBridge {
 	pullRequestsDiscovered?(sessionId: string, urls: string[]): void;
 	linkedPullRequests?(): Iterable<LinkedPullRequest>;
 	pullRequestUpdated?(pr: SessionPullRequest): void;
+	validatePullRequestBinding?(
+		sessionId: string,
+		url: string,
+		taskId?: string,
+	): { missionId: string; taskId?: string } | undefined;
+	applyPullRequestBinding?(operation: PullRequestBinding): void;
 	workspaceBehind?(sessionId: string, text: string): void;
 }
 
@@ -259,6 +278,11 @@ interface SessionMeta extends OutcomeMeta {
 	 * that created it, or else the first private-workspace session to discover it on its branch.
 	 */
 	agentPullRequests?: string[];
+	/** Explicit ownership and durable discovery exclusions. Binding clears an exclusion. */
+	boundPullRequests?: string[];
+	unboundPullRequests?: string[];
+	/** Protect explicit handoffs from lifecycle snapshots queued before their commit. */
+	prBindingOperation?: string;
 	/** One persisted budget shared by all PR problems, reset only by user input. */
 	prFollowUp?: { attempts: number; nextAttemptAt: number; generation: number; requestId?: string };
 	/** Transport retries of a user submission must not replenish the automatic budget again. */
@@ -296,7 +320,12 @@ interface FollowUpContext {
 }
 
 function followUpState(meta: SessionMeta): string {
-	return JSON.stringify([meta.workspace?.branch, sessionPullRequests(meta).map((pr) => [pr.url, pr.state])]);
+	return JSON.stringify([
+		meta.workspace?.branch,
+		sessionPullRequests(meta).map((pr) => [pr.url, pr.state]),
+		meta.boundPullRequests,
+		meta.unboundPullRequests,
+	]);
 }
 
 /** Any open or draft PR, on the current branch or an earlier one, keeps the workspace in use. */
@@ -720,6 +749,9 @@ export class SessionManager {
 	private readonly commandLists = new Map<string, SessionCommand[]>();
 	private parkTimer?: ReturnType<typeof setTimeout>;
 	private missions?: SessionMissionBridge;
+	private bindingQueue: Promise<unknown> = Promise.resolve();
+	/** Explicit owners, indexed so PR sync does not scan every chat for each fresh head. */
+	private readonly boundPullRequestOwners = new Map<string, string>();
 	/** Consecutive kernel crashes per session, so automatic work cannot restart a failing kernel in a loop. */
 	private readonly kernelFailures = new Map<string, { failures: number; at: number; until: number }>();
 	/** A transport failure is counted when detected, before its exit, and only once. */
@@ -804,6 +836,10 @@ export class SessionManager {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
 			}
 		}
+		for (const meta of this.metas.values())
+			for (const url of meta.boundPullRequests ?? [])
+				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
+		await this.recoverPullRequestBinding();
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
 			if (this.missions && (this.isActiveMissionCoordinator(meta.id) || meta.coordinatorBookmarkDetached))
@@ -1243,6 +1279,166 @@ export class SessionManager {
 		for (const meta of this.metas.values())
 			if (this.isActiveMissionCoordinator(meta.id) || meta.coordinatorBookmarkDetached) this.missionChanged(meta.id);
 		this.refreshMissionPullRequests();
+	}
+
+	async bindPullRequest(
+		id: string,
+		url: string,
+		actor: { sessionId?: string } = {},
+		taskId?: string,
+	): Promise<SessionSummary> {
+		await this.changePullRequestBinding(id, url, true, actor, taskId);
+		// Ownership is local and committed already. GitHub rate limits must not hold the API/tool open.
+		void this.pullRequests.refresh(this.require(id));
+		return this.summary(this.require(id));
+	}
+
+	async unbindPullRequest(id: string, url: string, actor: { sessionId?: string } = {}): Promise<SessionSummary> {
+		await this.changePullRequestBinding(id, url, false, actor);
+		return this.summary(this.require(id));
+	}
+
+	private changePullRequestBinding(
+		id: string,
+		raw: string,
+		bound: boolean,
+		actor: { sessionId?: string },
+		taskId?: string,
+	): Promise<void> {
+		const work = this.bindingQueue
+			.catch(() => undefined)
+			.then(async () => {
+				if (this.closing) throw new Conflict("The daemon is shutting down");
+				await this.recoverPullRequestBinding();
+				const meta = this.require(id);
+				if (typeof raw !== "string" || !raw.trim() || raw.length > 2048)
+					throw new Error("url must be a non-empty string of at most 2048 characters");
+				if (taskId !== undefined && (typeof taskId !== "string" || !taskId.trim() || taskId.length > 128))
+					throw new Error("taskId must be a non-empty task ID or number");
+				let parsed: ReturnType<typeof linkedPullRequest>;
+				try {
+					if (new URL(raw.trim()).port) throw new Error("Invalid port");
+					parsed = linkedPullRequest(raw.trim());
+				} catch {
+					throw new Error("Expected a GitHub pull request URL (https://github.com/owner/repository/pull/number)");
+				}
+				if (!meta.projectId) throw new Error("The chat must belong to a project repository");
+				const project = this.projects.require(meta.projectId);
+				const upstream =
+					meta.workspace?.upstream ?? (await this.runner("git", ["remote", "get-url", "origin"], project.path));
+				if (githubRepository(upstream.trim()).identity.toLowerCase() !== parsed.repo.identity.toLowerCase())
+					throw new Error("The pull request must belong to the chat's project repository");
+				const url = `https://${parsed.repo.identity.toLowerCase()}/pull/${parsed.number}`;
+				const resolved = bound ? this.missions?.validatePullRequestBinding?.(id, url, taskId) : undefined;
+				const previousSessionIds = bound
+					? [...this.metas.values()]
+							.filter((other) => other.id !== id && this.attachedPullRequest(other, url))
+							.map((other) => other.id)
+					: [];
+				const operation: PullRequestBinding = {
+					id: randomUUID(),
+					sessionId: id,
+					url,
+					bound,
+					actor,
+					previousSessionIds,
+					changed: bound
+						? !meta.boundPullRequests?.some((known) => known.toLowerCase() === url) ||
+							this.excludedPullRequest(meta, url) ||
+							previousSessionIds.length > 0
+						: !this.excludedPullRequest(meta, url) || this.attachedPullRequest(meta, url),
+					...(resolved
+						? { missionId: resolved.missionId, ...(resolved.taskId ? { taskId: resolved.taskId } : {}) }
+						: {}),
+				};
+				// A single durable commit point for all session files and task links. Recovery rolls forward,
+				// never leaving two owners after a partial write or daemon restart.
+				const file = join(this.sessionsDir, "pull-request-binding.json");
+				const temp = `${file}.tmp`;
+				await writeFile(temp, JSON.stringify(operation), { mode: 0o600 });
+				await rename(temp, file);
+				await this.applyPullRequestBinding(operation);
+				await rm(file);
+			});
+		this.bindingQueue = work;
+		return work;
+	}
+
+	private attachedPullRequest(meta: SessionMeta, url: string): boolean {
+		return (
+			[
+				...(meta.boundPullRequests ?? []),
+				...(meta.agentPullRequests ?? []),
+				...sessionPullRequests(meta).map((pr) => pr.url),
+			].some((known) => known.toLowerCase() === url.toLowerCase()) && !this.excludedPullRequest(meta, url)
+		);
+	}
+
+	private excludedPullRequest(meta: SessionMeta, url: string): boolean {
+		return !!meta.unboundPullRequests?.some((known) => known.toLowerCase() === url.toLowerCase());
+	}
+
+	private async recoverPullRequestBinding(): Promise<void> {
+		const file = join(this.sessionsDir, "pull-request-binding.json");
+		let operation: PullRequestBinding;
+		try {
+			operation = JSON.parse(await readFile(file, "utf8")) as PullRequestBinding;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+			throw error;
+		}
+		await this.applyPullRequestBinding(operation);
+		await rm(file);
+	}
+
+	private async applyPullRequestBinding(operation: PullRequestBinding): Promise<void> {
+		const target = this.require(operation.sessionId);
+		const same = (url: string) => url.toLowerCase() === operation.url.toLowerCase();
+		const previous = operation.previousSessionIds.map((id) => this.require(id));
+		const cached = [target, ...previous].flatMap(sessionPullRequests).find((pr) => same(pr.url));
+		const detach = (meta: SessionMeta) => {
+			if (this.boundPullRequestOwners.get(operation.url.toLowerCase()) === meta.id)
+				this.boundPullRequestOwners.delete(operation.url.toLowerCase());
+			// Revoke automatic inputs not yet admitted. Already running user work is not stopped.
+			const requestId = meta.prFollowUp?.requestId;
+			const pending = meta.pending?.find((command) => command.requestId === requestId);
+			const addressesPr =
+				pending?.type === "input" &&
+				pending.content.match(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/[1-9]\d*/g)?.some(same);
+			if (requestId && addressesPr) {
+				meta.pending = (meta.pending ?? []).filter((command) => command.requestId !== requestId);
+				if (meta.prFollowUp) {
+					meta.prFollowUp.attempts = Math.max(0, meta.prFollowUp.attempts - 1);
+					delete meta.prFollowUp.requestId;
+				}
+			}
+			meta.unboundPullRequests = [...(meta.unboundPullRequests ?? []).filter((url) => !same(url)), operation.url];
+			meta.boundPullRequests = meta.boundPullRequests?.filter((url) => !same(url));
+			meta.agentPullRequests = meta.agentPullRequests?.filter((url) => !same(url));
+			if (meta.pullRequest && same(meta.pullRequest.url)) {
+				delete meta.pullRequest;
+				delete meta.pullRequestMergedAt;
+			}
+			meta.previousPullRequests = meta.previousPullRequests?.filter((pr) => !same(pr.url));
+			delete meta.pullRequestError;
+		};
+		// Change every owner in memory before yielding, so in-flight health checks cannot act for the old owner.
+		for (const meta of previous) detach(meta);
+		if (operation.bound) {
+			this.boundPullRequestOwners.set(operation.url.toLowerCase(), target.id);
+			target.unboundPullRequests = target.unboundPullRequests?.filter((url) => !same(url));
+			target.boundPullRequests = [...(target.boundPullRequests ?? []).filter((url) => !same(url)), operation.url];
+			if (cached && !sessionPullRequests(target).some((pr) => same(pr.url))) {
+				if (!target.pullRequest) target.pullRequest = cached;
+				else target.previousPullRequests = [...(target.previousPullRequests ?? []), cached];
+			}
+		} else detach(target);
+		for (const meta of [...previous, target]) meta.prBindingOperation = operation.id;
+		// Move links before yielding to PR sync, so a racing merge cannot complete the old task.
+		// The journal is already durable; a metadata failure rolls this transaction forward on recovery.
+		this.missions?.applyPullRequestBinding?.(operation);
+		for (const meta of [...previous, target]) await this.save(meta);
+		for (const meta of [...previous, target]) this.emit(meta);
 	}
 
 	/** Newly linked URLs need no owning worker, or even an owning chat. */
@@ -2669,6 +2865,7 @@ export class SessionManager {
 		await Promise.allSettled(this.changingModels.values());
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
+		await this.bindingQueue.catch(() => undefined);
 		await Promise.allSettled(this.workspaceRefreshes.values());
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
@@ -3077,7 +3274,7 @@ export class SessionManager {
 		if (packet.type === "pullRequest.created") {
 			if (this.workers.get(meta.id) !== worker || !meta.workspace || meta.mode === "ask") return;
 			// Only one session owns a PR. The creator is normally the first, unless another session claimed it.
-			if (this.pullRequestOwner(packet.url) === undefined) {
+			if (!this.excludedPullRequest(meta, packet.url) && this.pullRequestOwner(packet.url) === undefined) {
 				meta.agentPullRequests = [...(meta.agentPullRequests ?? []), packet.url];
 				this.missions?.pullRequestCreated?.(meta.id, packet.url);
 				void this.save(meta).catch((error: unknown) =>
@@ -3246,6 +3443,17 @@ export class SessionManager {
 		result: PullRequestResult,
 		health?: { context: FollowUpContext; checks: HealthCheck[] },
 	): Promise<void> {
+		const bindingOperation = meta.prBindingOperation;
+		// Explicit handoffs win over results already in flight, including discovery on the old branch.
+		const attached = (pr: SessionPullRequest) => {
+			const owner = this.boundPullRequestOwners.get(pr.url.toLowerCase());
+			return !this.excludedPullRequest(meta, pr.url) && (owner === undefined || owner === meta.id);
+		};
+		result = {
+			...result,
+			pullRequest: result.pullRequest && attached(result.pullRequest) ? result.pullRequest : undefined,
+			others: result.others?.filter(attached),
+		};
 		// Retain old PR history, not a task bookmark association.
 		if (meta.coordinatorDetachedBookmark && result.branch === meta.coordinatorDetachedBookmark)
 			result = { ...result, branch: undefined };
@@ -3278,6 +3486,14 @@ export class SessionManager {
 		}
 		if (next) current = next;
 		for (const pr of result.others ?? []) others = [pr, ...others.filter((other) => other.url !== pr.url)];
+		if (current && !attached(current)) current = undefined;
+		others = others.filter(attached);
+		if (!current) {
+			current = others.find((pr) =>
+				meta.boundPullRequests?.some((url) => url.toLowerCase() === pr.url.toLowerCase()),
+			);
+			if (current) others = others.filter((pr) => pr.url !== current!.url);
+		}
 		if (current) others = others.filter((other) => other.url !== current!.url);
 		others.sort((a, b) => b.number - a.number);
 		const linked = new Set([current?.branch, ...others.map((other) => other.branch)]);
@@ -3323,6 +3539,7 @@ export class SessionManager {
 			try {
 				await this.save(meta);
 			} catch (error) {
+				if (meta.prBindingOperation !== bindingOperation) throw error;
 				// Publish only persisted PR updates, and let the next check retry the same error.
 				// Other activity/outcome fields may have changed during I/O. Never roll those back.
 				if (branchChanged && meta.workspace) {
@@ -3344,11 +3561,14 @@ export class SessionManager {
 				throw error;
 			}
 		}
+		// A handoff can commit during metadata I/O. Its task links must not be recreated by this old result.
+		if (meta.prBindingOperation !== bindingOperation) return;
 		if (fresh || changed) this.emit(meta);
 		const discovered = [next, ...(result.others ?? [])]
 			.filter(
 				(pr): pr is SessionPullRequest =>
 					!!pr &&
+					!meta.boundPullRequests?.some((url) => url.toLowerCase() === pr.url.toLowerCase()) &&
 					pr.state !== "closed" &&
 					![previous, ...(previousOthers ?? [])].some((old) => old?.url === pr.url),
 			)
@@ -3370,25 +3590,24 @@ export class SessionManager {
 	}
 
 	/**
-	 * The merge that can archive a session: its current PR is merged, every linked PR is settled, and the
+	 * The merge that can archive a session: at least one PR merged, every linked PR is settled, and the
 	 * latest known merge time decides the deadline. Persisted merge times avoid polling terminal PRs.
 	 */
 	private mergeArchiveTarget(meta: SessionMeta): { url: string; mergedAt: number } | undefined {
 		if (this.isActiveMissionCoordinator(meta.id)) return undefined;
-		const pr = meta.pullRequest;
-		const mergedAt = meta.pullRequestMergedAt ?? pr?.mergedAt;
-		if (pr?.state !== "merged" || meta.pullRequestError || mergedAt === undefined || !Number.isFinite(mergedAt))
-			return undefined;
-		if (!sessionPullRequests(meta).every(isTerminalPullRequest)) return undefined;
-		let target = { url: pr.url, mergedAt };
-		for (const other of meta.previousPullRequests ?? [])
+		const prs = sessionPullRequests(meta);
+		if (meta.pullRequestError || !prs.every(isTerminalPullRequest)) return undefined;
+		let target: { url: string; mergedAt: number } | undefined;
+		for (const pr of prs) {
+			const mergedAt = pr.url === meta.pullRequest?.url ? (meta.pullRequestMergedAt ?? pr.mergedAt) : pr.mergedAt;
 			if (
-				other.state === "merged" &&
-				other.mergedAt !== undefined &&
-				Number.isFinite(other.mergedAt) &&
-				other.mergedAt > target.mergedAt
+				pr.state === "merged" &&
+				mergedAt !== undefined &&
+				Number.isFinite(mergedAt) &&
+				(!target || mergedAt > target.mergedAt)
 			)
-				target = { url: other.url, mergedAt: other.mergedAt };
+				target = { url: pr.url, mergedAt };
+		}
 		return target;
 	}
 
@@ -3459,7 +3678,7 @@ export class SessionManager {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
-				meta.workspace &&
+				(meta.workspace || meta.boundPullRequests?.length) &&
 				meta.mode !== "ask" &&
 				meta.archivedAt === undefined &&
 				!meta.failure &&
@@ -3485,12 +3704,27 @@ export class SessionManager {
 	}
 
 	private ownsOpenPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
-		return (pr.state === "open" || pr.state === "draft") && Boolean(meta.agentPullRequests?.includes(pr.url));
+		return (
+			(pr.state === "open" || pr.state === "draft") &&
+			!this.excludedPullRequest(meta, pr.url) &&
+			[...(meta.agentPullRequests ?? []), ...(meta.boundPullRequests ?? [])].some(
+				(url) => url.toLowerCase() === pr.url.toLowerCase(),
+			)
+		);
 	}
 
 	/** The one session owning a PR, archived ones included, so a restored session resumes its own PRs. */
 	private pullRequestOwner(url: string): string | undefined {
-		for (const meta of this.metas.values()) if (meta.agentPullRequests?.includes(url)) return meta.id;
+		const bound = this.boundPullRequestOwners.get(url.toLowerCase());
+		if (bound !== undefined) return bound;
+		for (const meta of this.metas.values())
+			if (
+				!this.excludedPullRequest(meta, url) &&
+				[...(meta.boundPullRequests ?? []), ...(meta.agentPullRequests ?? [])].some(
+					(known) => known.toLowerCase() === url.toLowerCase(),
+				)
+			)
+				return meta.id;
 		return undefined;
 	}
 
@@ -3501,6 +3735,7 @@ export class SessionManager {
 	private canClaimPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
 		return Boolean(
 			meta.workspace &&
+				!this.excludedPullRequest(meta, pr.url) &&
 				meta.mode !== "ask" &&
 				meta.archivedAt === undefined &&
 				(pr.state === "open" || pr.state === "draft") &&
@@ -3634,10 +3869,25 @@ export class SessionManager {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
 		const snapshot = `${JSON.stringify(meta, null, "\t")}\n`;
+		const bindingOperation = meta.prBindingOperation;
 		const write = async () => {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = JSON.parse(snapshot) as SessionMeta;
+			// PR ownership can move while an older lifecycle write is queued. Never resurrect stale links.
+			if (meta.prBindingOperation !== bindingOperation)
+				for (const key of [
+					"prBindingOperation",
+					"boundPullRequests",
+					"unboundPullRequests",
+					"agentPullRequests",
+					"pullRequest",
+					"previousPullRequests",
+					"pullRequestMergedAt",
+				] as const) {
+					if (meta[key] === undefined) delete persisted[key];
+					else Object.assign(persisted, { [key]: meta[key] });
+				}
 			// Pin state, like archive state, commits only after rename. Stale lifecycle snapshots cannot erase it.
 			if (pin ? pin.value : meta.pinned) persisted.pinned = true;
 			else delete persisted.pinned;
