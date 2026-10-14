@@ -2845,9 +2845,10 @@ test("status and get report idle chats with live jobs as waiting, not done", asy
 	await until(() => f.workers.get(member.id)!.requests.find((command) => command.type === "input"));
 	const worker = f.workers.get(member.id)!;
 	const jobs = [{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" }];
+	const outcomeAt = Date.now();
 	worker.state = "idle";
 	worker.onPacket({ type: "jobs.changed", jobs });
-	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt } });
 	const status = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
 	const reported = status.members.find((chat) => chat.id === member.id)!;
 	assert.equal(reported.state, "waiting on background job");
@@ -2856,8 +2857,17 @@ test("status and get report idle chats with live jobs as waiting, not done", asy
 	const get = (await f.service.call(lead.id, "get", {})) as { members: Array<Record<string, unknown>> };
 	assert.equal(get.members.find((chat) => chat.title === "Background tests")?.state, "waiting on background job");
 	worker.onPacket({ type: "jobs.changed", jobs: [] });
+	const pending = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(pending.members.find((chat) => chat.id === member.id)?.outcome, undefined);
+	assert.equal(f.sessions.get(member.id)?.working, true);
+	// Finishing the jobs alone is not a result. Only their fresh follow-up turn publishes one.
+	worker.state = "working";
+	worker.onPacket({ type: "working", working: true });
+	worker.state = "idle";
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: outcomeAt + 1 } });
 	const done = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
 	assert.equal(done.members.find((chat) => chat.id === member.id)?.outcome, "done");
+	assert.equal(f.sessions.get(member.id)?.working, false);
 });
 
 test("coordinator status includes archived and parked members, outcomes and tasks without waking workers", async (t) => {
