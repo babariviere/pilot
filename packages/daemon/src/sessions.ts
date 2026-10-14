@@ -183,6 +183,8 @@ export interface SessionWorker {
 	hasChildren?(): Promise<boolean>;
 	jobs?(): Promise<SessionJob[]>;
 	runningJobs?: SessionJob[];
+	/** Live-worker work continues between the last job ending and its result turn completing. */
+	awaitingJobFollowUp?: boolean;
 }
 
 export interface SessionManagerOptions {
@@ -944,6 +946,7 @@ export class SessionManager {
 			this.workers.get(id) === worker &&
 			worker.state === "idle" &&
 			!worker.runningJobs?.length &&
+			!worker.awaitingJobFollowUp &&
 			!(worker.busy ?? true) &&
 			!this.watchers.get(id)?.size &&
 			!this.starting.has(id) &&
@@ -3646,6 +3649,10 @@ export class SessionManager {
 		if (packet.type === "jobs.changed") {
 			if (this.workers.get(meta.id) !== worker) return;
 			worker.runningJobs = packet.jobs;
+			if (packet.jobs.length) {
+				worker.awaitingJobFollowUp = true;
+				if (applyActivity(meta, Boolean(meta.working), undefined, true)) void this.save(meta);
+			}
 			this.emit(meta, worker);
 			return;
 		}
@@ -3671,7 +3678,14 @@ export class SessionManager {
 			if (this.applyAttempts(meta, packet.attempts)) void this.save(meta);
 		} else if (packet.type === "ready" || packet.type === "working") {
 			const wasWorking = Boolean(meta.working);
-			const changed = applyActivity(meta, packet.working, packet.completion);
+			if (
+				!packet.working &&
+				!worker.runningJobs?.length &&
+				packet.completion &&
+				packet.completion.outcomeAt > (meta.lastCompletionAt ?? meta.outcomeAt ?? -1)
+			)
+				worker.awaitingJobFollowUp = false;
+			const changed = applyActivity(meta, packet.working, packet.completion, worker.awaitingJobFollowUp);
 			if (packet.type === "ready") {
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
@@ -3707,6 +3721,15 @@ export class SessionManager {
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
 		const usage = this.usage(meta, worker);
+		const state = meta.failure
+			? "failed"
+			: meta.initializing
+				? "starting"
+				: meta.inputError && (!meta.working || !worker)
+					? "failed"
+					: (worker?.state ?? "parked");
+		const working =
+			state === "working" || state === "starting" || !!worker?.runningJobs?.length || !!worker?.awaitingJobFollowUp;
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
@@ -3740,21 +3763,18 @@ export class SessionManager {
 				: {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
-			state: meta.failure
-				? "failed"
-				: meta.initializing
-					? "starting"
-					: meta.inputError && (!meta.working || !worker)
-						? "failed"
-						: (worker?.state ?? "parked"),
+			state,
+			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
 			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
-			...(meta.outcome ? { outcome: meta.outcome } : {}),
-			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
-			...(meta.outcomeReason !== undefined ? { outcomeReason: safeFailureText(meta.outcomeReason) } : {}),
+			...(!working && meta.outcome ? { outcome: meta.outcome } : {}),
+			...(!working && meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
+			...(!working && meta.outcomeReason !== undefined
+				? { outcomeReason: safeFailureText(meta.outcomeReason) }
+				: {}),
 			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
 			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
 			...(meta.boundPullRequests?.some((url) => !this.excludedPullRequest(meta, url))

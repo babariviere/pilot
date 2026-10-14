@@ -84,6 +84,23 @@ test("idle is not a completion, and working clears all public outcome fields", (
 	assert.deepEqual(meta, { working: false, lastOutcomeAt: 42, lastCompletionAt: 42 });
 });
 
+test("job-waiting completions are consumed rather than deferred or replayed after restart", () => {
+	const meta: OutcomeMeta = {};
+	applyActivity(meta, true);
+	const completion: SessionCompletion = { outcome: "done", outcomeAt: 42 };
+	assert.equal(applyActivity(meta, false, completion, true), true);
+	assert.equal(meta.working, false, "kernel activity remains independent of user-visible background work");
+	assert.equal(meta.outcome, undefined);
+	assert.equal(meta.lastCompletionAt, 42);
+	const reopened: OutcomeMeta = JSON.parse(JSON.stringify(meta));
+	assert.equal(applyActivity(reopened, false, completion), false);
+	assert.equal(reopened.outcome, undefined);
+	applyActivity(reopened, true);
+	applyActivity(reopened, false, { outcome: "done", outcomeAt: 43 });
+	assert.equal(reopened.outcome, "done");
+	assert.equal(reopened.outcomeAt, 43);
+});
+
 test("settled packets persist each explicit outcome and replace obsolete reasons", () => {
 	const meta: OutcomeMeta = {};
 	const outcomes: SessionOutcome[] = ["done", "failed", "stopped"];

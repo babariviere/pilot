@@ -446,6 +446,30 @@ test("counts cover every project with one pass over the chats and omit quiet one
 	assert.throws(() => f.service.dashboard("nope"));
 });
 
+test("idle background work uses the daemon flag in counts, working rows, missions and Inbox", () => {
+	const m = mission({ id: "m1" });
+	const jobs = [{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" }];
+	const chats = [
+		session({ id: "jobs", working: true, runningJobs: jobs, outcome: "done", outcomeAt: 42, missionId: m.id }),
+		session({ id: "follow-up", working: true, missionId: m.id }),
+		session({ id: "legacy", runningJobs: jobs }),
+	];
+	const f = service(chats);
+	assert.deepEqual(f.service.counts(), { projects: { p1: { working: 3, needsYou: 0 } } });
+	const dashboard = f.service.dashboard("p1");
+	assert.equal(dashboard.summary.working, 3);
+	assert.equal(dashboard.working.total, 3);
+	assert.ok(dashboard.working.items.every((item) => item.state === "working"));
+	assert.equal(dashboard.needsYou.total, 0);
+	assert.equal(dashboard.recent.total, 0);
+	assert.equal(f.service.needsYou(undefined, 50).total, 0);
+	assert.equal(build({ sessions: chats, missions: [m] }).missions.items[0]?.working, 2);
+	// An explicit daemon value wins over local inference (for example, future attention overrides).
+	const override = session({ working: false, runningJobs: jobs, outcome: "question", outcomeAt: 43 });
+	assert.equal(build({ sessions: [override] }).summary.working, 0);
+	assert.equal(build({ sessions: [override] }).needsYou.total, 1);
+});
+
 test("counts add the Inbox's tracked items, and the Inbox lists needs-you rows across projects", () => {
 	const f = service(
 		[

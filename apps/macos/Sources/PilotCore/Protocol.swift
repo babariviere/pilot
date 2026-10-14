@@ -71,6 +71,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Sorts first and prevents automatic archiving. Omitted by older daemons, meaning unpinned.
     public let pinned: Bool?
     public let state: String
+    /// Daemon-derived user-visible work, including live jobs and their pending follow-up.
+    public let working: Bool?
     /// Worker startup failed. Retry reloads it without replacing queued messages or history.
     public let canRetryStartup: Bool?
     /// Live jobs owned by this worker. Nil when none.
@@ -106,7 +108,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// The workspace has work no PR carries, so terminal-PR rules do not apply. Omitted when none, or by older daemons.
     public let unpublishedWork: Bool?
 
-    public var isWorking: Bool { state == "working" || state == "starting" }
+    public var isWorking: Bool { working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty) }
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }
     public var workspaceLabel: String {
@@ -169,7 +171,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
         branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
-        workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil
+        workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
+        working: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -193,6 +196,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.archivedAt = archivedAt
         self.pinned = pinned
         self.state = state
+        self.working = working
         self.canRetryStartup = canRetryStartup
         self.runningJobs = runningJobs
         self.model = model
