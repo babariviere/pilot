@@ -51,7 +51,7 @@ extension SessionSummary {
 /// The All projects sidebar grouped by urgency instead of by project.
 public enum SidebarUrgency {
     public struct Groups: Equatable, Sendable {
-        /// Failed chats first, then agent questions, then unread results, each in list order.
+        /// Failed chats first, then agent questions, then unread or unanswered results, each in list order.
         public var needsYou: [SessionSummary] = []
         public var working: [SessionSummary] = []
         /// Everything else, in list order (pinned first).
@@ -66,8 +66,10 @@ public enum SidebarUrgency {
         public var isEmpty: Bool { needsYou.isEmpty && working.isEmpty && recent.isEmpty }
     }
 
-    /// One pass over `sessions`, which are already in sidebar list order.
-    public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool) -> Groups {
+    /// One pass over `sessions`, which are already in sidebar list order. `awaitingReply` keeps a viewed result
+    /// under Needs you, so opening a chat does not move it to Recent.
+    public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool,
+                              awaitingReply: (SessionSummary) -> Bool = { _ in false }) -> Groups {
         var failed: [SessionSummary] = []
         var questions: [SessionSummary] = []
         var waiting: [SessionSummary] = []
@@ -78,7 +80,8 @@ public enum SidebarUrgency {
             case .failed: failed.append(session)
             case .needsYou where session.status == .question: questions.append(session)
             case .needsYou: waiting.append(session)
-            case .readyToMerge, nil: groups.recent.append(session)
+            case .readyToMerge, nil:
+                if awaitingReply(session) { waiting.append(session) } else { groups.recent.append(session) }
             }
         }
         groups.needsYou = failed + questions + waiting

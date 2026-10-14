@@ -135,7 +135,8 @@ struct SessionSidebar: View {
     @ViewBuilder
     private func urgencyContent(visible: [SessionSummary], searching: Bool) -> some View {
         missionsSection(visible: visible, searching: searching)
-        let groups = SidebarUrgency.groups(visible) { model.isUnread($0) }
+        let groups = SidebarUrgency.groups(visible, unread: { model.isUnread($0) },
+                                           awaitingReply: { model.isAwaitingReply($0) })
         let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         if !groups.needsYou.isEmpty {
             Section {
@@ -638,6 +639,8 @@ struct SessionRow: View {
             }
             if unread {
                 Button("Mark as reviewed") { model.review(session, explicit: true) }
+            } else if model.isAwaitingReply(session) {
+                Button("Remove from Needs you") { model.review(session, explicit: true) }
             }
         }
     }

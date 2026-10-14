@@ -63,3 +63,10 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     #expect(!session("working", state: "working").isQuiet)
     #expect(!session("failed", outcome: .failed).isQuiet)
 }
+
+@Test func viewedResultsAwaitingReplyStayUnderNeedsYou() {
+    let sessions = [session("quiet", outcome: .done), session("viewed", outcome: .done), session("unread", outcome: .done)]
+    let groups = SidebarUrgency.groups(sessions, unread: { $0.id == "unread" }, awaitingReply: { $0.id == "viewed" })
+    #expect(groups.needsYou.map(\.id) == ["viewed", "unread"])
+    #expect(groups.recent.map(\.id) == ["quiet"])
+}

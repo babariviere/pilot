@@ -184,3 +184,42 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
         #expect(attention.isUnread(merged))
     }
 }
+
+@Test func viewingKeepsResultAwaitingReplyUntilAnsweredDismissedOrArchived() {
+    withDefaults { defaults in
+        let attention = SessionAttention(defaults: defaults)
+        let done = summary(at: 100)
+        _ = attention.observe([done], snapshot: true)
+        #expect(attention.review(done, chatVisible: true, appActive: true))
+        #expect(!attention.isUnread(done))
+        #expect(attention.isAwaitingReply(done))
+        // Persists across launches.
+        #expect(SessionAttention(defaults: defaults).isAwaitingReply(done))
+
+        // A reply starts work, then a new outcome, which ends the entry.
+        let working = summary(state: "working", at: 100)
+        #expect(!attention.isAwaitingReply(working))
+        _ = attention.observe([summary(at: 200)], snapshot: false)
+        #expect(!attention.isAwaitingReply(summary(at: 200)))
+        #expect(!attention.isAwaitingReply(done))
+
+        // Dismissing or archiving also ends it.
+        let other = summary(id: "o", at: 50)
+        attention.review(other, chatVisible: true, appActive: true)
+        #expect(attention.isAwaitingReply(other))
+        #expect(attention.dismiss(other))
+        #expect(!attention.isAwaitingReply(other))
+
+        let third = summary(id: "t", at: 60)
+        attention.review(third, chatVisible: true, appActive: true)
+        let archived = SessionSummary(id: "t", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 200, state: "idle",
+                                      outcome: .done, outcomeAt: 60, archivedAt: 70)
+        _ = attention.observe([archived], snapshot: false)
+        #expect(!attention.isAwaitingReply(third))
+
+        // An explicit review is a dismissal, so it never sticks.
+        let explicit = summary(id: "e", at: 80)
+        attention.review(explicit, chatVisible: false, appActive: false, explicit: true)
+        #expect(!attention.isAwaitingReply(explicit))
+    }
+}

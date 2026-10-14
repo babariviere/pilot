@@ -59,7 +59,7 @@ the project page. Do not restyle a state for a single screen.
 | State | Meaning | Interrupts |
 | --- | --- | --- |
 | Working | An agent is running | No |
-| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start | Yes |
+| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start. A viewed result stays until answered, archived or removed | Yes |
 | Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |

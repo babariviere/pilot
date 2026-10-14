@@ -449,9 +449,12 @@ final class AppModel: ObservableObject {
     }
 
     func isUnread(_ session: SessionSummary) -> Bool { attention.isUnread(session) }
+    func isAwaitingReply(_ session: SessionSummary) -> Bool { attention.isAwaitingReply(session) }
 
     func review(_ session: SessionSummary, chatVisible: Bool = false, explicit: Bool = false) {
-        if attention.review(session, chatVisible: chatVisible, appActive: NSApp.isActive, explicit: explicit) {
+        let reviewed = attention.review(session, chatVisible: chatVisible, appActive: NSApp.isActive, explicit: explicit)
+        let dismissed = explicit && attention.dismiss(session)
+        if reviewed || dismissed {
             reviewRevision += 1
         }
     }
