@@ -175,7 +175,7 @@ struct SessionInspectorControls: View {
     @ViewBuilder
     var body: some View {
         if session.missionId != nil {
-            InspectorToggle(tab: .mission, icon: "scope", help: "Mission")
+            InspectorToggle(tab: .mission, icon: MissionSymbol.name, help: "Mission")
         }
         if !session.isAsk {
             InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
@@ -189,7 +189,7 @@ struct SessionInspectorControls: View {
                     }
             }
         }
-        InspectorToggle(tab: .artifacts, icon: "cube.transparent", help: "Artifacts")
+        InspectorToggle(tab: .artifacts, icon: ArtifactSymbol.name, help: "Artifacts")
     }
 }
 

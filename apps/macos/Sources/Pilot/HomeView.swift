@@ -258,7 +258,7 @@ struct TaskComposer: View {
                 .padding(.horizontal, 4)
             HStack(spacing: 6) {
                 if let mission = form.mission {
-                    Label(mission.title, systemImage: "scope")
+                    Label(mission.title, systemImage: MissionSymbol.name)
                         .font(.system(size: 12)).lineLimit(1)
                         .foregroundStyle(Theme.mutedForeground)
                         .padding(.horizontal, 8).padding(.vertical, 4)

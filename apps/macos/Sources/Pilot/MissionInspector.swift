@@ -14,7 +14,7 @@ struct MissionInspectorPane: View {
             if let missionId = session.missionId, let mission = client.mission(missionId) {
                 content(mission, detail: client.missionDetails[missionId])
             } else {
-                EmptyStateView(icon: "scope", title: "Not in a mission",
+                EmptyStateView(icon: MissionSymbol.name, title: "Not in a mission",
                                message: "Use Make a mission… or Add to mission… from the chat's menu.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -100,7 +100,7 @@ struct MissionInspectorPane: View {
     private func header(_ mission: Mission, detail: MissionDetail?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "scope").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                Image(systemName: MissionSymbol.name).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                 Text(mission.title).font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground).lineLimit(2)
                 if mission.status != .active { MissionStatusChip(status: mission.status) }
                 Spacer(minLength: 6)
@@ -169,7 +169,7 @@ struct MissionChip: View {
     var body: some View {
         Button { model.openMission(missionId) } label: {
             HStack(spacing: 4) {
-                Image(systemName: "scope")
+                Image(systemName: MissionSymbol.name)
                 Text(client.mission(missionId)?.title ?? "Mission").lineLimit(1)
             }
             .font(.pilot(.caption, weight: .medium))

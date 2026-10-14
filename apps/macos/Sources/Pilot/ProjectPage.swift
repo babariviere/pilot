@@ -166,7 +166,7 @@ private struct ProjectToolbar: ToolbarContent {
             Menu {
                 Button { model.newSession(in: project.id) } label: { Label("New Chat", systemImage: "plus") }
                 Button { model.missionSheet = .create(projectId: project.id) } label: {
-                    Label("New Mission…", systemImage: "scope")
+                    Label("New Mission…", systemImage: MissionSymbol.name)
                 }
             } label: {
                 Label("New chat", systemImage: "plus")
@@ -187,7 +187,7 @@ private struct ProjectToolbar: ToolbarContent {
                 Button { model.showArchive(in: project.id) } label: {
                     Label("Browse Archived Chats", systemImage: "archivebox")
                 }
-                Button(action: showArtifacts) { Label("Artifacts…", systemImage: "cube.transparent") }
+                Button(action: showArtifacts) { Label("Artifacts…", systemImage: ArtifactSymbol.name) }
                 Divider()
                 if model.sidebarScope == project.id {
                     Button { model.focus(on: nil) } label: {
@@ -768,7 +768,7 @@ private struct ProjectWorkingRow: View {
                         Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                         HStack(spacing: 5) {
                             if let mission = item.missionTitle {
-                                Image(systemName: "scope").font(.pilot(.micro))
+                                Image(systemName: MissionSymbol.name).font(.pilot(.micro))
                                 Text(mission).lineLimit(1)
                                 if !meta.isEmpty { Text("·") }
                             }
@@ -926,7 +926,7 @@ private struct ProjectMissionRow: View {
         Button { model.openMission(mission.id) } label: {
             HoverRow(verticalPadding: 7) { _ in
                 HStack(spacing: 10) {
-                    Image(systemName: "scope").font(.pilot(.label)).foregroundStyle(Theme.foreground).frame(width: 16)
+                    Image(systemName: MissionSymbol.name).font(.pilot(.label)).foregroundStyle(Theme.foreground).frame(width: 16)
                     Text(mission.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if mission.working > 0 { CountBadge(count: mission.working).help("\(mission.working) working") }

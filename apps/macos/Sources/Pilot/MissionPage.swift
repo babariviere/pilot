@@ -34,7 +34,7 @@ struct MissionPage: View {
                                        compactTabs: width < MissionPage.compactTabsWidth)
                     }
             } else {
-                EmptyStateView(icon: "scope", title: "This mission no longer exists",
+                EmptyStateView(icon: MissionSymbol.name, title: "This mission no longer exists",
                                message: "It was deleted. Its chats are kept in their project.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }

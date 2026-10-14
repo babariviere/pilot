@@ -207,7 +207,7 @@ struct SessionSidebar: View {
                 }
             } header: {
                 HStack(spacing: 6) {
-                    Image(systemName: "scope").font(.system(size: 10)).frame(width: 14)
+                    Image(systemName: MissionSymbol.name).font(.system(size: 10)).frame(width: 14)
                     Text("Missions").font(.system(size: 11, weight: .semibold))
                     Spacer(minLength: 0)
                     Button { model.missionSheet = .create(projectId: projectId) } label: { Image(systemName: "plus") }
@@ -500,7 +500,7 @@ struct SessionRow: View {
                     MissionCoordinatorIndicator()
                 }
                 if showsMission, session.missionId != nil {
-                    Image(systemName: "scope")
+                    Image(systemName: MissionSymbol.name)
                         .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .help("In mission: \(model.client.mission(session.missionId)?.title ?? "")")

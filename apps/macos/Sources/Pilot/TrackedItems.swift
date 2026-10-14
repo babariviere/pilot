@@ -564,7 +564,7 @@ struct TrackedLinkButton: View {
                 if let status = link.sessionStatus {
                     SessionStatusIcon(status: status)
                 } else {
-                    Image(systemName: "scope").font(.pilot(.caption)).foregroundStyle(color)
+                    Image(systemName: MissionSymbol.name).font(.pilot(.caption)).foregroundStyle(color)
                 }
                 Text(link.status).font(.pilot(.caption)).foregroundStyle(color).lineLimit(1)
                 if link.count > 1 {

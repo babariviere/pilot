@@ -115,7 +115,7 @@ struct HomeOverview: View {
                 HStack(spacing: 10) {
                     Button { app.openMission(mission.id) } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Image(systemName: "scope").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                            Image(systemName: MissionSymbol.name).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                                 .frame(width: 14).accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(mission.title).font(.pilot(.body, weight: .medium))

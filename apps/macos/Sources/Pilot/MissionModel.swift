@@ -2,6 +2,12 @@ import AppKit
 import PilotCore
 import SwiftUI
 
+/// The one mission mark, everywhere a mission appears (sidebar, inspector, pages, menus). It pairs with the
+/// coordinator compass in `MissionCoordinatorIndicator`.
+enum MissionSymbol {
+    static let name = "map"
+}
+
 enum MissionTab: String, CaseIterable, Hashable {
     case overview, tasks, brief, chats, artifacts, activity
 
@@ -144,14 +150,14 @@ struct SessionMissionActions: View {
                 Button("Make coordinator") { model.setCoordinator(session.id, missionId: missionId) }
             }
             Button { model.openMission(missionId) } label: {
-                Label("Open mission", systemImage: "scope")
+                Label("Open mission", systemImage: MissionSymbol.name)
             }
             Button { model.removeFromMission(session.id) } label: {
                 Label("Remove from mission", systemImage: "minus.circle")
             }
         } else if session.projectId != nil {
             Button { model.missionSheet = .make(sessionId: session.id) } label: {
-                Label("Make a mission…", systemImage: "scope")
+                Label("Make a mission…", systemImage: MissionSymbol.name)
             }
             Button { model.missionSheet = .add(sessionId: session.id) } label: {
                 Label("Add to mission…", systemImage: "plus.circle")
@@ -224,7 +230,7 @@ extension MissionEventKind {
         case .comment: "text.quote"
         case .task: "checklist"
         case .claim: "hand.raised"
-        case .artifact: "cube.transparent"
+        case .artifact: ArtifactSymbol.name
         case .resource: "link"
         case .member: "person.badge.plus"
         case .coordinator: MissionCoordinatorIndicator.symbol
