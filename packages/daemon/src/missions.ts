@@ -552,12 +552,18 @@ export class MissionStore {
 		let changed = false;
 		this.transaction(() => {
 			for (const pr of prs) {
-				const cached = this.memberPullRequest(id, pr);
+				const row = this.one(
+					"SELECT pull_request FROM member_pull_requests WHERE mission_id = ? AND url = ?",
+					id,
+					pr.url,
+				);
+				const cached = row ? (JSON.parse(str(row.pull_request!)) as SessionPullRequest) : undefined;
 				if (
-					cached.checkedAt > pr.checkedAt ||
-					(cached.checkedAt === pr.checkedAt &&
-						(cached.state === "merged" || cached.state === "closed") &&
-						(pr.state === "open" || pr.state === "draft"))
+					cached &&
+					(cached.checkedAt > pr.checkedAt ||
+						(cached.checkedAt === pr.checkedAt &&
+							(cached.state === "merged" || cached.state === "closed") &&
+							(pr.state === "open" || pr.state === "draft")))
 				)
 					continue;
 				this.run(
@@ -568,7 +574,6 @@ export class MissionStore {
 					JSON.stringify(pr),
 				);
 				if (pr.state !== "merged" && pr.state !== "closed") continue;
-				if (pr.state === "merged" && pr.mergedAt === undefined) continue;
 				if (
 					this.one(
 						"SELECT 1 FROM pull_request_transitions WHERE mission_id = ? AND url = ? AND state = ?",
@@ -584,6 +589,10 @@ export class MissionStore {
 					pr.url,
 					pr.state,
 				);
+				// First observations are a durable, silent baseline, not evidence of a transition.
+				// Consume terminal states even when their timestamp is missing or later refreshed.
+				if (!cached || cached.state === pr.state) continue;
+				if (pr.state === "merged" && pr.mergedAt === undefined) continue;
 				// Closed PRs have no close timestamp in the cache. Their successful lookup is the best
 				// available boundary; merged PRs must have a real merge time, not a refresh timestamp.
 				if ((pr.state === "merged" ? (pr.mergedAt ?? 0) : pr.checkedAt) < joinedAt) continue;

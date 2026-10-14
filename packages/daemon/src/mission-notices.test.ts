@@ -200,6 +200,7 @@ test("PR transitions are recorded once, without repeating unchanged PR states", 
 	try {
 		const now = Date.now();
 		const open = completion("done", now + 1);
+		store.recordMemberPullRequests(open, [open.pullRequest!]);
 		store.recordMemberCompletion(open);
 		const merged = {
 			...open,
