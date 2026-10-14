@@ -60,6 +60,54 @@ test("jobs GET returns the session's read-only running list and routes missing s
 	assert.equal(reads.mock.callCount(), 3);
 });
 
+test("retry-startup POST returns the recovered session and preserves route guards", async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const summary: SessionSummary = {
+		id: "failed",
+		title: "Recovered",
+		cwd: "/work",
+		state: "working",
+		createdAt: 1,
+		updatedAt: 2,
+	};
+	const retries = t.mock.method(sessions, "retryStartup", async (id: string) => {
+		if (id === "missing") throw new NotFound("Unknown session");
+		if (id === "idle") throw new Conflict("Session has no retryable worker startup failure");
+		return summary;
+	});
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions`;
+	const response = await fetch(`${base}/failed/retry-startup`, { method: "POST" });
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), summary);
+	for (const [path, options, status] of [
+		[`${base}/missing/retry-startup`, { method: "POST" }, 404],
+		[`${base}/idle/retry-startup`, { method: "POST" }, 409],
+		[`${base}/failed/retry-startup`, {}, 404],
+		[`${base}/failed/retry-startup/extra`, { method: "POST" }, 404],
+		[`${base}/failed/retry-startup`, { method: "POST", headers: { origin: "https://example.com" } }, 403],
+	] as const) {
+		const denied = await fetch(path, options);
+		assert.equal(denied.status, status);
+		await denied.arrayBuffer();
+	}
+	assert.equal(retries.mock.callCount(), 3);
+});
+
 test("PR binding routes use the user actor, return summaries and validate request shape", async (t) => {
 	const projects = new ProjectStore("/unused");
 	const sessions = new SessionManager("/unused", projects);

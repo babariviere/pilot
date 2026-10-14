@@ -204,6 +204,8 @@ export interface SessionSummary {
 	/** Live worker-owned jobs. Omitted when none; never restored from stale metadata. */
 	runningJobs?: SessionJob[];
 	state: SessionState;
+	/** Worker startup failed. POST /api/sessions/:id/retry-startup reloads it with the existing outbox. */
+	canRetryStartup?: boolean;
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
 	outcomeReason?: string;

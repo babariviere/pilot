@@ -65,6 +65,10 @@ release source before using **System Settings → Privacy & Security → Open An
 The app installs `pilotd` as a per-user launchd agent. Closing or quitting Pilot does not stop running
 agents. Chat history is stored locally using [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable).
 
+If a chat's worker fails to start, fix the reported configuration or extension dependency problem and
+choose **Retry Startup** below the error. Pilot reloads the worker with the original queued messages,
+keeping its history and workspace. Workspace preparation failures cannot use this action.
+
 ## Working with Pilot
 
 ### Ask and Build

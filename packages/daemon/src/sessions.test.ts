@@ -12,6 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
 import type { AgentEvent, SessionCompletion, SessionPullRequest, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { Conflict } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -1249,8 +1250,152 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		reopened.subscribe(created.id, (events) => recoveredBatches.push(events));
 		assert.deepEqual(recoveredBatches, [[snapshot]]);
 		assert.equal(f.workers.length, count);
+		assert.equal(reopened.get(created.id)?.canRetryStartup, failure === "clone" ? undefined : true);
+		const pending = (await f.stored(created.id)).pending;
+		if (failure === "clone") {
+			await assert.rejects(reopened.retryStartup(created.id), /no retryable/);
+		} else {
+			const result = await reopened.retryStartup(created.id);
+			assert.equal(result.state, "working");
+			assert.equal(result.canRetryStartup, undefined);
+			assert.equal(result.error, undefined);
+			assert.equal(result.outcome, undefined);
+			assert.deepEqual(f.workers.at(-1)!.requests, pending);
+			assert.deepEqual((await f.stored(created.id)).pending, []);
+			await assert.rejects(reopened.retryStartup(created.id), /no retryable/);
+		}
 	});
 }
+
+for (const workspace of ["clone", "direct"] as const) {
+	test(`retry startup reuses the ${workspace} workspace, closes the old owner and serializes recovery`, async (t) => {
+		const f = await fixture(t);
+		let clones = 0;
+		const sessions = await f.manager({
+			workspace: async (_source, path) => {
+				clones++;
+				await mkdir(path);
+				return { path, base: "HEAD", jj: false };
+			},
+			worker: f.workerFactory(false),
+		});
+		const created = await sessions.spawn({
+			...(workspace === "clone" ? { projectId: f.project.id } : { cwd: f.source }),
+			message: "original input",
+		});
+		await until(() => f.workers.length === 1);
+		await writeFile(join(created.cwd, "keep"), "workspace contents");
+		await sessions.send(created.id, "second input", "steer", "stable-second-id");
+		f.workers[0]!.gate.reject(new Error("Native extension loading failed: dependency missing"));
+		await until(() => sessions.get(created.id)?.canRetryStartup === true);
+		const before = await f.stored(created.id);
+		const batches: AgentEvent[][] = [];
+		sessions.subscribe(created.id, (events) => batches.push(events));
+		const close = deferred();
+		t.after(() => close.resolve());
+		f.workers[0]!.closeGate = close.promise;
+		const retry = sessions.retryStartup(created.id);
+		await until(() => f.workers[0]!.closed);
+		assert.equal(f.workers.length, 1, "replacement must wait for the old storage owner");
+		await assert.rejects(sessions.retryStartup(created.id), /changing configuration/);
+		await assert.rejects(sessions.send(created.id, "racing send"), /changing its model/);
+		await assert.rejects(sessions.stop(created.id), /changing its model/);
+		await assert.rejects(sessions.archive(created.id), Conflict);
+		close.resolve();
+		await until(() => f.workers.length === 2);
+		assert.equal(sessions.get(created.id)?.state, "starting");
+		assert.equal(f.workers[1]!.spec.cwd, created.cwd);
+		assert.equal(f.workers[1]!.spec.storageDir, f.workers[0]!.spec.storageDir);
+		assert.ok(f.workers[1]!.sent.some((command) => command.type === "watch"));
+		f.workers[1]!.open();
+		const result = await retry;
+		assert.equal(result.state, "working");
+		assert.equal(result.error, undefined);
+		assert.equal(result.outcome, undefined);
+		assert.equal(result.canRetryStartup, undefined);
+		assert.deepEqual(f.workers[1]!.requests, before.pending);
+		assert.equal(clones, workspace === "clone" ? 1 : 0);
+		assert.equal(await readFile(join(created.cwd, "keep"), "utf8"), "workspace contents");
+		assert.equal((await f.stored(created.id)).lastUserMessageAt, before.lastUserMessageAt);
+		assert.deepEqual((await f.stored(created.id)).pending, []);
+	});
+}
+
+test("retry startup failures retain original input, show the new diagnostic and allow another retry", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	const created = await sessions.spawn({ cwd: f.source, message: "original input" });
+	await until(() => f.workers.length === 1);
+	f.workers[0]!.gate.reject(new Error("first startup failure"));
+	await until(() => sessions.get(created.id)?.canRetryStartup === true);
+	const pending = (await f.stored(created.id)).pending;
+	const retry = sessions.retryStartup(created.id);
+	const rejected = assert.rejects(retry, /second startup failure/);
+	await until(() => f.workers.length === 2);
+	f.workers[1]!.gate.reject(new Error("second startup failure"));
+	await rejected;
+	assert.equal(sessions.get(created.id)?.canRetryStartup, true);
+	assert.match(sessions.get(created.id)!.error!, /second startup failure/);
+	assert.deepEqual((await f.stored(created.id)).pending, pending);
+	assert.deepEqual(f.workers[1]!.requests, []);
+	const recovered = sessions.retryStartup(created.id);
+	await until(() => f.workers.length === 3);
+	f.workers[2]!.open();
+	assert.equal((await recovered).state, "working");
+	assert.deepEqual(f.workers[2]!.requests, pending);
+});
+
+test("retry startup honors the update lease and resumes the durable outbox after interrupted recovery", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	const created = await sessions.spawn({ cwd: f.source, message: "original input" });
+	await until(() => f.workers.length === 1);
+	f.workers[0]!.state = "failed";
+	f.workers[0]!.gate.reject(new Error("startup failure"));
+	await until(() => sessions.get(created.id)?.canRetryStartup === true);
+	const pending = (await f.stored(created.id)).pending;
+	await until(() => sessions.prepareUpdate().ready);
+	await assert.rejects(sessions.retryStartup(created.id), /update/i);
+	assert.equal(sessions.get(created.id)?.canRetryStartup, true);
+	assert.equal(f.workers.length, 1);
+	await sessions.shutdown();
+	const recovering = await f.manager({ worker: f.workerFactory(false) });
+	const retry = recovering.retryStartup(created.id);
+	await until(() => f.workers.length === 2);
+	assert.deepEqual(recovering.prepareUpdate(), { ready: false });
+	assert.equal((await f.stored(created.id)).initializing, true);
+	await recovering.shutdown();
+	await retry;
+	const reopened = await f.manager();
+	await until(() => reopened.get(created.id)?.state === "working");
+	assert.deepEqual(f.workers.at(-1)!.requests, pending);
+	assert.deepEqual((await f.stored(created.id)).pending, []);
+});
+
+test("retry startup refuses archived, invalid and non-startup failed sessions", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	const created = await sessions.spawn({ cwd: f.source, message: "original input" });
+	await assert.rejects(sessions.retryStartup("missing"), /Unknown session/);
+	await assert.rejects(sessions.retryStartup(created.id), /no retryable/);
+	await until(() => f.workers.length === 1);
+	f.workers[0]!.gate.reject(new Error("startup failure"));
+	await until(() => sessions.get(created.id)?.canRetryStartup === true);
+	await sessions.shutdown();
+	const path = join(f.home, "sessions", created.id, "meta.json");
+	const original = JSON.parse(await readFile(path, "utf8"));
+	for (const patch of [{ archivedAt: Date.now() }, { failure: "Session validation: invalid source" }]) {
+		await writeFile(path, JSON.stringify({ ...original, ...patch }));
+		const reopened = await f.manager();
+		assert.equal(reopened.get(created.id)?.canRetryStartup, undefined);
+		await assert.rejects(reopened.retryStartup(created.id), Conflict);
+		await reopened.shutdown();
+	}
+	await writeFile(path, JSON.stringify({ ...original, mode: "unsupported" }));
+	const invalid = await f.manager();
+	await assert.rejects(invalid.retryStartup(created.id), /mode/);
+	assert.equal(f.workers.length, 1, "invalid metadata cannot reopen a worker");
+});
 
 test("shutdown during clone does not start a worker when preparation later completes", async (t) => {
 	const f = await fixture(t);

@@ -2350,6 +2350,69 @@ export class SessionManager {
 		}
 	}
 
+	/** Retry worker initialization, without forking history or replacing queued input IDs. */
+	async retryStartup(id: string): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		let locked = false;
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		try {
+			const meta = this.require(id);
+			if (this.closing) throw new Error("pilotd is shutting down");
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before retrying startup");
+			if (this.changingModels.has(id) || this.archiveTransitions.has(id))
+				throw new Conflict("Session is changing configuration");
+			if (!this.canRetryStartup(meta)) throw new Conflict("Session has no retryable worker startup failure");
+			this.validateMode(meta);
+			this.changingModels.set(id, settled);
+			locked = true;
+			// The failed drain may still be finishing its metadata write and snapshot publication.
+			await this.starting.get(id);
+			await this.unparked(id);
+			const worker = this.workers.get(id);
+			if (worker) {
+				this.workers.delete(id);
+				this.lastUse.delete(id);
+				this.parked.add(worker);
+				const closing = worker.close().finally(() => {
+					if (this.parking.get(id) === closing) this.parking.delete(id);
+				});
+				this.parking.set(id, closing);
+				await this.unparked(id);
+			}
+			if (this.closing) throw new Error("pilotd is shutting down");
+			delete meta.failure;
+			delete meta.inputError;
+			this.kernelErrors.delete(id);
+			clearOutcome(meta);
+			meta.initializing = true;
+			meta.updatedAt = Date.now();
+			// A restart here resumes initialization on load, with the same durable outbox.
+			await this.save(meta);
+			this.emit(meta);
+			await this.start(id, true);
+			if (meta.failure || meta.inputError) throw new Error(meta.failure ?? meta.inputError);
+			return this.summary(meta);
+		} finally {
+			if (locked) this.changingModels.delete(id);
+			release();
+			end();
+		}
+	}
+
+	private canRetryStartup(meta: SessionMeta): boolean {
+		// Recognize persisted failures from older versions too. Preparation and validation failures
+		// are excluded: this action never discards or recreates a working directory.
+		return Boolean(
+			meta.failure?.startsWith("Session startup:") &&
+				!meta.preparing &&
+				!meta.workspaceRecovery &&
+				meta.archivedAt === undefined,
+		);
+	}
+
 	async stop(id: string): Promise<StopResponse> {
 		const meta = this.require(id);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
@@ -3608,6 +3671,7 @@ export class SessionManager {
 			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
+			...(this.canRetryStartup(meta) ? { canRetryStartup: true } : {}),
 			...(meta.unpublishedWork ? { unpublishedWork: true } : {}),
 			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
 				? {
