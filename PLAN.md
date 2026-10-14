@@ -206,9 +206,12 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   `.mise/config.local.toml`) and bounded `.pi/todos` files for restoration, with content-addressed
   backups for repeated cleanup. Block deletion on unknown files that would be lost, live work,
   subprocesses, viewers or terminals, sparse checkouts and submodules. Ignored regenerable dependency
-  and build directories are discarded. jj 0.46+ and Git 2.42+ are required for shared colocation.
+  and build directories are discarded, including the ignored, untracked generated checkout at
+  `apps/macos/Vendor/libghostty-spm` (not arbitrary vendor directories). jj 0.46+ and Git 2.42+ are required for shared colocation.
   Resume restores the pinned jj snapshot, not a moving bookmark or the current remote head. Cleanup
   failures are protocol metadata and appear in the existing workspace badge tooltip, without another screen.
+  Failed automatic cleanup backs off from 5 minutes to at most 1 hour per archival; busy conflicts
+  retry on the next sweep, and explicit cleanup bypasses the backoff.
 
 ### 5.5 Policy and safety
 

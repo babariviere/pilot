@@ -16,12 +16,13 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
 import {
 	copyLocalConfigs,
 	dissociateWorkspace,
+	isRegenerableDirectory,
 	localConfigs,
-	regenerableDirectories as regenerable,
 	run,
 	type Runner,
 	type Workspace,
@@ -936,10 +937,15 @@ export class SharedWorkspaceStore {
 				).split("\0")
 			: gitFields;
 		const tracked = new Set<string>();
+		const trackedDirectories = new Set<string>();
 		for (let index = 0; index + 1 < fields.length; index += 2) {
+			// Large snapshots need an index, but building it must not stall streaming and HTTP work.
+			if (index > 0 && index % 2048 === 0) await yieldToEventLoop();
 			if (fields[index + 1] === "git-submodule")
 				throw new Error(`Submodule prevents automatic cleanup: ${fields[index]}`);
 			tracked.add(fields[index]!);
+			for (let parent = dirname(fields[index]!); parent !== "."; parent = dirname(parent))
+				trackedDirectories.add(parent);
 		}
 		// Collapse ignored trees so dependency directories never consume the command output budget.
 		const ignored = (
@@ -959,7 +965,7 @@ export class SharedWorkspaceStore {
 				if (prefix && entry.name === ".git")
 					throw new Error(`Submodule or nested git repository prevents automatic cleanup: ${prefix.slice(0, -1)}`);
 				if (entry.isDirectory()) {
-					if (regenerable.has(entry.name) && ![...tracked].some((file) => file.startsWith(`${path}/`))) {
+					if (isRegenerableDirectory(path) && !trackedDirectories.has(path)) {
 						// Only ignored outputs may be discarded. Unignored directories can contain inputs.
 						if (await this.optional("git", ["check-ignore", "--", `${path}/`], cwd)) continue;
 					}

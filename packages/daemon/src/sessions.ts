@@ -311,6 +311,8 @@ function hasSettledPullRequests(meta: SessionMeta): boolean {
 }
 const WEEK_MS = 7 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
+const WORKSPACE_CLEANUP_BACKOFF_MS = 5 * 60_000;
+const WORKSPACE_CLEANUP_BACKOFF_MAX_MS = 60 * 60_000;
 /** Archive sweeps recheck a chat kept active by unpublished work at most this often. */
 const UNPUBLISHED_CHECK_MS = 30 * 60_000;
 const COLD_SNAPSHOT_TTL_MS = 5_000;
@@ -681,6 +683,11 @@ export class SessionManager {
 	private closing = false;
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
+	/** Failed disk scans must not repeat on every sweep. Explicit reclamation bypasses this backoff. */
+	private readonly workspaceCleanupBackoff = new Map<
+		string,
+		{ archivedAt: number; failures: number; until: number }
+	>();
 	private readonly pullRequests: PullRequestSync<SessionMeta, FollowUpContext>;
 	private readonly runner: Runner;
 	/** Last unpublished-work check per session, and the one in flight. */
@@ -966,7 +973,10 @@ export class SessionManager {
 		const staleBefore = Date.now() - this.workspaceRetentionMs;
 		for (const meta of this.metas.values()) {
 			if (this.closing) break;
-			if (
+			const previous = this.workspaceCleanupBackoff.get(meta.id);
+			if (previous && previous.archivedAt !== meta.archivedAt) this.workspaceCleanupBackoff.delete(meta.id);
+			else if (previous && Date.now() < previous.until) continue;
+			const legacy =
 				meta.workspace &&
 				!meta.workspace.shared &&
 				meta.mode !== "ask" &&
@@ -974,18 +984,9 @@ export class SessionManager {
 				meta.archivedAt !== undefined &&
 				meta.archivedAt <= staleBefore &&
 				meta.workspacePrunedAt === undefined &&
-				!hasActivePullRequest(meta)
-			) {
-				try {
-					await this.pruneWorkspace(meta.id, staleBefore);
-				} catch (error) {
-					if (!(error instanceof Conflict))
-						console.warn(`pilotd: could not prune workspace for ${meta.id}: ${error}`);
-				}
-				continue;
-			}
+				!hasActivePullRequest(meta);
 			if (
-				!meta.workspace?.shared ||
+				(!legacy && !meta.workspace?.shared) ||
 				meta.archivedAt === undefined ||
 				meta.archivedAt > staleBefore ||
 				hasActivePullRequest(meta) ||
@@ -993,11 +994,25 @@ export class SessionManager {
 			)
 				continue;
 			try {
-				await this.reclaimWorkspace(meta.id, staleBefore);
+				if (legacy) await this.pruneWorkspace(meta.id, staleBefore);
+				else await this.reclaimWorkspace(meta.id, staleBefore);
+				this.workspaceCleanupBackoff.delete(meta.id);
 			} catch (error) {
 				// Busy sessions and update leases are retried by the next sweep.
-				if (!(error instanceof Conflict))
-					console.warn(`pilotd: could not reclaim workspace for ${meta.id}: ${error}`);
+				if (error instanceof Conflict) continue;
+				const failures = (this.workspaceCleanupBackoff.get(meta.id)?.failures ?? 0) + 1;
+				const delay = Math.min(
+					WORKSPACE_CLEANUP_BACKOFF_MAX_MS,
+					WORKSPACE_CLEANUP_BACKOFF_MS * 2 ** Math.min(failures - 1, 16),
+				);
+				this.workspaceCleanupBackoff.set(meta.id, {
+					archivedAt: meta.archivedAt!,
+					failures,
+					until: Date.now() + delay,
+				});
+				console.warn(
+					`pilotd: could not ${legacy ? "prune" : "reclaim"} workspace for ${meta.id}; retrying in ${delay}ms: ${error}`,
+				);
 			}
 		}
 	}
@@ -1053,6 +1068,7 @@ export class SessionManager {
 						meta.workspaceRecovery.phase = "reclaimed";
 						meta.workspaceReclaimedAt ??= Date.now();
 						delete meta.workspaceCleanupError;
+						this.workspaceCleanupBackoff.delete(id);
 						this.coldSnapshots.delete(id);
 						await this.save(meta);
 						this.emit(meta);
@@ -1121,6 +1137,7 @@ export class SessionManager {
 						meta.workspacePrunedAt = Date.now();
 						if (removed.length) meta.workspaceReset = { at: meta.workspacePrunedAt };
 						delete meta.workspaceCleanupError;
+						this.workspaceCleanupBackoff.delete(id);
 						await this.save(meta);
 						this.emit(meta);
 						return this.summary(meta);
@@ -1561,6 +1578,7 @@ export class SessionManager {
 					...(!archived ? { restoredAt: Date.now() } : {}),
 					autoArchivedPullRequest,
 				});
+				this.workspaceCleanupBackoff.delete(id);
 				this.emit(meta);
 				return this.summary(meta);
 			});
@@ -1835,6 +1853,7 @@ export class SessionManager {
 			const saving = this.saving.get(id);
 			if (saving) await saving.catch(() => undefined);
 			this.metas.delete(id);
+			this.workspaceCleanupBackoff.delete(id);
 			await rm(this.dir(id), { recursive: true, force: true });
 			throw error;
 		}

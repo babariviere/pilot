@@ -1,10 +1,84 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { SharedWorkspaceStore } from "./shared-workspaces.ts";
 import { fixture, git, jj } from "./testing/shared-workspace.ts";
 import { type Runner, run } from "./workspaces.ts";
+
+test("large tracked-directory indexing yields to daemon work before finishing the listing", async () => {
+	const fields = Array.from({ length: 1100 }, (_, index) => `sources/${index}.ts\0file\0`).join("");
+	const runner: Runner = async (file, args) => {
+		if (file === "jj" && args.includes("sparse")) return ".";
+		if (file === "git" && args.includes("--stage")) return "";
+		if (file === "jj" && args.includes("file")) return `${fields}nested\0git-submodule\0`;
+		throw new Error("Inspection should stop before filesystem traversal");
+	};
+	let serviced = false;
+	const pending = setImmediate(() => {
+		serviced = true;
+	});
+	try {
+		const store = new SharedWorkspaceStore(process.cwd(), runner);
+		// biome-ignore lint/complexity/useLiteralKeys: Exercise the private inspection seam without repository I/O.
+		await assert.rejects(store["inspect"](process.cwd()), /Submodule prevents automatic cleanup: nested/);
+		assert.equal(serviced, true, "HTTP and streaming callbacks get a turn while indexing large trees");
+	} finally {
+		clearImmediate(pending);
+	}
+});
+
+test("generated Ghostty vendor checkout is discarded and rebuilt, without allowlisting arbitrary vendor inputs", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		const vendor = "apps/macos/Vendor/libghostty-spm";
+		writeFileSync(
+			join(w.path, ".gitignore"),
+			`${readFileSync(join(w.path, ".gitignore"), "utf8")}\napps/macos/Vendor/\n`,
+		);
+		mkdirSync(join(w.path, vendor), { recursive: true });
+		writeFileSync(join(w.path, vendor, ".gitattributes"), "generated\n");
+		writeFileSync(join(w.path, vendor, ".pilot-version"), "pinned\n");
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, recovery);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(existsSync(join(w.path, vendor)), false);
+		assert.deepEqual(recovery.localConfigs, {});
+
+		for (const path of ["apps/macos/Vendor/precious", "elsewhere/libghostty-spm"]) {
+			writeFileSync(join(w.path, ".gitignore"), `${readFileSync(join(w.path, ".gitignore"), "utf8")}\n${path}/\n`);
+			mkdirSync(join(w.path, path), { recursive: true });
+			writeFileSync(join(w.path, path, "input"), "do not lose\n");
+			await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+			rmSync(join(w.path, path), { recursive: true });
+		}
+
+		// A symlink at the allowlisted path must not be mistaken for a generated directory.
+		const outside = join(f.root, "outside");
+		mkdirSync(outside);
+		writeFileSync(join(outside, "input"), "keep\n");
+		symlinkSync(outside, join(w.path, vendor));
+		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+		assert.equal(readFileSync(join(outside, "input"), "utf8"), "keep\n");
+		rmSync(join(w.path, vendor));
+
+		// Do not skip ignored files adjacent to a tracked vendor source.
+		mkdirSync(join(w.path, vendor));
+		writeFileSync(join(w.path, ".gitignore"), "");
+		jj(w.path, "config", "set", "--repo", "snapshot.auto-track", "none()");
+		writeFileSync(join(w.path, vendor, "tracked.swift"), "source\n");
+		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe untracked or jj-omitted path/);
+		jj(w.path, "config", "set", "--repo", "snapshot.auto-track", "all()");
+		jj(w.path, "status");
+		writeFileSync(join(w.path, ".gitignore"), "apps/macos/Vendor/\n");
+		writeFileSync(join(w.path, vendor, ".gitattributes"), "ignored next to tracked source\n");
+		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+		assert.equal(readFileSync(join(w.path, vendor, "tracked.swift"), "utf8"), "source\n");
+	} finally {
+		f.close();
+	}
+});
 
 test("partial creation and restore resume after command completion but before metadata persistence", async () => {
 	let failAdd = true;
