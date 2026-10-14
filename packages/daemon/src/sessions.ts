@@ -1049,6 +1049,7 @@ export class SessionManager {
 			!meta.pending?.length &&
 			!meta.initializing &&
 			!meta.working &&
+			!meta.kernelRestartPending &&
 			Date.now() - (this.lastUse.get(id) ?? 0) >= this.idleParkMs
 		);
 	}
@@ -1419,6 +1420,7 @@ export class SessionManager {
 		if (
 			this.closing ||
 			meta.working ||
+			meta.kernelRestartPending ||
 			meta.initializing ||
 			meta.preparing ||
 			meta.pending?.length ||
@@ -1461,6 +1463,7 @@ export class SessionManager {
 			this.hasWorkspaceProcess(meta.id) ||
 			this.workers.has(meta.id) ||
 			meta.working ||
+			meta.kernelRestartPending ||
 			meta.initializing ||
 			meta.preparing ||
 			meta.pending?.length
@@ -2077,6 +2080,7 @@ export class SessionManager {
 		const busy =
 			meta.sleepPaused ||
 			meta.working ||
+			meta.kernelRestartPending ||
 			meta.initializing ||
 			meta.preparing ||
 			meta.pending?.length ||
@@ -2149,6 +2153,7 @@ export class SessionManager {
 									this.closing ||
 									meta.sleepPaused ||
 									meta.working ||
+									meta.kernelRestartPending ||
 									worker?.busy ||
 									worker?.awaitingJobFollowUp ||
 									worker?.runningJobs?.length ||
@@ -2398,6 +2403,7 @@ export class SessionManager {
 					archived &&
 					!(this.sleepPause && !worker) &&
 					(meta.working ||
+						meta.kernelRestartPending ||
 						// A terminal startup failure cannot drain its outbox. Keep those messages and
 						// preparation markers for restoration, but do not mistake them for live work.
 						(!meta.failure && (meta.initializing || meta.preparing || meta.pending?.length)) ||
@@ -2520,6 +2526,7 @@ export class SessionManager {
 		const worker = this.workers.get(meta.id);
 		if (
 			meta.working ||
+			meta.kernelRestartPending ||
 			meta.initializing ||
 			meta.preparing ||
 			meta.pending?.length ||
@@ -2828,6 +2835,7 @@ export class SessionManager {
 			!meta.failure &&
 			!this.kernelBackingOff(id) &&
 			!meta.working &&
+			!meta.kernelRestartPending &&
 			!meta.initializing &&
 			!meta.preparing &&
 			!meta.workspaceRecovery &&
@@ -4919,6 +4927,7 @@ export class SessionManager {
 			meta.workspaceRecovery ||
 			meta.archivedAt !== undefined ||
 			meta.working ||
+			meta.kernelRestartPending ||
 			worker?.state === "working" ||
 			worker?.busy ||
 			(previous && Date.now() - previous.at < maxAgeMs)
@@ -4955,6 +4964,7 @@ export class SessionManager {
 				!this.kernelBackingOff(meta.id) &&
 				!this.sleepPause &&
 				!meta.working &&
+				!meta.kernelRestartPending &&
 				!meta.initializing &&
 				!meta.preparing &&
 				!meta.workspaceRecovery &&
