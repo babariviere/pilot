@@ -404,7 +404,6 @@ enum Snapshot {
             model.client.loadFixture(projects: Fixtures.projects, sessions: sessions)
             model.client.loadMissionFixture(details)
             model.selectedSessionId = nil
-            model.expandedMissions = ["m1"]
             model.showingInactiveMissions = true
             await render(SessionSidebar(model: model, client: model.client), size: CGSize(width: 300, height: 680),
                          to: directory.appending(path: "missions-sidebar.png"))

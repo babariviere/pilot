@@ -1,74 +1,87 @@
 import PilotCore
 import SwiftUI
 
-/// A mission in the sidebar: opens the mission page, and expands to its chats. The needs-you badge is
-/// always visible; chat actions and the disclosure chevron appear on hover (the chevron also while expanded).
+/// A mission in the sidebar. Missions are not chats: the row summarises the mission (progress and the most
+/// urgent state of its chats, as a dithered corner) and opens the mission page. Its chats are listed in the
+/// chat groups like any other chat. The needs-you badge is always visible; the coordinator and new-chat actions
+/// appear on hover, in space the row always reserves.
 struct MissionSidebarRow: View {
     let mission: Mission
     let needsYou: Int
-    let chatCount: Int
     let working: Int
+    /// Most urgent state of the mission's chats, from MissionSidebarSummary.signal.
+    let signal: SessionSignal?
     let selected: Bool
-    @Binding var isExpanded: Bool
     @EnvironmentObject private var model: AppModel
     @State private var hovered = false
 
     var body: some View {
-        HStack(spacing: 6) {
+        let progress = MissionSidebarSummary.progress(mission: mission, working: working)
+        let active = mission.status == .active
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
             Button { model.openMission(mission.id) } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: MissionSymbol.name)
-                        .font(.pilot(.label))
-                        .foregroundStyle(mission.status == .active ? Theme.foreground : Theme.faintForeground)
-                        .frame(width: 14)
-                    Text(mission.title)
-                        .font(.pilot(.body, weight: .medium))
-                        .foregroundStyle(mission.status == .active ? Theme.foreground : Theme.mutedForeground)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if working > 0, !hovered {
-                        CountBadge(count: working)
-                            .help("\(working) working")
-                            .accessibilityLabel("\(working) working")
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: MissionSymbol.name)
+                            .font(.pilot(.label))
+                            .foregroundStyle(active ? Theme.foreground : Theme.faintForeground)
+                            .frame(width: 14)
+                        Text(mission.title)
+                            .font(.pilot(.body, weight: .medium))
+                            .foregroundStyle(active ? Theme.foreground : Theme.mutedForeground)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
                     }
-                    if needsYou > 0 {
-                        CountBadge(count: needsYou, style: .attention)
-                            .help("\(needsYou) item\(needsYou == 1 ? "" : "s") need you")
-                            .accessibilityLabel("\(needsYou) need you")
+                    if let progress {
+                        Text(progress)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .padding(.leading, 22)
                     }
                 }
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            MissionSidebarCoordinatorAction(mission: mission)
-                .revealed(hovered)
-            if mission.status == .active {
-                Button { model.newSession(in: mission) } label: { Image(systemName: "plus") }
-                    .buttonStyle(QuietIconButtonStyle())
-                    .help("New chat in \(mission.title)")
-                    .accessibilityLabel("New chat in \(mission.title)")
+            .help("Open \(mission.title)")
+            .accessibilityLabel([mission.title, progress, signal?.label].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityHint("Opens the mission")
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            // The corner clears behind the actions and badge while the pointer is over the row.
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                MissionSidebarCoordinatorAction(mission: mission)
                     .revealed(hovered)
+                if active {
+                    Button { model.newSession(in: mission) } label: { Image(systemName: "plus") }
+                        .buttonStyle(QuietIconButtonStyle())
+                        .help("New chat in \(mission.title)")
+                        .accessibilityLabel("New chat in \(mission.title)")
+                        .revealed(hovered)
+                }
+                if needsYou > 0 {
+                    CountBadge(count: needsYou, style: .attention)
+                        .help("\(needsYou) item\(needsYou == 1 ? "" : "s") need you")
+                        .accessibilityLabel("\(needsYou) need you")
+                }
             }
-            Button { isExpanded.toggle() } label: {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-            }
-            .buttonStyle(QuietIconButtonStyle())
-            .help("\(isExpanded ? "Hide" : "Show") \(chatCount) chat\(chatCount == 1 ? "" : "s")")
-            .accessibilityLabel("\(isExpanded ? "Collapse" : "Expand") \(mission.title)")
-            .revealed(hovered || isExpanded)
+            .ditherCornerClearance(hovered)
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, 4)
+        // Stop short of the corner's densest cells.
+        .padding(.trailing, 16)
+        .padding(.vertical, 3)
+        .padding(.leading, 4)
+        .ditherCorner(signal, outset: EdgeInsets(), cornerRadius: 6)
         .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.selected : (hovered ? Theme.muted : Color.clear)))
         .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
         .contextMenu {
-            Button("New Chat") { model.newSession(in: mission) }
-                .disabled(mission.status != .active)
-            Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
-            Divider()
             Button("Open Mission") { model.openMission(mission.id) }
             MissionSidebarCoordinatorAction(mission: mission, inMenu: true)
-            Button(isExpanded ? "Hide Chats" : "Show Chats") { isExpanded.toggle() }
+            Divider()
+            Button("New Chat") { model.newSession(in: mission) }
+                .disabled(!active)
+            Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
             MissionEditAction(missionId: mission.id)
             Divider()
             MissionStatusActions(missionId: mission.id, status: mission.status)
@@ -98,7 +111,7 @@ struct MissionExistingChatItems: View {
     }
 }
 
-/// Both shortcuts select by ID, independent of expansion, archive state and sidebar filters.
+/// Both shortcuts select by ID, independent of archive state and sidebar filters.
 struct MissionSidebarCoordinatorAction: View {
     let mission: Mission
     var inMenu = false
@@ -117,5 +130,54 @@ struct MissionSidebarCoordinatorAction: View {
                 .accessibilityLabel("Open coordinator")
             }
         }
+    }
+}
+
+/// "<map> Mission name" on a mission chat's second line, always visible so the chat lists name the mission.
+/// Clicking it opens the mission.
+struct SessionMissionLabel: View {
+    let title: String
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 3) {
+                Image(systemName: MissionSymbol.name).font(.system(size: 9))
+                Text(title).lineLimit(1).truncationMode(.tail)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Theme.mutedForeground)
+        .help("Open mission: \(title)")
+        .accessibilityLabel("Open mission \(title)")
+    }
+}
+
+/// An active coordinator's second line: "<compass> Coordinator" in amber, then its reason or state.
+/// Replaces the grey compass that used to trail the title.
+struct SessionCoordinatorLine: View {
+    let session: SessionSummary
+    let unread: Bool
+
+    var body: some View {
+        let detail = MissionCoordinatorStatus.detail(session, unread: unread)
+        HStack(spacing: 4) {
+            HStack(spacing: 3) {
+                Image(systemName: MissionCoordinatorIndicator.symbol).font(.system(size: 9))
+                Text("Coordinator").fontWeight(.semibold)
+            }
+            .foregroundStyle(Theme.warning)
+            .fixedSize()
+            Text("·").foregroundStyle(Theme.faintForeground)
+            Text(detail)
+                .foregroundStyle(Theme.mutedForeground)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .font(.system(size: 10, weight: .medium))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Coordinator, \(detail)")
     }
 }

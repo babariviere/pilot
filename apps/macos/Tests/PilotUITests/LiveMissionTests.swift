@@ -205,9 +205,8 @@ import WebKit
         try await liveUntil { client.session(other.id)?.missionId != nil }
     })
     let mission = try #require(client.mission(id))
-    try await liveCapture(MissionSidebarRow(mission: mission, needsYou: model.needsYouCount(mission),
-                                           chatCount: model.members(of: mission).count, working: 0,
-                                           selected: true, isExpanded: .constant(true)).environmentObject(model).frame(width: 260),
+    try await liveCapture(MissionSidebarRow(mission: mission, needsYou: model.needsYouCount(mission), working: 0,
+                                           signal: nil, selected: true).environmentObject(model).frame(width: 260),
                           name: "sidebar")
     #expect(client.mission(empty.mission.id) != nil)
     let directory = try #require(ProcessInfo.processInfo.environment["PILOT_LIVE_CAPTURE_DIR"])

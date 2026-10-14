@@ -130,6 +130,59 @@ public extension Collection where Element == Mission {
     var sidebarOrder: [Mission] { sorted { ($0.createdAt, $0.id) > ($1.createdAt, $1.id) } }
 }
 
+/// A mission's sidebar row: a progress line and the most urgent state of its chats. Missions are not chats,
+/// so the row summarises its members instead of listing them.
+public enum MissionSidebarSummary {
+    /// "3 of 12 tasks · 2 working". Nil when there is nothing to say (no task counts from an older daemon,
+    /// and no working chat).
+    public static func progress(mission: Mission, working: Int) -> String? {
+        var parts: [String] = []
+        if let total = mission.tasksTotal {
+            if total == 0 {
+                parts.append("No tasks")
+            } else {
+                let done = min(max(mission.tasksDone ?? 0, 0), total)
+                parts.append("\(done) of \(total) \(total == 1 ? "task" : "tasks")")
+            }
+        }
+        if working > 0 { parts.append("\(working) working") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    /// Sidebar urgency order: failed, then needs you, ready to merge and working. A blocked task or an open
+    /// comment for the user (`Mission.needsYouCount`) makes the mission need the user even when no chat does.
+    public static func signal(mission: Mission, members: [SessionSummary],
+                              isUnread: (SessionSummary) -> Bool) -> SessionSignal? {
+        let signals = Set(members.filter { $0.missionId == mission.id && !$0.isArchived }
+            .compactMap { $0.signal(unread: isUnread($0)) })
+        if signals.contains(.failed) { return .failed }
+        if signals.contains(.needsYou) || (mission.needsYouCount ?? 0) > 0 { return .needsYou }
+        if signals.contains(.readyToMerge) { return .readyToMerge }
+        if signals.contains(.working) { return .working }
+        return nil
+    }
+}
+
+/// The second line of a coordinator's sidebar row: "Coordinator", then its reason or state.
+public enum MissionCoordinatorStatus {
+    public static func detail(_ session: SessionSummary, unread: Bool) -> String {
+        switch session.status {
+        case .working: return "Working"
+        case .question: return firstLine(session.outcomeReason).map { "Asks: \($0)" } ?? "Asks a question"
+        case .failed:
+            return firstLine(session.outcomeReason ?? session.error).map { "Failed: \($0)" } ?? "Failed"
+        case .stopped: return "Stopped"
+        case .done, .idle: return unread && session.outcome == .done ? "New result" : "Idle"
+        }
+    }
+
+    private static func firstLine(_ text: String?) -> String? {
+        guard let line = text?.split(whereSeparator: \.isNewline).first?
+            .trimmingCharacters(in: .whitespaces), !line.isEmpty else { return nil }
+        return line
+    }
+}
+
 /// Task counts by status. Dropped tasks are excluded, as in `MissionDetail.progress`.
 public struct MissionTaskCounts: Equatable, Sendable {
     public let byStatus: [MissionTaskStatus: Int]

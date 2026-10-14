@@ -33,7 +33,6 @@ func sidebarCoordinatorShortcutsSelectEvenWhenChatIsNotVisible(inMenu: Bool, cha
     #expect(measuring.fittingSize.width > 0)
     #expect(measuring.fittingSize.height > 0)
     model.openMission(mission.id)
-    #expect(model.expandedMissions.isEmpty)
     let location = host.convert(NSPoint(x: host.bounds.midX, y: host.bounds.midY), to: nil)
     let event = { (type: NSEvent.EventType) in
         try #require(NSEvent.mouseEvent(with: type, location: location, modifierFlags: [],
@@ -49,7 +48,6 @@ func sidebarCoordinatorShortcutsSelectEvenWhenChatIsNotVisible(inMenu: Bool, cha
     RunLoop.main.run(until: Date().addingTimeInterval(0.05))
     #expect(model.selectedSessionId == "hidden-chat")
     #expect(model.selectedMissionId == nil)
-    #expect(model.expandedMissions.isEmpty)
     #expect(model.sidebarQuery == "does not match")
 }
 

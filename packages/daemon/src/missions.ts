@@ -277,7 +277,7 @@ export const NOTICE_MAX_DELAY_MS = 30 * 60_000;
 export const NOTICE_WINDOW_MS = 3_600_000;
 export const NOTICE_HOURLY_CAP = 20;
 
-/** Summary-only attention counts and one bounded reason, without loading full task/comment bodies. */
+/** Summary-only attention and progress counts plus one bounded reason, without loading full task/comment bodies. */
 const MISSION_SELECT = `SELECT missions.*,
 	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'blocked') +
 	CASE WHEN coordinator_session_id IS NULL THEN
@@ -285,6 +285,8 @@ const MISSION_SELECT = `SELECT missions.*,
 			AND target_session_id IS NULL AND author_session_id IS NOT NULL)
 	ELSE 0 END +
 	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') AS needs_you_count,
+	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'done') AS tasks_done,
+	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status != 'dropped') AS tasks_total,
 	COALESCE(
 		(SELECT substr('Blocked: ' || title, 1, 201) FROM tasks
 			WHERE mission_id = missions.id AND status = 'blocked' ORDER BY sort, number LIMIT 1),
@@ -2649,6 +2651,8 @@ function missionFrom(row: Row): Mission {
 		...(row.autopilot ? { autopilot: true } : {}),
 		briefRevision: num(row.brief_revision!),
 		needsYouCount: num(row.needs_you_count!),
+		tasksDone: num(row.tasks_done!),
+		tasksTotal: num(row.tasks_total!),
 		...(row.needs_you_reason ? { needsYouReason: reasonLine(str(row.needs_you_reason)) } : {}),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),

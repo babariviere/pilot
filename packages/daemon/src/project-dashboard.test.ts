@@ -39,6 +39,8 @@ function mission(overrides: Partial<Mission> = {}): Mission {
 		status: "active",
 		briefRevision: 0,
 		needsYouCount: 0,
+		tasksDone: 0,
+		tasksTotal: 0,
 		createdAt: 1,
 		updatedAt: 1,
 		...overrides,
