@@ -132,7 +132,7 @@ test("refresh reads committed Harness context without changing native history", 
 	const inspection = await harness.inspect(context);
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current, {
-		context: { tokens: 2, contextWindow, percent: (2 / contextWindow) * 100 },
+		context: { tokens: 3, contextWindow, percent: (3 / contextWindow) * 100 },
 		provider: adapter.model.provider,
 	});
 	assert.deepEqual(changes, [adapter.usage.current]);
@@ -212,7 +212,7 @@ test("committed response usage anchors trailing context, while resets discard ol
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current, {
 		provider: adapter.model.provider,
-		context: { tokens: 153, contextWindow, percent: (153 / contextWindow) * 100 },
+		context: { tokens: 154, contextWindow, percent: (154 / contextWindow) * 100 },
 	});
 
 	await conversation.reset("fresh123", context);
@@ -220,7 +220,7 @@ test("committed response usage anchors trailing context, while resets discard ol
 	await adapter.refreshUsage(context);
 	assert.deepEqual(adapter.usage.current, {
 		provider: adapter.model.provider,
-		context: { tokens: 2, contextWindow, percent: (2 / contextWindow) * 100 },
+		context: { tokens: 3, contextWindow, percent: (3 / contextWindow) * 100 },
 	});
 });
 
@@ -355,9 +355,10 @@ test("KernelSession exposes startup usage for ready and publishes committed fina
 		onUsageChanged: (usage) => changes.push(usage),
 	});
 	f.cleanup.push(() => restored.close());
+	const restoredTokens = tokens + estimateMessageTokens(trailing);
 	assert.deepEqual(restored.usage, {
 		provider,
-		context: { tokens: tokens + 1, contextWindow, percent: ((tokens + 1) / contextWindow) * 100 },
+		context: { tokens: restoredTokens, contextWindow, percent: (restoredTokens / contextWindow) * 100 },
 	});
 	assert.equal(f.faux.state.callCount, 1, "restoring ready usage never invokes a model");
 });
