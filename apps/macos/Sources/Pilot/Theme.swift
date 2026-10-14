@@ -305,6 +305,7 @@ extension SessionStatus {
     var symbolName: String? {
         switch self {
         case .working: nil
+        case .question: "questionmark.bubble.fill"
         case .done: "checkmark"
         case .failed: "exclamationmark.triangle.fill"
         case .stopped: "stop.circle.fill"
@@ -315,6 +316,7 @@ extension SessionStatus {
     var color: Color {
         switch self {
         case .working: Theme.foreground
+        case .question: Theme.warning
         case .done: Theme.success
         case .failed: Theme.destructive
         default: Theme.mutedForeground

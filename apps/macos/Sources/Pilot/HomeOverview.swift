@@ -7,17 +7,29 @@ enum HomeOverviewLists {
 
     static func agents(_ sessions: [SessionSummary], isUnread: (SessionSummary) -> Bool) -> [SessionSummary] {
         sessions.filter { session in
-            guard !session.isArchived, !session.isWorking, !session.hasTerminalPullRequest else { return false }
+            guard !session.isArchived, !session.isWorking else { return false }
+            // A question waits until it is answered, not until the chat is viewed.
+            if session.status == .question { return true }
+            guard !session.hasTerminalPullRequest else { return false }
             if let at = session.outcomeAt, at.isFinite {
                 return session.outcome != nil && isUnread(session)
             }
             // A legacy failure without a result version cannot be reviewed away.
             return session.state == "failed"
         }.sorted {
-            let lhsFailed = $0.status == .failed
-            let rhsFailed = $1.status == .failed
-            if lhsFailed != rhsFailed { return lhsFailed }
+            let lhsRank = urgency($0.status)
+            let rhsRank = urgency($1.status)
+            if lhsRank != rhsRank { return lhsRank < rhsRank }
             return ($0.visibleOutcomeAt ?? $0.listActivityAt, $0.id) > ($1.visibleOutcomeAt ?? $1.listActivityAt, $1.id)
+        }
+    }
+
+    /// Failed, then questions, then unreviewed results.
+    private static func urgency(_ status: SessionStatus) -> Int {
+        switch status {
+        case .failed: 0
+        case .question: 1
+        default: 2
         }
     }
 
@@ -84,7 +96,12 @@ struct HomeOverview: View {
     }
 
     private func agentRow(_ session: SessionSummary) -> some View {
-        VStack(spacing: 0) {
+        let (state, action): (String, String) = switch session.status {
+        case .failed: ("Failed", "Open chat")
+        case .question: (session.outcomeReason ?? "Waiting for your answer", "Answer")
+        default: ("Unreviewed result", "Review")
+        }
+        return VStack(spacing: 0) {
             Button { app.reveal(session: session.id) } label: {
                 HoverRow { _ in
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -93,18 +110,18 @@ struct HomeOverview: View {
                             Text(session.title).font(.pilot(.body, weight: .medium))
                                 .foregroundStyle(Theme.foreground).lineLimit(1).help(session.title)
                             Text([client.project(session.projectId)?.name ?? session.cwd.abbreviatingHome,
-                                  session.status == .failed ? "Failed" : "Unreviewed result"]
+                                  state]
                                 .joined(separator: " · "))
                                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                         }
                         Spacer(minLength: 4)
-                        Text(session.status == .failed ? "Open chat" : "Review")
+                        Text(action)
                             .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
                 }
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(session.title), \(session.status == .failed ? "failed" : "unreviewed result"). Open chat.")
+            .accessibilityLabel("\(session.title), \(state). \(action).")
             HairlineDivider(leading: 30)
         }
     }

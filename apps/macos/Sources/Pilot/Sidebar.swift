@@ -322,7 +322,8 @@ struct SessionSidebar: View {
                                  indented: Bool = false, projectNames: [String: String]? = nil) -> some View {
         let showingAll = searching || model.expandedSessionLists.contains(listId)
         let collapsed = SidebarSessionList.collapsed(sessions) { session in
-            session.id == model.selectedSessionId || session.isReadyToMerge || model.isUnread(session)
+            session.id == model.selectedSessionId || session.isReadyToMerge || session.status == .question
+                || model.isUnread(session)
         }
         let list = showingAll ? (shown: sessions, hidden: 0) : collapsed
         ForEach(list.shown) { session in

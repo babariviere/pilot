@@ -273,6 +273,35 @@ test("working chats never need review", () => {
 	assert.equal(dashboard.recent.total, 0);
 });
 
+test("an agent question needs you until it is answered, even after the chat was viewed", () => {
+	const asking = session({
+		outcome: "question",
+		outcomeAt: 50,
+		outcomeReason: "Where should retries live?",
+		missionId: "m-q",
+	});
+	const done = session({ outcome: "done", outcomeAt: 60 });
+	const dashboard = build({ sessions: [asking, done], isUnread: () => false });
+	assert.deepEqual(dashboard.needsYou.items, [
+		{
+			kind: "question",
+			id: `session:${asking.id}`,
+			title: asking.title,
+			sessionId: asking.id,
+			missionId: "m-q",
+			outcome: "question",
+			reason: "Where should retries live?",
+			at: 50,
+		},
+	]);
+	assert.deepEqual(
+		dashboard.recent.items.map((item) => item.sessionId),
+		[done.id],
+	);
+	// Answering starts a run; a working chat no longer waits on the user.
+	assert.equal(build({ sessions: [{ ...asking, state: "working" }] }).needsYou.total, 0);
+});
+
 test("pull requests dedupe by URL, skip settled ones and list newest check first", () => {
 	const a = session({ title: "A", pullRequest: pr(1), pullRequests: [pr(1), pr(2, { state: "merged" })] });
 	const b = session({ title: "B", pullRequest: pr(1, { checkedAt: 9_000, title: "PR 1 fresh" }) });

@@ -22,7 +22,7 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     #expect(old.outcome == nil)
     #expect(old.outcomeAt == nil)
     #expect(old.status == .idle)
-    for outcome in [SessionOutcome.done, .failed, .stopped] {
+    for outcome in [SessionOutcome.done, .failed, .stopped, .question] {
         let session = summary(outcome: outcome, at: 1234, reason: "Turn completed")
         let encoded = try JSONEncoder().encode(session)
         #expect(String(decoding: encoded, as: UTF8.self).contains("\"outcome\":\"\(outcome.rawValue)\""))
@@ -163,5 +163,24 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
         #expect(attention.observe([summary(at: 102)], snapshot: false).isEmpty)
         #expect(attention.observe([summary(outcome: nil)], snapshot: false).isEmpty)
         #expect(attention.observe([summary(at: nil)], snapshot: false).isEmpty)
+    }
+}
+
+@Test func agentQuestionsNeedTheUserAndNotifyWithTheQuestion() {
+    let asking = summary(outcome: .question, at: 300, reason: "Where should retries live?")
+    #expect(asking.status == .question)
+    withDefaults { defaults in
+        let attention = SessionAttention(defaults: defaults)
+        _ = attention.observe([], snapshot: true)
+        let notification = attention.observe([asking], snapshot: false).first
+        #expect(notification?.title == "Question")
+        #expect(notification?.body == "Task\nWhere should retries live?")
+        // Settled PRs do not hide a question.
+        let merged = SessionSummary(id: "m", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle",
+                                    outcome: .question, outcomeAt: 300,
+                                    pullRequest: SessionPullRequest(number: 1, url: "https://github.com/o/r/pull/1",
+                                                                    title: "PR", state: .merged, checkedAt: 1))
+        #expect(merged.hasTerminalPullRequest)
+        #expect(attention.isUnread(merged))
     }
 }

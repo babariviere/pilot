@@ -4,6 +4,7 @@ import {
 	defineDoc,
 	type Conversation,
 	type Cursor,
+	type EntryId,
 	type Harness,
 	type Storage,
 	type SubmissionId,
@@ -11,6 +12,11 @@ import {
 } from "@earendil-works/pi-durable";
 import type { SessionCompletion } from "@pilot/protocol";
 import { safeFailureText } from "./failure.ts";
+import { QUESTION_ENTRY } from "./question-tool.ts";
+
+/** A question ends its run, so only the run's last few entries can hold it (codemode adds a result and a reply). */
+const QUESTION_TAIL = 8;
+const QUESTION_REASON_LENGTH = 300;
 
 type StoredCompletion = Omit<SessionCompletion, "outcome"> & {
 	// Read older sessions without exposing the retired human-attention outcome.
@@ -50,6 +56,28 @@ export function classifyCompletion(record: SubmissionRecord): Omit<SessionComple
 	return { outcome: "done" };
 }
 
+/**
+ * The question asked at the end of the run started by input entry `after`, if any. A question followed by a user
+ * message was already answered within the run.
+ */
+export async function askedQuestion(
+	conversation: Conversation,
+	after: number,
+	context: Context,
+): Promise<string | undefined> {
+	const page = await conversation.entries({ minEntryId: (after + 1) as EntryId }, QUESTION_TAIL, undefined, context);
+	for (const entry of page.items) {
+		if (entry.kind === QUESTION_ENTRY) {
+			const question = (entry.data as { question?: unknown } | undefined)?.question;
+			return typeof question === "string" && question.trim()
+				? question.trim().replace(/\s+/g, " ").slice(0, QUESTION_REASON_LENGTH)
+				: "";
+		}
+		if (entry.model?.some((message) => message.role === "user")) return undefined;
+	}
+	return undefined;
+}
+
 /** Reconcile after run_end or an idle snapshot, including a crash before outcome publication. */
 export async function reconcileCompletion(
 	storage: Storage,
@@ -83,11 +111,16 @@ export async function reconcileCompletion(
 	if (!latest || (attention?.completion && attention.completion.entry >= latest.entry!))
 		return attention?.completion ? normalizeCompletion(attention.completion) : undefined;
 	const record = latest;
+	const classified = classifyCompletion(record);
+	const question =
+		classified.outcome === "done" ? await askedQuestion(conversation, record.entry!, context) : undefined;
 	return conversation.commit(async (tx) => {
 		const state = await tx.doc(AttentionDoc, conversation.id);
 		if (state.completion && state.completion.entry >= record.entry!) return normalizeCompletion(state.completion);
 		const completion = {
-			...classifyCompletion(record),
+			...(question === undefined
+				? classified
+				: { outcome: "question" as const, ...(question ? { outcomeReason: question } : {}) }),
 			outcomeAt: Math.max(Date.now(), (state.completion?.outcomeAt ?? 0) + 1),
 			input: record.id,
 			entry: record.entry!,

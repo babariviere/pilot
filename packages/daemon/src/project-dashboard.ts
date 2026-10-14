@@ -83,9 +83,12 @@ function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | un
 		: undefined;
 }
 
-/** A finished chat that has not been reviewed: its result or failure still waits on the user. */
+/** A finished chat that has not been reviewed, or one waiting for an answer: it still waits on the user. */
 function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread"]): boolean {
-	if (isWorking(session) || hasTerminalPullRequest(session)) return false;
+	if (isWorking(session)) return false;
+	// A question waits until it is answered, not until the chat is viewed.
+	if (session.outcome === "question") return true;
+	if (hasTerminalPullRequest(session)) return false;
 	if (session.outcomeAt !== undefined && Number.isFinite(session.outcomeAt))
 		return session.outcome !== undefined && isUnread(session.id, session.outcomeAt);
 	// A failure without a completion version cannot be reviewed away.
@@ -111,7 +114,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		const isFailure = failed(session);
 		const reason = oneLine(session.outcomeReason ?? (isFailure ? session.error : undefined));
 		needsYou.push({
-			kind: isFailure ? "failed" : "unread",
+			kind: isFailure ? "failed" : session.outcome === "question" ? "question" : "unread",
 			id: `session:${session.id}`,
 			title: session.title,
 			sessionId: session.id,
