@@ -62,6 +62,12 @@ public enum MissionResourceKind: String, LenientStringEnum {
     public static let fallback = MissionResourceKind.url
 }
 
+public enum MissionResourceRelationship: String, LenientStringEnum {
+    case ownership
+    case reference
+    public static let fallback = MissionResourceRelationship.reference
+}
+
 public enum MissionEventKind: String, LenientStringEnum {
     case created, status, handoff, update, brief, decision, comment, task, claim, artifact, resource, member, coordinator
     public static let fallback = MissionEventKind.update
@@ -263,6 +269,30 @@ public struct MissionArtifactLink: Codable, Identifiable, Equatable, Hashable, S
     public var id: String { "\(artifactId)/\(taskId ?? "mission")" }
 }
 
+/// The chat that owns a resource's pull request.
+public struct MissionResourceOwner: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let title: String
+
+    public init(id: String, title: String) {
+        self.id = id
+        self.title = title
+    }
+}
+
+/// Result of binding or unbinding a chat's pull request.
+public struct PullRequestBindingResult: Codable, Equatable, Sendable {
+    public let changed: Bool
+    public let previousOwner: MissionResourceOwner?
+    public let taskLinkRemoved: Bool
+
+    public init(changed: Bool, previousOwner: MissionResourceOwner? = nil, taskLinkRemoved: Bool) {
+        self.changed = changed
+        self.previousOwner = previousOwner
+        self.taskLinkRemoved = taskLinkRemoved
+    }
+}
+
 public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let taskId: String?
@@ -273,6 +303,9 @@ public struct MissionResource: Codable, Identifiable, Equatable, Hashable, Senda
     public let externalId: String?
     public let addedBySessionId: String?
     public let createdAt: Double
+    /// Nil for older daemons: task GitHub PRs imply ownership; other links are references.
+    public var relationship: MissionResourceRelationship? = nil
+    public var owner: MissionResourceOwner? = nil
 
     public var displayTitle: String { title ?? externalId ?? url }
 
@@ -287,11 +320,14 @@ public struct MissionResourceWrite: Codable, Sendable {
     public let url: String
     public let title: String?
     public let taskId: String?
+    public let relationship: MissionResourceRelationship?
 
-    public init(url: String, title: String? = nil, taskId: String? = nil) {
+    public init(url: String, title: String? = nil, taskId: String? = nil,
+                relationship: MissionResourceRelationship? = nil) {
         self.url = url
         self.title = title
         self.taskId = taskId
+        self.relationship = relationship
     }
 }
 

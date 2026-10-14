@@ -10,6 +10,56 @@ import Testing
     #expect(String(decoding: encoded, as: UTF8.self).contains(#""taskId":"t""#))
 }
 
+@Test func resourceRelationshipsAndOwnersRemainBackwardCompatible() throws {
+    let legacy = MissionResource(id: "r", taskId: "t", pullRequest: nil,
+                                 url: "https://github.com/o/r/pull/42", title: nil, kind: .githubPullRequest,
+                                 externalId: nil, addedBySessionId: nil, createdAt: 1)
+    #expect(legacy.relationship == nil)
+    #expect(legacy.owner == nil)
+    let legacyData = try JSONEncoder().encode(legacy)
+    #expect(try JSONDecoder().decode(MissionResource.self, from: legacyData) == legacy)
+    let base = try #require(JSONSerialization.jsonObject(with: legacyData) as? [String: Any])
+    for (wire, expected) in [("ownership", MissionResourceRelationship.ownership),
+                             ("reference", .reference), ("future", .reference)] {
+        var json = base
+        json["relationship"] = wire
+        json["owner"] = ["id": "s", "title": "Owning chat"]
+        let resource = try JSONDecoder().decode(MissionResource.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(resource.relationship == expected)
+        #expect(resource.owner == MissionResourceOwner(id: "s", title: "Owning chat"))
+        #expect(try JSONDecoder().decode(MissionResource.self, from: JSONEncoder().encode(resource)) == resource)
+    }
+    var nulls = base
+    nulls["relationship"] = NSNull()
+    nulls["owner"] = NSNull()
+    #expect(try JSONDecoder().decode(MissionResource.self, from: JSONSerialization.data(withJSONObject: nulls)) == legacy)
+}
+
+@Test func resourceWritesEncodeOnlyExplicitRelationships() throws {
+    let legacy = MissionResourceWrite(url: "https://github.com/o/r/pull/42", taskId: "t")
+    let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+    #expect(json["relationship"] == nil)
+    #expect(try JSONDecoder().decode(MissionResourceWrite.self, from: JSONEncoder().encode(legacy)).relationship == nil)
+    for relationship in [MissionResourceRelationship.ownership, .reference] {
+        let write = MissionResourceWrite(url: legacy.url, taskId: "t", relationship: relationship)
+        let data = try JSONEncoder().encode(write)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json["relationship"] as? String == relationship.rawValue)
+        #expect(try JSONDecoder().decode(MissionResourceWrite.self, from: data).relationship == relationship)
+    }
+}
+
+@Test func pullRequestBindingResultsDecodeAndRoundTrip() throws {
+    for owner in ["null", #"{"id":"s","title":"Previous chat"}"#] {
+        let data = Data("{\"changed\":true,\"previousOwner\":\(owner),\"taskLinkRemoved\":false}".utf8)
+        let result = try JSONDecoder().decode(PullRequestBindingResult.self, from: data)
+        #expect(result.changed)
+        #expect(!result.taskLinkRemoved)
+        #expect(result.previousOwner == (owner == "null" ? nil : MissionResourceOwner(id: "s", title: "Previous chat")))
+        #expect(try JSONDecoder().decode(PullRequestBindingResult.self, from: JSONEncoder().encode(result)) == result)
+    }
+}
+
 @Test func taskArtifactReferencesRoundTripAndHaveScopedIdentity() throws {
     let raw = #"{"artifactId":"a","sessionId":"s","title":"Design","kind":"html","revision":2,"linkedAt":1}"#
     let mission = try JSONDecoder().decode(MissionArtifactLink.self, from: Data(raw.utf8))

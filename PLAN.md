@@ -285,15 +285,25 @@ the brief into the repository is an explicit user action.
   Links optionally belong to a task, appear on its row and in agent task views, and can be added or
   removed there. Deleting a task keeps its links at mission level. A chat's newly opened PR is linked
   to its unfinished claimed tasks automatically.
-  Resource links are references, not chat PR ownership. The user can explicitly bind an existing PR
-  with `POST /api/sessions/:id/pull-requests` and JSON `{url, taskId?}`, or remove that binding with
-  `DELETE` on the same route and `{url}`. Both return `SessionSummary`; the user actor is `{}`.
+  Task PR links have a `relationship`: `ownership` (drives task PR status, the default for task PRs)
+  or `reference` (related work only). Other links and Start chat references are references. Existing
+  task PR links migrate to ownership. Neither relationship grants chat PR ownership. The `unlink`
+  tool action removes one link by URL and optional task ID (omitted means mission-level); members may
+  remove links they added, the coordinator any. Missing links return `removed:false`. When both roles
+  share a scope and are removable by the caller, it removes the reference first. The user can explicitly
+  bind an existing PR with `POST /api/sessions/:id/pull-requests` and JSON `{url, taskId?}`, or remove that binding with
+  `DELETE` on the same route and `{url}`. Both return `SessionSummary` plus the binding result
+  (`changed`, `previousOwner`, `taskLinkRemoved`); the user actor is `{}`.
   Only GitHub PRs in the chat's project repository qualify. The bound chat owns the PR head for follow-ups
-  and pushes. One chat owns each PR: binding transfers ownership and unfinished task links to the selected
-  chat and task. Use resource links for dependencies or references, not ownership. Unbinding stops tracking,
-  follow-ups and pushes for that chat, suppresses rediscovery and clears unfinished task links. Repository
-  branches and mission-level references stay unchanged. An optional task ID or number disambiguates
-  the owning mission task; multiple unfinished claims without it are rejected (HTTP 409).
+  and pushes. One chat owns each PR: binding transfers ownership and unfinished ownership links to the selected
+  chat and task. Use reference links for related work, not chat ownership. Unbinding stops tracking,
+  follow-ups and pushes for that chat, suppresses rediscovery and clears only unfinished ownership links.
+  References and repository branches stay unchanged. Coordinator `bindPr`/`unbindPr` return
+  `{changed, previousOwner, taskLinkRemoved}`; already unbound returns `changed:false`. `previousOwner`
+  is the prior chat's title and ID, or null. Agent `get` includes that owner on every PR resource
+  (null when unbound), and `status` includes each chat's `SessionSummary.boundPullRequests` list.
+  An optional task ID or number disambiguates the owning mission task; multiple unfinished claims
+  without it are rejected (HTTP 409).
   Explicit bindings use the existing PR tracker and lifecycle rules, including after a restart.
   Session metadata keeps `boundPullRequests` and `unboundPullRequests` URL overrides; rebinding clears
   an exclusion. A daemon write-ahead handoff rolls forward ownership and task links together before

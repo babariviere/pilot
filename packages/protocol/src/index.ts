@@ -42,14 +42,14 @@ export interface SessionPullRequest {
 	readiness?: PullRequestReadiness;
 }
 
-/** POST /api/sessions/:id/pull-requests. Returns SessionSummary. */
+/** POST /api/sessions/:id/pull-requests. Returns SessionSummary & PullRequestBindingResult. */
 export interface BindPullRequestRequest {
 	url: string;
 	/** Optional mission task ID or number to disambiguate the owning task. */
 	taskId?: string;
 }
 
-/** DELETE /api/sessions/:id/pull-requests. Detaches the PR from the chat; returns SessionSummary. */
+/** DELETE /api/sessions/:id/pull-requests. Returns SessionSummary & PullRequestBindingResult. */
 export interface UnbindPullRequestRequest {
 	url: string;
 }
@@ -533,6 +533,10 @@ export interface MissionArtifactLink {
 
 /** External link. Kind and external ID are parsed by pilotd when saved. */
 export interface MissionResource {
+	/** Task ownership drives PR status; references are related work only. */
+	relationship: "ownership" | "reference";
+	/** Current chat owning this PR in tool get results; null when unbound. */
+	owner?: { id: string; title: string } | null;
 	/** Last known GitHub PR state, refreshed by daemon tracking. */
 	pullRequest?: SessionPullRequest;
 	/** Omitted for mission-level links. */
@@ -548,10 +552,18 @@ export interface MissionResource {
 }
 
 export interface MissionResourceWrite {
+	/** Defaults to ownership for task PRs, reference otherwise. Does not bind a chat. */
+	relationship?: "ownership" | "reference";
 	/** Task ID or display number. */
 	taskId?: string;
 	url: string;
 	title?: string;
+}
+
+export interface PullRequestBindingResult {
+	changed: boolean;
+	previousOwner: { id: string; title: string } | null;
+	taskLinkRemoved: boolean;
 }
 
 /** POST /api/missions/:id/decisions; PATCH /api/missions/:id/decisions/:decisionId. */

@@ -214,6 +214,151 @@ test("PR handoff actions check coordinator role and membership and share task-li
 	assert.ok(events.some((e) => e.text.includes("unbound") && e.sessionId === undefined));
 });
 
+test("PR tools report actual ownership and link changes, and get/status expose cached owners", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const first = await f.spawn();
+	const second = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Handoff",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	for (const member of [first, second]) {
+		f.store.join(member.id, mission.id);
+		f.sessions["metas"].get(member.id)!.workspace = {
+			source: f.project.path,
+			upstream: "git@github.com:octo/repo.git",
+			branch: "feat/work",
+			base: "origin/main",
+			jj: false,
+		};
+	}
+	const a = f.store.addTask(mission.id, { title: "First" });
+	const b = f.store.addTask(mission.id, { title: "Second" });
+	f.store.claimTask(mission.id, a.id, first.id);
+	f.store.claimTask(mission.id, b.id, second.id);
+	const url = "https://github.com/octo/repo/pull/12";
+	const reference = await f.service.call(first.id, "link", { url, taskId: a.id, relationship: "reference" });
+	f.store.addResource(mission.id, { url });
+	const bind = (id: string, taskId?: string) =>
+		f.service.call(coordinator.id, "bindPr", { targetSessionId: id, url, ...(taskId ? { taskId } : {}) });
+	const unbind = (id: string) => f.service.call(coordinator.id, "unbindPr", { targetSessionId: id, url });
+	assert.deepEqual(await bind(first.id), { changed: true, previousOwner: null, taskLinkRemoved: false });
+	assert.deepEqual(await bind(first.id), {
+		changed: false,
+		previousOwner: { id: first.id, title: first.title },
+		taskLinkRemoved: false,
+	});
+	const get = (await f.service.call(first.id, "get", {})) as {
+		resources: { owner: unknown }[];
+		tasks: { resources: { owner: unknown }[] }[];
+	};
+	for (const r of [...get.resources, ...get.tasks.flatMap((task) => task.resources)])
+		assert.deepEqual(r.owner, { id: first.id, title: first.title });
+	const status = (await f.service.call(coordinator.id, "status", {})) as {
+		members: { id: string; boundPullRequests: string[] }[];
+	};
+	assert.deepEqual(status.members.find((m) => m.id === first.id)?.boundPullRequests, [url]);
+	assert.deepEqual(status.members.find((m) => m.id === second.id)?.boundPullRequests, []);
+	assert.deepEqual(await bind(second.id), {
+		changed: true,
+		previousOwner: { id: first.id, title: first.title },
+		taskLinkRemoved: true,
+	});
+	assert.deepEqual(await unbind(first.id), {
+		changed: false,
+		previousOwner: { id: second.id, title: second.title },
+		taskLinkRemoved: false,
+	});
+	assert.ok(f.store.detail(mission.id).resources.some((r) => r.taskId === b.id && r.relationship === "ownership"));
+	assert.deepEqual(await unbind(second.id), {
+		changed: true,
+		previousOwner: { id: second.id, title: second.title },
+		taskLinkRemoved: true,
+	});
+	const events = f.store.events(mission.id).length;
+	assert.deepEqual(await unbind(second.id), { changed: false, previousOwner: null, taskLinkRemoved: false });
+	assert.equal(f.store.events(mission.id).length, events);
+	const remaining = f.store.detail(mission.id).resources;
+	assert.equal(remaining.length, 2);
+	assert.ok(remaining.some((r) => r.id === (reference as { id: string }).id));
+	const unbound = (await f.service.call(first.id, "get", {})) as { resources: { owner: unknown }[] };
+	assert.ok(unbound.resources.every((r) => r.owner === null));
+	// Relinking the same owner to another task is still a change, even without a metadata change.
+	await bind(first.id, a.id);
+	assert.deepEqual(await bind(first.id, b.id), {
+		changed: true,
+		previousOwner: { id: first.id, title: first.title },
+		taskLinkRemoved: true,
+	});
+});
+
+test("unlink is scoped and idempotent, permits authors and coordinator, and never unbinds a PR", async (t) => {
+	const f = await fixture(t);
+	const coordinator = await f.spawn();
+	const author = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Links",
+		fromSessionId: coordinator.id,
+		draft: false,
+	});
+	f.store.join(author.id, mission.id);
+	f.store.join(member.id, mission.id);
+	const task = f.store.addTask(mission.id, { title: "Work" });
+	const url = "https://github.com/octo/repo/pull/12";
+	for (const taskId of [undefined, task.id])
+		await f.service.call(author.id, "link", { url, ...(taskId ? { taskId } : {}) });
+	await assert.rejects(f.service.call(member.id, "unlink", { url }), /only remove links they added/);
+	assert.equal(f.store.detail(mission.id).resources.length, 2);
+	assert.equal(
+		((await f.service.call(author.id, "unlink", { url: `${url}/files?x=1` })) as { removed: boolean }).removed,
+		true,
+	);
+	assert.deepEqual(await f.service.call(author.id, "unlink", { url }), { removed: false });
+	assert.equal(f.store.detail(mission.id).resources[0]?.taskId, task.id);
+	assert.equal(
+		((await f.service.call(coordinator.id, "unlink", { url, taskId: "#1" })) as { removed: boolean }).removed,
+		true,
+	);
+	f.store.addResource(mission.id, { url }); // User-added link.
+	await assert.rejects(f.service.call(author.id, "unlink", { url }), /only remove links they added/);
+	assert.equal(((await f.service.call(coordinator.id, "unlink", { url })) as { removed: boolean }).removed, true);
+	await assert.rejects(f.service.call(author.id, "unlink", {}), /requires url/);
+	await assert.rejects(f.service.call(author.id, "unlink", { url, taskId: 1 }), /taskId/);
+	await assert.rejects(f.service.call(author.id, "unlink", { url, taskId: "unknown" }), /Unknown task/);
+	f.sessions["metas"].get(author.id)!.workspace = {
+		source: f.project.path,
+		upstream: "git@github.com:octo/repo.git",
+		branch: "feat/work",
+		base: "origin/main",
+		jj: false,
+	};
+	await f.sessions.bindPullRequest(author.id, url, { sessionId: author.id }, task.id);
+	await f.service.call(author.id, "link", { url, taskId: task.id, relationship: "reference" });
+	const removed = (await f.service.call(author.id, "unlink", { url, taskId: task.id })) as {
+		resource: { relationship: string };
+	};
+	assert.equal(removed.resource.relationship, "reference");
+	await f.service.call(author.id, "unlink", { url, taskId: task.id });
+	assert.deepEqual(f.sessions.get(author.id)?.boundPullRequests, [url]);
+	// A member can still remove their ownership link when someone else's reference shares the scope.
+	await f.service.call(author.id, "link", { url, taskId: task.id });
+	const otherReference = (await f.service.call(member.id, "link", {
+		url,
+		taskId: task.id,
+		relationship: "reference",
+	})) as { id: string };
+	const own = (await f.service.call(author.id, "unlink", { url, taskId: task.id })) as {
+		resource: { relationship: string };
+	};
+	assert.equal(own.resource.relationship, "ownership");
+	assert.equal(f.store.detail(mission.id).resources[0]?.id, otherReference.id);
+});
+
 test("failed coordinator model admission leaves the created mission without a coordinator or chat", async (t) => {
 	const f = await fixture(t);
 	t.mock.method(f.sessions, "selectTaskModel", async () => {
