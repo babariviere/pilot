@@ -1066,6 +1066,10 @@ reports), producing a morning summary in the app and Slack.
   1000). Delivery is serial and coalesced; failed marks retry on the next review or reconnect, without
   polling. Project Needs you and sidebar scope counts use daemon state, without local subtraction.
 - Private-branch sessions show a linked colored PR icon and number independently of run outcome;
+  GitHub PR links reuse an existing tab when Helium is the default browser and already running,
+  including tabs on the PR's Files, Commits or comment anchors. Lookup uses macOS Automation off
+  the main thread, coalesces repeated clicks and has a five-second deadline. Missing tabs, denied
+  permission or lookup errors fall back to normal opening; other browsers and links are unchanged.
   open PRs share the three-node Git branch glyph with the base-branch selector, retaining their green color.
   Tooltips and accessibility labels distinguish Draft, Open, Merged or Closed without merging.
   Compact PR links show only a state icon and number; readiness stays in the tooltip and accessibility

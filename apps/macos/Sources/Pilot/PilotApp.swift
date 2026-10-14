@@ -12,6 +12,7 @@ struct PilotApp: App {
         Window("Pilot", id: MainWindow.id) {
             MainWindow()
                 .environmentObject(model)
+                .environment(\.openURL, BrowserLinkOpener.action)
                 .environment(\.pilotFonts, settings.fonts)
                 .frame(minWidth: 860, minHeight: 520)
         }

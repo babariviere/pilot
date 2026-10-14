@@ -372,6 +372,15 @@ final class MessageSelectionTextView: NSTextView {
         if let selectionOwner { selectionOwner.selectAll() } else { super.selectAll(sender) }
     }
 
+    override func clicked(onLink link: Any, at charIndex: Int) {
+        let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
+        if let url, BrowserLinkOpener.pullRequestKey(url) != nil {
+            BrowserLinkOpener.shared.open(url)
+        } else {
+            super.clicked(onLink: link, at: charIndex)
+        }
+    }
+
     override func copy(_ sender: Any?) {
         guard let selectionOwner else { super.copy(sender); return }
         copySelection(selectionOwner.selectedText, to: .general)
