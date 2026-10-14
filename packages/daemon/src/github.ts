@@ -5,7 +5,7 @@
  */
 import type { PullRequestReadiness, SessionPullRequest } from "@pilot/protocol";
 import { mergeReadiness } from "./pull-request-readiness.ts";
-import { execFileOffThread } from "./subprocess.ts";
+import { execFileOffThread, ProcessFailed } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
 const maxOutputBytes = 4 * 1024 * 1024;
@@ -313,7 +313,8 @@ const stackFields = "stack { number size baseRefName } stackEntry { position }";
 
 /** Fall back only for schema absence, never hide network, permission or other lookup errors. */
 function unsupportedStackFields(error: unknown): boolean {
-	const message = error instanceof Error ? error.message : String(error);
+	const message =
+		error instanceof ProcessFailed ? error.stderr : error instanceof Error ? error.message : String(error);
 	return /(?:Field ['"](?:stack|stackEntry)['"] doesn't exist on type ['"]PullRequest['"]|Cannot query field ['"](?:stack|stackEntry)['"] on type ['"]PullRequest['"])/i.test(
 		message,
 	);
@@ -535,7 +536,8 @@ export function checksPending(rollup: unknown): boolean {
 export const readinessFields = ["mergeStateStatus", "reviewDecision"] as const;
 /** Fall back for schema absence only, never permission or network errors. */
 export function unsupportedReadinessField(error: unknown): string | undefined {
-	const message = error instanceof Error ? error.message : String(error);
+	const message =
+		error instanceof ProcessFailed ? error.stderr : error instanceof Error ? error.message : String(error);
 	return readinessFields.find((field) =>
 		new RegExp(
 			`(?:Field ['"]${field}['"] doesn't exist on type ['"]PullRequest['"]|Cannot query field ['"]${field}['"] on type ['"]PullRequest['"])`,

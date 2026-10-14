@@ -236,7 +236,7 @@ test("a run containing only already completed tasks carries no new activity", ()
 	}
 });
 
-test("settles omit old completed work while retaining work completed during this run", (t) => {
+test("settles omit old completed work without materializing other members' tasks", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id } = setup();
 	try {
@@ -245,8 +245,13 @@ test("settles omit old completed work while retaining work completed during this
 		store.claimTask(id, next.id, "member");
 		const old = completion("done", 1).pullRequest!;
 		store.addResource(id, { url: old.url, taskId: store.resolveTask(id, "1").id });
+		const tasks = t.mock.method(store, "tasks", () => assert.fail("activity must not read every task body"));
 		store.recordMemberRun({ ...completion("done", 1), state: "working" });
+		tasks.mock.restore();
 		store.updateTask(id, next.id, { status: "done" });
+		// Duplicate working observations must not recapture a task completed during this run.
+		t.mock.method(store, "tasks", () => assert.fail("activity must not read every task body"));
+		store.recordMemberRun({ ...completion("done", 1), state: "working" });
 		t.mock.timers.tick(1);
 		const now = Date.now();
 		store.recordMemberCompletion({

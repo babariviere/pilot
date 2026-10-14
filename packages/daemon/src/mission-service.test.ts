@@ -1,4 +1,3 @@
-import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
@@ -17,10 +16,36 @@ import { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
 import { createDaemonServer } from "./server.ts";
-import { CommandRejected, type SessionWorker, SessionManager } from "./sessions.ts";
-import { type SubscriptionUsageSource, SUBSCRIPTION_USAGE_MAX_AGE_MS } from "./subscription-usage.ts";
+import { CommandRejected, SessionManager, type SessionWorker } from "./sessions.ts";
+import { SUBSCRIPTION_USAGE_MAX_AGE_MS, type SubscriptionUsageSource } from "./subscription-usage.ts";
 import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
+import { requiredAuthRegistration } from "./testing/required-auth.ts";
+
+test("session summaries resolve current membership without attention or task-detail reads", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Fixture",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	const get = t.mock.method(f.store, "get", () => assert.fail("summary must not count attention"));
+	const tasks = t.mock.method(f.store, "tasks", () => assert.fail("summary must not read task bodies"));
+	assert.equal(f.sessions.get(lead.id)?.activeMissionCoordinator, true);
+	assert.equal(f.sessions.get(member.id)?.missionId, mission.id);
+	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, undefined);
+	get.mock.restore();
+	tasks.mock.restore();
+	f.store.update(mission.id, { coordinatorSessionId: member.id });
+	assert.equal(f.sessions.get(lead.id)?.activeMissionCoordinator, undefined);
+	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, true);
+	f.store.update(mission.id, { status: "done" });
+	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, undefined);
+});
 
 test("decision audiences and task pins select prompts and avoid duplicate detail reads", async (t) => {
 	const f = await fixture(t);

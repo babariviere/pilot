@@ -105,17 +105,7 @@ export class MissionService {
 				store.join(sessionId, missionId);
 				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
-			membership: (sessionId) => {
-				const missionId = store.missionOf(sessionId);
-				const mission = missionId ? store.get(missionId) : undefined;
-				return mission
-					? {
-							missionId: mission.id,
-							active: mission.status === "active",
-							coordinator: mission.coordinatorSessionId === sessionId,
-						}
-					: undefined;
-			},
+			membership: (sessionId) => store.membership(sessionId),
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
