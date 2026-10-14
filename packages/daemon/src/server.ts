@@ -255,8 +255,6 @@ export function createDaemonServer(
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
 		if (parts[1] === "schedules" && parts.length <= 3) {
 			if (!schedules) throw new ServiceUnavailable("Scheduling is unavailable");
-			if (parts[2] === "wifi" && (req.method === "GET" || req.method === "POST"))
-				return json(res, 200, await schedules.wifiStatus(req.method === "POST"));
 			const id = parts[2];
 			if (!id && req.method === "GET")
 				return jsonText(res, 200, await schedules.snapshot(url.searchParams.get("projectId") ?? undefined));

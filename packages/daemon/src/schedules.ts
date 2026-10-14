@@ -1,25 +1,23 @@
 import { randomUUID } from "node:crypto";
 import type {
 	DashboardScheduledItem,
+	ScheduledItem,
 	SchedulePatch,
 	ScheduleRequest,
-	ScheduledItem,
 	ScheduleTarget,
 	SpawnRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
-import type { ProjectStore } from "./projects.ts";
 import type { MissionStore } from "./missions.ts";
+import type { ProjectStore } from "./projects.ts";
 import type { ScheduleStore } from "./schedule-store.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
-import type { WiFiDetector } from "./wifi-detection.ts";
 
 /** Detection plugs in here. Initial online state is not an offline→online edge. */
 export type ScheduleTriggerEvent =
 	| { type: "sleep"; at: number }
 	| { type: "wake"; full: boolean }
-	| { type: "online"; online: boolean; initial?: boolean }
-	| { type: "network"; previous: string | null; current: string | null };
+	| { type: "online"; online: boolean; initial?: boolean };
 export interface ScheduleTriggerSource {
 	readonly online: boolean;
 	/** Validate cached reachability before dispatching due work. */
@@ -57,7 +55,6 @@ export interface ScheduleServiceDeps {
 	trackedItems?: Pick<TrackedItemStore, "require" | "patch">;
 	clock?: ScheduleClock;
 	triggers?: ScheduleTriggerSource;
-	wifi?: WiFiDetector;
 }
 /** One serial dispatcher. No detection/polling here; one nearest-deadline timer while online. */
 export class ScheduleService {
@@ -83,21 +80,12 @@ export class ScheduleService {
 	start(): void {
 		if (this.started || this.stopped) return;
 		this.started = true;
-		if (this.deps.wifi)
-			this.disposers.push(
-				this.deps.wifi.subscribe((event) => {
-					void this.signal({ type: "network", ...event }).catch(() =>
-						console.warn("pilotd: Wi-Fi schedule dispatch failed"),
-					);
-				}),
-			);
 		this.online = this.deps.triggers?.online ?? false;
 		this.disposers.push(
 			this.store.onChange(() => {
 				// A durable claim removes the last pending item before admission can take a long time.
 				if (this.store.pendingItems().length === 0) {
 					this.deps.triggers?.setActive?.(false);
-					this.deps.wifi?.setActive(false);
 				}
 				this.requestSweep();
 			}),
@@ -165,17 +153,7 @@ export class ScheduleService {
 						await this.store.replace(item, { ...item, wakeObserved: true });
 					else if (
 						(event.type === "wake" && event.full && item.sleepObserved && item.trigger === "on_wake") ||
-						(becameOnline && item.trigger === "on_online") ||
-						(event.type === "network" &&
-							item.trigger === "on_join_network" &&
-							event.current !== null &&
-							event.current !== event.previous &&
-							item.networkNames!.includes(event.current)) ||
-						(event.type === "network" &&
-							item.trigger === "on_leave_network" &&
-							event.previous !== null &&
-							event.current !== event.previous &&
-							item.networkNames!.includes(event.previous))
+						(becameOnline && item.trigger === "on_online")
 					)
 						await this.fire(item);
 				} catch (error) {
@@ -218,14 +196,7 @@ export class ScheduleService {
 	}
 	private arm(): void {
 		const pending = this.store.pendingItems();
-		this.deps.wifi?.setActive(
-			!this.stopped &&
-				pending.some((item) => item.trigger === "on_join_network" || item.trigger === "on_leave_network"),
-		);
-		this.deps.triggers?.setActive?.(
-			!this.stopped &&
-				pending.some((item) => item.trigger !== "on_join_network" && item.trigger !== "on_leave_network"),
-		);
+		this.deps.triggers?.setActive?.(!this.stopped && pending.length > 0);
 		if (this.stopped || !this.online) return;
 		const next = Math.min(...pending.filter((item) => item.trigger === "at").map((item) => item.at!));
 		if (Number.isFinite(next))
@@ -294,7 +265,8 @@ export class ScheduleService {
 	async update(id: string, patch: SchedulePatch): Promise<ScheduledItem> {
 		this.assertOpen();
 		if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("Schedule patch is required");
-		for (const key of ["title", "trigger", "at", "networkNames", "target", "expectedRevision"] as const)
+		if ("networkNames" in patch) throw new Error("Wi-Fi triggers were removed");
+		for (const key of ["title", "trigger", "at", "target", "expectedRevision"] as const)
 			if (patch[key] === null) throw new Error(`${key} cannot be null`);
 		if (
 			patch.expectedRevision !== undefined &&
@@ -306,20 +278,17 @@ export class ScheduleService {
 		if (patch.expectedRevision !== undefined && patch.expectedRevision !== old.revision)
 			throw new Conflict("Schedule changed; reload before editing");
 		const trigger = patch.trigger ?? old.trigger;
+		if (trigger === "removed") throw new Error("Invalid schedule trigger");
 		const data = await this.validate({
 			title: patch.title ?? old.title,
 			trigger,
 			at: trigger === "at" ? (patch.at ?? old.at) : patch.at,
-			networkNames:
-				patch.networkNames ??
-				(trigger === "on_join_network" || trigger === "on_leave_network" ? old.networkNames : undefined),
 			target: patch.target ?? old.target,
 		});
 		return this.store.replace(old, {
 			...old,
 			...data,
 			at: data.at,
-			networkNames: data.networkNames,
 			projectId: data.projectId,
 			sessionId: data.sessionId,
 			wakeObserved: undefined,
@@ -339,10 +308,6 @@ export class ScheduleService {
 	list(projectId?: string): ScheduledItem[] {
 		return this.store.list(projectId);
 	}
-	wifiStatus(requestAuthorization = false) {
-		if (!this.deps.wifi) throw new ServiceUnavailable("Wi-Fi detection unavailable");
-		return requestAuthorization ? this.deps.wifi.requestAuthorization() : this.deps.wifi.status();
-	}
 	snapshot(projectId?: string, ws = false): Promise<string> {
 		return this.store.snapshot(projectId, ws);
 	}
@@ -360,7 +325,6 @@ export class ScheduleService {
 		this.cancelTimer?.();
 		for (const dispose of this.disposers.splice(0)) dispose();
 		this.deps.triggers?.setActive?.(false);
-		this.deps.wifi?.setActive(false);
 		await this.tail;
 	}
 	private assertOpen(): void {
@@ -376,25 +340,12 @@ export class ScheduleService {
 	}
 	private async validate(
 		request: ScheduleRequest,
-	): Promise<Pick<ScheduledItem, "title" | "trigger" | "at" | "networkNames" | "target" | "projectId" | "sessionId">> {
+	): Promise<Pick<ScheduledItem, "title" | "trigger" | "at" | "target" | "projectId" | "sessionId">> {
 		if (!request || typeof request !== "object" || Array.isArray(request))
 			throw new Error("Schedule request is required");
+		if ("networkNames" in request) throw new Error("Wi-Fi triggers were removed");
 		const trigger = request.trigger === undefined ? "on_back" : request.trigger;
-		if (!["on_back", "on_wake", "on_online", "at", "on_join_network", "on_leave_network"].includes(trigger))
-			throw new Error("Invalid schedule trigger");
-		let networkNames: string[] | undefined;
-		if (trigger === "on_join_network" || trigger === "on_leave_network") {
-			if (
-				!Array.isArray(request.networkNames) ||
-				request.networkNames.length < 1 ||
-				request.networkNames.length > 32 ||
-				request.networkNames.some(
-					(name) => typeof name !== "string" || !name.length || Buffer.byteLength(name) > 32,
-				)
-			)
-				throw new Error("networkNames must contain 1 to 32 Wi-Fi names of 1 to 32 UTF-8 bytes");
-			networkNames = [...new Set(request.networkNames)];
-		} else if (request.networkNames !== undefined) throw new Error("networkNames is only valid for network triggers");
+		if (!["on_back", "on_wake", "on_online", "at"].includes(trigger)) throw new Error("Invalid schedule trigger");
 		if (trigger === "at") {
 			if (
 				typeof request.at !== "number" ||
@@ -480,7 +431,6 @@ export class ScheduleService {
 				message.trim().split("\n")[0].slice(0, 200),
 			trigger,
 			at: request.at,
-			networkNames,
 			target,
 			projectId,
 			sessionId,

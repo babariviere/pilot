@@ -4,19 +4,18 @@ import { access } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WiFiStatus } from "@pilot/protocol";
-import type { WiFiHelperFactory } from "./wifi-detection.ts";
+import type { SystemEventsHelperFactory } from "./system-events-detection.ts";
 import { parseSystemPowerState } from "./system-power.ts";
 
-/** LaunchServices gives the helper its own TCC identity, independent of Node and the main app's lifetime. */
-export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClose, onPower) => {
+/** LaunchServices gives the helper an independent application lifetime from pilotd. */
+export const openSystemEventsHelper: SystemEventsHelperFactory = async (onPower, onClose) => {
 	if (process.platform !== "darwin") throw new Error("macOS required");
 	const source = dirname(fileURLToPath(import.meta.url));
 	const app =
-		process.env.PILOT_WIFI_HELPER_APP ??
+		process.env.PILOT_SYSTEM_EVENTS_HELPER_APP ??
 		(source.includes("/Contents/Resources/runtime/")
-			? resolve(source.split("/Contents/Resources/runtime/")[0], "Contents/Helpers/PilotWiFi.app")
-			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotWiFi.app"));
+			? resolve(source.split("/Contents/Resources/runtime/")[0], "Contents/Helpers/PilotSystemEvents.app")
+			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotSystemEvents.app"));
 	await access(app);
 	const token = randomBytes(32).toString("hex");
 	let socket: Socket | undefined;
@@ -64,8 +63,9 @@ export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClos
 				candidate.destroy();
 				return;
 			}
-			let end: number;
-			while ((end = buffer.indexOf("\n")) >= 0) {
+			while (true) {
+				const end = buffer.indexOf("\n");
+				if (end < 0) break;
 				const line = buffer.slice(0, end);
 				buffer = buffer.slice(end + 1);
 				try {
@@ -80,18 +80,12 @@ export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClos
 						clearTimeout(startup);
 						for (const other of candidates) if (other !== candidate) other.destroy();
 					} else {
-						const value = JSON.parse(line);
-						const power = parseSystemPowerState(value);
-						if (power) {
-							onPower?.(power);
-							continue;
-						}
-						const status = parseWiFiStatus(value);
-						if (!status) {
+						const power = parseSystemPowerState(JSON.parse(line));
+						if (!power) {
 							candidate.destroy();
 							return;
 						}
-						onStatus(status);
+						onPower(power);
 					}
 				} catch {
 					candidate.destroy();
@@ -115,13 +109,13 @@ export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClos
 		close();
 		throw new Error("Helper listener unavailable");
 	}
-	// Do not exec the helper directly: the Node parent's TCC identity cannot authorize SSID access.
+	// LaunchServices keeps the native monitor in its own process and gives it normal app-bundle identity.
 	await new Promise<void>((ok, reject) =>
 		execFile(
 			"/usr/bin/open",
 			["-g", "-j", "-n", app, "--args", String(address.port), token],
 			{ timeout: 10_000 },
-			(error) => (error ? reject(new Error("Wi-Fi helper launch failed")) : ok()),
+			(error) => (error ? reject(new Error("System Events helper launch failed")) : ok()),
 		),
 	).catch((error) => {
 		close();
@@ -135,7 +129,7 @@ export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClos
 		}
 		const timer = setTimeout(() => {
 			close();
-			reject(new Error("Wi-Fi helper connection timed out"));
+			reject(new Error("System Events helper connection timed out"));
 		}, 10_000);
 		const connected = () => {
 			if (socket) {
@@ -150,30 +144,8 @@ export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClos
 	});
 	return {
 		send: (command) => {
-			socket?.write(JSON.stringify(command) + "\n");
+			socket?.write(`${JSON.stringify(command)}\n`);
 		},
 		close,
 	};
 };
-
-export function parseWiFiStatus(value: unknown): WiFiStatus | undefined {
-	if (!value || typeof value !== "object") return;
-	const v = value as WiFiStatus;
-	const name = (s: unknown) => typeof s === "string" && s.length > 0 && Buffer.byteLength(s) <= 32;
-	if (
-		!["not_determined", "authorized", "denied", "restricted", "disabled", "unavailable"].includes(v.authorization) ||
-		typeof v.available !== "boolean" ||
-		!(v.currentNetwork === null || name(v.currentNetwork)) ||
-		!Array.isArray(v.knownNetworks) ||
-		v.knownNetworks.length > 256 ||
-		!v.knownNetworks.every(name)
-	)
-		return;
-	return {
-		authorization: v.authorization,
-		available: v.available,
-		currentNetwork: v.authorization === "authorized" && v.available ? v.currentNetwork : null,
-		knownNetworks: v.authorization === "authorized" ? [...new Set(v.knownNetworks)] : [],
-		...(v.error ? { error: "Wi-Fi monitoring unavailable." } : {}),
-	};
-}

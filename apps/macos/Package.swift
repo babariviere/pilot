@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Pilot", targets: ["Pilot"]),
-        .executable(name: "PilotWiFi", targets: ["PilotWiFi"]),
+        .executable(name: "PilotSystemEvents", targets: ["PilotSystemEvents"]),
     ],
     dependencies: [
         // Prebuilt libghostty (embedding C API) plus a Swift surface wrapper, vendored by
@@ -18,7 +18,7 @@ let package = Package(
     targets: [
         /// Protocol models and the transcript reducer. No UI, so it is unit-testable.
         .target(name: "PilotCore", path: "Sources/PilotCore"),
-        .executableTarget(name: "PilotWiFi", path: "Sources/PilotWiFi"),
+        .executableTarget(name: "PilotSystemEvents", path: "Sources/PilotSystemEvents"),
         .executableTarget(
             name: "Pilot",
             dependencies: [

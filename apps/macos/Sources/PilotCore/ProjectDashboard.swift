@@ -232,13 +232,19 @@ public enum DashboardScheduledTrigger: String, LenientStringEnum {
     case onWake = "on_wake"
     case onBack = "on_back"
     case onOnline = "on_online"
-    case onJoinNetwork = "on_join_network"
-    case onLeaveNetwork = "on_leave_network"
+    case removed
     case at
     public static let fallback = DashboardScheduledTrigger.onBack
+
+    public init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer().decode(String.self)
+        if value == "on_join_network" || value == "on_leave_network" { self = .removed }
+        else { self = Self(rawValue: value) ?? Self.fallback }
+    }
 }
 
 public enum DashboardScheduledState: String, LenientStringEnum {
+    case cancelled
     case pending
     case failed
     public static let fallback = DashboardScheduledState.pending
@@ -250,7 +256,6 @@ public struct DashboardScheduledItem: Codable, Identifiable, Equatable, Sendable
     public let title: String
     public let kind: DashboardScheduledKind
     public let trigger: DashboardScheduledTrigger
-    public let networkNames: [String]?
     /// Epoch milliseconds, for `at` triggers.
     public let at: Double?
     public let state: DashboardScheduledState
@@ -259,18 +264,35 @@ public struct DashboardScheduledItem: Codable, Identifiable, Equatable, Sendable
 
     public init(
         id: String, title: String, kind: DashboardScheduledKind = .chat,
-        trigger: DashboardScheduledTrigger = .onBack, at: Double? = nil, networkNames: [String]? = nil, state: DashboardScheduledState = .pending,
+        trigger: DashboardScheduledTrigger = .onBack, at: Double? = nil, state: DashboardScheduledState = .pending,
         error: String? = nil, sessionId: String? = nil
     ) {
         self.id = id
         self.title = title
         self.kind = kind
         self.trigger = trigger
-        self.networkNames = networkNames
         self.at = at
-        self.state = state
-        self.error = error
+        self.state = trigger == .removed ? .cancelled : state
+        self.error = trigger == .removed ? "Wi-Fi triggers were removed" : error
         self.sessionId = sessionId
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, title, kind, trigger, at, state, error, sessionId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try c.decode(String.self, forKey: .id),
+            title: try c.decode(String.self, forKey: .title),
+            kind: try c.decode(DashboardScheduledKind.self, forKey: .kind),
+            trigger: try c.decode(DashboardScheduledTrigger.self, forKey: .trigger),
+            at: try c.decodeIfPresent(Double.self, forKey: .at),
+            state: try c.decode(DashboardScheduledState.self, forKey: .state),
+            error: try c.decodeIfPresent(String.self, forKey: .error),
+            sessionId: try c.decodeIfPresent(String.self, forKey: .sessionId)
+        )
     }
 }
 

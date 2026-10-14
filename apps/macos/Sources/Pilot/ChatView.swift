@@ -416,7 +416,6 @@ struct ChatView: View {
         composer.attachments = ImageAttachments()
         let request = ScheduleRequest(
             title: ScheduleText.title(previous, fallback: "Follow-up message"), trigger: when.trigger, at: when.at,
-            networkNames: when.networkNames,
             target: .message(sessionId: session.id, message: message)
         )
         Task {
