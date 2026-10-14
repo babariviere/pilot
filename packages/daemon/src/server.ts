@@ -28,6 +28,7 @@ import type {
 	SchedulePatch,
 	ServerMessage,
 	SessionCommandsResponse,
+	SessionJobsResponse,
 	SessionHistoryPage,
 	SessionSummary,
 	SourceSignInRequest,
@@ -486,6 +487,10 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "commands" && req.method === "GET") {
 			const response: SessionCommandsResponse = { commands: await sessions.commands(parts[2]!) };
+			return json(res, 200, response);
+		}
+		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "jobs" && req.method === "GET") {
+			const response: SessionJobsResponse = { jobs: await sessions.jobs(parts[2]!) };
 			return json(res, 200, response);
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "history" && req.method === "GET") {

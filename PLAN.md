@@ -1149,14 +1149,19 @@ reports), producing a morning summary in the app and Slack.
   or session working directory; absolute paths and `~/` work too. A compact floating path picker shows
   file and folder icons with keyboard hints at the bottom, without a header or redundant metadata.
 - Typing `/` at the start of a chat message opens a slash command menu in the same floating picker style:
-  Pilot's built-in `/compact [instructions]`, then the session's prompt templates (`/name`) and skills
+  Pilot's built-in `/compact [instructions]` and `/jobs`, then the session's prompt templates (`/name`) and skills
   (`/skill:name`). Tab completes, Return runs (a template with an `argument-hint` is completed instead).
   Templates and skills are sent as ordinary messages and expanded by the kernel on admission. `/compact`
   is handled by Pilot (`POST /api/sessions/:id/compact`): it queues a durable manual compaction that runs
   alongside work and shows "Compacting context…" until the summary is placed. The list
   (`GET /api/sessions/:id/commands`) is loaded the first time the menu opens and cached by pilotd from
   each kernel's ready packet, so it reopens a parked chat at most once. Extension commands and the
-  new-task composer are not covered yet.
+  new-task composer are not covered yet. `/jobs` opens a compact read-only panel above the current chat's
+  composer, listing running shell jobs and elapsed times. Each row expands to show its ID and selectable
+  log path (copy or reveal in Finder). The panel has Refresh and Close controls. It reads
+  the existing jobs extension via `GET /api/sessions/:id/jobs`, without model work or claiming completions.
+  Opening and explicit Refresh fetch the list, with no polling; parked, archived and Ask chats list none
+  without starting a worker. Read failures and timeouts do not fail or stop the session.
 - Compaction and reset hide older entries from the snapshot, but storage keeps them. A compacted chat
   shows "Show earlier messages" at the top of its transcript, which loads them a page at a time
   (`GET /api/sessions/:id/history?before=<entryId>`, 100 entries by default, cut short past 4 MiB). pilotd

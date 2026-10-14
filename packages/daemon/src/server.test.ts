@@ -16,6 +16,50 @@ import { createDaemonServer } from "./server.ts";
 import { NotFound, SessionManager } from "./sessions.ts";
 import { TerminalManager } from "./terminals.ts";
 
+test("jobs GET returns the session's read-only running list and routes missing sessions", async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const jobs = [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }];
+	const reads = t.mock.method(sessions, "jobs", async (id: string) => {
+		if (id === "missing") throw new NotFound("Unknown session");
+		return id === "idle" ? [] : (jobs as Awaited<ReturnType<SessionManager["jobs"]>>);
+	});
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions`;
+	for (const [id, expected] of [
+		["working", jobs],
+		["idle", []],
+	] as const) {
+		const response = await fetch(`${base}/${id}/jobs`);
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), { jobs: expected });
+	}
+	for (const [path, options, status] of [
+		[`${base}/missing/jobs`, {}, 404],
+		[`${base}/working/jobs`, { method: "POST" }, 404],
+		[`${base}/working/jobs/extra`, {}, 404],
+		[`${base}/working/jobs`, { headers: { origin: "https://example.com" } }, 403],
+	] as const) {
+		const response = await fetch(path, options);
+		assert.equal(response.status, status);
+		await response.arrayBuffer();
+	}
+	assert.equal(reads.mock.callCount(), 3);
+});
+
 test("PR binding routes use the user actor, return summaries and validate request shape", async (t) => {
 	const projects = new ProjectStore("/unused");
 	const sessions = new SessionManager("/unused", projects);

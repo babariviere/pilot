@@ -33,6 +33,7 @@ import type {
 	SessionAttempt,
 	SessionCommand,
 	SessionHistoryPage,
+	SessionJob,
 	SessionListQuery,
 	SessionPullRequest,
 	SessionState,
@@ -175,6 +176,7 @@ export interface SessionWorker {
 	close(): Promise<void>;
 	/** Whether the kernel has live subprocesses (background jobs, subagents). Such workers are never parked. */
 	hasChildren?(): Promise<boolean>;
+	jobs?(): Promise<SessionJob[]>;
 }
 
 export interface SessionManagerOptions {
@@ -441,7 +443,13 @@ export class Worker implements SessionWorker {
 	usage?: KernelUsage;
 	private readonly pending = new Map<
 		string,
-		{ resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; onlyIfIdle?: boolean }
+		{
+			resolve(): void;
+			reject(error: Error): void;
+			timer: ReturnType<typeof setTimeout>;
+			onlyIfIdle?: boolean;
+			inspection?: boolean;
+		}
 	>();
 	private startupTimer?: ReturnType<typeof setTimeout>;
 	private killTimer?: ReturnType<typeof setTimeout>;
@@ -450,6 +458,8 @@ export class Worker implements SessionWorker {
 	private readonly commandTimeoutMs: number;
 	private children = true;
 	private checkingChildren?: Promise<boolean>;
+	private checkingJobs?: Promise<SessionJob[]>;
+	private readonly jobResults = new Map<string, SessionJob[]>();
 	private closing?: Promise<void>;
 	private shutdownRequested = false;
 	private readonly activity = new WorkerActivity();
@@ -518,12 +528,19 @@ export class Worker implements SessionWorker {
 			} else if (packet.type === "children") {
 				this.children = packet.hasChildren !== false;
 				this.settle(packet.requestId);
+			} else if (packet.type === "jobs") {
+				if (this.pending.has(packet.requestId)) this.jobResults.set(packet.requestId, packet.jobs);
+				this.settle(packet.requestId);
+				return;
 			} else if (packet.type === "accepted" || packet.type === "aborted") {
 				// IPC acceptance can precede working=true. A fresh committed snapshot is the idle barrier,
 				// including idempotent retries which produce no new run/inbox events.
 				if (packet.type === "accepted") this.refreshActivity();
 				this.settle(packet.requestId);
 			} else if (packet.type === "error") {
+				const inspection =
+					packet.requestId &&
+					(this.pending.get(packet.requestId)?.inspection || packet.requestId.startsWith("inspectJobs:"));
 				const idleRejection =
 					packet.code === "busy" && packet.requestId && this.pending.get(packet.requestId)?.onlyIfIdle;
 				if (packet.requestId) this.settle(packet.requestId, new CommandRejected(packet.message, packet.code));
@@ -532,7 +549,8 @@ export class Worker implements SessionWorker {
 					markFailed(new Error(packet.message));
 					this.state = "failed";
 				}
-				if (!idleRejection) this.error = packet.message;
+				if (!idleRejection && !inspection) this.error = packet.message;
+				if (inspection) return;
 			}
 			if ((packet.type === "ready" || packet.type === "working") && packet.working) this.error = undefined;
 			this.onPacket(packet);
@@ -601,24 +619,43 @@ export class Worker implements SessionWorker {
 		return this.checkingChildren;
 	}
 
+	/** Coalesce concurrent viewers without retaining snapshots after the read. */
+	jobs(): Promise<SessionJob[]> {
+		if (this.checkingJobs) return this.checkingJobs;
+		const requestId = `inspectJobs:${randomUUID()}`;
+		this.checkingJobs = this.request({ type: "inspectJobs", requestId })
+			.then(() => {
+				const jobs = this.jobResults.get(requestId);
+				if (!jobs) throw new Error("Kernel did not return a jobs list");
+				return jobs;
+			})
+			.finally(() => {
+				this.jobResults.delete(requestId);
+				this.checkingJobs = undefined;
+			});
+		return this.checkingJobs;
+	}
+
 	/** Send a command and wait for its accepted/aborted/error acknowledgement. */
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void> {
 		if (this.unavailable) return Promise.reject(this.unavailable);
 		if (!this.child.connected) return Promise.reject(new WorkerUnavailable("Kernel is disconnected"));
 		return new Promise((resolve, reject) => {
+			const inspection = command.type === "inspectChildren" || command.type === "inspectJobs";
 			const timer = setTimeout(
 				() => {
 					const error = new WorkerUnavailable(`Kernel ${command.type} acknowledgement timed out`);
-					if (command.type === "inspectChildren") this.settle(command.requestId, error);
+					if (inspection) this.settle(command.requestId, error);
 					else this.failTransport(error);
 				},
-				command.type === "inspectChildren" ? Math.min(this.commandTimeoutMs, 10_000) : this.commandTimeoutMs,
+				inspection ? Math.min(this.commandTimeoutMs, 10_000) : this.commandTimeoutMs,
 			);
 			timer.unref();
 			this.pending.set(command.requestId, {
 				resolve,
 				reject,
 				timer,
+				...(inspection ? { inspection: true } : {}),
 				...(command.type === "input" && command.onlyIfIdle ? { onlyIfIdle: true } : {}),
 			});
 			this.send(command);
@@ -2428,6 +2465,15 @@ export class SessionManager {
 		} finally {
 			end();
 		}
+	}
+
+	/** Jobs are runtime-local. A parked or archived chat has none; listing never reopens it. */
+	async jobs(id: string): Promise<SessionJob[]> {
+		const meta = this.require(id);
+		if (meta.archivedAt !== undefined || meta.mode === "ask" || this.closing) return [];
+		const worker = this.workers.get(id);
+		if (!worker || worker.state === "failed" || worker.state === "starting") return [];
+		return (await worker.jobs?.()) ?? [];
 	}
 
 	/**

@@ -1003,6 +1003,20 @@ export interface SessionCommandsResponse {
 	commands: SessionCommand[];
 }
 
+/** A running shell job owned by the current session worker. Handles and logs are runtime-local. */
+export interface SessionJob {
+	id: string;
+	name: string;
+	state: "running";
+	startedAt: number;
+	outputPath: string;
+}
+
+/** GET /api/sessions/:id/jobs. Read-only; never starts a model turn or reopens a parked worker. */
+export interface SessionJobsResponse {
+	jobs: SessionJob[];
+}
+
 /**
  * GET /api/sessions/:id/history?before=<entryId>[&limit=<n>]: retained entries older than the active transcript,
  * which compaction or reset hides from the snapshot. Read from storage without waking a parked session. Entries are

@@ -206,7 +206,7 @@ private func type(_ text: String, into editor: SubmitTextView) {
     var needed = 0
     editor.onSlashCommandsNeeded = { needed += 1 }
     type("/", into: editor)
-    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "review", "skill:commit"])
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "jobs", "review", "skill:commit"])
     #expect(needed == 1)
     let picker = editor.completionPicker
     type("co", into: editor)
@@ -259,6 +259,13 @@ private func type(_ text: String, into editor: SubmitTextView) {
     editor.keyDown(with: try pickerKey(36, "\r"))
     #expect(editor.string == "/compact")
     #expect(submissions.count == 2)
+
+    editor.string = ""
+    type("/jo", into: editor)
+    editor.keyDown(with: try pickerKey(36, "\r"))
+    #expect(editor.string == "/jobs")
+    #expect(submissions.count == 3, "Return runs jobs without waiting for arguments")
+    #expect(editor.completionPicker == nil)
 }
 
 @Test @MainActor func slashEscapeAndShiftReturnLeaveTheDraftAlone() throws {
@@ -283,9 +290,9 @@ private func type(_ text: String, into editor: SubmitTextView) {
 @Test @MainActor func loadedSessionCommandsRefreshAnOpenSlashMenu() throws {
     let editor = slashEditor(SlashCommands.builtins)
     type("/", into: editor)
-    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact"])
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "jobs"])
     editor.slashCommands = SlashCommands.all([SessionCommand(name: "review", source: .prompt)])
-    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "review"])
+    #expect(editor.completionPicker?.model.items.map(\.id) == ["compact", "jobs", "review"])
 }
 
 @Test @MainActor func pathPickerStaysWithinSmallAndSecondaryScreens() {

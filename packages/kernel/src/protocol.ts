@@ -8,6 +8,7 @@ import type {
 	RewindAction,
 	SessionAttempt,
 	SessionCommand,
+	SessionJob,
 	SessionCompletion,
 	SessionSubagent,
 } from "@pilot/protocol";
@@ -68,6 +69,7 @@ export type KernelCommand =
 	/** Stop work and continue another attempt. Answered by `rewound`. */
 	| { type: "activateAttempt"; requestId: string; attemptId: number }
 	| { type: "inspectChildren"; requestId: string }
+	| { type: "inspectJobs"; requestId: string }
 	| {
 			type: "subagent";
 			requestId: string;
@@ -101,6 +103,7 @@ export type KernelPacket =
 	  }
 	| { type: "usage"; usage: KernelUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
+	| { type: "jobs"; requestId: string; jobs: SessionJob[] }
 	/** Full replacement, after every change reported by the subagents extension. */
 	| { type: "subagents"; subagents: KernelSubagent[] }
 	| { type: "artifacts.changed" }

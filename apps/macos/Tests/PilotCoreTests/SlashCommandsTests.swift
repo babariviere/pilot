@@ -26,14 +26,37 @@ private func token(_ text: String, at location: Int? = nil) -> String? {
         SessionCommand(name: "skill:commit", source: .skill),
         SessionCommand(name: "skill:recompile", source: .skill),
         SessionCommand(name: "compact", source: .prompt, description: "shadowed"),
+        SessionCommand(name: "jobs", source: .prompt, description: "shadowed"),
     ])
-    #expect(commands.map(\.name) == ["compact", "review", "skill:commit", "skill:recompile"])
+    #expect(commands.map(\.name) == ["compact", "jobs", "review", "skill:commit", "skill:recompile"])
     #expect(commands.first?.kind == .builtin)
     #expect(SlashCommands.matches("com", in: commands).map(\.name) == ["compact", "skill:commit", "skill:recompile"])
     #expect(SlashCommands.matches("skill:", in: commands).map(\.name) == ["skill:commit", "skill:recompile"])
     #expect(SlashCommands.matches("REV", in: commands).map(\.name) == ["review"])
-    #expect(SlashCommands.matches("", in: commands).count == 4)
+    #expect(SlashCommands.matches("", in: commands).count == 5)
+    #expect(SlashCommands.matches("jo", in: commands) == [SlashCommands.jobs])
     #expect(SlashCommands.matches("zzz", in: commands).isEmpty)
+}
+
+@Test func jobsCommandRecognizesOnlyItsOwnToken() {
+    #expect(SlashCommands.jobsArguments("/jobs") == "")
+    #expect(SlashCommands.jobsArguments("  /jobs\n ") == "")
+    #expect(SlashCommands.jobsArguments("/jobs stop") == "stop")
+    #expect(SlashCommands.jobsArguments("/jobs-other") == nil)
+    #expect(SlashCommands.jobsArguments("please /jobs") == nil)
+    #expect(SlashCommands.jobsArguments("/skill:jobs") == nil)
+}
+
+@Test func jobsResponseMirrorsTheProtocolAndElapsedTimeIsSnapshotBased() throws {
+    let data = Data(#"{"jobs":[{"id":"tests","name":"Test suite","state":"running","startedAt":1000,"outputPath":"/tmp/tests.log"}]}"#.utf8)
+    let response = try JSONDecoder().decode(SessionJobsResponse.self, from: data)
+    let job = try #require(response.jobs.first)
+    #expect(job == SessionJob(id: "tests", name: "Test suite", startedAt: 1000, outputPath: "/tmp/tests.log"))
+    #expect(job.elapsed(at: 0) == "0s")
+    #expect(job.elapsed(at: 60000) == "59s")
+    #expect(job.elapsed(at: 61000) == "1m 0s")
+    #expect(job.elapsed(at: 3662000) == "1h 1m")
+    #expect(try JSONDecoder().decode(SessionJobsResponse.self, from: Data(#"{"jobs":[]}"#.utf8)).jobs.isEmpty)
 }
 
 @Test func compactInstructionsRecognizeOnlyTheCompactCommand() {
@@ -44,4 +67,3 @@ private func token(_ text: String, at location: Int? = nil) -> String? {
     #expect(SlashCommands.compactInstructions("please /compact") == nil)
     #expect(SlashCommands.compactInstructions("/skill:compact") == nil)
 }
-

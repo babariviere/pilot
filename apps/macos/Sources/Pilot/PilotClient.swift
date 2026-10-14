@@ -209,6 +209,11 @@ final class PilotClient: ObservableObject {
         return response.commands
     }
 
+    func jobs(_ sessionId: String) async throws -> [SessionJob] {
+        let response: SessionJobsResponse = try await call("api/sessions/\(sessionId)/jobs", method: "GET")
+        return response.jobs
+    }
+
     /// Starts a manual compaction; returns once it is queued, not when the summary is placed.
     func compact(_ sessionId: String, instructions: String?) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before compacting it.") }
