@@ -94,7 +94,7 @@ struct MissionBriefTab: View {
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @StateObject private var editor = BriefEditorState()
+    @ObservedObject var editor: BriefEditorState
     @State private var decision = MissionInput()
     @State private var comment = MissionInput()
 

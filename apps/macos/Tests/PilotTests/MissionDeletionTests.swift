@@ -32,6 +32,9 @@ private final class MissionDeletionHTTPStub: URLProtocol {
     let client = PilotClient(baseURL: URL(string: "http://mission-deletion.invalid"))
     let app = AppModel()
     app.selectedMissionId = "open"
+    let deletedEditor = app.briefEditor(for: "open")
+    deletedEditor.text = "Draft"
+    let otherEditor = app.briefEditor(for: "other")
 
     // Requesting or cancelling the window's confirmation never performs a write.
     app.pendingMissionDeletionId = "open"
@@ -43,6 +46,8 @@ private final class MissionDeletionHTTPStub: URLProtocol {
 
     try await app.deleteMission("open", using: client)
     #expect(app.selectedMissionId == nil)
+    #expect(app.briefEditor(for: "open") !== deletedEditor)
+    #expect(app.briefEditor(for: "other") === otherEditor)
 
     // Deletion from a row must not disturb a different open mission, project or chat.
     app.selectedMissionId = "other"
@@ -57,6 +62,7 @@ private final class MissionDeletionHTTPStub: URLProtocol {
 
     app.selectedSessionId = nil
     app.selectedMissionId = "failed"
+    let failedEditor = app.briefEditor(for: "failed")
     do {
         try await app.deleteMission("failed", using: client)
         Issue.record("Deletion should fail")
@@ -64,6 +70,7 @@ private final class MissionDeletionHTTPStub: URLProtocol {
         #expect(error.localizedDescription == "Deletion failed")
     }
     #expect(app.selectedMissionId == "failed")
+    #expect(app.briefEditor(for: "failed") === failedEditor)
     #expect(MissionDeletionHTTPStub.requests.map(\.method) == Array(repeating: "DELETE", count: 5))
     #expect(MissionDeletionHTTPStub.requests.map(\.path) == [
         "/api/missions/open", "/api/missions/from-row", "/api/missions/from-project",

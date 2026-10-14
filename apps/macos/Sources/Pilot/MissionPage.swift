@@ -63,7 +63,8 @@ struct MissionPage: View {
     @ViewBuilder
     private func content(_ mission: Mission, detail: MissionDetail?) -> some View {
         if let detail {
-            MissionTabContent(mission: mission, detail: detail, selection: model.missionTabSelection)
+            MissionTabContent(mission: mission, detail: detail, selection: model.missionTabSelection,
+                              briefEditor: model.briefEditor(for: mission.id))
         } else {
             ProgressView("Loading mission…")
         }
@@ -78,6 +79,7 @@ private struct MissionTabContent: View {
     let mission: Mission
     let detail: MissionDetail
     @ObservedObject var selection: MissionTabSelection
+    let briefEditor: BriefEditorState
     private static let top = "mission-tab-top"
 
     var body: some View {
@@ -100,7 +102,7 @@ private struct MissionTabContent: View {
     @ViewBuilder private func tab(_ proxy: ScrollViewProxy) -> some View {
         switch selection.tab {
         case .overview: MissionOverviewTab(mission: mission, detail: detail)
-        case .brief: MissionBriefTab(mission: mission, detail: detail)
+        case .brief: MissionBriefTab(mission: mission, detail: detail, editor: briefEditor)
         case .tasks: MissionTasksTab(mission: mission, detail: detail, scroll: proxy)
         case .chats: MissionChatsTab(mission: mission, detail: detail)
         case .artifacts: MissionArtifactsTab(mission: mission, detail: detail)

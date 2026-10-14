@@ -36,6 +36,8 @@ final class AppModel: ObservableObject {
     /// Drafts outlive their views and are saved locally by the production app.
     let newSessionForm = NewSessionForm()
     private var chatComposers: [String: ComposerState] = [:]
+    /// In-memory brief drafts outlive tab and page navigation, independently for each mission.
+    var missionBriefEditors: [String: BriefEditorState] = [:]
     private var knownScheduleStates: [String: ScheduleState] = [:]
     @Published private(set) var reviewRevision = 0
 
