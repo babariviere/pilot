@@ -29,6 +29,9 @@ enum Theme {
     static let success = Color(hex: 0x10B981)
     static let warning = Color(hex: 0xF59E0B)
     static let destructive = Color(hex: 0xEF4444)
+    /// Soft indigo for live work in the sidebar's dithered corners (`DitherCorner`). Distinct from the attention
+    /// colors, so working rows read as activity without asking for the user.
+    static let working = Color(hex: 0x6366F1)
     /// Text-weight amber for blockers the user can act on, such as a PR blocked from merging or a
     /// scheduled item that could not start. Readable on white, unlike `warning`.
     static let blocked = Color(hex: 0xB45309)

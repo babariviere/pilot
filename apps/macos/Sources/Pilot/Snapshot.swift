@@ -1450,9 +1450,10 @@ enum Snapshot {
 
         let counts = model.client.projectCounts.projects
         await render(SidebarScopeList(projects: model.orderedProjects, scope: nil, counts: counts,
-                                      choose: { _ in }, addProject: {}, newFolder: {})
+                                      archivedCount: 12, groupsByUrgency: true, choose: { _ in }, showArchive: {},
+                                      search: {}, toggleGrouping: {}, addProject: {}, newFolder: {})
                         .background(Theme.background),
-                     size: CGSize(width: 300, height: 220), to: directory.appending(path: "scope-switcher.png"))
+                     size: CGSize(width: 300, height: 320), to: directory.appending(path: "scope-switcher.png"))
 
         model.selectedSessionId = nil
         model.focus(on: "p1")

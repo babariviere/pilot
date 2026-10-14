@@ -75,12 +75,17 @@ enum SidebarScopeCounts {
 
 // MARK: - Views
 
-/// The top of the sidebar: the scope switcher ("All projects" or one focused project) with a compose button
-/// for that scope, and, when focused, a quiet line about work in other projects. The line opens the switcher.
+/// The top of the sidebar, in one row: the scope switcher ("All projects" or one focused project), Home for that
+/// scope with what needs the user, and a compose button. When focused, a quiet line about work in other projects
+/// follows; it opens the switcher. Archived chats, search and grouping live in the switcher's menu.
 struct SidebarScopeSwitcher: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
     let counts: [String: ProjectDashboardCount]
+    /// Things that need the user in this scope, badged on Home.
+    let needsYou: Int
+    let homeSelected: Bool
+    let archivedCount: Int
     let onNewFolder: () -> Void
     @State private var showingList = false
     @State private var hovered = false
@@ -113,6 +118,7 @@ struct SidebarScopeSwitcher: View {
                 .accessibilityLabel("Sidebar shows \(project?.name ?? "all projects")")
                 .accessibilityHint("Choose which projects the sidebar lists")
                 .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
+                homeButton(project: project)
                 composeButton(project: project)
             }
             if let elsewhereText, let elsewhere {
@@ -147,10 +153,20 @@ struct SidebarScopeSwitcher: View {
         .animation(Theme.Motion.quick, value: hovered)
         .popover(isPresented: $showingList, arrowEdge: .bottom) {
             SidebarScopeList(projects: model.orderedProjects, scope: project?.id, counts: counts,
+                             archivedCount: archivedCount, groupsByUrgency: model.sidebarGroupsByUrgency,
                              choose: { id in
                                  showingList = false
                                  model.focus(on: id)
                              },
+                             showArchive: {
+                                 showingList = false
+                                 model.showArchive(in: project?.id)
+                             },
+                             search: {
+                                 showingList = false
+                                 model.showSidebarSearch()
+                             },
+                             toggleGrouping: { model.sidebarGroupsByUrgency.toggle() },
                              addProject: {
                                  showingList = false
                                  model.addProject()
@@ -160,6 +176,32 @@ struct SidebarScopeSwitcher: View {
                                  onNewFolder()
                              })
         }
+    }
+
+    /// Home for the scope: today's Home, or the focused project's page. Badged with what needs the user.
+    private func homeButton(project: Project?) -> some View {
+        let title = project.map { "Open \($0.name)'s project page" } ?? "Open Home"
+        return Button { model.openScopeHome() } label: {
+            Image(systemName: homeSelected ? "house.fill" : "house")
+                .font(.pilot(.label))
+                .foregroundStyle(homeSelected ? Theme.foreground : Theme.mutedForeground)
+                .frame(width: 24, height: 24)
+                .overlay(alignment: .topTrailing) {
+                    if needsYou > 0 {
+                        CountBadge(count: needsYou, style: .attention)
+                            .scaleEffect(0.85)
+                            .offset(x: 7, y: -4)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(Theme.Motion.quick, value: needsYou > 0)
+        .padding(.trailing, needsYou > 0 ? 6 : 0)
+        .help(title)
+        .accessibilityLabel(needsYou > 0 ? "\(title), \(needsYou) \(needsYou == 1 ? "needs" : "need") you" : title)
+        .accessibilityAddTraits(homeSelected ? .isSelected : [])
     }
 
     private func composeButton(project: Project?) -> some View {
@@ -181,12 +223,18 @@ struct SidebarScopeSwitcher: View {
     }
 }
 
-/// The open switcher: All projects, then each project in sidebar order with its counts and shortcut.
+/// The open switcher: All projects, then each project in sidebar order with its counts and shortcut, then the
+/// sidebar's secondary actions (archived chats, search, grouping) and project management.
 struct SidebarScopeList: View {
     let projects: [Project]
     let scope: String?
     let counts: [String: ProjectDashboardCount]
+    let archivedCount: Int
+    let groupsByUrgency: Bool
     let choose: (String?) -> Void
+    let showArchive: () -> Void
+    let search: () -> Void
+    let toggleGrouping: () -> Void
     let addProject: () -> Void
     let newFolder: () -> Void
 
@@ -211,6 +259,14 @@ struct SidebarScopeList: View {
                 // Long lists scroll; a half row hints there is more.
                 .frame(height: min(CGFloat(projects.count), 12.5) * Self.rowHeight)
                 .scrollBounceBehavior(.basedOnSize)
+            }
+            HairlineDivider().padding(.vertical, 4)
+            SidebarScopeRow(title: "Archived chats (\(archivedCount))", icon: "archivebox", action: showArchive)
+            SidebarScopeRow(title: "Search chats", icon: "magnifyingglass", shortcut: "⌘F", action: search)
+            if scope == nil {
+                SidebarScopeRow(title: "Group chats by urgency", icon: "list.bullet.indent", checked: groupsByUrgency,
+                                help: "List Needs you, Working and Recent instead of projects and folders",
+                                action: toggleGrouping)
             }
             HairlineDivider().padding(.vertical, 4)
             SidebarScopeRow(title: "Add Project…", icon: "folder.badge.plus", action: addProject)
@@ -280,6 +336,10 @@ struct SidebarScopeCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
+            Divider()
+            Button("Search Chats") { model.showSidebarSearch() }
+                .keyboardShortcut("f", modifiers: .command)
+            Toggle("Group Chats by Urgency", isOn: $model.sidebarGroupsByUrgency)
             Divider()
             Toggle("All Projects", isOn: binding(nil))
                 .keyboardShortcut("0", modifiers: .command)

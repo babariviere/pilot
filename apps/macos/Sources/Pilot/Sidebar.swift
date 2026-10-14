@@ -2,13 +2,16 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Sessions grouped by project and optional user-created folders, pinned first, then PR status and stable activity.
-/// The scope switcher at the top lists every project (the default) or focuses on one, which then shows only
-/// that project's missions and chats.
+/// Sessions by urgency (Needs you, Working, Recent) or by project and optional user-created folders, pinned first,
+/// then PR status and stable activity. The scope switcher at the top lists every project (the default) or focuses on
+/// one, which then shows only that project's missions and chats. Search appears on ⌘F, and the footer only when
+/// the connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
 struct SessionSidebar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
     @StateObject private var folderEditor = ProjectFolderEditorState()
+
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
@@ -17,9 +20,12 @@ struct SessionSidebar: View {
         let unassigned = visible.filter { $0.projectId.map { !known.contains($0) } ?? true }
         let counts = client.projectCounts.projects
         let focused = model.focusedProject
+        let showsSearch = model.sidebarSearchVisible || searching
         List(selection: $model.selectedSessionId) {
             if let focused {
                 focusedContent(focused, visible: visible, searching: searching)
+            } else if model.sidebarGroupsByUrgency {
+                urgencyContent(visible: visible, searching: searching)
             } else {
                 allProjectsContent(visible: visible, searching: searching, unassigned: unassigned, counts: counts)
             }
@@ -38,38 +44,50 @@ struct SessionSidebar: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
+            // One row: scope, Home and compose. Archived chats live in the scope menu, search behind ⌘F.
+            let scopeCount = focused.map { counts[$0.id] ?? ProjectDashboardCount() }
+                ?? SidebarScopeCounts.total(counts)
+            let archived = focused.map { project in
+                client.archivedSessions.filter { $0.projectId == project.id }.count
+            } ?? client.archivedSessions.count
             VStack(spacing: 6) {
-                SidebarScopeSwitcher(model: model, client: client, counts: counts,
+                SidebarScopeSwitcher(model: model, client: client, counts: counts, needsYou: scopeCount.needsYou,
+                                     homeSelected: homeSelected(focused), archivedCount: archived,
                                      onNewFolder: { folderEditor.begin() })
-                    .padding(.bottom, 2)
-                let scopeCount = focused.map { counts[$0.id] ?? ProjectDashboardCount() }
-                    ?? SidebarScopeCounts.total(counts)
-                SidebarButton(title: focused == nil ? "Home" : "Project home", icon: "house",
-                              selected: homeSelected(focused), badge: scopeCount.needsYou,
-                              help: focused.map { "Open \($0.name)'s project page" } ?? "Open Home") {
-                    model.openScopeHome()
+                if showsSearch {
+                    SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
+                        .transition(.opacity.combined(with: .move(edge: .top)))
                 }
-                let archived = focused.map { project in
-                    client.archivedSessions.filter { $0.projectId == project.id }.count
-                } ?? client.archivedSessions.count
-                SidebarButton(title: "Archived chats (\(archived))", icon: "archivebox",
-                              selected: model.showingArchive && model.selectedSessionId == nil) {
-                    model.showArchive(in: focused?.id)
-                }
-                SearchField(text: $model.sidebarQuery)
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
             .padding(.bottom, 6)
+            .animation(Theme.Motion.quick, value: showsSearch)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ConnectionFooter(client: client)
-                // The list can draw beneath its safe-area inset while scrolling.
-                // Keep session metadata from showing through the status text.
-                .background(Theme.sidebar)
-                .overlay(alignment: .top) {
-                    Rectangle().fill(Theme.border).frame(height: 1)
+            // Quiet while connected. Working counts live in the rows' corners.
+            VStack(spacing: 0) {
+                if !client.connected {
+                    ConnectionFooter()
+                        // The list can draw beneath its safe-area inset while scrolling.
+                        // Keep session metadata from showing through the status text.
+                        .background(Theme.sidebar)
+                        .overlay(alignment: .top) {
+                            Rectangle().fill(Theme.border).frame(height: 1)
+                        }
+                        .transition(.opacity)
                 }
+            }
+            .animation(Theme.Motion.quick, value: client.connected)
+        }
+        .onChange(of: model.sidebarSearchFocusRequest) {
+            // The field may only now be inserted. Focus it once it exists.
+            DispatchQueue.main.async { searchFocused = true }
+        }
+        .onChange(of: searchFocused) { _, focused in
+            if !focused, model.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty {
+                model.hideSidebarSearch()
+            }
         }
         .onAppear { model.validateSidebarScope() }
         .onChange(of: known) { model.validateSidebarScope() }
@@ -103,6 +121,50 @@ struct SessionSidebar: View {
                 projectSessions(sessions, listId: project.id, searching: searching)
             }
         }
+    }
+
+    /// Every project's chats by urgency, each row naming its project. Folders and project headers stay out of the way;
+    /// the scope switcher and project pages reach them.
+    @ViewBuilder
+    private func urgencyContent(visible: [SessionSummary], searching: Bool) -> some View {
+        missionsSection(visible: visible, searching: searching)
+        let groups = SidebarUrgency.groups(visible) { model.isUnread($0) }
+        let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
+        if !groups.needsYou.isEmpty {
+            Section {
+                ForEach(groups.needsYou) { session in
+                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                }
+            } header: {
+                SidebarSectionHeader(title: "Needs you", count: groups.needsYou.count, attention: true)
+            }
+        }
+        if !groups.working.isEmpty {
+            Section {
+                ForEach(groups.working) { session in
+                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                }
+            } header: {
+                SidebarSectionHeader(title: "Working", count: groups.working.count)
+            }
+        }
+        if !groups.recent.isEmpty {
+            Section {
+                projectSessions(groups.recent, listId: Self.recentListId, searching: searching, projectNames: names)
+            } header: {
+                SidebarSectionHeader(title: "Recent")
+            }
+        }
+        if groups.isEmpty, !client.projects.isEmpty {
+            Text(searching ? "No matching chats" : "No chats yet")
+                .font(.caption).foregroundStyle(Theme.faintForeground)
+                .selectionDisabled(true)
+        }
+    }
+
+    private func projectName(_ session: SessionSummary, _ names: [String: String]?) -> String? {
+        guard let names, let id = session.projectId else { return nil }
+        return names[id]
     }
 
     /// Every project, grouped by folder, then chats outside any known project.
@@ -166,8 +228,7 @@ struct SessionSidebar: View {
 
     private func projectHeader(_ project: Project, needsYou: Int, sessions: [SessionSummary],
                                isExpanded: Binding<Bool>) -> some View {
-        ProjectHeader(project: project, client: client, model: model,
-                      working: sessions.filter(\.isWorking).count, needsYou: needsYou, isExpanded: isExpanded,
+        ProjectHeader(project: project, client: client, model: model, needsYou: needsYou, isExpanded: isExpanded,
                       onArchive: { model.showArchive(in: project.id) },
                       onNew: { model.newSession(in: project.id) },
                       onNewFolder: { folderEditor.begin(projectId: project.id) })
@@ -258,14 +319,15 @@ struct SessionSidebar: View {
 
     @ViewBuilder
     private func projectSessions(_ sessions: [SessionSummary], listId: String, searching: Bool,
-                                 indented: Bool = false) -> some View {
+                                 indented: Bool = false, projectNames: [String: String]? = nil) -> some View {
         let showingAll = searching || model.expandedSessionLists.contains(listId)
         let collapsed = SidebarSessionList.collapsed(sessions) { session in
-            session.id == model.selectedSessionId || session.isWorking || model.isUnread(session)
+            session.id == model.selectedSessionId || session.isReadyToMerge || model.isUnread(session)
         }
         let list = showingAll ? (shown: sessions, hidden: 0) : collapsed
         ForEach(list.shown) { session in
-            SessionRow(session: session).padding(.leading, indented ? 20 : 0).tag(session.id)
+            SessionRow(session: session, projectName: projectName(session, projectNames))
+                .padding(.leading, indented ? 20 : 0).tag(session.id)
         }
         if sessions.isEmpty {
             Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
@@ -273,7 +335,7 @@ struct SessionSidebar: View {
                 .selectionDisabled(true)
         }
         if list.hidden > 0 {
-            SidebarDisclosureRow(title: "Show \(list.hidden) more", expanded: false) {
+            SidebarDisclosureRow(title: "\(list.hidden) quiet \(list.hidden == 1 ? "chat" : "chats")", expanded: false) {
                 model.expandedSessionLists.insert(listId)
             }
             .padding(.leading, indented ? 20 : 0)
@@ -288,6 +350,8 @@ struct SessionSidebar: View {
     }
 
     static let otherListId = "pilot.sidebar.other"
+    /// The Recent section when All projects groups chats by urgency.
+    static let recentListId = "pilot.sidebar.recent"
 
     private func folderExpanded(_ id: String) -> Binding<Bool> {
         Binding(
@@ -337,34 +401,21 @@ struct SidebarDisclosureRow: View {
     }
 }
 
-private struct SidebarButton: View {
+/// Header of an urgency section in the sidebar, matching the Missions header's type.
+private struct SidebarSectionHeader: View {
     let title: String
-    let icon: String
-    let selected: Bool
-    /// Things that need the user in this row's scope, shown as an attention badge.
-    var badge = 0
-    var help: String?
-    let action: () -> Void
+    var count: Int?
+    var attention = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Label(title, systemImage: icon)
-                    .lineLimit(1)
-                Spacer(minLength: 0)
-                if badge > 0 {
-                    CountBadge(count: badge, style: .attention)
-                }
+        HStack(spacing: 6) {
+            Text(title).font(.system(size: 11, weight: .semibold))
+            if let count, count > 0 {
+                CountBadge(count: count, style: attention ? .attention : .neutral)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.subtleFill : Color.clear))
-            .contentShape(Rectangle())
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
-        .help(help ?? "")
-        .accessibilityLabel(badge > 0 ? "\(title), \(badge) \(badge == 1 ? "needs" : "need") you" : title)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -372,12 +423,12 @@ private struct ProjectHeader: View {
     let project: Project
     @ObservedObject var client: PilotClient
     @ObservedObject var model: AppModel
-    let working: Int
     let needsYou: Int
     @Binding var isExpanded: Bool
     let onArchive: () -> Void
     let onNew: () -> Void
     let onNewFolder: () -> Void
+    @State private var hovered = false
 
     var body: some View {
         let selected = model.selectedProjectId == project.id && model.selectedSessionId == nil
@@ -391,10 +442,6 @@ private struct ProjectHeader: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(selected ? Theme.foreground : Color.secondary)
-                    if working > 0 {
-                        CountBadge(count: working)
-                            .help("\(working) working")
-                    }
                     if needsYou > 0 {
                         CountBadge(count: needsYou, style: .attention)
                             .help("\(needsYou) \(needsYou == 1 ? "needs" : "need") you")
@@ -407,20 +454,30 @@ private struct ProjectHeader: View {
             .accessibilityLabel("Open \(project.name)")
             .accessibilityAddTraits(selected ? .isSelected : [])
             .help("Open \(project.name) (\(project.path.abbreviatingHome))")
-            ProjectArtifactsButton(project: project, client: client)
-                .frame(width: 16, height: 16)
-            Button(action: onArchive) { Image(systemName: "archivebox") }
-                .buttonStyle(.borderless)
-                .frame(width: 16, height: 16)
-                .help("Browse archived chats in \(project.name)")
-            Button(action: onNew) { Image(systemName: "plus") }
-                .buttonStyle(.borderless)
-                .frame(width: 16, height: 16)
-                .help("New session in \(project.name)")
+            // A resting header is just its name. Actions appear under the pointer and stay in the context menu.
+            Group {
+                ProjectArtifactsButton(project: project, client: client)
+                    .frame(width: 16, height: 16)
+                Button(action: onArchive) { Image(systemName: "archivebox") }
+                    .buttonStyle(.borderless)
+                    .frame(width: 16, height: 16)
+                    .help("Browse archived chats in \(project.name)")
+                    .accessibilityLabel("Browse archived chats in \(project.name)")
+                Button(action: onNew) { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+                    .frame(width: 16, height: 16)
+                    .help("New session in \(project.name)")
+                    .accessibilityLabel("New session in \(project.name)")
+            }
+            .revealed(hovered)
             Button { isExpanded.toggle() } label: {
                 Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
+                    // Faint at rest, never hidden: SwiftUI does not hit-test fully transparent views, and the
+                    // chevron must stay clickable before hover tracking catches up. A folded project shows it fully.
+                    .foregroundStyle(hovered || !isExpanded ? Theme.mutedForeground : Theme.faintForeground.opacity(0.6))
                     .frame(width: 16, height: 16)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
             .help("\(isExpanded ? "Collapse" : "Expand") \(project.name)")
@@ -429,6 +486,8 @@ private struct ProjectHeader: View {
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
         .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.subtleFill : Color.clear))
+        .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
         .contextMenu {
             Button("Open Project") { model.openProject(project.id) }
             Button("Focus on This Project") { model.focus(on: project.id) }
@@ -476,58 +535,76 @@ private struct ProjectHeader: View {
     }
 }
 
+/// One chat: its title, and its project (when the list is not grouped by project) and repository metadata.
+/// The dithered corner carries its state, so the row needs no status column. Time, pin and mission marks show
+/// under the pointer, in space the row always reserves, so hovering never reflows the title.
 struct SessionRow: View {
     let session: SessionSummary
     /// Off under the mission's own sidebar entry, where the mark would repeat.
     var showsMission = true
     var isCoordinator = false
+    /// Shown before the repository metadata in lists that mix projects.
+    var projectName: String?
     @EnvironmentObject private var model: AppModel
+    @State private var hovered = false
 
     var body: some View {
+        let unread = model.isUnread(session)
+        let signal = session.signal(unread: unread)
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                if session.isActiveMissionCoordinator && !session.isWorking {
-                    MissionCoordinatorIndicator()
-                } else {
-                    SessionStatusIcon(status: session.status)
-                }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
-                    .font(.system(size: 13, weight: model.isUnread(session) ? .semibold : .regular))
+                    .font(.system(size: 13, weight: unread ? .semibold : .regular))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if model.isUnread(session) { UnreadBadge() }
-                if (isCoordinator && !session.isActiveMissionCoordinator) || (session.isActiveMissionCoordinator && session.isWorking) {
+                if isCoordinator || session.isActiveMissionCoordinator {
                     MissionCoordinatorIndicator()
                 }
-                if showsMission, session.missionId != nil {
-                    Image(systemName: MissionSymbol.name)
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .help("In mission: \(model.client.mission(session.missionId)?.title ?? "")")
-                        .accessibilityLabel("Mission chat")
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if showsMission, session.missionId != nil {
+                        Image(systemName: MissionSymbol.name)
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .help("In mission: \(model.client.mission(session.missionId)?.title ?? "")")
+                            .accessibilityLabel("Mission chat")
+                    }
+                    if session.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                            .help("Pinned chat. Automatic archiving is disabled until unpinned.")
+                            .accessibilityLabel("Pinned chat")
+                    }
+                    TimelineView(.periodic(from: .now, by: 30)) { context in
+                        Text(SessionTimeFormatting.relative(session.listActivityAt, now: context.date))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                            .fixedSize()
+                    }
                 }
-                if session.isPinned {
-                    Image(systemName: "pin.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.secondary)
-                        .help("Pinned chat. Automatic archiving is disabled until unpinned.")
-                        .accessibilityLabel("Pinned chat")
-                }
-                TimelineView(.periodic(from: .now, by: 30)) { context in
-                    Text(SessionTimeFormatting.relative(session.listActivityAt, now: context.date))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .monospacedDigit()
-                        .fixedSize()
-                }
+                .revealed(hovered)
             }
-            SessionRepositoryMetadata(session: session)
-                // Match the title's inset (14-point status column plus 8-point spacing).
-                .padding(.leading, 22)
+            HStack(spacing: 4) {
+                if let projectName {
+                    Text(projectName)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                    Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                }
+                SessionRepositoryMetadata(session: session)
+            }
+            // Stop short of the corner's densest cells.
+            .padding(.trailing, 20)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
-        .help(session.cwd.abbreviatingHome)
+        .ditherCorner(signal)
+        .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
+        .help([signal?.label, session.cwd.abbreviatingHome].compactMap { $0 }.joined(separator: " · "))
         .contextMenu {
             SessionRenameAction(session: session)
             Button {
@@ -551,26 +628,22 @@ struct SessionRow: View {
                         .help(session.pullRequestHelpText ?? "")
                 }
             }
-            if model.isUnread(session) {
+            if unread {
                 Button("Mark as reviewed") { model.review(session, explicit: true) }
             }
         }
     }
 }
 
+/// Shown only while pilotd is unreachable.
 private struct ConnectionFooter: View {
-    @ObservedObject var client: PilotClient
-
     var body: some View {
         HStack(spacing: 6) {
             Circle()
-                .fill(client.connected ? Color.green : Color.orange)
+                .fill(Theme.warning)
                 .frame(width: 6, height: 6)
-            Text(client.connected ? "pilotd connected" : "Connecting to pilotd…")
+            Text("Connecting to pilotd…")
             Spacer()
-            if client.workingCount > 0 {
-                Text("\(client.workingCount) working")
-            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -579,21 +652,26 @@ private struct ConnectionFooter: View {
     }
 }
 
+/// Appears on ⌘F. Escape clears it and hides it again.
 private struct SearchField: View {
     @Binding var text: String
+    var focused: FocusState<Bool>.Binding
+    let onDismiss: () -> Void
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
-            TextField("Search sessions", text: $text)
+            TextField("Search chats", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
-            if !text.isEmpty {
-                Button { text = "" } label: {
-                    Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
-                }
-                .buttonStyle(.plain)
+                .focused(focused)
+                .onExitCommand(perform: onDismiss)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
             }
+            .buttonStyle(.plain)
+            .help("Close search (Esc)")
+            .accessibilityLabel("Close search")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)

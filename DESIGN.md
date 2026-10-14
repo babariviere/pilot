@@ -35,6 +35,10 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   tertiary text colors for meta information, and keep line lengths comfortable.
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).
   They explain a change, never decorate it.
+- **Dithered gradients are Pilot's signature.** Prefer ordered (Bayer) dithering with hard square pixels over smooth
+  gradients, glows and blurs: the Home sky (`DitherSky`) and the sidebar's status corners (`DitherCorner`) set the
+  tone. Use it for atmosphere and state, with a soft palette and quiet motion (a slow ripple, a breath, a dissolve
+  from cell to cell), and keep text readable over it.
 - **Check it by eye.** Beauty is reviewed, not assumed. Look at the real result in light and dark, with real
   and long content, before calling a UI change done.
 
@@ -57,6 +61,21 @@ the project page. Do not restyle a state for a single screen.
 | Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |
+
+In the sidebar, a chat's state is its dithered corner (`DitherCorner`), not an icon column: an ordered dither
+growing from the row's bottom-right corner in the state's tint. Working is a soft indigo ripple, needs you an amber
+breath, failed a steady dense red, ready to merge a steady light green. Done and other quiet chats draw nothing.
+Density and motion differ per state, so color is never the only signal, and VoiceOver reads the state. Changes
+dissolve cell by cell, the corner leans toward the pointer, and Reduce Motion keeps it still.
+
+## Sidebar
+
+The sidebar answers "what needs me" before "where is it". One header row holds the scope switcher, Home (badged with
+what needs the user) and compose; archived chats, search (⌘F) and grouping live in the switcher's menu. All
+projects groups chats by urgency (Needs you, Working, Recent) with each row naming its project; a focused project
+lists its own missions and chats. Rows are a title and one metadata line. Time, pin and mission marks, and project
+header actions, appear under the pointer. Quiet chats fold past the first few, and the footer appears only while
+pilotd is unreachable.
 
 ## Consistency
 

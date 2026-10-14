@@ -32,14 +32,14 @@ private func row(_ id: String, pinned: Bool? = nil, state: String = "idle",
 @Test func longSidebarListsKeepEveryActiveChatWithoutADisclosure() {
     let sessions = (0..<30).map { index in
         row("s\(index)", state: index % 2 == 0 ? "idle" : "parked",
-            prs: index % 3 == 0 ? [] : [index % 3 == 1 ? .open : .draft])
+            prs: [index % 3 == 1 ? .open : .draft])
     }
     let result = SidebarSessionList.collapsed(sessions) { _ in false }
     #expect(result.shown == sessions)
     #expect(result.hidden == 0)
 }
 
-@Test func sidebarFoldsOnlyTerminalPRChatsAndPreservesOrder() {
+@Test func sidebarFoldsOnlyQuietChatsAndPreservesOrder() {
     let sessions = (0..<5).map { row("s\($0)") } + [
         row("merged", prs: [.merged]),
         row("idle"),
@@ -51,11 +51,12 @@ private func row(_ id: String, pinned: Bool? = nil, state: String = "idle",
         row("draft-secondary", prs: [.closed, .draft]),
         row("coordinator", prs: [.merged], coordinator: true),
         row("unpublished", prs: [.closed], unpublished: true),
+        row("failed", state: "failed"),
     ]
     let result = SidebarSessionList.collapsed(sessions) { _ in false }
-    #expect(result.shown.map(\.id) == ["s0", "s1", "s2", "s3", "s4", "idle", "open", "draft",
-                                      "open-secondary", "draft-secondary", "coordinator", "unpublished"])
-    #expect(result.hidden == 3)
+    #expect(result.shown.map(\.id) == ["s0", "s1", "s2", "s3", "s4", "open", "draft",
+                                      "open-secondary", "draft-secondary", "coordinator", "failed"])
+    #expect(result.hidden == 5)
 }
 
 @Test func sidebarKeepsSelectedWorkingAndUnreadTerminalChats() {
