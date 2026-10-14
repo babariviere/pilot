@@ -123,8 +123,8 @@ export interface SessionMissionBridge {
 	noticeAllowed?(sessionId: string, requestId: string): boolean;
 	/** Validate new-chat admission and resolve the mission's project. */
 	spawnProject(missionId: string): string;
-	/** Join after metadata is saved, but before starting the worker. */
-	joinSpawn(sessionId: string, missionId: string, coordinator?: boolean): void;
+	/** Join and optionally claim a task after metadata is saved, but before starting the worker. */
+	joinSpawn(sessionId: string, missionId: string, coordinator?: boolean, taskId?: string): void;
 	/** Roll back membership if saving/admission fails before a worker starts. */
 	leaveSpawn?(sessionId: string): void;
 	/** The chat's mission, its status and this member's coordinator role. */
@@ -2514,10 +2514,10 @@ export class SessionManager {
 			throw new Error("Invalid Ask snapshot context");
 	}
 
-	async spawn(request: SpawnRequest, coordinator = false): Promise<SessionSummary> {
+	async spawn(request: SpawnRequest, coordinator = false, taskId?: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
-			return await this.spawnAdmitted(request, coordinator);
+			return await this.spawnAdmitted(request, coordinator, taskId);
 		} finally {
 			end();
 		}
@@ -2601,7 +2601,7 @@ export class SessionManager {
 		}
 	}
 
-	private async spawnAdmitted(request: SpawnRequest, coordinator: boolean): Promise<SessionSummary> {
+	private async spawnAdmitted(request: SpawnRequest, coordinator: boolean, taskId?: string): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
 			throw new Error("mode must be build or ask");
@@ -2678,10 +2678,10 @@ export class SessionManager {
 		try {
 			await this.save(meta);
 			if (request.missionId !== undefined) {
-				this.missions!.joinSpawn(id, request.missionId, coordinator);
+				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId);
 			}
 		} catch (error) {
-			// The mission may have closed, or another chat may now coordinate it.
+			// Admission may lose a coordinator/task claim or race a closed mission.
 			this.missions?.leaveSpawn?.(id);
 			// Promotion and rollback can queue metadata writes. Drain them before removing their directory,
 			// and preserve the admission error even if one of those writes failed.

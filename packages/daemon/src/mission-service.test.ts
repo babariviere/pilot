@@ -10,6 +10,7 @@ import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { KernelCommand, KernelPacket, KernelSpec } from "@pilot/kernel";
 import type { MissionDetail, ServerMessage, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { Conflict } from "./errors.ts";
 import { draftMessage, MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
@@ -2110,11 +2111,11 @@ test("start saves member and already-linked artifacts and parsed links before sp
 	f.service.leave(author.id); // An existing mission link remains a valid reference.
 	const task = f.store.resolveTask(mission.id, "1");
 	const spawn = f.sessions.spawn.bind(f.sessions);
-	t.mock.method(f.sessions, "spawn", async (request: Parameters<SessionManager["spawn"]>[0]) => {
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof spawn>) => {
 		const detail = f.store.detail(mission.id);
 		assert.equal(detail.artifacts.filter((ref) => ref.taskId === task.id).length, 2);
 		assert.equal(detail.resources.filter((ref) => ref.taskId === task.id).length, 2);
-		return spawn(request);
+		return spawn(...args);
 	});
 	const session = (await f.service.call(lead.id, "start", {
 		id: "#1",
@@ -2453,6 +2454,225 @@ for (const status of ["done", "archived"] as const) {
 	});
 }
 
+for (const [firstVia, secondVia] of [
+	["HTTP", "HTTP"],
+	["HTTP", "tool"],
+	["tool", "HTTP"],
+	["tool", "tool"],
+] as const) {
+	test(`concurrent ${firstVia}/${secondVia} task starts reserve canonical task IDs before async selection`, async (t) => {
+		const f = await fixture(t);
+		const lead = await f.spawn();
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: lead.id,
+			draft: false,
+			tasks: [{ title: "Auth" }],
+		});
+		const task = f.store.resolveTask(mission.id, "1");
+		const terminals = new TerminalManager();
+		const server = createDaemonServer(
+			{ home: f.home, host: "127.0.0.1", port: 0 },
+			f.sessions,
+			f.projects,
+			new ModelCatalog(f.home),
+			terminals,
+			{ service: f.service, store: f.store },
+		);
+		t.after(async () => {
+			terminals.shutdown();
+			server.closeAllConnections();
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+		});
+		server.listen(0, "127.0.0.1");
+		await once(server, "listening");
+		const port = (server.address() as AddressInfo).port;
+		const start = async (via: "HTTP" | "tool", id: string) => {
+			if (via === "HTTP") {
+				const response = await fetch(
+					`http://127.0.0.1:${port}/api/missions/${mission.id}/tasks/${encodeURIComponent(id)}/start`,
+					{
+						method: "POST",
+						headers: { "content-type": "application/json" },
+						body: "{}",
+					},
+				);
+				return { status: response.status, body: (await response.json()) as { id?: string; error?: string } };
+			}
+			try {
+				return { status: 201, body: (await f.service.call(lead.id, "start", { id })) as SessionSummary };
+			} catch (error) {
+				assert.ok(error instanceof Conflict);
+				return { status: 409, body: { error: error.message } };
+			}
+		};
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let selecting!: () => void;
+		const selectionStarted = new Promise<void>((resolve) => {
+			selecting = resolve;
+		});
+		t.mock.method(f.sessions, "selectTaskModel", async () => {
+			selecting();
+			await blocked;
+			return { model: "test/model", thinking: "medium" };
+		});
+		const spawn = t.mock.method(f.sessions, "spawn");
+		const first = start(firstVia, task.id);
+		try {
+			await selectionStarted;
+			// HTTP numbers and tool #number aliases share the UUID reservation.
+			for (const alias of secondVia === "HTTP" ? ["1", task.id] : ["1", "#1"]) {
+				const second = await start(secondVia, alias);
+				assert.equal(second.status, 409);
+				assert.match("error" in second.body ? (second.body.error ?? "") : "", /already starting/);
+			}
+			assert.equal(spawn.mock.callCount(), 0);
+		} finally {
+			release();
+		}
+		const winner = await first;
+		assert.equal(winner.status, 201);
+		assert.ok("id" in winner.body && winner.body.id);
+		const id = winner.body.id;
+		assert.equal(f.store.task(mission.id, task.id).sessionId, id);
+		assert.equal(spawn.mock.callCount(), 1);
+		assert.equal(f.sessions.list().length, 2);
+		assert.deepEqual(new Set(f.store.members(mission.id)), new Set([lead.id, id]));
+		assert.deepEqual(new Set(await readdir(join(f.home, "data", "sessions"))), new Set([lead.id, id]));
+		const worker = await until(() => f.workers.get(id));
+		assert.equal(worker.spec.mission?.tasks[0]?.number, task.number, "the claim precedes worker startup");
+		assert.equal(f.workers.size, 2);
+		assert.equal(f.store.events(mission.id).filter((event) => event.text.startsWith("Started #")).length, 1);
+		const retry = await start(secondVia, "1");
+		assert.equal(retry.status, 409);
+		assert.match("error" in retry.body ? (retry.body.error ?? "") : "", /already claimed/);
+	});
+}
+
+test("task start reservations remain held through spawn and do not block other tasks or missions", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "Auth" }, { title: "Other" }],
+	});
+	const other = f.store.create({ projectId: f.project.id, title: "Other", tasks: [{ title: "Auth" }] });
+	let release!: () => void;
+	const blocked = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let spawning!: () => void;
+	const spawnStarted = new Promise<void>((resolve) => {
+		spawning = resolve;
+	});
+	const original = f.sessions.spawn.bind(f.sessions);
+	let calls = 0;
+	t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof original>) => {
+		if (++calls === 1) {
+			spawning();
+			await blocked;
+		}
+		return original(...args);
+	});
+	const first = f.service.startTask(mission.id, "1");
+	try {
+		await spawnStarted;
+		await assert.rejects(f.service.startTask(mission.id, "#1"), /already starting/);
+		const [sameMission, otherMission] = await Promise.all([
+			f.service.startTask(mission.id, "2"),
+			f.service.startTask(other.id, "1"),
+		]);
+		assert.equal(f.store.resolveTask(mission.id, "2").sessionId, sameMission.id);
+		assert.equal(f.store.resolveTask(other.id, "1").sessionId, otherMission.id);
+	} finally {
+		release();
+	}
+	const winner = await first;
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, winner.id);
+	assert.equal(calls, 3);
+});
+
+for (const failure of ["selection", "references", "admission"] as const) {
+	test(`failed task ${failure} releases its start reservation and rejected admission leaves no orphan`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.resolveTask(mission.id, "1");
+		let restore = () => {};
+		if (failure === "selection") {
+			const mock = t.mock.method(f.sessions, "selectTaskModel", async () => {
+				throw new Error("selection failed");
+			});
+			restore = () => mock.mock.restore();
+		} else if (failure === "admission") {
+			const original = f.sessions["missions"]!.joinSpawn;
+			const mock = t.mock.method(f.sessions["missions"]!, "joinSpawn", (...args: Parameters<typeof original>) => {
+				original(...args);
+				throw new Error("admission failed");
+			});
+			restore = () => mock.mock.restore();
+		}
+		await assert.rejects(
+			f.service.startTask(mission.id, task.id, failure === "references" ? { message: "x".repeat(4000) } : {}),
+			failure === "references" ? /Opening message is too long/ : /failed/,
+		);
+		restore();
+		assert.equal(f.store.task(mission.id, task.id).sessionId, undefined);
+		assert.deepEqual(f.store.members(mission.id), []);
+		assert.equal(f.sessions.list({ archived: "all" }).length, 0);
+		assert.equal(f.workers.size, 0);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
+		assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+		const retry = await f.service.startTask(mission.id, "#1");
+		assert.equal(f.store.task(mission.id, task.id).sessionId, retry.id);
+	});
+}
+
+for (const change of ["claimed", "deleted"] as const) {
+	test(`task ${change} during spawn preparation rejects before worker startup and cleans persisted metadata`, async (t) => {
+		const f = await fixture(t);
+		const owner = await f.spawn();
+		const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
+		const task = f.store.resolveTask(mission.id, "1");
+		let prepared!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			prepared = resolve;
+		});
+		const original = f.sessions["missions"]!.spawnProject;
+		const mock = t.mock.method(f.sessions["missions"]!, "spawnProject", (id: string) => {
+			const project = original(id);
+			prepared();
+			return project;
+		});
+		const pending = assert.rejects(
+			f.service.startTask(mission.id, task.id),
+			change === "claimed" ? /already claimed/ : /Unknown task/,
+		);
+		await preparing;
+		if (change === "claimed") f.service.join(owner.id, { missionId: mission.id, taskId: task.id });
+		else f.store.removeTask(mission.id, task.id);
+		await pending;
+		mock.mock.restore();
+		assert.deepEqual(
+			f.sessions.list({ archived: "all" }).map((session) => session.id),
+			[owner.id],
+		);
+		assert.deepEqual([...f.workers.keys()], [owner.id]);
+		assert.deepEqual(await readdir(join(f.home, "data", "sessions")), [owner.id]);
+		assert.deepEqual(f.store.members(mission.id), change === "claimed" ? [owner.id] : []);
+		assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+		if (change === "claimed") {
+			assert.equal(f.store.task(mission.id, task.id).sessionId, owner.id);
+			f.store.releaseTask(mission.id, task.id);
+			const retry = await f.service.startTask(mission.id, "1");
+			assert.equal(f.store.task(mission.id, task.id).sessionId, retry.id);
+		}
+	});
+}
+
 test("Start chat spawns a member chat that owns the task; leaving releases it", async (t) => {
 	const f = await fixture(t);
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
@@ -2464,12 +2684,7 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 	await assert.rejects(f.service.startTask(mission.id, task.id), /already claimed/);
 	const worker = await until(() => f.workers.get(session.id));
 	assert.equal(worker.spec.mission?.id, mission.id);
-	assert.ok(
-		worker.spec.mission?.tasks[0]?.number === task.number ||
-			worker.sent.some(
-				(command) => command.type === "mission.context" && command.context?.tasks[0]?.number === task.number,
-			),
-	);
+	assert.equal(worker.spec.mission?.tasks[0]?.number, task.number, "the first context already includes the claim");
 	const input = await until(() => worker.requests.find((command) => command.type === "input"));
 	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Focus on login/);
 	const left = f.service.leave(session.id);
