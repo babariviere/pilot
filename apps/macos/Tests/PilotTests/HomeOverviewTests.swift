@@ -3,93 +3,100 @@ import PilotCore
 import Testing
 @testable import Pilot
 
-private func homeAgent(_ id: String, outcome: SessionOutcome? = .done, at: Double? = 2,
-                       state: String = "idle", archived: Bool = false, terminalPR: Bool = false,
-                       coordinator: Bool = false) -> SessionSummary {
-    SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: 1, state: state,
-                   outcome: outcome, outcomeAt: at,
-                   pullRequest: terminalPR ? SessionPullRequest(number: 1, url: "https://example.com/pr/1",
-                                                               title: "PR", state: .merged, checkedAt: 1) : nil,
-                   archivedAt: archived ? 3 : nil, activeMissionCoordinator: coordinator)
+private func homeSession(_ id: String, project: String? = "p", state: String = "idle", at: Double = 1,
+                         archived: Bool = false, readyPR: Bool = false, mission: String? = nil) -> SessionSummary {
+    SessionSummary(id: id, title: id, cwd: "/tmp", projectId: project, createdAt: at, updatedAt: at, state: state,
+                   pullRequest: readyPR ? SessionPullRequest(number: 1, url: "https://example.com/pr/1", title: "PR",
+                                                             state: .open, checkedAt: 1,
+                                                             readiness: PullRequestReadiness(state: .ready, reasons: [],
+                                                                                             checkedAt: 1)) : nil,
+                   archivedAt: archived ? 3 : nil, missionId: mission)
 }
 
-private func homeMission(_ id: String, status: MissionStatus = .active, at: Double = 1,
-                         coordinator: String? = nil) -> Mission {
-    Mission(id: id, projectId: "p", title: id, goal: "", status: status, coordinatorSessionId: coordinator,
-            createdAt: at, updatedAt: at)
+private func homeMission(_ id: String, project: String = "p", status: MissionStatus = .active, at: Double = 1,
+                         coordinator: String? = nil, done: Int? = nil, total: Int? = nil) -> Mission {
+    Mission(id: id, projectId: project, title: id, goal: "", status: status, coordinatorSessionId: coordinator,
+            createdAt: at, updatedAt: at, tasksDone: done, tasksTotal: total)
 }
 
-@Test func homeAttentionIncludesOnlyUnreviewedResultsAndLegacyFailures() {
-    let sessions = [homeAgent("done"), homeAgent("failed", outcome: .failed), homeAgent("stopped", outcome: .stopped),
-                    homeAgent("running", state: "working"), homeAgent("archive", archived: true),
-                    homeAgent("merged", terminalPR: true), homeAgent("quiet", outcome: nil, at: nil),
-                    homeAgent("seen"), homeAgent("seen-failure", outcome: .failed),
-                    homeAgent("legacy", outcome: nil, at: nil, state: "failed")]
-    let items = HomeOverviewLists.agents(sessions) { !$0.id.hasPrefix("seen") }
-    #expect(Set(items.map(\.id)) == ["done", "failed", "stopped", "legacy"])
-    #expect(items.prefix(2).allSatisfy { $0.status == .failed })
+private func project(_ id: String, _ name: String? = nil) -> Project {
+    Project(id: id, name: name ?? id, path: "/tmp/\(id)", createdAt: 1)
 }
 
-@Test func homeAttentionSortsByFailureThenResultTimeWithStableTies() {
-    let sessions = [homeAgent("old", at: 1), homeAgent("new", at: 4), homeAgent("b", at: 2),
-                    homeAgent("a", at: 2), homeAgent("failure", outcome: .failed, at: 0)]
-    #expect(HomeOverviewLists.agents(sessions) { _ in true }.map(\.id) == ["failure", "new", "b", "a", "old"])
-    #expect(HomeOverviewLists.agents([]) { _ in true }.isEmpty)
+@Test func homeProjectRowsCombineCountsReadyPullRequestsMissionsAndActivity() {
+    let rows = HomeStatus.projects(
+        [project("p"), project("q")],
+        counts: ["p": ProjectDashboardCount(working: 2, needsYou: 1, tracked: 3)],
+        sessions: [homeSession("a", at: 5, readyPR: true), homeSession("b", at: 9), homeSession("old", at: 50, archived: true),
+                   homeSession("c", project: "q", at: 2), homeSession("folder", project: nil, at: 99, readyPR: true)],
+        missions: [homeMission("Release", done: 3, total: 12), homeMission("Gone", status: .done)])
+    let p = rows[0]
+    #expect(p.id == "p" && p.readyToMerge == 1 && p.lastActivity == 9)
+    #expect(p.missions.map(\.id) == ["Release"])
+    #expect(p.signal == .needsYou)
+    #expect(p.countsLine == "2 working · 1 needs you · 1 ready to merge")
+    #expect(p.missionLine == "Release: 3 of 12 tasks")
+    #expect(rows[1].signal == nil && rows[1].countsLine == "Quiet" && rows[1].missionLine == nil && !rows[1].isActive)
+    #expect(HomeStatus.inboxCount(rows) == 5)
 }
 
-@Test func homeAttentionKeepsActiveCoordinatorsWithSettledPRs() {
-    let coordinator = homeAgent("coordinator", terminalPR: true, coordinator: true)
-    #expect(HomeOverviewLists.agents([coordinator]) { _ in true }.map(\.id) == ["coordinator"])
+@Test func homeProjectsSortByUrgencyThenActivityThenName() {
+    let projects = ["quiet-b", "quiet-a", "working", "failed", "ready", "mission", "needs"].map { project($0) }
+    let rows = HomeStatus.projects(projects, counts: [
+        "working": ProjectDashboardCount(working: 1),
+        "failed": ProjectDashboardCount(needsYou: 1, needsYouReasons: ["failed": 1]),
+        "needs": ProjectDashboardCount(working: 3, needsYou: 2, needsYouReasons: ["asks": 2]),
+    ], sessions: [homeSession("r", project: "ready", readyPR: true)],
+       missions: [homeMission("m", project: "mission"), homeMission("m2", project: "mission", done: 1, total: 2)])
+    #expect(rows.map(\.id) == ["failed", "needs", "ready", "working", "mission", "quiet-a", "quiet-b"])
+    #expect(rows[0].signal == .failed)
+    #expect(rows[4].missionLine == "2 missions: 1 of 2 tasks")
 }
 
-@Test func homeAttentionUsesPersistentReviewVersions() {
-    let name = "home-attention-\(UUID())"
-    let defaults = UserDefaults(suiteName: name)!
-    defer { defaults.removePersistentDomain(forName: name) }
-    let attention = SessionAttention(defaults: defaults)
-    let failed = homeAgent("failed", outcome: .failed)
-    #expect(HomeOverviewLists.agents([failed], isUnread: attention.isUnread).count == 1)
-    attention.review(failed, chatVisible: true, appActive: true)
-    #expect(HomeOverviewLists.agents([failed], isUnread: attention.isUnread).isEmpty)
-    #expect(HomeOverviewLists.agents([homeAgent("failed", outcome: .failed, at: 3)],
-                                    isUnread: attention.isUnread).count == 1)
+@Test func homeSummarySentenceCountsActiveProjectsWorkMissionsAndInbox() {
+    let rows = HomeStatus.projects(
+        [project("a"), project("b"), project("c"), project("d")],
+        counts: ["a": ProjectDashboardCount(working: 2, needsYou: 1, tracked: 4),
+                 "b": ProjectDashboardCount(working: 1)],
+        sessions: [homeSession("r", project: "c", readyPR: true)], missions: [homeMission("m", project: "a")])
+    #expect(HomeStatus.summary(rows)
+        == "3 projects are active: 3 chats are working and 1 mission is moving. 6 things wait in your Inbox.")
+    let one = HomeStatus.projects([project("a")], counts: ["a": ProjectDashboardCount(working: 1)], sessions: [], missions: [])
+    #expect(HomeStatus.summary(one) == "1 project is active: 1 chat is working. Your Inbox is empty.")
+    let waiting = HomeStatus.projects([project("a")], counts: ["a": ProjectDashboardCount(tracked: 1)], sessions: [], missions: [])
+    #expect(HomeStatus.summary(waiting) == "Nothing is working. 1 thing waits in your Inbox.")
+    #expect(HomeStatus.summary([]) == "All quiet. Nothing is working and your Inbox is empty.")
+}
+
+@Test func homeWorkingListsLiveChatsNewestFirst() {
+    let sessions = [homeSession("idle"), homeSession("old", state: "working", at: 1),
+                    homeSession("new", state: "working", at: 5), homeSession("gone", state: "working", archived: true)]
+    #expect(HomeStatus.working(sessions).map(\.id) == ["new", "old"])
 }
 
 @Test func homeListsEveryMissionWithActiveBeforeDoneAndArchived() {
     let missions = [homeMission("archive", status: .archived, at: 9), homeMission("done", status: .done, at: 10),
                     homeMission("old"), homeMission("b", at: 2), homeMission("a", at: 2)]
-    #expect(HomeOverviewLists.missions(missions).map(\.id) == ["b", "a", "old", "done", "archive"])
-    #expect(HomeOverviewLists.missions([]).isEmpty)
+    #expect(HomeStatus.missions(missions).map(\.id) == ["b", "a", "old", "done", "archive"])
+    #expect(HomeStatus.missions([]).isEmpty)
 }
 
 @Test func homeCoordinatorLinksIncludeArchivedChatsButNotMissingChats() {
-    let sessions = [homeAgent("archived-coordinator", archived: true)]
-    let ids = Set(sessions.map(\.id))
-    #expect(HomeOverviewLists.coordinator(homeMission("m", coordinator: "archived-coordinator"), sessionIds: ids)
+    let ids: Set<String> = ["archived-coordinator"]
+    #expect(HomeStatus.coordinator(homeMission("m", coordinator: "archived-coordinator"), sessionIds: ids)
         == "archived-coordinator")
-    #expect(HomeOverviewLists.coordinator(homeMission("m", coordinator: "missing"), sessionIds: ids) == nil)
-    #expect(HomeOverviewLists.coordinator(homeMission("m"), sessionIds: ids) == nil)
+    #expect(HomeStatus.coordinator(homeMission("m", coordinator: "missing"), sessionIds: ids) == nil)
+    #expect(HomeStatus.coordinator(homeMission("m"), sessionIds: ids) == nil)
 }
 
-@Test func homeFullListsAreNotTruncatedToThePreviewLimit() {
-    let sessions = (0..<40).map { homeAgent("s\($0)", at: Double($0)) }
-    #expect(HomeOverviewLists.agents(sessions) { _ in true }.count == 40)
-    #expect(HomeOverviewLists.missions((0..<40).map { homeMission("m\($0)") }).count == 40)
-    #expect(HomeOverviewLists.previewLimit == 5)
-}
-
-@Test func homeLargeSnapshotSelectionCost() {
-    let sessions = (0..<10_000).map { homeAgent("s\($0)", at: Double($0), archived: $0 % 10 != 0) }
-    let baselineStart = Date()
-    for _ in 0..<20 {
-        #expect(sessions.filter { !$0.isArchived && $0.isIdleAwaitingReview }.count == 1_000)
-    }
-    let baseline = Date().timeIntervalSince(baselineStart) * 1_000 / 20
+@Test func homeLargeSnapshotProjectRowsCost() {
+    let projects = (0..<50).map { project("p\($0)") }
+    let sessions = (0..<10_000).map { homeSession("s\($0)", project: "p\($0 % 50)", at: Double($0), archived: $0 % 10 != 0) }
     let start = Date()
     for _ in 0..<20 {
-        #expect(HomeOverviewLists.agents(sessions) { _ in true }.count == 1_000)
+        #expect(HomeStatus.projects(projects, counts: [:], sessions: sessions, missions: []).count == 50)
     }
-    print("Home 10,000-session snapshot: prior idle filter \(baseline) ms; added attention selection \(Date().timeIntervalSince(start) * 1_000 / 20) ms")
+    print("Home 10,000-session snapshot: project rows \(Date().timeIntervalSince(start) * 1_000 / 20) ms")
 }
 
 @Test @MainActor func homeLinksNavigateFromMissionToArchivedCoordinatorChat() {
@@ -97,14 +104,13 @@ private func homeMission(_ id: String, status: MissionStatus = .active, at: Doub
     let defaults = UserDefaults(suiteName: name)!
     defer { defaults.removePersistentDomain(forName: name) }
     let app = AppModel(projectFolderDefaults: defaults)
-    let coordinator = homeAgent("coordinator", archived: true)
+    let coordinator = homeSession("coordinator", archived: true)
     let mission = homeMission("mission", coordinator: coordinator.id)
     app.client.loadFixture(projects: [], sessions: [coordinator])
     app.client.handle(.missions([mission]))
     app.openMission(mission.id)
     #expect(app.selectedMissionId == mission.id && app.selectedSessionId == nil)
-    let id = HomeOverviewLists.coordinator(mission, sessionIds: Set(app.client.sessions.map(\.id)))!
+    let id = HomeStatus.coordinator(mission, sessionIds: Set(app.client.sessions.map(\.id)))!
     app.reveal(session: id)
     #expect(app.selectedSessionId == coordinator.id && app.selectedMissionId == nil)
-    #expect(app.client.session(coordinator.id)?.isArchived == true)
 }
