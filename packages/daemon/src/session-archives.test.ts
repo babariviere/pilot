@@ -585,6 +585,89 @@ test("running, starting and in-flight input sessions cannot be archived", async 
 	}
 });
 
+for (const preparing of [false, true]) {
+	test(`terminal ${preparing ? "preparation" : "worker startup"} failure can archive with its outbox intact across restart`, async () => {
+		const { home, sessions, ids, manager, cleanup } = await fixture();
+		const id = ids[0]!;
+		try {
+			const meta = sessions["metas"].get(id)!;
+			meta.failure = "Session startup: extension dependency missing";
+			meta.initializing = true;
+			meta.pending = [{ type: "input", requestId: "original-request", content: "Original input", mode: "followUp" }];
+			meta.outcome = "failed";
+			meta.outcomeReason = meta.failure;
+			if (preparing) meta.preparing = { source: home };
+			await sessions["save"](meta);
+			await sessions.shutdown();
+			const failed = await manager();
+			const before = failed.get(id)!;
+			const path = join(home, "sessions", id, "meta.json");
+			const stored = JSON.parse(await readFile(path, "utf8"));
+			const archived = await failed.archive(id);
+			assert.ok(archived.archivedAt);
+			assert.equal(archived.error, before.error);
+			assert.equal(archived.canRetryStartup, undefined);
+			assert.equal(failed["workers"].size, 0);
+			assert.deepEqual(JSON.parse(await readFile(path, "utf8")), { ...stored, archivedAt: archived.archivedAt });
+			await assert.rejects(failed.retryStartup(id), /Restore the archived/);
+			const reopened = await manager();
+			assert.deepEqual(reopened.get(id), archived);
+			assert.deepEqual(await reopened.restore(id), before);
+			assert.equal(reopened["workers"].size, 0);
+			const restored = JSON.parse(await readFile(path, "utf8"));
+			assert.deepEqual(restored.pending, stored.pending);
+			assert.equal(restored.failure, stored.failure);
+			assert.equal(restored.initializing, true);
+			assert.deepEqual(restored.preparing, stored.preparing);
+			assert.equal(await readFile(join(home, "sessions", id, "durable", "history"), "utf8"), "retained transcript");
+			assert.equal(await readFile(join(meta.cwd, "work.txt"), "utf8"), "retained changes");
+		} finally {
+			await cleanup();
+		}
+	});
+}
+
+test("terminal failure does not bypass live activity or startup/recovery transitions when archiving", async () => {
+	const { sessions, ids, cleanup } = await fixture();
+	const id = ids[0]!;
+	try {
+		const meta = sessions["metas"].get(id)!;
+		meta.failure = "Session startup: extension dependency missing";
+		meta.initializing = true;
+		meta.pending = [{ type: "input", requestId: "original-request", content: "Original input", mode: "followUp" }];
+		const worker = new FakeWorker();
+		sessions["workers"].set(id, worker);
+		for (const state of ["starting", "working"] as const) {
+			worker.state = state;
+			await assert.rejects(sessions.archive(id), Conflict);
+		}
+		worker.state = "failed";
+		worker.busy = true;
+		await assert.rejects(sessions.archive(id), Conflict);
+		worker.busy = false;
+		meta.working = true;
+		await assert.rejects(sessions.archive(id), Conflict);
+		meta.working = false;
+		sessions["starting"].set(id, Promise.resolve(new Map()));
+		await assert.rejects(sessions.archive(id), Conflict);
+		sessions["starting"].delete(id);
+		sessions["changingModels"].set(id, Promise.resolve());
+		await assert.rejects(sessions.archive(id), Conflict);
+		sessions["changingModels"].delete(id);
+		sessions["sending"].set(id, 1);
+		await assert.rejects(sessions.archive(id), Conflict);
+		sessions["sending"].delete(id);
+		assert.equal(sessions.get(id)?.archivedAt, undefined);
+		assert.ok((await sessions.archive(id)).archivedAt);
+		assert.deepEqual(
+			meta.pending.map((command) => command.requestId),
+			["original-request"],
+		);
+	} finally {
+		await cleanup();
+	}
+});
+
 test("restore does not start an agent, and permits the next input admission", async () => {
 	const { sessions, ids, cleanup } = await fixture();
 	const id = ids[0]!;
