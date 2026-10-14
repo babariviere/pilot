@@ -45,7 +45,8 @@ function view(messages: Message[], headId?: number): ContextView {
 
 test("context uses the last response including cache tokens, plus trailing message estimates", () => {
 	const tail: Message = { role: "user", content: "abcdefgh", timestamp: 2 };
-	assert.deepEqual(contextUsage(view([assistant(), tail]), 200), { tokens: 102, contextWindow: 200, percent: 51 });
+	// Pi 1.1 estimates text at 3.5 characters/token, rounded up.
+	assert.deepEqual(contextUsage(view([assistant(), tail]), 200), { tokens: 103, contextWindow: 200, percent: 51.5 });
 	assert.equal(contextUsage(view([assistant(0)]), 200)?.tokens, 100);
 });
 
