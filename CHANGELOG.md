@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.30.0](https://github.com/babariviere/pilot/compare/v1.29.0...v1.30.0) (2026-10-14)
+
+
+### Features
+
+* **chat:** add a compact running jobs command ([877e40b](https://github.com/babariviere/pilot/commit/877e40ba47a6563d292eb178c748d19672a12f0b))
+
+
+### Bug Fixes
+
+* **chats:** preserve redacted failure causes and steps ([47e7166](https://github.com/babariviere/pilot/commit/47e7166e586325c1864a99ebf04ca5d477742883))
+* **kernel:** use codemode-only tools in Ask chats ([2391e0e](https://github.com/babariviere/pilot/commit/2391e0e7900e4effa733830ce7ac9f365a9fa434))
+* **macos:** keep active sidebar chats unfolded ([d9a4549](https://github.com/babariviere/pilot/commit/d9a45491700b811c68dfeae873047b5f1a3f15f4))
+* **macos:** reuse existing Helium pull request tabs ([bb3ca5f](https://github.com/babariviere/pilot/commit/bb3ca5ffccf0d2e701f2cd718c8d178849aa8324))
+
 ## [1.29.0](https://github.com/babariviere/pilot/compare/v1.28.1...v1.29.0) (2026-10-14)
 
 
