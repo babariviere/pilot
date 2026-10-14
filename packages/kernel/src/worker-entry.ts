@@ -5,5 +5,7 @@
 import { enableCompileCache } from "node:module";
 
 enableCompileCache();
+const { configureBundledChildren } = await import("./bundled-extensions.ts");
+configureBundledChildren();
 const { runKernelWorker } = await import("./worker.ts");
 runKernelWorker();

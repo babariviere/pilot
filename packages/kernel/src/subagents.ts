@@ -6,10 +6,18 @@ import { randomUUID } from "node:crypto";
 import type { DeliveryMode } from "@pilot/protocol";
 import type { KernelSubagent } from "./protocol.ts";
 
-export const SUBAGENTS_SNAPSHOT_EVENT = "subagents:snapshot";
-export const SUBAGENTS_REQUEST_SNAPSHOT_EVENT = "subagents:request-snapshot";
-export const SUBAGENTS_COMMAND_EVENT = "subagents:command";
-export const SUBAGENTS_COMMAND_RESULT_EVENT = "subagents:command-result";
+import {
+	SUBAGENTS_SNAPSHOT_EVENT,
+	SUBAGENTS_REQUEST_SNAPSHOT_EVENT,
+	SUBAGENTS_COMMAND_EVENT,
+	SUBAGENTS_COMMAND_RESULT_EVENT,
+} from "@babariviere/pi-extensions/profile";
+export {
+	SUBAGENTS_SNAPSHOT_EVENT,
+	SUBAGENTS_REQUEST_SNAPSHOT_EVENT,
+	SUBAGENTS_COMMAND_EVENT,
+	SUBAGENTS_COMMAND_RESULT_EVENT,
+};
 
 /** The subset of pi's extension event bus this bridge needs. */
 export interface EventBus {

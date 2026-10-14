@@ -58,6 +58,42 @@ For a runner comparison, alternate `pnpm test:timings` and `pnpm test:timings --
 machine, with the same concurrency, installed renderers and dependency cache. Record wall time, failures
 and skips. Do not benchmark a full suite concurrently with a Swift build or another suite.
 
+## Bundled extension verification
+
+`packages/kernel/src/bundled-extensions.integration.test.ts` uses fresh agent directories, synthetic
+providers and mocked transport responses. It checks the default profile, reload, pre-import suppression
+of package/symlink duplicates, unrelated personal extensions, direct/nested jobs, a real child worker's
+inherited profile/auth and repeated IPC input/stop, static model configuration and API-key/OAuth request
+shaping. Ask tests ensure personal, project and inline extension factories never execute.
+`apps/macos/scripts/check-runtime.sh` also exercises parent/child profile loading, Ask web and daemon
+auth from the isolated production install, both before and after ZIP extraction.
+
+To compare profile overhead on synthetic large history and streaming, without account access:
+
+```sh
+node packages/kernel/src/bundled-extensions.bench.ts 5
+```
+
+The baseline disables only the bundled capability profile, retaining mandatory auth and the same
+Pi 1.1.0 runtime. This is a feature-overhead comparison, not a Pi 1.0.4 versus 1.1.0 benchmark. It seeds
+10,000 messages and streams a 65,536-character faux answer through the real Harness/native adapter.
+It alternates variants and excludes the first warmup pair from medians. On 2026-10-14, Node 24.21.0 on
+macOS arm64, five samples after the suites completed gave:
+
+| Metric | Baseline | Bundled |
+| --- | --- | --- |
+| First in-process profile startup | 93 ms | 579 ms |
+| Warm startup median | 23 ms | 103 ms |
+| Streaming median | 215 ms | 232 ms |
+| Streaming CPU median | 250 ms | 259 ms |
+
+The added profile has a startup and small measured streaming cost, not a demonstrated speedup.
+RSS output is whole-process data with shared module caches and GC across alternating samples, not
+isolated per-profile memory overhead. This does not measure a real provider, browser, idle authenticated
+usage polling, daemon first-request latency or live GUI responsiveness. No GUI/storage path changed.
+Repository-wide lint still reports pre-existing assignment-expression errors in `jobs.ts` and
+`system-events-helper.ts`; the new bundled-profile implementation, integration tests and benchmark lint cleanly.
+
 ## Workspace fixtures and clocks
 
 Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real

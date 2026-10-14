@@ -5,6 +5,14 @@ overrides:
   # Pi 1.1 imports declaration exports removed by pi-codemode 1.2.
   "@earendil-works/pi-coding-agent>@earendil-works/pi-codemode": 1.1.0
   mermaid>katex: 0.19.0
+  # Pi 1.1's declarations API is incompatible with the 1.2 codemode release.
+  "@earendil-works/pi-codemode": 1.1.0
+  "@earendil-works/chord": 1.1.0
+  "@earendil-works/pi-agent-core": 1.1.0
+  "@earendil-works/pi-ai": 1.1.0
+  "@earendil-works/pi-durable": 1.1.0
+  "@earendil-works/pi-mcp": 1.1.0
+  "@earendil-works/pi-tui": 1.1.0
 
 # Only these dependencies may run install scripts.
 allowBuilds:

@@ -355,6 +355,7 @@ async function fixture(t: TestContext, mode: "on" | "only" = "on") {
 			modelRuntime,
 			model: faux.getModel(),
 		},
+		bundledExtensions: false,
 		loaderOptions: {
 			cwd: root,
 			agentDir: join(root, "agent"),

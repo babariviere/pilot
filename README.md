@@ -89,7 +89,7 @@ message to carry them along. Waiting system messages are read-only.
 | --- | --- | --- |
 | Purpose | Understand code, discuss options, plan | Implement, test and deliver changes |
 | Code source | Current checkout or a pinned origin-branch snapshot | Project workspace setting, with a per-chat override |
-| Tools | Pilot's read/search tools and session-local artifacts | Pi tools, compatible extensions, MCP and shell tools |
+| Tools | Pilot's read/search tools, bundled web and session-local artifacts | Pi tools, bundled capabilities, compatible extensions, MCP and shell tools |
 | Repository writes | No | Yes |
 | Diff inspector and terminal | No | Yes |
 
@@ -164,8 +164,20 @@ such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. 
 retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
 SwiftUI artifacts are static renders, not live app views.
 
-Build sessions load pi configuration from `~/.pi/agent`, including packages such as
-[pi-extensions](https://github.com/babariviere/pi-extensions). Linear and Slack tracking use the configured
+Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,
+patch editing, web, browser, todos, subscription usage, background jobs and persistent subagents.
+No separate extension installation is needed. Children inherit sandbox, patch, web, browser and todos,
+but cannot launch jobs or recursive subagents. Browser and web services still need their own prerequisites
+and credentials. Secrets, router and Clef remain optional personal extensions; terminal-only UI,
+workspace automation, PR automation and night mode are not bundled.
+
+Build sessions also load personal pi configuration from `~/.pi/agent`. Bundled capabilities take
+precedence over duplicate package entries before those copies execute; unrelated extensions remain
+available. Ask loads only its restricted tools and bundled web, never personal/project extension
+factories. [pi-anthropic-auth](https://github.com/gotgenes/pi-anthropic-auth) is required in Build, Ask,
+child workers and daemon model calls, without modifying personal settings.
+
+Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
 Pilot stores a classifier summary for each Slack message, not its text; the triage inspector reads and quotes the

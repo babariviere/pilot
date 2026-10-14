@@ -1,3 +1,4 @@
+import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -47,6 +48,7 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => [expensive, luna],
 				completeSimple: async (
 					chosen: Model,
@@ -105,6 +107,7 @@ test("memory compaction uses the explicit luna model, no tools or reasoning, and
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => [cheap, luna],
 				completeSimple: async (
 					chosen: Model,
@@ -138,7 +141,7 @@ test("memory compaction never falls back to another model when luna is unavailab
 	t.mock.method(
 		ModelRuntime,
 		"create",
-		async () => ({ getAvailable: async () => [cheap] }) as unknown as ModelRuntime,
+		async () => ({ ...requiredAuthRegistration, getAvailable: async () => [cheap] }) as unknown as ModelRuntime,
 	);
 	await assert.rejects(
 		new ModelCatalog(root).summarizeMemory("memories", new AbortController().signal),
@@ -236,6 +239,7 @@ test("title generation follows project model scope, ignores its thinking suffix 
 	await writeFile(join(cwd, ".pi", "settings.json"), JSON.stringify({ enabledModels: ["test/small:high"] }));
 	const calls: Model[] = [];
 	const runtime = {
+		...requiredAuthRegistration,
 		getAvailable: async () => [expensive, cheap, model("outside-scope", 0, 0)],
 		completeSimple: async (chosen: Model, _context: unknown, options: { reasoning?: string }) => {
 			calls.push(chosen);
@@ -268,6 +272,7 @@ test("model catalog shares availability across directories and applies settings 
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => {
 					calls++;
 					if (failed) throw new Error("models failed");
@@ -312,6 +317,7 @@ test("model catalog reloads model definitions when models.json changes", async (
 	t.mock.method(ModelRuntime, "create", async () => {
 		creates++;
 		return {
+			...requiredAuthRegistration,
 			getAvailable: async () => models,
 			refresh: async (options: { allowNetwork?: boolean }) => {
 				assert.equal(options.allowNetwork, false);
@@ -346,6 +352,7 @@ test("model catalog bounds pending loads and keeps no per-directory state", asyn
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => {
 					calls++;
 					await stalled;
@@ -376,6 +383,7 @@ test("model catalog offers only levels supported by each model, including mapped
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => [cheap, mapped, plain],
 			}) as unknown as ModelRuntime,
 	);
@@ -406,6 +414,7 @@ async function taskCatalog(t: TestContext, settings: Record<string, unknown> = {
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => models,
 				getModel: (provider: string, id: string) =>
 					models.find((model) => model.provider === provider && model.id === id),

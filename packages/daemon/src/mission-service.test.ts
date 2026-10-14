@@ -1,3 +1,4 @@
+import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
@@ -2051,6 +2052,7 @@ test("task starts reject invalid model/thinking before spawning, and record expl
 		"create",
 		async () =>
 			({
+				...requiredAuthRegistration,
 				getAvailable: async () => models,
 				getModel: (_provider: string, id: string) => models.find((model) => model.id === id),
 			}) as unknown as ModelRuntime,

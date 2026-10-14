@@ -108,6 +108,7 @@ async function fixture(t: TestContext) {
 			projectTrusted: false,
 			settingsManager: SettingsManager.inMemory({ defaultTools: ["bash", "codemode", "lookup_pr"] }),
 			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
+			bundledExtensions: false,
 			loaderOptions: {
 				cwd: root,
 				agentDir: join(root, "agent"),

@@ -31,9 +31,13 @@ async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-ask-native-"));
 	const source = join(root, "source");
 	const agentDir = join(root, "agent");
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const cleanup: Array<() => Promise<void>> = [];
 	t.after(async () => {
 		for (const close of cleanup.reverse()) await close();
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		await rm(root, { recursive: true, force: true });
 	});
 	for (const dir of [join(source, ".pi", "extensions"), join(agentDir, "extensions")])
@@ -61,15 +65,15 @@ async function fixture(t: TestContext) {
 	return { root, source, agentDir, cleanup, faux, options };
 }
 
-test("Ask borrows only the user web tool, never activates extension hooks, and ignores project, explicit, inline and custom tools", async (t) => {
+test("Ask uses bundled web and never executes personal, project, explicit or inline extension factories", async (t) => {
 	const f = await fixture(t);
 	const marker = join(f.root, "activated");
 	const started = join(f.root, "started");
-	// User-level modules may be evaluated to harvest the web tool; their hooks must never run.
+	// Even personal module evaluation is forbidden in Ask.
 	const tool = (description: string) =>
 		`{ name: 'web', label: 'web', description: ${JSON.stringify(description)}, parameters: { type: 'object', properties: {} }, execute: async () => ({ content: [{ type: 'text', text: ${JSON.stringify(description)} }] }) }`;
 	const userModule = (description: string) =>
-		`import {writeFileSync} from 'node:fs'; export default (pi) => { pi.on('session_start', () => writeFileSync(${JSON.stringify(started)}, 'startup executed')); pi.registerTool(${tool(description)}); pi.registerTool({ ...${tool("user bash")}, name: 'bash' }); };`;
+		`import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'personal module executed'); export default (pi) => { pi.on('session_start', () => writeFileSync(${JSON.stringify(started)}, 'startup executed')); pi.registerTool(${tool(description)}); pi.registerTool({ ...${tool("user bash")}, name: 'bash' }); };`;
 	const module = `import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'module executed'); export default (pi) => { pi.registerTool(${tool("untrusted web")}); };`;
 	const userExtension = join(f.agentDir, "extensions", "evil.ts");
 	const explicitExtension = join(f.root, "explicit.ts");
@@ -148,7 +152,10 @@ test("Ask borrows only the user web tool, never activates extension hooks, and i
 			.sort(),
 		["codemode", "find", "grep", "ls", "read", "web"],
 	);
-	assert.equal(adapter.session.getAllTools().find((tool) => tool.name === "web")?.description, "user web");
+	assert.match(
+		adapter.session.getAllTools().find((tool) => tool.name === "web")?.description ?? "",
+		/Kagi|Search|search/,
+	);
 	assert.deepEqual(
 		adapter.extension.tools?.map((tool) => tool.name),
 		["codemode"],
@@ -166,7 +173,7 @@ test("Ask borrows only the user web tool, never activates extension hooks, and i
 	assert.ok(adapter.session.getAllTools().every((tool) => ASK_TOOL_NAMES.includes(tool.name)));
 	assert.ok(
 		adapter.session.getAllTools().some((tool) => tool.name === "web"),
-		"reload keeps the user web tool",
+		"reload keeps the bundled web tool",
 	);
 	adapter.refreshTools();
 	assert.deepEqual(
@@ -174,17 +181,28 @@ test("Ask borrows only the user web tool, never activates extension hooks, and i
 		["codemode"],
 	);
 	const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+	const url = "https://raw.githubusercontent.com/example/offline-fixture/main/readme.txt";
+	t.mock.method(globalThis, "fetch", async (input: Parameters<typeof fetch>[0]) => {
+		assert.equal(String(input), url);
+		return new Response("BUNDLED_WEB_OK", { headers: { "content-type": "text/plain" } });
+	});
 	adapter.session.agent.state.messages.push(
 		fauxAssistantMessage(
 			{ type: "toolCall", id: "web-script", name: "codemode", arguments: {} },
 			{ stopReason: "toolUse" },
 		),
 	);
-	const webResult = await codemode.execute("web-script", { code: "text(await tools.web({}));" }, undefined);
+	const webResult = await codemode.execute(
+		"web-script",
+		{ code: `text(await tools.web({ action: "fetch", url: ${JSON.stringify(url)} }));` },
+		undefined,
+	);
 	assert.ok(!webResult.isError, JSON.stringify(webResult));
-	assert.match(JSON.stringify(webResult), /user web/);
+	assert.match(JSON.stringify(webResult), /BUNDLED_WEB_OK/);
+	assert.doesNotMatch(JSON.stringify(webResult), /user web|untrusted web/);
 	const web = adapter.session.agent.state.tools.find((tool) => tool.name === "web")!;
-	assert.match(JSON.stringify(await web.execute("web", {}, undefined)), /user web/);
+	assert.match(JSON.stringify(await web.execute("web", { action: "fetch", url }, undefined)), /BUNDLED_WEB_OK/);
+	await assert.rejects(web.execute("web", { action: "fetch" }, undefined), /Invalid web arguments/);
 	assert.equal(existsSync(started), false, "extension hooks never run");
 	assert.doesNotMatch(adapter.session.systemPrompt, /evil-skill|Untrusted skill marker/);
 });
@@ -410,7 +428,7 @@ text(await tools.artifact({action:'list'}));
 			.getAllTools()
 			.map((tool) => tool.name)
 			.sort(),
-		["artifact", "ask_user", "codemode", "find", "grep", "ls", "read"],
+		["artifact", "ask_user", "codemode", "find", "grep", "ls", "read", "web"],
 	);
 	assert.match(output, /registered.*artifact.*find.*grep.*ls.*read/);
 	await native.session.reload();
