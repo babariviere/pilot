@@ -1003,6 +1003,13 @@ final class PilotClient: ObservableObject {
                                  body: MissionDecisionWrite(text: text, audience: audience))
     }
 
+    @discardableResult
+    func resolveMissionDecisionProposal(_ id: String, proposalId: String, accept: Bool,
+                                        text: String? = nil) async throws -> MissionDecisionProposal {
+        try await missionRequest(["missions", id, "decision-proposals", proposalId, accept ? "accept" : "reject"],
+                                 body: MissionDecisionWrite(text: text))
+    }
+
     func deleteMissionDecision(_ id: String, decisionId: String) async throws {
         let _: Ack = try await missionRequest(["missions", id, "decisions", decisionId], method: "DELETE")
     }

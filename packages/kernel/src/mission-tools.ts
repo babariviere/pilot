@@ -28,6 +28,7 @@ const MEMBER_ACTIONS = [
 ] as const;
 export const MISSION_ACTIONS = [
 	...MEMBER_ACTIONS,
+	"propose",
 	"delete",
 	"group",
 	"start",
@@ -49,7 +50,7 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: without id, compact goal/status/brief revision, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you and PRs in review. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
+- get: without id, compact goal/status/brief revision, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
 - comments: open comments on demand.
@@ -67,6 +68,7 @@ Actions:
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
 			coordinator
 				? `
+- propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Decisions stay binding until the user accepts; get includes pending and recent outcomes.
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
@@ -111,7 +113,7 @@ Actions:
 			decisionIds: Type.Optional(
 				Type.Array(Type.String({ maxLength: 128 }), {
 					maxItems: 1000,
-					description: "Task decision pins; [] clears.",
+					description: "Task decision pins (IDs or D7); [] clears.",
 				}),
 			),
 			audience: Type.Optional(StringEnum(["all", "coordinator", "reference"] as const)),
@@ -131,6 +133,9 @@ Actions:
 			),
 			...(coordinator
 				? {
+						decisionId: Type.Optional(Type.String({ maxLength: 128 })),
+						remove: Type.Optional(Type.Literal(true)),
+						reason: Type.Optional(Type.String({ maxLength: 8000 })),
 						mode: Type.Optional(
 							StringEnum(["steer", "followUp"] as const, {
 								description: "For send: steer changes current work; followUp can wait (default).",

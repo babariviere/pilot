@@ -650,3 +650,30 @@ test("members and coordinators declare and forward release selectors", async () 
 		}
 	}
 });
+
+test("propose is exposed only to the coordinator and forwards decision references", async () => {
+	const member = createMissionTool(async () => null);
+	assert.ok(
+		!JSON.stringify((member.parameters as { properties: { action: unknown } }).properties.action).includes(
+			'"propose"',
+		),
+	);
+	const calls: unknown[] = [];
+	const coordinator = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return {};
+	}, true);
+	assert.ok(
+		JSON.stringify((coordinator.parameters as { properties: { action: unknown } }).properties.action).includes(
+			'"propose"',
+		),
+	);
+	await coordinator.execute(
+		"p",
+		{ action: "propose", decisionId: "D7", remove: true, reason: "Superseded" },
+		undefined,
+		undefined,
+		{} as never,
+	);
+	assert.deepEqual(calls, [["propose", { decisionId: "D7", remove: true, reason: "Superseded" }]]);
+});

@@ -9,12 +9,14 @@ public enum MissionNeedsYouItem: Identifiable, Equatable, Sendable {
     case blockedTask(MissionTask)
     /// An open agent comment addressed to nobody while the user coordinates.
     case comment(MissionComment)
+    case decisionProposal(MissionDecisionProposal, number: Int)
 
     public var id: String {
         switch self {
         case let .chat(session): "chat-\(session.id)"
         case let .blockedTask(task): "task-\(task.id)"
         case let .comment(comment): "comment-\(comment.id)"
+        case let .decisionProposal(proposal, _): "proposal-\(proposal.id)"
         }
     }
 }
@@ -49,6 +51,10 @@ public enum MissionNeedsYou {
             items += detail.comments
                 .filter { $0.isOpen && $0.targetSessionId == nil && $0.authorSessionId != nil }
                 .map { .comment($0) }
+        }
+        items += (detail.decisionProposals ?? []).filter { $0.status == "pending" }.compactMap { proposal in
+            guard let decision = detail.decisions.first(where: { $0.id == proposal.decisionId }) else { return nil }
+            return .decisionProposal(proposal, number: decision.number)
         }
         return items
     }

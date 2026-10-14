@@ -125,7 +125,7 @@ private final class BindingHTTPStub: URLProtocol {
                                  createdAt: 1, updatedAt: 1, state: "idle", missionId: "m")
     let mission = MissionDetail(
         mission: Mission(id: "m", projectId: "p", title: "M", goal: "g", createdAt: 1, updatedAt: 1),
-        brief: nil, decisions: [], comments: [],
+        brief: nil, decisions: [], decisionProposals: [], comments: [],
         tasks: [MissionTask(id: "t", number: 34, title: "Mine", status: .inProgress, sessionId: "attach-form")],
         artifacts: [], resources: [], events: [])
     func height(_ draft: PullRequestAttachDraft, mission: MissionDetail? = nil) throws -> Int {

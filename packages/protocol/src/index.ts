@@ -530,11 +530,25 @@ export type MissionDecisionAudience = "all" | "coordinator" | "reference";
 
 export interface MissionDecision {
 	id: string;
+	number: number;
 	audience: MissionDecisionAudience;
 	text: string;
 	authorSessionId?: string;
 	createdAt: number;
 	updatedAt: number;
+}
+
+/** Coordinator suggestion. The recorded decision stays binding until the user accepts. */
+export interface MissionDecisionProposal {
+	id: string;
+	decisionId: string;
+	kind: "edit" | "remove";
+	text?: string;
+	reason: string;
+	authorSessionId: string;
+	status: "pending" | "accepted" | "rejected";
+	createdAt: number;
+	resolvedAt?: number;
 }
 
 /** Annotation anchored to a brief excerpt, optionally addressed to one member chat. */
@@ -683,6 +697,7 @@ export interface MissionDetail {
 	mission: Mission;
 	brief?: MissionBrief;
 	decisions: MissionDecision[];
+	decisionProposals: MissionDecisionProposal[];
 	/** Open comments, plus recently resolved ones. */
 	comments: MissionComment[];
 	tasks: MissionTask[];

@@ -1436,3 +1436,159 @@ test("release rolls back storage failures and keeps task references", (t) => {
 	missions.releaseTasks(id, ["1", "2"], { sessionId: "owner" });
 	assert.deepEqual(missions.detail(id).resources, before.resources);
 });
+
+test("decision numbers backfill in creation order, persist their high-water mark and resolve aliases", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-decision-numbers-"));
+	const file = join(dir, "missions.sqlite");
+	let store = new MissionStore(file);
+	try {
+		const { id } = store.create({ projectId: "p", title: "Numbers" });
+		const a = store.addDecision(id, "First");
+		const b = store.addDecision(id, "Second");
+		store.close();
+		const legacy = new DatabaseSync(file);
+		legacy.exec(
+			"DROP INDEX decision_numbers; ALTER TABLE decisions DROP COLUMN number; ALTER TABLE missions DROP COLUMN decision_sequence",
+		);
+		legacy.prepare("UPDATE decisions SET created_at = ? WHERE id = ?").run(1, b.id);
+		legacy.prepare("UPDATE decisions SET created_at = ? WHERE id = ?").run(2, a.id);
+		legacy.close();
+		store = new MissionStore(file);
+		assert.deepEqual(
+			store.detail(id).decisions.map((d) => [d.text, d.number]),
+			[
+				["Second", 1],
+				["First", 2],
+			],
+		);
+		assert.equal(store.updateDecision(id, "D2", "Updated").id, a.id);
+		store.removeDecision(id, "D2");
+		store.removeDecision(id, "D1");
+		store.close();
+		store = new MissionStore(file);
+		assert.equal(store.addDecision(id, "Third").number, 3);
+		const other = store.create({ projectId: "p", title: "Other" });
+		assert.equal(store.addDecision(other.id, "Independent").number, 1);
+		assert.throws(() => store.updateDecision(other.id, "D3", "Foreign"), /Unknown decision/);
+	} finally {
+		store.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("decision proposals are coordinator-only, replace pending suggestions, discard stale ones and count attention", () => {
+	const store = new MissionStore(":memory:");
+	try {
+		const { id } = store.create({ projectId: "p", title: "Shared" });
+		store.join("lead", id);
+		store.join("worker", id);
+		store.update(id, { coordinatorSessionId: "lead" });
+		const d = store.addDecision(id, "Original", {}, "all");
+		assert.throws(
+			() => store.proposeDecision(id, "D1", "Edit", undefined, "Reason", { sessionId: "worker" }),
+			/Only the mission coordinator/,
+		);
+		assert.throws(
+			() => store.proposeDecision(id, "D1", "Edit", undefined, "Reason", {}),
+			/Only the mission coordinator/,
+		);
+		assert.throws(() => store.proposeDecision(id, "D1", "Edit", true, "Reason", { sessionId: "lead" }), /not both/);
+		const first = store.proposeDecision(id, "D1", "New", undefined, "Superseded", { sessionId: "lead" });
+		assert.equal(store.require(id).needsYouCount, 1);
+		assert.equal(store.detail(id).decisions[0]!.text, "Original");
+		const second = store.proposeDecision(id, d.id, undefined, true, "Obsolete", { sessionId: "lead" });
+		assert.deepEqual(
+			store.proposals(id).map((p) => p.id),
+			[second.id],
+		);
+		assert.throws(() => store.resolveProposal(id, first.id, true), /Unknown pending/);
+		store.updateDecision(id, "D1", undefined, {}, "reference");
+		assert.deepEqual(store.proposals(id), []);
+		assert.equal(store.require(id).needsYouCount, 0);
+		const third = store.proposeDecision(id, "D1", "Reword", undefined, "Reason", { sessionId: "lead" });
+		store.removeDecision(id, d.id);
+		assert.equal(store.proposals(id).length, 0);
+		assert.throws(() => store.resolveProposal(id, third.id, true), /Unknown pending/);
+	} finally {
+		store.close();
+	}
+});
+
+test("proposal resolution uses the user path atomically, preserves audiences and pins, and queues outcomes", () => {
+	const store = new MissionStore(":memory:");
+	try {
+		const { id } = store.create({ projectId: "p", title: "Shared", tasks: [{ title: "Implement" }] });
+		store.join("lead", id);
+		store.update(id, { coordinatorSessionId: "lead" });
+		const decision = store.addDecision(id, "Original", {}, "all");
+		store.updateTask(id, "1", { decisionIds: ["D1"] });
+		const propose = (remove = false) =>
+			store.proposeDecision(id, "D1", remove ? undefined : "Suggested", remove ? true : undefined, "Reason", {
+				sessionId: "lead",
+			});
+		let p = propose();
+		assert.throws(() => store.resolveProposal(id, p.id, true, undefined, { sessionId: "lead" }), /Only the user/);
+		assert.equal(store.resolveProposal(id, p.id, false).status, "rejected");
+		assert.equal(store.detail(id).decisions[0]!.text, "Original");
+		p = propose();
+		assert.throws(() => store.resolveProposal(id, p.id, true, ""), /text/);
+		assert.equal(store.proposals(id).find((x) => x.id === p.id)!.status, "pending");
+		assert.equal(store.detail(id).decisions[0]!.text, "Original");
+		let broadcasts = 0;
+		const unsubscribe = store.onChange(() => {
+			broadcasts++;
+			assert.equal(store.proposals(id).find((x) => x.id === p.id)!.status, "accepted");
+		});
+		const accepted = store.resolveProposal(id, p.id, true, "User wording");
+		assert.equal(accepted.status, "accepted");
+		assert.equal(accepted.text, "User wording");
+		assert.equal(broadcasts, 1);
+		unsubscribe();
+		assert.equal(store.detail(id).decisions[0]!.text, "User wording");
+		assert.equal(store.detail(id).decisions[0]!.audience, "all");
+		assert.equal(store.detail(id).decisions[0]!.number, 1);
+		assert.equal(store.require(id).needsYouCount, 0);
+		assert.ok(store.detail(id).events.some((e) => /Decision D1 changed.*proposed by chat lead/.test(e.text)));
+		p = propose(true);
+		assert.equal(store.resolveProposal(id, p.id, true).status, "accepted");
+		assert.equal(store.detail(id).decisions.length, 0);
+		assert.deepEqual(store.resolveTask(id, "1").decisionIds, []);
+		assert.ok(store.proposals(id).some((x) => x.id === p.id && x.status === "accepted"));
+		assert.ok(store.detail(id).events.some((e) => /proposal .* rejected/.test(e.text)));
+		assert.ok(store.detail(id).events.some((e) => /Decision D1 removed.*proposed by chat lead/.test(e.text)));
+		assert.equal(store.addDecision(id, "Next").number, decision.number + 1);
+		const notice = store.prepareNotice(id, "lead", Date.now() + 31_000);
+		assert.ok(notice?.content.includes("rejected"));
+		assert.ok(notice?.content.includes("accepted"));
+	} finally {
+		store.close();
+	}
+});
+
+test("pending and resolved proposals survive restart, including an accepted removal", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-decision-proposals-"));
+	const file = join(dir, "missions.sqlite");
+	let store = new MissionStore(file);
+	try {
+		const { id } = store.create({ projectId: "p", title: "Shared" });
+		store.join("lead", id);
+		store.update(id, { coordinatorSessionId: "lead" });
+		store.addDecision(id, "Original");
+		const proposal = store.proposeDecision(id, "D1", undefined, true, "Obsolete", { sessionId: "lead" });
+		store.close();
+		store = new MissionStore(file);
+		assert.equal(store.require(id).needsYouCount, 1);
+		assert.equal(store.proposals(id)[0]!.id, proposal.id);
+		const resolved = store.resolveProposal(id, proposal.id, true);
+		assert.ok(resolved.resolvedAt);
+		store.close();
+		store = new MissionStore(file);
+		assert.equal(store.require(id).needsYouCount, 0);
+		assert.deepEqual(store.detail(id).decisions, []);
+		assert.deepEqual(store.proposals(id), [resolved]);
+		assert.equal(store.addDecision(id, "Next").number, 2);
+	} finally {
+		store.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

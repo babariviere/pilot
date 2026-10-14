@@ -259,7 +259,7 @@ private func comment(_ id: String, author: String?, target: String? = nil, resol
 }
 
 private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [MissionComment] = []) -> MissionDetail {
-    MissionDetail(mission: mission, brief: nil, decisions: [], comments: comments, tasks: tasks, artifacts: [],
+    MissionDetail(mission: mission, brief: nil, decisions: [], decisionProposals: [], comments: comments, tasks: tasks, artifacts: [],
                   resources: [], events: [])
 }
 
@@ -427,4 +427,21 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     #expect(counts.total == 5)
     #expect(counts[.todo] == 2)
     #expect(counts[.dropped] == 0)
+}
+
+@Test func decisionNumbersAndProposalsRoundTripAndNeedAttention() throws {
+    let data = Data(#"""
+    {"mission":{"id":"m","projectId":"p","title":"Shared","goal":"g","status":"active","briefRevision":0,"createdAt":1,"updatedAt":2,"needsYouCount":1},
+     "decisions":[{"id":"d","number":7,"text":"Original","audience":"all","createdAt":1,"updatedAt":2}],
+     "decisionProposals":[{"id":"proposal","decisionId":"d","kind":"edit","text":"New","reason":"Superseded","authorSessionId":"lead","status":"pending","createdAt":3}],
+     "tasks":[],"comments":[],"artifacts":[],"resources":[],"events":[]}
+    """#.utf8)
+    let detail = try JSONDecoder().decode(MissionDetail.self, from: data)
+    #expect(detail.decisions[0].number == 7)
+    #expect(detail.decisionProposals?.first?.text == "New")
+    #expect(try JSONDecoder().decode(MissionDetail.self, from: JSONEncoder().encode(detail)) == detail)
+    #expect(MissionNeedsYou.count(mission: detail.mission, members: [], isUnread: { _ in false }) == 1)
+    let items = MissionNeedsYou.items(mission: detail.mission, detail: detail, members: [], isUnread: { _ in false })
+    #expect(items.count == 1)
+    #expect(items.first?.id == "proposal-proposal")
 }

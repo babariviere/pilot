@@ -37,10 +37,13 @@ test("decision audiences and task pins select prompts and avoid duplicate detail
 	const reference = f.store.addDecision(mission.id, "Reference");
 	const all = f.store.addDecision(mission.id, "Everyone", {}, "all");
 	const coordinator = f.store.addDecision(mission.id, "Coordinate", {}, "coordinator");
-	assert.deepEqual(f.service.context(worker.id)?.decisions, ["Everyone"]);
-	assert.deepEqual(f.service.context(lead.id)?.decisions, ["Everyone", "Coordinate"]);
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D2: Everyone"]);
+	assert.deepEqual(f.service.context(lead.id)?.decisions, ["D2: Everyone", "D3: Coordinate"]);
 	await f.service.call(worker.id, "task", { id: "1", decisionIds: [reference.id, coordinator.id] });
-	assert.deepEqual(new Set(f.service.context(worker.id)?.decisions), new Set(["Reference", "Everyone", "Coordinate"]));
+	assert.deepEqual(
+		new Set(f.service.context(worker.id)?.decisions),
+		new Set(["D1: Reference", "D2: Everyone", "D3: Coordinate"]),
+	);
 	assert.equal(f.service.context(worker.id)?.remainingDecisions, 0);
 	const before = f.service.context(worker.id)!.decisionEntries;
 	assert.deepEqual(
@@ -63,7 +66,7 @@ test("decision audiences and task pins select prompts and avoid duplicate detail
 		["Reference"],
 	);
 	await f.service.call(worker.id, "task", { id: "1", decisionIds: [] });
-	assert.deepEqual(f.service.context(worker.id)?.decisions, ["Revised"]);
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D2: Revised"]);
 	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
 	const foreignDecision = f.store.addDecision(foreign.id, "Elsewhere");
 	await assert.rejects(
@@ -3169,6 +3172,29 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const lead = (await startedCoordinator.json()) as SessionSummary;
 	assert.equal(lead.missionId, id);
 	assert.equal(f.store.require(id).coordinatorSessionId, lead.id);
+
+	const proposed = (await f.service.call(lead.id, "propose", {
+		decisionId: "D1",
+		text: "Accepted wording",
+		reason: "Clarify",
+	})) as { id: string };
+	const accepted = await api(`/missions/${id}/decision-proposals/${proposed.id}/accept`, {
+		method: "POST",
+		body: JSON.stringify({ text: "Edited wording" }),
+	});
+	assert.equal(accepted.status, 200);
+	assert.equal((await accepted.json()).status, "accepted");
+	assert.equal(f.store.detail(id).decisions[0]!.text, "Edited wording");
+	const removal = (await f.service.call(lead.id, "propose", { decisionId: "D1", remove: true, reason: "Old" })) as {
+		id: string;
+	};
+	const rejected = await api(`/missions/${id}/decision-proposals/${removal.id}/reject`, {
+		method: "POST",
+		body: "{}",
+	});
+	assert.equal(rejected.status, 200);
+	assert.equal((await rejected.json()).status, "rejected");
+	assert.equal(f.store.detail(id).decisions.length, 1);
 	const duplicateCoordinator = await api(`/missions/${id}/coordinator/start`, { method: "POST", body: "{}" });
 	assert.equal(duplicateCoordinator.status, 409);
 	await duplicateCoordinator.arrayBuffer();
@@ -3418,4 +3444,39 @@ test("held and discarded message events wake the lead once, survive outbox repla
 		worker.requests.slice(initial).map((command) => command.type),
 		["sendHeldMessages", "discardHeldMessages", "discardHeldMessages"],
 	);
+});
+
+test("proposals expose only coordinator results and never alter member prompt wording until accepted", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	f.store.addDecision(mission.id, "Binding", {}, "all");
+	await assert.rejects(
+		f.service.call(worker.id, "propose", { decisionId: "D1", text: "Change", reason: "Why" }),
+		/Only the mission coordinator/,
+	);
+	const proposal = (await f.service.call(lead.id, "propose", {
+		decisionId: "D1",
+		text: "Replacement",
+		reason: "Superseded",
+	})) as { id: string };
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D1: Binding"]);
+	let result = (await f.service.call(lead.id, "get", {})) as {
+		decisionProposals: { id: string; status: string }[];
+		decisions: string[];
+	};
+	assert.equal(result.decisionProposals[0]!.status, "pending");
+	assert.deepEqual(result.decisions, ["D1"]);
+	assert.equal("decisionProposals" in ((await f.service.call(worker.id, "get", {})) as object), false);
+	f.store.resolveProposal(mission.id, proposal.id, true);
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["D1: Replacement"]);
+	result = (await f.service.call(lead.id, "get", {})) as typeof result;
+	assert.equal(result.decisionProposals[0]!.status, "accepted");
 });
