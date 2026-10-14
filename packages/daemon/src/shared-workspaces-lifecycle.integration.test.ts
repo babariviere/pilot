@@ -80,6 +80,90 @@ test("generated Ghostty vendor checkout is discarded and rebuilt, without allowl
 	}
 });
 
+test("cleanup discards ignored build files beside tracked placeholders and restores tracked edits", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		const dist = "addons/outlook/dist";
+		writeFileSync(
+			join(w.path, ".gitignore"),
+			readFileSync(join(w.path, ".gitignore"), "utf8").replace(/^dist\/\n/m, ""),
+		);
+		mkdirSync(join(w.path, dist, "assets"), { recursive: true });
+		writeFileSync(join(w.path, "addons/outlook/.gitignore"), "dist/*\n!dist/.gitkeep\n!dist/tracked.txt\n");
+		writeFileSync(join(w.path, dist, ".gitkeep"), "");
+		writeFileSync(join(w.path, dist, "tracked.txt"), "original\n");
+		jj(w.path, "status");
+		assert.equal(git(w.path, "ls-files", "--", `${dist}/.gitkeep`), `${dist}/.gitkeep`);
+		writeFileSync(join(w.path, dist, "tracked.txt"), "edited\n");
+		writeFileSync(join(w.path, dist, "assets/icon-128.png"), Buffer.from([0, 1, 2]));
+		writeFileSync(join(w.path, dist, "bundle.js"), "generated\n");
+		assert.equal(git(w.path, "check-ignore", "--", `${dist}/assets/icon-128.png`), `${dist}/assets/icon-128.png`);
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		assert.deepEqual(recovery.localConfigs, {});
+		// Revalidation must still protect inputs introduced after the recovery snapshot.
+		symlinkSync(join(w.path, "a.txt"), join(w.path, dist, "unsafe-link"));
+		await assert.rejects(f.store.remove(w.path, w.shared!, recovery), /Unsafe ignored path.*unsafe-link/);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "base\n");
+		rmSync(join(w.path, dist, "unsafe-link"));
+		await f.store.remove(w.path, w.shared!, recovery);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(readFileSync(join(w.path, dist, "tracked.txt"), "utf8"), "edited\n");
+		assert.equal(existsSync(join(w.path, dist, ".gitkeep")), true);
+		assert.equal(existsSync(join(w.path, dist, "assets/icon-128.png")), false);
+		assert.equal(existsSync(join(w.path, dist, "bundle.js")), false);
+		assert.equal(
+			jj(w.path, "--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", "commit_id"),
+			recovery.commitId,
+		);
+	} finally {
+		f.close();
+	}
+});
+
+test("mixed build directories still block unknown inputs, symlinks and nested repositories", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		mkdirSync(join(w.path, "build"));
+		writeFileSync(join(w.path, "build/.gitkeep"), "");
+		writeFileSync(
+			join(w.path, ".gitignore"),
+			`${readFileSync(join(w.path, ".gitignore"), "utf8")}\nbuild/*\n!build/.gitkeep\n!build/input.txt\n`,
+		);
+		jj(w.path, "status");
+		jj(w.path, "config", "set", "--repo", "snapshot.auto-track", "none()");
+		writeFileSync(join(w.path, "build/input.txt"), "keep untracked\n");
+		await assert.rejects(
+			f.store.snapshot(w.path, w.shared!, f.recovery),
+			/Unsafe untracked or jj-omitted path.*build\/input.txt/,
+		);
+		rmSync(join(w.path, "build/input.txt"));
+
+		const outside = join(f.root, "outside");
+		mkdirSync(outside);
+		writeFileSync(join(outside, "input.txt"), "keep external\n");
+		for (const target of [join(outside, "input.txt"), outside]) {
+			symlinkSync(target, join(w.path, "build/link"));
+			await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path.*build\/link/);
+			rmSync(join(w.path, "build/link"));
+		}
+		assert.equal(readFileSync(join(outside, "input.txt"), "utf8"), "keep external\n");
+
+		mkdirSync(join(w.path, "build/nested/.git"), { recursive: true });
+		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Submodule or nested git repository/);
+		rmSync(join(w.path, "build/nested"), { recursive: true });
+		mkdirSync(join(w.path, ".pi"), { recursive: true });
+		writeFileSync(join(w.path, ".pi/archive-final-source.log"), "keep unknown log\n");
+		await assert.rejects(
+			f.store.snapshot(w.path, w.shared!, f.recovery),
+			/Unsafe ignored path.*\.pi\/archive-final-source.log/,
+		);
+	} finally {
+		f.close();
+	}
+});
+
 test("partial creation and restore resume after command completion but before metadata persistence", async () => {
 	let failAdd = true;
 	let failEdit = false;

@@ -23,6 +23,7 @@ import {
 	dissociateWorkspace,
 	isRegenerableDirectory,
 	localConfigs,
+	regenerableDirectories,
 	run,
 	type Runner,
 	type Workspace,
@@ -948,17 +949,30 @@ export class SharedWorkspaceStore {
 				trackedDirectories.add(parent);
 		}
 		// Collapse ignored trees so dependency directories never consume the command output budget.
-		const ignored = (
-			await this.runner("git", ["ls-files", "--others", "--ignored", "--directory", "--exclude-standard", "-z"], cwd)
-		)
-			.split("\0")
-			.filter(Boolean);
-		const isIgnored = (path: string) =>
-			ignored.some((rule) => rule === path || (rule.endsWith("/") && path.startsWith(rule)));
+		const ignored = new Set(
+			(
+				await this.runner(
+					"git",
+					["ls-files", "--others", "--ignored", "--directory", "--exclude-standard", "-z"],
+					cwd,
+				)
+			)
+				.split("\0")
+				.filter(Boolean),
+		);
+		// Mixed build trees can contain many individual ignored files. Avoid a scan of every rule per file.
+		const isIgnored = (path: string) => {
+			if (ignored.has(path) || ignored.has(`${path}/`)) return true;
+			for (let parent = dirname(path); parent !== "."; parent = dirname(parent))
+				if (ignored.has(`${parent}/`)) return true;
+			return false;
+		};
 		const configs: Record<string, string> = {};
 		let inputBytes = 0;
-		const walk = async (directory: string, prefix = "") => {
+		let entries = 0;
+		const walk = async (directory: string, prefix = "", buildOutput = false) => {
 			for (const entry of await readdir(directory, { withFileTypes: true })) {
+				if (++entries % 2048 === 0) await yieldToEventLoop();
 				const path = prefix + entry.name;
 				if (!prefix && (path === ".git" || path === ".jj")) continue;
 				// jj does not list submodules, so a nested .git is the only sign of one. Report it specifically.
@@ -969,8 +983,15 @@ export class SharedWorkspaceStore {
 						// Only ignored outputs may be discarded. Unignored directories can contain inputs.
 						if (await this.optional("git", ["check-ignore", "--", `${path}/`], cwd)) continue;
 					}
-					await walk(join(directory, entry.name), `${path}/`);
+					// Build trees may have tracked placeholders or sources: inspect rather than skip them.
+					// The exact vendor exception remains whole-directory-only, never mixed vendor inputs.
+					await walk(
+						join(directory, entry.name),
+						`${path}/`,
+						buildOutput || regenerableDirectories.has(entry.name),
+					);
 				} else if (!tracked.has(path)) {
+					if (buildOutput && entry.isFile() && isIgnored(path)) continue;
 					if (recoverableInput(path) && isIgnored(path) && (await safeFile(cwd, path))) {
 						const size = (await lstat(join(cwd, path))).size;
 						inputBytes += size;
