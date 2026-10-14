@@ -8,7 +8,13 @@ import {
 	slackMetadataThreadFixture,
 	slackThreadFixture,
 } from "./slack-fixtures.ts";
-import { parseSlackPage, parseSlackThread, SlackFormatChanged } from "./slack-format.ts";
+import {
+	parseSlackPage,
+	parseSlackThread,
+	parseSlackThreadParent,
+	SlackFormatChanged,
+	slackExcerptText,
+} from "./slack-format.ts";
 
 test("observed history wire shape: multiline content, bot/user headers, thread counts, pagination and empty pages", () => {
 	const page = parseSlackPage(slackHistoryFixture, 8);
@@ -173,4 +179,48 @@ test("format drift, missing IDs, ambiguous framing, bad counts and oversized pag
 		assert.throws(() => parseSlackThread(value, "1791885305.000001", 30), SlackFormatChanged);
 	assert.throws(() => parseSlackThread(slackThreadFixture, "1791885000.000001", 30), SlackFormatChanged);
 	assert.throws(() => parseSlackThread(slackThreadFixture, "1791885305.000001", 1), SlackFormatChanged);
+});
+test("thread parent for the inspector: author name only, metadata dropped, replies ignored, framing checked", () => {
+	assert.deepEqual(parseSlackThreadParent(slackThreadFixture, "1791885305.000001"), {
+		author: "Reporter",
+		text: "Export crashes after choosing a large file.",
+	});
+	assert.deepEqual(parseSlackThreadParent(slackMetadataThreadFixture, "1791961960.000201"), {
+		author: "Sam Rivera",
+		text: "The invoice preview shows the wrong currency for <https://example.test/accounts/42|account 42>.",
+	});
+	// A thread read of a message without replies, from a bot author without an email.
+	const parentOnly = {
+		messages:
+			"=== THREAD PARENT MESSAGE ===\nFrom: Monitor (B000000013)\nTime: 2026-10-14 09:00:00 CEST\nMessage TS: 1791961200.000204\n\nFiles: a.png (ID: F1, image/png, 1 KB)\n",
+	};
+	assert.deepEqual(parseSlackThreadParent(parentOnly, "1791961200.000204"), { author: "Monitor", text: "" });
+	for (const value of [
+		null,
+		{ messages: 1 },
+		{ messages: "Channel: #bugs (C000000001)\n" },
+		{ messages: parentOnly.messages.replace("Message TS", "TS") },
+		{ messages: parentOnly.messages.replace("Files:", "=== injected ===\nFiles:") },
+		{ messages: "x".repeat(512 * 1024 + 1) },
+	] as TrackingJson[])
+		assert.throws(() => parseSlackThreadParent(value, "1791961200.000204"), SlackFormatChanged);
+	assert.throws(() => parseSlackThreadParent(slackThreadFixture, "1791885360.000001"), SlackFormatChanged);
+});
+test("excerpt text is plain, bounded and cut at a word with an ellipsis", () => {
+	assert.deepEqual(
+		slackExcerptText(
+			"See <https://example.test/a|the report> and <https://example.test/b>.\r\n\n\n\n<@U000000001|sam> in <#C000000001|bugs>, <!here>\u202E\u200B ok\t!",
+			800,
+			12,
+		),
+		{ text: "See the report and https://example.test/b.\n\n@sam in #bugs, @here ok !", truncated: false },
+	);
+	assert.deepEqual(slackExcerptText("a\nb\nc\nd", 800, 2), { text: "a\nb…", truncated: true });
+	const long = slackExcerptText("word ".repeat(400), 100, 12);
+	assert.equal(long.truncated, true);
+	assert.ok(long.text.length <= 101);
+	assert.match(long.text, /word…$/);
+	// Never splits an emoji's surrogate pair.
+	assert.equal(slackExcerptText(`${"x".repeat(9)}😀😀`, 10, 12).text, `${"x".repeat(9)}…`);
+	assert.deepEqual(slackExcerptText("  ", 800, 12), { text: "", truncated: false });
 });

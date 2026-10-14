@@ -106,6 +106,23 @@ struct SegmentedProgressBar: View {
     }
 }
 
+/// Quoted external text, such as the Slack message in the triage inspector: a thin rule beside short, muted
+/// supporting content. Keep quotes bounded and link to the source for the rest. Chat Markdown quotes use the
+/// user's font settings in `MarkdownView` instead.
+struct QuoteBlock<Content: View>: View {
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 1).fill(Theme.faintForeground.opacity(0.5)).frame(width: 3)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) { content() }
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 /// Centered empty state: a faint symbol, a short title, one sentence and the obvious next actions.
 /// Use it where a whole pane or section is empty; use a single quiet line inside busy pages.
 struct EmptyStateView<Actions: View>: View {

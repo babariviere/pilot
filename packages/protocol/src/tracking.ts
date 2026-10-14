@@ -129,6 +129,17 @@ export interface TrackedItemPrefill {
 	/** Explicitly quoted external content. User confirmation is required before starting work. */
 	prompt: string;
 }
+/** GET /api/tracked-items/:id/excerpt. The first message of a Slack thread, read on demand for the triage
+ * inspector. Transient: never stored or broadcast. Plain text, bounded and stripped of control characters. */
+export interface SlackExcerpt {
+	itemId: string;
+	/** Display name of the author, when Slack shows one. */
+	author?: string;
+	/** Empty when the message has no text (for example, only files). */
+	text: string;
+	/** The message was longer and was cut, ending with an ellipsis. */
+	truncated: boolean;
+}
 /** Per-channel health of a configured Slack channel. */
 export interface SlackChannelStatus {
 	/** As configured: a channel ID, or a name in older configs. */

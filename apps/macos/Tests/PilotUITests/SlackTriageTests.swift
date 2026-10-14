@@ -175,3 +175,45 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     app.selectedSessionId = "s"
     #expect(app.selectedProjectId == nil && app.slackTriageProjectId == nil)
 }
+
+
+@Test @MainActor func slackExcerptsAreReadOnceKeptBoundedAndRetriedAfterFailure() async {
+    let store = SlackExcerptStore()
+    var reads: [String] = []
+    #expect(store.state("a") == .loading)
+    await store.load("a", settle: .zero) { id in
+        reads.append(id)
+        return SlackExcerpt(itemId: id, author: "Sam", text: "Export fails")
+    }
+    #expect(store.state("a") == .loaded(SlackExcerpt(itemId: "a", author: "Sam", text: "Export fails")))
+    await store.load("a", settle: .zero) { _ in Issue.record("already shown"); throw ClientError("unused") }
+    #expect(reads == ["a"])
+
+    await store.load("b", settle: .zero) { _ in
+        throw ClientError("Sign in to Slack to read this message", status: 503)
+    }
+    #expect(store.state("b") == .unavailable("Sign in to Slack to read this message."))
+    await store.load("b", settle: .zero) { id in SlackExcerpt(itemId: id, text: "") }
+    #expect(store.state("b") == .loaded(SlackExcerpt(itemId: "b", text: "")), "selecting again retries")
+
+    #expect(SlackExcerptStore.reason(ClientError("Superseded by a newer selection", status: 409))
+        == "Couldn't load this message.")
+    #expect(SlackExcerptStore.reason(ClientError("internal detail", status: 500)) == "Couldn't load this message.")
+    #expect(SlackExcerptStore.reason(URLError(.notConnectedToInternet)) == "Couldn't load this message.")
+
+    for index in 0 ..< SlackExcerptStore.limit {
+        await store.load("m\(index)", settle: .zero) { id in SlackExcerpt(itemId: id, text: "x") }
+    }
+    #expect(store.states.count == SlackExcerptStore.limit)
+    #expect(store.state("a") == .loading, "the oldest read is dropped first")
+}
+
+@Test @MainActor func cancelledExcerptReadsLeaveNoState() async {
+    let store = SlackExcerptStore()
+    let task = Task { @MainActor in
+        await store.load("a", settle: .seconds(5)) { id in SlackExcerpt(itemId: id, text: "late") }
+    }
+    task.cancel()
+    await task.value
+    #expect(store.states.isEmpty)
+}

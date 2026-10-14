@@ -556,6 +556,11 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["tracked-items", id, "prefill"])
     }
 
+    /// The Slack message behind a triage item, read from Slack on demand and never stored.
+    func slackExcerpt(_ id: String) async throws -> SlackExcerpt {
+        try await missionRequest(["tracked-items", id, "excerpt"])
+    }
+
     /// The project's latest Slack triage corrections, newest first (at most 20). The classifier learns from them.
     func slackCorrections(projectId: String) async throws -> [SlackCorrection] {
         if let fixture = fixtureTracking { return fixture.corrections }
