@@ -155,7 +155,7 @@ struct SessionDetail: View {
 /// Keep orientation in the title area, leaving workspace and PR details to Changes.
 enum SessionHeaderContext {
     static func source(for session: SessionSummary) -> String? {
-        let source = session.isAsk ? session.sourceLabel : session.branch
+        let source = session.isMissionCoordinator ? nil : (session.isAsk ? session.sourceLabel : session.branch)
         return source.flatMap { $0.isEmpty ? nil : $0 }
     }
 
@@ -184,8 +184,10 @@ struct SessionInspectorControls: View {
         if session.missionId != nil {
             InspectorToggle(tab: .mission, icon: MissionSymbol.name, help: "Mission")
         }
-        if !session.isAsk {
+        if session.supportsChanges {
             InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
+        }
+        if session.supportsChanges {
             InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
             if !(session.subagents ?? []).isEmpty {
                 InspectorToggle(tab: .agents, icon: "person.2", help: "Subagents")
@@ -274,8 +276,8 @@ struct Inspector: View {
                     tab("Mission", .mission)
                 }
                 if !session.isAsk {
-                    tab("Changes", .changes)
-                    tab("Terminal", .terminal)
+                    if session.supportsChanges { tab("Changes", .changes) }
+                    if session.supportsChanges { tab("Terminal", .terminal) }
                     tab("Agents", .agents, badge: model.unreadSubagents(in: session))
                 }
                 tab("Artifacts", .artifacts)
@@ -293,14 +295,14 @@ struct Inspector: View {
             .background(Theme.sidebar)
             Rectangle().fill(Theme.border).frame(height: 1)
             ZStack {
-                if !session.isAsk {
+                if session.supportsChanges {
                     ChangesPane(session: session, isVisible: model.inspectorTab == .changes)
                         .opacity(model.inspectorTab == .changes ? 1 : 0)
                         .allowsHitTesting(model.inspectorTab == .changes)
                         .accessibilityHidden(model.inspectorTab != .changes)
                 }
                 // Mounted once opened, so browsing other tabs never starts a shell.
-                if !session.isAsk && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
+                if session.supportsChanges && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
                     TerminalPane(store: model.terminals, session: session, isVisible: model.inspectorTab == .terminal)
                         .opacity(model.inspectorTab == .terminal ? 1 : 0)
                         .allowsHitTesting(model.inspectorTab == .terminal)

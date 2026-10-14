@@ -345,7 +345,7 @@ enum TrackedItemText {
         case .failed: ("Needs you", .attention)
         case .done where unread(session): ("Needs you", .attention)
         default:
-            if let pr = session.pullRequest { (pullRequestLabel(pr), pr.state == .merged ? .done : .quiet) }
+            if let pr = session.pullRequest, !session.isMissionCoordinator { (pullRequestLabel(pr), pr.state == .merged ? .done : .quiet) }
             else if status == .done { ("Done", .done) }
             else if status == .stopped { ("Stopped", .quiet) }
             else { ("Idle", .quiet) }

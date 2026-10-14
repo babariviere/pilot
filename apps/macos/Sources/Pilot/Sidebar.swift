@@ -598,7 +598,7 @@ struct SessionRow: View {
                         .layoutPriority(1)
                     Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
                 }
-                if session.isActiveMissionCoordinator {
+                if session.isMissionCoordinator {
                     SessionCoordinatorLine(session: session, unread: needsAttention)
                 } else {
                     if let missionId = session.missionId, let missionTitle {
@@ -629,7 +629,7 @@ struct SessionRow: View {
             .compactMap { $0 }.joined(separator: "\n"))
         .accessibilityElement(children: .contain)
         .accessibilityLabel([session.title, projectName, missionTitle,
-                             session.isActiveMissionCoordinator ? "Coordinator" : nil, reason ?? signal?.label]
+                             session.isMissionCoordinator ? "Coordinator" : nil, reason ?? signal?.label]
             .compactMap { $0 }.joined(separator: ". "))
         .contextMenu {
             SessionRenameAction(session: session)

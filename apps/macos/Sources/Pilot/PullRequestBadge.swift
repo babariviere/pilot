@@ -11,7 +11,7 @@ struct PullRequestBadge: View {
     var body: some View {
         Group {
             let prs = session.linkedPullRequests
-            if !prs.isEmpty {
+            if session.isMissionCoordinator { EmptyView() } else if !prs.isEmpty {
                 if presentation == .details {
                     ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 6) { links }
                 } else {

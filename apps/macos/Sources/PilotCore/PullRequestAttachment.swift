@@ -44,11 +44,12 @@ public enum PullRequestURL {
 
 extension SessionSummary {
     /// The user can attach PRs to Build chats of a project. Ask chats never push, archived chats do not follow up.
-    public var canAttachPullRequests: Bool { !isAsk && projectId != nil && !isArchived }
+    public var canAttachPullRequests: Bool { supportsChanges && projectId != nil && !isArchived }
 
     /// Explicitly bound to this chat, rather than discovered on one of its branches.
     public func isBoundPullRequest(_ url: String) -> Bool {
-        boundPullRequests?.contains { PullRequestURL.same($0, url) } ?? false
+        guard !isMissionCoordinator else { return false }
+        return boundPullRequests?.contains { PullRequestURL.same($0, url) } ?? false
     }
 
     /// The chat tracks this PR, discovered or bound.
@@ -58,7 +59,8 @@ extension SessionSummary {
 
     /// Bound PRs whose GitHub details have not arrived yet. Binding returns before pilotd refreshes GitHub.
     public var pendingBoundPullRequests: [String] {
-        (boundPullRequests ?? []).filter { url in !linkedPullRequests.contains { PullRequestURL.same($0.url, url) } }
+        guard !isMissionCoordinator else { return [] }
+        return (boundPullRequests ?? []).filter { url in !linkedPullRequests.contains { PullRequestURL.same($0.url, url) } }
     }
 
     /// A bound PR whose head is not the chat's current branch shows an "attached" hint, so it is clear why it

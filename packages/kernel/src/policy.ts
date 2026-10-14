@@ -17,6 +17,8 @@ export interface WorkspaceContext {
 export interface PilotContext {
 	/** This project chat has the host-owned memory tools. */
 	projectMemory?: boolean;
+	/** Daemon-managed source view with a per-chat temp directory. */
+	coordinatorView?: { path: string; scratch: string; protectedPaths: string[] };
 	/** Local github/gh-stack extension detected at worker open. Undefined on older workers. */
 	ghStack?: boolean;
 	workspace?: WorkspaceContext;
@@ -105,13 +107,19 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your tasks, and add tasks for follow-up work you find instead of widening your scope.`,
 		'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with a comment saying why, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
 		'- Read extra decisions with `mission({action: "decisions"})`; live decision changes arrive as notices, not prompt edits. Record agreed decisions with decide, edit the brief (with expectedRevision) when the design changes, and post a handoff with log before stopping with unfinished work.',
-		"- Open one pull request per task and link it to the task with the link action and taskId. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
-		ghStack === true
-			? `- github/gh-stack is installed: ${stackLink}`
-			: ghStack === false
-				? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
-				: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
-		"- The mission is internal coordination. Commit messages, branch or bookmark names and pull requests describe the change itself, without mentioning the mission, its tasks, the coordinator, other chats or Pilot (Pilot rejects commands that mention the mission). External tracker references such as Linear issue IDs are fine.",
+		...(mission.coordinator === "self"
+			? [
+					"- Delegate all code changes to member chats. You have no branch or pull request and must not commit, create bookmarks or branches, push, or open pull requests. Durable output belongs in the brief, tasks and artifacts.",
+				]
+			: [
+					"- Open one pull request per task and link it to the task with the link action and taskId. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
+					ghStack === true
+						? `- github/gh-stack is installed: ${stackLink}`
+						: ghStack === false
+							? "- github/gh-stack is unavailable: keep plain chained PRs and do not install it."
+							: `- If gh extension list shows github/gh-stack, ${stackLink} Otherwise keep plain chained PRs.`,
+					"- The mission is internal coordination. Commit messages, branch or bookmark names and pull requests describe the change itself, without mentioning the mission, its tasks, the coordinator, other chats or Pilot (Pilot rejects commands that mention the mission). External tracker references such as Linear issue IDs are fine.",
+				]),
 	];
 	if (mission.status !== "active")
 		lines.push(`- This mission is ${mission.status}. Do not start new mission work unless the user asks.`);
@@ -125,6 +133,29 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 		);
 	if (mission.remainingDecisions) lines.push(`- ${mission.remainingDecisions} more decisions: mission decisions.`);
 	return lines.join("\n");
+}
+
+/** Conservative backup to the OS read-only view, including nested shell/codemode commands. */
+export function coordinatorMutation(arguments_: unknown): boolean {
+	const text = strings(arguments_).join("\n");
+	for (const command of text.replace(/["'`]/g, "").split(/\n|;|&&|\|\|/)) {
+		if (
+			/\b(?:jj|git)\b/.test(command) &&
+			/\b(?:commit|ci|describe|desc|new|bookmark|bookmarks|branch|branches|push|fetch|checkout|switch|reset|rebase|merge|squash|restore|undo|abandon|tag|update-ref|config|clean|add|rm|apply|cherry-pick)\b/.test(
+				command,
+			)
+		)
+			return true;
+		if (/\bgh\b.*\bpr\s+(?:create|edit)\b|\bgh\s+api\b.*(?:-X|--method|-[fF]|--field|--input)\b/.test(command))
+			return true;
+		if (
+			/\b(?:pnpm|npm|yarn|bun)\s+(?:install|i|add|run|test|build|exec|dlx|ci)\b|\b(?:swift|cargo)\s+(?:build|test|run|install)\b|\b(?:make|cmake|xcodebuild|pytest)\b|\bnode\s+--test\b|\bscripts\/(?:build|test|bundle)\./.test(
+				command,
+			)
+		)
+			return true;
+	}
+	return false;
 }
 
 /** Why executable text would post on GitHub, or undefined. Includes nested calls in codemode scripts. */
@@ -157,11 +188,12 @@ export function commandArguments(name: string, args: Record<string, unknown>): u
 	return undefined;
 }
 
-export function pilotPrompt(context: PilotContext, artifactsAvailable = false): string {
+export function pilotPrompt(context: PilotContext, artifactsAvailable = false, coordinator = false): string {
+	coordinator ||= !!context.coordinatorView;
 	const lines = [
 		"You are running inside Pilot as a background agent. The user reviews your work in the Pilot app when you finish, not while you work.",
 	];
-	if (!context.ask)
+	if (!context.ask && !coordinator)
 		lines.push(
 			"- Take each request as far as it asks. For implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked, and then use ask_user.",
 		);
@@ -179,6 +211,12 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 	}
 	const workspace = context.workspace;
 	const requirePullRequest = context.requirePullRequest !== false;
+
+	if (coordinator)
+		lines.push(
+			`- You read the daemon-managed, shared read-only view of current main${context.coordinatorView ? ` at ${JSON.stringify(context.coordinatorView.path)}. Your persistent scratch folder (TMPDIR) is ${JSON.stringify(context.coordinatorView.scratch)}` : ""}. It updates after project fetches, without a jj working copy or a task bookmark.`,
+			"- Repository writes fail. Read-only git, gh and rg are available; installs, builds and tests are not. Use TMPDIR for temporary files and delegate code changes and verification to member chats. Do not commit, push, create branches or bookmarks, or open pull requests.",
+		);
 	if (context.ask) {
 		const ask = context.ask;
 		lines.push(
@@ -188,7 +226,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 			"- If implementation is requested, explain that it requires an explicit new Build session handoff. This Ask session cannot be converted into Build or make changes itself.",
 		);
 	}
-	if (!context.ask && workspace) {
+	if (!context.ask && !coordinator && workspace) {
 		if (workspace.shared) {
 			lines.push(
 				`- Your working directory is the shared jj workspace \`${workspace.shared.name}\` in ${workspace.shared.repository}, created from ${workspace.source}. Its working-copy change starts on base \`${workspace.base}\`${workspace.baseBranch ? ` (branch \`${workspace.baseBranch}\`)` : ""}${workspace.branch ? `, with task bookmark \`${workspace.branch}\`` : ", with no task bookmark yet"}. The user's own checkout and its uncommitted changes are unaffected by your workspace edits. This is not a private clone or detached checkout.`,
@@ -214,7 +252,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 			);
 		}
 	}
-	if (!context.ask && workspace && context.workspaceReset) {
+	if (!context.ask && !coordinator && workspace && context.workspaceReset) {
 		const reset = context.workspaceReset;
 		lines.push(
 			reset.changeId
@@ -222,7 +260,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 				: "- While this chat was archived, Pilot deleted ignored dependency and build directories (such as `node_modules`, `dist`, `build` and `.build`) from this workspace to free disk space. History and all other files are intact. Reinstall or rebuild them before running builds or tests.",
 		);
 	}
-	if (!context.ask && (workspace || context.requirePullRequest !== undefined)) {
+	if (!context.ask && !coordinator && (workspace || context.requirePullRequest !== undefined)) {
 		if (requirePullRequest) {
 			lines.push(
 				"- Name a new branch or bookmark `<type>/<short-description>` with the conventional type that matches the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/` or `revert/` (for example `fix/branch-prefix-policy`), not `pilot/`. Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention.",
@@ -267,7 +305,7 @@ export function withPilotPolicy(
 			section("pilot", async (input, requestContext) => {
 				await prepareTurn?.(input, requestContext);
 				const current = mission();
-				const prompt = pilotPrompt(context, artifactsAvailable());
+				const prompt = pilotPrompt(context, artifactsAvailable(), current?.coordinator === "self");
 				return current ? `${prompt}\n${missionPrompt(current, context.ghStack)}` : prompt;
 			}),
 		],
@@ -276,6 +314,26 @@ export function withPilotPolicy(
 			hook(ToolTask, {
 				beforeTool: (call) => {
 					const commands = commandArguments(call.name, call.arguments);
+					if (
+						(mission()?.coordinator === "self" || context.coordinatorView) &&
+						/(?:^|__)(?:write|edit|apply_patch|applyPatch)$/.test(call.name)
+					) {
+						const path = call.arguments.path ?? call.arguments.file_path;
+						const scratch = context.coordinatorView?.scratch;
+						if (
+							typeof path !== "string" ||
+							!scratch ||
+							!path.startsWith(`${scratch}/`) ||
+							path.split("/").includes("..")
+						)
+							return {
+								block: "Pilot policy: repository writes are unavailable for the coordinator. Use an absolute path inside TMPDIR for scratch files, or delegate code changes to a member chat.",
+							};
+					}
+					if ((mission()?.coordinator === "self" || context.coordinatorView) && coordinatorMutation(commands))
+						return {
+							block: "Pilot policy: the coordinator has read-only source access. Delegate code changes, commits, branches, pushes, pull requests and heavy verification to a member chat; use TMPDIR for scratch files.",
+						};
 					// Direct GitHub write tools are forbidden regardless of their arguments.
 					const posting = githubPosting([call.name, commands]);
 					if (posting)

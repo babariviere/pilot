@@ -89,6 +89,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Mission this chat belongs to. Omitted when it has none, or by older daemons.
     public let missionId: String?
     /// Daemon-owned active role. Omitted by older daemons or when terminal-PR rules apply normally.
+    public let missionCoordinator: Bool?
     public let activeMissionCoordinator: Bool?
     public let error: String?
     public let outcome: SessionOutcome?
@@ -115,6 +116,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }
     public var workspaceLabel: String {
+        if isMissionCoordinator { return "Read-only main view" }
         if isAsk { return "Read-only · no isolated workspace" }
         if workspaceReclaimedAt != nil { return "Archived workspace (restored on resume)" }
         if workspaceStorage == .shared { return "Shared jj workspace" }
@@ -125,11 +127,15 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         }
     }
     public var sourceLabel: String {
+        if isMissionCoordinator { return "Current main" }
         if isAsk { return sourceBranch.map { "origin/\($0)" } ?? "Current checkout" }
         return branch ?? sourceBranch.map { "origin/\($0)" }
             ?? (workspace == .clone ? "Default base" : workspace == .direct ? "Current checkout" : "Source unavailable")
     }
     public var workspaceHelp: String {
+        if isMissionCoordinator {
+            return "Shared read-only source, updated after project fetches. Code changes and verification belong in member chats. Temporary files live in this chat's scratch folder until archive."
+        }
         if isAsk {
             return "Ask can read and discuss this source, but cannot modify files, run a terminal, or publish. No isolated workspace is created.\(sourceCommit.map { "\nPinned source commit: \($0)" } ?? "")"
         }
@@ -147,11 +153,13 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     }
     public var isArchived: Bool { archivedAt != nil }
     public var isPinned: Bool { pinned ?? false }
+    public var isMissionCoordinator: Bool { missionCoordinator ?? isActiveMissionCoordinator }
+    public var supportsChanges: Bool { !isAsk && !isMissionCoordinator }
     public var isActiveMissionCoordinator: Bool { activeMissionCoordinator ?? false }
     public func workspaceBaseLabel(now: Date = Date()) -> String? {
-        guard isActiveMissionCoordinator, let workspaceBase else { return nil }
+        guard isMissionCoordinator, let workspaceBase else { return nil }
         let prefix = workspaceBehind == nil ? "on" : "behind"
-        let base = "\(prefix) \(sourceBranch ?? "base") @ \(workspaceBase.prefix(8))"
+        let base = "\(prefix) \(sourceBranch ?? "main") @ \(workspaceBase.prefix(8))"
         guard let workspaceUpdatedAt else { return "\(base), not yet updated" }
         let minutes = max(0, Int((now.timeIntervalSince1970 * 1000 - workspaceUpdatedAt) / 60_000))
         return "\(base), updated \(minutes) min ago"
@@ -172,7 +180,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         lastUserMessageAt: Double? = nil,
         workspaceStorage: WorkspaceStorage? = nil, workspaceReclaimedAt: Double? = nil, workspaceCleanupError: String? = nil,
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
-        branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
+        branches: [String]? = nil, missionCoordinator: Bool? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
         working: Bool? = nil
@@ -207,6 +215,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.usage = usage
         self.subagents = subagents
         self.missionId = missionId
+        self.missionCoordinator = missionCoordinator
         self.activeMissionCoordinator = activeMissionCoordinator
         self.error = error
         self.outcome = outcome
