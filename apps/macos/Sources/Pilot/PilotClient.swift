@@ -399,6 +399,27 @@ final class PilotClient: ObservableObject {
         return session
     }
 
+    /// Binds a GitHub PR to the chat, moving it from any chat that owns it. pilotd validates the link and the
+    /// project repository; in a mission chat `taskId` picks the task to link (default: the chat's claim).
+    @discardableResult
+    func bindPullRequest(_ sessionId: String, url: String, taskId: String? = nil) async throws -> SessionSummary {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/pull-requests", body: BindPullRequestRequest(url: url, taskId: taskId)
+        )
+        update(session)
+        return session
+    }
+
+    /// Detaches a PR from the chat: no tracking, follow-ups or rediscovery, and its mission task link is removed.
+    @discardableResult
+    func unbindPullRequest(_ sessionId: String, url: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/pull-requests", method: "DELETE", body: UnbindPullRequestRequest(url: url)
+        )
+        update(session)
+        return session
+    }
+
     func createProject(_ request: ProjectRequest) async throws -> Project {
         let project: Project = try await call("api/projects", body: request)
         upsert(project)

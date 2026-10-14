@@ -192,6 +192,11 @@ export interface SessionSummary {
 	 */
 	pullRequests?: SessionPullRequest[];
 	/**
+	 * URLs of PRs explicitly bound to this chat (POST /api/sessions/:id/pull-requests), excluding detached ones.
+	 * They can be on a branch the chat never used. Omitted when none, or by older daemons.
+	 */
+	boundPullRequests?: string[];
+	/**
 	 * Every branch or bookmark the session created or used, the current one first. Pair with pullRequests by
 	 * branch. Shared jj workspaces only list bookmarks created from their own workspace. Omitted when none.
 	 */

@@ -299,6 +299,12 @@ the brief into the repository is an explicit user action.
   an exclusion. A daemon write-ahead handoff rolls forward ownership and task links together before
   restarting workers after a crash. Binding returns after that local commit and refreshes GitHub
   asynchronously, so rate limits do not hold the API open. Unbinding revokes inputs not yet admitted.
+  `SessionSummary.boundPullRequests` lists the explicit bindings that are not detached, so the app can show
+  them before GitHub details arrive. In the app's Changes pane, "Attach pull request…" opens a popover
+  for the URL (validated by pilotd, errors inline) that suggests other chats' open PRs, names the chat a PR
+  moves from and, in a mission chat, picks the task to link (default: the chat's claim). Each PR row has
+  "Detach from This Chat" in its hover ⋯ and context menus; in a mission chat it first confirms the task
+  it unlinks. Bound PRs off the chat's branch show their head branch and an "attached" hint.
   Task-linked GitHub PRs use the daemon's existing serial PR tracker, including links added by hand
   and PRs unrelated to the owning chat. An open or draft PR moves a task to in_review. It becomes
   done when every linked PR has a known terminal state and at least one merged; closed-unmerged

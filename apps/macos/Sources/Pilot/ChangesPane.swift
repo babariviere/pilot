@@ -147,6 +147,9 @@ struct ChangesPane: View {
 struct ChangesRepositoryContext: View {
     let session: SessionSummary
     var changes: SessionChanges?
+    @State private var detachConfirmation: DetachConfirmation?
+    @State private var detaching: Set<String> = []
+    @State private var detachError: String?
 
     var branch: String? {
         if session.isActiveMissionCoordinator { return nil }
@@ -156,10 +159,11 @@ struct ChangesRepositoryContext: View {
 
     var body: some View {
         let links = session.branchLinks(current: branch)
+        let pending = session.pendingBoundPullRequests
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                if !links.isEmpty {
-                    SectionLabel(title: "Branches", count: links.count)
+                if !links.isEmpty || !pending.isEmpty {
+                    SectionLabel(title: "Branches", count: links.count + pending.count)
                     Spacer(minLength: 8)
                 }
                 Label(session.workspaceLabel, systemImage: workspaceIcon)
@@ -181,13 +185,41 @@ struct ChangesRepositoryContext: View {
                 }
                 .padding(.horizontal, 8)
             }
-            if !links.isEmpty {
+            if !links.isEmpty || !pending.isEmpty {
                 VStack(spacing: 2) {
                     ForEach(links) { link in
-                        BranchLinkRow(link: link, current: link.name != nil && link.name == branch,
-                                      stale: session.pullRequestIsStale)
+                        BranchLinkRow(
+                            link: link, current: link.name != nil && link.name == branch, stale: session.pullRequestIsStale,
+                            attached: link.pullRequest.map { session.showsAttachedHint($0, current: branch) } ?? false,
+                            busy: link.pullRequest.map { detaching.contains($0.url) } ?? false,
+                            detach: link.pullRequest.map { pr in { requestDetach(url: pr.url, number: pr.number) } }
+                        )
+                    }
+                    ForEach(pending, id: \.self) { url in
+                        PendingAttachedRow(url: url, busy: detaching.contains(url)) {
+                            requestDetach(url: url, number: PullRequestURL.number(of: url))
+                        }
                     }
                 }
+            }
+            if let detachError {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(detachError)
+                        .font(.pilot(.caption))
+                        .foregroundStyle(Theme.destructive)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                    Spacer(minLength: 0)
+                    Button { self.detachError = nil } label: { Image(systemName: "xmark") }
+                        .buttonStyle(QuietIconButtonStyle())
+                        .help("Dismiss")
+                        .accessibilityLabel("Dismiss error")
+                }
+                .padding(.horizontal, 8)
+            }
+            if session.canAttachPullRequests {
+                AttachPullRequestButton(session: session)
+                    .padding(.horizontal, 8)
             }
             if session.linkedPullRequests.isEmpty, session.pullRequestError != nil {
                 // Lookup failures without a cached PR.
@@ -198,6 +230,47 @@ struct ChangesRepositoryContext: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 4)
         .padding(.vertical, 10)
+        .confirmationDialog(
+            detachConfirmation?.prompt ?? "",
+            isPresented: Binding(get: { detachConfirmation != nil }, set: { if !$0 { detachConfirmation = nil } }),
+            titleVisibility: .visible,
+            presenting: detachConfirmation
+        ) { item in
+            Button("Detach", role: .destructive) { detach(url: item.url) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This chat stops tracking it and gets no CI or review follow-ups for it. The branch and the pull request stay unchanged.")
+        }
+    }
+
+    /// Outside a mission, detaching is one click and undone by attaching again. In a mission it also unlinks
+    /// the PR from its task, so the user confirms after seeing which one.
+    private func requestDetach(url: String, number: Int?) {
+        detachError = nil
+        guard let missionId = session.missionId, let number else { return detach(url: url) }
+        let sessionId = session.id
+        let client = AppModel.shared.client
+        detaching.insert(url)
+        Task { @MainActor in
+            let detail: MissionDetail?
+            if let cached = client.missionDetails[missionId] { detail = cached }
+            else { detail = try? await client.missionDetail(missionId) }
+            detaching.remove(url)
+            let tasks = detail.map { PullRequestAttachment.linkedTasks(of: url, sessionId: sessionId, in: $0) } ?? []
+            // Nothing to unlink: no confirmation needed. An unknown answer still asks.
+            if detail != nil, tasks.isEmpty { return detach(url: url) }
+            detachConfirmation = DetachConfirmation(url: url, prompt: PullRequestAttachment.detachPrompt(number: number, tasks: tasks))
+        }
+    }
+
+    private func detach(url: String) {
+        let sessionId = session.id
+        detaching.insert(url)
+        Task { @MainActor in
+            defer { detaching.remove(url) }
+            do { try await AppModel.shared.client.unbindPullRequest(sessionId, url: url) }
+            catch { detachError = "Couldn't detach the pull request. \(error.localizedDescription)" }
+        }
     }
 
     private var workspaceIcon: String {
@@ -207,11 +280,22 @@ struct ChangesRepositoryContext: View {
     }
 }
 
-/// A session branch and the PR opened from it. Long names wrap so the full branch stays readable.
+private struct DetachConfirmation: Equatable {
+    let url: String
+    let prompt: String
+}
+
+/// A session branch and the PR opened from it or attached to the chat. Long names wrap so the full branch
+/// stays readable. PR rows reveal a ⋯ menu on hover, mirrored in the context menu.
 private struct BranchLinkRow: View {
     let link: SessionBranchLink
     let current: Bool
     let stale: Bool
+    /// Bound by hand and not on the chat's current branch.
+    var attached = false
+    var busy = false
+    var detach: (() -> Void)?
+    @State private var hovered = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -221,7 +305,10 @@ private struct BranchLinkRow: View {
                 .foregroundStyle(current ? Theme.foreground : Theme.faintForeground)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                name
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    name
+                    if attached { AttachedHint() }
+                }
                 HStack(spacing: 6) {
                     if let pr = link.pullRequest {
                         PullRequestPill(pullRequest: pr, stale: stale)
@@ -238,12 +325,24 @@ private struct BranchLinkRow: View {
                     }
                 }
             }
+            .accessibilityElement(children: .combine)
             Spacer(minLength: 0)
+            if let pr = link.pullRequest, let detach {
+                PullRequestRowMenu(url: pr.url, number: pr.number, busy: busy, visible: hovered, detach: detach)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 6).fill(current ? Theme.muted : .clear))
-        .accessibilityElement(children: .combine)
+        .background(RoundedRectangle(cornerRadius: 6).fill(current || hovered ? Theme.muted : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
+        .contextMenu {
+            if let pr = link.pullRequest, let detach {
+                PullRequestRowActions(url: pr.url, detach: detach)
+            }
+        }
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder private var name: some View {
@@ -260,6 +359,280 @@ private struct BranchLinkRow: View {
                 .font(.pilot(.caption))
                 .italic()
                 .foregroundStyle(Theme.faintForeground)
+        }
+    }
+}
+
+/// A PR bound to the chat whose GitHub details are still loading. Binding returns before pilotd checks GitHub.
+private struct PendingAttachedRow: View {
+    let url: String
+    let busy: Bool
+    let detach: () -> Void
+    @State private var hovered = false
+
+    var body: some View {
+        let number = PullRequestURL.number(of: url)
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(nsImage: GitBranchGlyph.image)
+                .resizable()
+                .frame(width: 10, height: 10)
+                .foregroundStyle(Theme.faintForeground)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(number.map { "PR #\(String($0))" } ?? url)
+                        .font(.pilot(.caption, design: .monospaced))
+                        .foregroundStyle(Theme.foreground)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    AttachedHint()
+                }
+                Text("Checking GitHub…")
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.faintForeground)
+            }
+            .accessibilityElement(children: .combine)
+            .help(url)
+            Spacer(minLength: 0)
+            PullRequestRowMenu(url: url, number: number, busy: busy, visible: hovered, detach: detach)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 7)
+        .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? Theme.muted : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
+        .contextMenu { PullRequestRowActions(url: url, detach: detach) }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Says why a PR appears although the chat never used its branch.
+private struct AttachedHint: View {
+    var body: some View {
+        Text("attached")
+            .font(.pilot(.small))
+            .foregroundStyle(Theme.faintForeground)
+            .fixedSize()
+            .help("Attached to this chat by hand. Its head branch is not this chat's branch.")
+            .accessibilityLabel("attached by hand")
+    }
+}
+
+/// The hover ⋯ menu of a PR row, or a spinner while it is being detached.
+private struct PullRequestRowMenu: View {
+    let url: String
+    let number: Int?
+    let busy: Bool
+    let visible: Bool
+    let detach: () -> Void
+
+    var body: some View {
+        if busy {
+            ProgressView().controlSize(.mini).frame(width: 20, height: 20)
+        } else {
+            Menu { PullRequestRowActions(url: url, detach: detach) } label: { Image(systemName: "ellipsis") }
+                .menuStyle(.button)
+                .buttonStyle(QuietIconButtonStyle())
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Pull request actions")
+                .accessibilityLabel(number.map { "Actions for pull request \($0)" } ?? "Pull request actions")
+                .revealed(visible)
+        }
+    }
+}
+
+private struct PullRequestRowActions: View {
+    let url: String
+    let detach: () -> Void
+
+    var body: some View {
+        if let link = URL(string: url), ["http", "https"].contains(link.scheme?.lowercased() ?? "") {
+            Button("Open Pull Request") { NSWorkspace.shared.open(link) }
+        }
+        Button("Copy Link") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(url, forType: .string)
+        }
+        Divider()
+        Button("Detach from This Chat", role: .destructive, action: detach)
+    }
+}
+
+/// "+ Attach pull request…", a quiet secondary control under the branches, like the mission "+ Add link".
+private struct AttachPullRequestButton: View {
+    let session: SessionSummary
+    @State private var presented = false
+
+    var body: some View {
+        Button { presented = true } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus").font(.pilot(.micro, weight: .semibold))
+                Text("Attach pull request…")
+            }
+            .font(.pilot(.caption))
+            .foregroundStyle(Theme.mutedForeground)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Attach a GitHub pull request to this chat. A pull request another chat has moves here.")
+        .popover(isPresented: $presented, arrowEdge: .bottom) {
+            AttachPullRequestForm(session: session) { presented = false }
+        }
+    }
+}
+
+/// The attach popover: a PR link validated by pilotd, open PRs of other chats as suggestions, the chat a PR
+/// would move from and, in a mission, the task to link. Styled like MissionAddLinkForm.
+struct AttachPullRequestForm: View {
+    let session: SessionSummary
+    let dismiss: () -> Void
+    @ObservedObject private var client = AppModel.shared.client
+    @State private var draft = PullRequestAttachDraft()
+    @State private var mission: MissionDetail?
+    @FocusState private var focused: Bool
+
+    init(session: SessionSummary, draft: PullRequestAttachDraft = PullRequestAttachDraft(), mission: MissionDetail? = nil,
+         dismiss: @escaping () -> Void) {
+        self.session = session
+        self.dismiss = dismiss
+        _draft = State(initialValue: draft)
+        _mission = State(initialValue: mission)
+    }
+
+    private var current: SessionSummary { client.session(session.id) ?? session }
+
+    var body: some View {
+        let current = current
+        let owner = draft.url.flatMap { PullRequestAttachment.owner(of: $0, excluding: current.id, in: client.sessions) }
+        let suggestions = draft.text.isEmpty ? PullRequestAttachment.suggestions(for: current, in: client.sessions) : []
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Attach a pull request").font(.pilot(.body, weight: .semibold))
+            Text("This chat tracks it, follows up on CI and reviews, and may push to its branch.")
+                .font(.pilot(.caption))
+                .foregroundStyle(Theme.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
+            TextField("https://github.com/owner/repository/pull/123", text: $draft.text)
+                .textFieldStyle(.roundedBorder)
+                .focused($focused)
+                .onSubmit(attach)
+                .onChange(of: draft.text) { draft.error = nil }
+            if let error = draft.error {
+                Text(error)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.destructive)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            } else if let hint = draft.hint(for: current) {
+                Text(hint)
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if let owner {
+                Label("Moves from “\(owner.title)”", systemImage: "arrow.turn.down.right")
+                    .font(.pilot(.caption))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .lineLimit(2)
+                    .help("That chat stops tracking it and gets no more follow-ups for it.")
+            }
+            if !suggestions.isEmpty { suggestionList(suggestions) }
+            if let mission { taskPicker(mission, sessionId: current.id) }
+            HStack(spacing: 8) {
+                if draft.busy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
+                Button(owner == nil ? "Attach" : "Move Here", action: attach)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!draft.canSubmit(for: current))
+            }
+        }
+        .padding(14)
+        .frame(width: 360)
+        .onAppear { focused = true }
+        .task(id: current.missionId) { await loadMission(current.missionId) }
+    }
+
+    private func suggestionList(_ suggestions: [PullRequestAttachment.Suggestion]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Open in other chats")
+                .font(.pilot(.small, weight: .medium))
+                .foregroundStyle(Theme.faintForeground)
+                .padding(.top, 2)
+            ForEach(suggestions) { suggestion in
+                let pr = suggestion.pullRequest
+                Button { draft.text = pr.url } label: {
+                    HoverRow(horizontalPadding: 6, verticalPadding: 4) { _ in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            pr.state.icon.foregroundStyle(pr.state.color)
+                            Text("#\(String(pr.number))")
+                                .font(.pilot(.caption, weight: .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(Theme.foreground)
+                            Text(pr.title)
+                                .font(.pilot(.caption))
+                                .foregroundStyle(Theme.foreground)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 6)
+                            Text(suggestion.sessionTitle)
+                                .font(.pilot(.caption))
+                                .foregroundStyle(Theme.faintForeground)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: 120, alignment: .trailing)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("\(pr.label): \(pr.title)\nIn “\(suggestion.sessionTitle)”")
+                .accessibilityLabel("Pull request \(pr.number), \(pr.title), in \(suggestion.sessionTitle)")
+            }
+        }
+    }
+
+    @ViewBuilder private func taskPicker(_ mission: MissionDetail, sessionId: String) -> some View {
+        let choices = PullRequestAttachment.taskChoices(for: sessionId, in: mission)
+        if !choices.isEmpty {
+            Picker("Link to task", selection: $draft.taskId) {
+                if PullRequestAttachment.allowsNoTask(for: sessionId, in: mission) {
+                    Text("No task").tag(String?.none)
+                }
+                ForEach(choices) { task in
+                    Text("#\(task.number) \(task.title)").tag(Optional(task.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .font(.pilot(.label))
+            .help("The mission task this pull request is linked to. Detaching it later removes the link.")
+        }
+    }
+
+    private func loadMission(_ missionId: String?) async {
+        guard let missionId, mission?.mission.id != missionId else { return }
+        let detail: MissionDetail?
+        if let cached = client.missionDetails[missionId] { detail = cached }
+        else { detail = try? await client.missionDetail(missionId) }
+        guard let detail, !Task.isCancelled else { return }
+        mission = detail
+        if draft.taskId == nil { draft.taskId = PullRequestAttachment.defaultTask(for: session.id, in: detail) }
+    }
+
+    private func attach() {
+        let current = current
+        guard draft.canSubmit(for: current), let url = draft.url else { return }
+        draft.busy = true
+        draft.error = nil
+        let taskId = mission == nil ? nil : draft.taskId
+        Task { @MainActor in
+            do {
+                try await client.bindPullRequest(current.id, url: url, taskId: taskId)
+                draft = PullRequestAttachDraft()
+                dismiss()
+            } catch {
+                draft.busy = false
+                draft.error = error.localizedDescription
+            }
         }
     }
 }
