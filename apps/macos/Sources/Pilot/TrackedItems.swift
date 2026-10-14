@@ -112,9 +112,9 @@ enum TrackedItemText {
             let command = source.signInCommand ?? "pi mcp login \(source.kind.rawValue)"
             return SourceLine(text: "Sign in required. Run \(command) in Terminal, then sync.", tone: .attention)
         case .error:
-            var text = source.error ?? "Couldn't sync this source."
+            var text = source.error ?? "Couldn't read \(source.label)."
             if let next = source.nextPollAt, next > now.timeIntervalSince1970 * 1000 {
-                text += " Retrying \(Date(timeIntervalSince1970: next / 1000).formatted(date: .omitted, time: .shortened))."
+                text += " Pilot will retry at \(Date(timeIntervalSince1970: next / 1000).formatted(date: .omitted, time: .shortened))."
             }
             return SourceLine(text: text, tone: .attention)
         case .notConfigured:

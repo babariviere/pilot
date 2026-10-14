@@ -45,6 +45,8 @@ const auth = (await import(new URL("./core/auth-storage.js", sdk).href)) as {
 	FileAuthStorageBackend: new (path: string) => unknown;
 };
 const controller = new AbortController();
+/** Our own setup checks. Their fixed messages are safe for the daemon log, unlike transport errors. */
+class SetupError extends Error {}
 let connection: Connection | undefined;
 let closing: Promise<void> | undefined;
 // SDK connection.close() itself is not single-flight: a second close can miss the first transport's
@@ -68,16 +70,16 @@ let reply: {
 try {
 	const { kind, tool: logicalTool, args } = workerData;
 	const name = dedicatedSourceTool(kind, logicalTool);
-	if (!name) throw new Error("Unknown dedicated MCP source tool");
+	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
 	// Global user config only. A repository cannot execute a new MCP server through tracking settings.
 	const loaded = config.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false });
 	const entry = loaded.servers.find((entry) => entry.name === kind);
-	if (!entry) throw new Error("Dedicated MCP server is not configured in pi");
-	if (entry.config.enabled === false) throw new Error("MCP server is disabled or hidden");
-	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new Error("MCP tool is hidden");
+	if (!entry) throw new SetupError("Dedicated MCP server is not configured in pi");
+	if (entry.config.enabled === false) throw new SetupError("MCP server is disabled or hidden");
+	if (config.getMcpToolExposure(entry.config, name) === "hidden") throw new SetupError("MCP tool is hidden");
 	if ("url" in entry.config && entry.config.auth)
-		throw new Error("Tracking requires MCP OAuth or configured headers, not a model provider login");
+		throw new SetupError("Tracking requires MCP OAuth or configured headers, not a model provider login");
 	connection = new runtime.McpServerConnection({
 		entry,
 		cwd: agentDir,
@@ -92,7 +94,7 @@ try {
 	await connection.getClient();
 	const tool = connection.tools.find((tool) => tool.name === name);
 	if (!tool || tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true)
-		throw new Error("Tracking tool is missing or advertises writes");
+		throw new SetupError("Tracking tool is missing or advertises writes");
 	const result = await connection.callTool(name, args, { signal: controller.signal, timeoutMs: 30_000 });
 	reply = { value: decodeMcpResult(result) };
 } catch (error) {
@@ -102,7 +104,13 @@ try {
 		error:
 			connection?.state === "needs-auth"
 				? "Sign in required"
-				: "MCP request failed. Check pi mcp list and the source tool configuration.",
+				: `MCP request failed: ${
+						error instanceof SetupError || error instanceof SourceToolError
+							? error.message
+							: error instanceof SyntaxError
+								? "invalid JSON"
+								: "connection or transport error"
+					}`,
 		signIn: connection?.state === "needs-auth",
 		...(limited ? { retryAfterMs: limited.retryAfterMs } : {}),
 		...(!limited && error instanceof SourceToolError ? { toolError: true } : {}),

@@ -684,12 +684,20 @@ failed in the checkpoint and skipped until its next turn, with a source error na
 rate limits, connection and format errors still stop the whole source. Items carry `channelName`.
 Removing a channel marks its items inactive (kept with dismissals and links); re-adding shows them again.
 
-History parses the observed `Channel`, `=== Message from … ===`, `Message TS` and optional
-`Thread` framing. Thread reads have a separate contract: `=== THREAD PARENT MESSAGE ===`,
-`From`/`Time`/`Message TS`, `=== THREAD REPLIES (N total) ===`, and numbered reply delimiters.
-Both validate pagination text, counts, timestamps, duplicate IDs and response bounds. Unknown or
-ambiguous formats produce a visible source error, retaining last data and the checkpoint. Fixtures
-use synthetic content/identifiers with real wire formatting, including empty history and pagination.
+History parses the observed `Channel`, `=== Message from … ===`, `Message TS` framing. A message
+ends with known metadata lines (`Thread: N replies (latest: …)`, `Reactions: …`, `Files: …`) in any
+order, at most once each; they are dropped from the text. Bot `Attachment: …` blocks follow them and
+stay in the text as content. Messages with no text and no replies (file only) are skipped. Thread reads
+have a separate contract: `=== THREAD PARENT MESSAGE ===`, `From`/`Time`/`Message TS`,
+`=== THREAD REPLIES (N total) ===`, and numbered reply delimiters; their messages drop the same
+Reactions/Files lines. Both validate pagination text, counts, timestamps, duplicate IDs and response
+bounds. Unknown or ambiguous formats produce a visible source error, retaining last data and the
+checkpoint. Fixtures use synthetic content/identifiers with real wire formatting, including empty
+history and pagination.
+
+Source errors shown in the app are plain ("Couldn't read Linear.", "Couldn't read some Slack
+messages."), followed by the retry time; the technical cause goes to one daemon log line without
+response content.
 
 Standalone messages use their parent text. Threads read at most 30 replies; classification sees only
 a bounded 12,000-character excerpt. `ModelCatalog` reuses title-price selection restricted to scoped,
@@ -771,7 +779,9 @@ reports the fallback and queries my open issues by state type (triage, backlog, 
 never scanning completed issue history. Cycle progress/counts cover only my issues, not the team's
 overall progress. `TrackingSource.linear` and `DashboardTrackedSource.linear` expose the summary;
 the tracked APIs expose cycleId, state/statusType, priority, estimate, assignee/team IDs, identifier
-and gitBranchName in metadata. Swift mirrors these types in PilotCore.
+and gitBranchName in metadata. `list_issues` returns priority and estimate as `{value, name}` objects
+(estimate null when unset); metadata stores the numeric value. The `duplicate` state type counts as
+closed. Swift mirrors these types in PilotCore.
 
 Membership reconciliation is bounded to 500 tickets. Issue details are incremental by updatedAt
 with a one-second overlap; cycle rollover, settings changes and a periodic 15-minute refresh reset

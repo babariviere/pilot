@@ -109,6 +109,10 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.sourceLine(source(.signInRequired), now: now).text
         == "Sign in required. Run pi mcp login linear in Terminal, then sync.")
     #expect(TrackedItemText.sourceLine(source(.error, error: "Rate limited."), now: now).tone == .attention)
+    let retry = Date(timeIntervalSince1970: (ms + 600_000) / 1000).formatted(date: .omitted, time: .shortened)
+    #expect(TrackedItemText.sourceLine(source(.error, error: "Couldn't read Linear.", next: ms + 600_000), now: now).text
+        == "Couldn't read Linear. Pilot will retry at \(retry).")
+    #expect(TrackedItemText.sourceLine(source(.error), now: now).text == "Couldn't read Linear.")
     #expect(TrackedItemText.sourceLine(source(.idle), now: now).text == "Waiting for the first sync.")
     #expect(TrackedItemText.channelStatus(nil, saved: false).text == "Save to start tracking")
     #expect(TrackedItemText.channelStatus(.init(id: "C1", status: .ok, lastPulledAt: ms - 60_000), saved: true, now: now).text
