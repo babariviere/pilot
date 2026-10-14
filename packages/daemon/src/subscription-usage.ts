@@ -11,6 +11,40 @@ import type { SubscriptionUsage } from "@pilot/protocol";
 export type SubscriptionProvider = NonNullable<SubscriptionUsage["provider"]>;
 export const SUBSCRIPTION_PROVIDERS: readonly SubscriptionProvider[] = ["anthropic", "openai"];
 
+/** Agent reads use cached provider snapshots only, with a two-minute freshness budget. */
+export const SUBSCRIPTION_USAGE_MAX_AGE_MS = 120_000;
+export interface SubscriptionUsageReading {
+	status: "current" | "stale" | "unknown";
+	fetchedAt?: number;
+	windows: Array<{ label: string; usedPercent: number; resetsAt: string | null }>;
+}
+
+/** Explicit allowlist: never forward provider errors, costs, credentials or account metadata. */
+export function subscriptionUsageReadings(
+	source: SubscriptionUsageSource | undefined,
+	now = Date.now(),
+): Record<SubscriptionProvider, SubscriptionUsageReading> {
+	const read = (provider: SubscriptionProvider): SubscriptionUsageReading => {
+		let usage: SubscriptionUsage | undefined;
+		try {
+			usage = source?.get(provider);
+		} catch {
+			return { status: "unknown", windows: [] };
+		}
+		if (!usage || usage.error || !usage.windows.length) return { status: "unknown", windows: [] };
+		return {
+			status: usage.fetchedAt > now || now - usage.fetchedAt >= SUBSCRIPTION_USAGE_MAX_AGE_MS ? "stale" : "current",
+			fetchedAt: usage.fetchedAt,
+			windows: usage.windows.map(({ label, usedPercent, resetsAt }) => ({
+				label,
+				usedPercent,
+				resetsAt: resetsAt ?? null,
+			})),
+		};
+	};
+	return { anthropic: read("anthropic"), openai: read("openai") };
+}
+
 /** pi providers whose subscription windows are reported. Virtual routers resolve to these first. */
 export function subscriptionProvider(piProvider: string | undefined): SubscriptionProvider | undefined {
 	if (piProvider === "anthropic") return "anthropic";
@@ -55,6 +89,7 @@ export function parseUsageCache(data: unknown, provider: SubscriptionProvider): 
 }
 
 export interface SubscriptionUsageSource {
+	/** Synchronous in-memory read only. Refreshes/provider I/O belong in the source's background work. */
 	get(provider: SubscriptionProvider): SubscriptionUsage | undefined;
 	start(): Promise<void>;
 	close(): void;

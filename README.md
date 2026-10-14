@@ -124,6 +124,11 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+Only the coordinating chat sees subscription windows in its status and start tool results: percent
+used and reset time per provider, with readings over two minutes old marked stale and missing data
+marked unknown. Reads use the daemon's shared cache without waiting for providers. Worker tool results
+contain no subscription usage, and no account, billing or cost details are exposed.
+
 Coordinator updates wait while member chats are working or have running background jobs. An idle chat
 with jobs is reported as waiting, not finished. Updates settle for 30 seconds after activity stops,
 with a 30-minute safety cap measured from the oldest pending event or a job's start, whichever is

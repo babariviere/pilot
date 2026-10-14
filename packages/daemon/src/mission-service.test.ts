@@ -17,6 +17,7 @@ import { ProjectStore } from "./projects.ts";
 import type { PullRequestOptions } from "./pull-requests.ts";
 import { createDaemonServer } from "./server.ts";
 import { CommandRejected, type SessionWorker, SessionManager } from "./sessions.ts";
+import { type SubscriptionUsageSource, SUBSCRIPTION_USAGE_MAX_AGE_MS } from "./subscription-usage.ts";
 import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 
@@ -228,6 +229,7 @@ async function fixture(
 			throw new Error("GitHub unavailable in fixture");
 		},
 	},
+	usageSource?: SubscriptionUsageSource,
 ) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-missions-"));
 	const projectDir = join(home, "project");
@@ -253,6 +255,7 @@ async function fixture(
 			},
 		},
 		{ ...pullRequests, ...(pullRequests.runner ? { runner: legacyGitHub(pullRequests.runner) } : {}) },
+		{ ...(usageSource ? { subscriptionUsage: () => usageSource } : {}) },
 	);
 	const store = new MissionStore(":memory:");
 	t.mock.method(sessions, "selectTaskModel", async (_cwd: string, model?: string, thinking?: string) => ({
@@ -2147,6 +2150,133 @@ test("coordinator actions check the current role on every call before causing si
 	for (const [action, args] of actions)
 		await assert.rejects(f.service.call(member.id, action, args), /Only the mission coordinator/);
 	assert.deepEqual(f.store.tasks(mission.id), tasks);
+});
+
+test("only the current lead gets allowlisted subscription readings in status and start", async (t) => {
+	const fetchedAt = Date.now();
+	const source: SubscriptionUsageSource = {
+		get: (provider) => ({
+			provider,
+			fetchedAt,
+			windows: [
+				{ label: "5-hour", usedPercent: 67.3, resetsAt: "2026-10-15T12:00:00Z" },
+				{ label: "Weekly", usedPercent: 12.4, resetsAt: "2026-10-20T12:00:00Z" },
+			],
+			account: "private-account",
+			cost: 100,
+		}),
+		start: async () => {},
+		close() {},
+	};
+	const f = await fixture(t, undefined, source);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const status = (await f.service.call(lead.id, "status", {})) as { subscriptionUsage: unknown };
+	const reading = { status: "current", fetchedAt, windows: source.get("anthropic")!.windows };
+	assert.deepEqual(status.subscriptionUsage, {
+		anthropic: reading,
+		openai: reading,
+	});
+	assert.doesNotMatch(JSON.stringify(status), /private-account|cost|account/);
+	const started = (await f.service.call(lead.id, "start", { id: "1" })) as {
+		id: string;
+		subscriptionUsage: unknown;
+		usage?: unknown;
+	};
+	assert.deepEqual(started.subscriptionUsage, status.subscriptionUsage);
+	assert.equal(started.usage, undefined);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, started.id);
+	for (const id of [worker.id, started.id]) {
+		await assert.rejects(f.service.call(id, "status", {}), /Only the mission coordinator/);
+		await assert.rejects(f.service.call(id, "start", { id: "1" }), /Only the mission coordinator/);
+		for (const action of [
+			"get",
+			"tasks",
+			"decisions",
+			"links",
+			"artifacts",
+			"comments",
+			"activity",
+			"brief",
+		] as const) {
+			assert.doesNotMatch(
+				JSON.stringify(await f.service.call(id, action, {})),
+				/subscription|67\.3|12\.4|private-account/,
+			);
+		}
+		assert.doesNotMatch(
+			JSON.stringify(await f.service.call(id, "task", { id: "1" })),
+			/subscription|67\.3|private-account/,
+		);
+	}
+	// The raw start summary used to forward subscription errors and all session usage.
+	t.mock.method(f.service, "startTask", async () => ({
+		...worker,
+		usage: { subscription: { fetchedAt, windows: [], error: "private-account" } },
+	}));
+	const filtered = await f.service.call(lead.id, "start", { id: "1" });
+	assert.doesNotMatch(JSON.stringify(filtered), /private-account|"usage"/);
+	f.store.update(mission.id, { coordinatorSessionId: worker.id });
+	await assert.rejects(f.service.call(lead.id, "status", {}), /Only the mission coordinator/);
+	assert.deepEqual(
+		((await f.service.call(worker.id, "status", {})) as { subscriptionUsage: unknown }).subscriptionUsage,
+		status.subscriptionUsage,
+	);
+	// Recheck authority after asynchronous spawn, not just before it.
+	t.mock.method(f.service, "startTask", async () => {
+		f.store.update(mission.id, { coordinatorSessionId: lead.id });
+		return worker;
+	});
+	await assert.rejects(f.service.call(worker.id, "start", { id: "1" }), /Only the mission coordinator/);
+});
+
+test("status returns stale or unknown cache data while a provider refresh is stalled", async (t) => {
+	const fetchedAt = Date.now() - SUBSCRIPTION_USAGE_MAX_AGE_MS;
+	let release!: () => void;
+	const stalled = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(release);
+	let starts = 0;
+	const source: SubscriptionUsageSource = {
+		get: (provider) =>
+			provider === "anthropic"
+				? { fetchedAt, windows: [{ label: "5h", usedPercent: 70 }] }
+				: { fetchedAt, windows: [], error: "private provider failure" },
+		start: async () => {
+			if (++starts > 1) await stalled;
+		},
+		close() {},
+	};
+	const f = await fixture(t, undefined, source);
+	const lead = await f.spawn();
+	await f.service.create({ projectId: f.project.id, title: "Shared", fromSessionId: lead.id, draft: false });
+	const refreshing = source.start();
+	const workerCount = f.workers.size;
+	const before = performance.now();
+	const result = await Promise.race([
+		f.service.call(lead.id, "status", {}),
+		delay(250).then(() => {
+			throw new Error("status blocked on a provider");
+		}),
+	]);
+	assert.ok(performance.now() - before < 250);
+	assert.deepEqual((result as { subscriptionUsage: unknown }).subscriptionUsage, {
+		anthropic: { status: "stale", fetchedAt, windows: [{ label: "5h", usedPercent: 70, resetsAt: null }] },
+		openai: { status: "unknown", windows: [] },
+	});
+	assert.equal(starts, 2, "status never requests another refresh");
+	assert.equal(f.workers.size, workerCount);
+	release();
+	await refreshing;
 });
 
 test("task deletion, ordering and grouping validate inputs and preserve unrelated state", async (t) => {

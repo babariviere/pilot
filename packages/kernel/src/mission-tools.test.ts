@@ -197,6 +197,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	assert.ok(schema.properties.thinking);
 	assert.match(tool.description, /validation errors list allowed model IDs, prices and supported thinking levels/);
 	assert.match(tool.description, /cheaper models for small tasks.*strongest allowed model for hard ones/);
+	assert.match(tool.description, /cached read-only subscriptionUsage per provider/);
 	for (const params of [
 		{ action: "delete", id: "#3" },
 		{ action: "group", ids: ["1-5", 8], milestone: "Next" },
@@ -235,6 +236,7 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.equal(tool.annotations?.destructiveHint, false);
 	assert.ok(!("order" in schema.properties));
 	assert.doesNotMatch(tool.description, /task order|For claim or group/);
+	assert.doesNotMatch(tool.description, /subscriptionUsage|window percent\/reset/);
 	assert.match(tool.description, /status "dropped"/);
 	assert.equal(schema.properties.model, undefined);
 	assert.equal(schema.properties.thinking, undefined);
