@@ -58,9 +58,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var sidebarScope: String?
     /// The last selection in each scope, restored when the user switches back. Keyed by `scopeKey`.
     var scopeSelections: [String: SidebarSelection] = [:]
-    /// Settings tab to show next, and a project to select there ("Project Settings…").
+    /// Settings page to show next, such as a project's page from "Project Settings…".
     @Published var settingsTab: SettingsTab = .appearance
-    @Published var settingsProjectId: String?
     @Published var missionTab: MissionTab = .overview
     /// A task the Tasks tab should scroll to and briefly highlight, set by "Show task" on a link.
     @Published var revealedMissionTaskId: String?

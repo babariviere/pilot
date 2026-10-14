@@ -44,6 +44,8 @@ struct PilotApp: App {
             SettingsView()
                 .environmentObject(model)
         }
+        .defaultSize(width: 780, height: 580)
+        .windowResizability(.contentMinSize)
 
         MenuBarExtra {
             MenuBarContent(model: model)

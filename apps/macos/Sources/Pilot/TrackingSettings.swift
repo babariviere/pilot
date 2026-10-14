@@ -53,10 +53,7 @@ struct TrackingSettingsSection: View {
         } header: {
             Text("Tracking")
         } footer: {
-            Text("Pilot reads your Linear issues and Slack bug reports through your pi MCP servers. It never posts, comments or changes tickets, and never starts work on its own.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            SettingsFooter("Pilot reads your Linear issues and Slack bug reports through your pi MCP servers. It never posts, comments or changes tickets, and never starts work on its own.")
         }
     }
 }

@@ -101,6 +101,20 @@ enum Snapshot {
             return
         }
 
+        if CommandLine.arguments.contains("--settings-only") {
+            let pages: [(String, SettingsTab)] = SettingsTab.general.map { ($0.title.lowercased(), $0) }
+                + [("project", .project(Fixtures.projects[0].id))]
+            for (name, tab) in pages {
+                model.settingsTab = tab
+                await render(SettingsView(), size: CGSize(width: 780, height: 580),
+                             to: directory.appending(path: "settings-\(name).png"))
+            }
+            await render(SettingsView(), size: CGSize(width: 1240, height: 640), to: directory.appending(path: "settings-wide.png"))
+            await render(SettingsView(), size: CGSize(width: 640, height: 440), to: directory.appending(path: "settings-narrow.png"))
+            NSApp.terminate(nil)
+            return
+        }
+
         if CommandLine.arguments.contains("--long-messages-only") {
             let report = "I had a crash:\n\nTranslated Report\nProcess: Pilot\nException: Stack overflow\nThread 0:\n"
                 + String(repeating: "SwiftUI menuHostDidChangeMenuItems\n", count: 2000)
@@ -630,7 +644,7 @@ enum Snapshot {
             size: CGSize(width: 1500, height: 860),
             to: directory.appending(path: "session-changes.png")
         )
-        await render(SettingsView().environmentObject(model), size: CGSize(width: 560, height: 420), to: directory.appending(path: "settings.png"))
+        await render(SettingsView().environmentObject(model), size: CGSize(width: 780, height: 580), to: directory.appending(path: "settings.png"))
         await render(
             VStack(alignment: .leading, spacing: 16) {
                 UsageFooter(usage: Fixtures.codexUsage)

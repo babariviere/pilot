@@ -148,8 +148,7 @@ struct ProjectPage: View {
     }
 
     private func openProjectSettings(_ project: Project) {
-        model.settingsTab = .projects
-        model.settingsProjectId = project.id
+        model.settingsTab = .project(project.id)
         openSettings()
     }
 }

@@ -7,6 +7,8 @@ import SwiftUI
 enum Theme {
     /// Readable line length for the transcript and composer.
     static let column: CGFloat = 760
+    /// Readable width of settings pages; wider settings windows center the page.
+    static let settingsColumn: CGFloat = 680
     static let radius: CGFloat = 10
 
     static let background = Color.white
