@@ -1,0 +1,20 @@
+name: Cancel closed PR CI
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+# Joining the PR's CI concurrency group (see macos-release.yml) cancels its in-progress run.
+# Merged changes are verified again by the main push run.
+concurrency:
+  group: pilot-ci-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - run: echo "Cancelled CI for closed PR #${{ github.event.pull_request.number }}"
