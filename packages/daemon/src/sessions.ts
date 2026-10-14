@@ -674,7 +674,12 @@ export class Worker implements SessionWorker {
 	}
 }
 
+export type MessageDelivery =
+	| { delivery: "delivered" | "queued" }
+	| { delivery: "not_started"; reason: string; error?: string };
+
 export class SessionManager {
+	private readonly deliveryReports = new Map<string, MessageDelivery | undefined>();
 	private readonly metas = new Map<string, SessionMeta>();
 	private readonly workers = new Map<string, SessionWorker>();
 	/** sessionId -> watchId -> listener */
@@ -2195,6 +2200,35 @@ export class SessionManager {
 		}
 	}
 
+	/** Explicit agent follow-ups use user admission, but report the kernel's durable placement. */
+	async sendReported(id: string, message: string, requestId: string): Promise<MessageDelivery> {
+		const end = this.updateGate.begin();
+		this.deliveryReports.set(requestId, undefined);
+		try {
+			const worker = this.workers.get(id);
+			if (worker?.state === "failed")
+				return { delivery: "not_started", reason: "failed", error: worker.error ?? "Chat failed" };
+			await this.sendAdmitted(id, message, "followUp", requestId, true);
+			const report = this.deliveryReports.get(requestId);
+			if (report) return report;
+			const meta = this.require(id);
+			throw new WorkerUnavailable(meta.inputError ?? "Message admission acknowledgement is uncertain");
+		} catch (error) {
+			const meta = this.require(id);
+			if (meta.archivedAt !== undefined)
+				return {
+					delivery: "not_started",
+					reason: "archived",
+					error: "Restore the archived session before sending a message",
+				};
+			if (meta.failure) return { delivery: "not_started", reason: "failed", error: meta.failure };
+			throw error;
+		} finally {
+			this.deliveryReports.delete(requestId);
+			end();
+		}
+	}
+
 	async send(
 		id: string,
 		message: string,
@@ -2209,7 +2243,13 @@ export class SessionManager {
 		}
 	}
 
-	private async sendAdmitted(id: string, message: string, mode: DeliveryMode, requestId: string): Promise<void> {
+	private async sendAdmitted(
+		id: string,
+		message: string,
+		mode: DeliveryMode,
+		requestId: string,
+		report = false,
+	): Promise<void> {
 		const meta = this.require(id);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		const transition = this.archiveTransitions.get(id);
@@ -2224,7 +2264,13 @@ export class SessionManager {
 			// Pending duplicates retain their original payload; accepted retries are deduped by the kernel.
 			if (!meta.pending?.some((command) => command.requestId === requestId)) {
 				meta.pending ??= [];
-				meta.pending.push({ type: "input", requestId, content: message, mode });
+				meta.pending.push({
+					type: "input",
+					requestId,
+					content: message,
+					mode,
+					...(report ? { reportDelivery: true } : {}),
+				});
 			}
 			meta.updatedAt = Date.now();
 			meta.lastUserMessageAt = meta.updatedAt;
@@ -2237,7 +2283,7 @@ export class SessionManager {
 			this.emit(meta);
 			const starting = meta.initializing;
 			const admission = this.start(id, true);
-			if (!starting) {
+			if (!starting || report) {
 				const rejected = await admission;
 				if (rejected.has(requestId)) throw rejected.get(requestId);
 				if (meta.failure) throw new Error(meta.failure);
@@ -2260,6 +2306,15 @@ export class SessionManager {
 		// Drop queued input, and abort anything whose acknowledgement was in flight. The user's own undelivered messages
 		// go back to the composer. One in flight reaches the kernel first, which either withdraws it too or runs it.
 		const delivering = this.delivering.get(id);
+		for (const command of meta.pending ?? []) {
+			if (
+				command.type === "input" &&
+				command.requestId !== delivering &&
+				this.deliveryReports.has(command.requestId) &&
+				!this.deliveryReports.get(command.requestId)
+			)
+				this.deliveryReports.set(command.requestId, { delivery: "not_started", reason: "stopped" });
+		}
 		const unsent = (meta.pending ?? []).flatMap((command) =>
 			command.type === "input" &&
 			!command.onlyIfIdle &&
@@ -3200,6 +3255,19 @@ export class SessionManager {
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (
+			packet.type === "accepted" &&
+			packet.delivery &&
+			this.workers.get(meta.id) === worker &&
+			this.deliveryReports.has(packet.requestId)
+		) {
+			this.deliveryReports.set(
+				packet.requestId,
+				packet.delivery === "not_started"
+					? { delivery: packet.delivery, reason: packet.reason ?? "stopped" }
+					: { delivery: packet.delivery },
+			);
+		}
 		// Parking already detached this worker. Cleanup errors and late packets belong
 		// to its shutdown, not the session's completed work or a replacement worker.
 		if (this.parked.has(worker)) return;

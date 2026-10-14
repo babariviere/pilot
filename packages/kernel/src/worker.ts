@@ -206,10 +206,17 @@ export function runKernelWorker(): void {
 				await session.recordActivity(command.requestId, command.text);
 				await send({ type: "accepted", requestId: command.requestId });
 				break;
-			case "input":
-				await session.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
-				await send({ type: "accepted", requestId: command.requestId });
+			case "input": {
+				const delivery = await session.submit(
+					command.requestId,
+					command.content,
+					command.mode,
+					command.onlyIfIdle,
+					command.reportDelivery,
+				);
+				await send({ type: "accepted", requestId: command.requestId, ...delivery });
 				break;
+			}
 			case "abort": {
 				const withdrawn = await session.abort();
 				await send({ type: "aborted", requestId: command.requestId, ...(withdrawn.length ? { withdrawn } : {}) });

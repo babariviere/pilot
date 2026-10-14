@@ -333,6 +333,11 @@ the brief into the repository is an explicit user action.
   events and agent logs cannot push user notes out of this separate window. Posting does not send
   a chat message; agents read these notes on their next `get`.
 
+Coordinator `send` uses the same follow-up admission as user messages, waking idle or paused member
+chats. It returns `delivery: delivered` after kernel placement, `queued` while busy, or
+`not_started` with a reason (`archived`, `failed`, or `stopped`). Archived chats must be restored
+first. Lost admission acknowledgements remain errors, never a claimed delivery.
+
 **Membership.** A session has at most one mission and must belong to the mission's project; attaching
 a chat from another project is rejected. Chats join through **Make a mission…** (the chat drafts the
 mission from its conversation), **Add to mission…**, or **Start chat** on a task (which also claims the

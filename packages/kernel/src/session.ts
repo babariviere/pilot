@@ -535,7 +535,13 @@ export class KernelSession {
 	}
 
 	/** Durable admission. Retrying the same requestId returns the existing submission. */
-	async submit(requestId: string, content: string, mode: DeliveryMode, onlyIfIdle = false): Promise<void> {
+	async submit(
+		requestId: string,
+		content: string,
+		mode: DeliveryMode,
+		onlyIfIdle = false,
+		reportDelivery = false,
+	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			throw new ConversationBusy(this.conversation.id);
 		this.#admissions++;
@@ -544,9 +550,22 @@ export class KernelSession {
 			const prepared = await this.adapter.prepareInput(content);
 			if (onlyIfIdle) {
 				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context);
-				return;
+				return { delivery: "delivered" };
 			}
-			await this.conversation.submit({ type: "input", content: prepared, requestId, whenBusy: mode }, context);
+			const submission = await this.conversation.submit(
+				{ type: "input", content: prepared, requestId, whenBusy: mode },
+				context,
+			);
+			// Ordinary user/automatic admission needs no extra storage read.
+			if (!reportDelivery) return;
+			const status = await submission.status(context);
+			if (status.status === "queued") return { delivery: "queued" };
+			if (status.status === "unanswered")
+				return {
+					delivery: "not_started",
+					reason: status.reason === "aborted" || status.reason === "reset" ? "stopped" : "failed",
+				};
+			return { delivery: "delivered" };
 		} finally {
 			this.#admissions--;
 		}
