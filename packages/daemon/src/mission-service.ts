@@ -513,8 +513,12 @@ export class MissionService {
 					throw new Conflict("That chat is not in this mission");
 				if (typeof args.message !== "string" || !args.message.trim()) throw new Error("send requires message");
 				// Coordinator messages reach the chat without appearing as the user's queued messages.
-				await this.sessions.send(args.targetSessionId, args.message, "followUp", `mission:send:${randomUUID()}`);
-				return { sessionId: args.targetSessionId, sent: true };
+				const result = await this.sessions.sendReported(
+					args.targetSessionId,
+					args.message,
+					`mission:send:${randomUUID()}`,
+				);
+				return { sessionId: args.targetSessionId, sent: result.delivery !== "not_started", ...result };
 			}
 			case "status": {
 				const tasks = this.store.tasks(missionId);

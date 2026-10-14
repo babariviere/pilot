@@ -47,7 +47,14 @@ export interface KernelSpec {
 
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
-	| { type: "input"; requestId: string; content: string; mode: DeliveryMode; onlyIfIdle?: boolean }
+	| {
+			type: "input";
+			requestId: string;
+			content: string;
+			mode: DeliveryMode;
+			onlyIfIdle?: boolean;
+			reportDelivery?: boolean;
+	  }
 	/** Passive, display-only daemon activity. Never schedules a model turn. */
 	| { type: "activity"; requestId: string; text: string }
 	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string; mode?: DeliveryMode }
@@ -112,7 +119,7 @@ export type KernelPacket =
 	| { type: "artifact.reference.get"; callId: string; id: string; revision?: number }
 	/** The kernel is awaiting its first prompt preparation. No model or tools are running. */
 	| { type: "workspace.prepare"; callId: string }
-	| { type: "accepted"; requestId: string }
+	| { type: "accepted"; requestId: string; delivery?: "delivered" | "queued" | "not_started"; reason?: string }
 	/** `withdrawn` holds the user's own queued messages, in delivery order, which Stop restores to the composer. */
 	| { type: "aborted"; requestId: string; withdrawn?: { requestId?: string; content: string }[] }
 	/**

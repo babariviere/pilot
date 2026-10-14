@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { InboxDoc } from "@earendil-works/pi-durable";
+import { Harness, InboxDoc } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
 import {
 	fauxAssistantMessage,
@@ -19,6 +19,56 @@ import { KernelSession } from "./session.ts";
 import { SubagentBridge } from "./subagents.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+for (const paused of [false, true]) {
+	test(`follow-up delivery starts an ${paused ? "initially paused" : "idle"} kernel and busy input is queued`, async (t) => {
+		const f = await fixture(t, []);
+		const openAdapter = NativeAdapter.open;
+		t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+			openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+		);
+		if (paused) {
+			const openHarness = Harness.open;
+			t.mock.method(Harness, "open", async (...args: Parameters<typeof openHarness>) => {
+				const harness = await openHarness(...args);
+				t.mock.method(harness, "resume", () => {});
+				return harness;
+			});
+		}
+		let release!: () => void;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.after(() => release());
+		let started!: () => void;
+		const generating = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		f.faux.setResponses([
+			async () => {
+				started();
+				await gate;
+				return fauxAssistantMessage("First answer");
+			},
+			fauxAssistantMessage("Queued answer"),
+		]);
+		const session = await KernelSession.open(
+			{ sessionId: "delivery", cwd: f.root, storageDir: join(f.root, "storage") },
+			{ onWorking: () => {} },
+		);
+		f.cleanup.push(() => session.close());
+		if (paused) assert.equal((await session.harness.inspect(context)).scheduling, "paused");
+		assert.deepEqual(await session.submit("first", "Start a turn", "followUp", false, true), {
+			delivery: "delivered",
+		});
+		await generating;
+		assert.equal((await session.harness.inspect(context)).scheduling, "running");
+		assert.deepEqual(await session.submit("second", "Run next", "followUp", false, true), { delivery: "queued" });
+		release();
+		await session.harness.waitForIdle(context);
+		assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))?.items.length, 0);
+	});
+}
 const entry = {
 	name: "review",
 	state: "working",

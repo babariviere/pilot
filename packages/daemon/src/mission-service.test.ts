@@ -38,6 +38,12 @@ class FakeWorker implements SessionWorker {
 	}
 	async request(command: KernelCommand): Promise<void> {
 		this.requests.push(command);
+		if (command.type === "input")
+			this.onPacket({
+				type: "accepted",
+				requestId: command.requestId,
+				delivery: this.state === "working" ? "queued" : "delivered",
+			});
 	}
 	async close(): Promise<void> {}
 }
@@ -1277,7 +1283,7 @@ test("agent calls run against the chat's mission and update its context", async 
 	assert.equal(started.missionId, mission.id);
 	const memberWorker = await until(() => f.workers.get(started.id));
 	const sent = await call("send", { targetSessionId: started.id, message: "Cover error cases" });
-	assert.deepEqual(sent.result, { sessionId: started.id, sent: true });
+	assert.deepEqual(sent.result, { sessionId: started.id, sent: true, delivery: "delivered" });
 	await until(() =>
 		memberWorker.requests.find((command) => command.type === "input" && command.content === "Cover error cases"),
 	);
@@ -2061,7 +2067,11 @@ test("coordinator send admits follow-ups only to member chats and propagates del
 		worker.onPacket({ type: "working", working: state === "working" });
 		const message = `Continue while ${state}`;
 		const result = await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message });
-		assert.deepEqual(result, { sessionId: member.id, sent: true });
+		assert.deepEqual(result, {
+			sessionId: member.id,
+			sent: true,
+			delivery: state === "working" ? "queued" : "delivered",
+		});
 		const input = await until(() =>
 			worker.requests.find((command) => command.type === "input" && command.content === message),
 		);
@@ -2073,16 +2083,19 @@ test("coordinator send admits follow-ups only to member chats and propagates del
 	worker.onPacket({ type: "working", working: false });
 	await until(() => !f.sessions["starting"].has(member.id));
 	await f.sessions.archive(member.id);
-	await assert.rejects(
-		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }),
-		/Restore the archived session/,
-	);
+	assert.deepEqual(await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }), {
+		sessionId: member.id,
+		sent: false,
+		delivery: "not_started",
+		reason: "archived",
+		error: "Restore the archived session before sending a message",
+	});
 	f.service.leave(member.id);
 	await assert.rejects(
 		f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" }),
 		/not in this mission/,
 	);
-	t.mock.method(f.sessions, "send", async () => {
+	t.mock.method(f.sessions, "sendReported", async () => {
 		throw new Error("Delivery failed");
 	});
 	await assert.rejects(
@@ -2090,6 +2103,126 @@ test("coordinator send admits follow-ups only to member chats and propagates del
 		/Delivery failed/,
 	);
 });
+
+for (const acknowledgement of ["queued", "missing"] as const) {
+	test(`coordinator send uses the kernel's ${acknowledgement} acknowledgement rather than an idle state guess`, async (t) => {
+		const f = await fixture(t);
+		const coordinator = await f.spawn();
+		const member = await f.spawn();
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: coordinator.id,
+			draft: false,
+		});
+		f.service.join(member.id, { missionId: mission.id });
+		const worker = f.workers.get(member.id)!;
+		assert.equal(worker.state, "idle");
+		t.mock.method(worker, "request", async (command: KernelCommand) => {
+			assert.equal(command.type, "input");
+			if (command.type !== "input") return;
+			assert.equal(command.reportDelivery, true);
+			if (acknowledgement === "queued")
+				worker.onPacket({ type: "accepted", requestId: command.requestId, delivery: "queued" });
+		});
+		const sent = f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" });
+		if (acknowledgement === "queued")
+			assert.deepEqual(await sent, { sessionId: member.id, sent: true, delivery: "queued" });
+		else await assert.rejects(sent, /acknowledgement is uncertain/);
+		assert.equal(f.sessions["deliveryReports"].size, 0);
+	});
+}
+
+for (const outcome of ["failed", "archived", "stopped", "parked"] as const) {
+	test(`coordinator send reports ${outcome} admission without claiming a dropped message was delivered`, async (t) => {
+		const f = await fixture(t);
+		const coordinator = await f.spawn();
+		const member = await f.spawn();
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			fromSessionId: coordinator.id,
+			draft: false,
+		});
+		f.service.join(member.id, { missionId: mission.id });
+		const worker = f.workers.get(member.id)!;
+		const before = worker.requests.length;
+		if (outcome === "failed") {
+			worker.state = "failed";
+			worker.error = "Model unavailable";
+		}
+		if (outcome === "archived") await f.sessions.archive(member.id);
+		if (outcome === "parked") {
+			await f.sessions["unparked"](member.id);
+			f.sessions["workers"].delete(member.id);
+		}
+		let release!: () => void;
+		let saved!: () => void;
+		const saving = new Promise<void>((resolve) => {
+			saved = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.after(() => release());
+		if (outcome === "stopped") {
+			const save = f.sessions["save"].bind(f.sessions);
+			let gated = false;
+			t.mock.method(f.sessions, "save" as never, async (...args: Parameters<typeof save>) => {
+				if (
+					!gated &&
+					args[0].id === member.id &&
+					args[0].pending?.some(
+						(command) => command.type === "input" && command.requestId.startsWith("mission:send:"),
+					)
+				) {
+					gated = true;
+					saved();
+					await gate;
+				}
+				return save(...args);
+			});
+		}
+		const sent = f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Continue" });
+		if (outcome === "stopped") {
+			await saving;
+			await f.sessions.stop(member.id);
+			release();
+		}
+		const result = await sent;
+		if (outcome === "parked") {
+			assert.deepEqual(result, { sessionId: member.id, sent: true, delivery: "delivered" });
+			assert.notEqual(f.workers.get(member.id), worker);
+			assert.ok(
+				f.workers
+					.get(member.id)
+					?.requests.some((command) => command.type === "input" && command.content === "Continue"),
+			);
+		} else {
+			assert.deepEqual(result, {
+				sessionId: member.id,
+				sent: false,
+				delivery: "not_started",
+				reason: outcome,
+				...(outcome === "failed" ? { error: "Model unavailable" } : {}),
+				...(outcome === "archived" ? { error: "Restore the archived session before sending a message" } : {}),
+			});
+			assert.ok(
+				!worker.requests
+					.slice(before)
+					.some((command) => command.type === "input" && command.content === "Continue"),
+			);
+		}
+		assert.equal(f.sessions["deliveryReports"].size, 0);
+		if (outcome === "archived") {
+			await f.sessions.restore(member.id);
+			assert.deepEqual(
+				await f.service.call(coordinator.id, "send", { targetSessionId: member.id, message: "Restored" }),
+				{ sessionId: member.id, sent: true, delivery: "delivered" },
+			);
+		}
+	});
+}
 
 test("coordinator status includes archived and parked members, outcomes and tasks without waking workers", async (t) => {
 	const f = await fixture(t);
