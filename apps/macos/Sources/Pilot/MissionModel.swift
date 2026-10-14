@@ -80,6 +80,12 @@ extension AppModel {
         }
     }
 
+    /// Clear only the deleted mission's selection, and only after the daemon succeeds.
+    func deleteMission(_ id: String, using client: PilotClient? = nil) async throws {
+        try await (client ?? self.client).deleteMission(id)
+        if selectedMissionId == id { selectedMissionId = nil }
+    }
+
     func removeFromMission(_ sessionId: String) {
         missionAction { [client] in try await client.leaveMission(sessionId) }
     }
@@ -329,4 +335,51 @@ func missionAuthorName(_ sessionId: String?, client: PilotClient) -> String {
 
 func missionRelativeTime(_ milliseconds: Double, now: Date = Date()) -> String {
     SessionTimeFormatting.relative(milliseconds, now: now)
+}
+
+// Shared menu items keep the toolbar and both row menus consistent.
+struct MissionEditAction: View {
+    let missionId: String
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Button { model.missionSheet = .edit(missionId: missionId) } label: {
+            Label("Edit Title and Goal…", systemImage: "pencil")
+        }
+    }
+}
+
+struct MissionStatusActions: View {
+    let missionId: String
+    let status: MissionStatus
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if status != .done {
+            Button { setStatus(.done) } label: { Label("Mark as Done", systemImage: "checkmark.circle") }
+        }
+        if status != .active {
+            Button { setStatus(.active) } label: { Label("Reopen", systemImage: "arrow.uturn.backward") }
+        }
+        if status != .archived {
+            Button { setStatus(.archived) } label: { Label("Archive", systemImage: "archivebox") }
+        }
+    }
+
+    private func setStatus(_ status: MissionStatus) {
+        model.missionAction { [client = model.client, missionId] in
+            try await client.updateMission(missionId, UpdateMissionRequest(status: status))
+        }
+    }
+}
+
+struct MissionDeleteAction: View {
+    let missionId: String
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Button(role: .destructive) { model.pendingMissionDeletionId = missionId } label: {
+            Label("Delete Mission…", systemImage: "trash")
+        }
+    }
 }

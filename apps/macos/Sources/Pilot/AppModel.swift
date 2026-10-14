@@ -70,6 +70,8 @@ final class AppModel: ObservableObject {
     /// A task the Tasks tab should scroll to and briefly highlight, set by "Show task" on a link.
     @Published var revealedMissionTaskId: String?
     @Published var missionSheet: MissionSheet?
+    /// Deletion is confirmed once by the main window, regardless of its entry point.
+    @Published var pendingMissionDeletionId: String?
     /// Missions whose chats are listed in the sidebar.
     @Published var expandedMissions: Set<String> = []
     @Published var showingInactiveMissions = false
