@@ -956,11 +956,16 @@ enum Snapshot {
         }
         for id in ["d1", "pr1"] { if let session = model.client.session(id) { model.review(session, explicit: true) } }
         func linear(_ number: Int, _ title: String, _ type: String, _ state: String, priority: Double, ago: Double,
-                    sessions: [String]? = nil, missions: [String]? = nil) -> TrackedItem {
-            TrackedItem(id: "l\(number)", projectId: "p1", kind: .linear, externalId: "uuid-\(number)", title: title,
+                    sessions: [String]? = nil, missions: [String]? = nil, startFailed: Bool = false) -> TrackedItem {
+            var metadata: [String: JSONValue] = ["identifier": .string("ENG-\(number)"), "statusType": .string(type),
+                                                 "priority": .number(priority)]
+            if startFailed {
+                metadata["linearStart"] = .object(["outcome": .string("error"), "attemptedAt": .number(now - ago),
+                                                   "error": .string("Couldn't move ticket to In progress.")])
+            }
+            return TrackedItem(id: "l\(number)", projectId: "p1", kind: .linear, externalId: "uuid-\(number)", title: title,
                         url: "https://linear.app/acme/issue/ENG-\(number)", status: state,
-                        metadata: ["identifier": .string("ENG-\(number)"), "statusType": .string(type),
-                                   "priority": .number(priority)],
+                        metadata: metadata,
                         sessionId: sessions?.last, missionId: missions?.last, sessionIds: sessions, missionIds: missions,
                         createdAt: now - ago, updatedAt: now - ago)
         }
@@ -979,7 +984,7 @@ enum Snapshot {
             linear(388, "Flaky test: workspace lifecycle does not settle", "unstarted", "Todo", priority: 2,
                    ago: 5 * 60 * minute, sessions: ["f1"]),
             linear(397, "Add a keyboard shortcut to archive a chat", "unstarted", "Todo", priority: 3, ago: day,
-                   sessions: ["d1"], missions: ["m1"]),
+                   sessions: ["d1"], missions: ["m1"], startFailed: true),
             linear(420, "Settings window forgets its size between launches", "backlog", "Backlog", priority: 4,
                    ago: 2 * day),
             linear(371, "Upgrade the daemon to Node 24", "completed", "Done", priority: 3, ago: 3 * day),

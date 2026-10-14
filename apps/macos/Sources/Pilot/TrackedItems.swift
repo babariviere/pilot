@@ -70,10 +70,26 @@ enum TrackedItemText {
         guard case let .number(value) = item.metadata["priority"] else { return nil }
         switch Int(value) {
         case 1: return "Urgent"
-        case 2: return "High priority"
-        case 3: return "Medium priority"
-        case 4: return "Low priority"
+        case 2: return "High"
+        case 3: return "Medium"
+        case 4: return "Low"
         default: return nil
+        }
+    }
+
+    /// Rows name only the priorities that stand out (Urgent and High). Medium and Low would repeat on most rows.
+    static func notablePriority(_ item: TrackedItem) -> String? {
+        guard case let .number(value) = item.metadata["priority"], (1...2).contains(Int(value)) else { return nil }
+        return priority(item)
+    }
+
+    /// pilotd's quiet result when it couldn't move a started ticket to the team's first started state. It no
+    /// longer applies once the ticket is started or closed, for example after the user moved it in Linear.
+    static func linearStartError(_ item: TrackedItem) -> String? {
+        guard item.kind == .linear, item.metadata["linearStart"]?["outcome"]?.string == "error" else { return nil }
+        switch item.metadata["statusType"]?.string {
+        case "started", "completed", "canceled": return nil
+        default: return "Couldn't move to In progress"
         }
     }
 
@@ -82,11 +98,15 @@ enum TrackedItemText {
         return "\(severity.prefix(1).uppercased())\(severity.dropFirst()) severity"
     }
 
-    static func subtitle(_ item: TrackedItem, now: Date = Date()) -> String {
+    /// "In Review · High · 3h ago". Under a status group the status is left out when the group already names it.
+    static func subtitle(_ item: TrackedItem, now: Date = Date(), group: LinearGroup? = nil) -> String {
         let when = ProjectPageText.compactAgo(item.updatedAt, now: now)
         switch item.kind {
         case .linear:
-            return [item.status, priority(item), "updated \(when)"].compactMap { $0 }.joined(separator: " · ")
+            let key = { (text: String) in text.lowercased().filter { !$0.isWhitespace } }
+            let status = item.status.isEmpty || group.map({ key($0.title) == key(item.status) }) == true
+                ? nil : item.status
+            return [status, notablePriority(item), when].compactMap { $0 }.joined(separator: " · ")
         case .slack:
             return [identifier(item), severity(item), when].compactMap { $0 }.joined(separator: " · ")
         }
@@ -428,6 +448,8 @@ struct TrackedItemRow: View {
     let item: TrackedItem
     @ObservedObject var actions: TrackedItemActions
     var now = Date()
+    /// The Linear status group the row is listed under, which then names the status.
+    var group: TrackedItemText.LinearGroup? = nil
     /// Called after a dismiss or link, so lists can refresh.
     var changed: () -> Void = {}
     @EnvironmentObject private var model: AppModel
@@ -439,7 +461,8 @@ struct TrackedItemRow: View {
             missionIds: item.missionIds ?? item.missionId.map { [$0] } ?? [],
             session: { client.session($0) }, mission: { client.mission($0) }, unread: { model.isUnread($0) })
         let busy = actions.busy.contains(item.id)
-        let subtitle = TrackedItemText.subtitle(item, now: now)
+        let subtitle = TrackedItemText.subtitle(item, now: now, group: group)
+        let startError = TrackedItemText.linearStartError(item)
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {
                 Button(action: openInBrowser) {
@@ -453,7 +476,15 @@ struct TrackedItemRow: View {
                                 }
                                 Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                             }
-                            Text(subtitle).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                            // A start error leads the meta line, so it never truncates away or shifts the row.
+                            Group {
+                                if let startError {
+                                    Text("\(Text(verbatim: "\(startError) · ").foregroundColor(Theme.blocked))\(subtitle)")
+                                } else {
+                                    Text(verbatim: subtitle)
+                                }
+                            }
+                            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                             if let error = actions.errors[item.id] {
                                 Text(error).font(.pilot(.caption)).foregroundStyle(Theme.blocked).lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -464,8 +495,11 @@ struct TrackedItemRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(item.url)
-                .accessibilityLabel("\(TrackedItemText.identifier(item)), \(item.title). \(subtitle)")
+                .help(startError == nil ? item.url
+                    : "Pilot couldn't move this ticket to In progress when the work started. Open it in Linear to update it.")
+                .accessibilityLabel([
+                    "\(TrackedItemText.identifier(item)), \(item.title).", startError.map { "\($0)." }, subtitle,
+                ].compactMap { $0 }.joined(separator: " "))
                 .accessibilityHint("Opens in the browser")
                 trailing(link: link, hovered: hovered, busy: busy)
             }
@@ -744,7 +778,7 @@ struct LinearIssueGroups: View {
                 if !items.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
                         SectionLabel(title: group.title, count: items.count).padding(.horizontal, 8).padding(.top, 6)
-                        rows(items)
+                        rows(items, group: group)
                     }
                 }
             }
@@ -765,7 +799,7 @@ struct LinearIssueGroups: View {
                     .accessibilityLabel("Done, \(doneCount)")
                     .accessibilityHint(showDone ? "Hides done issues" : "Shows done issues")
                     if showDone {
-                        rows(done)
+                        rows(done, group: .done)
                         if doneCount > done.count, let showAllDone {
                             Button("Show all \(doneCount) done", action: showAllDone)
                                 .buttonStyle(.plain)
@@ -779,10 +813,10 @@ struct LinearIssueGroups: View {
         }
     }
 
-    private func rows(_ items: [TrackedItem]) -> some View {
+    private func rows(_ items: [TrackedItem], group: TrackedItemText.LinearGroup) -> some View {
         ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
             if index > 0 { HairlineDivider(leading: 34) }
-            TrackedItemRow(item: item, actions: actions, now: now, changed: changed)
+            TrackedItemRow(item: item, actions: actions, now: now, group: group, changed: changed)
         }
     }
 }
