@@ -229,6 +229,8 @@ export interface SessionSummary {
 	/** Live worker-owned jobs. Omitted when none; never restored from stale metadata. */
 	runningJobs?: SessionJob[];
 	state: SessionState;
+	/** Daemon-derived user-visible work, including live jobs and their pending follow-up. Prefer over state. */
+	working?: boolean;
 	/** Worker startup failed. POST /api/sessions/:id/retry-startup reloads it with the existing outbox. */
 	canRetryStartup?: boolean;
 	outcome?: SessionOutcome;

@@ -21,12 +21,17 @@ export function normalizeLegacyOutcome(meta: { outcome?: string; outcomeReason?:
 }
 
 /** Apply kernel activity without guessing a completion from an idle transition. */
-export function applyActivity(meta: OutcomeMeta, working: boolean, completion?: SessionCompletion): boolean {
+export function applyActivity(
+	meta: OutcomeMeta,
+	working: boolean,
+	completion?: SessionCompletion,
+	backgroundWorking = false,
+): boolean {
 	let changed = meta.working !== working;
 	meta.working = working;
 	const last = Math.max(meta.lastOutcomeAt ?? -1, meta.outcomeAt ?? -1);
 	const lastCompletion = meta.lastCompletionAt ?? meta.outcomeAt ?? -1;
-	if (working) {
+	if (working || backgroundWorking) {
 		if (meta.outcomeAt !== undefined) {
 			meta.lastOutcomeAt = last;
 			meta.lastCompletionAt ??= meta.outcomeAt;
@@ -35,6 +40,12 @@ export function applyActivity(meta: OutcomeMeta, working: boolean, completion?: 
 		delete meta.outcome;
 		delete meta.outcomeAt;
 		delete meta.outcomeReason;
+		// A turn that leaves jobs running is not a result. Consume its source version so an idle
+		// replay after the last job ends (or a restart) cannot publish it before the follow-up ends.
+		if (backgroundWorking && completion && completion.outcomeAt > lastCompletion) {
+			meta.lastCompletionAt = completion.outcomeAt;
+			changed = true;
+		}
 	} else if (completion && completion.outcomeAt > lastCompletion) {
 		// Cold views (or an older worker) can still contain the retired persisted outcome.
 		completion = { ...completion };

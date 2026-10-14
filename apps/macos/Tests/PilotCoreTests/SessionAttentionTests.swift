@@ -69,6 +69,40 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     }
 }
 
+@Test func backgroundWorkUsesDaemonStateForAttentionCountsAndNotifications() throws {
+    let job = SessionJob(id: "tests", name: "Tests", startedAt: 1, outputPath: "/tmp/tests.log")
+    func chat(working: Bool?, jobs: [SessionJob]?, outcome: SessionOutcome? = .done, at: Double? = 42) -> SessionSummary {
+        SessionSummary(id: "jobs", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2, state: "idle",
+                       outcome: outcome, outcomeAt: at, runningJobs: jobs, working: working)
+    }
+    let running = chat(working: true, jobs: [job])
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(running)) == running)
+    #expect(chat(working: nil, jobs: [job]).isWorking) // Old daemon compatibility.
+    #expect(!chat(working: nil, jobs: []).isWorking)
+    #expect(!chat(working: false, jobs: [job]).isWorking) // Daemon value is authoritative.
+    withDefaults { defaults in
+        let attention = SessionAttention(defaults: defaults)
+        _ = attention.observe([], snapshot: true)
+        for session in [running, chat(working: true, jobs: []), chat(working: true, jobs: nil, outcome: nil, at: nil)] {
+            #expect(session.isWorking)
+            #expect(session.status == .working)
+            #expect(session.visibleOutcomeAt == nil)
+            #expect(!attention.isUnread(session))
+            #expect(!attention.isAwaitingReply(session))
+            #expect(attention.observe([session], snapshot: false).isEmpty)
+            #expect(session.signal(unread: true) == .working)
+            let groups = SidebarUrgency.groups([session], unread: attention.isUnread, awaitingReply: attention.isAwaitingReply)
+            #expect(groups.working.count == 1)
+            #expect(groups.needsYou.isEmpty)
+            #expect([session].filter(\.isWorking).count == 1)
+        }
+        let finished = chat(working: false, jobs: nil, at: 43)
+        #expect(attention.isUnread(finished))
+        #expect(attention.observe([finished], snapshot: false).count == 1)
+        #expect(attention.observe([finished], snapshot: true).isEmpty)
+    }
+}
+
 @Test func statusIsIndependentOfLifecycleAndHiddenWhileWorking() {
     for state in ["idle", "stopped", "failed"] {
         #expect(summary(state: state).status == .done)

@@ -55,7 +55,8 @@ export interface DashboardInput {
 
 const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, unread: 3 } as const;
 const isTerminal = (pr: SessionPullRequest) => pr.state === "merged" || pr.state === "closed";
-const isWorking = (session: SessionSummary) => session.state === "working" || session.state === "starting";
+const isWorking = (session: SessionSummary) =>
+	session.working ?? (session.state === "working" || session.state === "starting" || !!session.runningJobs?.length);
 
 /** Mirrors the app: a chat whose PRs have all settled, with nothing left unpublished, no longer asks for review. */
 function hasTerminalPullRequest(session: SessionSummary): boolean {

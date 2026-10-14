@@ -1700,6 +1700,14 @@ test("reported running jobs prevent parking even when process inspection misses 
 	assert.equal(worker.closed, false);
 	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
 	await sessions["parkIdleWorkers"]();
+	assert.equal(worker.closed, false, "the pending result turn is still working");
+	sessions["onPacket"](meta, worker, {
+		type: "working",
+		working: false,
+		completion: { outcome: "done", outcomeAt: Date.now() },
+	});
+	sessions["lastUse"].set(created.id, jobs[0]!.startedAt);
+	await sessions["parkIdleWorkers"]();
 	await sessions["unparked"](created.id);
 	assert.equal(worker.closed, true);
 });
@@ -2094,16 +2102,19 @@ test("live job snapshots clear on worker exit and daemon restart, ignoring a rep
 		];
 		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
 		assert.deepEqual(manager.get(meta.id)?.runningJobs, jobs);
+		assert.equal(manager.get(meta.id)?.working, true);
 		await manager["save"](meta);
 		const reopened = new SessionManager(home, new ProjectStore(home));
 		await reopened.load();
 		try {
 			assert.equal(reopened.get(meta.id)?.runningJobs, undefined);
+			assert.equal(reopened.get(meta.id)?.working, false);
 		} finally {
 			await reopened.shutdown();
 		}
 		manager["onExit"](meta, worker, 0);
 		assert.equal(manager.get(meta.id)?.runningJobs, undefined);
+		assert.equal(manager.get(meta.id)?.working, false);
 		const replacement = fakeWorker();
 		manager["workers"].set(meta.id, replacement);
 		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
@@ -2114,6 +2125,94 @@ test("live job snapshots clear on worker exit and daemon restart, ignoring a rep
 		manager["onExit"](meta, replacement, 1);
 		assert.equal(manager.get(meta.id)?.runningJobs, undefined);
 		assert.equal(manager.get(meta.id)?.outcome, "failed");
+		assert.equal(manager.get(meta.id)?.working, false);
+	});
+});
+
+test("idle jobs and their follow-up stay working without publishing an intermediate outcome", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		const worker = { ...fakeWorker(), busy: false };
+		manager["workers"].set(meta.id, worker);
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		const completion: SessionCompletion = { outcome: "done", outcomeAt: 42 };
+		const jobs = [
+			{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" },
+		];
+		worker.state = "working";
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+		worker.state = "idle";
+		manager["onPacket"](meta, worker, { type: "working", working: false, completion });
+		assert.equal(manager.get(meta.id)?.state, "idle");
+		assert.equal(manager.get(meta.id)?.working, true);
+		assert.equal(meta.outcome, undefined);
+		// Removing the last job does not finish the chat, nor does a replay of its earlier completion.
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+		manager["onPacket"](meta, worker, { type: "working", working: false, completion });
+		assert.equal(manager.get(meta.id)?.working, true);
+		manager["lastUse"].set(meta.id, 0);
+		assert.equal(manager["parkable"](meta, worker), false);
+		assert.ok(
+			changes.every(
+				(summary) => summary.working && summary.outcome === undefined && summary.outcomeAt === undefined,
+			),
+		);
+		await flush(manager);
+		const stored = JSON.parse(await readFile(join(home, "sessions", meta.id, "meta.json"), "utf8"));
+		assert.equal(stored.outcome, undefined, "the intermediate outcome is never persisted");
+		assert.equal(stored.lastCompletionAt, 42);
+		const reopened = new SessionManager(home, new ProjectStore(home));
+		await reopened.load();
+		try {
+			const freshWorker = fakeWorker();
+			reopened["workers"].set(meta.id, freshWorker);
+			reopened["onPacket"](reopened["metas"].get(meta.id)!, freshWorker, {
+				type: "ready",
+				model: "test/model",
+				working: false,
+				usage: {},
+				completion,
+			});
+			assert.equal(reopened.get(meta.id)?.outcome, undefined, "restart cannot resurrect the job-waiting result");
+			assert.equal(reopened.get(meta.id)?.working, false, "live jobs are never restored from metadata");
+		} finally {
+			await reopened.shutdown();
+		}
+		worker.state = "working";
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		worker.state = "idle";
+		manager["onPacket"](meta, worker, {
+			type: "working",
+			working: false,
+			completion: { outcome: "done", outcomeAt: 43 },
+		});
+		assert.equal(manager.get(meta.id)?.working, false);
+		assert.equal(manager.get(meta.id)?.outcome, "done");
+		assert.equal(manager.get(meta.id)?.outcomeAt, 43);
+		manager["lastUse"].set(meta.id, 0);
+		assert.equal(manager["parkable"](meta, worker), true);
+		assert.equal(changes.filter((summary) => summary.outcome).length, 1);
+	});
+});
+
+test("jobs that end during a turn allow that turn's final outcome", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		const worker = fakeWorker();
+		manager["workers"].set(meta.id, worker);
+		manager["onPacket"](meta, worker, { type: "working", working: true });
+		manager["onPacket"](meta, worker, {
+			type: "jobs.changed",
+			jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
+		});
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+		manager["onPacket"](meta, worker, {
+			type: "working",
+			working: false,
+			completion: { outcome: "done", outcomeAt: 42 },
+		});
+		assert.equal(manager.get(meta.id)?.working, false);
+		assert.equal(manager.get(meta.id)?.outcomeAt, 42);
 	});
 });
 
