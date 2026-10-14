@@ -233,13 +233,16 @@ Publication still works without it.
 
 [`renovate.json`](renovate.json) configures reviewed update PRs for pnpm dependencies, including required
 Anthropic auth. Pi SDK packages and workspace overrides update together; `pi-extensions` tracks upstream
-`main` while remaining pinned to a full commit SHA. Renovate refreshes `pnpm-lock.yaml` with those updates.
+`main` while remaining pinned to a full commit SHA. Its updates are paused until upstream `main` includes
+Pilot's embedding exports; the current pin stays on the compatible embedding commit. The native npm
+manager refreshes `pnpm-lock.yaml` with dependency updates, and Renovate reports artifact generation
+success or failure on every update PR.
 Automerge is disabled. Renovate PRs also check an isolated production runtime before and after ZIP
 relocation in the Node CI job. Review those checks and the existing tests before merging.
 
-Enable the [Renovate GitHub App](https://github.com/apps/renovate) for this repository after this config
-lands on `main`. Before enabling digest updates, ensure `pi-extensions/main` includes Pilot's embedding
-exports; an older upstream head is not a compatible replacement for the bundled profile.
+Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate). Re-enable the
+`pi-extensions` package rule only after upstream `main` includes Pilot's embedding exports and the
+production runtime checks pass.
 
 ### Architecture
 
