@@ -300,6 +300,10 @@ model loop. Keep protocol changes in sync with `apps/macos/Sources/PilotCore`.
 These are daemon environment variables. The app-managed daemon runs under launchd; exporting a variable
 in your terminal does not change an already running daemon.
 
+Heavy repository checks also use `PILOT_HOME`: Python 3 coordinates one Swift build/test and two Node
+suite runs across checkouts. See [shared verification slots](docs/testing.md#shared-heavy-verification-slots)
+for machine-wide limits and queue diagnostics.
+
 [Local request timings](docs/request-timings.md) separate preparation, provider waiting and streaming.
 They stay outside the transcript, have bounded private storage, and are never exported.
 

@@ -32,6 +32,44 @@ To run just affected files without importing every file in a group:
 node --test --test-force-exit --test-concurrency=2 packages/daemon/src/github.test.ts
 ```
 
+### Shared heavy-verification slots
+
+Iterate with affected test files. Run the relevant full suites once before publishing, not after each
+edit. Use background jobs for long checks, and never bypass the queue or launch duplicate suites while
+waiting. `pnpm test` (also `npm test`) and all `test:*` suite commands use the Node pool;
+`--list` only lists files and needs no slot. Direct, focused `node --test …` stays lightweight and unqueued.
+
+`apps/macos/scripts/{build,test,bundle}.sh` share the Swift pool, including package preparation and all
+build/test subprocesses. Use these wrappers rather than raw `swift build` / `swift test`. Existing
+per-command limits (`PILOT_SWIFT_JOBS`, `PILOT_TEST_CONCURRENCY`) still apply inside each slot.
+
+The Python 3 stdlib runner, `scripts/verification-slot.py`, uses local OS file locks under
+`$PILOT_HOME/verification` (default `$XDG_DATA_HOME/pilot/verification`, or
+`~/.local/share/pilot/verification`). All checkouts using that home share **1 Swift slot and 2 Node
+slots**, even outside the app. Set the same absolute `PILOT_HOME` in every session/shell; separate homes
+intentionally have separate pools. No daemon, npm package or lock service is required.
+
+To configure the machine-wide capacities, create `$PILOT_HOME/verification/limits.json`:
+
+```json
+{"swift": 1, "node": 2}
+```
+
+Omitted keys keep their defaults; values must be integers from 1 to 64. Invalid configuration fails
+visibly rather than running without a limit. Change limits while checks are idle, since each queued
+invocation reads the configuration once. Raising these limits can overload the machine.
+
+Waiting reports each holder's PID, executable, workspace and elapsed holding time immediately, then
+every 15 seconds. It waits indefinitely until admitted or explicitly interrupted; a quiet job log is
+never a queue timeout. Exit codes/signals and command arguments pass through unchanged. Only the
+executable name, not its arguments, is stored in holder metadata.
+
+Locks are inherited across `exec`, and the OS releases them when the holder exits, including SIGKILL.
+Stale JSON left by a crash is ignored once the kernel lock is free. Never delete a lock file to clear
+a queue: a live process could still hold its old inode. Stop the actual holder instead. Long-lived
+children that inherit the descriptor keep the slot until they exit as well. This is a local-filesystem
+semaphore, not a distributed lock or strict FIFO scheduler.
+
 ### Local measurements
 
 On 2026-10-13, sequential runs on macOS arm64 (Node 24.21.0, pnpm 12.10.1, jj 0.46.0, 11 logical CPUs),

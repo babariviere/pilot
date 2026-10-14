@@ -149,6 +149,15 @@ test("Build prompts define completion; Ask prompts do not", () => {
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /finish with a working change/);
 });
 
+test("Build verification guidance prefers focused iteration and shared slots, never Ask", () => {
+	const prompt = pilotPrompt({});
+	assert.match(prompt, /Run focused tests while iterating/);
+	assert.match(prompt, /full suites once before publishing/);
+	assert.match(prompt, /shared heavy-check slots/);
+	assert.match(prompt, /do not bypass a queue or start duplicate full suites/);
+	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /focused tests|heavy-check slots/);
+});
+
 test("memory guidance is short and limited to project chats with memory, never Ask", () => {
 	const prompt = pilotPrompt({ projectMemory: true });
 	assert.match(

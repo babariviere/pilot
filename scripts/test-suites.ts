@@ -88,7 +88,7 @@ const fast = new Set([
 ]);
 
 export function testSuite(path: string): Suite {
-	if (path === "scripts/test-suites.test.ts") return "fast";
+	if (path === "scripts/test-suites.test.ts" || path === "scripts/test-verification-slot.test.ts") return "fast";
 	if (path.endsWith(".stress.test.ts")) return "stress";
 	const match = /^packages\/([^/]+)\/src\/(.+)\.test\.ts$/.exec(path);
 	return match && fast.has(`${match[1]}/${match[2]}`) ? "fast" : "integration";
