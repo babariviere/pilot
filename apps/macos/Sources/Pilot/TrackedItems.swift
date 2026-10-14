@@ -646,7 +646,8 @@ struct TrackedItemIcon: View {
     let item: TrackedItem
 
     var body: some View {
-        let type = item.kind == .slack ? SlackTriageText.triage(item).type : nil
+        let triage = item.kind == .slack ? SlackTriageText.triage(item) : nil
+        let type = triage?.type
         let (symbol, color): (String, Color) = switch item.kind {
         case .slack: (type?.symbolName ?? "bubble.left", Theme.mutedForeground)
         case .linear:
@@ -659,7 +660,18 @@ struct TrackedItemIcon: View {
         }
         Image(systemName: symbol).font(.pilot(.label)).foregroundStyle(color)
             .accessibilityLabel(type.map { "Slack \($0.title.lowercased())" } ?? item.status)
+            .overlay(alignment: .bottomTrailing) {
+                // Critical and high Slack messages carry triage's severity dot, so they stand out in a list.
+                if let severity = triage?.severity, severity.isNotable {
+                    SlackSeverityDot(severity: severity).offset(x: 3, y: 2)
+                }
+            }
     }
+}
+
+extension SlackSeverity {
+    /// Severities that show their dot on tracked and Inbox rows. Medium and low stay in the meta text only.
+    var isNotable: Bool { self == .critical || self == .high }
 }
 
 /// Sync state of a source: synced, syncing, sign-in required (with Sign in, then waiting with Cancel) or an

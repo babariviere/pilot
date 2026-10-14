@@ -71,7 +71,7 @@ private struct InboxSections: View {
                 }
                 if let slack = inbox.slack {
                     trackedSection(title: "Slack", kind: .slack, items: slack.items, total: slack.total,
-                                   empty: "No open Slack messages.", triage: triageProjectId)
+                                   empty: "No open Slack messages.", triage: triageProjects)
                 }
             }
             if let hidden = InboxText.hiddenFooter(inbox.slack?.hidden ?? []) {
@@ -104,10 +104,9 @@ private struct InboxSections: View {
     }
 
     private func trackedSection(title: String, kind: TrackedKind, items: [TrackedItem], total: Int,
-                                empty: String, triage: String? = nil) -> some View {
+                                empty: String, triage: [Project] = []) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            PageSectionHeader(title: title, count: total, linkTitle: triage == nil ? nil : "Open triage",
-                              link: triage.map { id -> () -> Void in { model.openSlackTriage(id) } })
+            triageHeader(title: title, total: total, projects: triage)
             if let source = signInSource(kind) {
                 TrackedSourceStatusLine(source: source, actions: actions, now: now)
             }
@@ -123,6 +122,18 @@ private struct InboxSections: View {
             }
             capNote(shown: items.count, total: total)
         }
+    }
+
+    /// "Open triage" opens the one project's Slack triage, or a menu of projects when several track Slack.
+    private func triageHeader(title: String, total: Int, projects: [Project]) -> some View {
+        let open = { (id: String) in model.openSlackTriage(id) }
+        return PageSectionHeader(
+            title: title, count: total, linkTitle: projects.isEmpty ? nil : "Open triage",
+            link: projects.count == 1 ? { open(projects[0].id) } : nil,
+            linkChoices: projects.count < 2 ? [] : projects.map { project in
+                PageSectionLinkChoice(id: project.id, title: project.name) { open(project.id) }
+            }
+        )
     }
 
     @ViewBuilder private func capNote(shown: Int, total: Int) -> some View {
@@ -143,12 +154,9 @@ private struct InboxSections: View {
         return session.signal(unread: model.isUnread(session))
     }
 
-    /// Slack triage is per project: offered when the scope has exactly one project tracking Slack.
-    private var triageProjectId: String? {
-        let projects = Set(model.client.trackingSources.filter {
-            $0.kind == .slack && $0.configured && (scope == nil || $0.projectId == scope?.id)
-        }.map(\.projectId))
-        return projects.count == 1 ? projects.first : nil
+    /// Slack triage is per project: every project in scope that tracks Slack, in sidebar order.
+    private var triageProjects: [Project] {
+        InboxText.triageProjects(model.client.projects, sources: model.client.trackingSources, scope: scope?.id)
     }
 
     /// Sign-in is shared by every project, so one line per source kind is enough.

@@ -97,6 +97,14 @@ public enum InboxText {
     public static func capNote(shown: Int, total: Int) -> String? {
         total > shown ? "Showing the first \(shown) of \(total)." : nil
     }
+
+    /// Projects the Slack section's "Open triage" link leads to: each project in scope that tracks Slack
+    /// channels, in the order of `projects`. One opens directly; several make the link a menu.
+    public static func triageProjects(_ projects: [Project], sources: [TrackingSource], scope: String?) -> [Project] {
+        let ids = Set(sources.filter { $0.kind == .slack && $0.configured && (scope == nil || $0.projectId == scope) }
+            .map(\.projectId))
+        return projects.filter { ids.contains($0.id) }
+    }
 }
 
 extension DashboardNeedsYouItem {

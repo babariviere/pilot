@@ -56,3 +56,17 @@ import Testing
     #expect(InboxText.capNote(shown: 50, total: 50) == nil)
     #expect(InboxText.capNote(shown: 50, total: 72) == "Showing the first 50 of 72.")
 }
+
+@Test func triageLinksEachProjectInScopeThatTracksSlack() {
+    let projects = ["p1", "p2", "p3"].map { Project(id: $0, name: "Project \($0)", path: "/tmp/\($0)", createdAt: 1) }
+    let source = { (project: String, kind: TrackedKind, configured: Bool) in
+        TrackingSource(id: "\(project):\(kind.rawValue)", projectId: project, kind: kind, label: kind.rawValue,
+                       configured: configured, status: .ok)
+    }
+    let sources = [source("p3", .slack, true), source("p1", .slack, true), source("p2", .linear, true),
+                   source("p2", .slack, false)]
+    // Every project: Slack-tracking projects in the given order, without Linear-only or unconfigured ones.
+    #expect(InboxText.triageProjects(projects, sources: sources, scope: nil).map(\.id) == ["p1", "p3"])
+    #expect(InboxText.triageProjects(projects, sources: sources, scope: "p3").map(\.id) == ["p3"])
+    #expect(InboxText.triageProjects(projects, sources: sources, scope: "p2").isEmpty)
+}
