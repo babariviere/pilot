@@ -12,6 +12,7 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
     private var input = Data()
     private var pendingSample: DispatchWorkItem?
     private var monitorError = false
+    private var authorizationRequested = false
     private var wakeObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -59,8 +60,11 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
                 self.input.removeSubrange(...newline)
                 guard let command = try? JSONSerialization.jsonObject(with: line) as? [String: Bool] else { exit(1) }
                 if command["authorize"] == true && self.location.authorizationStatus == .notDetermined {
-                    // macOS treats this as persistent app authorization; the helper stays alive without Pilot.
-                    self.location.requestAlwaysAuthorization()
+                    // CoreLocation ignores requests from an app not currently in use.
+                    // Foreground only in response to the app's explicit user action, never on GET/startup.
+                    self.authorizationRequested = true
+                    NSApp.activate(ignoringOtherApps: true)
+                    self.requestAuthorizationIfActive()
                 }
                 self.sample()
             }
@@ -70,6 +74,12 @@ final class WiFiAgent: NSObject, NSApplicationDelegate, CLLocationManagerDelegat
     }
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) { sample() }
+    func applicationDidBecomeActive(_ notification: Notification) { requestAuthorizationIfActive() }
+    private func requestAuthorizationIfActive() {
+        guard authorizationRequested && NSApp.isActive else { return }
+        authorizationRequested = false
+        location.requestAlwaysAuthorization()
+    }
     func ssidDidChangeForWiFiInterface(withName interfaceName: String) { scheduleSample() }
     func powerStateDidChangeForWiFiInterface(withName interfaceName: String) { scheduleSample() }
     func linkDidChangeForWiFiInterface(withName interfaceName: String) { scheduleSample() }

@@ -1204,7 +1204,9 @@ reports), producing a morning summary in the app and Slack.
   restricted | disabled | unavailable`; a null network is a real disconnect only when authorized
   and available. The Location entry is named **Pilot Wi-Fi**, not Pilot. Denial is changed in System
   Settings, not re-prompted. `PilotClient.wifiStatus()` / `requestWiFiAuthorization()` and PilotCore
-  mirror these APIs. Scheduling CRUD and both schedule/dashboard snapshots carry `networkNames`.
+  mirror these APIs. The helper activates only for an explicit authorization request, then requests
+  permission once active (CoreLocation ignores requests from an app not currently in use).
+  Scheduling CRUD and both schedule/dashboard snapshots carry `networkNames`.
   Switching to a non-network trigger clears names; omitted names on PATCH retain the existing list.
   Picker controls are separate app work; these APIs do not reject saves while access is unavailable.
 - Signing: `PILOT_CODESIGN_IDENTITY` signs the helper and enclosing bundle with a stable identity
