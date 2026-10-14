@@ -555,6 +555,15 @@ final class PilotClient: ObservableObject {
                                         query: [URLQueryItem(name: "projectId", value: projectId)])
     }
 
+    /// Snapshot data for the Inbox page. Never used by the live app.
+    var fixtureInbox: Inbox?
+
+    /// What waits on the user in one project, or across every project. Bounded per section by pilotd.
+    func inbox(projectId: String?) async throws -> Inbox {
+        if let fixtureInbox { return fixtureInbox }
+        return try await missionRequest(["inbox"], query: projectId.map { [URLQueryItem(name: "projectId", value: $0)] } ?? [])
+    }
+
     private func upsert(_ project: Project) {
         projects.removeAll { $0.id == project.id }
         projects.append(project)

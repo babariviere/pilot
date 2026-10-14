@@ -9,16 +9,18 @@ import type {
 	TrackedKind,
 } from "@pilot/protocol";
 import { NotFound, ServiceUnavailable } from "./errors.ts";
-import type { SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
+import type { InboxQuery, InboxTracked, SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
 import type { SlackCache, SlackReservation } from "./tracked-items-disk.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
 export { validatePatch } from "./tracked-items-disk.ts";
-export type { SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
+export type { InboxQuery, InboxTracked, SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
 type Snapshot = {
 	projectId: string;
 	kind: TrackedKind;
 	preview: DashboardTrackedSource;
 	checkpoint?: SourceCheckpoint;
+	/** Inbox counts by effective label, kept with the preview so sidebar counts need no disk read. */
+	inbox?: Record<string, number>;
 };
 export class TrackedItemStore {
 	private readonly worker: Worker;
@@ -85,6 +87,13 @@ export class TrackedItemStore {
 	}
 	list(query: TrackedQuery): Promise<TrackedItemList> {
 		return this.rpc("list", query);
+	}
+	inbox(query: InboxQuery): Promise<InboxTracked> {
+		return this.rpc("inbox", query);
+	}
+	/** Cached Inbox counts of a source by effective label ("" for none). */
+	inboxCounts(projectId: string, kind: TrackedKind): Record<string, number> {
+		return { ...this.snapshots.get(`${projectId}:${kind}`)?.inbox };
 	}
 	slackCached(channel: string, ts: string, projectId: string): Promise<SlackCache | undefined> {
 		return this.rpc("slackCached", { channel, ts, projectId });

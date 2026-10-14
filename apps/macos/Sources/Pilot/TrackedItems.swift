@@ -462,6 +462,8 @@ struct TrackedItemRow: View {
     var now = Date()
     /// The Linear status group the row is listed under, which then names the status.
     var group: TrackedItemText.LinearGroup? = nil
+    /// Leads the subtitle, such as the project name in the Inbox.
+    var context: String? = nil
     /// Called after a dismiss or link, so lists can refresh.
     var changed: () -> Void = {}
     @EnvironmentObject private var model: AppModel
@@ -473,7 +475,8 @@ struct TrackedItemRow: View {
             missionIds: item.missionIds ?? item.missionId.map { [$0] } ?? [],
             session: { client.session($0) }, mission: { client.mission($0) }, unread: { model.isUnread($0) })
         let busy = actions.busy.contains(item.id)
-        let subtitle = TrackedItemText.subtitle(item, now: now, group: group)
+        let subtitle = [context, TrackedItemText.subtitle(item, now: now, group: group)].compactMap { $0 }
+            .joined(separator: " · ")
         let startError = TrackedItemText.linearStartError(item)
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {

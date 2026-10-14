@@ -417,6 +417,39 @@ test("counts cover every project with one pass over the chats and omit quiet one
 	assert.throws(() => f.service.dashboard("nope"));
 });
 
+test("counts add the Inbox's tracked items, and the Inbox lists needs-you rows across projects", () => {
+	const f = service(
+		[
+			session({ id: "a", projectId: "p1", outcome: "done", outcomeAt: 5 }),
+			session({ id: "b", projectId: "p2", outcome: "failed", outcomeAt: 1 }),
+			session({ id: "c", projectId: "p2", outcome: "done", outcomeAt: 9 }),
+		],
+		{ providers: { inbox: (projectId) => (projectId === "p3" ? 4 : 0) } },
+	);
+	assert.deepEqual(f.service.counts(), {
+		projects: {
+			p1: { working: 0, needsYou: 1 },
+			p2: { working: 0, needsYou: 2 },
+			p3: { working: 0, needsYou: 0, tracked: 4 },
+		},
+	});
+	const all = f.service.needsYou(undefined, 2);
+	assert.equal(all.total, 3);
+	assert.deepEqual(
+		all.items.map((item) => [item.projectId, item.sessionId, item.kind]),
+		[
+			["p2", "b", "failed"],
+			["p2", "c", "unread"],
+		],
+		"failures first, then newest, across projects",
+	);
+	assert.deepEqual(
+		f.service.needsYou("p1", 50).items.map((item) => item.sessionId),
+		["a"],
+	);
+	assert.throws(() => f.service.needsYou("missing", 50));
+});
+
 test("providers feed scheduled and tracked sections and report changes", () => {
 	const changeListeners = new Set<() => void>();
 	const f = service([], {

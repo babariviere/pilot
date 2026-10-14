@@ -905,9 +905,11 @@ export interface ProjectDashboard {
 export interface ProjectDashboardCount {
 	working: number;
 	needsYou: number;
+	/** Open tracked items the Inbox lists (Linear and Slack, without hidden labels). Omitted when 0. */
+	tracked?: number;
 }
 
-/** GET /api/dashboard/counts, and the payload of WS `dashboard.counts`. Projects with neither are omitted. */
+/** GET /api/dashboard/counts, and the payload of WS `dashboard.counts`. Projects with no counts are omitted. */
 export interface ProjectDashboardCounts {
 	projects: Record<string, ProjectDashboardCount>;
 }
@@ -1179,6 +1181,7 @@ export type TerminalSocketMessage =
 export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.events" | "error" }>;
 
 export const DEFAULT_PORT = 4319;
+export type * from "./inbox.ts";
 export type * from "./memory.ts";
 export type * from "./schedules.ts";
 export type * from "./tracking.ts";

@@ -18,12 +18,16 @@ parentPort!.on("message", ({ id, method, args }) => {
 						kind,
 						preview: disk.preview(projectId, kind),
 						checkpoint: disk.checkpoint(`${projectId}:${kind}`),
+						inbox: disk.inboxCounts(projectId, kind),
 					})),
 				);
 				break;
 			}
 			case "list":
 				value = disk.list(args);
+				break;
+			case "inbox":
+				value = disk.inbox(args);
 				break;
 			case "slackCached":
 				value = disk.slackCached(args.channel, args.ts, args.projectId);
@@ -75,6 +79,7 @@ parentPort!.on("message", ({ id, method, args }) => {
 							kind,
 							preview: disk.preview(projectId!, kind),
 							checkpoint: disk.checkpoint(`${projectId}:${kind}`),
+							inbox: disk.inboxCounts(projectId!, kind),
 						})),
 					}
 				: {}),

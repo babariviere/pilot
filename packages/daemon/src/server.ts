@@ -10,6 +10,7 @@ import type {
 	CompactRequest,
 	CreateMissionRequest,
 	EditQueuedMessageRequest,
+	Inbox,
 	JoinMissionRequest,
 	MissionArtifactLinkWrite,
 	MissionBriefWrite,
@@ -230,6 +231,7 @@ export function createDaemonServer(
 		providers: {
 			...dashboardProviders,
 			...(tracking ? { tracked: (id: string) => tracking.dashboard(id) } : {}),
+			...(tracking ? { inbox: (id: string) => tracking.inboxCount(id) } : {}),
 			...(memory ? { memory: (id: string) => memory.summary(id) } : {}),
 			...(schedules ? { scheduled: (id: string) => schedules.dashboard(id) } : {}),
 			onChange(listener) {
@@ -429,6 +431,16 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "dashboard" && parts[2] === "counts" && parts.length === 3 && req.method === "GET")
 			return json(res, 200, dashboards.counts());
+		if (parts[1] === "inbox" && parts.length === 2 && req.method === "GET") {
+			const projectId = url.searchParams.get("projectId") || undefined;
+			const limit = url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 50;
+			if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, "limit must be 1..100");
+			const inbox: Inbox = {
+				needsYou: dashboards.needsYou(projectId, limit),
+				...(tracking ? await tracking.inbox(projectId, limit) : {}),
+			};
+			return json(res, 200, inbox);
+		}
 		if (parts[1] === "reviews" && parts.length === 2 && req.method === "POST") {
 			const body = await readJson<ReviewRequest>(req);
 			const marks = body?.marks;

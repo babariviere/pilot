@@ -44,7 +44,7 @@ struct SessionSidebar: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            // One row: scope, Home and compose. Archived chats live in the scope menu, search behind ⌘F.
+            // One row: scope, Home, Inbox and compose. Archived chats live in the scope menu, search behind ⌘F.
             let scopeCount = focused.map { counts[$0.id] ?? ProjectDashboardCount() }
                 ?? SidebarScopeCounts.total(counts)
             let archived = focused.map { project in
@@ -52,7 +52,8 @@ struct SessionSidebar: View {
             } ?? client.archivedSessions.count
             VStack(spacing: 6) {
                 SidebarScopeSwitcher(model: model, client: client, counts: counts, needsYou: scopeCount.needsYou,
-                                     homeSelected: homeSelected(focused), archivedCount: archived,
+                                     homeSelected: homeSelected(focused), inboxCount: InboxText.badge(scopeCount),
+                                     inboxSelected: inboxSelected, archivedCount: archived,
                                      onNewFolder: { folderEditor.begin() })
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
@@ -109,6 +110,12 @@ struct SessionSidebar: View {
         guard model.selectedSessionId == nil else { return false }
         if let focused { return model.selectedProjectId == focused.id }
         return model.selectedMissionId == nil && model.selectedProjectId == nil && !model.showingArchive
+            && !model.showingInbox
+    }
+
+    private var inboxSelected: Bool {
+        model.showingInbox && model.selectedSessionId == nil && model.selectedMissionId == nil
+            && model.selectedProjectId == nil
     }
 
     /// Focused on one project: its missions, then its chats, without project headers.

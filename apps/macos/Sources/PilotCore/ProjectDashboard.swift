@@ -415,10 +415,23 @@ public struct ProjectDashboard: Codable, Equatable, Sendable {
 public struct ProjectDashboardCount: Codable, Equatable, Sendable {
     public let working: Int
     public let needsYou: Int
+    /// Open tracked items the Inbox lists (Linear and Slack, without hidden labels).
+    public let tracked: Int
 
-    public init(working: Int = 0, needsYou: Int = 0) {
+    public init(working: Int = 0, needsYou: Int = 0, tracked: Int = 0) {
         self.working = working
         self.needsYou = needsYou
+        self.tracked = tracked
+    }
+
+    private enum CodingKeys: String, CodingKey { case working, needsYou, tracked }
+
+    /// pilotd omits `tracked` when it is 0.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        working = try container.decode(Int.self, forKey: .working)
+        needsYou = try container.decode(Int.self, forKey: .needsYou)
+        tracked = try container.decodeIfPresent(Int.self, forKey: .tracked) ?? 0
     }
 }
 
