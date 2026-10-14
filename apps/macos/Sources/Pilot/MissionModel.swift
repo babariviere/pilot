@@ -17,6 +17,12 @@ enum MissionTab: String, CaseIterable, Hashable {
     }
 }
 
+/// The selected mission section; see `AppModel.missionTab`.
+@MainActor
+final class MissionTabSelection: ObservableObject {
+    @Published var tab: MissionTab = .overview
+}
+
 /// Mission sheets, presented once by the main window.
 enum MissionSheet: Identifiable, Hashable {
     /// "New mission…", optionally preselecting a project.

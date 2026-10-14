@@ -48,6 +48,11 @@ struct MissionPage: View {
                 .onChange(of: geometry.size.width) { _, value in width = value }
         })
         .missionSubscription(missionId, client: client)
+        // Prepare the brief's Markdown off the main thread as soon as it arrives, so opening Brief only
+        // lays out the blocks on screen.
+        .task(id: client.missionDetails[missionId]?.brief?.revision) {
+            if let markdown = client.missionDetails[missionId]?.brief?.markdown { await MarkdownView.prewarm(markdown) }
+        }
         .confirmationDialog("Delete this mission?", isPresented: $confirmingDeletion) {
             Button("Delete Mission", role: .destructive) {
                 model.missionAction { [client, missionId, model] in
@@ -70,16 +75,48 @@ struct MissionPage: View {
     @ViewBuilder
     private func content(_ mission: Mission, detail: MissionDetail?) -> some View {
         if let detail {
-            switch model.missionTab {
-            case .overview: MissionOverviewTab(mission: mission, detail: detail)
-            case .brief: MissionBriefTab(mission: mission, detail: detail)
-            case .tasks: MissionTasksTab(mission: mission, detail: detail)
-            case .chats: MissionChatsTab(mission: mission, detail: detail)
-            case .artifacts: MissionArtifactsTab(mission: mission, detail: detail)
-            case .activity: MissionActivityTab(mission: mission, detail: detail)
-            }
+            MissionTabContent(mission: mission, detail: detail, selection: model.missionTabSelection)
         } else {
             ProgressView("Loading mission…")
+        }
+    }
+}
+
+/// The selected section in one scroll view shared by every tab, in the page's reading column.
+///
+/// Only this view and the section picker observe tab switches. Keeping a single scroll view matters: a new
+/// scroll view makes AppKit rebuild the window toolbar, which cost more than a small tab itself.
+private struct MissionTabContent: View {
+    let mission: Mission
+    let detail: MissionDetail
+    @ObservedObject var selection: MissionTabSelection
+    private static let top = "mission-tab-top"
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    Color.clear.frame(height: 0).id(Self.top)
+                    tab(proxy)
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 24)
+                        .frame(maxWidth: Theme.column, alignment: .leading)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            // Each section opens at its top, like a page.
+            .onChange(of: selection.tab) { _, _ in proxy.scrollTo(Self.top, anchor: .top) }
+        }
+    }
+
+    @ViewBuilder private func tab(_ proxy: ScrollViewProxy) -> some View {
+        switch selection.tab {
+        case .overview: MissionOverviewTab(mission: mission, detail: detail)
+        case .brief: MissionBriefTab(mission: mission, detail: detail)
+        case .tasks: MissionTasksTab(mission: mission, detail: detail, scroll: proxy)
+        case .chats: MissionChatsTab(mission: mission, detail: detail)
+        case .artifacts: MissionArtifactsTab(mission: mission, detail: detail)
+        case .activity: MissionActivityTab(mission: mission, detail: detail)
         }
     }
 }
@@ -94,7 +131,7 @@ private struct MissionToolbar: ToolbarContent {
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .principal) {
-            MissionTabPicker(mission: mission, compact: compactTabs)
+            MissionTabPicker(mission: mission, compact: compactTabs, selection: model.missionTabSelection)
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
@@ -175,11 +212,12 @@ private struct MissionToolbar: ToolbarContent {
 struct MissionTabPicker: View {
     let mission: Mission
     var compact = false
+    @ObservedObject var selection: MissionTabSelection
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        let picker = Picker("Mission section", selection: $model.missionTab) {
+        let picker = Picker("Mission section", selection: $selection.tab) {
             ForEach(MissionTab.allCases, id: \.self) { tab in
                 Text(label(tab)).tag(tab)
             }
@@ -277,71 +315,65 @@ struct MissionOverviewTab: View {
             .filter { [.inProgress, .inReview, .blocked].contains($0.status) }
             .flatMap(\.tasks)
         let waiting = detail.tasks.filter { $0.status == .todo }.count
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                summary(counts)
-                if drafting {
-                    MissionDraftingBanner(mission: mission)
-                } else if detail.tasks.isEmpty {
-                    EmptyStateView(icon: "checklist", title: "Plan the work",
-                                   message: mission.coordinatorSessionId == nil
-                                       ? "Break the goal into tasks, or start a coordinator to draft them from the brief."
-                                       : "Break the goal into tasks, or ask the coordinator to draft them from the brief.") {
-                        Button("Add a Task") { model.missionTab = .tasks }
-                            .buttonStyle(.borderedProminent)
-                        if let coordinator = mission.coordinatorSessionId {
-                            Button("Open Coordinator") { model.selectedSessionId = coordinator }
-                        }
+        VStack(alignment: .leading, spacing: 28) {
+            summary(counts)
+            if drafting {
+                MissionDraftingBanner(mission: mission)
+            } else if detail.tasks.isEmpty {
+                EmptyStateView(icon: "checklist", title: "Plan the work",
+                               message: mission.coordinatorSessionId == nil
+                                   ? "Break the goal into tasks, or start a coordinator to draft them from the brief."
+                                   : "Break the goal into tasks, or ask the coordinator to draft them from the brief.") {
+                    Button("Add a Task") { model.missionTab = .tasks }
+                        .buttonStyle(.borderedProminent)
+                    if let coordinator = mission.coordinatorSessionId {
+                        Button("Open Coordinator") { model.selectedSessionId = coordinator }
                     }
                 }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                PageSectionHeader(title: "Needs you", count: needs.count, countStyle: .attention)
+                if needs.isEmpty {
+                    HStack(spacing: 8) {
+                        Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
+                        Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
+                    }
+                    .font(.pilot(.body))
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                }
+                ForEach(Array(needs.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 { HairlineDivider(leading: 34) }
+                    NeedsYouRow(item: item, mission: mission)
+                }
+            }
+            if !inFlight.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    PageSectionHeader(title: "Needs you", count: needs.count, countStyle: .attention)
-                    if needs.isEmpty {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
-                            Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
-                        }
-                        .font(.pilot(.body))
-                        .padding(.horizontal, 8).padding(.vertical, 4)
+                    PageSectionHeader(title: "In flight", count: inFlight.count, linkTitle: "All tasks") {
+                        model.missionTab = .tasks
                     }
-                    ForEach(Array(needs.enumerated()), id: \.element.id) { index, item in
+                    ForEach(Array(inFlight.prefix(8).enumerated()), id: \.element.id) { index, task in
                         if index > 0 { HairlineDivider(leading: 34) }
-                        NeedsYouRow(item: item, mission: mission)
+                        CompactTaskRow(task: task)
                     }
-                }
-                if !inFlight.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        PageSectionHeader(title: "In flight", count: inFlight.count, linkTitle: "All tasks") {
+                    if waiting > 0 || inFlight.count > 8 {
+                        Button(waitingText(waiting: waiting, hidden: max(0, inFlight.count - 8))) {
                             model.missionTab = .tasks
                         }
-                        ForEach(Array(inFlight.prefix(8).enumerated()), id: \.element.id) { index, task in
-                            if index > 0 { HairlineDivider(leading: 34) }
-                            CompactTaskRow(task: task)
-                        }
-                        if waiting > 0 || inFlight.count > 8 {
-                            Button(waitingText(waiting: waiting, hidden: max(0, inFlight.count - 8))) {
-                                model.missionTab = .tasks
-                            }
-                            .buttonStyle(.plain)
-                            .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
-                            .padding(.leading, 34)
-                        }
+                        .buttonStyle(.plain)
+                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                        .padding(.leading, 34)
                     }
                 }
-                if !detail.events.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        PageSectionHeader(title: "Recent activity", linkTitle: "All activity") { model.missionTab = .activity }
-                        ForEach(detail.events.prefix(3)) { event in
-                            MissionEventRow(event: event)
-                        }
-                    }
-                }
-                MissionLinksSection(mission: mission, detail: detail)
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
-            .frame(maxWidth: Theme.column, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            if !detail.events.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    PageSectionHeader(title: "Recent activity", linkTitle: "All activity") { model.missionTab = .activity }
+                    ForEach(detail.events.prefix(3)) { event in
+                        MissionEventRow(event: event)
+                    }
+                }
+            }
+            MissionLinksSection(mission: mission, detail: detail)
         }
     }
 

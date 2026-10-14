@@ -60,7 +60,13 @@ final class AppModel: ObservableObject {
     var scopeSelections: [String: SidebarSelection] = [:]
     /// Settings page to show next, such as a project's page from "Project Settings…".
     @Published var settingsTab: SettingsTab = .appearance
-    @Published var missionTab: MissionTab = .overview
+    /// The mission page section. Published by its own object, so a tab switch re-renders only the section
+    /// picker and the page content, not every view observing the app model (window, sidebar, toolbar).
+    let missionTabSelection = MissionTabSelection()
+    var missionTab: MissionTab {
+        get { missionTabSelection.tab }
+        set { missionTabSelection.tab = newValue }
+    }
     /// A task the Tasks tab should scroll to and briefly highlight, set by "Show task" on a link.
     @Published var revealedMissionTaskId: String?
     @Published var missionSheet: MissionSheet?

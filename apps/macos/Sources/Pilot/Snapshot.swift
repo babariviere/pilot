@@ -22,6 +22,10 @@ enum Snapshot {
             Task { await PerformanceCheck.run() }
             return true
         }
+        if arguments.contains("--mission-tabs-check") {
+            Task { await MissionTabsCheck.run() }
+            return true
+        }
         if arguments.contains("--terminal-resource-test") {
             TerminalResourceTest.run()
             return true

@@ -7,27 +7,26 @@ import SwiftUI
 struct MarkdownView: View {
     let text: String
     let textColor: NSColor
+    /// Creates blocks only as they scroll into view, for long documents such as a mission brief inside a
+    /// scroll view. Shows a small spinner, not the raw text, until the blocks are prepared.
+    let lazy: Bool
     @StateObject private var state: MarkdownRenderState
     @Environment(\.transcriptContentPrepared) private var contentPrepared
     @Environment(\.pilotFonts) private var fonts
 
-    init(text: String, textColor: NSColor = .labelColor) {
+    init(text: String, textColor: NSColor = .labelColor, lazy: Bool = false) {
         self.text = text
         self.textColor = textColor
+        self.lazy = lazy
         _state = StateObject(wrappedValue: MarkdownRenderState(markdown: text))
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if state.source == nil {
-                // Not prepared yet: plain text keeps the row near its final height, so the
-                // lazy transcript does not jump when the formatted blocks arrive.
-                SelectableMessageText(text: AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono)
+        Group {
+            if lazy {
+                LazyVStack(alignment: .leading, spacing: 10) { blocks }
             } else {
-                ForEach(Array(state.blocks.enumerated()), id: \.offset) { index, block in
-                    BlockView(block: block)
-                        .environment(\.messageSelectionBlock, index)
-                }
+                VStack(alignment: .leading, spacing: 10) { blocks }
             }
         }
         .environment(\.messageTextSelection, state.selection)
@@ -45,6 +44,31 @@ struct MarkdownView: View {
                 contentPrepared?()
             } catch { /* A newer streamed value or disappeared row cancelled preparation. */ }
         }
+    }
+
+    @ViewBuilder private var blocks: some View {
+        if state.source == nil {
+            if lazy {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                // Not prepared yet: plain text keeps the row near its final height, so the
+                // lazy transcript does not jump when the formatted blocks arrive.
+                SelectableMessageText(text: AttributedString(text), font: fonts.nsBody, monoFont: fonts.nsMono)
+            }
+        } else {
+            ForEach(Array(state.blocks.enumerated()), id: \.offset) { index, block in
+                BlockView(block: block)
+                    .environment(\.messageSelectionBlock, index)
+            }
+        }
+    }
+
+    /// Prepares Markdown off the main actor and keeps it for views created later, such as a tab opened
+    /// after its content arrived.
+    static func prewarm(_ text: String) async {
+        guard !text.isEmpty, PreparedMarkdownCache.shared.blocks(for: text) == nil,
+              let blocks = try? await MarkdownRenderer.shared.prepare(text) else { return }
+        PreparedMarkdownCache.shared.store(blocks, for: text)
     }
 }
 
