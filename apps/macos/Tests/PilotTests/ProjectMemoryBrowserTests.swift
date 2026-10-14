@@ -58,6 +58,23 @@ private final class MemoryBrowserClient: ProjectMemoryClient {
     #expect(model.results.first?.text == "matching note")
 }
 
+@Test func memoryBrowserMarksReplacedNotesAndSummaries() {
+    let old = MemoryEntry(index: 2, id: "a", deviceId: "d", at: 0, sessionId: "s", text: "Old fact", replacedBy: 5)
+    let note = MemoryNode(lo: 2, hi: 2, text: old.text, entry: old, replaced: true)
+    #expect(note.isReplaced)
+    #expect(note.title == "Old fact")
+    #expect(old.replacedLabel == "Replaced by #5")
+
+    let emptied = MemoryNode(lo: 0, hi: 3, replaced: true)
+    #expect(emptied.isReplaced)
+    #expect(emptied.title == "All notes here were replaced by later corrections")
+
+    let current = MemoryNode(lo: 4, hi: 7, text: "Summary")
+    #expect(!current.isReplaced)
+    #expect(MemoryNode(lo: 0, hi: 3, pending: true).title == "Summary is being built…")
+    #expect(MemoryEntry(index: 5, id: "b", deviceId: "d", at: 0, sessionId: "s", text: "New").replacedLabel == nil)
+}
+
 @Test @MainActor func memoryBrowserRequiresConfirmationBeforeForgetting() async {
     let client = MemoryBrowserClient()
     let model = ProjectMemoryBrowserModel(projectId: "project", client: client)
