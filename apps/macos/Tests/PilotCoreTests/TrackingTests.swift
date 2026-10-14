@@ -31,11 +31,20 @@ import Testing
     #expect(list.items[0].missionId == "m")
     let source = Data(#"""
     {"type":"sources","sources":[{"id":"p:linear","projectId":"p","kind":"linear","label":"Linear","configured":true,
-      "status":"sign_in_required","signInCommand":"pi mcp login linear"}]}
+      "status":"sign_in_required","signInCommand":"pi mcp login linear",
+      "signIn":{"kind":"linear","state":"waiting","again":true,"startedAt":1,"expiresAt":300001}}]}
     """#.utf8)
     guard case let .sources(sources) = try ServerUpdate.decode(source) else { Issue.record("Expected sources"); return }
     #expect(sources[0].status == .signInRequired)
     #expect(sources[0].signInCommand == "pi mcp login linear")
+    #expect(sources[0].signIn == SourceSignIn(kind: .linear, state: .waiting, again: true, startedAt: 1,
+                                              expiresAt: 300_001))
+    let failed = try JSONDecoder().decode(SourceSignIn.self, from: Data(#"""
+    {"kind":"slack","state":"future_state","startedAt":1,"expiresAt":2,"finishedAt":2,"error":"Sign-in timed out."}
+    """#.utf8))
+    #expect(failed.state == .failed)
+    #expect(String(decoding: try JSONEncoder().encode(SourceSignInRequest(again: true)), as: UTF8.self)
+        == #"{"again":true}"#)
     guard case let .trackedChanged(projectId) = try ServerUpdate.decode(Data(#"{"type":"tracked.changed","projectId":"p"}"#.utf8))
     else { Issue.record("Expected invalidation"); return }
     #expect(projectId == "p")

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ProjectDashboard, ServerMessage, SessionSummary, TrackingSource } from "@pilot/protocol";
+import type { ProjectDashboard, ServerMessage, SessionSummary, SourceSignIn, TrackingSource } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
@@ -31,6 +31,11 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 		async call() {
 			throw new SourceSignInRequired();
 		},
+		// A fake browser sign-in that waits until it is cancelled.
+		signIn: (_kind, { signal }) =>
+			new Promise<void>((_resolve, reject) =>
+				signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+			),
 	});
 	tracking.register("linear", async (context) => {
 		await context.call("issues", {});
@@ -102,6 +107,28 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	});
 	assert.equal((await (await api("/tracking/slack/channels?query=bugs")).json()).status, "sign_in_required");
 	assert.equal((await api("/tracking/slack/teams")).status, 404);
+	const signIn = (await (await api("/tracking/linear/sign-in", {})).json()) as SourceSignIn;
+	assert.equal(signIn.state, "waiting");
+	assert.equal(
+		((await (await api("/tracking/linear/sign-in", { again: true })).json()) as SourceSignIn).startedAt,
+		signIn.startedAt,
+		"one sign-in per server",
+	);
+	assert.equal((await api("/tracking/linear/sign-in", { again: "yes" })).status, 400);
+	assert.equal((await api("/tracking/bogus/sign-in", {})).status, 404);
+	assert.equal((await api("/tracking/slack/sign-in", undefined, "DELETE")).status, 404);
+	await until(() =>
+		messages.some(
+			(message) =>
+				message.type === "sources" &&
+				message.sources.some((source) => source.kind === "linear" && source.signIn?.state === "waiting"),
+		),
+	);
+	const listed = (await (await api(`/sources?projectId=${other.id}`)).json()) as TrackingSource[];
+	assert.equal(listed.find((source) => source.kind === "linear")?.signIn?.state, "waiting", "shared by projects");
+	const cancelled = (await (await api("/tracking/linear/sign-in", undefined, "DELETE")).json()) as SourceSignIn;
+	assert.equal(cancelled.state, "cancelled");
+	assert.ok(!JSON.stringify(cancelled).toLowerCase().includes("token"));
 	ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: project.id }));
 	await until(() => messages.some((message) => message.type === "dashboard"));
 	await items.commit(
