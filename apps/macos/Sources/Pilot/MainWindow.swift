@@ -32,6 +32,8 @@ struct MainWindow: View {
                         ProjectPage(projectId: projectId)
                             .id(projectId)
                     }
+                } else if model.showingInbox {
+                    InboxPage()
                 } else if model.showingArchive {
                     ArchiveView()
                 } else {

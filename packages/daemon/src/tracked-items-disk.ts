@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
+	InboxHiddenLabel,
 	LinearSourceSummary,
 	SlackCorrection,
 	SlackOverrides,
@@ -54,6 +55,26 @@ export interface TrackedQuery {
 	limit?: number;
 	offset?: number;
 }
+/** Projects whose synced sources the Inbox lists, with each project's hidden Slack labels. */
+export interface InboxQuery {
+	linear: string[];
+	slack: Array<{ projectId: string; hidden: string[] }>;
+	limit: number;
+}
+export interface InboxTracked {
+	linear: TrackedItemList;
+	slack: TrackedItemList & { hidden: InboxHiddenLabel[] };
+}
+// What the Inbox lists: my Linear tickets not done, and Slack messages still open or in progress.
+const LINEAR_OPEN =
+	"kind = 'linear' AND active = 1 AND dismissed = 0 AND coalesce(json_extract(metadata, '$.statusType'), '') NOT IN ('completed', 'canceled')";
+const SLACK_OPEN = "kind = 'slack' AND active = 1 AND dismissed = 0 AND slack_status IN ('open', 'in_progress')";
+/** The effective label: a user override (an explicit null clears it) wins over the classifier's. */
+const SLACK_LABEL =
+	"CASE WHEN json_type(slack_overrides, '$.label') IS NOT NULL THEN json_extract(slack_overrides, '$.label') ELSE json_extract(metadata, '$.label') END";
+/** Pairs of [projectId, label] in the second parameter. */
+const SLACK_HIDDEN = `EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL})`;
+const IN_PROJECTS = "project_id IN (SELECT value FROM json_each(?))";
 
 export class TrackedItemDisk {
 	private readonly db: DatabaseSync;
@@ -248,6 +269,67 @@ export class TrackedItemDisk {
 	checkpoint(id: string): SourceCheckpoint | undefined {
 		const row = this.db.prepare("SELECT value FROM source_checkpoints WHERE id = ?").get(id);
 		return row ? (JSON.parse(String(row.value)) as SourceCheckpoint) : undefined;
+	}
+	/** Inbox counts of a source by effective label ("" for none; Linear has only ""), so hidden labels can be
+	 * subtracted without reading rows. One small grouped query per source. */
+	inboxCounts(projectId: string, kind: TrackedKind): Record<string, number> {
+		const sql =
+			kind === "linear"
+				? `SELECT '' AS label, COUNT(*) AS n FROM tracked_items WHERE project_id = ? AND ${LINEAR_OPEN}`
+				: `SELECT coalesce(${SLACK_LABEL}, '') AS label, COUNT(*) AS n FROM tracked_items WHERE project_id = ? AND ${SLACK_OPEN} GROUP BY 1`;
+		const counts: Record<string, number> = {};
+		for (const row of this.db.prepare(sql).all(projectId))
+			if (Number(row.n) > 0) counts[String(row.label)] = Number(row.n);
+		return counts;
+	}
+	/** Open tracked work of several projects for the Inbox, bounded, most pressing first. */
+	inbox(query: InboxQuery): InboxTracked {
+		const limit = query.limit;
+		if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error("limit must be 1..100");
+		const linear = JSON.stringify(query.linear);
+		const slack = JSON.stringify(query.slack.map((entry) => entry.projectId));
+		const hidden = JSON.stringify(
+			query.slack.flatMap((entry) => entry.hidden.map((label) => [entry.projectId, label])),
+		);
+		const count = (sql: string, ...args: string[]) =>
+			Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${sql}`).get(...args)!.n);
+		const rows = (sql: string, order: string, ...args: string[]) =>
+			(
+				this.db
+					.prepare(`SELECT * FROM tracked_items WHERE ${sql} ORDER BY ${order} LIMIT ?`)
+					.all(...args, limit) as Row[]
+			).map(decode);
+		const linearWhere = `${IN_PROJECTS} AND ${LINEAR_OPEN}`;
+		const slackWhere = `${IN_PROJECTS} AND ${SLACK_OPEN} AND NOT ${SLACK_HIDDEN}`;
+		return {
+			linear: {
+				total: count(linearWhere, linear),
+				items: rows(
+					linearWhere,
+					`CASE json_extract(metadata, '$.statusType') WHEN 'started' THEN 0 ELSE 1 END,
+					 CASE WHEN json_extract(metadata, '$.priority') BETWEEN 1 AND 4 THEN json_extract(metadata, '$.priority') ELSE 5 END,
+					 updated_at DESC, id`,
+					linear,
+				),
+			},
+			slack: {
+				total: count(slackWhere, slack, hidden),
+				items: rows(
+					slackWhere,
+					`CASE coalesce(json_extract(slack_overrides, '$.severity'), json_extract(metadata, '$.severity'))
+					 WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END, updated_at DESC, id`,
+					slack,
+					hidden,
+				),
+				hidden: this.db
+					.prepare(
+						`SELECT ${SLACK_LABEL} AS label, COUNT(*) AS n FROM tracked_items
+						 WHERE ${IN_PROJECTS} AND ${SLACK_OPEN} AND ${SLACK_HIDDEN} GROUP BY 1 ORDER BY 2 DESC, 1`,
+					)
+					.all(slack, hidden)
+					.map((row) => ({ label: String(row.label), count: Number(row.n) })),
+			},
+		};
 	}
 	/** Only current projects are loaded into the daemon's bounded dashboard cache. */
 	preview(projectId: string, kind: TrackedKind): import("@pilot/protocol").DashboardTrackedSource {

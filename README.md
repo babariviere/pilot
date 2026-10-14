@@ -35,8 +35,8 @@ use a stand-in window header. See [screenshot notes](docs/screenshots/README.md)
 - **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams and
   static SwiftUI renders. Artifacts stay attached to their chat and can be linked to missions and tasks.
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
-  messages by type, label and severity, then start a chat or mission from an item. Schedule work for later or
-  for supported wake, network and Wi-Fi events.
+  messages by type, label and severity, see what waits on you across projects in one Inbox, then start a chat or
+  mission from an item. Schedule work for later or for supported wake, network and Wi-Fi events.
 
 ## Get started
 

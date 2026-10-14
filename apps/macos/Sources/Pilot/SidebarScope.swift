@@ -11,6 +11,8 @@ enum SidebarSelection: Equatable {
     case mission(String)
     case project(String)
     case archive(projectId: String?, missionId: String?)
+    /// The Inbox, scoped like the sidebar.
+    case inbox
 
     /// Key for `AppModel.scopeSelections`: the project id, or "" for every project.
     static func scopeKey(_ scope: String?) -> String { scope ?? "" }
@@ -20,8 +22,8 @@ enum SidebarSelection: Equatable {
                           missions: [Mission], projectIds: Set<String>) -> SidebarSelection {
         guard let saved else { return .home }
         switch saved {
-        case .home:
-            return .home
+        case .home, .inbox:
+            return saved
         case let .session(id):
             guard let session = sessions.first(where: { $0.id == id }),
                   scope == nil || session.projectId == scope else { return .home }
@@ -53,7 +55,8 @@ enum SidebarScopeCounts {
         counts.reduce(into: ProjectDashboardCount()) { total, entry in
             guard entry.key != projectId else { return }
             total = ProjectDashboardCount(working: total.working + entry.value.working,
-                                          needsYou: total.needsYou + entry.value.needsYou)
+                                          needsYou: total.needsYou + entry.value.needsYou,
+                                          tracked: total.tracked + entry.value.tracked)
         }
     }
 
@@ -85,6 +88,9 @@ struct SidebarScopeSwitcher: View {
     /// Things that need the user in this scope, badged on Home.
     let needsYou: Int
     let homeSelected: Bool
+    /// What the Inbox lists in this scope (needs you plus open tracked items), a neutral count on its button.
+    let inboxCount: Int
+    let inboxSelected: Bool
     let archivedCount: Int
     let onNewFolder: () -> Void
     @State private var showingList = false
@@ -119,6 +125,7 @@ struct SidebarScopeSwitcher: View {
                 .accessibilityHint("Choose which projects the sidebar lists")
                 .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
                 homeButton(project: project)
+                inboxButton(project: project)
                 composeButton(project: project)
             }
             if let elsewhereText, let elsewhere {
@@ -202,6 +209,33 @@ struct SidebarScopeSwitcher: View {
         .help(title)
         .accessibilityLabel(needsYou > 0 ? "\(title), \(needsYou) \(needsYou == 1 ? "needs" : "need") you" : title)
         .accessibilityAddTraits(homeSelected ? .isSelected : [])
+    }
+
+    /// The Inbox for the scope: what waits on the user, with open tracked items. Its count is neutral, since
+    /// tickets do not interrupt; Home keeps the attention badge.
+    private func inboxButton(project: Project?) -> some View {
+        let title = project.map { "Open the Inbox for \($0.name)" } ?? "Open the Inbox"
+        return Button { model.showInbox() } label: {
+            Image(systemName: inboxSelected ? "tray.fill" : "tray")
+                .font(.pilot(.label))
+                .foregroundStyle(inboxSelected ? Theme.foreground : Theme.mutedForeground)
+                .frame(width: 24, height: 24)
+                .overlay(alignment: .topTrailing) {
+                    if inboxCount > 0 {
+                        CountBadge(count: inboxCount)
+                            .scaleEffect(0.85)
+                            .offset(x: 7, y: -4)
+                            .transition(.scale.combined(with: .opacity))
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .animation(Theme.Motion.quick, value: inboxCount > 0)
+        .padding(.trailing, inboxCount > 0 ? 6 : 0)
+        .help(title)
+        .accessibilityLabel(inboxCount > 0 ? "\(title), \(inboxCount) waiting" : title)
+        .accessibilityAddTraits(inboxSelected ? .isSelected : [])
     }
 
     private func composeButton(project: Project?) -> some View {

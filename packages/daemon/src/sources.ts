@@ -1,5 +1,6 @@
 import type {
 	DashboardTrackedSource,
+	Inbox,
 	LinearTeamOption,
 	Project,
 	ProjectTrackingConfig,
@@ -295,6 +296,38 @@ export class SourceRegistry {
 		const { kind: _kind, ...rest } = query;
 		return this.items.list({ ...rest, kinds });
 	}
+	/** Open tracked items the Inbox lists for a project, from cached counts: no disk read. */
+	inboxCount(projectId: string): number {
+		const project = this.projects.require(projectId);
+		const hidden = new Set(hiddenLabels(project));
+		let total = 0;
+		for (const kind of ["linear", "slack"] as const) {
+			if (!this.synced(project, kind)) continue;
+			for (const [label, count] of Object.entries(this.items.inboxCounts(projectId, kind)))
+				if (!label || !hidden.has(label)) total += count;
+		}
+		return total;
+	}
+	/** Open tracked work of one project or every project, for the Inbox. A kind no project tracks is omitted. */
+	async inbox(projectId: string | undefined, limit: number): Promise<Pick<Inbox, "linear" | "slack">> {
+		const projects = projectId ? [this.projects.require(projectId)] : this.projects.list();
+		const linear = projects.filter((project) => this.synced(project, "linear")).map((project) => project.id);
+		const slack = projects
+			.filter((project) => this.synced(project, "slack"))
+			.map((project) => ({ projectId: project.id, hidden: hiddenLabels(project) }));
+		const tracks = (kind: TrackedKind) => projects.some((project) => isConfigured(project, kind));
+		const result = await this.items.inbox({ linear, slack, limit });
+		return {
+			...(tracks("linear") ? { linear: result.linear } : {}),
+			...(tracks("slack") ? { slack: result.slack } : {}),
+		};
+	}
+	/** Configured, with stored rows from its current settings (a team change must not show the old team's rows). */
+	private synced(project: Project, kind: TrackedKind): boolean {
+		if (!isConfigured(project, kind)) return false;
+		const checkpoint = this.items.checkpoint(`${project.id}:${kind}`);
+		return !checkpoint || checkpoint.configKey === configKey(project, kind);
+	}
 	async prefill(itemId: string): Promise<TrackedItemPrefill> {
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
 		const existing = this.details.get(itemId);
@@ -540,7 +573,7 @@ export class SourceRegistry {
 	}
 	private describe(project: Project, kind: TrackedKind): TrackingSource {
 		const id = `${project.id}:${kind}`;
-		const configured = kind === "linear" ? !!project.tracking?.linearTeam : !!project.tracking?.slackChannels.length;
+		const configured = isConfigured(project, kind);
 		const key = configKey(project, kind),
 			health = this.health.get(id),
 			checkpoint = this.items.checkpoint(id),
@@ -622,6 +655,15 @@ function configKey(project: Project, kind: TrackedKind): string {
 			]),
 		)
 		.digest("hex");
+}
+
+/** Project labels whose Slack messages stay out of the Inbox. */
+function hiddenLabels(project: Project): string[] {
+	return (project.tracking?.slackLabels ?? []).filter((label) => label.hideFromInbox).map((label) => label.name);
+}
+
+function isConfigured(project: Project, kind: TrackedKind): boolean {
+	return kind === "linear" ? !!project.tracking?.linearTeam : !!project.tracking?.slackChannels.length;
 }
 
 /** Even a buggy adapter ignoring cancellation cannot keep a registry slot or commit stale results. */

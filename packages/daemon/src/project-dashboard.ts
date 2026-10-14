@@ -11,6 +11,7 @@ import {
 	type DashboardSection,
 	type DashboardTrackedSource,
 	type DashboardWorkingItem,
+	type InboxNeedsYouItem,
 	type Mission,
 	type ProjectDashboard,
 	type ProjectDashboardCounts,
@@ -32,6 +33,8 @@ export interface DashboardProviders {
 	tracked?: (projectId: string) => DashboardTrackedSource[];
 	/** Cached count, recent notes and background compaction health. No disk I/O while building a dashboard. */
 	memory?: (projectId: string) => ProjectMemorySummary;
+	/** Open tracked items the Inbox lists for a project, from cached counts. Added to the sidebar counts. */
+	inbox?: (projectId: string) => number;
 	/** Subscribe to provider changes so the dashboard updates without polling. */
 	onChange?: (listener: () => void) => () => void;
 }
@@ -289,34 +292,34 @@ export class ProjectDashboardService {
 		);
 	}
 
-	/** Working and needs-you counts of every project that has either. One pass over the chats. */
+	/** Working, needs-you and Inbox tracked counts of every project that has any. One pass over the chats. */
 	counts(): ProjectDashboardCounts {
-		const byProject = new Map<string, SessionSummary[]>();
-		for (const session of this.deps.sessions.list({ archived: "false" })) {
-			if (!session.projectId) continue;
-			const list = byProject.get(session.projectId);
-			if (list) list.push(session);
-			else byProject.set(session.projectId, [session]);
-		}
-		const missionsByProject = new Map<string, Mission[]>();
-		for (const mission of this.deps.missions?.list() ?? []) {
-			const list = missionsByProject.get(mission.projectId);
-			if (list) list.push(mission);
-			else missionsByProject.set(mission.projectId, [mission]);
-		}
-		const progress = this.deps.missions?.taskProgress() ?? new Map();
+		const all = this.everyProject();
 		const projects: ProjectDashboardCounts["projects"] = {};
 		for (const project of this.deps.projects.list()) {
-			const { summary } = this.build(
-				project.id,
-				byProject.get(project.id) ?? [],
-				missionsByProject.get(project.id) ?? [],
-				progress,
-			);
-			if (summary.working || summary.needsYou)
-				projects[project.id] = { working: summary.working, needsYou: summary.needsYou };
+			const { summary } = all.build(project.id);
+			const tracked = this.deps.providers?.inbox?.(project.id) ?? 0;
+			if (summary.working || summary.needsYou || tracked)
+				projects[project.id] = {
+					working: summary.working,
+					needsYou: summary.needsYou,
+					...(tracked ? { tracked } : {}),
+				};
 		}
 		return { projects };
+	}
+
+	/** Needs-you rows of one project or every project, most urgent first, for the Inbox. Throws NotFound. */
+	needsYou(projectId: string | undefined, limit: number): DashboardSection<InboxNeedsYouItem> {
+		if (projectId) this.deps.projects.require(projectId);
+		const ids = projectId ? [projectId] : this.deps.projects.list().map((project) => project.id);
+		const all = this.everyProject();
+		const items: InboxNeedsYouItem[] = [];
+		for (const id of ids)
+			for (const item of all.build(id, Number.MAX_SAFE_INTEGER).needsYou.items)
+				items.push({ ...item, projectId: id });
+		items.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.at - a.at || a.id.localeCompare(b.id));
+		return section(items, limit);
 	}
 
 	/** Fires after any change that can alter a dashboard. Callers coalesce and compare results. */
@@ -331,6 +334,34 @@ export class ProjectDashboardService {
 		];
 		return () => {
 			for (const dispose of disposers) dispose();
+		};
+	}
+
+	/** Chats and missions grouped by project in one pass, for building several dashboards. */
+	private everyProject(): { build(projectId: string, limit?: number): ProjectDashboard } {
+		const byProject = new Map<string, SessionSummary[]>();
+		for (const session of this.deps.sessions.list({ archived: "false" })) {
+			if (!session.projectId) continue;
+			const list = byProject.get(session.projectId);
+			if (list) list.push(session);
+			else byProject.set(session.projectId, [session]);
+		}
+		const missionsByProject = new Map<string, Mission[]>();
+		for (const mission of this.deps.missions?.list() ?? []) {
+			const list = missionsByProject.get(mission.projectId);
+			if (list) list.push(mission);
+			else missionsByProject.set(mission.projectId, [mission]);
+		}
+		const progress = this.deps.missions?.taskProgress() ?? new Map();
+		return {
+			build: (projectId, limit) =>
+				this.build(
+					projectId,
+					byProject.get(projectId) ?? [],
+					missionsByProject.get(projectId) ?? [],
+					progress,
+					limit,
+				),
 		};
 	}
 

@@ -110,6 +110,8 @@ final class AppModel: ObservableObject {
         didSet { projectFolders.save(defaults: projectFolderDefaults) }
     }
     @Published var showingArchive = false
+    /// The Inbox page: what waits on the user in the sidebar's scope. Below chats, missions and project pages.
+    @Published var showingInbox = false
     /// nil browses every project's archived chats.
     @Published var archiveProjectId: String?
     /// nil includes chats from every mission, as well as chats without one.
@@ -319,6 +321,7 @@ final class AppModel: ObservableObject {
 
     func newSession(in projectId: String?, message: String? = nil) {
         showingArchive = false
+        showingInbox = false
         if projectId != nil || message != nil { newSessionForm.mission = nil }
         let fresh = message != nil || !newSessionForm.hasUnsubmittedDraft
         if let projectId, draftProjectId != projectId {
@@ -472,14 +475,25 @@ final class AppModel: ObservableObject {
         archiveProjectId = projectId
         chooseArchiveMission(missionId)
         showingArchive = true
+        showingInbox = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
     }
 
+    /// Shows the Inbox for the sidebar's scope.
+    func showInbox() {
+        showingArchive = false
+        selectedSessionId = nil
+        selectedMissionId = nil
+        selectedProjectId = nil
+        showingInbox = true
+    }
+
     /// Shows a project's page, keeping the sidebar as it is.
     func openProject(_ id: String) {
         showingArchive = false
+        showingInbox = false
         selectedSessionId = nil
         selectedProjectId = id
         slackTriageProjectId = nil
@@ -525,20 +539,24 @@ final class AppModel: ObservableObject {
         if let id = selectedSessionId { return .session(id) }
         if let id = selectedMissionId { return .mission(id) }
         if let id = selectedProjectId { return .project(id) }
+        if showingInbox { return .inbox }
         if showingArchive { return .archive(projectId: archiveProjectId, missionId: archiveMissionId) }
         return .home
     }
 
     /// Lists every project (nil) or focuses the sidebar on one. Remembers the selection of the scope being
     /// left and restores the last selection of the new scope; a scope seen for the first time opens its Home.
+    /// The Inbox stays open and follows the new scope.
     func focus(on projectId: String?) {
         let target = projectId.flatMap { client.project($0)?.id }
         guard projectId == nil || target != nil, target != sidebarScope else { return }
-        scopeSelections[SidebarSelection.scopeKey(sidebarScope)] = currentSelection
+        let leaving = currentSelection
+        scopeSelections[SidebarSelection.scopeKey(sidebarScope)] = leaving
         sidebarScope = target
         saveSidebarScope()
         let saved = scopeSelections[SidebarSelection.scopeKey(target)]
-        apply(SidebarSelection.restoring(saved, in: target, sessions: client.sessions, missions: client.missions,
+        apply(leaving == .inbox ? .inbox
+            : SidebarSelection.restoring(saved, in: target, sessions: client.sessions, missions: client.missions,
                                          projectIds: Set(client.projects.map(\.id))))
     }
 
@@ -572,6 +590,7 @@ final class AppModel: ObservableObject {
                 openProject(scope)
             } else {
                 showingArchive = false
+                showingInbox = false
                 selectedSessionId = nil
                 selectedMissionId = nil
                 selectedProjectId = nil
@@ -585,6 +604,8 @@ final class AppModel: ObservableObject {
             openProject(id)
         case let .archive(projectId, missionId):
             showArchive(in: projectId, missionId: missionId)
+        case .inbox:
+            showInbox()
         }
     }
 

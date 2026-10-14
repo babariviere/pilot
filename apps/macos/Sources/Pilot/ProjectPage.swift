@@ -673,14 +673,16 @@ private func projectTrackingSource(_ group: DashboardTrackedSource, projectId: S
 
 // MARK: Rows
 
-private struct ProjectNeedsYouRow: View {
+/// Also listed in the Inbox, where `context` names the row's project.
+struct ProjectNeedsYouRow: View {
     let item: DashboardNeedsYouItem
     let now: Date
+    var context: String? = nil
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let action = ProjectPageText.needsAction(item)
-        let subtitle = ProjectPageText.needsSubtitle(item, now: now)
+        let subtitle = [context, ProjectPageText.needsSubtitle(item, now: now)].compactMap { $0 }.joined(separator: " · ")
         Button(action: open) {
             HoverRow(verticalPadding: 7) { hovered in
                 HStack(spacing: 10) {
