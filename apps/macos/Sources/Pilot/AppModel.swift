@@ -11,6 +11,7 @@ enum InspectorTab: Hashable {
     case links
 
     func isAvailable(for session: SessionSummary) -> Bool {
+        if self == .changes || self == .terminal { return session.supportsChanges }
         if self == .mission { return session.missionId != nil }
         return !session.isAsk || self == .artifacts || self == .links
     }

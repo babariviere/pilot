@@ -123,6 +123,7 @@ public struct PullRequestStack: Codable, Equatable, Hashable, Sendable {
 extension SessionSummary {
     /// Every PR linked to the session, the current branch's first. Falls back to pullRequest for older daemons.
     public var linkedPullRequests: [SessionPullRequest] {
+        guard !isMissionCoordinator else { return [] }
         if let pullRequests, !pullRequests.isEmpty { return pullRequests }
         return pullRequest.map { [$0] } ?? []
     }
@@ -130,6 +131,7 @@ extension SessionSummary {
     /// Every session branch paired with its PR, the current branch first. PRs without a known head branch
     /// (older daemons) attach to the current branch when it has none, otherwise they follow without a name.
     public func branchLinks(current: String? = nil) -> [SessionBranchLink] {
+        guard !isMissionCoordinator else { return [] }
         let current = current ?? branch
         let prs = linkedPullRequests
         var names: [String] = []

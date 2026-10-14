@@ -57,8 +57,8 @@ import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
 import { submitIdleInput } from "./idle-input.ts";
-import { JobsMonitor } from "./jobs.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
+import { JobsMonitor } from "./jobs.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
@@ -79,7 +79,6 @@ import { refActivity } from "./ref-activity.ts";
 import { openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
 import { TodosWatch, todosDirectory } from "./todos.ts";
-import { turnPreparation } from "./turn-preparation.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
@@ -295,17 +294,7 @@ export class KernelSession {
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage, active), detectGhStack(spec.cwd)]);
 			const pilot = { ...spec.pilot, ghStack, projectMemory: !!spec.projectId && !!hooks.callMemory };
-			const prepareWorkspace = hooks.prepareWorkspace
-				? turnPreparation(
-						owned.storage,
-						async () => {
-							if (mission.current?.coordinator !== "self" || mission.current.status !== "active") return;
-							const workspace = await hooks.prepareWorkspace!();
-							if (workspace) pilot.workspace = workspace;
-						},
-						() => mission.current?.coordinator === "self" && mission.current.status === "active",
-					)
-				: undefined;
+			const prepareWorkspace = undefined;
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,

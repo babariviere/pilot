@@ -52,6 +52,7 @@ import { ColdViewReader } from "./cold-view-reader.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
+import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { ModelCatalog } from "./models.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
@@ -80,8 +81,8 @@ import {
 	type SubscriptionProvider,
 	SubscriptionUsageCache,
 	type SubscriptionUsageSource,
-	subscriptionUsageReadings,
 	subscriptionProvider,
+	subscriptionUsageReadings,
 } from "./subscription-usage.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
@@ -249,6 +250,7 @@ interface SessionMeta extends OutcomeMeta {
 	workspaceMainAttempted?: string;
 	workspaceMainDeferred?: string;
 	workspaceBehind?: string;
+	coordinatorView?: { originalCwd: string; path: string; scratch: string; head: string; repository: string };
 	coordinatorBookmarkDetached?: boolean;
 	coordinatorDetachedBookmark?: string;
 	/** Persisted before removal. Never discard this record until restoration has succeeded. */
@@ -390,9 +392,10 @@ function publicSubagent({
 	return subagent;
 }
 
-function forkWorker(): ChildProcess {
+function forkWorker(spec?: WorkerSpec): ChildProcess {
+	const view = spec?.pilot?.coordinatorView;
+	if (view) return forkMainViewWorker(fileURLToPath(workerEntry), view);
 	return fork(fileURLToPath(workerEntry), [], {
-		// Node strips the kernel's erasable TypeScript itself. A loader hook (tsx) roughly doubles import time.
 		execArgv: [],
 		serialization: "advanced",
 		stdio: ["ignore", "inherit", "inherit", "ipc"],
@@ -503,7 +506,7 @@ export class Worker implements SessionWorker {
 		options: WorkerOptions = {},
 	) {
 		this.onPacket = onPacket;
-		this.child = options.child ?? pool?.take() ?? forkWorker();
+		this.child = options.child ?? (spec.pilot?.coordinatorView ? forkWorker(spec) : (pool?.take() ?? forkWorker()));
 		this.commandTimeoutMs = options.commandTimeoutMs ?? 60_000;
 		let markReady!: () => void;
 		let markFailed!: (error: Error) => void;
@@ -799,12 +802,16 @@ export class SessionManager {
 	private readonly workerOptions: WorkerOptions;
 	private readonly workspaceRetentionMs: number;
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
+	private readonly mainViews: MainViewStore;
+	private readonly roleTransitions = new Map<string, Promise<void>>();
 	private readonly workspaceRefreshes = new Map<string, Promise<void>>();
 	private readonly mainRefreshDue = new Set<string>();
 	private readonly mainRefreshes = new Map<string, Promise<void>>();
+	private readonly projectMainOperations = new Map<string, Promise<void>>();
 	private mainRefreshTimer?: ReturnType<typeof setTimeout>;
 	private readonly mainHeads = new Map<string, string>();
-	private readonly mainListeners = new Set<(event: MainMoved) => void>();
+	private readonly mainRepositories = new Map<string, string>();
+	private readonly mainListeners = new Set<(event: MainMoved) => unknown>();
 	private hasWorkspaceProcess: (id: string) => boolean = () => false;
 	/** Queued opposite archive transitions must not release a workspace's capability lock. */
 	private readonly workspaceMaintenance = new Map<string, number>();
@@ -872,6 +879,8 @@ export class SessionManager {
 		this.workerOptions = { startupTimeoutMs: options.startupTimeoutMs, commandTimeoutMs: options.commandTimeoutMs };
 		this.workspaceRetentionMs = options.workspaceRetentionMs ?? DAY_MS;
 		this.sharedWorkspaces = new SharedWorkspaceStore(home);
+		this.mainViews = new MainViewStore(home);
+		this.onMainMoved((event) => this.refreshMainViews(event));
 		this.onMainMoved((event) => this.refreshMainMembers(event));
 		if (!factories.worker) this.pool = new WorkerPool();
 		const onUsage = (provider: SubscriptionProvider) => this.subscriptionUsageChanged(provider);
@@ -887,8 +896,8 @@ export class SessionManager {
 		this.autoRebase = new PullRequestAutoRebase(this.runner);
 		this.pullRequests = new PullRequestSync<SessionMeta, FollowUpContext>(
 			{
-				sessions: () => this.metas.values(),
-				session: (id) => this.metas.get(id),
+				sessions: () => [...this.metas.values()].filter((meta) => !this.isMissionCoordinator(meta.id)),
+				session: (id) => (this.isMissionCoordinator(id) ? undefined : this.metas.get(id)),
 				apply: (session, result, health) => this.applyPullRequest(this.require(session.id), result, health),
 				health: (session, result) => this.followUpHealthPlan(session, result),
 				projects: () => this.mainProjects(),
@@ -954,7 +963,10 @@ export class SessionManager {
 		await this.recoverPullRequestBinding();
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
-			if (this.missions && (this.isActiveMissionCoordinator(meta.id) || meta.coordinatorBookmarkDetached))
+			if (
+				this.missions &&
+				(this.isMissionCoordinator(meta.id) || meta.coordinatorView || meta.coordinatorBookmarkDetached)
+			)
 				this.missionChanged(meta.id);
 		for (const meta of this.metas.values()) if (meta.titlePending) this.generateTitle(meta);
 		for (const meta of this.metas.values())
@@ -1054,7 +1066,7 @@ export class SessionManager {
 	}
 
 	private dissociate(meta: SessionMeta): void {
-		if (meta.mode === "ask") return;
+		if (meta.mode === "ask" || meta.coordinatorView) return;
 		if (!meta.workspace || !workspaceBorrowsObjects(meta.cwd)) return;
 		this.dissociation = this.dissociation.then(async () => {
 			if (this.closing) return;
@@ -1179,6 +1191,8 @@ export class SessionManager {
 						return this.summary(meta);
 					if (meta.archivedAt === undefined)
 						throw new Conflict("Archive the session before reclaiming its workspace");
+					if (meta.coordinatorView)
+						throw new Conflict("The read-only project view is shared and cannot be reclaimed per chat");
 					if (!meta.workspace?.shared) throw new Conflict("Only shared jj workspaces can be reclaimed");
 					if (hasActivePullRequest(meta))
 						throw new Conflict("Workspaces with an open pull request cannot be reclaimed");
@@ -1403,7 +1417,8 @@ export class SessionManager {
 	setMissionBridge(bridge: SessionMissionBridge): void {
 		this.missions = bridge;
 		for (const meta of this.metas.values())
-			if (this.isActiveMissionCoordinator(meta.id) || meta.coordinatorBookmarkDetached) this.missionChanged(meta.id);
+			if (this.isMissionCoordinator(meta.id) || meta.coordinatorView || meta.coordinatorBookmarkDetached)
+				this.missionChanged(meta.id);
 		this.refreshMissionPullRequests();
 		this.refreshMainWorkspaces();
 	}
@@ -1442,6 +1457,8 @@ export class SessionManager {
 				if (this.closing) throw new Conflict("The daemon is shutting down");
 				await this.recoverPullRequestBinding();
 				const meta = this.require(id);
+				if (bound && this.isMissionCoordinator(id))
+					throw new Conflict("A coordinator cannot own a pull request. Bind it to a member chat instead.");
 				if (typeof raw !== "string" || !raw.trim() || raw.length > 2048)
 					throw new Error("url must be a non-empty string of at most 2048 characters");
 				if (taskId !== undefined && (typeof taskId !== "string" || !taskId.trim() || taskId.length > 128))
@@ -1489,6 +1506,10 @@ export class SessionManager {
 				const temp = `${file}.tmp`;
 				await writeFile(temp, JSON.stringify(operation), { mode: 0o600 });
 				await rename(temp, file);
+				if (bound && this.isMissionCoordinator(id)) {
+					await rm(file);
+					throw new Conflict("A coordinator cannot own a pull request. Bind it to a member chat instead.");
+				}
 				const links = await this.applyPullRequestBinding(operation);
 				await rm(file);
 				return {
@@ -1538,6 +1559,8 @@ export class SessionManager {
 	private async applyPullRequestBinding(
 		operation: PullRequestBinding,
 	): Promise<{ changed: boolean; taskLinkRemoved: boolean } | void> {
+		// A crash can leave a pre-promotion bind journal. Do not transfer its previous owner's PR.
+		if (operation.bound && this.isMissionCoordinator(operation.sessionId)) return;
 		const target = this.require(operation.sessionId);
 		const same = (url: string) => url.toLowerCase() === operation.url.toLowerCase();
 		const previous = operation.previousSessionIds.map((id) => this.require(id));
@@ -1603,22 +1626,163 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id)): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
-		if (context?.coordinator === "self" && !meta.coordinatorBookmarkDetached) {
-			meta.coordinatorBookmarkDetached = true;
-			meta.coordinatorDetachedBookmark = meta.workspace?.branch;
-			if (meta.workspace) delete meta.workspace.branch;
-			void this.save(meta);
-		} else if (context?.coordinator !== "self" && meta.coordinatorBookmarkDetached) {
-			delete meta.coordinatorBookmarkDetached;
-			delete meta.coordinatorDetachedBookmark;
-			void this.save(meta);
+		if (context?.coordinator === "self") {
+			// Revoke ownership immediately; late discovery/health results also recheck the role.
+			const urls = new Set([
+				...(meta.boundPullRequests ?? []),
+				...(meta.agentPullRequests ?? []),
+				...sessionPullRequests(meta).map((pr) => pr.url),
+			]);
+			for (const url of urls)
+				void this.unbindPullRequest(id, url).catch((error) =>
+					console.warn(`pilotd: could not unbind promoted chat PR: ${error}`),
+				);
+			if (urls.size) {
+				meta.prActivities ??= [];
+				meta.prActivities.push({
+					type: "activity",
+					requestId: `role-unbind:${randomUUID()}`,
+					text: `Unbound ${urls.size} pull request${urls.size === 1 ? "" : "s"} because this chat is now the coordinator. Bind them to a member chat to continue tracking them.`,
+				});
+				void this.save(meta);
+			}
 		}
+		void this.prepareCoordinatorRole(id).catch((error) =>
+			console.warn(`pilotd: role workspace transition failed: ${error}`),
+		);
 		this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
 		this.emit(meta);
 		// A role/status change can release a persisted merge deadline without another GitHub lookup.
 		void this.archiveMergedPullRequest(meta).catch((error: unknown) =>
 			console.warn(`pilotd: could not archive merged PR session ${id}: ${error}`),
 		);
+	}
+
+	private isMissionCoordinator(id: string): boolean {
+		return this.missions?.membership(id)?.coordinator === true;
+	}
+
+	/** Role changes wait for the current turn to finish; the live policy revokes writes immediately. */
+	private async prepareCoordinatorRole(id: string): Promise<void> {
+		const existing = this.roleTransitions.get(id);
+		if (existing) {
+			await existing;
+			return this.prepareCoordinatorRole(id);
+		}
+		const meta = this.require(id);
+		const promote = this.isMissionCoordinator(id);
+		const worker = this.workers.get(id);
+		if (
+			meta.preparing ||
+			meta.archivedAt !== undefined ||
+			this.closing ||
+			this.sleepPause ||
+			this.updateGate.paused ||
+			worker?.busy ||
+			worker?.state === "working" ||
+			worker?.awaitingJobFollowUp ||
+			this.hasWorkspaceProcess(id)
+		)
+			return;
+		if (promote && meta.coordinatorView && existsSync(meta.coordinatorView.path)) {
+			await mkdir(meta.coordinatorView.scratch, { recursive: true, mode: 0o700 });
+			return;
+		}
+		if (!promote && !meta.coordinatorView) return;
+		const end = this.updateGate.begin();
+		const release = this.holdWorkspace(id);
+		const task = Promise.resolve()
+			.then(async () => {
+				await this.bindingQueue.catch(() => undefined);
+				let next: SessionMeta["coordinatorView"];
+				if (promote) {
+					if (!meta.projectId) throw new Conflict("A coordinator requires a project repository");
+					if (!this.mainHeads.has(meta.projectId)) await this.refreshProjectMain(meta.projectId);
+					const head = this.mainHeads.get(meta.projectId);
+					if (!head) throw new Error("The current main head is unavailable");
+					const repository = this.mainRepositories.get(meta.projectId)!;
+					const source = meta.workspace?.source ?? this.projects.require(meta.projectId).path;
+					const upstream =
+						meta.workspace?.upstream ?? (await run("git", ["remote", "get-url", "origin"], source)).trim();
+					const path = await this.mainViews.update(meta.projectId, repository, head, upstream);
+					const scratch = join(this.dir(id), "scratch");
+					await mkdir(scratch, { recursive: true, mode: 0o700 });
+					next = { originalCwd: meta.coordinatorView?.originalCwd ?? meta.cwd, path, scratch, head, repository };
+				}
+				if (this.closing || this.sleepPause || this.isMissionCoordinator(id) !== promote) return;
+				if (worker) {
+					if ((await worker.hasChildren?.()) ?? true)
+						throw new Conflict("Stop background work before changing this chat's workspace role");
+					this.workers.delete(id);
+					this.parked.add(worker);
+					await worker.close();
+				}
+				if (next) {
+					meta.coordinatorView = next;
+					meta.cwd = next.path;
+					meta.workspaceUpdatedAt = Date.now();
+				} else if (meta.coordinatorView) {
+					meta.cwd = meta.coordinatorView.originalCwd;
+					// A direct-checkout chat gains its own isolated workspace on demotion too.
+					if (!meta.workspace && meta.projectId) {
+						const source = this.projects.require(meta.projectId).path;
+						const destination = join(this.dir(id), "workspace");
+						const created = existsSync(join(source, ".jj"))
+							? await this.sharedWorkspaces.create(source, destination)
+							: await createWorkspace(source, destination);
+						meta.workspace = { source, ...created };
+						meta.cwd = destination;
+					}
+					delete meta.coordinatorView;
+					if (meta.workspace && meta.coordinatorDetachedBookmark)
+						meta.workspace.branch = meta.coordinatorDetachedBookmark;
+					delete meta.coordinatorBookmarkDetached;
+					delete meta.coordinatorDetachedBookmark;
+				}
+				delete meta.workspaceMainDue;
+				delete meta.workspaceRefreshDue;
+				await this.save(meta);
+				this.emit(meta);
+			})
+			.finally(() => {
+				this.roleTransitions.delete(id);
+				release();
+				end();
+			});
+		this.roleTransitions.set(id, task);
+		await task;
+	}
+
+	private async refreshMainViews(event: MainMoved): Promise<void> {
+		const members = [...this.metas.values()].filter(
+			(meta) =>
+				meta.projectId === event.projectId &&
+				meta.coordinatorView &&
+				meta.archivedAt === undefined &&
+				this.isMissionCoordinator(meta.id),
+		);
+		if (!members.length) return;
+		const source = members[0]!.workspace?.source ?? this.projects.require(event.projectId).path;
+		const upstream =
+			members[0]!.workspace?.upstream ?? (await run("git", ["remote", "get-url", "origin"], source)).trim();
+		try {
+			await this.mainViews.update(event.projectId, event.repository, event.head, upstream);
+		} catch (error) {
+			for (const meta of members) {
+				meta.workspaceBehind = formatFailure(error, "Read-only main view update");
+				await this.save(meta);
+				this.emit(meta);
+			}
+			throw error;
+		}
+		for (const meta of members) {
+			meta.coordinatorView!.head = event.head;
+			meta.coordinatorView!.repository = event.repository;
+			meta.workspaceUpdatedAt = Date.now();
+			delete meta.workspaceBehind;
+			await this.save(meta);
+			this.emit(meta);
+		}
 	}
 
 	private isActiveMissionCoordinator(id: string): boolean {
@@ -1629,26 +1793,29 @@ export class SessionManager {
 	/** One project entry in the existing scheduler, removed when its last active subscriber leaves. */
 	private mainProjects(): { id: string; group?: string }[] {
 		const projects = new Map<string, { id: string; group?: string }>();
-		for (const meta of this.metas.values()) {
-			if (
-				!meta.projectId ||
-				!meta.workspace?.shared ||
-				meta.archivedAt !== undefined ||
-				projects.has(meta.projectId) ||
-				!this.missions?.membership(meta.id)?.active
-			)
-				continue;
-			let group: string | undefined;
-			try {
-				if (meta.workspace.upstream) group = githubRepository(meta.workspace.upstream).identity;
-			} catch {}
-			projects.set(meta.projectId, { id: meta.projectId, ...(group ? { group } : {}) });
-		}
+		// Prefer shared repository subscribers. The second pass covers Git-only source readers.
+		for (const shared of [true, false])
+			for (const meta of this.metas.values()) {
+				if (
+					!meta.projectId ||
+					meta.archivedAt !== undefined ||
+					projects.has(meta.projectId) ||
+					!!meta.workspace?.shared !== shared
+				)
+					continue;
+				const membership = this.missions?.membership(meta.id);
+				if (shared ? !membership?.active && !membership?.coordinator : !membership?.coordinator) continue;
+				let group: string | undefined;
+				try {
+					if (meta.workspace?.upstream) group = githubRepository(meta.workspace.upstream).identity;
+				} catch {}
+				projects.set(meta.projectId, { id: meta.projectId, ...(group ? { group } : {}) });
+			}
 		return [...projects.values()];
 	}
 
 	/** Base consumers subscribe here rather than fetching/polling; returned promises share the project lease. */
-	onMainMoved(listener: (event: MainMoved) => void): () => void {
+	onMainMoved(listener: (event: MainMoved) => unknown): () => void {
 		this.mainListeners.add(listener);
 		return () => this.mainListeners.delete(listener);
 	}
@@ -1690,26 +1857,53 @@ export class SessionManager {
 		}
 	}
 
-	async refreshProjectMain(projectId: string): Promise<void> {
+	refreshProjectMain(projectId: string): Promise<void> {
+		this.mainRefreshDue.delete(projectId);
+		const existing = this.projectMainOperations.get(projectId);
+		if (existing) return existing;
+		const task = this.refreshProjectMainOnce(projectId).finally(() => this.projectMainOperations.delete(projectId));
+		this.projectMainOperations.set(projectId, task);
+		return task;
+	}
+
+	private async refreshProjectMainOnce(projectId: string): Promise<void> {
 		const candidates = [...this.metas.values()].filter(
-			(meta) => meta.projectId === projectId && meta.workspace?.shared && meta.archivedAt === undefined,
+			(meta) =>
+				meta.projectId === projectId &&
+				meta.archivedAt === undefined &&
+				(this.missions?.membership(meta.id)?.active || this.isMissionCoordinator(meta.id)),
 		);
-		const workspace = candidates.find((meta) => this.missions?.membership(meta.id)?.active)?.workspace;
-		if (!workspace?.shared || this.closing) return;
-		const target = await this.sharedWorkspaces.fetchMain(workspace.shared, workspace.source);
+		if (!candidates.length || this.closing) return;
+		const workspace = candidates.find((meta) => meta.workspace?.shared)?.workspace;
+		let repository: string;
+		let target: string;
+		if (workspace?.shared) {
+			repository = workspace.shared.repository;
+			target = await this.sharedWorkspaces.fetchMain(workspace.shared, workspace.source);
+		} else {
+			if (!candidates.some((meta) => this.isMissionCoordinator(meta.id))) return;
+			const upstream = (
+				await run("git", ["remote", "get-url", "origin"], this.projects.require(projectId).path)
+			).trim();
+			({ repository, head: target } = await this.mainViews.fetch(projectId, upstream));
+		}
 		if (this.closing || this.mainHeads.get(projectId) === target) return;
 		this.mainHeads.set(projectId, target);
-		const event: MainMoved = { projectId, head: target, repository: workspace.shared.repository };
+		this.mainRepositories.set(projectId, repository);
+		const event: MainMoved = { projectId, head: target, repository };
+		let failed = false;
 		// Async consumers start together, but remain within this project's bounded refresh lease.
 		await Promise.all(
 			[...this.mainListeners].map(async (listener) => {
 				try {
 					await listener(event);
 				} catch (error) {
+					failed = true;
 					console.warn(`pilotd: main subscriber failed: ${error}`);
 				}
 			}),
 		);
+		if (failed) this.mainHeads.delete(projectId);
 	}
 
 	/** The member consumer of the project event, with no timer or main fetch of its own. */
@@ -1794,6 +1988,7 @@ export class SessionManager {
 				await this.save(meta);
 				let reason: string | undefined;
 				const workspace = meta.workspace;
+				if (this.isMissionCoordinator(meta.id)) return;
 				const bindingOperation = meta.prBindingOperation;
 				const prs = sessionPullRequests(meta);
 				if (!this.missions?.membership(id)?.active || this.isActiveMissionCoordinator(id))
@@ -1872,96 +2067,25 @@ export class SessionManager {
 		return task;
 	}
 
-	/** Merge-triggered updates bypass the turn throttle, but wait for a safe boundary if busy. */
+	/** PR merges share the existing project scheduler and emit a single main-moved event. */
 	coordinatorBaseMerged(id: string): void {
 		const meta = this.metas.get(id);
-		if (!meta || !this.isActiveMissionCoordinator(id)) return;
-		meta.workspaceRefreshDue = true;
-		void this.save(meta);
-		void this.refreshCoordinatorWorkspace(id).catch((error: unknown) =>
-			console.warn(`pilotd: base refresh failed: ${error}`),
-		);
+		if (meta?.projectId && this.isMissionCoordinator(id)) this.requestMainRefresh(meta.projectId);
 	}
 
-	async refreshCoordinatorWorkspace(id: string, turnBoundary = false): Promise<void> {
-		const existing = this.workspaceRefreshes.get(id);
-		if (existing) return existing;
-		const meta = this.metas.get(id);
-		const workspace = meta?.workspace;
-		const worker = this.workers.get(id);
-		if (
-			!meta ||
-			!workspace?.shared ||
-			!this.isActiveMissionCoordinator(id) ||
-			this.closing ||
-			meta.archivedAt !== undefined ||
-			meta.workspaceRecovery ||
-			this.workspaceMaintenance.has(id) ||
-			meta.preparing ||
-			this.hasWorkspaceProcess(id) ||
-			meta.subagents?.some((child) => child.state === "working") ||
-			(!turnBoundary &&
-				(meta.working || meta.initializing || worker?.busy || (worker && worker.state !== "idle"))) ||
-			(!meta.workspaceRefreshDue && Date.now() - (meta.workspaceCheckedAt ?? 0) < 10 * 60_000)
-		)
-			return;
-		const end = this.updateGate.begin();
-		// Publish the barrier before any I/O. Queued turns await it too.
-		const release = this.holdWorkspace(id);
-		const task = Promise.resolve()
-			.then(async () => {
-				meta.workspaceCheckedAt = Date.now();
-				delete meta.workspaceRefreshDue;
-				await this.save(meta);
-				try {
-					const result = await this.sharedWorkspaces.refreshBase(
-						meta.cwd,
-						workspace.shared!,
-						workspace.source,
-						workspace.base,
-						workspace.baseBranch,
-					);
-					if ("behind" in result) {
-						const text = `Coordinator workspace is behind ${workspace.baseBranch ?? "the base branch"} @ ${result.target?.slice(0, 8)}. ${result.behind} Its changes were left in place.`;
-						if (meta.workspaceBehind !== text) this.missions?.workspaceBehind?.(id, text);
-						meta.workspaceBehind = text;
-					} else {
-						workspace.base = result.base;
-						meta.workspaceUpdatedAt = Date.now();
-						delete meta.workspaceBehind;
-					}
-				} catch (error) {
-					const text = `Coordinator workspace could not update and may be behind: ${error instanceof Error ? error.message : String(error)}`;
-					if (meta.workspaceBehind !== text) this.missions?.workspaceBehind?.(id, text);
-					meta.workspaceBehind = text;
-				}
-				await this.save(meta);
-				this.emit(meta);
-			})
-			.finally(() => {
-				this.workspaceRefreshes.delete(id);
-				release();
-				end();
-				if (this.metas.get(id)?.workspaceMainDue && !this.closing)
-					void this.refreshMainWorkspace(id).catch((error: unknown) =>
-						console.warn(`pilotd: merged workspace update failed: ${error}`),
-					);
-				// A merge arriving during the fetch gets one more event-driven pass, not an idle timer.
-				if (meta.workspaceRefreshDue && !this.closing)
-					void this.refreshCoordinatorWorkspace(id).catch((error: unknown) =>
-						console.warn(`pilotd: base refresh failed: ${error}`),
-					);
-			});
-		this.workspaceRefreshes.set(id, task);
-		return task;
+	async refreshCoordinatorWorkspace(id: string, _turnBoundary = false): Promise<void> {
+		await this.prepareCoordinatorRole(id);
 	}
 
-	private missionSummary(id: string): Pick<SessionSummary, "missionId" | "activeMissionCoordinator"> {
+	private missionSummary(
+		id: string,
+	): Pick<SessionSummary, "missionId" | "activeMissionCoordinator" | "missionCoordinator"> {
 		const membership = this.missions?.membership(id);
 		return membership
 			? {
 					missionId: membership.missionId,
 					...(membership.active && membership.coordinator ? { activeMissionCoordinator: true } : {}),
+					...(membership.coordinator ? { missionCoordinator: true } : {}),
 				}
 			: {};
 	}
@@ -2161,6 +2285,7 @@ export class SessionManager {
 					autoArchivedPullRequest,
 				});
 				this.workspaceCleanupBackoff.delete(id);
+				if (archived) await rm(join(this.dir(id), "scratch"), { recursive: true, force: true });
 				this.emit(meta);
 				return this.summary(meta);
 			});
@@ -2175,7 +2300,7 @@ export class SessionManager {
 	/** Bound/agent-owned PRs only. A discovered reference is not attached work. */
 	ownedPullRequests(id: string): SessionPullRequest[] {
 		const meta = this.metas.get(id);
-		if (!meta) return [];
+		if (!meta || this.isMissionCoordinator(id)) return [];
 		const owned = new Set(
 			[...(meta.agentPullRequests ?? []), ...(meta.boundPullRequests ?? [])].map((url) => url.toLowerCase()),
 		);
@@ -2289,6 +2414,8 @@ export class SessionManager {
 		const meta = this.require(id);
 		this.validateMode(meta);
 		if (meta.mode === "ask") throw new Conflict("Ask sessions are read-only");
+		if (this.isMissionCoordinator(id) || meta.coordinatorView)
+			throw new Conflict("The coordinator has a read-only source view and no Changes pane");
 		if (meta.workspaceRecovery || this.workspaceMaintenance.has(id))
 			throw new Conflict("Restore the archived session before accessing its workspace");
 	}
@@ -3653,6 +3780,7 @@ export class SessionManager {
 		await Promise.allSettled([...this.titleTasks]);
 		await Promise.allSettled([...this.preparations]);
 		await this.dissociation;
+		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled([...this.parking.values()]);
 		await this.coldReader.close();
@@ -3665,9 +3793,11 @@ export class SessionManager {
 		await Promise.allSettled(this.workspaceRefreshes.values());
 		clearTimeout(this.mainRefreshTimer);
 		await Promise.allSettled(this.mainRefreshes.values());
+		await Promise.allSettled(this.projectMainOperations.values());
 		this.mainRefreshDue.clear();
 		this.mainListeners.clear();
 		this.mainHeads.clear();
+		this.mainRepositories.clear();
 		await this.archiveSweep;
 		await Promise.allSettled([...this.archiveTransitions.values()].map((transition) => transition.promise));
 		await Promise.all([...this.saving.values()]);
@@ -3750,6 +3880,9 @@ export class SessionManager {
 					}
 				}
 				await this.unparked(id);
+				await this.prepareCoordinatorRole(id);
+				// Do not admit another turn into a workspace whose role switch is waiting on live work.
+				if (this.isMissionCoordinator(id) !== !!meta.coordinatorView && meta.pending?.[0]?.type !== "abort") return;
 				if (this.closing || this.sleepPause) return;
 				const refresh = this.workspaceRefreshes.get(id);
 				if (refresh) await refresh;
@@ -3907,6 +4040,20 @@ export class SessionManager {
 				pilot: {
 					...(meta.ask ? { ask: meta.ask } : {}),
 					...(meta.workspace ? { workspace: meta.workspace } : {}),
+					...(meta.coordinatorView
+						? {
+								coordinatorView: {
+									path: meta.coordinatorView.path,
+									scratch: meta.coordinatorView.scratch,
+									protectedPaths: [
+										join(this.home, "main-views"),
+										meta.coordinatorView.repository,
+										meta.coordinatorView.originalCwd,
+										this.projects.require(meta.projectId!).path,
+									],
+								},
+							}
+						: {}),
 					...(meta.projectId
 						? { requirePullRequest: this.projects.get(meta.projectId)?.requirePullRequest !== false }
 						: {}),
@@ -4126,7 +4273,13 @@ export class SessionManager {
 			return;
 		}
 		if (packet.type === "pullRequest.created") {
-			if (this.workers.get(meta.id) !== worker || !meta.workspace || meta.mode === "ask") return;
+			if (
+				this.workers.get(meta.id) !== worker ||
+				!meta.workspace ||
+				meta.mode === "ask" ||
+				this.isMissionCoordinator(meta.id)
+			)
+				return;
 			// Only one session owns a PR. The creator is normally the first, unless another session claimed it.
 			if (!this.excludedPullRequest(meta, packet.url) && this.pullRequestOwner(packet.url) === undefined) {
 				meta.agentPullRequests = [...(meta.agentPullRequests ?? []), packet.url];
@@ -4141,7 +4294,12 @@ export class SessionManager {
 		}
 		if (packet.type === "refs.changed") {
 			// A branch may have been created or pushed. Repeated hints coalesce in the sync.
-			if (this.workers.get(meta.id) === worker && meta.workspace && meta.mode !== "ask")
+			if (
+				this.workers.get(meta.id) === worker &&
+				meta.workspace &&
+				meta.mode !== "ask" &&
+				!this.isMissionCoordinator(meta.id)
+			)
 				void this.pullRequests.refresh(meta);
 			return;
 		}
@@ -4228,6 +4386,19 @@ export class SessionManager {
 				void this.refreshMainWorkspace(meta.id).catch((error: unknown) =>
 					console.warn(`pilotd: merged workspace update failed: ${error}`),
 				);
+			if (!packet.working && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
+				void this.prepareCoordinatorRole(meta.id)
+					.then(() => {
+						if (
+							this.isMissionCoordinator(meta.id) === !!meta.coordinatorView &&
+							!this.starting.has(meta.id) &&
+							!this.closing &&
+							!this.sleepPause &&
+							(meta.pending?.length || meta.prActivities?.length)
+						)
+							void this.start(meta.id);
+					})
+					.catch((error) => console.warn(`pilotd: role workspace transition failed: ${error}`));
 			if (!packet.working && meta.workspaceRefreshDue)
 				void this.refreshCoordinatorWorkspace(meta.id).catch((error: unknown) =>
 					console.warn(`pilotd: base refresh failed: ${error}`),
@@ -4241,6 +4412,8 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const membership = this.missionSummary(meta.id);
+		const coordinator = membership.missionCoordinator === true;
 		const paused =
 			!!this.sleepPause &&
 			meta.archivedAt === undefined &&
@@ -4272,23 +4445,23 @@ export class SessionManager {
 			id: meta.id,
 			mode: meta.mode === "ask" ? "ask" : "build",
 			...(meta.mode !== "ask" ? { workspace: meta.workspace || meta.preparing ? "clone" : "direct" } : {}),
-			...(sourceBranch ? { sourceBranch } : {}),
+			...(!coordinator && sourceBranch ? { sourceBranch } : {}),
 			...(meta.ask?.commit ? { sourceCommit: meta.ask.commit } : {}),
 			title: meta.title,
 			cwd: meta.cwd,
 			sessionPath: this.dir(meta.id),
 			...(meta.projectId ? { projectId: meta.projectId } : {}),
-			...(meta.workspace?.branch ? { branch: meta.workspace.branch } : {}),
+			...(!coordinator && meta.workspace?.branch ? { branch: meta.workspace.branch } : {}),
 			createdAt: meta.createdAt,
 			updatedAt: meta.updatedAt,
 			...(meta.lastUserMessageAt !== undefined ? { lastUserMessageAt: meta.lastUserMessageAt } : {}),
 			...(meta.archivedAt !== undefined ? { archivedAt: meta.archivedAt } : {}),
 			...(meta.pinned ? { pinned: true } : {}),
-			...this.missionSummary(meta.id),
+			...membership,
 			...(meta.workspace?.shared ? { workspaceStorage: "shared" as const } : {}),
-			...(this.isActiveMissionCoordinator(meta.id) && meta.workspace
+			...(coordinator && (meta.coordinatorView || meta.workspace)
 				? {
-						workspaceBase: meta.workspace.base,
+						workspaceBase: meta.coordinatorView?.head ?? meta.workspace!.base,
 						...(meta.workspaceUpdatedAt !== undefined ? { workspaceUpdatedAt: meta.workspaceUpdatedAt } : {}),
 						...(meta.workspaceBehind ? { workspaceBehind: meta.workspaceBehind } : {}),
 					}
@@ -4308,13 +4481,13 @@ export class SessionManager {
 			...(!working && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
 				: {}),
-			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
-			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
-			...(meta.boundPullRequests?.some((url) => !this.excludedPullRequest(meta, url))
+			...(!coordinator && meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
+			...(!coordinator && sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
+			...(!coordinator && meta.boundPullRequests?.some((url) => !this.excludedPullRequest(meta, url))
 				? { boundPullRequests: meta.boundPullRequests.filter((url) => !this.excludedPullRequest(meta, url)) }
 				: {}),
-			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
-			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
+			...(!coordinator && sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
+			...(!coordinator && meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
 			...(this.canRetryStartup(meta) ? { canRetryStartup: true } : {}),
 			...(meta.unpublishedWork ? { unpublishedWork: true } : {}),
@@ -4358,6 +4531,7 @@ export class SessionManager {
 		result: PullRequestResult,
 		health?: { context: FollowUpContext; checks: HealthCheck[] },
 	): Promise<void> {
+		if (this.isMissionCoordinator(meta.id)) return;
 		const bindingOperation = meta.prBindingOperation;
 		// Explicit handoffs win over results already in flight, including discovery on the old branch.
 		const attached = (pr: SessionPullRequest) => {
@@ -4477,7 +4651,7 @@ export class SessionManager {
 			}
 		}
 		// A handoff can commit during metadata I/O. Its task links must not be recreated by this old result.
-		if (meta.prBindingOperation !== bindingOperation) return;
+		if (this.isMissionCoordinator(meta.id) || meta.prBindingOperation !== bindingOperation) return;
 		const discovered = [next, ...(result.others ?? [])]
 			.filter(
 				(pr): pr is SessionPullRequest =>
@@ -4558,6 +4732,7 @@ export class SessionManager {
 	 * so it runs only for idle, unarchived sessions; otherwise, or when the check fails, the last known result holds.
 	 */
 	private unpublishedWork(meta: SessionMeta, maxAgeMs = UNPUBLISHED_CHECK_MS): Promise<boolean> {
+		if (this.isMissionCoordinator(meta.id) || meta.coordinatorView) return Promise.resolve(false);
 		const known = () => meta.unpublishedWork === true;
 		const previous = this.unpublishedChecks.get(meta.id);
 		if (previous?.promise) return previous.promise;
@@ -4595,6 +4770,7 @@ export class SessionManager {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
+				!this.isMissionCoordinator(meta.id) &&
 				(meta.workspace || meta.boundPullRequests?.length) &&
 				meta.mode !== "ask" &&
 				meta.archivedAt === undefined &&
@@ -4634,9 +4810,10 @@ export class SessionManager {
 	/** The one session owning a PR, archived ones included, so a restored session resumes its own PRs. */
 	pullRequestOwner(url: string): string | undefined {
 		const bound = this.boundPullRequestOwners.get(url.toLowerCase());
-		if (bound !== undefined) return bound;
+		if (bound !== undefined && !this.isMissionCoordinator(bound)) return bound;
 		for (const meta of this.metas.values())
 			if (
+				!this.isMissionCoordinator(meta.id) &&
 				!this.excludedPullRequest(meta, url) &&
 				[...(meta.boundPullRequests ?? []), ...(meta.agentPullRequests ?? [])].some(
 					(known) => known.toLowerCase() === url.toLowerCase(),
@@ -4652,7 +4829,8 @@ export class SessionManager {
 	 */
 	private canClaimPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
 		return Boolean(
-			meta.workspace &&
+			!this.isMissionCoordinator(meta.id) &&
+				meta.workspace &&
 				!this.excludedPullRequest(meta, pr.url) &&
 				meta.mode !== "ask" &&
 				meta.archivedAt === undefined &&
@@ -4972,6 +5150,14 @@ export class SessionManager {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = JSON.parse(snapshot) as SessionMeta;
+			// Role switches change cwd while lifecycle and PR writes may already be queued.
+			// Never reopen a demoted chat inside the shared read-only view after a restart.
+			if (persisted.cwd !== meta.cwd) {
+				persisted.cwd = meta.cwd;
+				persisted.workspace = meta.workspace;
+			}
+			if (meta.coordinatorView) persisted.coordinatorView = meta.coordinatorView;
+			else delete persisted.coordinatorView;
 			// PR ownership can move while an older lifecycle write is queued. Never resurrect stale links.
 			if (meta.prBindingOperation !== bindingOperation)
 				for (const key of [

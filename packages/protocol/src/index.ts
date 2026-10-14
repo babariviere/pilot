@@ -290,6 +290,8 @@ export interface SessionSummary {
 	missionId?: string;
 	/** Current coordinator of an active mission. Exempt from terminal-PR treatment and merge auto-archiving. */
 	activeMissionCoordinator?: boolean;
+	/** Current role, including a done or archived mission. */
+	missionCoordinator?: boolean;
 	/**
 	 * Conversation attempts created by retry, edit and restore, oldest first, the original included. Omitted while the
 	 * session has a single attempt. Attempts that only hold a failed turn are left out.
@@ -1286,7 +1288,6 @@ export type SubagentServerMessage = Extract<ServerMessage, { type: "subagent.eve
 export const DEFAULT_PORT = 4319;
 export type * from "./inbox.ts";
 export type * from "./memory.ts";
+export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./schedules.ts";
 export type * from "./tracking.ts";
-
-export type { PowerSettings, PowerStatus } from "./power.ts";

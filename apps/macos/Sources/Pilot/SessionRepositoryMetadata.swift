@@ -7,12 +7,13 @@ final class SessionRepositoryModel: ObservableObject {
     @Published private(set) var error: String?
 
     func branch(for session: SessionSummary) -> String? {
+        guard !session.isMissionCoordinator else { return nil }
         if let summary { return summary.branch }
         return session.branch
     }
 
     func load(_ session: SessionSummary, client: PilotClient) async {
-        guard !Task.isCancelled, !session.isAsk, session.state != "starting" else { return }
+        guard !Task.isCancelled, session.supportsChanges, session.state != "starting" else { return }
         do {
             let summary = try await client.changeSummary(session.id)
             try Task.checkCancellation()
@@ -44,7 +45,7 @@ struct SessionRepositoryMetadata: View {
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground).lineLimit(1)
                 .help("Read-only · no isolated workspace" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))
-        } else {
+        } else if !session.isMissionCoordinator {
             SessionRepositoryMetadataContent(session: session, summary: model.summary,
                                              branch: model.branch(for: session), error: model.error)
             .preference(key: SessionRepositoryHelpKey.self,
@@ -81,21 +82,23 @@ struct SessionRepositoryMetadataContent: View {
     let error: String?
 
     var body: some View {
-        HStack(spacing: 6) {
-            PullRequestBadge(session: session)
-            if let branch, !branch.isEmpty {
-                if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil {
-                    Text("·").accessibilityHidden(true)
+        if !session.isMissionCoordinator {
+            HStack(spacing: 6) {
+                PullRequestBadge(session: session)
+                if let branch, !branch.isEmpty {
+                    if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil {
+                        Text("·").accessibilityHidden(true)
+                    }
+                    Text(branch)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .layoutPriority(-1)
+                        .accessibilityLabel("Branch \(branch)")
                 }
-                Text(branch)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(-1)
-                    .accessibilityLabel("Branch \(branch)")
             }
+            .lineLimit(1)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Theme.mutedForeground)
         }
-        .lineLimit(1)
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(Theme.mutedForeground)
     }
 }

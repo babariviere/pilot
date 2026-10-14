@@ -470,6 +470,24 @@ async function fixture(
 		{ ...pullRequests, ...(pullRequests.runner ? { runner: legacyGitHub(pullRequests.runner) } : {}) },
 		{ ...(usageSource ? { subscriptionUsage: () => usageSource } : {}) },
 	);
+	// No repository or subprocesses in this service fixture. Real source-role coverage lives in coordinator-role.test.ts.
+	const roleHost = sessions as unknown as {
+		refreshMainViews(): Promise<void>;
+		prepareCoordinatorRole(id: string): Promise<void>;
+	};
+	t.mock.method(roleHost, "refreshMainViews", async () => {});
+	t.mock.method(roleHost, "prepareCoordinatorRole", async (id: string) => {
+		const meta = sessions["require"](id);
+		if (sessions["isMissionCoordinator"](id))
+			meta.coordinatorView ??= {
+				originalCwd: meta.cwd,
+				path: meta.cwd,
+				scratch: join(home, "scratch", id),
+				head: "a".repeat(40),
+				repository: projectDir,
+			};
+		else delete meta.coordinatorView;
+	});
 	const store = new MissionStore(":memory:");
 	t.mock.method(sessions, "selectTaskModel", async (_cwd: string, model?: string, thinking?: string) => ({
 		model: model ?? "test/model",
@@ -897,61 +915,6 @@ test("activity keeps recent user notes visible beyond the event window for every
 	await assert.rejects(get(outsider.id), /not part of a mission/);
 });
 
-test("base refresh is role-scoped and throttled; main moves exclude the coordinator", async (t) => {
-	const f = await fixture(t);
-	const lead = await f.spawn();
-	const member = await f.spawn();
-	const meta = f.sessions["require"](lead.id);
-	meta.workspace = {
-		source: f.project.path,
-		base: "a".repeat(40),
-		baseBranch: "main",
-		jj: true,
-		branch: "fix/previous",
-		shared: { repository: "/owned", name: "lead" },
-	};
-	const { mission } = await f.service.create({
-		projectId: f.project.id,
-		title: "M",
-		fromSessionId: lead.id,
-		draft: false,
-	});
-	f.service.join(member.id, { missionId: mission.id });
-	f.sessions["require"](member.id).workspace = { ...meta.workspace };
-	assert.equal(meta.workspace.branch, undefined, "promotion detaches the task bookmark without deleting it");
-	await f.sessions["applyPullRequest"](meta, { branch: "fix/previous" });
-	assert.equal(meta.workspace.branch, undefined, "discovery must not reattach the old task bookmark");
-	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => ({ base: "b".repeat(40) }));
-	const worker = f.workers.get(lead.id)!;
-	worker.state = "working";
-	worker.busy = true;
-	worker.onPacket({ type: "working", working: true });
-	await f.sessions.refreshCoordinatorWorkspace(lead.id);
-	await f.sessions.refreshCoordinatorWorkspace(member.id, true);
-	assert.equal(refresh.mock.calls.length, 0);
-	worker.state = "idle";
-	worker.busy = false;
-	worker.onPacket({ type: "working", working: false });
-	await Promise.all([
-		f.sessions.refreshCoordinatorWorkspace(lead.id),
-		f.sessions.refreshCoordinatorWorkspace(lead.id),
-	]);
-	assert.equal(refresh.mock.calls.length, 1, "coalesced calls");
-	assert.equal(f.sessions.get(lead.id)!.workspaceBase, "b".repeat(40));
-	assert.ok(f.sessions.get(lead.id)!.workspaceUpdatedAt);
-	await f.sessions.refreshCoordinatorWorkspace(lead.id);
-	assert.equal(refresh.mock.calls.length, 1, "10 minute throttle");
-	meta.workspaceCheckedAt! -= 10 * 60_000;
-	worker.onPacket({ type: "workspace.prepare", callId: "turn" });
-	await until(() => worker.sent.find((command) => command.type === "workspace.prepared" && command.callId === "turn"));
-	assert.equal(refresh.mock.calls.length, 2, "next turn requests refresh after throttle expires");
-	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "c".repeat(40));
-	await f.sessions.refreshProjectMain(f.project.id);
-	assert.equal(refresh.mock.calls.length, 3, "only the idle member gets a fresh-change move");
-	assert.equal(meta.workspaceMainAttempted, undefined, "coordinator excluded");
-	assert.equal(refresh.mock.calls[2]!.arguments[5]?.target, "c".repeat(40));
-});
-
 for (const scenario of ["working", "jobs", "follow-up", "dirty", "open", "binding"] as const) {
 	test(`main workspace activity is passive and safe: ${scenario}`, async (t) => {
 		const f = await fixture(t);
@@ -1231,77 +1194,6 @@ test("a live worker's next input waits for the passive main move", async (t) => 
 	await send;
 	assert.equal(meta.workspace.base, "b".repeat(40));
 	assert.equal(worker.requests.filter((cmd) => cmd.type === "input").length, before + 1);
-});
-
-test("conflicting workspace refresh leaves the base unchanged and posts one explanatory comment", async (t) => {
-	const f = await fixture(t);
-	const lead = await f.spawn();
-	const { mission } = await f.service.create({
-		projectId: f.project.id,
-		title: "M",
-		fromSessionId: lead.id,
-		draft: false,
-	});
-	const meta = f.sessions["require"](lead.id);
-	meta.workspace = {
-		source: f.project.path,
-		base: "a".repeat(40),
-		baseBranch: "main",
-		jj: true,
-		shared: { repository: "/owned", name: "lead" },
-	};
-	t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => ({
-		base: meta.workspace!.base,
-		target: "b".repeat(40),
-		behind: "Rebasing this chat's changes would conflict with the latest base.",
-	}));
-	await f.sessions.refreshCoordinatorWorkspace(lead.id);
-	assert.equal(meta.workspace.base, "a".repeat(40));
-	assert.equal(f.store.detail(mission.id).comments.length, 1);
-	assert.match(f.store.detail(mission.id).comments[0]!.text, /behind main.*conflict/);
-	assert.equal(f.sessions.get(lead.id)!.workspaceUpdatedAt, undefined);
-	meta.workspaceCheckedAt! -= 10 * 60_000;
-	await f.sessions.refreshCoordinatorWorkspace(lead.id);
-	assert.equal(f.store.detail(mission.id).comments.length, 1, "same failure does not spam activity");
-});
-
-test("the first-request barrier includes a second merge arriving during an idle fetch", async (t) => {
-	const f = await fixture(t);
-	const lead = await f.spawn();
-	await f.service.create({ projectId: f.project.id, title: "M", fromSessionId: lead.id, draft: false });
-	const meta = f.sessions["require"](lead.id);
-	meta.workspace = {
-		source: f.project.path,
-		base: "a".repeat(40),
-		baseBranch: "main",
-		jj: true,
-		shared: { repository: "/owned", name: "lead" },
-	};
-	const releases: (() => void)[] = [];
-	let calls = 0;
-	t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => {
-		const call = ++calls;
-		await new Promise<void>((resolve) => {
-			releases.push(resolve);
-		});
-		return { base: (call === 1 ? "b" : "c").repeat(40) };
-	});
-	const first = f.sessions.refreshCoordinatorWorkspace(lead.id);
-	await until(() => calls === 1);
-	const worker = f.workers.get(lead.id)!;
-	worker.onPacket({ type: "workspace.prepare", callId: "barrier" });
-	f.sessions.coordinatorBaseMerged(lead.id);
-	releases[0]!();
-	await until(() => calls === 2);
-	assert.equal(
-		worker.sent.some((command) => command.type === "workspace.prepared"),
-		false,
-	);
-	releases[1]!();
-	await first;
-	const reply = await until(() => worker.sent.find((command) => command.type === "workspace.prepared"));
-	assert.ok(reply.type === "workspace.prepared");
-	assert.equal(reply.workspace?.base, "c".repeat(40));
 });
 
 test("hand-linked PRs poll without a worker, finish after all settle, and respect a racing manual reset", async (t) => {
@@ -2487,9 +2379,10 @@ test("Start chat spawns a member chat that owns the task; leaving releases it", 
 	const worker = await until(() => f.workers.get(session.id));
 	assert.equal(worker.spec.mission?.id, mission.id);
 	assert.ok(
-		worker.sent.some(
-			(command) => command.type === "mission.context" && command.context?.tasks[0]?.number === task.number,
-		),
+		worker.spec.mission?.tasks[0]?.number === task.number ||
+			worker.sent.some(
+				(command) => command.type === "mission.context" && command.context?.tasks[0]?.number === task.number,
+			),
 	);
 	const input = await until(() => worker.requests.find((command) => command.type === "input"));
 	assert.match(input.type === "input" ? input.content : "", /task #1: Auth[\s\S]*Focus on login/);

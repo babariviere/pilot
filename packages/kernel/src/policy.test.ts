@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ToolHooks } from "@earendil-works/pi-durable";
 import {
+	coordinatorMutation,
 	githubPosting,
 	type MissionContext,
 	missionLeak,
@@ -62,6 +63,11 @@ test("multi-task guidance claims requested tasks, orders work, maintains statuse
 			prompt,
 			/in_progress while working, blocked with a comment saying why, in_review once a pull request is open/,
 		);
+		if (coordinator === "self") {
+			assert.match(prompt, /Delegate all code changes to member chats/);
+			assert.doesNotMatch(prompt, /Open one pull request per task|gh pr create|base your own bookmark/);
+			continue;
+		}
 		assert.match(prompt, /Open one pull request per task/);
 		assert.match(prompt, /link it to the task with the link action and taskId/);
 		assert.match(prompt, /Resource links are references, not PR ownership/);
@@ -232,6 +238,67 @@ function checkTool(name: string, args: Parameters<ToolHooks["beforeTool"]>[0]["a
 		undefined as never,
 	);
 }
+
+test("coordinator prompts omit delivery instructions, even with direct default-branch delivery", () => {
+	for (const requirePullRequest of [true, false]) {
+		const context = {
+			requirePullRequest,
+			workspace: { source: "/source", base: "old", jj: true, shared: { repository: "/repo", name: "old" } },
+		};
+		const prompt = pilotPrompt(context, false, true) + missionPrompt({ ...mission, coordinator: "self" });
+		assert.doesNotMatch(
+			prompt,
+			/push the task branch|gh pr create|Name a new branch|jj bookmark create|directly to the remote/,
+		);
+		assert.match(prompt, /read-only view of current main/);
+		assert.match(prompt, /Delegate all code changes to member chats/);
+		assert.match(
+			pilotPrompt(context, false, false),
+			requirePullRequest ? /push the task branch/ : /directly to the remote/,
+		);
+	}
+});
+
+test("coordinator command policy blocks writes with global flags and nested calls, then releases on demotion", async () => {
+	let current = { ...mission, coordinator: "self" as MissionContext["coordinator"] };
+	const extension = withPilotPolicy(
+		{ name: "test" },
+		{},
+		() => false,
+		() => current,
+	);
+	const hook = (extension.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
+	const check = (name: string, args: Parameters<ToolHooks["beforeTool"]>[0]["arguments"]) =>
+		hook({ type: "toolCall", id: "test", name, arguments: args }, undefined as never, undefined as never);
+	const mutations = [
+		"jj commit -m change",
+		"jj --ignore-working-copy bookmark create feat/test",
+		"jj git push --bookmark feat/test",
+		"git -C /source commit -m change",
+		"git push origin HEAD",
+		"git 'commit' -m change",
+		"gh -R octo/repo pr " + "create --fill",
+		"pnpm install",
+		"apps/macos/scripts/test.sh",
+	];
+	for (const command of mutations) {
+		assert.ok(coordinatorMutation(command), command);
+		assert.ok((await check("bash", { command }))?.block, command);
+		assert.ok(
+			(await check("codemode", { code: `await tools.bash({ command: ${JSON.stringify(command)} });` }))?.block,
+			command,
+		);
+		assert.ok((await check("jobs", { action: "start", command }))?.block, command);
+	}
+	for (const command of ["git status", "git log -5", "git show HEAD:file.ts", "gh pr view 42", "rg thing packages"]) {
+		assert.equal(await check("bash", { command }), undefined, command);
+	}
+	assert.ok((await check("write", { path: "/source/new.ts", content: "code" }))?.block);
+	assert.equal(await check("artifact", { action: "create", source: "content" }), undefined);
+	current = { ...mission, coordinator: "other" };
+	assert.equal(await check("bash", { command: "git push origin feat/test" }), undefined);
+	assert.equal(await check("write", { path: "/source/new.ts", content: "code" }), undefined);
+});
 
 test("content-only calls may mention forbidden commands and internal deliverable names", async () => {
 	for (const content of ["gh pr merge 12; gh stack push", 'gh pr create --title "API v2 redesign"']) {
