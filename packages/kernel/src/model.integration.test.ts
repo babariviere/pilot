@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -11,6 +11,7 @@ import {
 	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
+	type ModelsSimpleStreamOptions,
 	Type,
 } from "@earendil-works/pi-ai";
 import {
@@ -26,6 +27,7 @@ import type { SessionCompletion } from "@pilot/protocol";
 import { userText } from "./attempts.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
+import type { PerformanceRecord } from "./performance.ts";
 import { KernelSession } from "./session.ts";
 import { readSessionSnapshot } from "./snapshot.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -261,7 +263,7 @@ test("recovered fetch retries and parallel requests do not attach stale network 
 
 test("the real OpenAI SDK retains fetch causes even when it emits only Connection error", async (t) => {
 	const f = await fixture(t);
-	await f.open();
+	const session = await f.open();
 	const adapter = f.adapters[0]!;
 	const model = adapter.models.getModel("openai", "gpt-4.1-mini");
 	assert.ok(model);
@@ -287,6 +289,14 @@ test("the real OpenAI SDK retains fetch causes even when it emits only Connectio
 	assert.ok(calls > 0);
 	assert.equal(result.stopReason, "error");
 	assert.match(result.errorMessage!, /Model request \(openai\/gpt-4.1-mini\).*ECONNRESET.*api.example.com.*connect/);
+	await session.close();
+	const [timing] = await performanceRecords(f.spec.storageDir);
+	assert.ok(timing);
+	assert.equal(timing.outcome, "error");
+	assert.equal(timing.httpAttempts, calls);
+	assert.ok(timing.httpDispatchMs! >= 0);
+	assert.equal(timing.responseHeadersMs, undefined);
+	assert.equal(timing.firstContentMs, undefined);
 });
 
 test("bash nonzero exits retain command, output and their structured contract without failing the chat", async (t) => {
@@ -1098,4 +1108,276 @@ test("rewinding rejects unknown entries and points that cannot be resent", { tim
 	await assert.rejects(session.rewind("restore", assistant!.id), /already the latest point/);
 	assert.equal(session.attempts, undefined);
 	await session.submit(randomUUID(), "still usable", "followUp");
+});
+
+async function performanceRecords(storageDir: string): Promise<PerformanceRecord[]> {
+	return (await readFile(join(storageDir, "performance.jsonl"), "utf8"))
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line));
+}
+
+test("performance timings cover tool handoff and generation without retaining any conversation content", async (t) => {
+	const f = await fixture(t, [
+		(pi) => {
+			pi.registerTool({
+				name: "private_fixture",
+				label: "Private fixture",
+				description: "Offline tool",
+				parameters: Type.Object({ value: Type.String() }),
+				execute: async () => ({ content: [{ type: "text", text: "sensitive tool output" }], details: undefined }),
+			});
+		},
+	]);
+	f.a.setResponses([
+		fauxAssistantMessage(fauxToolCall("private_fixture", { value: "sensitive argument" }), { stopReason: "toolUse" }),
+		fauxAssistantMessage([
+			{ type: "thinking", thinking: "sensitive reasoning" },
+			{ type: "text", text: "sensitive answer" },
+		]),
+	]);
+	const session = await f.open();
+	await session.submit("timed-tool", "sensitive prompt", "followUp");
+	await session.conversation.waitForIdle(context);
+	await session.close();
+	const records = await performanceRecords(f.spec.storageDir);
+	assert.equal(records.length, 2);
+	assert.deepEqual(
+		records.map((r) => r.source),
+		["generation", "generation"],
+	);
+	assert.deepEqual(
+		records.map((r) => r.outcome),
+		["completed", "completed"],
+	);
+	assert.equal(records[0]!.toolToPreparationMs, undefined);
+	assert.ok(records[1]!.toolToPreparationMs! >= 0);
+	assert.ok(records[0]!.firstToolCallMs! >= 0);
+	assert.ok(records[1]!.firstThinkingMs! >= 0);
+	assert.ok(records[1]!.firstTextMs! >= records[1]!.firstThinkingMs!);
+	for (const r of records) {
+		assert.ok(r.preparationMs >= 0);
+		assert.ok(r.totalMs >= r.providerMs);
+		assert.ok(Math.abs(r.totalMs - r.preparationMs - r.providerMs) < 0.02);
+		assert.equal(r.httpDispatchMs, undefined, "faux provider never performs HTTP");
+		assert.equal(r.firstProviderEventMs, undefined, "missing raw SDK events are not invented");
+	}
+	assert.doesNotMatch(
+		JSON.stringify(records),
+		/sensitive|private_fixture|pilot-model|authorization|content|errorMessage/,
+	);
+});
+
+test("performance timings preserve request hooks and isolate HTTP retries across parallel streams", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const adapter = f.adapters[0]!;
+	let payloads = 0;
+	let headers = 0;
+	let events = 0;
+	f.a.setResponses(
+		[1, 2].map((attempts) => async (_messages, options) => {
+			assert.deepEqual(await options!.onPayload!({ private: "payload" }, f.a.getModel()), { replaced: true });
+			for (let attempt = 0; attempt < attempts; attempt++) await options!.fetch!("https://example.invalid/private");
+			await options!.onResponse!({ status: 200, headers: { authorization: "private" } }, f.a.getModel());
+			await options!.onProviderStreamEvent!({ sensitive: "raw provider data" }, f.a.getModel());
+			return fauxAssistantMessage("sensitive response");
+		}),
+	);
+	const options: ModelsSimpleStreamOptions = {
+		fetch: async () => new Response("sensitive HTTP response"),
+		onPayload: async () => {
+			payloads++;
+			return { replaced: true };
+		},
+		transformHeaders: async (value) => {
+			headers++;
+			return value;
+		},
+		onProviderStreamEvent: async () => {
+			events++;
+		},
+	};
+	const answers = await Promise.all([
+		adapter.models.completeSimple(f.a.getModel(), { messages: [] }, options),
+		adapter.models.completeSimple(f.a.getModel(), { messages: [] }, options),
+	]);
+	assert.deepEqual(
+		answers.map((a) => a.stopReason),
+		["stop", "stop"],
+	);
+	assert.deepEqual([payloads, headers, events], [2, 2, 2]);
+	await session.close();
+	const records = (await performanceRecords(f.spec.storageDir)).sort((a, b) => a.request - b.request);
+	assert.equal(records.length, 2);
+	assert.deepEqual(
+		records.map((r) => r.httpAttempts),
+		[1, 2],
+	);
+	for (const r of records) {
+		assert.equal(r.source, "stream");
+		assert.ok(r.payloadReadyMs! >= 0);
+		assert.ok(r.httpDispatchMs! >= r.payloadReadyMs!);
+		// Faux emits synthetic headers before running its response factory, not after its fake fetches.
+		assert.ok(r.responseHeadersMs! >= 0);
+		assert.ok(r.firstProviderEventMs! >= r.responseHeadersMs!);
+		assert.ok(r.firstContentMs! >= r.firstProviderEventMs!);
+	}
+	assert.doesNotMatch(JSON.stringify(records), /sensitive|private|payload"|example.invalid|authorization/);
+});
+
+test("performance timings record failure and pre-content cancellation without false first-response markers", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const adapter = f.adapters[0]!;
+	const started = deferred();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => response.resolve(fauxAssistantMessage("")));
+	f.a.setResponses([
+		fauxAssistantMessage("", { stopReason: "error", errorMessage: "sensitive error" }),
+		async () => {
+			started.resolve();
+			return response.promise;
+		},
+	]);
+	const error = await adapter.models.completeSimple(f.a.getModel(), { messages: [] });
+	assert.equal(error.stopReason, "error");
+	const controller = new AbortController();
+	const pending = adapter.models.completeSimple(f.a.getModel(), { messages: [] }, { signal: controller.signal });
+	await started.promise;
+	controller.abort();
+	response.resolve(fauxAssistantMessage(""));
+	assert.equal((await pending).stopReason, "aborted");
+	await session.close();
+	const records = await performanceRecords(f.spec.storageDir);
+	assert.deepEqual(
+		records.map((r) => r.outcome),
+		["error", "aborted"],
+	);
+	assert.ok(records.every((r) => r.firstContentMs === undefined && r.httpDispatchMs === undefined));
+	assert.doesNotMatch(JSON.stringify(records), /sensitive/);
+});
+
+test("performance timings can be disabled without creating a log", async (t) => {
+	const previous = process.env.PILOT_PERF_TIMINGS;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PILOT_PERF_TIMINGS;
+		else process.env.PILOT_PERF_TIMINGS = previous;
+	});
+	process.env.PILOT_PERF_TIMINGS = "0";
+	const disabled = await fixture(t);
+	disabled.a.setResponses([fauxAssistantMessage("Done")]);
+	const session = await disabled.open();
+	await session.submit("disabled", "Offline input", "followUp");
+	await session.conversation.waitForIdle(context);
+	await session.close();
+	await assert.rejects(readFile(join(disabled.spec.storageDir, "performance.jsonl")), { code: "ENOENT" });
+});
+
+test("unavailable performance log paths never stop a conversation", async (t) => {
+	const unavailable = await fixture(t);
+	await mkdir(join(unavailable.spec.storageDir, "performance.jsonl"), { recursive: true });
+	unavailable.a.setResponses([fauxAssistantMessage("Still works")]);
+	const working = await unavailable.open();
+	await working.submit("unavailable", "Offline input", "followUp");
+	await working.conversation.waitForIdle(context);
+	await unavailable.completed;
+	await working.close();
+	assert.equal(working.completion?.outcome, "done");
+});
+
+test("performance timings observe real SDK HTTP dispatch, SSE headers and first content using a fake response", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	const adapter = f.adapters[0]!;
+	const base = adapter.models.getModel("openai", "gpt-4.1-mini");
+	assert.ok(base);
+	const item = {
+		id: "offline-message",
+		type: "message",
+		role: "assistant",
+		status: "completed",
+		content: [{ type: "output_text", text: "sensitive answer", annotations: [] }],
+	};
+	const events = [
+		{ type: "response.created", response: { id: "offline-response", status: "in_progress", output: [] } },
+		{ type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
+		{ type: "response.output_text.delta", output_index: 0, content_index: 0, delta: "sensitive answer" },
+		{ type: "response.output_item.done", output_index: 0, item },
+		{
+			type: "response.completed",
+			response: {
+				id: "offline-response",
+				status: "completed",
+				output: [item],
+				usage: {
+					input_tokens: 1,
+					output_tokens: 1,
+					total_tokens: 2,
+					input_tokens_details: { cached_tokens: 0 },
+					output_tokens_details: { reasoning_tokens: 0 },
+				},
+			},
+		},
+	];
+	let calls = 0;
+	const result = await adapter.models.completeSimple(
+		{ ...base, api: "openai-responses", baseUrl: "https://example.invalid/v1" },
+		{ messages: [{ role: "user", content: "sensitive prompt", timestamp: 1 }] },
+		{
+			apiKey: "sensitive-fixture-key",
+			maxRetries: 0,
+			fetch: async () => {
+				calls++;
+				return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+					headers: { "content-type": "text/event-stream", authorization: "sensitive-response-header" },
+				});
+			},
+		},
+	);
+	assert.equal(result.stopReason, "stop", result.errorMessage);
+	assert.deepEqual(
+		result.content.map((c) => (c.type === "text" ? c.text : "")),
+		["sensitive answer"],
+	);
+	await session.close();
+	const [timing] = await performanceRecords(f.spec.storageDir);
+	assert.ok(timing);
+	assert.equal(timing.httpAttempts, calls);
+	assert.equal(calls, 1);
+	assert.ok(timing.httpDispatchMs! >= timing.payloadReadyMs!);
+	assert.ok(timing.responseHeadersMs! >= timing.httpDispatchMs!);
+	assert.ok(timing.firstProviderEventMs! >= timing.responseHeadersMs!);
+	assert.ok(timing.firstTextMs! >= timing.firstProviderEventMs!);
+	assert.equal(timing.firstThinkingMs, undefined);
+	assert.doesNotMatch(
+		JSON.stringify(timing),
+		/sensitive|example.invalid|offline-response|offline-message|authorization/,
+	);
+});
+
+test("performance timings isolate a failed preparation hook from the subsequent fallback stream", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	f.a.setResponses([fauxAssistantMessage("Fallback answer")]);
+	t.mock.method(f.adapters[0]!.session.agent, "convertToLlm", () => {
+		throw new Error("sensitive preparation error");
+	});
+	await session.submit("bad-preparation", "sensitive prompt", "followUp");
+	await session.conversation.waitForIdle(context);
+	await f.completed;
+	await session.close();
+	const records = await performanceRecords(f.spec.storageDir);
+	// Harness treats hook failures as nonfatal and still invokes the model with its original request.
+	assert.equal(records.length, 2);
+	assert.equal(records[0]!.outcome, "error");
+	assert.equal(records[0]!.source, "generation");
+	assert.equal(records[0]!.providerMs, 0);
+	assert.equal(records[0]!.httpAttempts, 0);
+	assert.equal(records[0]!.firstContentMs, undefined);
+	assert.equal(records[1]!.source, "stream");
+	assert.equal(records[1]!.outcome, "completed");
+	assert.ok(records[1]!.firstTextMs! >= 0);
+	assert.equal(f.a.state.callCount, 1);
+	assert.doesNotMatch(JSON.stringify(records), /sensitive/);
 });

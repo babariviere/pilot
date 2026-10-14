@@ -56,6 +56,7 @@ import { InputOrigins } from "./input-origin.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
+import { PerformanceLog } from "./performance.ts";
 import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
@@ -179,6 +180,10 @@ export class KernelSession {
 
 	static async open(spec: KernelSpec, hooks: KernelSessionHooks): Promise<KernelSession> {
 		const owned = await openSessionStorage(spec.storageDir);
+		const performanceLog =
+			process.env.PILOT_PERF_TIMINGS === "0"
+				? undefined
+				: new PerformanceLog(join(spec.storageDir, "performance.jsonl"));
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
 		let artifactConversation: Conversation | undefined;
@@ -282,6 +287,7 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
+				performance: performanceLog,
 				hostExtensions: [
 					...(provenance ? [provenance.native] : []),
 					...(refs ? [refs.native] : []),
@@ -457,6 +463,7 @@ export class KernelSession {
 			if (harness) await harness.close(context).catch(() => undefined);
 			else await owned.storage.close(context).catch(() => undefined);
 			await adapter?.close().catch(() => undefined);
+			await performanceLog?.close();
 			owned.release();
 			throw error;
 		}

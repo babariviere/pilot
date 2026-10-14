@@ -203,9 +203,13 @@ model loop. Keep protocol changes in sync with `apps/macos/Sources/PilotCore`.
 | `PILOT_PORT` | `4319` | Daemon port |
 | `PILOT_AGENT_DIR` | pi's agent directory | Pi settings, packages and authentication |
 | `PILOT_WORKSPACE_RETENTION_DAYS` | `1` | Archived workspace cleanup delay; `0` disables cleanup |
+| `PILOT_PERF_TIMINGS` | enabled | Set to `0` to disable local, content-free request timing logs for new workers |
 
 These are daemon environment variables. The app-managed daemon runs under launchd; exporting a variable
 in your terminal does not change an already running daemon.
+
+[Local request timings](docs/request-timings.md) separate preparation, provider waiting and streaming.
+They stay outside the transcript, have bounded private storage, and are never exported.
 
 - **Keep the daemon local.** It binds to `127.0.0.1`, rejects requests with an `Origin` header and has no
   authentication. Do not expose it to a network.

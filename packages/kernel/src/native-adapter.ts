@@ -6,6 +6,7 @@
  * provider authentication from the user's pi configuration (settings, packages, extensions, MCP).
  */
 import { createHash, randomUUID } from "node:crypto";
+import { performance } from "node:perf_hooks";
 import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import {
@@ -67,6 +68,7 @@ import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
+import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
@@ -112,6 +114,8 @@ export interface NativeAdapterOptions {
 	sessionFile?: string;
 	/** Live display data, independent from the durable transcript. */
 	onUsageChanged?: (usage: KernelUsage) => void;
+	/** Host-owned, local-only content-free timings. Omitted for standalone SDK callers. */
+	performance?: PerformanceSink;
 	/** Host observers, also applied to nested native tool calls. Build sessions only. */
 	hostExtensions?: ExtensionFactory[];
 	/** Receives pi-extensions subagents host events. */
@@ -240,6 +244,11 @@ export class NativeAdapter {
 	#onExtensionInput?: (input: ExtensionInput) => void;
 	#registerHostTool!: (tool: ToolDefinition) => void;
 	readonly #ask: boolean;
+	readonly #performance?: PerformanceSink;
+	#requestNumber = 0;
+	#pendingPreparation?: PreparationMark;
+	#toolFinished?: number;
+	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
 
 	readonly session: AgentSession;
 	readonly usage: UsageTracker;
@@ -250,11 +259,13 @@ export class NativeAdapter {
 		usage: UsageTracker,
 		ask = false,
 		infrastructure = new InfrastructureChildren(),
+		timings?: PerformanceSink,
 	) {
 		this.infrastructure = infrastructure;
 		this.session = session;
 		this.usage = usage;
 		this.#ask = ask;
+		this.#performance = timings;
 		// Bind every ordinary Models operation to its native runtime. In particular, getAuth and
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
 		this.models = new Proxy(session.modelRuntime, {
@@ -267,10 +278,10 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							(observe) =>
+							(observe, timing) =>
 								session.extensionRunner
 									.getModelRegistry()
-									.streamSimple(model, context, this.requestOptions(options, observe, model.api)),
+									.streamSimple(model, context, this.requestOptions(options, observe, model.api, timing)),
 							model,
 							options?.signal,
 						);
@@ -283,14 +294,14 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							(observe) =>
+							(observe, timing) =>
 								// Instrument shared fields; the spread preserves provider-specific options unchanged.
 								session.extensionRunner
 									.getModelRegistry()
 									.stream(
 										model,
 										context,
-										this.requestOptions(options as ModelsSimpleStreamOptions, observe, model.api),
+										this.requestOptions(options as ModelsSimpleStreamOptions, observe, model.api, timing),
 									),
 							model,
 							options?.signal,
@@ -432,7 +443,7 @@ export class NativeAdapter {
 					customTools: sessionConfig.customTools ?? [],
 				})
 			: (await createAgentSession(sessionConfig)).session;
-		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure);
+		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure, options.performance);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
 		// bindExtensions reads the committed activity source dynamically, including
@@ -553,6 +564,7 @@ export class NativeAdapter {
 		this.#activity = activity;
 		let notifiedVersion = activity.settledVersion;
 		activity.start(async () => {
+			if (activity.idle) this.#toolFinished = undefined;
 			// Coalescing or a slow handler must not announce an obsolete idle frame.
 			// The cursor tracks notifications, not a separately mutable busy state.
 			if (this.#closed || !this.session.isIdle || notifiedVersion === activity.settledVersion) return;
@@ -822,9 +834,14 @@ export class NativeAdapter {
 					if (!current) throw new Error(`Native tool withdrawn: ${tool.name}`);
 					const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
 					try {
-						const result = await current.execute(api.callId, args, context.abortSignal, (update) => {
-							for (const block of update.content) if (block.type === "text") api.output(block.text);
-						});
+						let result: AgentToolResult<unknown>;
+						try {
+							result = await current.execute(api.callId, args, context.abortSignal, (update) => {
+								for (const block of update.content) if (block.type === "text") api.output(block.text);
+							});
+						} finally {
+							if (this.#performance) this.#toolFinished = performance.now();
+						}
 						await this.persistCustomEntries(before, context);
 						return durableResult(result);
 					} finally {
@@ -840,29 +857,54 @@ export class NativeAdapter {
 		this.extension = {
 			name: "native",
 			tools,
-			sections: [section("native", async (_input, context) => this.preparePrompt(context), { tag: false })],
+			sections: [
+				section(
+					"native",
+					async (_input, context) => {
+						// A native adapter belongs to one conversation, with one generation preparing at a time.
+						// Compactions do not render these sections or consume this mark.
+						if (this.#performance) this.#pendingPreparation = this.preparationMark();
+						return this.preparePrompt(context);
+					},
+					{ tag: false },
+				),
+			],
 			hooks: [
 				hook(GenerationTask, {
 					beforeRequest: async (request, _api, context) => {
-						// Recovery can enter the durable request phase without re-rendering sections.
-						await this.preparePrompt(context);
-						const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
-						let messages = await this.session.extensionRunner.emitContext([
-							...request.messages,
-							...this.#startMessages,
-						]);
-						await this.persistCustomEntries(before, context);
-						if (this.#forcedPrompt !== undefined)
-							messages = [
-								{
-									role: "system",
-									content: this.#forcedPrompt,
-									toolsAdded: getCurrentTools(messages),
-									timestamp: Date.now(),
-								},
-								...messages.filter((m) => m.role !== "system"),
-							];
-						return { messages: await this.session.agent.convertToLlm(messages) };
+						const preparation = this.#performance
+							? (this.#pendingPreparation ?? this.preparationMark())
+							: undefined;
+						this.#pendingPreparation = undefined;
+						try {
+							// Recovery can enter the durable request phase without re-rendering sections.
+							await this.preparePrompt(context);
+							const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
+							let messages = await this.session.extensionRunner.emitContext([
+								...request.messages,
+								...this.#startMessages,
+							]);
+							await this.persistCustomEntries(before, context);
+							if (this.#forcedPrompt !== undefined)
+								messages = [
+									{
+										role: "system",
+										content: this.#forcedPrompt,
+										toolsAdded: getCurrentTools(messages),
+										timestamp: Date.now(),
+									},
+									...messages.filter((m) => m.role !== "system"),
+								];
+							const converted = await this.session.agent.convertToLlm(messages);
+							if (preparation && context.abortSignal) this.#preparations.set(context.abortSignal, preparation);
+							return { messages: converted };
+						} catch (error) {
+							if (preparation)
+								new RequestTiming(this.#performance!, ++this.#requestNumber, "generation", preparation).finish(
+									context.abortSignal?.aborted ? "aborted" : "error",
+								);
+							throw error;
+						}
 					},
 					afterResponse: async (message, _api, context) => {
 						await this.sync(context);
@@ -926,12 +968,34 @@ export class NativeAdapter {
 
 	#diagnosticTools = new WeakSet<ToolDefinition>();
 
+	private preparationMark(): PreparationMark {
+		return {
+			started: performance.now(),
+			at: Date.now(),
+			...(this.#toolFinished === undefined
+				? {}
+				: {
+						toolFinished: this.#toolFinished,
+					}),
+		};
+	}
+
 	private requestStream(
-		dispatch: (observe: (error: unknown) => void) => AssistantMessageEventStream,
+		dispatch: (observe: (error: unknown) => void, timing?: RequestTiming) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
 	): AssistantMessageEventStream {
 		const stream = createAssistantMessageEventStream();
+		const preparation = signal ? this.#preparations.get(signal) : undefined;
+		if (signal) this.#preparations.delete(signal);
+		const timing = this.#performance
+			? new RequestTiming(
+					this.#performance,
+					++this.#requestNumber,
+					preparation ? "generation" : "stream",
+					preparation,
+				)
+			: undefined;
 		// Request-local, so recovered retries and parallel model calls cannot leak an old cause.
 		let fetchError: unknown;
 		const step = `Model request (${model.provider}/${model.id})`;
@@ -950,15 +1014,34 @@ export class NativeAdapter {
 				if (this.#harness)
 					await this.sync(signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT);
 				this.assertOpen();
+				timing?.providerStart();
 				const source = dispatch((error) => {
 					fetchError = error;
-				});
+				}, timing);
 				for await (const event of source) {
+					if (
+						(event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") &&
+						event.delta.length
+					) {
+						timing?.mark("firstContentMs");
+						timing?.mark(
+							event.type === "text_delta"
+								? "firstTextMs"
+								: event.type === "thinking_delta"
+									? "firstThinkingMs"
+									: "firstToolCallMs",
+						);
+					}
 					if (event.type === "error") diagnose(event.error);
 					stream.push(event);
 				}
-				stream.end(diagnose(await source.result()));
+				const message = diagnose(await source.result());
+				timing?.finish(
+					message.stopReason === "aborted" ? "aborted" : message.stopReason === "error" ? "error" : "completed",
+				);
+				stream.end(message);
 			} catch (error) {
+				timing?.finish(signal?.aborted ? "aborted" : "error");
 				const message: AssistantMessage = {
 					role: "assistant",
 					content: [],
@@ -988,15 +1071,24 @@ export class NativeAdapter {
 		options: ModelsSimpleStreamOptions = {},
 		observe: (error: unknown) => void,
 		api: string,
+		timing?: RequestTiming,
 	): ModelsSimpleStreamOptions {
 		const runner = this.session.extensionRunner;
 		const settings = this.session.settingsManager;
 		const retry = settings.getProviderRetrySettings();
+		const fetch = diagnosticFetch(options.fetch ?? globalThis.fetch, observe);
 		return {
 			...options,
 			// Google adapters explicitly reject custom fetch. Virtual routing may pick one of them.
 			...(!["google-generative-ai", "google-vertex", "pi-virtual"].includes(api)
-				? { fetch: diagnosticFetch(options.fetch ?? globalThis.fetch, observe) }
+				? {
+						fetch: timing
+							? (input, init) => {
+									timing.mark("httpDispatchMs");
+									return fetch(input, init);
+								}
+							: fetch,
+					}
 				: {}),
 			transport: options.transport ?? this.session.agent.transport,
 			thinkingBudgets: options.thinkingBudgets ?? this.session.agent.thinkingBudgets,
@@ -1007,14 +1099,22 @@ export class NativeAdapter {
 			onPayload: async (
 				payload: unknown,
 				model: Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1],
-			) => runner.emitBeforeProviderRequest((await options?.onPayload?.(payload, model)) ?? payload),
+			) => {
+				const value = await runner.emitBeforeProviderRequest(
+					(await options?.onPayload?.(payload, model)) ?? payload,
+				);
+				timing?.mark("payloadReadyMs");
+				return value;
+			},
 			transformHeaders: async (headers) =>
 				runner.emitBeforeProviderHeaders((await options?.transformHeaders?.(headers)) ?? headers),
 			onResponse: async (response, model) => {
+				timing?.mark("responseHeadersMs");
 				await options?.onResponse?.(response, model);
 				await runner.emit({ type: "after_provider_response", status: response.status, headers: response.headers });
 			},
 			onProviderStreamEvent: async (data, model) => {
+				timing?.mark("firstProviderEventMs");
 				await options?.onProviderStreamEvent?.(data, model);
 				await runner.emit({
 					type: "provider_stream_event",
@@ -1034,6 +1134,12 @@ export class NativeAdapter {
 			await this.session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" });
 		} finally {
 			this.session.dispose();
+			// Best-effort logging is independent from the model and durable history.
+			try {
+				await this.#performance?.close?.();
+			} catch {
+				// A failed diagnostics flush must not fail session shutdown.
+			}
 		}
 	}
 }
