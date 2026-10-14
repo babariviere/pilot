@@ -210,8 +210,9 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   `apps/macos/Vendor/libghostty-spm` (not arbitrary vendor directories). jj 0.46+ and Git 2.42+ are required for shared colocation.
   Resume restores the pinned jj snapshot, not a moving bookmark or the current remote head. Cleanup
   failures are protocol metadata and appear in the existing workspace badge tooltip, without another screen.
-  Failed automatic cleanup backs off from 5 minutes to at most 1 hour per archival; busy conflicts
-  retry on the next sweep, and explicit cleanup bypasses the backoff.
+  Automatic cleanup errors retry per session after 5, 10, 20 and 40 minutes, then pause after five failures
+  until the daemon restarts. Busy-session conflicts stay quiet and are rechecked each minute. Manual reclaim
+  bypasses the pause; successful cleanup or an archive/restore transition resets the failure budget.
 
 ### 5.5 Policy and safety
 
@@ -1013,6 +1014,8 @@ reports), producing a morning summary in the app and Slack.
 - Archive inactive chats without deleting their history. Shared jj working directories may be reclaimed
   after the retention period, with recoverable snapshots restored on resume (§5.4). Browse archived chats globally
   or per project, search them, and restore them to continue the conversation. Stop running chats first.
+  Home activity counts all sessions started in the last 14 calendar days, including archived chats, even
+  after their workspace is reclaimed.
   The daemon checks once a minute to automatically archive chats after one week without activity,
   skipping running chats and pending admissions. Restoration grants another week, including across
   daemon restarts, without changing chat ordering. Observed GitHub merges automatically archive

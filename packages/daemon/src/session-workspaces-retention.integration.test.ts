@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Conflict } from "./errors.ts";
 
-import { DAY, fixture } from "./testing/session-workspace.ts";
+import { assertHistory, DAY, fixture, seedHistory } from "./testing/session-workspace.ts";
 
 test("failed automatic cleanup backs off, caps retries, and leaves explicit cleanup available", async (t) => {
 	const f = await fixture(t);
@@ -21,7 +21,7 @@ test("failed automatic cleanup backs off, caps retries, and leaves explicit clea
 		throw new Error("Unsafe ignored path prevents cleanup: unknown/input");
 	});
 	const warnings = t.mock.method(console, "warn", () => {});
-	for (const minutes of [5, 10, 20, 40, 60, 60]) {
+	for (const minutes of [5, 10, 20, 40, 60]) {
 		const attempts = snapshot.mock.callCount();
 		await f.sessions["reclaimArchivedWorkspaces"]();
 		assert.equal(snapshot.mock.callCount(), attempts + 1);
@@ -31,7 +31,7 @@ test("failed automatic cleanup backs off, caps retries, and leaves explicit clea
 		assert.equal(snapshot.mock.callCount(), attempts + 1, "no scan just before retry deadline");
 		now += 1;
 	}
-	assert.equal(warnings.mock.callCount(), 6, "warnings occur only for actual attempts");
+	assert.equal(warnings.mock.callCount(), 5, "warnings occur only for actual attempts");
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	const attempts = snapshot.mock.callCount();
 	await assert.rejects(f.sessions.reclaimWorkspace(created.id), /Unsafe ignored path/);
@@ -164,4 +164,98 @@ test("archived legacy clones keep history and inputs but lose regenerable output
 	await f.sessions.send(legacy.id, "continue after pruning");
 	assert.deepEqual(f.specs.at(-1)?.pilot?.workspaceReset, { at: now });
 	await f.assertSourceUnchanged();
+});
+
+for (const recovery of ["manual", "restart"] as const) {
+	test(`cleanup backs off, pauses after five failures and recovers via ${recovery}`, async (t) => {
+		const f = await fixture(t);
+		const created = await f.spawn();
+		await seedHistory(join(f.home, "sessions", created.id));
+		await f.sessions.archive(created.id);
+		let now = Date.now();
+		t.mock.method(Date, "now", () => now);
+		const meta = f.sessions["metas"].get(created.id)!;
+		meta.archivedAt = now - DAY;
+		await f.sessions["save"](meta);
+		const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "snapshot", async () => {
+			throw new Error("temporary snapshot failure");
+		});
+		const warnings = t.mock.method(console, "warn", () => {});
+		for (let attempt = 1; attempt <= 5; attempt++) {
+			await f.sessions["reclaimArchivedWorkspaces"]();
+			assert.equal(snapshot.mock.callCount(), attempt);
+			assert.equal(warnings.mock.callCount(), attempt);
+			for (let tick = 0; tick < 100; tick++) await f.sessions["reclaimArchivedWorkspaces"]();
+			assert.equal(snapshot.mock.callCount(), attempt, "no repeated work or logs during backoff");
+			if (attempt < 5) {
+				now += 5 * 60_000 * 2 ** (attempt - 1) - 1;
+				await f.sessions["reclaimArchivedWorkspaces"]();
+				assert.equal(snapshot.mock.callCount(), attempt, "retry waits for the exact boundary");
+				now++;
+			}
+		}
+		now += 2 * DAY;
+		await f.sessions["reclaimArchivedWorkspaces"]();
+		assert.equal(snapshot.mock.callCount(), 5, "max failures pauses even after a long wait");
+		assert.equal(warnings.mock.callCount(), 5);
+		assert.match(String(warnings.mock.calls[4]!.arguments[0]), /paused until daemon restart/);
+		assert.ok(existsSync(created.cwd));
+		assert.ok((await f.stored(created.id)).workspaceCleanupError);
+		assert.ok(f.sessions.get(created.id), "the session is never removed");
+		snapshot.mock.restore();
+		if (recovery === "manual") {
+			await f.sessions.reclaimWorkspace(created.id);
+			assert.equal(f.sessions["workspaceCleanupBackoff"].size, 0, "manual success resets the budget");
+			await assertHistory(f.sessions, created.id);
+		} else {
+			await f.sessions.shutdown();
+			const restarted = await f.manager();
+			await restarted["reclaimArchivedWorkspaces"]();
+			await assertHistory(restarted, created.id);
+		}
+		assert.equal(existsSync(created.cwd), false);
+		assert.equal((await f.stored(created.id)).workspaceCleanupError, undefined);
+	});
+}
+
+test("legacy pruning uses per-session backoff, conflicts stay quiet and restoration resets the budget", async (t) => {
+	const f = await fixture(t);
+	const legacy = await f.spawn();
+	const healthy = await f.spawn();
+	for (const created of [legacy, healthy]) await f.sessions.archive(created.id);
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	for (const created of [legacy, healthy]) f.sessions["metas"].get(created.id)!.archivedAt = now - DAY;
+	f.sessions["metas"].get(healthy.id)!.archivedAt = now;
+	delete f.sessions["metas"].get(legacy.id)!.workspace!.shared;
+	let conflict = true;
+	const pruning = f.sessions as unknown as { pruneWorkspace: (typeof f.sessions)["pruneWorkspace"] };
+	const prune = t.mock.method(pruning, "pruneWorkspace", async () => {
+		if (conflict) throw new Conflict("busy");
+		throw new Error("pruning failed");
+	});
+	const warnings = t.mock.method(console, "warn", () => {});
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(prune.mock.callCount(), 2, "busy sessions are checked every sweep");
+	assert.equal(warnings.mock.callCount(), 0);
+	assert.equal(f.sessions["workspaceCleanupBackoff"].size, 0);
+	assert.equal(existsSync(healthy.cwd), true, "recent archives are still retained");
+	conflict = false;
+	f.sessions["metas"].get(healthy.id)!.archivedAt = now - DAY;
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(existsSync(healthy.cwd), false, "one failing session never delays another");
+	assert.equal(prune.mock.callCount(), 3);
+	assert.equal(warnings.mock.callCount(), 1);
+	await f.sessions.restore(legacy.id);
+	assert.equal(f.sessions["workspaceCleanupBackoff"].size, 0);
+	await f.sessions.archive(legacy.id);
+	f.sessions["metas"].get(legacy.id)!.archivedAt = now - DAY;
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(prune.mock.callCount(), 4, "a new archival starts a fresh budget immediately");
+	now += 5 * 60_000;
+	prune.mock.restore();
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(f.sessions["workspaceCleanupBackoff"].size, 0, "successful pruning resets its budget");
 });

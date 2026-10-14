@@ -341,7 +341,7 @@ function hasSettledPullRequests(meta: SessionMeta): boolean {
 const WEEK_MS = 7 * DAY_MS;
 const ARCHIVE_INTERVAL_MS = 60_000;
 const WORKSPACE_CLEANUP_BACKOFF_MS = 5 * 60_000;
-const WORKSPACE_CLEANUP_BACKOFF_MAX_MS = 60 * 60_000;
+const WORKSPACE_CLEANUP_MAX_FAILURES = 5;
 /** Archive sweeps recheck a chat kept active by unpublished work at most this often. */
 const UNPUBLISHED_CHECK_MS = 30 * 60_000;
 const COLD_SNAPSHOT_TTL_MS = 5_000;
@@ -712,7 +712,7 @@ export class SessionManager {
 	private closing = false;
 	private archiveTimer?: ReturnType<typeof setTimeout>;
 	private archiveSweep?: Promise<void>;
-	/** Failed disk scans must not repeat on every sweep. Explicit reclamation bypasses this backoff. */
+	/** Failed scans back off, then pause until restart. Explicit reclamation bypasses this budget. */
 	private readonly workspaceCleanupBackoff = new Map<
 		string,
 		{ archivedAt: number; failures: number; until: number }
@@ -1037,17 +1037,18 @@ export class SessionManager {
 				// Busy sessions and update leases are retried by the next sweep.
 				if (error instanceof Conflict) continue;
 				const failures = (this.workspaceCleanupBackoff.get(meta.id)?.failures ?? 0) + 1;
-				const delay = Math.min(
-					WORKSPACE_CLEANUP_BACKOFF_MAX_MS,
-					WORKSPACE_CLEANUP_BACKOFF_MS * 2 ** Math.min(failures - 1, 16),
-				);
+				const delay = WORKSPACE_CLEANUP_BACKOFF_MS * 2 ** (failures - 1);
+				const paused = failures >= WORKSPACE_CLEANUP_MAX_FAILURES;
 				this.workspaceCleanupBackoff.set(meta.id, {
 					archivedAt: meta.archivedAt!,
 					failures,
-					until: Date.now() + delay,
+					until: paused ? Number.POSITIVE_INFINITY : Date.now() + delay,
 				});
+				const retry = paused
+					? "automatic retries paused until daemon restart"
+					: `retrying in ${delay / 60_000} minutes`;
 				console.warn(
-					`pilotd: could not ${legacy ? "prune" : "reclaim"} workspace for ${meta.id}; retrying in ${delay}ms: ${error}`,
+					`pilotd: could not ${legacy ? "prune" : "reclaim"} workspace for ${meta.id}: ${error}; ${retry}`,
 				);
 			}
 		}
