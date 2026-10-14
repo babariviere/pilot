@@ -81,6 +81,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let canRetryStartup: Bool?
     /// Live jobs owned by this worker. Nil when none.
     public let runningJobs: [SessionJob]?
+    /// Live user-only attention, independent of the kernel state and outcome.
+    public let attentionReason: NeedsYouReason?
+    public let attentionAt: Double?
     public let model: String?
     /// Effective thinking level pinned for this chat. Omitted by older daemons.
     public let thinking: String?
@@ -184,7 +187,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         branches: [String]? = nil, missionCoordinator: Bool? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
         workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil,
-        working: Bool? = nil
+        working: Bool? = nil, attentionReason: NeedsYouReason? = nil, attentionAt: Double? = nil
     ) {
         self.id = id
         self.title = title
@@ -211,6 +214,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.working = working
         self.canRetryStartup = canRetryStartup
         self.runningJobs = runningJobs
+        self.attentionReason = attentionReason
+        self.attentionAt = attentionAt
         self.model = model
         self.thinking = thinking
         self.usage = usage

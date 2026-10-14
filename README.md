@@ -156,6 +156,9 @@ with jobs is reported as waiting, not finished. Updates settle for 30 seconds af
 with a 30-minute safety cap measured from the oldest pending event or a job's start, whichever is
 earlier. A capped update names still-running jobs and their elapsed time. Pending updates are durable;
 running job processes belong to their live worker and do not survive orderly shutdown or replacement.
+A job still running after one hour moves its chat to **Needs you**, with its name and elapsed time.
+This fixed threshold is user-only attention, including inside missions: it never wakes a coordinator
+and clears when the job ends or is stopped.
 With the durable jobs extension, handles and logs remain available on resume. Unfinished records after
 a crash are marked `interrupted`, never automatically rerun; subprocesses may remain alive.
 

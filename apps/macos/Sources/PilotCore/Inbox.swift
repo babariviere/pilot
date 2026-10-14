@@ -182,7 +182,7 @@ extension DashboardNeedsYouItem {
     public var signal: SessionSignal {
         switch kind {
         case .failed, .scheduledFailed: .failed
-        case .unread, .question: .needsYou
+        case .unread, .question, .longJob: .needsYou
         }
     }
 }

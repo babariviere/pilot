@@ -11,6 +11,7 @@ export function reasonLine(text: string | undefined): string | undefined {
 }
 
 export function sessionNeedsYouReason(session: SessionSummary, now = Date.now()): NeedsYouReason {
+	if (session.attentionReason) return session.attentionReason;
 	if (session.outcome === "failed" || (!session.outcome && session.state === "failed")) {
 		const limit = subscriptionLimit(session, now);
 		if (limit) return { kind: "limit", ...(limit.resumesAt !== undefined ? { resumesAt: limit.resumesAt } : {}) };

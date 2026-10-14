@@ -621,3 +621,40 @@ test("reason totals include rows beyond the dashboard and Inbox caps", () => {
 	assert.equal(f.service.needsYou(undefined, 50).items.length, 50);
 	assert.deepEqual(f.service.counts().projects.p1?.needsYouReasons, { asks: 10, not_reviewed: 70 });
 });
+
+test("long jobs move from Working to Needs you, count inside missions, and cannot be reviewed away", () => {
+	const m = mission();
+	const long = session({
+		id: "long",
+		missionId: m.id,
+		working: true,
+		attentionReason: { kind: "long_job", detail: "Tests has run for 1h" },
+		attentionAt: 3_600_000,
+	});
+	const normal = session({ id: "short", missionId: m.id, working: true });
+	const dashboard = build({ sessions: [long, normal], missions: [m], isUnread: () => false });
+	assert.equal(dashboard.needsYou.total, 1);
+	assert.deepEqual(dashboard.needsYou.items[0], {
+		kind: "long_job",
+		id: "session:long",
+		title: long.title,
+		sessionId: "long",
+		missionId: m.id,
+		reason: "Tests has run for 1h",
+		attentionReason: long.attentionReason,
+		at: 3_600_000,
+	});
+	assert.deepEqual(
+		dashboard.working.items.map((item) => item.sessionId),
+		["short"],
+	);
+	assert.equal(dashboard.missions.items[0]!.needsYou, 1);
+	assert.equal(dashboard.missions.items[0]!.working, 2, "member activity remains real work");
+	const cleared = build({
+		sessions: [{ ...long, attentionReason: undefined, attentionAt: undefined }],
+		missions: [m],
+	});
+	assert.equal(cleared.needsYou.total, 0);
+	assert.equal(cleared.working.total, 1);
+	assert.equal(cleared.missions.items[0]!.needsYou, 0);
+});
