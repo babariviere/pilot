@@ -65,7 +65,21 @@ final class BriefEditorState: ObservableObject {
     }
 
     func loadRevisions(missionId: String, client: PilotClient) async {
-        revisions = (try? await client.missionBriefRevisions(missionId))?.sorted { $0.revision > $1.revision } ?? revisions
+        guard let loaded = try? await client.missionBriefRevisions(missionId) else { return }
+        revisions = loaded.sorted { $0.revision > $1.revision }
+        Self.revisionCache[missionId] = revisions
+    }
+
+    /// Revision lists by mission, so reopening the tab does not refetch an unchanged history.
+    private static var revisionCache: [String: [MissionBriefRevision]] = [:]
+
+    /// Shows the cached history and fetches it only when it is missing or older than `latest`.
+    func loadRevisionsIfNeeded(missionId: String, latest: Int, client: PilotClient) async {
+        if let cached = Self.revisionCache[missionId], (cached.first?.revision ?? 0) >= latest {
+            if revisions != cached { revisions = cached }
+            return
+        }
+        await loadRevisions(missionId: missionId, client: client)
     }
 
     func view(_ revision: Int, missionId: String, client: PilotClient) async {
@@ -85,20 +99,19 @@ struct MissionBriefTab: View {
     @State private var comment = MissionInput()
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                decisions
-                briefSection
-                comments
-            }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
-            .frame(maxWidth: Theme.column, alignment: .leading)
-            .frame(maxWidth: .infinity)
+        VStack(alignment: .leading, spacing: 28) {
+            decisions
+            briefSection
+            comments
         }
         .onAppear { editor.sync(detail.brief) }
         .onChange(of: detail.brief?.revision) { _, _ in editor.sync(detail.brief) }
-        .task(id: mission.briefRevision) { await editor.loadRevisions(missionId: mission.id, client: client) }
+        .task(id: mission.briefRevision) {
+            // History only fills the revision menu: fetch it after the tab is on screen, once per revision.
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+            await editor.loadRevisionsIfNeeded(missionId: mission.id, latest: mission.briefRevision, client: client)
+        }
         .sheet(item: Binding(get: { editor.viewing.map(BriefRevisionItem.init) }, set: { if $0 == nil { editor.viewing = nil } })) { item in
             BriefRevisionViewer(brief: item.brief, editor: editor)
         }
@@ -153,15 +166,20 @@ struct MissionBriefTab: View {
                         Text(missionAuthorName(item.authorSessionId, client: client))
                             .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1)
                             .opacity(hovered ? 0 : 1)
-                        HStack(spacing: 2) {
-                            Button { editDecision(item) } label: { Image(systemName: "pencil") }
-                                .buttonStyle(QuietIconButtonStyle())
-                                .help("Edit decision").accessibilityLabel("Edit decision")
-                            Button { removeDecision(item) } label: { Image(systemName: "trash") }
-                                .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
-                                .help("Remove decision").accessibilityLabel("Remove decision")
+                        // Built only on hover, in a fixed slot so the row does not reflow; the context
+                        // menu has the same actions.
+                        if hovered {
+                            HStack(spacing: 2) {
+                                Button { editDecision(item) } label: { Image(systemName: "pencil") }
+                                    .buttonStyle(QuietIconButtonStyle())
+                                    .help("Edit decision").accessibilityLabel("Edit decision")
+                                Button { removeDecision(item) } label: { Image(systemName: "trash") }
+                                    .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                                    .help("Remove decision").accessibilityLabel("Remove decision")
+                            }
+                        } else {
+                            Color.clear.frame(width: 42, height: 20)
                         }
-                        .revealed(hovered)
                     }
                 }
             }
@@ -212,7 +230,7 @@ struct MissionBriefTab: View {
                         .buttonStyle(.borderedProminent)
                 }
             } else {
-                MarkdownView(text: editor.text)
+                MarkdownView(text: editor.text, lazy: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 4)
             }
@@ -264,6 +282,10 @@ struct MissionBriefTab: View {
         }
         .chipMenuStyle()
         .fixedSize()
+        .onHover { inside in
+            guard inside else { return }
+            Task { await editor.loadRevisionsIfNeeded(missionId: mission.id, latest: mission.briefRevision, client: client) }
+        }
         .help("Revision history")
         .accessibilityLabel(editor.baseRevision == 0 ? "No revisions" : "Revision \(editor.baseRevision), history")
     }
@@ -491,6 +513,8 @@ private struct CommentRow: View {
 struct MissionTasksTab: View {
     let mission: Mission
     let detail: MissionDetail
+    /// The page's scroll view, for "Show task".
+    let scroll: ScrollViewProxy
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @State private var input = MissionInput()
@@ -503,56 +527,55 @@ struct MissionTasksTab: View {
     var body: some View {
         let groups = MissionTaskOrdering.groups(detail.tasks)
         let counts = MissionTaskCounts(detail.tasks)
-        // One id lookup and one dependents index per update, shared by every row.
+        // One id lookup, one dependents index, one link index and one member list per update, shared by
+        // every row. The list is lazy: only rows on screen are created, so switching here stays fast.
         let dependencies = MissionTaskDependencyIndex(tasks: detail.tasks)
-        ScrollViewReader { proxy in
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                if counts.total > 0 {
-                    MissionTaskProgress(counts: counts, compact: true)
-                        .frame(maxWidth: 280, alignment: .leading)
-                        .padding(.bottom, 12)
-                }
-                addField
-                if groups.isEmpty {
-                    EmptyStateView(icon: "checklist", title: "No tasks yet",
-                                   message: "Add the first task above, or ask a mission chat to plan them.")
-                } else if counts.total > 0, counts.done == counts.total, mission.status == .active {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle").foregroundStyle(Theme.success)
-                        Text("Every task is done.").foregroundStyle(Theme.mutedForeground)
-                        Button("Mark Mission as Done") {
-                            model.missionAction { [client, id = mission.id] in
-                                try await client.updateMission(id, UpdateMissionRequest(status: .done))
-                            }
+        let links = MissionTaskLinkIndex(detail)
+        let members = model.members(of: mission).filter { !$0.isArchived }
+        LazyVStack(alignment: .leading, spacing: 0) {
+            if counts.total > 0 {
+                MissionTaskProgress(counts: counts, compact: true)
+                    .frame(maxWidth: 280, alignment: .leading)
+                    .padding(.bottom, 12)
+            }
+            addField
+            if groups.isEmpty {
+                EmptyStateView(icon: "checklist", title: "No tasks yet",
+                               message: "Add the first task above, or ask a mission chat to plan them.")
+            } else if counts.total > 0, counts.done == counts.total, mission.status == .active {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark.circle").foregroundStyle(Theme.success)
+                    Text("Every task is done.").foregroundStyle(Theme.mutedForeground)
+                    Button("Mark Mission as Done") {
+                        model.missionAction { [client, id = mission.id] in
+                            try await client.updateMission(id, UpdateMissionRequest(status: .done))
                         }
-                        .controlSize(.small)
                     }
-                    .font(.pilot(.body))
-                    .padding(.top, 16)
+                    .controlSize(.small)
                 }
-                ForEach(groups) { group in
+                .font(.pilot(.body))
+                .padding(.top, 16)
+            }
+            ForEach(MissionTaskListItem.items(groups, collapsed: collapsed)) { item in
+                switch item {
+                case let .header(group):
                     groupHeader(group)
-                    if !collapsed.contains(group.status) {
-                        ForEach(Array(group.tasks.enumerated()), id: \.element.id) { index, task in
-                            if index > 0 { HairlineDivider(leading: 58) }
-                            MissionTaskRow(task: task, mission: mission, siblings: group.tasks,
-                                           highlighted: highlighted == task.id,
-                                           dependencies: dependencies.dependencies(of: task),
-                                           onShowTask: { show($0, proxy) })
-                                .id(task.id)
-                        }
+                case let .task(task, index, group):
+                    VStack(alignment: .leading, spacing: 0) {
+                        if index > 0 { HairlineDivider(leading: 58) }
+                        MissionTaskRow(task: task, mission: mission, siblings: group.tasks,
+                                       highlighted: highlighted == task.id,
+                                       dependencies: dependencies.dependencies(of: task),
+                                       resources: links.resources(of: task.id),
+                                       artifactLinks: links.artifacts(of: task.id),
+                                       members: members,
+                                       onShowTask: { show($0, scroll) })
                     }
                 }
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
-            .frame(maxWidth: Theme.column, alignment: .leading)
-            .frame(maxWidth: .infinity)
         }
-        .onAppear { reveal(proxy) }
-        .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(proxy) }
-        }
+        .onAppear { reveal(scroll) }
+        .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(scroll) }
     }
 
     /// Unfolds the group of the task named by "Show task", scrolls to it and highlights it briefly.
@@ -646,6 +669,10 @@ struct MissionTaskRow: View {
     var highlighted = false
     /// Precomputed by the tab; rows never search the task list.
     var dependencies = MissionTaskDependencies.none
+    /// The task's links and artifacts, and the mission's active chats, precomputed by the tab.
+    var resources: [MissionResource] = []
+    var artifactLinks: [MissionArtifactLink] = []
+    var members: [SessionSummary] = []
     /// Scrolls to a task and highlights it.
     var onShowTask: (String) -> Void = { _ in }
     @EnvironmentObject private var model: AppModel
@@ -653,25 +680,32 @@ struct MissionTaskRow: View {
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @StateObject private var artifacts = MissionArtifactsState()
+    /// Rows built, so the tab-switch check can confirm the list stays lazy.
+    static var bodyEvaluations = 0
 
     init(task: MissionTask, mission: Mission, siblings: [MissionTask], highlighted: Bool = false,
-         dependencies: MissionTaskDependencies = .none, onShowTask: @escaping (String) -> Void = { _ in }) {
+         dependencies: MissionTaskDependencies = .none, resources: [MissionResource] = [],
+         artifactLinks: [MissionArtifactLink] = [], members: [SessionSummary] = [],
+         onShowTask: @escaping (String) -> Void = { _ in }) {
         self.task = task
         self.mission = mission
         self.siblings = siblings
         self.highlighted = highlighted
         self.dependencies = dependencies
+        self.resources = resources
+        self.artifactLinks = artifactLinks
+        self.members = members
         self.onShowTask = onShowTask
         _title = StateObject(wrappedValue: TaskTitleState(task.title))
     }
 
     var body: some View {
-        let detail = client.missionDetails[mission.id]
-        let resources = detail?.resources.filter { $0.taskId == task.id } ?? []
-        let links = detail?.artifacts.filter { $0.taskId == task.id } ?? []
+        let _ = Self.bodyEvaluations &+= 1
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: dependencies.isWaiting)
+                // Menus are AppKit pop-up buttons and costly to create, so rows build them only on hover.
+                // The context menu offers the same actions without hovering.
+                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: dependencies.isWaiting, interactive: hovered)
                 Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     .frame(minWidth: 20, alignment: .leading)
                     .help(dependencies.helpText ?? "")
@@ -685,12 +719,12 @@ struct MissionTaskRow: View {
                         .accessibilityLabel("Task \(task.number) title")
                     if dependencies.isWaiting { waitingLine }
                     MissionTaskDescription(task: task, collapsedLineLimit: 2)
-                    if !resources.isEmpty || !links.isEmpty {
+                    if !resources.isEmpty || !artifactLinks.isEmpty {
                         ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
                             ForEach(resources) { item in
                                 MissionLinkChip(resource: item, missionId: mission.id, compact: true)
                             }
-                            ForEach(links) { item in
+                            ForEach(artifactLinks) { item in
                                 Button { open(item) } label: {
                                     Label("\(item.title) · \(item.revision.map { "r\($0)" } ?? "latest")",
                                           systemImage: item.kind == "image" ? "photo" : "cube.transparent")
@@ -720,13 +754,17 @@ struct MissionTaskRow: View {
                     if task.sessionId == nil, !task.status.isClosed {
                         MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
                     }
-                    Menu { menuItems } label: { Image(systemName: "ellipsis") }
-                        .menuStyle(.button)
-                        .buttonStyle(QuietIconButtonStyle())
-                        .menuIndicator(.hidden)
-                        .fixedSize()
-                        .help("Task actions")
-                        .accessibilityLabel("Actions for task \(task.number)")
+                    if hovered {
+                        Menu { menuItems } label: { Image(systemName: "ellipsis") }
+                            .menuStyle(.button)
+                            .buttonStyle(QuietIconButtonStyle())
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .help("Task actions")
+                            .accessibilityLabel("Actions for task \(task.number)")
+                    } else {
+                        Color.clear.frame(width: 20, height: 20)
+                    }
                 }
                 .revealed(hovered)
             }
@@ -775,7 +813,6 @@ struct MissionTaskRow: View {
     }
 
     @ViewBuilder private var menuItems: some View {
-        let members = model.members(of: mission).filter { !$0.isArchived }
         let index = siblings.firstIndex { $0.id == task.id } ?? 0
         if let sessionId = task.sessionId {
             Button("Open Chat") { model.selectedSessionId = sessionId }
@@ -876,25 +913,37 @@ struct MissionTaskStatusMenu: View {
     let missionId: String
     /// Waiting on unfinished dependencies: a muted symbol. The stored status is unchanged.
     var subdued = false
+    /// False draws only the icon, without creating the menu, for rows that are not hovered.
+    var interactive = true
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Menu {
-            ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-                Button { set(status) } label: { Label(status.label, systemImage: status.symbol) }
-                    .disabled(status == task.status)
+        Group {
+            if interactive {
+                Menu {
+                    ForEach(MissionTaskStatus.allCases, id: \.self) { status in
+                        Button { set(status) } label: { Label(status.label, systemImage: status.symbol) }
+                            .disabled(status == task.status)
+                    }
+                } label: {
+                    icon
+                }
+                .chipMenuStyle()
+            } else {
+                icon
             }
-        } label: {
-            Image(systemName: task.status.symbol)
-                .font(.pilot(.body, weight: .medium))
-                .foregroundStyle(subdued ? Theme.faintForeground : task.status.color)
-                .frame(width: 16)
-                .contentShape(Rectangle())
         }
-        .chipMenuStyle()
         .fixedSize()
         .help("Status: \(task.status.label)")
         .accessibilityLabel("Status \(task.status.label)")
+    }
+
+    private var icon: some View {
+        Image(systemName: task.status.symbol)
+            .font(.pilot(.body, weight: .medium))
+            .foregroundStyle(subdued ? Theme.faintForeground : task.status.color)
+            .frame(width: 16)
+            .contentShape(Rectangle())
     }
 
     private func set(_ status: MissionTaskStatus) {
@@ -933,42 +982,37 @@ struct MissionChatsTab: View {
         case .archived: archived
         case .all: all
         }
-        ScrollView {
-            VStack(alignment: .leading, spacing: 8) {
-                if !all.isEmpty {
-                    Picker("Show", selection: $state.filter) {
-                        Text(active.isEmpty ? "Active" : "Active \(active.count)").tag(MissionChatFilter.active)
-                        Text(archived.isEmpty ? "Archived" : "Archived \(archived.count)").tag(MissionChatFilter.archived)
-                        Text("All").tag(MissionChatFilter.all)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .padding(.bottom, 6)
+        let tasksByChat = MissionTasksByChat.index(detail.tasks)
+        VStack(alignment: .leading, spacing: 8) {
+            if !all.isEmpty {
+                Picker("Show", selection: $state.filter) {
+                    Text(active.isEmpty ? "Active" : "Active \(active.count)").tag(MissionChatFilter.active)
+                    Text(archived.isEmpty ? "Archived" : "Archived \(archived.count)").tag(MissionChatFilter.archived)
+                    Text("All").tag(MissionChatFilter.all)
                 }
-                if all.isEmpty || (members.isEmpty && state.filter == .active) {
-                    EmptyStateView(icon: "bubble.left.and.bubble.right", title: "No chats yet",
-                                   message: "Start a chat to work on the mission, or bring in a chat from this project.") {
-                        Button { model.newSession(in: mission) } label: { Label("New Chat", systemImage: "plus") }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(mission.status != .active)
-                        Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
-                            .fixedSize()
-                    }
-                } else if members.isEmpty {
-                    Text("No archived chats").font(.pilot(.body)).foregroundStyle(Theme.faintForeground)
-                        .padding(.horizontal, 8)
-                }
-                ForEach(Array(members.enumerated()), id: \.element.id) { index, session in
-                    if index > 0 { HairlineDivider(leading: 34) }
-                    MissionChatRow(session: session, mission: mission,
-                                   tasks: detail.tasks.filter { $0.sessionId == session.id })
-                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .padding(.bottom, 6)
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
-            .frame(maxWidth: Theme.column, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            if all.isEmpty || (members.isEmpty && state.filter == .active) {
+                EmptyStateView(icon: "bubble.left.and.bubble.right", title: "No chats yet",
+                               message: "Start a chat to work on the mission, or bring in a chat from this project.") {
+                    Button { model.newSession(in: mission) } label: { Label("New Chat", systemImage: "plus") }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(mission.status != .active)
+                    Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
+                        .fixedSize()
+                }
+            } else if members.isEmpty {
+                Text("No archived chats").font(.pilot(.body)).foregroundStyle(Theme.faintForeground)
+                    .padding(.horizontal, 8)
+            }
+            ForEach(Array(members.enumerated()), id: \.element.id) { index, session in
+                if index > 0 { HairlineDivider(leading: 34) }
+                MissionChatRow(session: session, mission: mission,
+                               tasks: tasksByChat[session.id] ?? [])
+            }
         }
     }
 }
@@ -1061,59 +1105,53 @@ struct MissionArtifactsTab: View {
     var body: some View {
         let members = model.members(of: mission).filter { !$0.isArchived }
         let taskNumbers = Dictionary(uniqueKeysWithValues: detail.tasks.map { ($0.id, $0.number) })
-        ScrollView {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("Artifacts stay owned by their chat. Linking makes them part of the mission.")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                    Spacer(minLength: 8)
-                    if !detail.artifacts.isEmpty { linkMenu(members: members) }
-                }
-                .padding(.bottom, 6)
-                if detail.artifacts.isEmpty {
-                    EmptyStateView(icon: "cube.transparent", title: "No linked artifacts",
-                                   message: "Link a chat's mockups, diagrams or reports so every mission chat can find them.") {
-                        linkMenu(members: members)
-                    }
-                }
-                ForEach(Array(detail.artifacts.enumerated()), id: \.element.id) { index, link in
-                    if index > 0 { HairlineDivider(leading: 34) }
-                    HoverRow(verticalPadding: 7) { hovered in
-                        HStack(spacing: 10) {
-                            Image(systemName: link.kind == "image" ? "photo" : "cube.transparent")
-                                .foregroundStyle(Theme.mutedForeground).frame(width: 16)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(link.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                                Text([client.session(link.sessionId)?.title ?? "Chat",
-                                      link.taskId.flatMap { taskNumbers[$0] }.map { "Task #\($0)" }]
-                                    .compactMap { $0 }.joined(separator: " · "))
-                                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
-                            }
-                            Spacer(minLength: 8)
-                            Text("\(link.kind.uppercased()) · \(link.revision.map { "r\($0)" } ?? "latest")")
-                                .font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
-                            Button { unlink(link) } label: { Image(systemName: "xmark") }
-                                .buttonStyle(QuietIconButtonStyle())
-                                .help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
-                                .accessibilityLabel("Unlink \(link.title)")
-                                .revealed(hovered)
-                        }
-                    }
-                    .onTapGesture { open(link) }
-                    .contextMenu {
-                        Button("Open") { open(link) }
-                        Button("Unlink", role: .destructive) { unlink(link) }
-                    }
-                    .accessibilityElement(children: .contain)
-                    .accessibilityAddTraits(.isButton)
-                    .accessibilityAction { open(link) }
-                    .help("Open \(link.title)")
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Artifacts stay owned by their chat. Linking makes them part of the mission.")
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                Spacer(minLength: 8)
+                if !detail.artifacts.isEmpty { linkMenu(members: members) }
+            }
+            .padding(.bottom, 6)
+            if detail.artifacts.isEmpty {
+                EmptyStateView(icon: "cube.transparent", title: "No linked artifacts",
+                               message: "Link a chat's mockups, diagrams or reports so every mission chat can find them.") {
+                    linkMenu(members: members)
                 }
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
-            .frame(maxWidth: Theme.column, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            ForEach(Array(detail.artifacts.enumerated()), id: \.element.id) { index, link in
+                if index > 0 { HairlineDivider(leading: 34) }
+                HoverRow(verticalPadding: 7) { hovered in
+                    HStack(spacing: 10) {
+                        Image(systemName: link.kind == "image" ? "photo" : "cube.transparent")
+                            .foregroundStyle(Theme.mutedForeground).frame(width: 16)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(link.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                            Text([client.session(link.sessionId)?.title ?? "Chat",
+                                  link.taskId.flatMap { taskNumbers[$0] }.map { "Task #\($0)" }]
+                                .compactMap { $0 }.joined(separator: " · "))
+                                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Text("\(link.kind.uppercased()) · \(link.revision.map { "r\($0)" } ?? "latest")")
+                            .font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
+                        Button { unlink(link) } label: { Image(systemName: "xmark") }
+                            .buttonStyle(QuietIconButtonStyle())
+                            .help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
+                            .accessibilityLabel("Unlink \(link.title)")
+                            .revealed(hovered)
+                    }
+                }
+                .onTapGesture { open(link) }
+                .contextMenu {
+                    Button("Open") { open(link) }
+                    Button("Unlink", role: .destructive) { unlink(link) }
+                }
+                .accessibilityElement(children: .contain)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { open(link) }
+                .help("Open \(link.title)")
+            }
         }
         .task(id: mission.id) {
             for member in members where client.artifacts[member.id] == nil {
@@ -1180,37 +1218,35 @@ struct MissionActivityTab: View {
     var body: some View {
         let recentIds = Set(detail.events.map(\.id))
         let events = detail.events + state.older.filter { !recentIds.contains($0.id) }
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                composer
-                if events.isEmpty {
-                    EmptyStateView(icon: "clock", title: "No activity yet",
-                                   message: "Updates, handoffs, task changes and brief revisions appear here.")
-                }
-                ForEach(MissionActivityDay.group(events)) { day in
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(day.title).font(.pilot(.caption, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
-                            .accessibilityAddTraits(.isHeader)
-                        VStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(day.events.enumerated()), id: \.element.id) { index, event in
-                                MissionTimelineRow(event: event, last: index == day.events.count - 1)
-                            }
-                        }
-                    }
-                }
-                if !events.isEmpty, !state.exhausted {
-                    Button(state.loading ? "Loading…" : "Load older activity") { loadOlder(before: events.last?.id) }
-                        .buttonStyle(.plain)
-                        .font(.pilot(.label))
-                        .foregroundStyle(Theme.mutedForeground)
-                        .disabled(state.loading)
-                        .frame(maxWidth: .infinity)
+        let days = MissionActivityDay.group(events)
+        // Lazy: a long history creates only the entries on screen.
+        LazyVStack(alignment: .leading, spacing: 0) {
+            composer
+                .padding(.bottom, 20)
+            if events.isEmpty {
+                EmptyStateView(icon: "clock", title: "No activity yet",
+                               message: "Updates, handoffs, task changes and brief revisions appear here.")
+            }
+            ForEach(MissionActivityItem.items(days)) { item in
+                switch item {
+                case let .day(day, first):
+                    Text(day.title).font(.pilot(.caption, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
+                        .accessibilityAddTraits(.isHeader)
+                        .padding(.top, first ? 0 : 20)
+                        .padding(.bottom, 10)
+                case let .event(event, last):
+                    MissionTimelineRow(event: event, last: last)
                 }
             }
-            .padding(.horizontal, 32)
-            .padding(.vertical, 24)
-            .frame(maxWidth: Theme.column, alignment: .leading)
-            .frame(maxWidth: .infinity)
+            if !events.isEmpty, !state.exhausted {
+                Button(state.loading ? "Loading…" : "Load older activity") { loadOlder(before: events.last?.id) }
+                    .buttonStyle(.plain)
+                    .font(.pilot(.label))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .disabled(state.loading)
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 20)
+            }
         }
     }
 
@@ -1284,16 +1320,16 @@ struct MissionActivityDay: Identifiable {
     let events: [MissionEvent]
 
     static func group(_ events: [MissionEvent], now: Date = Date(), calendar: Calendar = .current) -> [MissionActivityDay] {
-        var days: [MissionActivityDay] = []
+        var days: [(id: Date, events: [MissionEvent])] = []
         for event in events {
             let day = calendar.startOfDay(for: Date(timeIntervalSince1970: event.at / 1000))
-            if let last = days.last, last.id == day {
-                days[days.count - 1] = MissionActivityDay(id: day, title: last.title, events: last.events + [event])
+            if days.last?.id == day {
+                days[days.count - 1].events.append(event)
             } else {
-                days.append(MissionActivityDay(id: day, title: title(day, now: now, calendar: calendar), events: [event]))
+                days.append((day, [event]))
             }
         }
-        return days
+        return days.map { MissionActivityDay(id: $0.id, title: title($0.id, now: now, calendar: calendar), events: $0.events) }
     }
 
     static func title(_ day: Date, now: Date, calendar: Calendar) -> String {
@@ -1304,6 +1340,31 @@ struct MissionActivityDay: Identifiable {
         let sameYear = calendar.component(.year, from: day) == calendar.component(.year, from: now)
         return day.formatted(sameYear ? .dateTime.weekday(.wide).day().month(.wide)
                                       : .dateTime.day().month(.wide).year())
+    }
+}
+
+/// One line of the activity timeline: a day title or an entry. A flat list keeps the timeline lazy.
+private enum MissionActivityItem: Identifiable {
+    case day(MissionActivityDay, first: Bool)
+    case event(MissionEvent, last: Bool)
+
+    var id: String {
+        switch self {
+        case let .day(day, _): "day-\(day.id.timeIntervalSince1970)"
+        case let .event(event, _): "event-\(event.id)"
+        }
+    }
+
+    static func items(_ days: [MissionActivityDay]) -> [MissionActivityItem] {
+        var items: [MissionActivityItem] = []
+        items.reserveCapacity(days.reduce(days.count) { $0 + $1.events.count })
+        for (index, day) in days.enumerated() {
+            items.append(.day(day, first: index == 0))
+            for (position, event) in day.events.enumerated() {
+                items.append(.event(event, last: position == day.events.count - 1))
+            }
+        }
+        return items
     }
 }
 

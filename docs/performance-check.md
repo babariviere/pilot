@@ -125,6 +125,48 @@ one clock, a local run measured 5.00% working and 20.16% streaming CPU, with pea
 system load, not a claimed installed-app or battery-life improvement. Compare identical
 fixtures in packaged/release builds before drawing broader conclusions.
 
+### Mission tab switches
+
+`--mission-tabs-check` opens an offline mission with 100 tasks (with descriptions, links,
+artifacts and dependencies), twelve chats, 30 decisions, a 50 KB brief and 1,000 activity
+events in a real window, then visits every tab several times:
+
+```sh
+apps/macos/scripts/build.sh -c release
+apps/macos/.build/out/Products/Release/Pilot --mission-tabs-check --rounds 6
+# One tab against a cheap one, for profiling with sample(1) or Instruments:
+apps/macos/.build/out/Products/Release/Pilot --mission-tabs-check --tabs tasks,chats --rounds 12
+# Screenshots of every tab after measuring:
+apps/macos/.build/out/Products/Release/Pilot --mission-tabs-check --rounds 1 --screenshot /tmp/mission
+```
+
+Per tab it reports the synchronous switch (selection through layout and display), the longest
+main-thread gap in the following second and the main thread's CPU time, plus how many task rows
+the Tasks tab built. Release builds on a busy 11-core M3 Pro (load 7 to 10), median of later visits:
+
+| Tab | Before | After |
+| --- | --- | --- |
+| Tasks | 459–740 ms | 114–125 ms |
+| Brief | 1,373–1,750 ms | 103–121 ms |
+| Chats | 219–294 ms | 57–82 ms |
+| Artifacts | 183–190 ms | 93–103 ms |
+| Activity | 1,667–2,096 ms | 53–93 ms |
+| Overview | 1,122–1,239 ms | 75–92 ms |
+
+Before, the worst gap was 6.8 s (Brief) and 3.8 s (Activity). The first visit to a tab in a fresh
+process stays slower (one-time AppKit and SwiftUI set-up). What made switches slow, and the fixes:
+
+- Every tab built all of its rows: task rows with their menus, every activity entry and every
+  Markdown block of the brief as a text view. Lists and brief blocks are now lazy (17 of 55 open
+  task rows are built), and row menus are created only while the row is hovered.
+- Each tab had its own scroll view. Replacing a scroll view made AppKit rebuild the window toolbar,
+  which cost more than a small tab. The page now keeps one scroll view for every tab.
+- The selected tab was published by the app model, so a switch re-rendered the window, sidebar and
+  toolbar. It now has its own observable object, read only by the picker and the page content.
+- Rows filtered the mission's links and artifacts and sorted its members themselves. The tab now
+  indexes them once per update. The brief's Markdown is prepared off the main thread when it
+  arrives, and its revision list is fetched once per revision instead of on every visit.
+
 ## Verification
 
 - TypeScript: typecheck, formatting and lint passed; **356 tests passed, 3 skipped**.
