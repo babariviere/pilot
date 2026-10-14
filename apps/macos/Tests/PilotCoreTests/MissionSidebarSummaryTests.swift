@@ -73,6 +73,9 @@ private func member(_ id: String, state: String = "idle", outcome: SessionOutcom
         MissionCoordinatorStatus.detail(session, unread: unread)
     }
     #expect(detail(member("c", state: "working", coordinator: true)) == "Working")
+    var paused = member("c", state: "working", coordinator: true)
+    paused.sleepPaused = true
+    #expect(detail(paused) == "Paused until wake")
     #expect(detail(member("c", outcome: .question, reason: "Start #1, #3?\nDetails follow", coordinator: true))
         == "Asks: Start #1, #3?")
     #expect(detail(member("c", outcome: .question, coordinator: true)) == "Asks a question")
