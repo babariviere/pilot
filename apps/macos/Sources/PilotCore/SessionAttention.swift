@@ -69,8 +69,12 @@ public final class SessionAttention {
     private let defaults: UserDefaults
     private let reviewedKey = "pilot.reviewedOutcomeAt"
     private let observedKey = "pilot.observedOutcomeAt"
+    private let awaitingReplyKey = "pilot.awaitingReplyOutcomeAt"
     private var reviewed: [String: Double]
     private var observed: [String: Double]
+    /// Results the user opened but has neither answered, dismissed nor archived. They keep their place under
+    /// Needs you so opening a chat does not move it away. A reply starts a new outcome, which ends the entry.
+    private var awaitingReply: [String: Double]
     private var receivedSnapshot = false
 
     /// Fired only when a review high-water mark advances, for explicit and visible reviews alike.
@@ -92,6 +96,7 @@ public final class SessionAttention {
         self.defaults = defaults
         reviewed = defaults.dictionary(forKey: reviewedKey) as? [String: Double] ?? [:]
         observed = defaults.dictionary(forKey: observedKey) as? [String: Double] ?? [:]
+        awaitingReply = defaults.dictionary(forKey: awaitingReplyKey) as? [String: Double] ?? [:]
     }
 
     public func isUnread(_ session: SessionSummary) -> Bool {
@@ -101,11 +106,34 @@ public final class SessionAttention {
         return reviewed[session.id].map { $0 < version } ?? true
     }
 
+    /// Reviewed by viewing, but still waiting on a reply, a dismissal or archiving.
+    public func isAwaitingReply(_ session: SessionSummary) -> Bool {
+        guard !session.isArchived, !session.hasTerminalPullRequest, let version = session.visibleOutcomeAt else {
+            return false
+        }
+        return awaitingReply[session.id] == version
+    }
+
+    /// Takes a viewed result out of Needs you without replying. Returns whether anything changed.
+    @discardableResult
+    public func dismiss(_ session: SessionSummary) -> Bool {
+        guard awaitingReply.removeValue(forKey: session.id) != nil else { return false }
+        defaults.set(awaitingReply, forKey: awaitingReplyKey)
+        return true
+    }
+
     @discardableResult
     public func review(_ session: SessionSummary, chatVisible: Bool, appActive: Bool, explicit: Bool = false) -> Bool {
         guard explicit || (chatVisible && appActive), isUnread(session), let version = session.visibleOutcomeAt else { return false }
         reviewed[session.id] = version
         defaults.set(reviewed, forKey: reviewedKey)
+        // Viewing keeps the chat under Needs you until answered. An explicit review is the user dismissing it.
+        if explicit {
+            dismiss(session)
+        } else {
+            awaitingReply[session.id] = version
+            defaults.set(awaitingReply, forKey: awaitingReplyKey)
+        }
         onReview?(ReviewRequest.Mark(sessionId: session.id, outcomeAt: version))
         return true
     }
@@ -116,6 +144,7 @@ public final class SessionAttention {
     public func observe(_ sessions: [SessionSummary], snapshot: Bool) -> [SessionOutcomeNotification] {
         let baseline = snapshot && !receivedSnapshot
         if snapshot { receivedSnapshot = true }
+        pruneAwaitingReply(sessions, snapshot: snapshot)
         var notifications: [SessionOutcomeNotification] = []
         for session in sessions {
             guard session.outcome != nil, let version = session.outcomeAt, version.isFinite else { continue }
@@ -137,5 +166,26 @@ public final class SessionAttention {
         }
         defaults.set(observed, forKey: observedKey)
         return notifications
+    }
+
+    /// Drops entries whose chat was answered (new or no outcome), archived, or, on a full snapshot, deleted.
+    private func pruneAwaitingReply(_ sessions: [SessionSummary], snapshot: Bool) {
+        guard !awaitingReply.isEmpty else { return }
+        var seen = Set<String>()
+        var changed = false
+        for session in sessions {
+            seen.insert(session.id)
+            guard let version = awaitingReply[session.id] else { continue }
+            if session.isArchived || session.outcomeAt != version {
+                awaitingReply.removeValue(forKey: session.id)
+                changed = true
+            }
+        }
+        if snapshot {
+            let before = awaitingReply.count
+            awaitingReply = awaitingReply.filter { seen.contains($0.key) }
+            changed = changed || awaitingReply.count != before
+        }
+        if changed { defaults.set(awaitingReply, forKey: awaitingReplyKey) }
     }
 }
