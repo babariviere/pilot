@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,14 @@ import type { TerminalManager } from "./terminals.ts";
 import { run } from "./workspaces.ts";
 
 type Spec = Extract<KernelCommand, { type: "start" }>["spec"];
+
+function deferred() {
+	let resolve!: () => void;
+	const promise = new Promise<void>((done) => {
+		resolve = done;
+	});
+	return { promise, resolve };
+}
 
 async function waitFor(predicate: () => boolean | Promise<boolean>): Promise<void> {
 	// Git preparation and cold-reader thread startup compete with the full suite's browser/native tests.
@@ -109,6 +117,18 @@ async function fixture(t: TestContext) {
 		return sessions;
 	};
 	const stored = async (id: string) => JSON.parse(await readFile(join(home, "sessions", id, "meta.json"), "utf8"));
+	const settleStartup = async (sessions: SessionManager, id: string) => {
+		// Idle is published before the final startup write. Await admission, persistence and drain cleanup.
+		// biome-ignore lint/complexity/useLiteralKeys: Await the daemon's startup/outbox lifecycle barrier.
+		const rejected = await sessions["start"](id);
+		assert.equal(rejected.size, 0);
+		const meta = await stored(id);
+		assert.equal(meta.initializing, undefined);
+		assert.equal(meta.preparing, undefined);
+		assert.deepEqual(meta.pending, []);
+		assert.equal(sessions.get(id)?.state, "idle");
+		assert.equal(sessions.get(id)?.error, undefined);
+	};
 	t.after(async () => {
 		await Promise.all(managers.map((sessions) => sessions.shutdown()));
 		await rm(root, { recursive: true, force: true });
@@ -127,6 +147,7 @@ async function fixture(t: TestContext) {
 		specs,
 		manager,
 		stored,
+		settleStartup,
 		clones: () => clones,
 	};
 }
@@ -200,7 +221,7 @@ test("Ask exact remote branch uses a durable isolated bare snapshot, immutable a
 	assert.equal(pending.ask.commit, undefined);
 	assert.equal(f.specs.length, 0);
 	release();
-	await waitFor(() => sessions.get(created.id)?.state === "idle");
+	await f.settleStartup(sessions, created.id);
 	const meta = await f.stored(created.id);
 	assert.equal(meta.ask.commit, f.selected);
 	assert.equal(meta.preparing, undefined);
@@ -348,6 +369,55 @@ test("malformed modes and workspace combinations reject before durable session a
 	assert.equal(f.specs.length, 0);
 });
 
+for (const baseBranch of [undefined, "topic/remote-only"]) {
+	test(`Ask ${baseBranch ? "snapshot" : "checkout"} archival waits for the final startup write`, async (t) => {
+		const persistence = deferred();
+		const saving = deferred();
+		const f = await fixture(t);
+		const sessions = await f.manager();
+		// biome-ignore lint/complexity/useLiteralKeys: Gate the startup persistence seam, not production lifecycle.
+		const save = sessions["save"].bind(sessions);
+		let held = false;
+		// biome-ignore lint/complexity/useLiteralKeys: Gate the final write after initializing is cleared in memory.
+		sessions["save"] = async (...args) => {
+			const [meta] = args;
+			if (!held && !meta.initializing && meta.pending?.length === 0) {
+				held = true;
+				saving.resolve();
+				await persistence.promise;
+			}
+			return save(...args);
+		};
+		const ask = await sessions.spawn({
+			projectId: f.project.id,
+			mode: "ask",
+			baseBranch,
+			message: "explain",
+			title: "Ask",
+		});
+		let startup: Promise<void> | undefined;
+		try {
+			await saving.promise;
+			assert.equal(sessions.get(ask.id)?.state, "idle");
+			const meta = await f.stored(ask.id);
+			assert.deepEqual(meta.pending, []);
+			assert.equal(meta.initializing, true, "the final startup write has not committed");
+			let settled = false;
+			startup = f.settleStartup(sessions, ask.id).then(() => {
+				settled = true;
+			});
+			await assert.rejects(sessions.archive(ask.id), /Stop the session before archiving it/);
+			assert.equal(settled, false, "the fixture barrier must include the final startup write");
+		} finally {
+			persistence.resolve();
+			// biome-ignore lint/complexity/useLiteralKeys: Restore the test-only persistence seam.
+			sessions["save"] = save;
+			await startup;
+		}
+		assert.ok((await sessions.archive(ask.id)).archivedAt);
+	});
+}
+
 test("cold parked and archived Ask subscriptions suppress live checkout TODOs without waking a worker", async (t) => {
 	const f = await fixture(t);
 	await mkdir(join(f.source, ".pi", "todos"), { recursive: true });
@@ -367,10 +437,7 @@ test("cold parked and archived Ask subscriptions suppress live checkout TODOs wi
 				message: "explain",
 				title: "Ask",
 			});
-			// The fake worker is idle before the daemon finishes draining its startup outbox.
-			// biome-ignore lint/complexity/useLiteralKeys: Await the published startup/admission barrier.
-			await original["start"](ask.id);
-			assert.equal(original.get(ask.id)?.state, "idle");
+			await f.settleStartup(original, ask.id);
 			if (archived) await original.archive(ask.id);
 			created.push({ ask, baseBranch, archived });
 		}
