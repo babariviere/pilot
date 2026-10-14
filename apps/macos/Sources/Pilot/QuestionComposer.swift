@@ -32,7 +32,7 @@ struct QuestionComposer: View {
             }
             // The tray's state, in the same amber breath as the sidebar's needs-you corner. It sits behind the
             // opaque reply card, so it shows in the margin and beside the hints.
-            .ditherCorner(.needsYou, outset: EdgeInsets(), cornerRadius: 14)
+            .ditherCorner(.needsYou, outset: EdgeInsets(), cornerRadius: 14, extent: 2.5)
             .background(
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Theme.tray)

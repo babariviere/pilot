@@ -62,3 +62,13 @@ import Testing
     #expect(clock.subscriberCount == baseline)
     if baseline == 0 { #expect(!clock.isRunning) }
 }
+
+@MainActor @Test func largerExtentsAddCellsAndKeepTheirShape() {
+    let request = DitherCornerRequest(signal: .needsYou, previous: nil, frame: 0, extent: 2.5)
+    let image = DitherCornerRenderer.image(for: request)
+    #expect(image?.width == 130 && image?.height == 60)
+    // The same relative point is as dense at both sizes.
+    let small = DitherCornerRenderer.coverage(.needsYou, u: 10, v: 5, frame: 0, lean: (0, 0), hover: 0)
+    let large = DitherCornerRenderer.coverage(.needsYou, u: 25, v: 12.5, frame: 0, lean: (0, 0), hover: 0, extent: 2.5)
+    #expect(abs(small - large) < 0.000_001)
+}
