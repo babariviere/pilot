@@ -36,9 +36,10 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).
   They explain a change, never decorate it.
 - **Dithered gradients are Pilot's signature.** Prefer ordered (Bayer) dithering with hard square pixels over smooth
-  gradients, glows and blurs: the Home sky (`DitherSky`) and the sidebar's status corners (`DitherCorner`) set the
-  tone. Use it for atmosphere and state, with a soft palette and quiet motion (a slow ripple, a breath, a dissolve
-  from cell to cell), and keep text readable over it.
+  gradients, glows and blurs: the Home sky (`DitherSky`), the empty Inbox's coast (`DitherScene`, a bundled
+  painting dithered the same way) and the sidebar's status corners (`DitherCorner`) set the tone. Use it for
+  atmosphere and state, with a soft palette and quiet motion (a slow ripple, a breath, a dissolve from cell to
+  cell), and keep text readable over it.
 - **Check it by eye.** Beauty is reviewed, not assumed. Look at the real result in light and dark, with real
   and long content, before calling a UI change done.
 
