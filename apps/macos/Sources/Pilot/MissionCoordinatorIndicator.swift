@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The same role mark in the sidebar, Chats tab and mission header.
 struct MissionCoordinatorIndicator: View {
-    static let symbol = "star.fill"
+    static let symbol = "safari"
     var showsLabel = false
 
     var body: some View {
