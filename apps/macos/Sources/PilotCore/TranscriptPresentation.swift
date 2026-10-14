@@ -147,8 +147,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
                  let .error(_, text), let .notice(_, text), let .automatic(_, text, _, _):
                 return base + text.utf8.count
             case let .event(event):
-                return base + event.text.utf8.count + (event.detail?.utf8.count ?? 0)
-                    + (event.branch?.utf8.count ?? 0) + (event.title?.utf8.count ?? 0)
+                return base + eventByteCount(event)
             case let .tools(_, items):
                 return base + items.reduce(0) { $0 + byteCount(of: $1) }
             case let .artifact(_, reference): return base + artifactByteCount(reference)
@@ -156,6 +155,15 @@ public struct TranscriptPresentation: Equatable, Sendable {
                 return base + questionByteCount(question)
             }
         }
+    }
+
+    /// Keep optional additions outside the row reduce: Swift 6.2's type checker otherwise times out.
+    static func eventByteCount(_ event: ChatEvent) -> Int {
+        var bytes: Int = event.text.utf8.count
+        bytes += event.detail?.utf8.count ?? 0
+        bytes += event.branch?.utf8.count ?? 0
+        bytes += event.title?.utf8.count ?? 0
+        return bytes
     }
 
     /// Separate, typed steps: CI's compiler times out type-checking this inline in the reduce above.
