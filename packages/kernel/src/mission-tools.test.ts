@@ -489,3 +489,17 @@ for (const ask of [false, true]) {
 		});
 	}
 }
+test("members and coordinators declare and forward release selectors", async () => {
+	for (const coordinator of [false, true]) {
+		const calls: unknown[] = [];
+		const tool = createMissionTool(async (action, args) => {
+			calls.push([action, args]);
+			return { released: [], skipped: [] };
+		}, coordinator);
+		assert.match(tool.description, /- release:/);
+		for (const args of [{ id: "1-3" }, { ids: ["#1", 2, "task-id"] }]) {
+			await tool.execute("call", { action: "release", ...args } as never, undefined, undefined, {} as never);
+			assert.deepEqual(calls.at(-1), ["release", args]);
+		}
+	}
+});

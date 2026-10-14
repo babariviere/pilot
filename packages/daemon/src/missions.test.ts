@@ -1240,3 +1240,84 @@ test("status updates, events paging and deletion detach members", () => {
 	assert.equal(missions.missionOf("s1"), undefined);
 	assert.throws(() => missions.require(id), /Unknown mission/);
 });
+test("release resets active claims, preserves review/closed states and notifies once", (t) => {
+	const missions = store();
+	t.after(() => missions.close());
+	const { id } = missions.create({
+		projectId: "p",
+		title: "M",
+		tasks: Array.from({ length: 6 }, (_, i) => ({ title: `T${i}` })),
+	});
+	for (const chat of ["owner", "other", "lead"]) missions.join(chat, id);
+	missions.update(id, { coordinatorSessionId: "lead" });
+	const states = ["in_progress", "blocked", "in_review", "done", "dropped", "todo"] as const;
+	for (const [i, status] of states.entries()) {
+		missions.claimTask(id, i + 1, "owner");
+		missions.updateTask(id, String(i + 1), { status });
+	}
+	assert.throws(() => missions.releaseTask(id, "1", { sessionId: "other" }), /only the coordinator/);
+	assert.throws(() => missions.releaseTasks(id, ["1"], { sessionId: "outsider" }), /not in this mission/);
+	assert.equal(missions.releaseTasks(id, ["1", "99"], { sessionId: "other" }).skipped.length, 2);
+	const events = missions.events(id).length;
+	let changes = 0;
+	const refreshed: string[] = [];
+	missions.onChange(() => {
+		changes++;
+		assert.ok(missions.tasks(id).every((task) => !task.sessionId));
+	});
+	missions.onMembershipChange((sessionId) => refreshed.push(sessionId));
+	const result = missions.releaseTasks(id, ["1", "#1", "2", "3", "4", "5", "6", "99"], { sessionId: "lead" });
+	assert.deepEqual(
+		result.released.map((task) => task.status),
+		["todo", "todo", "in_review", "done", "dropped", "todo"],
+	);
+	assert.equal(result.skipped.length, 1);
+	assert.equal(changes, 1);
+	assert.deepEqual(refreshed, ["owner"]);
+	assert.equal(missions.events(id).length, events + 6);
+	assert.ok(
+		missions
+			.events(id)
+			.slice(0, 6)
+			.every((event) => event.sessionId === "lead" && event.text.includes("owner")),
+	);
+	missions.releaseTask(id, "1", { sessionId: "owner" });
+	assert.equal(missions.events(id).length, events + 6);
+});
+
+test("members release their own claims and app assignment clearing resets blocked work", (t) => {
+	const missions = store();
+	t.after(() => missions.close());
+	const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	missions.join("owner", id);
+	missions.claimTask(id, "1", "owner");
+	missions.claimTask(id, "2", "owner");
+	missions.updateTask(id, "2", { status: "blocked" });
+	assert.equal(missions.releaseTask(id, "1", { sessionId: "owner" }).status, "todo");
+	const released = missions.updateTask(id, "2", { sessionId: null });
+	assert.equal(released.status, "todo");
+	assert.equal(released.sessionId, undefined);
+});
+test("release rolls back storage failures and keeps task references", (t) => {
+	const missions = store();
+	t.after(() => missions.close());
+	const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	missions.join("owner", id);
+	const task = missions.claimTask(id, "1", "owner");
+	missions.claimTask(id, "2", "owner");
+	missions.addResource(id, { url: "https://example.com/work", taskId: task.id });
+	const before = missions.detail(id);
+	let changes = 0;
+	missions.onChange(() => changes++);
+	const resolve = missions.resolveTask.bind(missions);
+	const mock = t.mock.method(missions, "resolveTask", (id: string, ref: unknown) => {
+		if (ref === "2") throw new Error("Storage failed");
+		return resolve(id, ref);
+	});
+	assert.throws(() => missions.releaseTasks(id, ["1", "2"], { sessionId: "owner" }), /Storage failed/);
+	assert.deepEqual(missions.detail(id), before);
+	assert.equal(changes, 0);
+	mock.mock.restore();
+	missions.releaseTasks(id, ["1", "2"], { sessionId: "owner" });
+	assert.deepEqual(missions.detail(id).resources, before.resources);
+});

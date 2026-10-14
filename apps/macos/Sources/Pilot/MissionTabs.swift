@@ -825,10 +825,9 @@ struct MissionTaskRow: View {
                 Button(session.title) { assign(session.id) }.disabled(session.id == task.sessionId)
             }
             if members.isEmpty { Text("No mission chats") }
-            if task.sessionId != nil {
-                Divider()
-                Button("Release") { assign(nil) }
-            }
+        }
+        if task.sessionId != nil {
+            Button("Release Claim") { assign(nil) }
         }
         Menu("Status") {
             ForEach(MissionTaskStatus.allCases, id: \.self) { status in

@@ -1044,6 +1044,8 @@ export class MissionStore {
 	}
 
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
+		if (write.sessionId === null && Object.keys(write).length === 1 && !actor.sessionId)
+			return this.releaseTask(id, taskId, actor);
 		const before = this.resolveTask(id, taskId);
 		const fields = this.taskFields(id, write, before.id);
 		const title = write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE)!;
@@ -1178,6 +1180,82 @@ export class MissionStore {
 		});
 		this.changed(id, [sessionId]);
 		return task;
+	}
+
+	/** The user and current coordinator may release any claim; members only their own. */
+	releaseTask(id: string, taskId: unknown, actor: MissionActor = USER): MissionTask {
+		const mission = this.require(id);
+		if (actor.sessionId) this.assertMember(id, actor.sessionId);
+		const before = this.resolveTask(id, taskId);
+		const task = this.transaction(() => {
+			if (
+				actor.sessionId &&
+				actor.sessionId !== mission.coordinatorSessionId &&
+				before.sessionId &&
+				before.sessionId !== actor.sessionId
+			)
+				throw new Conflict(
+					`Task #${before.number} is claimed by another chat; only the coordinator can release it`,
+				);
+			if (!before.sessionId) return before;
+			const status = before.status === "in_progress" || before.status === "blocked" ? "todo" : before.status;
+			this.run(
+				"UPDATE tasks SET session_id = NULL, status = ?, updated_at = ? WHERE id = ?",
+				status,
+				Date.now(),
+				before.id,
+			);
+			this.event(
+				id,
+				"claim",
+				`Task #${before.number} claim released from chat ${before.sessionId}: ${before.title}`,
+				actor,
+				{ taskId: before.id },
+			);
+			return this.task(id, before.id);
+		});
+		if (!this.writing && before.sessionId) this.changed(id, [before.sessionId]);
+		return task;
+	}
+
+	releaseTasks(id: string, refs: string[], actor: MissionActor = USER) {
+		if (actor.sessionId) this.assertMember(id, actor.sessionId);
+		const affected = new Set<string>();
+		const result = this.transaction(() => {
+			const released: MissionTask[] = [];
+			const skipped: Array<{ ref: string; reason: string; task?: MissionTask }> = [];
+			const seen = new Set<string>();
+			for (const ref of refs) {
+				let task: MissionTask;
+				try {
+					task = this.resolveTask(id, ref);
+				} catch (error) {
+					if (!(error instanceof NotFound)) throw error;
+					skipped.push({ ref, reason: error.message });
+					continue;
+				}
+				if (seen.has(task.id)) continue;
+				seen.add(task.id);
+				if (
+					actor.sessionId &&
+					actor.sessionId !== this.require(id).coordinatorSessionId &&
+					task.sessionId &&
+					task.sessionId !== actor.sessionId
+				) {
+					skipped.push({
+						ref,
+						reason: `Task #${task.number} is claimed by another chat; only the coordinator can release it`,
+						task,
+					});
+					continue;
+				}
+				if (task.sessionId) affected.add(task.sessionId);
+				released.push(this.releaseTask(id, task.id, actor));
+			}
+			return { released, skipped };
+		});
+		if (result.released.length) this.changed(id, [...affected]);
+		return result;
 	}
 
 	/** Partial success for a batch, without exposing intermediate state to member contexts. */

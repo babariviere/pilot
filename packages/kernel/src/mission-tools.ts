@@ -12,6 +12,7 @@ const MEMBER_ACTIONS = [
 	"tasks",
 	"task",
 	"claim",
+	"release",
 	"decide",
 	"comment",
 	"resolve",
@@ -48,6 +49,7 @@ Actions:
 - update: change the mission title or goal.
 - tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
 - claim: take tasks for this chat. Use id for one task or ids for several IDs, numbers or ranges (for example ["1-5", "#8"]). A range or comma-separated list also works in id. Batch results contain claimed tasks and skipped tasks with reasons (owned by another chat or not found); other chats' tasks are never taken.
+- release: clear task claims using id or ids with the same selectors as claim. Members may release their own claims; the coordinator may release any claim. Resets in_progress or blocked to todo, keeps other states and links. Batch results contain released and skipped tasks.
 - decide: record a decision. Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
@@ -75,8 +77,8 @@ Actions:
 				Type.String({
 					maxLength: 128,
 					description: coordinator
-						? "Task ID or number (task, claim, delete, start), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both."
-						: "Task ID or number (task, claim), or comment ID (resolve). For claim, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
+						? "Task ID or number (task, claim, release, delete, start), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both."
+						: "Task ID or number (task, claim, release), or comment ID (resolve). For claim or release, also accepts ranges or comma-separated numbers. Use id or ids, not both.",
 				}),
 			),
 			ids: Type.Optional(
@@ -84,8 +86,8 @@ Actions:
 					minItems: 1,
 					maxItems: 1000,
 					description: coordinator
-						? "For claim or group: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Claim returns claimed and skipped; group requires every task to exist. Use instead of id."
-						: "For claim only: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed and skipped. Use instead of id.",
+						? "For claim, release or group: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Claim/release return claimed/released and skipped; group requires every task to exist. Use instead of id."
+						: "For claim or release: task IDs, numbers or inclusive ascending ranges such as 1-5 (at most 1000 expanded references). Returns claimed/released and skipped. Use instead of id.",
 				}),
 			),
 			markdown: Type.Optional(Type.String({ maxLength: 262144, description: "Complete replacement brief." })),

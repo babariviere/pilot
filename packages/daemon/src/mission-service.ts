@@ -459,6 +459,7 @@ export class MissionService {
 			throw new Conflict(`Only the mission coordinator can use ${action}`);
 		const actor = { sessionId };
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
+		const claimant = (id: string) => ({ id, title: this.sessions.get(id)?.title ?? "Unknown chat" });
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
 			case "bindPr":
@@ -567,7 +568,7 @@ export class MissionService {
 							status: task.status,
 							resources: resources.filter((resource) => resource.taskId === task.id),
 							artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
-							...(task.sessionId ? { owner: who(task.sessionId) } : {}),
+							...(task.sessionId ? { owner: who(task.sessionId), claimingChat: claimant(task.sessionId) } : {}),
 							...(task.milestone ? { milestone: task.milestone } : {}),
 							...(task.dependsOn?.length
 								? { dependsOn: task.dependsOn.map((dep) => number.get(dep) ?? dep) }
@@ -649,7 +650,7 @@ export class MissionService {
 						...task,
 						resources: detail.resources.filter((resource) => resource.taskId === task.id),
 						artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
-						...(task.sessionId ? { sessionId: undefined, owner: who(task.sessionId) } : {}),
+						...(task.sessionId ? { owner: who(task.sessionId), claimingChat: claimant(task.sessionId) } : {}),
 					})),
 				};
 			}
@@ -666,16 +667,22 @@ export class MissionService {
 					? this.store.addTask(missionId, write, actor)
 					: this.store.updateTask(missionId, this.store.resolveTask(missionId, args.id).id, write, actor);
 			}
-			case "claim": {
-				if (args.id !== undefined && args.ids !== undefined) throw new Error("claim accepts id or ids, not both");
-				if (args.ids !== undefined && !Array.isArray(args.ids)) throw new Error("claim ids must be an array");
-				if (args.id === undefined && args.ids === undefined) throw new Error("claim requires id or ids");
+			case "claim":
+			case "release": {
+				if (args.id !== undefined && args.ids !== undefined)
+					throw new Error(`${action} accepts id or ids, not both`);
+				if (args.ids !== undefined && !Array.isArray(args.ids)) throw new Error(`${action} ids must be an array`);
+				if (args.id === undefined && args.ids === undefined) throw new Error(`${action} requires id or ids`);
 				if (args.id !== undefined && typeof args.id !== "string" && typeof args.id !== "number")
-					throw new Error("claim id must be a task ID, number or range");
-				const refs = parseTaskRefs(args.ids ?? args.id);
+					throw new Error(`${action} id must be a task ID, number or range`);
+				const refs = parseTaskRefs(args.ids ?? args.id, action);
 				// Preserve the single-id result and conflict error for existing callers.
 				const batch =
 					args.ids !== undefined || (typeof args.id === "string" && /,|^#?\d+\s*-\s*#?\d+$/.test(args.id.trim()));
+				if (action === "release")
+					return batch
+						? this.store.releaseTasks(missionId, refs, actor)
+						: this.store.releaseTask(missionId, refs[0], actor);
 				return batch
 					? this.store.claimTasks(missionId, refs, sessionId)
 					: this.store.claimTask(missionId, refs[0], sessionId);

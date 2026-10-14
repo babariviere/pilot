@@ -411,6 +411,7 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 | `get` | Goal, decisions, own tasks, open tasks, open comments, recent user updates and handoffs, recent activity and the brief's revision and outline |
 | `brief` | Read the brief (optionally a revision), or replace it with `markdown` and `expectedRevision` |
 | `tasks`, `task`, `claim` | List tasks; create or update one; claim one (`id`) or several (`ids`, including ranges) for this chat |
+| `release` | Clear claims with the same `id`/`ids` selectors as claim. Members release their own, the current coordinator or user any claim. Resets in_progress/blocked to todo, preserves other states and links, and logs activity. `get`/`tasks` include the claiming chat title and ID. The task row offers Release Claim in its menu. |
 | `decide`, `comment`, `resolve` | Record a decision; add or resolve a comment |
 | `attach`, `link` | Link an artifact; link an external resource |
 | `log` | Post a handoff or status update |
