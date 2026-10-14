@@ -134,6 +134,10 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+Decisions have an audience: **All chats**, **Coordinator only**, or **Reference** (the default).
+Choose it when recording or editing a decision, or change it from the row's context menu.
+Reference decisions are available on request; pinning a decision to a task includes it in that task's chat.
+
 Only the coordinating chat sees subscription windows in its status and start tool results: percent
 used and reset time per provider, with readings over two minutes old marked stale and missing data
 marked unknown. Reads use the daemon's shared cache without waiting for providers. Worker tool results

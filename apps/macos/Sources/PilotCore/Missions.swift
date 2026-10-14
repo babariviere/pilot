@@ -141,17 +141,32 @@ public struct MissionBriefWrite: Codable, Sendable {
     }
 }
 
-public enum MissionDecisionAudience: String, Codable, Sendable {
+public enum MissionDecisionAudience: String, Codable, CaseIterable, Sendable {
     case all, coordinator, reference
 }
 
 public struct MissionDecision: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let text: String
-    public var audience: MissionDecisionAudience?
+    public var audience: MissionDecisionAudience
     public let authorSessionId: String?
     public let createdAt: Double
     public let updatedAt: Double
+
+    private enum CodingKeys: String, CodingKey {
+        case id, text, audience, authorSessionId, createdAt, updatedAt
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        text = try values.decode(String.self, forKey: .text)
+        // Decisions from older daemons predate audiences and are reference material.
+        audience = try values.decodeIfPresent(MissionDecisionAudience.self, forKey: .audience) ?? .reference
+        authorSessionId = try values.decodeIfPresent(String.self, forKey: .authorSessionId)
+        createdAt = try values.decode(Double.self, forKey: .createdAt)
+        updatedAt = try values.decode(Double.self, forKey: .updatedAt)
+    }
 
     /// Only user decisions are binding over the brief and editable by the user alone.
     public var isUserDecision: Bool { authorSessionId == nil }

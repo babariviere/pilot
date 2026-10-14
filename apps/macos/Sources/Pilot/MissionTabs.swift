@@ -96,6 +96,8 @@ struct MissionBriefTab: View {
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var editor = BriefEditorState()
     @State private var decision = MissionInput()
+    @State private var newDecisionAudience: MissionDecisionAudience = .reference
+    @State private var editingDecisionAudience: MissionDecisionAudience = .reference
     @State private var comment = MissionInput()
 
     var body: some View {
@@ -129,19 +131,27 @@ struct MissionBriefTab: View {
                 decisionRow(item)
             }
             if decision.confirming {
-                HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
                     TextField("Record a decision", text: $decision.text)
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(addDecision)
                         .onExitCommand { decision.confirming = false }
-                    Button("Cancel") { decision.confirming = false; decision.text = "" }
-                    Button("Add", action: addDecision)
-                        .disabled(decision.busy || decision.trimmed(decision.text).isEmpty)
+                    HStack(spacing: 8) {
+                        DecisionAudiencePicker(selection: $newDecisionAudience)
+                        Spacer(minLength: 8)
+                        Button("Cancel") { decision.confirming = false; decision.text = "" }
+                        Button("Add", action: addDecision)
+                            .disabled(decision.trimmed(decision.text).isEmpty)
+                    }
                 }
+                .disabled(decision.busy)
                 .padding(.leading, 8)
                 .padding(.top, 4)
             } else {
-                QuietAddButton(title: "Record a decision") { decision.confirming = true }
+                QuietAddButton(title: "Record a decision") {
+                    newDecisionAudience = .reference
+                    decision.confirming = true
+                }
                     .padding(.leading, 8)
                     .padding(.top, 2)
             }
@@ -153,14 +163,26 @@ struct MissionBriefTab: View {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: "checkmark.seal.fill").font(.pilot(.caption)).foregroundStyle(Theme.success).frame(width: 16)
                 if decision.editingId == item.id {
-                    TextField("Decision", text: $decision.secondary, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .onSubmit { saveDecision(item) }
-                    Button("Cancel") { decision.editingId = nil }
-                    Button("Save") { saveDecision(item) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField("Decision", text: $decision.secondary, axis: .vertical)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit { saveDecision(item) }
+                            .onExitCommand { decision.editingId = nil }
+                        HStack(spacing: 8) {
+                            DecisionAudiencePicker(selection: $editingDecisionAudience)
+                            Spacer(minLength: 8)
+                            Button("Cancel") { decision.editingId = nil }
+                            Button("Save") { saveDecision(item) }
+                                .disabled(decision.trimmed(decision.secondary).isEmpty)
+                        }
+                    }
+                    .disabled(decision.busy)
                 } else {
-                    Text(item.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
-                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        DecisionAudienceTag(audience: item.audience)
+                    }
                     Spacer(minLength: 8)
                     ZStack(alignment: .trailing) {
                         Text(missionAuthorName(item.authorSessionId, client: client))
@@ -186,8 +208,15 @@ struct MissionBriefTab: View {
         }
         .contextMenu {
             Button("Edit Decision") { editDecision(item) }
+            Menu("Change Audience") {
+                DecisionAudienceOptions(selection: Binding(
+                    get: { item.audience },
+                    set: { changeAudience(item, to: $0) }
+                ))
+            }
             Button("Remove Decision", role: .destructive) { removeDecision(item) }
         }
+        .disabled(decision.busy)
     }
 
     // MARK: Brief
@@ -346,10 +375,11 @@ struct MissionBriefTab: View {
     private func addDecision() {
         let text = decision.trimmed(decision.text)
         guard !text.isEmpty, !decision.busy else { return }
+        let audience = newDecisionAudience
         decision.busy = true
         model.missionAction { [client, id = mission.id] in
             defer { decision.busy = false }
-            try await client.addMissionDecision(id, text: text)
+            try await client.addMissionDecision(id, text: text, audience: audience)
             decision.text = ""
             decision.confirming = false
         }
@@ -357,6 +387,7 @@ struct MissionBriefTab: View {
 
     private func editDecision(_ item: MissionDecision) {
         decision.secondary = item.text
+        editingDecisionAudience = item.audience
         decision.editingId = item.id
     }
 
@@ -368,10 +399,24 @@ struct MissionBriefTab: View {
 
     private func saveDecision(_ item: MissionDecision) {
         let text = decision.trimmed(decision.secondary)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty, !decision.busy else { return }
+        let audience = editingDecisionAudience
+        decision.busy = true
         model.missionAction { [client, id = mission.id] in
-            try await client.updateMissionDecision(id, decisionId: item.id, text: text)
+            defer { decision.busy = false }
+            try await client.updateMissionDecision(id, decisionId: item.id, text: text, audience: audience)
             decision.editingId = nil
+        }
+    }
+
+    private func changeAudience(_ item: MissionDecision, to audience: MissionDecisionAudience) {
+        guard audience != item.audience, !decision.busy else { return }
+        decision.busy = true
+        model.missionAction { [client, id = mission.id] in
+            defer { decision.busy = false }
+            // Do not resend text: it may have changed since this row was rendered.
+            try await client.updateMissionDecision(id, decisionId: item.id, audience: audience)
+            if decision.editingId == item.id { editingDecisionAudience = audience }
         }
     }
 

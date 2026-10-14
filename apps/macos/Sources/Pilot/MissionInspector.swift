@@ -75,8 +75,11 @@ struct MissionInspectorPane: View {
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                                         Image(systemName: "checkmark.seal.fill").font(.pilot(.small))
                                             .foregroundStyle(Theme.success).frame(width: 16)
-                                        Text(decision.text).font(.pilot(.label)).foregroundStyle(Theme.foreground)
-                                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(decision.text).font(.pilot(.label)).foregroundStyle(Theme.foreground)
+                                                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                                            DecisionAudienceTag(audience: decision.audience)
+                                        }
                                     }
                                 }
                             }

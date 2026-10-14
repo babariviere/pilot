@@ -115,6 +115,7 @@ import Testing
     #expect(!detail.mission.isAutopilot)
     #expect(detail.mission.needsYouCount == nil, "older daemons remain decodable")
     #expect(detail.decisions[0].isUserDecision)
+    #expect(detail.decisions[0].audience == .reference)
     #expect(detail.comments[0].isOpen)
     #expect(detail.orderedTasks.map(\.number) == [1, 2, 3, 4])
     #expect(detail.tasks[3].status == .todo, "unknown task statuses fall back instead of failing the payload")
@@ -145,6 +146,26 @@ import Testing
     #expect(try JSONDecoder().decode(MissionTask.self, from: JSONEncoder().encode(task)) == task)
     #expect(try json(MissionTaskWrite(decisionIds: ["d1"]))["decisionIds"] as? [String] == ["d1"])
     #expect(try json(MissionTaskWrite(decisionIds: []))["decisionIds"] as? [String] == [])
+}
+
+@Test func everyDecisionAudienceRoundTripsAndPartialWritesOmitText() throws {
+    for audience in MissionDecisionAudience.allCases {
+        let data = Data("{\"id\":\"d1\",\"text\":\"Rule\",\"audience\":\"\(audience.rawValue)\",\"createdAt\":1,\"updatedAt\":2}".utf8)
+        let decision = try JSONDecoder().decode(MissionDecision.self, from: data)
+        #expect(decision.audience == audience)
+        #expect(try JSONDecoder().decode(MissionDecision.self, from: JSONEncoder().encode(decision)) == decision)
+        let create = try json(MissionDecisionWrite(text: "Rule", audience: audience))
+        #expect(create["text"] as? String == "Rule")
+        #expect(create["audience"] as? String == audience.rawValue)
+        let change = try json(MissionDecisionWrite(audience: audience))
+        #expect(change["text"] == nil)
+        #expect(change["audience"] as? String == audience.rawValue)
+    }
+    #expect(try json(MissionDecisionWrite(text: "Edited"))["audience"] == nil)
+    let legacy = try JSONDecoder().decode(MissionDecision.self, from: Data(
+        #"{"id":"d1","text":"Rule","audience":null,"createdAt":1,"updatedAt":2}"#.utf8
+    ))
+    #expect(legacy.audience == .reference)
 }
 
 @Test func sessionSummaryCarriesOptionalMission() throws {
