@@ -101,15 +101,18 @@ import Testing
                 activate: function() {activated = true;}};
     }
     """#
-    let wrapped = stub + "\n" + HeliumTabLookup.script + #"""
+    // JXA's global Application is non-configurable. Shadow it only inside this scope.
+    let wrapped = "var syntheticRun = (function() {\n" + stub + "\n" + HeliumTabLookup.script + #"""
     var lookup = run;
-    run = function(argv) {
+    return function(argv) {
         var result = lookup(argv);
         if (result === 'focused' && activated && windows[1].activeTabIndex === 2 &&
             windows[1].minimized === false && windows[1].index === 1) return 'ok';
         if (result === 'not-found' && !activated) return 'missing';
         throw new Error('Unexpected focus behavior');
     };
+    })();
+    function run(argv) { return syntheticRun(argv); }
     """#
     #expect(HeliumTabLookup.run(script: wrapped, arguments: ["acme/app/pull/42"]) == "ok")
     #expect(HeliumTabLookup.run(script: wrapped, arguments: ["other/app/pull/42"]) == "missing")
