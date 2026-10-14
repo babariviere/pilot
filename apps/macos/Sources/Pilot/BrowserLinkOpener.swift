@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// PR links reuse Helium tabs without changing other links or the user's default browser.
+/// Service links prefer desktop apps; PR links reuse Helium tabs. Never changes browser defaults.
 @MainActor
 final class BrowserLinkOpener {
     nonisolated static let heliumID = "net.imput.helium"
@@ -10,6 +10,7 @@ final class BrowserLinkOpener {
     private let canLookup: (URL) -> Bool
     private let focus: (String) async -> Bool
     private let openNormally: (URL) -> Void
+    private let openDesktop: (URL) -> Bool
     private var pending: URL?
     private var openingKey: String?
     private var requestVersion = 0
@@ -20,16 +21,22 @@ final class BrowserLinkOpener {
               Bundle(url: app)?.bundleIdentifier == heliumID else { return false }
         return !NSRunningApplication.runningApplications(withBundleIdentifier: heliumID).isEmpty
     }, focus: @escaping (String) async -> Bool = { await HeliumTabLookup.focus($0) },
-         openNormally: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) }) {
+         openNormally: @escaping (URL) -> Void = { NSWorkspace.shared.open($0) },
+         openDesktop: @escaping (URL) -> Bool = { url in
+             guard NSWorkspace.shared.urlForApplication(toOpen: url) != nil else { return false }
+             return NSWorkspace.shared.open(url)
+         }) {
         self.canLookup = canLookup
         self.focus = focus
         self.openNormally = openNormally
+        self.openDesktop = openDesktop
     }
 
     func open(_ url: URL) {
         guard let key = Self.pullRequestKey(url), canLookup(url) else {
             pending = nil
             requestVersion += 1
+            if let native = DesktopAppLink.url(for: url), openDesktop(native) { return }
             openNormally(url)
             return
         }
@@ -63,10 +70,14 @@ final class BrowserLinkOpener {
 
     static var action: OpenURLAction {
         OpenURLAction { url in
-            guard pullRequestKey(url) != nil else { return .systemAction }
+            guard handles(url) else { return .systemAction }
             shared.open(url)
             return .handled
         }
+    }
+
+    nonisolated static func handles(_ url: URL) -> Bool {
+        pullRequestKey(url) != nil || DesktopAppLink.url(for: url) != nil
     }
 }
 

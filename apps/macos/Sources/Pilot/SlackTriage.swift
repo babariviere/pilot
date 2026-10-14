@@ -625,7 +625,7 @@ struct SlackTriagePage: View {
             let rows = SlackTriageRowActions(
                 start: { actions.startChat($0, app: model) },
                 mission: { actions.startMission($0, app: model) },
-                open: { item in if let url = trackedBrowserURL(item.url) { NSWorkspace.shared.open(url) } },
+                open: { item in if let url = trackedBrowserURL(item.url) { BrowserLinkOpener.shared.open(url) } },
                 toggleDismissed: { toggleDismissed($0, columns: columns) },
                 select: { item in
                     selection = item.id

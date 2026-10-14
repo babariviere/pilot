@@ -374,7 +374,7 @@ final class MessageSelectionTextView: NSTextView {
 
     override func clicked(onLink link: Any, at charIndex: Int) {
         let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
-        if let url, BrowserLinkOpener.pullRequestKey(url) != nil {
+        if let url, BrowserLinkOpener.handles(url) {
             BrowserLinkOpener.shared.open(url)
         } else {
             super.clicked(onLink: link, at: charIndex)

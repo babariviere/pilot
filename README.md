@@ -182,6 +182,9 @@ pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not 
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
 Pilot stores a classifier summary for each Slack message, not its text; the triage inspector reads and quotes the
 message from Slack when you select it, without saving it.
+Slack messages and Linear issue or project links open in their desktop apps when installed, with a
+browser fallback when the app is unavailable. Copied links remain web URLs.
+Slack links without a workspace ID use Slack's active workspace.
 
 ## Development
 

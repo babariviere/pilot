@@ -481,7 +481,7 @@ struct TrackedItemRow: View {
         let startError = TrackedItemText.linearStartError(item)
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {
-                Button(action: openInBrowser) {
+                Button(action: openInApp) {
                     HStack(spacing: 10) {
                         TrackedItemIcon(item: item).frame(width: 16)
                         VStack(alignment: .leading, spacing: 1) {
@@ -589,8 +589,8 @@ struct TrackedItemRow: View {
         }
     }
 
-    private func openInBrowser() {
-        if let url = trackedBrowserURL(item.url) { NSWorkspace.shared.open(url) }
+    private func openInApp() {
+        if let url = trackedBrowserURL(item.url) { BrowserLinkOpener.shared.open(url) }
     }
 
     private func openLink(_ target: TrackedItemText.LinkSummary.Target) {
