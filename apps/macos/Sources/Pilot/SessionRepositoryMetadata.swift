@@ -47,6 +47,9 @@ struct SessionRepositoryMetadata: View {
         } else {
             SessionRepositoryMetadataContent(session: session, summary: model.summary,
                                              branch: model.branch(for: session), error: model.error)
+            .preference(key: SessionRepositoryHelpKey.self,
+                        value: SessionRepositoryHelp.text(summary: model.summary, branch: model.branch(for: session),
+                                                          error: model.error))
             .task(id: pollingKey) {
                 guard pollingKey.enabled else { return }
                 // Refresh on return/activity, but back off idle workspaces. External editor changes
@@ -61,74 +64,38 @@ struct SessionRepositoryMetadata: View {
     }
 }
 
-/// Fixed-size metadata must not set the minimum width of the entire session row.
-/// Prefer complete stats, dropping the branch and then line counts on narrow sidebars.
+/// The changes, branch and lookup errors behind a row's metadata, for the row's tooltip.
+/// Rows show no diff counts, so this is where they surface outside the Changes pane.
+struct SessionRepositoryHelpKey: PreferenceKey {
+    static let defaultValue: String? = nil
+    static func reduce(value: inout String?, nextValue: () -> String?) { value = value ?? nextValue() }
+}
+
+/// A row's PR badge and branch. Lists show no file or line counts (those live in the Changes pane and the
+/// row tooltip, via SessionRepositoryHelpKey). The branch truncates first, so the metadata never sets the
+/// row's minimum width.
 struct SessionRepositoryMetadataContent: View {
     let session: SessionSummary
     let summary: SessionChangeSummary?
     let branch: String?
     let error: String?
 
-    /// A clean workspace adds no information to the row, so "0 files +0 −0" is omitted.
-    /// The hover help still reports the clean summary.
-    private var changes: SessionChangeSummary? { summary.flatMap { $0.fileCount > 0 ? $0 : nil } }
-
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            metadata(showBranch: true, showLineStats: true)
-                .fixedSize(horizontal: true, vertical: false)
-            if changes != nil {
-                metadata(showBranch: false, showLineStats: true)
-                    .fixedSize(horizontal: true, vertical: false)
-                metadata(showBranch: false, showLineStats: false)
-                    .fixedSize(horizontal: true, vertical: false)
-            }
-            HStack(spacing: 6) {
-                PullRequestBadge(session: session)
-                if session.linkedPullRequests.isEmpty && session.pullRequestError == nil {
-                    if let changes {
-                        Text(changes.fileCountLabel).monospacedDigit()
-                    } else if let branch, !branch.isEmpty {
-                        Text(branch).truncationMode(.middle)
-                    }
-                }
-            }
-            .lineLimit(1)
-        }
-        .font(.system(size: 10, weight: .medium))
-        .foregroundStyle(Theme.mutedForeground)
-        .help([summary?.helpText, branch.map { "Branch: \($0)" },
-               error.map { "Git changes unavailable: \($0)" }].compactMap { $0 }.joined(separator: "\n"))
-    }
-
-    private func metadata(showBranch: Bool, showLineStats: Bool) -> some View {
         HStack(spacing: 6) {
             PullRequestBadge(session: session)
-            if let summary = changes {
-                Text(summary.fileCountLabel)
-                    .monospacedDigit()
-                    .fixedSize()
-                    .help(summary.helpText)
-                    .accessibilityLabel("\(summary.fileCountLabel) changed since \(summary.base)")
-                if showLineStats, let additions = summary.additions, let deletions = summary.deletions {
-                    DiffStat(additions: additions, deletions: deletions, showZero: true, fontSize: 10)
-                        .fixedSize()
-                        .help(summary.helpText)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(summary.lineStatLabel ?? "")
-                }
-            }
-            if showBranch, let branch, !branch.isEmpty {
-                if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil || changes != nil {
+            if let branch, !branch.isEmpty {
+                if !session.linkedPullRequests.isEmpty || session.pullRequestError != nil {
                     Text("·").accessibilityHidden(true)
                 }
                 Text(branch)
                     .lineLimit(1)
                     .truncationMode(.middle)
                     .layoutPriority(-1)
-                    .help("Branch: \(branch)" + (error.map { "\nGit changes unavailable: \($0)" } ?? ""))
                     .accessibilityLabel("Branch \(branch)")
             }
         }
+        .lineLimit(1)
+        .font(.system(size: 10, weight: .medium))
+        .foregroundStyle(Theme.mutedForeground)
     }
 }

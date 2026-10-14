@@ -515,6 +515,9 @@ export interface Mission {
 	/** Blocked tasks plus open, unaddressed agent comments when there is no coordinator.
 	 * Excludes unread member-chat results, which clients count locally. */
 	needsYouCount: number;
+	/** Done and total tasks, dropped tasks excluded from both. */
+	tasksDone: number;
+	tasksTotal: number;
 	/** First blocked task, unaddressed agent question or pending decision proposal, bounded to one line. */
 	needsYouReason?: string;
 	createdAt: number;

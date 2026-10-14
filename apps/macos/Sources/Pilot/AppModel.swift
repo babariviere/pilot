@@ -80,8 +80,6 @@ final class AppModel: ObservableObject {
     @Published var missionSheet: MissionSheet?
     /// Deletion is confirmed once by the main window, regardless of its entry point.
     @Published var pendingMissionDeletionId: String?
-    /// Missions whose chats are listed in the sidebar.
-    @Published var expandedMissions: Set<String> = []
     @Published var showingInactiveMissions = false
     @Published var inspectorVisible = false
     @Published var inspectorTab: InspectorTab = .changes

@@ -58,16 +58,27 @@ private func sidebarMeasuredSizes<V: View>(_ view: V, width: CGFloat) -> [CGSize
                                                                 title: "A large change", state: .merged, checkedAt: now), pinned: true)
     let summary = SessionChangeSummary(base: "origin/main", branch: session.branch,
                                        fileCount: 1234, additions: 123456, deletions: 98765)
-    model.client.loadFixture(projects: [], sessions: [session])
-    model.client.fixtureChangeSummaries = [session.id: summary]
+    let member = SessionSummary(id: "member", title: session.title, cwd: "/repository", branch: session.branch,
+                                createdAt: now, updatedAt: now, state: "idle", pullRequest: session.pullRequest,
+                                missionId: "mission")
+    let coordinator = SessionSummary(id: "coordinator", title: session.title, cwd: "/repository", createdAt: now,
+                                     updatedAt: now, state: "idle", outcome: .question, outcomeAt: now,
+                                     outcomeReason: "Should I start every unblocked task in the sidebar milestone now?",
+                                     missionId: "mission", activeMissionCoordinator: true)
+    let missionJSON = """
+    [{"mission":{"id":"mission","projectId":"p","title":"A mission with a long title that has to truncate",
+      "goal":"","status":"active","coordinatorSessionId":"coordinator","briefRevision":0,"createdAt":1,"updatedAt":1},
+      "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]}]
+    """
+    model.client.loadFixture(projects: [], sessions: [session, member, coordinator])
+    model.client.loadMissionFixture(try JSONDecoder().decode([MissionDetail].self, from: Data(missionJSON.utf8)))
+    model.client.fixtureChangeSummaries = [session.id: summary, member.id: summary]
     for sidebarWidth in [230.0, 280.0, 400.0] {
         for indent in [0.0, 20.0] {
             // Native list row insets, plus the extra inset for projects in folders.
             let rowWidth = sidebarWidth - 32 - indent
-            for isCoordinator in [false, true] {
-                let rows = sidebarMeasuredSizes(
-                    SessionRow(session: session, showsMission: !isCoordinator, isCoordinator: isCoordinator)
-                        .environmentObject(model), width: rowWidth)
+            for row in [session, member, coordinator] {
+                let rows = sidebarMeasuredSizes(SessionRow(session: row).environmentObject(model), width: rowWidth)
                 #expect(!rows.isEmpty)
                 #expect(rows.allSatisfy { $0.width <= rowWidth + 0.5 })
                 #expect(rows.allSatisfy { $0.height < 60 })

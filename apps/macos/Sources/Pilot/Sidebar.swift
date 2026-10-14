@@ -269,7 +269,7 @@ struct SessionSidebar: View {
         if !matching.isEmpty {
             Section {
                 ForEach(active) { mission in
-                    missionRows(mission, visible: visible, searching: searching)
+                    missionRow(mission)
                 }
                 if active.isEmpty, !searching {
                     Text("No active missions").font(.caption).foregroundStyle(Theme.faintForeground)
@@ -283,7 +283,7 @@ struct SessionSidebar: View {
                     .selectionDisabled(true)
                     if showing {
                         ForEach(inactive) { mission in
-                            missionRows(mission, visible: visible, searching: searching)
+                            missionRow(mission)
                         }
                     }
                 }
@@ -305,37 +305,17 @@ struct SessionSidebar: View {
         }
     }
 
-    @ViewBuilder
-    private func missionRows(_ mission: Mission, visible: [SessionSummary], searching: Bool) -> some View {
-        let members = MissionMembers.members(of: mission, in: visible)
-        let isExpanded = searching ? Binding.constant(true) : missionExpanded(mission.id)
-        MissionSidebarRow(mission: mission, needsYou: model.needsYouCount(mission),
-                          chatCount: members.count, working: members.filter(\.isWorking).count,
-                          selected: model.selectedMissionId == mission.id && model.selectedSessionId == nil,
-                          isExpanded: isExpanded)
+    /// A mission summarises its chats, which the chat lists show like any other chat. Counts use every active
+    /// member, not only those matching the search.
+    private func missionRow(_ mission: Mission) -> some View {
+        let members = model.members(of: mission).filter { !$0.isArchived }
+        return MissionSidebarRow(
+            mission: mission, needsYou: model.needsYouCount(mission),
+            working: members.filter(\.isWorking).count,
+            signal: MissionSidebarSummary.signal(mission: mission, members: members,
+                                                 isUnread: { model.isUnread($0) }),
+            selected: model.selectedMissionId == mission.id && model.selectedSessionId == nil)
             .selectionDisabled(true)
-        if isExpanded.wrappedValue {
-            ForEach(members) { session in
-                SessionRow(session: session, showsMission: false,
-                           isCoordinator: mission.coordinatorSessionId == session.id)
-                    .padding(.leading, 20)
-                    .tag(session.id)
-            }
-            if members.isEmpty {
-                Text("No chats").font(.caption).foregroundStyle(Theme.faintForeground)
-                    .padding(.leading, 20)
-                    .selectionDisabled(true)
-            }
-        }
-    }
-
-    private func missionExpanded(_ id: String) -> Binding<Bool> {
-        Binding(
-            get: { model.expandedMissions.contains(id) },
-            set: { open in
-                if open { model.expandedMissions.insert(id) } else { model.expandedMissions.remove(id) }
-            }
-        )
     }
 
     @ViewBuilder
@@ -557,19 +537,19 @@ private struct ProjectHeader: View {
     }
 }
 
-/// One chat: its title, and its project (when the list is not grouped by project) and repository metadata.
-/// The dithered corner carries its state, so the row needs no status column. Time, pin and mission marks show
-/// under the pointer, in space the row always reserves, so hovering never reflows the title. The corner clears
-/// behind them while they show, so they stay legible on a working or needs-you row. The mission mark opens its mission.
+/// One chat: its title, then its project (when the list is not grouped by project), its mission and its
+/// repository metadata. An active coordinator's second line says "Coordinator" and its state instead. The
+/// dithered corner carries the chat's state, so the row needs no status column. Time and pin marks show under
+/// the pointer, in space the row always reserves, so hovering never reflows the title, and the corner clears
+/// behind them while they show. The mission label opens its mission. Diff counts stay out of the row and
+/// appear in its tooltip.
 struct SessionRow: View {
     let session: SessionSummary
-    /// Off under the mission's own sidebar entry, where the mark would repeat.
-    var showsMission = true
-    var isCoordinator = false
     /// Shown before the repository metadata in lists that mix projects.
     var projectName: String?
     @EnvironmentObject private var model: AppModel
     @State private var hovered = false
+    @State private var repositoryHelp: String?
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -582,27 +562,14 @@ struct SessionRow: View {
         let needsAttention = unread || model.isAwaitingReply(session)
         let signal = session.signal(unread: needsAttention)
         let reason = session.needsYouReason(unread: needsAttention)?.label(at: session.outcomeAt ?? session.updatedAt, now: now)
+        let missionTitle = session.missionId.flatMap { model.client.mission($0)?.title }
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
                     .font(.system(size: 13, weight: unread ? .semibold : .regular))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                if isCoordinator || session.isActiveMissionCoordinator {
-                    MissionCoordinatorIndicator()
-                }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if showsMission, let missionId = session.missionId {
-                        Button { model.openMission(missionId) } label: {
-                            Image(systemName: MissionSymbol.name)
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Theme.foreground)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help("Open mission: \(model.client.mission(missionId)?.title ?? "")")
-                        .accessibilityLabel("Open mission")
-                    }
                     if session.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.system(size: 10, weight: .semibold))
@@ -630,13 +597,21 @@ struct SessionRow: View {
                         .layoutPriority(1)
                     Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
                 }
-                SessionRepositoryMetadata(session: session)
-                if let reason {
-                    if session.isAsk || session.branch != nil || !session.linkedPullRequests.isEmpty {
+                if session.isActiveMissionCoordinator {
+                    SessionCoordinatorLine(session: session, unread: needsAttention)
+                } else {
+                    if let missionId = session.missionId, let missionTitle {
+                        SessionMissionLabel(title: missionTitle) { model.openMission(missionId) }
                         Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
                     }
-                    Text(reason).font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
-                        .lineLimit(1).layoutPriority(1)
+                    SessionRepositoryMetadata(session: session)
+                    if let reason {
+                        if session.isAsk || session.branch != nil || !session.linkedPullRequests.isEmpty {
+                            Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                        }
+                        Text(reason).font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                            .lineLimit(1).layoutPriority(1)
+                    }
                 }
             }
             // Stop short of the corner's densest cells.
@@ -646,10 +621,15 @@ struct SessionRow: View {
         .padding(.vertical, 2)
         .ditherCorner(signal)
         .onHover { hovered = $0 }
+        .onPreferenceChange(SessionRepositoryHelpKey.self) { repositoryHelp = $0 }
         .animation(Theme.Motion.quick, value: hovered)
-        .help([reason ?? signal?.label, session.cwd.abbreviatingHome].compactMap { $0 }.joined(separator: " · "))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel([session.title, projectName, reason ?? signal?.label].compactMap { $0 }.joined(separator: ". "))
+        .help([[reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
+                .compactMap { $0 }.joined(separator: " · "), repositoryHelp]
+            .compactMap { $0 }.joined(separator: "\n"))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel([session.title, projectName, missionTitle,
+                             session.isActiveMissionCoordinator ? "Coordinator" : nil, reason ?? signal?.label]
+            .compactMap { $0 }.joined(separator: ". "))
         .contextMenu {
             SessionRenameAction(session: session)
             Button {

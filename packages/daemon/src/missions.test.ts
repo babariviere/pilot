@@ -385,11 +385,13 @@ test("summary attention counts track task and comment changes without loading de
 			throw new Error("unexpected detail read");
 		};
 		assert.equal(counts(), 0);
+		assert.deepEqual([missions.require(id).tasksDone, missions.require(id).tasksTotal], [0, 2]);
 		assert.equal(missions.require(id).needsYouReason, undefined);
 		const task = missions.resolveTask(id, "1");
 		missions.updateTask(id, task.id, { status: "blocked" });
 		assert.equal(counts(), 1);
 		assert.equal(missions.require(id).needsYouReason, "Blocked: A");
+		assert.deepEqual([missions.require(id).tasksDone, missions.require(id).tasksTotal], [0, 2]);
 		missions.addComment(id, { text: "User's own comment" });
 		missions.addComment(id, { text: "Addressed", targetSessionId: "agent" }, { sessionId: "agent" });
 		assert.equal(counts(), 1);
@@ -408,6 +410,12 @@ test("summary attention counts track task and comment changes without loading de
 		for (const status of ["todo", "in_progress", "in_review", "done", "dropped"] as const) {
 			missions.updateTask(id, task.id, { status });
 			assert.equal(counts(), 0);
+			const summary = missions.require(id);
+			assert.deepEqual(
+				[summary.tasksDone, summary.tasksTotal],
+				[status === "done" ? 1 : 0, status === "dropped" ? 1 : 2],
+				`progress with task ${status}`,
+			);
 		}
 		missions.updateTask(id, task.id, { status: "blocked" });
 		missions.removeTask(id, task.id);
