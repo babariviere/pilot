@@ -411,8 +411,6 @@ export class MissionStore {
 		});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
-		if (!this.all("PRAGMA table_info(notice_activity)").some((row) => row.name === "job_deadline"))
-			this.db.exec("ALTER TABLE notice_activity ADD COLUMN job_deadline INTEGER");
 		// Upgrade already queued events without losing their stable event IDs.
 		this.db.exec(`INSERT OR IGNORE INTO pending_notice_summaries (event_id, group_key, text, state)
 			SELECT p.event_id, COALESCE('task:' || e.task_id, 'task:' || t.id,
@@ -759,16 +757,15 @@ export class MissionStore {
 
 	/** Durable high-water mark prevents ready snapshots/restarts from announcing a completion twice. */
 	recordMemberCompletion(session: SessionSummary, recovering = false): void {
-		if (!session.outcome || session.outcomeAt === undefined) return;
+		if (session.working || session.runningJobs?.length || !session.outcome || session.outcomeAt === undefined) return;
 		const membership = this.membership(session.id);
 		if (!membership || membership.coordinator) return;
 		const id = membership.missionId;
 		const previous = this.one("SELECT * FROM member_completions WHERE session_id = ?", session.id);
 		if (previous && num(previous.outcome_at!) > session.outcomeAt) return;
-		const jobs = session.runningJobs ?? [];
-		const waiting = jobs.length > 0;
+		// Older stores may contain a waiting snapshot at the same outcome version.
 		const previousWaiting = previous?.signature && JSON.parse(str(previous.signature))[0] === "waiting";
-		if (previous && num(previous.outcome_at!) === session.outcomeAt && !waiting && !previousWaiting) return;
+		if (previous && num(previous.outcome_at!) === session.outcomeAt && !previousWaiting) return;
 		const ownedTasks = this.all(
 			"SELECT * FROM tasks WHERE mission_id = ? AND session_id = ? ORDER BY sort, number",
 			id,
@@ -802,11 +799,11 @@ export class MissionStore {
 		);
 		// Poll timestamps, titles and stack positions do not change the state being announced.
 		const signature = JSON.stringify([
-			waiting ? "waiting" : session.outcome,
+			session.outcome,
 			session.outcomeReason ?? null,
 			tasks.map((task) => task.id).sort(),
-			(waiting ? [] : prs).map((pr) => [pr.url, pr.state]).sort(),
-			jobs.map((job) => [job.id, job.name, job.startedAt]).sort(),
+			prs.map((pr) => [pr.url, pr.state]).sort(),
+			[], // Retain the signature shape used by older completion records.
 		]);
 		const label = tasks.length ? tasks.map((task) => `#${task.number} ${task.title}`).join(", ") : session.title;
 		const legacyNote = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${prs.length ? `, ${prs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
@@ -827,14 +824,13 @@ export class MissionStore {
 				session.outcomeAt!,
 				signature,
 			);
-			if (!waiting) this.run("DELETE FROM member_runs WHERE session_id = ?", session.id);
+			this.run("DELETE FROM member_runs WHERE session_id = ?", session.id);
 			if (ownedTasks.length && !tasks.length) return;
 			// Startup is recovery, not a replay of all historical outcomes of newly attached chats.
 			if (recovering && !previous && session.outcomeAt! < joinedAt) return;
 			// Distinct failures remain useful (and can be counted), but unchanged successful/stopped
 			// snapshots must not produce another notice just because their outcome version advanced.
-			if ((previous?.signature === signature || unchangedLegacy) && (waiting || session.outcome !== "failed"))
-				return;
+			if ((previous?.signature === signature || unchangedLegacy) && session.outcome !== "failed") return;
 			// Terminal PRs have their own durable PR-keyed events, never repeat them in outcomes.
 			const previousPrs = new Map<string, string>(previous?.signature ? JSON.parse(str(previous.signature))[3] : []);
 			const relevantPrs = prs.filter(
@@ -850,9 +846,7 @@ export class MissionStore {
 				!relevantPrs.length
 			)
 				return;
-			const note = waiting
-				? `${label}: waiting on background job`
-				: `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+			const note = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
 			const suffix = note.slice(label.length);
 			this.event(
 				id,
@@ -865,9 +859,9 @@ export class MissionStore {
 						? tasks.map((task) => ({
 								key: `task:${task.id}`,
 								text: `#${task.number} ${task.title}${suffix}`,
-								state: waiting ? "waiting" : session.outcome,
+								state: session.outcome,
 							}))
-						: [{ key: `chat:${session.id}`, text: note, state: waiting ? "waiting" : session.outcome }],
+						: [{ key: `chat:${session.id}`, text: note, state: session.outcome }],
 				},
 			);
 		});
@@ -875,17 +869,14 @@ export class MissionStore {
 	}
 
 	/** Persist only activity transitions, not streaming summary updates. */
-	setNoticeActivity(id: string, busy: boolean, now: number, jobDeadline?: number): void {
+	setNoticeActivity(id: string, busy: boolean, now: number): void {
 		this.run(
-			`INSERT INTO notice_activity (mission_id, busy, idle_at, job_deadline) VALUES (?, ?, ?, ?)
-			ON CONFLICT(mission_id) DO UPDATE SET busy = excluded.busy,
-				idle_at = CASE WHEN notice_activity.busy <> excluded.busy THEN ? ELSE notice_activity.idle_at END,
-				job_deadline = excluded.job_deadline
-			WHERE notice_activity.busy <> excluded.busy OR notice_activity.job_deadline IS NOT excluded.job_deadline`,
+			`INSERT INTO notice_activity (mission_id, busy, idle_at) VALUES (?, ?, ?)
+			ON CONFLICT(mission_id) DO UPDATE SET busy = excluded.busy, idle_at = ?
+			WHERE notice_activity.busy <> excluded.busy`,
 			id,
 			busy ? 1 : 0,
 			busy ? now : 0,
-			jobDeadline ?? null,
 			now,
 		);
 	}
@@ -900,7 +891,7 @@ export class MissionStore {
 				SELECT mission_id, delivered_at, ROW_NUMBER() OVER (PARTITION BY mission_id ORDER BY delivered_at DESC) AS rank
 				FROM notices WHERE delivered_at > ?
 			)
-			SELECT p.*, n.request_id, a.busy, a.idle_at, a.job_deadline, r.delivered_at AS capped_at FROM pending p
+			SELECT p.*, n.request_id, a.busy, a.idle_at, r.delivered_at AS capped_at FROM pending p
 			LEFT JOIN notice_activity a ON a.mission_id = p.mission_id
 			LEFT JOIN notices n ON n.mission_id = p.mission_id AND n.delivered_at IS NULL
 			LEFT JOIN recent r ON r.mission_id = p.mission_id AND r.rank = ?`,
@@ -915,7 +906,6 @@ export class MissionStore {
 			const due = Math.min(
 				row.request_id && row.busy !== 1 ? Math.max(now, num(row.idle_at ?? 0) + NOTICE_DEBOUNCE_MS) : settled,
 				num(row.first_at!) + NOTICE_MAX_DELAY_MS,
-				row.job_deadline === null ? Infinity : num(row.job_deadline!),
 			);
 			return {
 				missionId,
@@ -930,12 +920,7 @@ export class MissionStore {
 	}
 
 	/** Freeze both the cutoff and payload before IPC, so an uncertain acknowledgement has a stable retry. */
-	prepareNotice(
-		id: string,
-		sessionId: string,
-		now: number,
-		runningJobNotes: string[] = [],
-	): MissionNotice | undefined {
+	prepareNotice(id: string, sessionId: string, now: number): MissionNotice | undefined {
 		const mission = this.require(id);
 		if (mission.status !== "active" || mission.coordinatorSessionId !== sessionId) return undefined;
 		return this.transaction(() => {
@@ -991,7 +976,6 @@ export class MissionStore {
 				...(num(events[0]!.total!) > events.length
 					? [`- ${num(events[0]!.total!) - events.length} additional groups; read the activity for details.`]
 					: []),
-				...runningJobNotes.slice(0, 100).map((note) => `- ${note.replace(/\s+/g, " ").slice(0, 500)}`),
 				"Read the mission with get for details.",
 				"Update tasks and the brief as needed, summarise for the user and propose next steps. Do not start chats unless the user asks.",
 			].join("\n");

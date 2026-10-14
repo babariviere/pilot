@@ -3160,6 +3160,35 @@ test("status and get report idle chats with live jobs as waiting, not done", asy
 	assert.equal(f.sessions.get(member.id)?.working, false);
 });
 
+test("a coordinator's idle kernel accepts notices while its own jobs keep the chat working", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	await until(() => !f.sessions["starting"].has(lead.id));
+	f.service.notices.start();
+	const worker = f.workers.get(lead.id)!;
+	worker.state = "idle";
+	worker.onPacket({
+		type: "jobs.changed",
+		jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
+	});
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	assert.equal(f.sessions.get(lead.id)?.working, true);
+	assert.equal(f.sessions.canSendNotice(lead.id), true);
+	f.store.addComment(mission.id, { text: "Update while tests run" });
+	await f.service.notices.flush(Date.now() + 30_000);
+	const notices = worker.requests.filter(
+		(command) => command.type === "input" && command.requestId.startsWith("mission-notice:"),
+	);
+	assert.equal(notices.length, 1);
+	assert.deepEqual(f.store.noticeDeadlines(Date.now()), []);
+});
+
 test("coordinator status includes archived and parked members, outcomes and tasks without waking workers", async (t) => {
 	const f = await fixture(t);
 	const coordinator = await f.spawn();
