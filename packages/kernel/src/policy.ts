@@ -138,7 +138,12 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 /** Conservative backup to the OS read-only view, including nested shell/codemode commands. */
 export function coordinatorMutation(arguments_: unknown): boolean {
 	const text = strings(arguments_).join("\n");
-	for (const command of text.replace(/["'`]/g, "").split(/\n|;|&&|\|\|/)) {
+	for (let command of text.replace(/["'`]/g, "").split(/\n|;|&&|\|\|/)) {
+		// Common metadata reads are not branch/config mutations (also inside a nested tool call).
+		command = command.replace(
+			/\bgit(?:\s+-C\s+\S+)?\s+(?:branch\s+--show-current|config\s+(?:--get(?:-all|-regexp)?\s+[^\s,)}]+|--list|-l))[,)}\s]*$/,
+			"",
+		);
 		if (
 			/\b(?:jj|git)\b/.test(command) &&
 			/\b(?:commit|ci|describe|desc|new|bookmark|bookmarks|branch|branches|push|fetch|checkout|switch|reset|rebase|merge|squash|restore|undo|abandon|tag|update-ref|config|clean|add|rm|apply|cherry-pick)\b/.test(
@@ -214,7 +219,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false, c
 
 	if (coordinator)
 		lines.push(
-			`- You read the daemon-managed, shared read-only view of current main${context.coordinatorView ? ` at ${JSON.stringify(context.coordinatorView.path)}. Your persistent scratch folder (TMPDIR) is ${JSON.stringify(context.coordinatorView.scratch)}` : ""}. It updates after project fetches, without a jj working copy or a task bookmark.`,
+			`- You read the daemon-managed, shared read-only view of current main${context.coordinatorView ? ` at ${JSON.stringify(context.coordinatorView.path)}. Your working directory and TMPDIR are persistent scratch at ${JSON.stringify(context.coordinatorView.scratch)}; read source via absolute paths or git -C` : ""}. It updates after project fetches, without a jj working copy or a task bookmark.`,
 			"- Repository writes fail. Read-only git, gh and rg are available; installs, builds and tests are not. Use TMPDIR for temporary files and delegate code changes and verification to member chats. Do not commit, push, create branches or bookmarks, or open pull requests.",
 		);
 	if (context.ask) {

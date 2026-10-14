@@ -276,6 +276,9 @@ test("coordinator command policy blocks writes with global flags and nested call
 		"jj git push --bookmark feat/test",
 		"git -C /source commit -m change",
 		"git push origin HEAD",
+		"git config remote.origin.pushurl other",
+		"git branch feat/test",
+		"git branch --show-current; git push origin HEAD",
 		"git 'commit' -m change",
 		"gh -R octo/repo pr " + "create --fill",
 		"pnpm install",
@@ -290,8 +293,23 @@ test("coordinator command policy blocks writes with global flags and nested call
 		);
 		assert.ok((await check("jobs", { action: "start", command }))?.block, command);
 	}
-	for (const command of ["git status", "git log -5", "git show HEAD:file.ts", "gh pr view 42", "rg thing packages"]) {
+	for (const command of [
+		"git status",
+		"git log -5",
+		"git show HEAD:file.ts",
+		"git branch --show-current",
+		"git -C /source branch --show-current",
+		"git config --get remote.origin.url",
+		"git config --list",
+		"gh pr view 42",
+		"rg thing packages",
+	]) {
 		assert.equal(await check("bash", { command }), undefined, command);
+		assert.equal(
+			await check("codemode", { code: `await tools.bash({ command: ${JSON.stringify(command)} });` }),
+			undefined,
+			command,
+		);
 	}
 	assert.ok((await check("write", { path: "/source/new.ts", content: "code" }))?.block);
 	assert.equal(await check("artifact", { action: "create", source: "content" }), undefined);

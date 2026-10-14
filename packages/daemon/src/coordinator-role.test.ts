@@ -22,6 +22,8 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	const projects = new ProjectStore(home);
 	const project = await projects.create({ path: source });
 	let specs: KernelSpec[] = [];
+	let busy = false;
+	const activities: string[] = [];
 	const manager = new SessionManager(
 		home,
 		projects,
@@ -32,11 +34,14 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 				return {
 					ready: Promise.resolve(),
 					state: "idle",
-					busy: false,
+					get busy() {
+						return busy;
+					},
 					send() {},
 					hasChildren: async () => false,
 					close: async () => {},
 					request: async (command) => {
+						if (command.type === "activity") activities.push(command.text);
 						if (command.type === "input") onPacket({ type: "accepted", requestId: command.requestId });
 					},
 				};
@@ -88,7 +93,9 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 		pullRequest: { number: 42, url, title: "Old", state: "open", checkedAt: 1 },
 	};
 	await manager["save"](meta);
+	assert.throws(() => manager["ensureWorker"](id), /workspace role is still changing/);
 	manager.missionChanged(id);
+	await manager.commands(id);
 	await manager.refreshCoordinatorWorkspace(id);
 	const sibling = randomUUID();
 	const siblingWorkspace = await manager["sharedWorkspaces"].create(
@@ -114,7 +121,8 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	assert.deepEqual(manager.ownedPullRequests(id), []);
 	assert.equal(manager.pullRequestOwner(url), undefined);
 	assert.ok(meta.unboundPullRequests?.includes(url));
-	assert.ok(meta.prActivities?.some((item) => /Unbound 1 pull request/.test(item.text)));
+	await manager["starting"].get(id);
+	assert.ok(activities.some((text) => /Unbound 1 pull request/.test(text)));
 	assert.throws(() => manager.changeBase(id), /read-only/);
 	await assert.rejects(manager.bindPullRequest(id, url), /coordinator cannot own/);
 	await manager["applyPullRequest"](meta, {
@@ -129,6 +137,7 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	await manager.send(id, "read source");
 	await manager.send(id, "read again");
 	assert.equal(specs.length, 1);
+	assert.equal(specs[0]!.cwd, scratch);
 	assert.equal(specs[0]!.pilot?.coordinatorView?.scratch, scratch);
 	assert.equal(await readFile(join(scratch, "notes.txt"), "utf8"), "keep across turns");
 	await assert.rejects(writeFile(join(path, "file.txt"), "forbidden"), /EACCES|EPERM/);
@@ -152,15 +161,23 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 	await manager.restore(id);
 	await manager.refreshCoordinatorWorkspace(id);
 	assert.ok(existsSync(scratch));
+	specs = [];
+	busy = true;
 	coordinator = false;
 	manager.missionChanged(id);
 	await manager.refreshCoordinatorWorkspace(id);
+	assert.equal(meta.cwd, path, "demotion waits for an admitted turn or job");
+	await manager.send(id, "continue after demotion");
+	assert.equal(specs.length, 0, "new input cannot start a worker in the wrong role");
+	busy = false;
+	manager.missionChanged(id);
+	await manager.refreshCoordinatorWorkspace(id);
+	await manager["starting"].get(id);
 	assert.equal(meta.cwd, workspace.path);
 	assert.equal(meta.coordinatorView, undefined);
 	assert.equal(manager.get(id)!.branch, "fix/old");
 	assert.doesNotThrow(() => manager.changeBase(id));
 	await writeFile(join(meta.cwd, "new.txt"), "normal writes return");
-	specs = [];
 	await manager.send(id, "continue coding");
 	assert.equal(specs[0]!.pilot?.coordinatorView, undefined);
 	assert.ok(
@@ -172,6 +189,20 @@ test("promotion unbinds PRs, shares main, retains scratch, and demotion restores
 			checkedAt: 3,
 		}),
 	);
+	busy = true;
+	coordinator = true;
+	manager.missionChanged(id);
+	await manager.refreshCoordinatorWorkspace(id);
+	assert.equal(meta.coordinatorView, undefined, "promotion also waits for a safe boundary");
+	await manager.send(id, "read after promotion");
+	assert.equal(specs.length, 1);
+	busy = false;
+	manager.missionChanged(id);
+	await manager.refreshCoordinatorWorkspace(id);
+	await manager["starting"].get(id);
+	assert.equal(meta.cwd, path);
+	assert.equal(specs.length, 2);
+	assert.equal(specs[1]!.cwd, scratch);
 	await manager.refreshCoordinatorWorkspace(sibling);
 	await manager.archive(id);
 	await manager.archive(sibling);

@@ -170,8 +170,8 @@ Moves and skip reasons are passive chat activity, without a model turn. The coor
 
 Coordinating chats read one shared, read-only main checkout per project, updated by that same watcher.
 They have no task bookmark, PR ownership or Changes pane, and delegate code changes and verification
-to member chats. Their kernels and subprocesses cannot write to the source view. Temporary files go
-in a per-chat scratch folder (TMPDIR), retained across turns and removed on archive. Promoting a chat
+to member chats. Their kernels and subprocesses cannot write to the source view. Tools start in a
+per-chat scratch folder (also TMPDIR), retained across turns and removed on archive. Promoting a chat
 unbinds its PRs and explains that they can be bound to a member chat. Demotion restores its isolated
 workspace, but does not rebind those PRs automatically.
 

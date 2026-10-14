@@ -232,7 +232,7 @@ test("pins prevent inactivity and merged PR automatic archival across restarts u
 });
 
 for (const release of ["done", "archived", "role", "leave"] as const) {
-	test(`active coordinator keeps merged PR chats active until ${release}`, async () => {
+	test(`promotion removes old merge ownership across ${release}`, async () => {
 		const { sessions, projects, first, ids, cleanup } = await fixture();
 		const store = new MissionStore(":memory:");
 		new MissionService(store, sessions, projects);
@@ -248,10 +248,12 @@ for (const release of ["done", "archived", "role", "leave"] as const) {
 			meta.pullRequestMergedAt = meta.pullRequest!.mergedAt;
 			delete meta.pullRequestError;
 			await sessions["save"](meta);
+			await sessions["coordinatorUnbindings"].get(id);
 			await sessions["archiveInactiveSessions"]();
 			assert.equal(sessions.get(id)?.activeMissionCoordinator, true);
 			assert.equal(sessions.get(id)?.archivedAt, undefined);
-			assert.equal(meta.autoArchivedPullRequest, undefined, "exemption does not consume the merge marker");
+			assert.equal(meta.pullRequest, undefined, "promotion removes the old owner association");
+			assert.equal(meta.autoArchivedPullRequest, undefined);
 
 			if (release === "role") {
 				const next = ids[2]!;
@@ -263,8 +265,8 @@ for (const release of ["done", "archived", "role", "leave"] as const) {
 			else store.update(mission.id, { status: release });
 			await sessions["archiveTransitions"].get(id)?.promise;
 			assert.equal(sessions.get(id)?.activeMissionCoordinator, undefined);
-			assert.ok(sessions.get(id)?.archivedAt, "role/status changes re-evaluate the persisted deadline");
-			assert.equal(meta.autoArchivedPullRequest, meta.pullRequest!.url);
+			assert.equal(sessions.get(id)?.archivedAt, undefined, "the unbound PR cannot archive its former owner");
+			assert.equal(meta.autoArchivedPullRequest, undefined);
 		} finally {
 			await cleanup();
 			store.close();

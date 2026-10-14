@@ -253,8 +253,6 @@ interface SessionMeta extends OutcomeMeta {
 	workspaceMainDeferred?: string;
 	workspaceBehind?: string;
 	coordinatorView?: { originalCwd: string; path: string; scratch: string; head: string; repository: string };
-	coordinatorBookmarkDetached?: boolean;
-	coordinatorDetachedBookmark?: string;
 	/** Persisted before removal. Never discard this record until restoration has succeeded. */
 	workspaceRecovery?: WorkspaceRecovery & { phase: "removing" | "reclaimed" | "restoring" };
 	workspaceReclaimedAt?: number;
@@ -812,6 +810,7 @@ export class SessionManager {
 	private readonly sharedWorkspaces: SharedWorkspaceStore;
 	private readonly mainViews: MainViewStore;
 	private readonly roleTransitions = new Map<string, Promise<void>>();
+	private readonly coordinatorUnbindings = new Map<string, Promise<void>>();
 	private readonly workspaceRefreshes = new Map<string, Promise<void>>();
 	private readonly mainRefreshDue = new Set<string>();
 	private readonly mainRefreshes = new Map<string, Promise<void>>();
@@ -971,10 +970,7 @@ export class SessionManager {
 		await this.recoverPullRequestBinding();
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
 		for (const meta of this.metas.values())
-			if (
-				this.missions &&
-				(this.isMissionCoordinator(meta.id) || meta.coordinatorView || meta.coordinatorBookmarkDetached)
-			)
+			if (this.missions && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
 				this.missionChanged(meta.id);
 		for (const meta of this.metas.values()) if (meta.titlePending) this.generateTitle(meta);
 		for (const meta of this.metas.values())
@@ -1052,6 +1048,10 @@ export class SessionManager {
 	/** Wait for an inactivity close, so the next worker can take the session's storage lease. */
 	private async unparked(id: string): Promise<void> {
 		for (let closing = this.parking.get(id); closing; closing = this.parking.get(id)) await closing;
+		const meta = this.metas.get(id);
+		// Every worker-opening path, including command listing/compaction, must enter the correct sandbox.
+		if (meta && !this.workers.has(id) && (this.isMissionCoordinator(id) || meta.coordinatorView))
+			await this.prepareCoordinatorRole(id);
 	}
 
 	/** Doubling per consecutive crash, capped; a quiet period starts over. */
@@ -1150,6 +1150,7 @@ export class SessionManager {
 				meta.workspacePrunedAt === undefined &&
 				!hasActivePullRequest(meta);
 			if (
+				meta.coordinatorView ||
 				(!legacy && !meta.workspace?.shared) ||
 				meta.archivedAt === undefined ||
 				meta.archivedAt > staleBefore ||
@@ -1425,8 +1426,7 @@ export class SessionManager {
 	setMissionBridge(bridge: SessionMissionBridge): void {
 		this.missions = bridge;
 		for (const meta of this.metas.values())
-			if (this.isMissionCoordinator(meta.id) || meta.coordinatorView || meta.coordinatorBookmarkDetached)
-				this.missionChanged(meta.id);
+			if (this.isMissionCoordinator(meta.id) || meta.coordinatorView) this.missionChanged(meta.id);
 		this.refreshMissionPullRequests();
 		this.refreshMainWorkspaces();
 	}
@@ -1634,36 +1634,63 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id)): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
-		if (context?.coordinator === "self") {
-			// Revoke ownership immediately; late discovery/health results also recheck the role.
-			const urls = new Set([
-				...(meta.boundPullRequests ?? []),
-				...(meta.agentPullRequests ?? []),
-				...sessionPullRequests(meta).map((pr) => pr.url),
-			]);
-			for (const url of urls)
-				void this.unbindPullRequest(id, url).catch((error) =>
-					console.warn(`pilotd: could not unbind promoted chat PR: ${error}`),
-				);
-			if (urls.size) {
-				meta.prActivities ??= [];
-				meta.prActivities.push({
-					type: "activity",
-					requestId: `role-unbind:${randomUUID()}`,
-					text: `Unbound ${urls.size} pull request${urls.size === 1 ? "" : "s"} because this chat is now the coordinator. Bind them to a member chat to continue tracking them.`,
-				});
-				void this.save(meta);
-			}
-		}
-		void this.prepareCoordinatorRole(id).catch((error) =>
-			console.warn(`pilotd: role workspace transition failed: ${error}`),
-		);
+		if (context?.coordinator === "self")
+			void this.unbindCoordinatorPullRequests(meta)
+				.then(() => this.resumeRoleWork(id))
+				.catch((error) => console.warn(`pilotd: could not unbind promoted chat PRs: ${error}`));
+		// New chats join before admission commits. Their explicit startup owns the first transition.
+		if (!meta.initializing)
+			void this.prepareCoordinatorRole(id)
+				.then(() => this.resumeRoleWork(id))
+				.catch((error) => console.warn(`pilotd: role workspace transition failed: ${error}`));
 		this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
 		this.emit(meta);
 		// A role/status change can release a persisted merge deadline without another GitHub lookup.
 		void this.archiveMergedPullRequest(meta).catch((error: unknown) =>
 			console.warn(`pilotd: could not archive merged PR session ${id}: ${error}`),
 		);
+	}
+
+	private unbindCoordinatorPullRequests(meta: SessionMeta): Promise<void> {
+		const existing = this.coordinatorUnbindings.get(meta.id);
+		if (existing) return existing;
+		const urls = [
+			...new Set([
+				...(meta.boundPullRequests ?? []),
+				...(meta.agentPullRequests ?? []),
+				...sessionPullRequests(meta).map((pr) => pr.url),
+			]),
+		].sort();
+		if (!urls.length) return Promise.resolve();
+		const task = Promise.resolve()
+			.then(async () => {
+				for (const url of urls) await this.unbindPullRequest(meta.id, url);
+				meta.prActivities ??= [];
+				meta.prActivities.push({
+					type: "activity",
+					requestId: `role-unbind:${randomUUID()}`,
+					text: `Unbound ${urls.length} pull request${urls.length === 1 ? "" : "s"} because this chat is now the coordinator. Bind them to a member chat to continue tracking them.`,
+				});
+				await this.save(meta);
+			})
+			.finally(() => this.coordinatorUnbindings.delete(meta.id));
+		this.coordinatorUnbindings.set(meta.id, task);
+		return task;
+	}
+
+	private resumeRoleWork(id: string): void {
+		const meta = this.metas.get(id);
+		if (!meta || meta.initializing) return;
+		if (
+			this.isMissionCoordinator(id) === !!meta.coordinatorView &&
+			!this.starting.has(id) &&
+			!this.closing &&
+			!this.sleepPause &&
+			!this.updateGate.paused &&
+			meta.archivedAt === undefined &&
+			(meta.pending?.length || meta.prActivities?.length)
+		)
+			void this.start(id);
 	}
 
 	private isMissionCoordinator(id: string): boolean {
@@ -1683,6 +1710,7 @@ export class SessionManager {
 		if (
 			meta.preparing ||
 			meta.archivedAt !== undefined ||
+			this.archiveTransitions.has(id) ||
 			this.closing ||
 			this.sleepPause ||
 			this.updateGate.paused ||
@@ -1693,7 +1721,13 @@ export class SessionManager {
 		)
 			return;
 		if (promote && meta.coordinatorView && existsSync(meta.coordinatorView.path)) {
-			await mkdir(meta.coordinatorView.scratch, { recursive: true, mode: 0o700 });
+			const release = this.holdWorkspace(id);
+			try {
+				await this.unbindCoordinatorPullRequests(meta);
+				await mkdir(meta.coordinatorView.scratch, { recursive: true, mode: 0o700 });
+			} finally {
+				release();
+			}
 			return;
 		}
 		if (!promote && !meta.coordinatorView) return;
@@ -1701,7 +1735,8 @@ export class SessionManager {
 		const release = this.holdWorkspace(id);
 		const task = Promise.resolve()
 			.then(async () => {
-				await this.bindingQueue.catch(() => undefined);
+				if (promote) await this.unbindCoordinatorPullRequests(meta);
+				else await this.bindingQueue.catch(() => undefined);
 				let next: SessionMeta["coordinatorView"];
 				if (promote) {
 					if (!meta.projectId) throw new Conflict("A coordinator requires a project repository");
@@ -1742,10 +1777,6 @@ export class SessionManager {
 						meta.cwd = destination;
 					}
 					delete meta.coordinatorView;
-					if (meta.workspace && meta.coordinatorDetachedBookmark)
-						meta.workspace.branch = meta.coordinatorDetachedBookmark;
-					delete meta.coordinatorBookmarkDetached;
-					delete meta.coordinatorDetachedBookmark;
 				}
 				delete meta.workspaceMainDue;
 				delete meta.workspaceRefreshDue;
@@ -3806,6 +3837,7 @@ export class SessionManager {
 		await Promise.allSettled([...this.titleTasks]);
 		await Promise.allSettled([...this.preparations]);
 		await this.dissociation;
+		await Promise.allSettled(this.coordinatorUnbindings.values());
 		await Promise.allSettled(this.roleTransitions.values());
 		await Promise.all([...this.workers.values()].map((worker) => worker.close()));
 		await Promise.allSettled([...this.parking.values()]);
@@ -3906,7 +3938,7 @@ export class SessionManager {
 					}
 				}
 				await this.unparked(id);
-				await this.prepareCoordinatorRole(id);
+				if (this.isMissionCoordinator(id) || meta.coordinatorView) await this.prepareCoordinatorRole(id);
 				// Do not admit another turn into a workspace whose role switch is waiting on live work.
 				if (this.isMissionCoordinator(id) !== !!meta.coordinatorView && meta.pending?.[0]?.type !== "abort") return;
 				if (this.closing || this.sleepPause) return;
@@ -4045,6 +4077,8 @@ export class SessionManager {
 		const meta = this.require(id);
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
 		if (meta.workspaceRecovery) throw new Conflict("Restore the archived session before starting its worker");
+		if (this.isMissionCoordinator(id) !== !!meta.coordinatorView)
+			throw new Conflict("This chat's workspace role is still changing");
 		this.validateMode(meta, true);
 		this.coldSnapshots.delete(id);
 		this.coldLoading.delete(id);
@@ -4058,7 +4092,7 @@ export class SessionManager {
 				sessionId: id,
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
-				cwd: meta.cwd,
+				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
 				model: meta.model,
 				thinking: meta.thinking,
 				agentDir: this.agentDir,
@@ -4414,16 +4448,7 @@ export class SessionManager {
 				);
 			if (!packet.working && (this.isMissionCoordinator(meta.id) || meta.coordinatorView))
 				void this.prepareCoordinatorRole(meta.id)
-					.then(() => {
-						if (
-							this.isMissionCoordinator(meta.id) === !!meta.coordinatorView &&
-							!this.starting.has(meta.id) &&
-							!this.closing &&
-							!this.sleepPause &&
-							(meta.pending?.length || meta.prActivities?.length)
-						)
-							void this.start(meta.id);
-					})
+					.then(() => this.resumeRoleWork(meta.id))
 					.catch((error) => console.warn(`pilotd: role workspace transition failed: ${error}`));
 			if (!packet.working && meta.workspaceRefreshDue)
 				void this.refreshCoordinatorWorkspace(meta.id).catch((error: unknown) =>
@@ -4569,9 +4594,6 @@ export class SessionManager {
 			pullRequest: result.pullRequest && attached(result.pullRequest) ? result.pullRequest : undefined,
 			others: result.others?.filter(attached),
 		};
-		// Retain old PR history, not a task bookmark association.
-		if (meta.coordinatorDetachedBookmark && result.branch === meta.coordinatorDetachedBookmark)
-			result = { ...result, branch: undefined };
 		// Only discovery changes the branch and PRs, and it never overlaps itself. Anything else is a stale lookup.
 		const healthFresh = health !== undefined && health.context.recorded === followUpState(meta);
 		const previousBranch = meta.workspace?.branch;

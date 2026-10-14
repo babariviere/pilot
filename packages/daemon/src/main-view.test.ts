@@ -53,12 +53,12 @@ test("one non-jj main view shares fetched heads, permits reads and rejects write
 		const entry = join(home, "sandbox-child.cjs");
 		await writeFile(
 			entry,
-			`const fs = require('node:fs'); const cp = require('node:child_process'); let denied = false; try { cp.execFileSync('/bin/chmod', ['u+w', ${JSON.stringify(join(path, "file.txt"))}], {stdio:'pipe'}); } catch { denied = true; } fs.writeFileSync(require('node:path').join(process.env.TMPDIR, 'scratch.txt'), 'persistent'); process.send({denied, tmp: process.env.TMPDIR}); process.disconnect();`,
+			`const fs = require('node:fs'); const cp = require('node:child_process'); let denied = false; try { cp.execFileSync('/bin/chmod', ['u+w', ${JSON.stringify(join(path, "file.txt"))}], {stdio:'pipe'}); } catch { denied = true; } fs.writeFileSync(require('node:path').join(process.env.TMPDIR, 'scratch.txt'), 'persistent'); process.send({denied, tmp: process.env.TMPDIR, cwd: process.cwd()}); process.disconnect();`,
 		);
 		const child = forkMainViewWorker(entry, { scratch: home, protectedPaths: [path] });
 		const message = once(child, "message");
 		const exit = once(child, "exit");
-		assert.deepEqual((await message)[0], { denied: true, tmp: home });
+		assert.deepEqual((await message)[0], { denied: true, tmp: home, cwd: home });
 		assert.equal((await exit)[0], 0);
 		assert.equal(await readFile(join(home, "scratch.txt"), "utf8"), "persistent");
 	}
