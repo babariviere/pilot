@@ -73,10 +73,17 @@ enum SidebarScopeCounts {
     static func needsYou(_ count: Int) -> String { "\(count) \(count == 1 ? "needs" : "need") you" }
 
     /// The Inbox badge's tooltip and VoiceOver label: "5 need you: 2 questions, 1 failed, 2 not reviewed".
-    /// The reasons come from the chats in the sidebar, so they are only listed when they account for the whole
-    /// count; otherwise the total stands alone. nil when nothing needs the user.
-    static func needsYouReasons(total: Int, reasons: NeedsYouReasons) -> String? {
+    /// Prefer the daemon's uncapped reasons (including scheduled failures and task/questions). Older daemons
+    /// fall back to local chat reasons only when they account for the whole count. nil when nothing needs the user.
+    static func needsYouReasons(total: Int, reasons: NeedsYouReasons,
+                               counts: [String: ProjectDashboardCount] = [:]) -> String? {
         guard total > 0 else { return nil }
+        if counts.values.reduce(0, { $0 + $1.needsYou }) == total,
+           counts.values.allSatisfy({ count in
+               count.needsYou == 0 || count.needsYouReasons?.values.reduce(0, +) == count.needsYou
+           }) {
+            return InboxText.needsYouSummary(Array(counts.values))
+        }
         let parts = [
             reasons.questions > 0 ? "\(reasons.questions) \(reasons.questions == 1 ? "question" : "questions")" : nil,
             reasons.failed > 0 ? "\(reasons.failed) failed" : nil,

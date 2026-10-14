@@ -45,15 +45,18 @@ function mission(overrides: Partial<Mission> = {}): Mission {
 	};
 }
 
-function build(overrides: Partial<DashboardInput> = {}) {
-	return buildProjectDashboard({
-		projectId: "p1",
-		sessions: [],
-		missions: [],
-		progress: new Map(),
-		isUnread: () => true,
-		...overrides,
-	});
+function build(overrides: Partial<DashboardInput> = {}, limit = 5) {
+	return buildProjectDashboard(
+		{
+			projectId: "p1",
+			sessions: [],
+			missions: [],
+			progress: new Map(),
+			isUnread: () => true,
+			...overrides,
+		},
+		limit,
+	);
 }
 
 test("an empty project has empty bounded sections and no extension data", () => {
@@ -217,6 +220,7 @@ test("needs you lists failures, mission questions, failed schedules and unread r
 		title: asking.title,
 		missionId: asking.id,
 		count: 2,
+		attentionReason: { kind: "mission", detail: "A question or blocked task is waiting on you" },
 		at: 900,
 	});
 	assert.equal(dashboard.scheduled.total, 1);
@@ -291,6 +295,7 @@ test("an agent question needs you until it is answered, even after the chat was 
 			missionId: "m-q",
 			outcome: "question",
 			reason: "Where should retries live?",
+			attentionReason: { kind: "asks", detail: "Where should retries live?" },
 			at: 50,
 		},
 	]);
@@ -438,7 +443,10 @@ test("counts cover every project with one pass over the chats and omit quiet one
 		session({ projectId: undefined, state: "working" }),
 	]);
 	assert.deepEqual(f.service.counts(), {
-		projects: { p1: { working: 1, needsYou: 1 }, p2: { working: 0, needsYou: 1 } },
+		projects: {
+			p1: { working: 1, needsYou: 1, needsYouReasons: { not_reviewed: 1 } },
+			p2: { working: 0, needsYou: 1, needsYouReasons: { failed: 1 } },
+		},
 	});
 	assert.equal(f.queries(), 1);
 	// The dashboard agrees with the counts.
@@ -481,8 +489,8 @@ test("counts add the Inbox's tracked items, and the Inbox lists needs-you rows a
 	);
 	assert.deepEqual(f.service.counts(), {
 		projects: {
-			p1: { working: 0, needsYou: 1 },
-			p2: { working: 0, needsYou: 2 },
+			p1: { working: 0, needsYou: 1, needsYouReasons: { not_reviewed: 1 } },
+			p2: { working: 0, needsYou: 2, needsYouReasons: { failed: 1, not_reviewed: 1 } },
 			p3: { working: 0, needsYou: 0, tracked: 4 },
 		},
 	});
@@ -530,4 +538,40 @@ test("providers feed scheduled and tracked sections and report changes", () => {
 	f.reviewed();
 	assert.equal(changes, 3);
 	assert.equal(changeListeners.size, 0);
+});
+
+test("every attention row has a reason, including missing diagnostics and schedules", () => {
+	const dashboard = build(
+		{
+			sessions: [
+				session({ outcome: "failed", outcomeAt: 1 }),
+				session({ outcome: "question", outcomeReason: "Deploy now?\nOptions" }),
+				session({ outcome: "done", outcomeAt: 1 }),
+			],
+			missions: [mission({ needsYouCount: 1, needsYouReason: "Blocked: Release" })],
+			scheduled: [{ id: "schedule", title: "Later", kind: "chat", trigger: "on_back", state: "failed" }],
+		},
+		50,
+	);
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => item.attentionReason),
+		[
+			{ kind: "failed", detail: "The chat failed" },
+			{ kind: "asks", detail: "Deploy now?" },
+			{ kind: "mission", detail: "Blocked: Release" },
+			{ kind: "couldnt_start", detail: "The scheduled chat could not start" },
+			{ kind: "not_reviewed" },
+		],
+	);
+});
+
+test("reason totals include rows beyond the dashboard and Inbox caps", () => {
+	const f = service(
+		Array.from({ length: 80 }, (_, i) =>
+			session({ id: `s${i}`, projectId: "p1", outcome: i < 10 ? "question" : "done", outcomeAt: i + 1 }),
+		),
+	);
+	assert.equal(f.service.dashboard("p1").needsYou.items.length, 5);
+	assert.equal(f.service.needsYou(undefined, 50).items.length, 50);
+	assert.deepEqual(f.service.counts().projects.p1?.needsYouReasons, { asks: 10, not_reviewed: 70 });
 });

@@ -160,6 +160,18 @@ test("GET /api/projects/:id/dashboard aggregates the project and rejects unknown
 		],
 	);
 	assert.equal(dashboard.working.items[0]?.missionTitle, "API v2");
+	assert.deepEqual(
+		dashboard.needsYou.items.map((item) => item.attentionReason),
+		[
+			{ kind: "failed", detail: "boom" },
+			{ kind: "mission", detail: "Blocked: Two" },
+		],
+	);
+	const inbox = await (await f.api("/inbox")).json();
+	assert.deepEqual(
+		inbox.needsYou.items.map((item: { attentionReason: unknown }) => item.attentionReason),
+		dashboard.needsYou.items.map((item) => item.attentionReason),
+	);
 	assert.deepEqual(dashboard.missions.items[0], {
 		id: mission.id,
 		title: "API v2",
@@ -171,7 +183,9 @@ test("GET /api/projects/:id/dashboard aggregates the project and rejects unknown
 
 	assert.equal((await f.api("/projects/nope/dashboard")).status, 404);
 	const counts = (await (await f.api("/dashboard/counts")).json()) as ProjectDashboardCounts;
-	assert.deepEqual(counts, { projects: { [f.project.id]: { working: 1, needsYou: 2 } } });
+	assert.deepEqual(counts, {
+		projects: { [f.project.id]: { working: 1, needsYou: 2, needsYouReasons: { failed: 1, mission: 1 } } },
+	});
 });
 
 test("POST /api/reviews moves a result from needs you to recent and rejects bad input", async (t) => {
@@ -235,7 +249,9 @@ test("WebSocket pushes counts on connect and dashboards on change, without dupli
 	assert.equal(dashboards()[1]!.dashboard.working.total, 2);
 	assert.equal(dashboards()[1]!.dashboard.needsYou.total, 1);
 	await until(() => counts().length === 2);
-	assert.deepEqual(counts()[1]!.counts, { projects: { [f.project.id]: { working: 2, needsYou: 1 } } });
+	assert.deepEqual(counts()[1]!.counts, {
+		projects: { [f.project.id]: { working: 2, needsYou: 1, needsYouReasons: { not_reviewed: 1 } } },
+	});
 
 	// A change that does not alter the dashboard (a title-less metadata touch) pushes nothing.
 	t.mock.timers.enable({ apis: ["setTimeout"] });

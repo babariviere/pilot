@@ -55,7 +55,7 @@ struct SessionSidebar: View {
                               inboxSelected: inboxSelected, overviewSelected: overviewSelected(focused),
                               needsYou: needsYou,
                               needsYouHelp: SidebarScopeCounts.needsYouReasons(total: needsYou,
-                                                                               reasons: needsYouReasons),
+                                                                               reasons: needsYouReasons, counts: counts),
                               archivedCount: archived, onNewFolder: { folderEditor.begin() })
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
@@ -572,8 +572,16 @@ struct SessionRow: View {
     @State private var hovered = false
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            row(now: context.date)
+        }
+    }
+
+    @ViewBuilder private func row(now: Date) -> some View {
         let unread = model.isUnread(session)
-        let signal = session.signal(unread: unread)
+        let needsAttention = unread || model.isAwaitingReply(session)
+        let signal = session.signal(unread: needsAttention)
+        let reason = session.needsYouReason(unread: needsAttention)?.label(at: session.outcomeAt ?? session.updatedAt, now: now)
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
@@ -602,8 +610,8 @@ struct SessionRow: View {
                             .help("Pinned chat. Automatic archiving is disabled until unpinned.")
                             .accessibilityLabel("Pinned chat")
                     }
-                    TimelineView(.periodic(from: .now, by: 30)) { context in
-                        Text(SessionTimeFormatting.relative(session.listActivityAt, now: context.date))
+                    if reason == nil {
+                        Text(SessionTimeFormatting.relative(session.listActivityAt, now: now))
                             .font(.caption)
                             .foregroundStyle(Theme.mutedForeground)
                             .monospacedDigit()
@@ -623,6 +631,13 @@ struct SessionRow: View {
                     Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
                 }
                 SessionRepositoryMetadata(session: session)
+                if let reason {
+                    if session.isAsk || session.branch != nil || !session.linkedPullRequests.isEmpty {
+                        Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                    }
+                    Text(reason).font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1).layoutPriority(1)
+                }
             }
             // Stop short of the corner's densest cells.
             .padding(.trailing, 20)
@@ -632,7 +647,9 @@ struct SessionRow: View {
         .ditherCorner(signal)
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
-        .help([signal?.label, session.cwd.abbreviatingHome].compactMap { $0 }.joined(separator: " · "))
+        .help([reason ?? signal?.label, session.cwd.abbreviatingHome].compactMap { $0 }.joined(separator: " · "))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([session.title, projectName, reason ?? signal?.label].compactMap { $0 }.joined(separator: ". "))
         .contextMenu {
             SessionRenameAction(session: session)
             Button {

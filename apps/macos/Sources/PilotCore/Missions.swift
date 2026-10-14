@@ -87,6 +87,7 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
     /// Blocked tasks and open, unaddressed agent comments when the user coordinates.
     /// Excludes locally unread chat results. Nil when connected to an older daemon.
     public let needsYouCount: Int?
+    public let needsYouReason: String?
     public let createdAt: Double
     public let updatedAt: Double
     public let completedAt: Double?
@@ -97,7 +98,8 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
     public init(
         id: String, projectId: String, title: String, goal: String, status: MissionStatus = .active,
         coordinatorSessionId: String? = nil, autopilot: Bool? = nil, briefRevision: Int = 0, createdAt: Double,
-        updatedAt: Double, completedAt: Double? = nil, archivedAt: Double? = nil, needsYouCount: Int? = nil
+        updatedAt: Double, completedAt: Double? = nil, archivedAt: Double? = nil, needsYouCount: Int? = nil,
+        needsYouReason: String? = nil
     ) {
         self.id = id
         self.projectId = projectId
@@ -108,6 +110,7 @@ public struct Mission: Codable, Identifiable, Equatable, Hashable, Sendable {
         self.autopilot = autopilot
         self.briefRevision = briefRevision
         self.needsYouCount = needsYouCount
+        self.needsYouReason = needsYouReason
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.completedAt = completedAt

@@ -20,10 +20,10 @@ import {
 	type SessionSummary,
 } from "@pilot/protocol";
 import type { MissionStore } from "./missions.ts";
+import { reasonLine, sessionNeedsYouReason } from "./needs-you-reason.ts";
 import type { ProjectStore } from "./projects.ts";
-import type { ReviewStore } from "./reviews.ts";
-import { NotFound } from "./errors.ts";
 import { readinessReasonLabel } from "./pull-request-readiness.ts";
+import type { ReviewStore } from "./reviews.ts";
 
 /** Optional data providers. Until registered, their sections are empty or absent. */
 export interface DashboardProviders {
@@ -68,15 +68,6 @@ function section<T>(items: T[], limit = DASHBOARD_SECTION_LIMIT): DashboardSecti
 	return { total: items.length, items: items.slice(0, limit) };
 }
 
-function oneLine(text: string | undefined): string | undefined {
-	const line = text
-		?.split("\n")
-		.find((candidate) => candidate.trim())
-		?.trim();
-	if (!line) return undefined;
-	return line.length > 200 ? `${line.slice(0, 199)}…` : line;
-}
-
 function ref(pr: SessionPullRequest | undefined): DashboardPullRequestRef | undefined {
 	return pr ? { number: pr.number, url: pr.url, state: pr.state } : undefined;
 }
@@ -116,7 +107,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		if (session.missionId)
 			needsYouByMission.set(session.missionId, (needsYouByMission.get(session.missionId) ?? 0) + 1);
 		const isFailure = failed(session);
-		const reason = oneLine(session.outcomeReason ?? (isFailure ? session.error : undefined));
+		const reason = reasonLine(session.outcomeReason ?? (isFailure ? session.error : undefined));
 		needsYou.push({
 			kind: isFailure ? "failed" : session.outcome === "question" ? "question" : "unread",
 			id: `session:${session.id}`,
@@ -125,6 +116,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			...(session.missionId ? { missionId: session.missionId } : {}),
 			outcome: session.outcome ?? "failed",
 			...(reason ? { reason } : {}),
+			attentionReason: sessionNeedsYouReason(session),
 			at: session.outcomeAt ?? session.updatedAt,
 		});
 	}
@@ -138,6 +130,10 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			title: mission.title,
 			missionId: mission.id,
 			count: mission.needsYouCount,
+			attentionReason: {
+				kind: "mission",
+				detail: reasonLine(mission.needsYouReason) ?? "A question or blocked task is waiting on you",
+			},
 			at: mission.updatedAt,
 		});
 	}
@@ -149,7 +145,11 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 				title: item.title,
 				scheduledId: item.id,
 				...(item.sessionId ? { sessionId: item.sessionId } : {}),
-				...(oneLine(item.error) ? { reason: oneLine(item.error) } : {}),
+				...(reasonLine(item.error) ? { reason: reasonLine(item.error) } : {}),
+				attentionReason: {
+					kind: "couldnt_start",
+					detail: reasonLine(item.error) ?? "The scheduled chat could not start",
+				},
 				at: item.at ?? 0,
 			});
 	needsYou.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.at - a.at || a.id.localeCompare(b.id));
@@ -298,12 +298,18 @@ export class ProjectDashboardService {
 		const all = this.everyProject();
 		const projects: ProjectDashboardCounts["projects"] = {};
 		for (const project of this.deps.projects.list()) {
-			const { summary } = all.build(project.id);
+			const { summary, needsYou } = all.build(project.id, Number.MAX_SAFE_INTEGER);
+			const needsYouReasons: NonNullable<ProjectDashboardCounts["projects"][string]["needsYouReasons"]> = {};
+			for (const item of needsYou.items) {
+				const kind = item.attentionReason.kind;
+				needsYouReasons[kind] = (needsYouReasons[kind] ?? 0) + 1;
+			}
 			const tracked = this.deps.providers?.inbox?.(project.id) ?? 0;
 			if (summary.working || summary.needsYou || tracked)
 				projects[project.id] = {
 					working: summary.working,
 					needsYou: summary.needsYou,
+					...(summary.needsYou ? { needsYouReasons } : {}),
 					...(tracked ? { tracked } : {}),
 				};
 		}

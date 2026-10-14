@@ -155,6 +155,10 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     #expect(SidebarScopeCounts.needsYouReasons(total: 3, reasons: NeedsYouReasons(failed: 1)) == "3 need you")
     #expect(SidebarScopeCounts.needsYouReasons(total: 2, reasons: NeedsYouReasons()) == "2 need you")
     #expect(SidebarScopeCounts.summary(ProjectDashboardCount(working: 4)) == "4 working")
+    let counts = ["p1": ProjectDashboardCount(needsYou: 1, needsYouReasons: ["asks": 1]),
+                  "p2": ProjectDashboardCount(needsYou: 2, needsYouReasons: ["mission": 1, "couldnt_start": 1])]
+    #expect(SidebarScopeCounts.needsYouReasons(total: 3, reasons: NeedsYouReasons(), counts: counts)
+        == "3 need you: 1 question, 1 couldn't start, 1 mission")
 }
 
 @Test func needsYouReasonsCountTheUrgencyGroup() {
