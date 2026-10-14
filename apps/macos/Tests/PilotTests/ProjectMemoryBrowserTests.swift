@@ -89,6 +89,22 @@ private final class MemoryBrowserClient: ProjectMemoryClient {
     #expect(client.forgotten == [MemoryRange(lo: 4, hi: 7)])
 }
 
+@Test @MainActor func memoryBrowserOffersForgetOnlyOnSummaries() async {
+    let entry = MemoryEntry(index: 3, id: "note", deviceId: "d", at: 0, sessionId: "s", text: "A single note")
+    let note = MemoryNode(lo: 3, hi: 3, text: entry.text, entry: entry)
+    let summary = MemoryNode(lo: 0, hi: 3, text: "summary")
+    #expect(!note.canForget)
+    #expect(summary.canForget)
+    #expect(!MemoryNode(lo: 0, hi: 3, pending: true).canForget)
+
+    let client = MemoryBrowserClient()
+    let model = ProjectMemoryBrowserModel(projectId: "project", client: client)
+    model.requestForget(note)
+    #expect(model.forgetting == nil)
+    await model.confirmForget()
+    #expect(client.forgotten.isEmpty)
+}
+
 @Test @MainActor func memoryBrowserSurfacesLoadAndSearchErrors() async {
     let client = MemoryBrowserClient()
     client.failure = MemoryBrowserFailure.unavailable
