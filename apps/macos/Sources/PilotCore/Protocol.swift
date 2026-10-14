@@ -337,6 +337,7 @@ public enum InputOrigin: String, Codable, Hashable, Sendable {
     case job
     case subagent
     case `extension`
+    case coordinator
     case mission
     case pullRequest
 }

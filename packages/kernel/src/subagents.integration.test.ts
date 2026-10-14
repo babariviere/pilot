@@ -262,7 +262,7 @@ test("the bridge rejects commands before the extension reports and when the exte
 	await assert.rejects(bridge.command({ action: "stop", name: "other" }), /not loaded/);
 });
 
-test("live composer queue hides jobs initially, on updates and after reconnect without withdrawing them", {
+test("live composer queue lists jobs separately initially, on updates and after reconnect without withdrawing them", {
 	timeout: 15_000,
 }, async (t) => {
 	const f = await fixture(t, []);
@@ -308,12 +308,20 @@ test("live composer queue hides jobs initially, on updates and after reconnect w
 		frames.at(-1)?.items.map((item) => item.content),
 		["User follow-up"],
 	);
+	assert.deepEqual(
+		frames.at(-1)?.automatic?.map(({ id, origin, mode, preview }) => ({ id, origin, mode, preview })),
+		[{ id: job, origin: "job", mode: "followUp", preview: "Background job tests done" }],
+	);
 	await enqueue("native:jobs.result:second", "Another job done");
 	await enqueue("user:second", "Another follow-up");
 	await update;
 	assert.deepEqual(
 		frames.at(-1)?.items.map((item) => item.content),
 		["User follow-up", "Another follow-up"],
+	);
+	assert.deepEqual(
+		frames.at(-1)?.automatic?.map((item) => item.preview),
+		["Background job tests done", "Another job done"],
 	);
 	await session.unwatch("queue");
 	const beforeReconnect = frames.at(-1);
@@ -324,7 +332,7 @@ test("live composer queue hides jobs initially, on updates and after reconnect w
 		},
 		false,
 	);
-	assert.deepEqual(frames.at(-1), beforeReconnect);
+	assert.deepEqual(frames.at(-1), beforeReconnect, "a reconnect reports the same waiting times");
 	const receipt = await session.harness.submission(job, context);
 	assert.equal((await receipt?.status(context))?.status, "queued", "hidden notification is still admitted");
 	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))?.items.length, 4);

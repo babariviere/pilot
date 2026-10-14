@@ -112,6 +112,45 @@ public struct QueuedMessage: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
+/// Mirrors packages/protocol's PendingAutomaticInput: a system message waiting to join a run. Read-only.
+public struct PendingAutomaticInput: Identifiable, Equatable, Sendable {
+    public let id: Int
+    public let origin: InputOrigin
+    public let mode: DeliveryMode
+    public let preview: String
+    /// Epoch milliseconds.
+    public let queuedAt: Double
+    public let held: Bool
+
+    public init(id: Int, origin: InputOrigin, mode: DeliveryMode, preview: String, queuedAt: Double, held: Bool = false) {
+        self.id = id
+        self.origin = origin
+        self.mode = mode
+        self.preview = preview
+        self.queuedAt = queuedAt
+        self.held = held
+    }
+
+    public init?(json: JSONValue) {
+        guard let id = json["id"]?.int,
+              let mode = json["mode"]?.string.flatMap(DeliveryMode.init(rawValue:))
+        else { return nil }
+        self.init(
+            id: id,
+            origin: json["origin"]?.string.map { InputOrigin(rawValue: $0) ?? .extension } ?? .extension,
+            mode: mode,
+            preview: json["preview"]?.string ?? "",
+            queuedAt: json["queuedAt"]?.number ?? 0,
+            held: json["held"]?.bool ?? false
+        )
+    }
+
+    /// Steering joins the current run before follow-ups, like the user's own queue. FIFO within each mode.
+    public static func inDeliveryOrder(_ inputs: [PendingAutomaticInput]) -> [PendingAutomaticInput] {
+        inputs.filter { $0.mode == .steer } + inputs.filter { $0.mode == .followUp }
+    }
+}
+
 /// Folds pi-durable agent events into a renderable transcript.
 public struct Transcript: Equatable, Sendable {
     private var storedEntries: [Entry] = []
@@ -149,6 +188,8 @@ public struct Transcript: Equatable, Sendable {
     private var changedToolIDs: Set<String> = []
     public var working = false
     public var queuedMessages: [QueuedMessage] = []
+    /// System messages waiting to join a run, in submission order.
+    public var automaticInputs: [PendingAutomaticInput] = []
     public var todos: [SessionTodo] = []
     public var queued: Int { queuedMessages.count }
     public var retry: String?
@@ -190,6 +231,7 @@ public struct Transcript: Equatable, Sendable {
     public static func == (lhs: Transcript, rhs: Transcript) -> Bool {
         lhs.entries == rhs.entries && lhs.streaming == rhs.streaming && lhs.tools == rhs.tools
             && lhs.working == rhs.working && lhs.queuedMessages == rhs.queuedMessages
+            && lhs.automaticInputs == rhs.automaticInputs
             && lhs.todos == rhs.todos && lhs.retry == rhs.retry && lhs.error == rhs.error
             && lhs.compactionTasks == rhs.compactionTasks
             && lhs.earlierCursor == rhs.earlierCursor
@@ -240,6 +282,7 @@ public struct Transcript: Equatable, Sendable {
             // Queue contents have their own exact-frame watch. An agent stream overflow snapshot
             // must not erase them; reconnects deliver a fresh queue_update after the snapshot.
             let queue = queuedMessages
+            let automatic = automaticInputs
             let savedTodos = todos
             let savedGitHubEntries = githubEntries
             let savedRowRevision = rowRevision
@@ -251,6 +294,7 @@ public struct Transcript: Equatable, Sendable {
             )
             self = Transcript()
             queuedMessages = queue
+            automaticInputs = automatic
             todos = savedTodos
             githubEntries = savedGitHubEntries
             displayedEntries = savedGitHubEntries
@@ -336,6 +380,7 @@ public struct Transcript: Equatable, Sendable {
             if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
         case "queue_update":
             queuedMessages = (event["items"]?.array ?? []).compactMap(QueuedMessage.init(json:))
+            automaticInputs = (event["automatic"]?.array ?? []).compactMap(PendingAutomaticInput.init(json:))
         case "github_actions_update":
             let actions = Array((event["actions"]?.array ?? []).suffix(200))
             let formatter = ISO8601DateFormatter()

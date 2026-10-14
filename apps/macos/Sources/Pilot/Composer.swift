@@ -117,12 +117,15 @@ final class ComposerState: ObservableObject {
 /// Return steers the current run (or starts one), Option-Return queues a follow-up,
 /// Shift-Return adds a line. Queued messages sit at the top of the same tray; editing one uses the
 /// same keys, so Return saves it as steering and Option-Return as a follow-up. Submitting an
-/// empty queue edit removes the message instead.
+/// empty queue edit removes the message instead. Waiting system messages sit above the queue as one
+/// read-only line (`SystemMessagesStrip`).
 struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var state: ComposerState
     let working: Bool
     let queuedMessages: [QueuedMessage]
+    /// Automatic input waiting in the inbox, in submission order.
+    let automaticInputs: [PendingAutomaticInput]
     let completionDirectory: String?
     let onSend: (String, DeliveryMode) -> Void
     let onStop: () -> Void
@@ -140,6 +143,7 @@ struct Composer: View {
         state: ComposerState,
         working: Bool,
         queuedMessages: [QueuedMessage],
+        automaticInputs: [PendingAutomaticInput] = [],
         completionDirectory: String?,
         onSend: @escaping (String, DeliveryMode) -> Void,
         onStop: @escaping () -> Void,
@@ -153,6 +157,7 @@ struct Composer: View {
         self.state = state
         self.working = working
         self.queuedMessages = queuedMessages
+        self.automaticInputs = automaticInputs
         self.completionDirectory = completionDirectory
         self.onSend = onSend
         self.onStop = onStop
@@ -171,12 +176,28 @@ struct Composer: View {
         !remainingQueuedMessages.isEmpty || state.queueEditing.selected != nil || state.queueRemovalError != nil
     }
 
+    private var systemMessages: [PendingAutomaticInput] {
+        SystemMessagesStrip.visible(automaticInputs, working: working)
+    }
+
     var body: some View {
+        let systemMessages = systemMessages
         VStack(spacing: 8) {
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
                 if let session, onSchedule != nil {
                     ScheduledFollowUpsStrip(sessionId: session.id)
+                }
+                if !systemMessages.isEmpty {
+                    VStack(spacing: 2) {
+                        SystemMessagesStrip(inputs: systemMessages)
+                        if showsQueue {
+                            Rectangle().fill(Theme.border).frame(height: 1).padding(.horizontal, 8)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.top, 4)
+                    .transition(.opacity)
                 }
                 if showsQueue {
                     QueuedMessagesStrip(state: state, messages: remainingQueuedMessages, completionDirectory: completionDirectory,
@@ -189,6 +210,7 @@ struct Composer: View {
                 controls
             }
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsQueue)
+            .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: systemMessages.isEmpty)
             .background(
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Theme.tray)

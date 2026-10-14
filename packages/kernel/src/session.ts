@@ -130,6 +130,8 @@ export class KernelSession {
 	readonly #ask: boolean;
 	readonly #watches = new Map<string, () => Promise<void>>();
 	#origins!: InputOrigins;
+	/** When each waiting automatic input was first seen, shared by every watch. Pruned to the inbox on each update. */
+	readonly #automaticSince = new Map<number, number>();
 	/** Shared with the prompt section and deliverable guard, which read it per request and per tool call. */
 	readonly #mission: { current?: MissionContext };
 	/** Last UI-published run state. Current work is read from the adapter's activity source. */
@@ -848,10 +850,14 @@ export class KernelSession {
 		}
 		const stream = await watchEvents(this.harness, this.conversation.id, context);
 		const displayQueue = (inbox: Readonly<InboxState> | null) =>
-			queueUpdateForDisplay(inbox, async (id) => {
-				const submission = await this.harness.submission(id, context);
-				return submission?.status(context);
-			});
+			queueUpdateForDisplay(
+				inbox,
+				async (id) => {
+					const submission = await this.harness.submission(id, context);
+					return submission?.status(context);
+				},
+				this.#automaticSince,
+			);
 		let queue: DocumentWatch<InboxState>;
 		let audit: DocumentWatch<{ actions: GitHubAction[] }> | undefined;
 		try {

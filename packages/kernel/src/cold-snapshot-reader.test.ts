@@ -106,13 +106,17 @@ test("cold snapshot matches durable active view under a writer lease, without ru
 		const view = await readSessionSnapshot(durable, dir);
 		assert.deepEqual(view.events[0], expected);
 		assert.equal(view.completion, undefined, "a running session must not publish an old completion");
-		assert.deepEqual(view.events[1], {
-			type: "queue_update",
-			items: [
-				{ id: 904, mode: "steer", content: "steer" },
-				{ id: 905, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
-			],
-		});
+		const queue = view.events[1];
+		assert.equal(queue?.type, "queue_update");
+		assert.deepEqual(queue.items, [
+			{ id: 904, mode: "steer", content: "steer" },
+			{ id: 905, mode: "followUp", content: [{ type: "text", text: "follow up" }] },
+		]);
+		assert.deepEqual(
+			queue.automatic?.map(({ id, origin, mode, preview }) => ({ id, origin, mode, preview })),
+			[{ id: 11, origin: "job", mode: "followUp", preview: "Background job tests done" }],
+			"a cold snapshot lists waiting automatic input separately",
+		);
 		const reader = await openSessionReader(durable);
 		assert.ok(reader);
 		await assert.rejects(reader.commit([], context), /read-only/);

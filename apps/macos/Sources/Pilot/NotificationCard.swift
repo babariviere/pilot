@@ -74,6 +74,7 @@ extension InputOrigin {
         case .job: "Background job"
         case .subagent: "Subagent"
         case .extension: "Automatic message"
+        case .coordinator: "Coordinator"
         case .mission: "Mission"
         case .pullRequest: "PR follow-up"
         }
@@ -84,7 +85,8 @@ extension InputOrigin {
         case .job: "terminal"
         case .subagent: "person.2"
         case .extension: "puzzlepiece.extension"
-        case .mission: "flag"
+        case .coordinator: MissionCoordinatorIndicator.symbol
+        case .mission: MissionSymbol.name
         case .pullRequest: "arrow.triangle.pull"
         }
     }

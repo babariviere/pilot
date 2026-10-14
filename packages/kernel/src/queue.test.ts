@@ -3,7 +3,14 @@ import { test } from "node:test";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createSession, InboxDoc, MemoryStorage } from "@earendil-works/pi-durable";
 import type { QueueUpdateEvent } from "@pilot/protocol";
-import { editQueuedMessage, queueUpdate, queueUpdateForDisplay, watchQueue, withdrawUserMessages } from "./queue.ts";
+import {
+	editQueuedMessage,
+	previewText,
+	queueUpdate,
+	queueUpdateForDisplay,
+	watchQueue,
+	withdrawUserMessages,
+} from "./queue.ts";
 
 function deferred() {
 	let resolve!: () => void;
@@ -86,7 +93,7 @@ test("display queue shows only user input, without changing durable input or mat
 				["native:subagent.result:def", "followUp", "Subagent result"],
 				["native:user:ghi", "steer", "User steering"],
 				["native:jobs.result:jkl", "steer", "Job steering"],
-				["mission:send:mno", "followUp", "Coordinator message"],
+				["mission:send:mno", "followUp", "\nCoordinator message\nDetails"],
 				["mission-notice:7", "followUp", "Mission notice"],
 				["pr-follow-up:pqr", "followUp", "PR follow-up"],
 				["client-request", "followUp", "User follow-up"],
@@ -104,20 +111,51 @@ test("display queue shows only user input, without changing durable input or mat
 		const readSubmission = (id: Parameters<typeof storage.submission>[0]) => storage.submission(id, context);
 		const watch = await watchQueue(session, conversation.id, context);
 		const original = structuredClone(watch.value);
-		const displayed = await queueUpdateForDisplay(watch.value, readSubmission);
+		const since = new Map<number, number>();
+		const displayed = await queueUpdateForDisplay(watch.value, readSubmission, since, 1_000);
 		assert.deepEqual(
 			displayed.items.map((item) => item.content),
 			["Background job tests finished. Output: logs", "User steering", "User follow-up"],
 		);
+		assert.deepEqual(
+			displayed.automatic?.map(({ origin, mode, preview, queuedAt }) => ({ origin, mode, preview, queuedAt })),
+			[
+				{ origin: "job", mode: "followUp", preview: "Job result", queuedAt: 1_000 },
+				{ origin: "subagent", mode: "followUp", preview: "Subagent result", queuedAt: 1_000 },
+				{ origin: "job", mode: "steer", preview: "Job steering", queuedAt: 1_000 },
+				{ origin: "coordinator", mode: "followUp", preview: "Coordinator message", queuedAt: 1_000 },
+				{ origin: "mission", mode: "followUp", preview: "Mission notice", queuedAt: 1_000 },
+				{ origin: "pullRequest", mode: "followUp", preview: "PR follow-up", queuedAt: 1_000 },
+			],
+			"automatic input is listed read-only, in submission order",
+		);
 		assert.deepEqual(watch.value, original, "filtering never withdraws or edits input");
 		await watch.stop();
 		const reattached = await watchQueue(session, conversation.id, context);
-		assert.deepEqual(await queueUpdateForDisplay(reattached.value, readSubmission), displayed);
+		assert.deepEqual(
+			await queueUpdateForDisplay(reattached.value, readSubmission, since, 5_000),
+			displayed,
+			"a later update keeps each item's first-seen time",
+		);
 		await reattached.stop();
-		assert.deepEqual(await queueUpdateForDisplay(null, readSubmission), { type: "queue_update", items: [] });
+		assert.deepEqual(await queueUpdateForDisplay(null, readSubmission, since), {
+			type: "queue_update",
+			items: [],
+			automatic: [],
+		});
+		assert.equal(since.size, 0, "first-seen times are dropped once items leave the inbox");
 	} finally {
 		await session.close(context);
 	}
+});
+
+test("automatic previews use the first non-empty line and stay bounded", () => {
+	assert.equal(previewText("\n  \n  First line  \nSecond"), "First line");
+	assert.equal(previewText([{ type: "image" }, { type: "text", text: "From parts" }]), "From parts");
+	const long = previewText("x".repeat(500));
+	assert.equal(Array.from(long).length, 200);
+	assert.ok(long.endsWith("…"));
+	assert.equal(previewText(undefined), "");
 });
 
 test("editing queued messages preserves IDs, delivery modes, order, and broadcasts committed content", async () => {
