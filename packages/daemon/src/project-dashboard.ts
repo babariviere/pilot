@@ -53,7 +53,7 @@ export interface DashboardInput {
 	memory?: ProjectMemorySummary;
 }
 
-const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, unread: 3 } as const;
+const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, long_job: 3, unread: 4 } as const;
 const isTerminal = (pr: SessionPullRequest) => pr.state === "merged" || pr.state === "closed";
 const isWorking = (session: SessionSummary) =>
 	session.working ?? (session.state === "working" || session.state === "starting" || !!session.runningJobs?.length);
@@ -80,6 +80,7 @@ function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | un
 
 /** A finished chat that has not been reviewed, or one waiting for an answer: it still waits on the user. */
 function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread"]): boolean {
+	if (session.attentionReason?.kind === "long_job") return true;
 	if (isWorking(session)) return false;
 	// A question waits until it is answered, not until the chat is viewed.
 	if (session.outcome === "question") return true;
@@ -106,18 +107,21 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 		reviewing.add(session.id);
 		if (session.missionId)
 			needsYouByMission.set(session.missionId, (needsYouByMission.get(session.missionId) ?? 0) + 1);
-		const isFailure = failed(session);
-		const reason = reasonLine(session.outcomeReason ?? (isFailure ? session.error : undefined));
+		const longJob = session.attentionReason?.kind === "long_job";
+		const isFailure = !longJob && failed(session);
+		const reason = reasonLine(
+			longJob ? session.attentionReason?.detail : (session.outcomeReason ?? (isFailure ? session.error : undefined)),
+		);
 		needsYou.push({
-			kind: isFailure ? "failed" : session.outcome === "question" ? "question" : "unread",
+			kind: longJob ? "long_job" : isFailure ? "failed" : session.outcome === "question" ? "question" : "unread",
 			id: `session:${session.id}`,
 			title: session.title,
 			sessionId: session.id,
 			...(session.missionId ? { missionId: session.missionId } : {}),
-			outcome: session.outcome ?? "failed",
+			...(!longJob ? { outcome: session.outcome ?? "failed" } : {}),
 			...(reason ? { reason } : {}),
 			attentionReason: sessionNeedsYouReason(session),
-			at: session.outcomeAt ?? session.updatedAt,
+			at: (longJob ? session.attentionAt : session.outcomeAt) ?? session.updatedAt,
 		});
 	}
 
@@ -155,7 +159,7 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 	needsYou.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.at - a.at || a.id.localeCompare(b.id));
 
 	const working: DashboardWorkingItem[] = sessions
-		.filter(isWorking)
+		.filter((session) => isWorking(session) && !reviewing.has(session.id))
 		.map((session) => ({
 			sessionId: session.id,
 			title: session.title,

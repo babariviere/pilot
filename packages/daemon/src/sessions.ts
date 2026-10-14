@@ -53,6 +53,7 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
+import { longJobAttention, LongJobTimers } from "./long-jobs.ts";
 import { ModelCatalog } from "./models.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
@@ -818,6 +819,7 @@ export class SessionManager {
 	private readonly mainRefreshes = new Map<string, Promise<void>>();
 	private readonly projectMainOperations = new Map<string, Promise<void>>();
 	private mainRefreshTimer?: ReturnType<typeof setTimeout>;
+	private readonly longJobTimers = new LongJobTimers();
 	private readonly mainHeads = new Map<string, string>();
 	private readonly mainRepositories = new Map<string, string>();
 	private readonly mainListeners = new Set<(event: MainMoved) => unknown>();
@@ -3838,6 +3840,7 @@ export class SessionManager {
 
 	async shutdown(): Promise<void> {
 		this.closing = true;
+		this.longJobTimers.close();
 		clearTimeout(this.updatePauseTimer);
 		clearTimeout(this.archiveTimer);
 		clearTimeout(this.parkTimer);
@@ -4534,6 +4537,7 @@ export class SessionManager {
 			state,
 			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
+			...(meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
@@ -5158,6 +5162,10 @@ export class SessionManager {
 
 	private emit(meta: SessionMeta, worker?: SessionWorker): void {
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
+		if (!this.closing)
+			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {
+				if (!this.closing && this.metas.get(meta.id) === meta) this.emit(meta);
+			});
 		for (const listener of this.changeListeners) listener(summary);
 	}
 

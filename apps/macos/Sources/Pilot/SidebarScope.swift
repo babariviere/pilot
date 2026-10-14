@@ -85,6 +85,7 @@ enum SidebarScopeCounts {
             return InboxText.needsYouSummary(Array(counts.values))
         }
         let parts = [
+            reasons.longJobs > 0 ? "\(reasons.longJobs) \(reasons.longJobs == 1 ? "long job" : "long jobs")" : nil,
             reasons.questions > 0 ? "\(reasons.questions) \(reasons.questions == 1 ? "question" : "questions")" : nil,
             reasons.failed > 0 ? "\(reasons.failed) failed" : nil,
             reasons.limited > 0 ? "\(reasons.limited) \(reasons.limited == 1 ? "limit" : "limits") reached" : nil,
@@ -102,8 +103,9 @@ struct NeedsYouReasons: Equatable {
     var notReviewed = 0
     /// Failed chats stopped by a subscription limit.
     var limited = 0
+    var longJobs = 0
 
-    var total: Int { questions + failed + notReviewed + limited }
+    var total: Int { questions + failed + notReviewed + limited + longJobs }
 
     init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0, limited: Int = 0) {
         self.questions = questions
@@ -115,6 +117,7 @@ struct NeedsYouReasons: Equatable {
     /// Counts the Needs you group of `SidebarUrgency.groups` by reason.
     init(_ needsYou: [SessionSummary], unread: (SessionSummary) -> Bool) {
         for session in needsYou {
+            if session.attentionReason?.kind == .longJob { longJobs += 1; continue }
             switch session.signal(unread: unread(session)) {
             case .failed:
                 if session.subscriptionLimit() != nil { limited += 1 } else { failed += 1 }

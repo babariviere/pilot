@@ -32,6 +32,7 @@ extension SessionSummary {
 
     /// `unread` comes from the client's review marks (`SessionAttention.isUnread`).
     public func signal(unread: Bool) -> SessionSignal? {
+        if attentionReason?.kind == .longJob { return .needsYou }
         if isWorking { return .working }
         if status == .failed && !hasTerminalPullRequest { return .failed }
         // A question waits on the user until answered, even once viewed or after its PRs settled.

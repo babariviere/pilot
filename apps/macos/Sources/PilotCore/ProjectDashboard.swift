@@ -24,6 +24,7 @@ public enum DashboardNeedsYouKind: String, LenientStringEnum {
     case question
     case scheduledFailed = "scheduled_failed"
     case unread
+    case longJob = "long_job"
     public static let fallback = DashboardNeedsYouKind.unread
 }
 

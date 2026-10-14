@@ -2184,6 +2184,50 @@ test("live job snapshots clear on worker exit and daemon restart, ignoring a rep
 	});
 });
 
+test("long jobs emit live user attention at one hour and clear on job end or worker exit", async (t) => {
+	await outcomeFixture(async (manager, meta) => {
+		t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_000 });
+		const worker = fakeWorker();
+		manager["workers"].set(meta.id, worker);
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		const job = {
+			id: "tests",
+			name: "Tests",
+			state: "running" as const,
+			startedAt: 1_000,
+			outputPath: "/tmp/tests.log",
+		};
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [job] });
+		t.mock.timers.tick(3_599_999);
+		assert.equal(changes.at(-1)?.attentionReason, undefined);
+		t.mock.timers.tick(1);
+		assert.deepEqual(changes.at(-1)?.attentionReason, { kind: "long_job", detail: "Tests has run for 1h" });
+		assert.equal(changes.at(-1)?.attentionAt, 3_601_000);
+		assert.equal(changes.at(-1)?.working, true);
+		assert.equal(changes.at(-1)?.outcome, undefined);
+		assert.equal(meta.outcome, undefined);
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+		assert.equal(changes.at(-1)?.attentionReason, undefined, "end/stop clears immediately, before the follow-up");
+		assert.equal(changes.at(-1)?.working, true);
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [job] });
+		assert.equal(changes.at(-1)?.attentionReason?.kind, "long_job", "overdue snapshots escalate immediately");
+		manager["onExit"](meta, worker, 0);
+		assert.equal(manager.get(meta.id)?.attentionReason, undefined);
+		const replacement = fakeWorker();
+		manager["workers"].set(meta.id, replacement);
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs: [job] });
+		assert.equal(manager.get(meta.id)?.attentionReason, undefined, "late packets cannot restore old attention");
+		const fresh = { ...job, startedAt: Date.now() };
+		manager["onPacket"](meta, replacement, { type: "jobs.changed", jobs: [fresh] });
+		const count = changes.length;
+		await manager.shutdown();
+		t.mock.timers.tick(3_600_000);
+		assert.equal(changes.length, count, "shutdown releases live deadlines");
+		t.mock.timers.reset();
+	});
+});
+
 test("idle jobs and their follow-up stay working without publishing an intermediate outcome", async () => {
 	await outcomeFixture(async (manager, meta, home) => {
 		const worker = { ...fakeWorker(), busy: false };

@@ -33,8 +33,8 @@ public enum MissionNeedsYou {
         mission: Mission, members: [SessionSummary], isUnread: (SessionSummary) -> Bool
     ) -> [SessionSummary] {
         members
-            .filter { $0.missionId == mission.id && !$0.isArchived && !$0.isWorking }
-            .filter { ($0.outcome == .done || $0.outcome == .failed) && isUnread($0) }
+            .filter { $0.missionId == mission.id && !$0.isArchived }
+            .filter { $0.attentionReason?.kind == .longJob || (!$0.isWorking && ($0.outcome == .done || $0.outcome == .failed) && isUnread($0)) }
     }
 
     /// Member chats come from the session list; `detail` is nil until the mission's detail is loaded.
@@ -173,6 +173,9 @@ public enum MissionSidebarSummary {
 /// The second line of a coordinator's sidebar row: "Coordinator", then its reason or state.
 public enum MissionCoordinatorStatus {
     public static func detail(_ session: SessionSummary, unread: Bool) -> String {
+        if let reason = session.needsYouReason(unread: unread), reason.kind == .longJob {
+            return reason.label(at: session.attentionAt ?? session.updatedAt)
+        }
         switch session.status {
         case .working: return "Working"
         case .paused: return session.status.rawValue

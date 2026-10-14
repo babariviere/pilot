@@ -714,6 +714,7 @@ struct ProjectNeedsYouRow: View {
         switch item.kind {
         case .unread: SessionStatusIcon(status: item.outcome == .stopped ? .stopped : .done)
         case .failed: SessionStatusIcon(status: .failed)
+        case .longJob: SessionStatusIcon(status: .question)
         case .question:
             if item.sessionId != nil { SessionStatusIcon(status: .question) } else { MissionCoordinatorIndicator() }
         case .scheduledFailed: ScheduleStateIcon(state: .failed)
@@ -725,7 +726,7 @@ struct ProjectNeedsYouRow: View {
         case .question:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
             else if let missionId = item.missionId { model.openMission(missionId) }
-        case .unread, .failed, .scheduledFailed:
+        case .unread, .failed, .scheduledFailed, .longJob:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
         }
     }
@@ -1078,7 +1079,7 @@ enum ProjectPageText {
     static func needsAction(_ item: DashboardNeedsYouItem) -> String? {
         switch item.kind {
         case .unread: item.sessionId == nil ? nil : "Review"
-        case .failed: item.sessionId == nil ? nil : "Open chat"
+        case .failed, .longJob: item.sessionId == nil ? nil : "Open chat"
         case .question: item.sessionId == nil && item.missionId == nil ? nil : "Answer"
         case .scheduledFailed: item.sessionId == nil ? nil : "Open chat"
         }
