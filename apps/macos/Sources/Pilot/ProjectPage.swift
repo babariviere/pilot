@@ -2,10 +2,11 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// A project's status page: what needs the user, what is running, open pull requests, active missions
-/// and recent results. Built from pilotd's project dashboard, which stays live over the WebSocket while
-/// the page is visible (no polling). Same shape as the mission Overview: one reading column, a headline
-/// summary and hairline-row sections, with the title and actions in the window toolbar.
+/// A project's Overview: Up next (its top Inbox rows), then what is running, pull requests still waiting,
+/// active missions, schedules, Linear, Slack, memory and recent results. Built from pilotd's project dashboard,
+/// which stays live over the WebSocket while the page is visible (no polling). Same shape as the mission
+/// Overview: one reading column, a headline summary and hairline-row sections, with the project name as the
+/// window title and its actions in the toolbar. Chat rows carry the sidebar's dithered corner, not a status icon.
 struct ProjectPage: View {
     let projectId: String
     @EnvironmentObject private var model: AppModel
@@ -98,7 +99,7 @@ struct ProjectPage: View {
                 }
             } else {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
-                                     needsYou: dashboard.needsYou, scheduled: scheduled,
+                                     scheduled: scheduled,
                                      banner: banner, showFullList: showFullList,
                                      browseMemory: { showingMemory = true },
                                      trackedActions: trackedActions,
@@ -217,7 +218,6 @@ private struct ProjectToolbar: ToolbarContent {
 private struct ProjectDashboardBody: View {
     let project: Project
     let dashboard: ProjectDashboard
-    let needsYou: DashboardSection<DashboardNeedsYouItem>
     let scheduled: [ScheduledItem]
     let banner: ProjectRefreshBanner?
     let showFullList: (ProjectFullList) -> Void
@@ -241,11 +241,11 @@ private struct ProjectDashboardBody: View {
 
     private func sections(now: Date) -> some View {
         let client = model.client
-        let hiddenNeeds = dashboard.needsYou.total - needsYou.total
+        let overview = ProjectOverview(dashboard)
         return VStack(alignment: .leading, spacing: 28) {
             if let banner { banner }
             VStack(alignment: .leading, spacing: 8) {
-                Text(ProjectPageText.headline(dashboard.summary, needsYou: dashboard.summary.needsYou - hiddenNeeds,
+                Text(ProjectPageText.headline(dashboard.summary, needsYou: dashboard.summary.needsYou,
                                               lastFinishedAt: dashboard.recent.items.first?.outcomeAt, now: now))
                     .font(.pilot(.headline))
                     .lineSpacing(3)
@@ -263,8 +263,10 @@ private struct ProjectDashboardBody: View {
                 .foregroundStyle(Theme.mutedForeground)
             }
 
-            ProjectPageSection(header: PageSectionHeader(title: "Needs you", count: needsYou.total, countStyle: .attention)) {
-                if needsYou.items.isEmpty {
+            ProjectPageSection(header: PageSectionHeader(title: "Up next", linkTitle: overview.inboxLinkTitle) {
+                model.showInbox(for: project.id)
+            }) {
+                if overview.upNext.isEmpty {
                     HStack(spacing: 8) {
                         Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
                         Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
@@ -272,50 +274,35 @@ private struct ProjectDashboardBody: View {
                     .font(.pilot(.body))
                     .padding(.horizontal, 8).padding(.vertical, 4)
                 }
-                ForEach(Array(needsYou.items.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { HairlineDivider(leading: 34) }
-                    ProjectNeedsYouRow(item: item, now: now)
+                ForEach(Array(overview.upNext.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
+                    switch row {
+                    case let .needsYou(item): ProjectNeedsYouRow(item: item, now: now).inboxCorner(row.signal)
+                    case let .readyToMerge(pr): InboxReadyToMergeRow(pr: pr).inboxCorner(row.signal)
+                    }
                 }
-                ProjectMoreLine(hidden: needsYou.hiddenCount, total: needsYou.total + needsYou.hiddenCount,
-                                noun: "need you") { showFullList(.needsYou) }
             }
 
             if !dashboard.working.items.isEmpty {
                 ProjectPageSection(header: PageSectionHeader(title: "Working now", count: dashboard.working.total)) {
                     ForEach(Array(dashboard.working.items.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 { HairlineDivider(leading: 34) }
-                        ProjectWorkingRow(item: item, status: client.session(item.sessionId)?.status ?? .working, now: now)
+                        if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
+                        ProjectWorkingRow(item: item, now: now)
                     }
                     ProjectMoreLine(hidden: dashboard.working.hiddenCount, total: dashboard.working.total,
                                     noun: "working") { showFullList(.working) }
                 }
             }
 
-            if !dashboard.pullRequests.items.isEmpty {
-                ProjectPageSection(header: PageSectionHeader(title: "Pull requests", count: dashboard.pullRequests.total)) {
-                    let ready = dashboard.pullRequests.items.filter(\.isReady)
-                    let other = dashboard.pullRequests.items.filter { !$0.isReady }
-                    if !ready.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            PageSectionHeader(title: "Ready to merge", count: ready.count)
-                            ForEach(Array(ready.enumerated()), id: \.element.id) { index, pr in
-                                if index > 0 { HairlineDivider(leading: 34) }
-                                ProjectPullRequestRow(pr: pr)
-                            }
-                        }
+            // Ready ones lead Up next and the Inbox; this lists what still waits on checks, review or a fix.
+            if overview.pullRequestTotal > 0 {
+                ProjectPageSection(header: PageSectionHeader(title: "Pull requests", count: overview.pullRequestTotal)) {
+                    ForEach(Array(overview.pullRequests.enumerated()), id: \.element.id) { index, pr in
+                        if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
+                        ProjectPullRequestRow(pr: pr)
                     }
-                    if !other.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            PageSectionHeader(title: ready.isEmpty ? "Open pull requests" : "Other pull requests",
-                                              count: other.count)
-                            ForEach(Array(other.enumerated()), id: \.element.id) { index, pr in
-                                if index > 0 { HairlineDivider(leading: 34) }
-                                ProjectPullRequestRow(pr: pr)
-                            }
-                        }
-                    }
-                    ProjectMoreLine(hidden: dashboard.pullRequests.hiddenCount, total: dashboard.pullRequests.total,
-                                    noun: "open") { showFullList(.pullRequests) }
+                    ProjectMoreLine(hidden: overview.pullRequestTotal - overview.pullRequests.count,
+                                    total: dashboard.pullRequests.total, noun: "open") { showFullList(.pullRequests) }
                 }
             }
 
@@ -440,13 +427,12 @@ enum TrackedSheetScope: Identifiable, Hashable {
 }
 
 private enum ProjectFullList: String, Identifiable {
-    case needsYou, working, pullRequests, missions, scheduled
+    case working, pullRequests, missions, scheduled
     /// Rows a section shows before its "Show all" line, as pilotd bounds its sections.
     static let rowLimit = 5
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .needsYou: "Needs you"
         case .working: "Working now"
         case .pullRequests: "Pull requests"
         case .missions: "Missions"
@@ -472,22 +458,15 @@ private struct ProjectFullListSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         switch list {
-                        case .needsYou:
-                            let visible = dashboard.needsYou
-                            ForEach(Array(visible.items.enumerated()), id: \.element.id) { index, item in
-                                if index > 0 { HairlineDivider(leading: 34) }
-                                ProjectNeedsYouRow(item: item, now: Date())
-                            }
-                            capNote(visible.total, visible.items.count)
                         case .working:
                             ForEach(Array(dashboard.working.items.enumerated()), id: \.element.sessionId) { index, item in
-                                if index > 0 { HairlineDivider(leading: 34) }
-                                ProjectWorkingRow(item: item, status: model.client.session(item.sessionId)?.status ?? .working, now: Date())
+                                if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
+                                ProjectWorkingRow(item: item, now: Date())
                             }
                             capNote(dashboard.working.total, dashboard.working.items.count)
                         case .pullRequests:
                             ForEach(Array(dashboard.pullRequests.items.enumerated()), id: \.element.url) { index, item in
-                                if index > 0 { HairlineDivider(leading: 34) }
+                                if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
                                 ProjectPullRequestRow(pr: item)
                             }
                             capNote(dashboard.pullRequests.total, dashboard.pullRequests.items.count)
@@ -644,6 +623,8 @@ private struct ProjectTrackedSection: View {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 { HairlineDivider(leading: 34) }
                 TrackedItemRow(item: item, actions: actions, now: now)
+                    .inboxCorner(model.trackedItemSignal(item),
+                                 background: model.trackedItemSession(item)?.isWaitingOnJobs == true)
             }
             ProjectMoreLine(hidden: max(0, group.total - items.count), total: group.total,
                             noun: kind == .slack ? "messages" : "items", action: openAll)
@@ -673,7 +654,7 @@ private func projectTrackingSource(_ group: DashboardTrackedSource, projectId: S
 
 // MARK: Rows
 
-/// Also listed in the Inbox, where `context` names the row's project.
+/// Also listed in the Inbox, where `context` names the row's project. Lists add `.inboxCorner(item.signal)`.
 struct ProjectNeedsYouRow: View {
     let item: DashboardNeedsYouItem
     let now: Date
@@ -686,20 +667,8 @@ struct ProjectNeedsYouRow: View {
         let detail = detail
         Button(action: open) {
             HoverRow(verticalPadding: 7) { hovered in
-                HStack(spacing: 10) {
-                    icon.frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        detail
-                    }
-                    Spacer(minLength: 8)
-                    if let action {
-                        Text(action).font(.pilot(.label, weight: .medium))
-                            .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
-                            .fixedSize()
-                        Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
-                            .foregroundStyle(Theme.faintForeground)
-                    }
+                InboxRowLabel(title: item.title) { detail } trailing: {
+                    if let action { InboxRowAction(title: action, hovered: hovered) }
                 }
             }
         }
@@ -723,17 +692,6 @@ struct ProjectNeedsYouRow: View {
         let missionTitle = chatId == nil ? nil : item.missionId.flatMap { model.client.mission($0)?.title }
         return InboxRowDetail(projectName: context, session: session, missionTitle: missionTitle,
                               reason: ProjectPageText.needsSubtitle(item, now: now))
-    }
-
-    @ViewBuilder private var icon: some View {
-        switch item.kind {
-        case .unread: SessionStatusIcon(status: item.outcome == .stopped ? .stopped : .done)
-        case .failed: SessionStatusIcon(status: .failed)
-        case .longJob: SessionStatusIcon(status: .question)
-        case .question:
-            if item.sessionId != nil { SessionStatusIcon(status: .question) } else { MissionCoordinatorIndicator() }
-        case .scheduledFailed: ScheduleStateIcon(state: .failed)
-        }
     }
 
     private func open() {
@@ -794,42 +752,35 @@ private struct ProjectScheduledRow: View {
     }
 }
 
+/// A running chat. Its second line reads like its sidebar row (coordinator, or mission, PR badge and branch),
+/// then mode and model; its corner is the chat's live state.
 private struct ProjectWorkingRow: View {
     let item: DashboardWorkingItem
-    let status: SessionStatus
     let now: Date
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let meta = ProjectPageText.workingMeta(item)
+        let session = model.client.session(item.sessionId)
+        let mode = ProjectPageText.workingMode(item)
+        let detail = InboxRowDetail(session: session, missionTitle: item.missionTitle, reason: mode)
         let elapsed = item.state == .starting ? "Starting" : SessionTimeFormatting.relative(item.startedAt, now: now)
         Button { model.selectedSessionId = item.sessionId } label: {
-            HoverRow { _ in
-                HStack(spacing: 10) {
-                    SessionStatusIcon(status: status).frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        HStack(spacing: 5) {
-                            if let mission = item.missionTitle {
-                                Image(systemName: MissionSymbol.name).font(.pilot(.micro))
-                                Text(mission).lineLimit(1)
-                                if !meta.isEmpty { Text("·") }
-                            }
-                            Text(meta).lineLimit(1).truncationMode(.middle)
-                        }
-                        .font(.pilot(.caption))
-                        .foregroundStyle(Theme.mutedForeground)
-                    }
-                    Spacer(minLength: 8)
-                    if let pr = item.pullRequest { DashboardPullRequestMark(ref: pr) }
+            HoverRow(verticalPadding: 7) { _ in
+                InboxRowLabel(title: item.title) {
+                    if session != nil { detail } else { fallbackDetail }
+                } trailing: {
+                    if session == nil, let pr = item.pullRequest { DashboardPullRequestMark(ref: pr) }
                     Text(elapsed).font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                         .fixedSize()
                 }
             }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel([item.title, item.missionTitle, meta, "working for \(elapsed)"]
-            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", "))
+        .inboxCorner(session.map { $0.signal(unread: model.isUnread($0)) } ?? .working,
+                     background: session?.isWaitingOnJobs == true)
+        .accessibilityLabel([item.title, session == nil ? ProjectPageText.workingMeta(item) : detail.accessibilityText,
+                             "working for \(elapsed)"]
+            .filter { !$0.isEmpty }.joined(separator: ", "))
         .contextMenu {
             Button("Open Chat") { model.selectedSessionId = item.sessionId }
             Button("Stop Chat") { model.stopSession(item.sessionId) }
@@ -837,6 +788,21 @@ private struct ProjectWorkingRow: View {
                 Link("Open PR #\(pr.number) in Browser", destination: url)
             }
         }
+    }
+
+    /// Until the chat's summary arrives: the dashboard's mission, mode, model and branch.
+    private var fallbackDetail: some View {
+        let meta = ProjectPageText.workingMeta(item)
+        return HStack(spacing: 4) {
+            if let mission = item.missionTitle {
+                InboxMissionLabel(title: mission)
+                if !meta.isEmpty { Text("·").foregroundStyle(Theme.faintForeground) }
+            }
+            Text(meta).lineLimit(1).truncationMode(.middle)
+        }
+        .font(.system(size: 10))
+        .foregroundStyle(Theme.mutedForeground)
+        .lineLimit(1)
     }
 }
 
@@ -907,6 +873,8 @@ struct PullRequestReadinessStyle: Equatable {
     }
 }
 
+/// An open pull request. The second line reads like its chat's sidebar row (mission or coordinator, PR badge with
+/// its readiness, branch), then what it waits on. Ready ones carry the Ready to merge corner; the others are quiet.
 private struct ProjectPullRequestRow: View {
     let pr: DashboardPullRequest
     @EnvironmentObject private var model: AppModel
@@ -914,25 +882,12 @@ private struct ProjectPullRequestRow: View {
     var body: some View {
         let readiness = PullRequestReadinessStyle(pr)
         let url = dashboardBrowserURL(pr.url)
+        let detail = InboxRowDetail(session: model.client.session(pr.sessionId),
+                                    missionTitle: pr.missionId.flatMap { model.client.mission($0)?.title },
+                                    reason: readiness.label, pullRequest: pr)
         Button { if let url { BrowserLinkOpener.shared.open(url) } else { openChat() } } label: {
-            HoverRow { hovered in
-                HStack(spacing: 10) {
-                    readiness.icon
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(readiness.color)
-                        .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 6) {
-                            Text("#\(pr.number)").font(.pilot(.caption)).monospacedDigit()
-                                .foregroundStyle(Theme.faintForeground)
-                            Text(pr.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        }
-                        (Text(readiness.label).foregroundColor(readiness.color)
-                            + Text("  ·  \(pr.sessionTitle)").foregroundColor(Theme.mutedForeground))
-                            .font(.pilot(.caption))
-                            .lineLimit(2)
-                    }
-                    Spacer(minLength: 8)
+            HoverRow(verticalPadding: 7) { hovered in
+                InboxRowLabel(title: pr.title) { detail } trailing: {
                     if url != nil {
                         Image(systemName: "arrow.up.right").font(.pilot(.micro, weight: .semibold))
                             .foregroundStyle(hovered ? Theme.mutedForeground : Theme.faintForeground)
@@ -942,8 +897,9 @@ private struct ProjectPullRequestRow: View {
             }
         }
         .buttonStyle(.plain)
-        .help(url == nil ? "Open the chat that owns this pull request" : pr.url)
-        .accessibilityLabel("Pull request \(pr.number), \(pr.title). \(readiness.label). Chat: \(pr.sessionTitle)")
+        .inboxCorner(pr.isReady ? .readyToMerge : nil)
+        .help(url == nil ? "Open the chat that owns this pull request" : "\(pr.url)\nChat: \(pr.sessionTitle)")
+        .accessibilityLabel("\(pr.title). \(detail.accessibilityText). Chat: \(pr.sessionTitle)")
         .accessibilityHint(url == nil ? "Opens the chat" : "Opens in the browser")
         .accessibilityAction(named: "Open chat", openChat)
         .contextMenu {
@@ -966,6 +922,7 @@ private struct ProjectMissionRow: View {
     var body: some View {
         let done = min(mission.tasksDone, mission.tasksTotal)
         let progress = mission.tasksTotal == 0 ? "No tasks" : "\(done) of \(mission.tasksTotal)"
+        let signal = signal
         Button { model.openMission(mission.id) } label: {
             HoverRow(verticalPadding: 7) { _ in
                 HStack(spacing: 10) {
@@ -987,10 +944,12 @@ private struct ProjectMissionRow: View {
             }
         }
         .buttonStyle(.plain)
+        .inboxCorner(signal, background: waitingOnJobs)
         .accessibilityLabel([mission.title,
                              mission.working > 0 ? "\(mission.working) working" : nil,
                              mission.needsYou > 0 ? "\(mission.needsYou) need you" : nil,
-                             mission.tasksTotal == 0 ? "no tasks" : "\(done) of \(mission.tasksTotal) tasks done"]
+                             mission.tasksTotal == 0 ? "no tasks" : "\(done) of \(mission.tasksTotal) tasks done",
+                             signal?.label]
             .compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
             MissionEditAction(missionId: mission.id)
@@ -1003,8 +962,22 @@ private struct ProjectMissionRow: View {
             MissionDeleteAction(missionId: mission.id)
         }
     }
+
+    /// The sidebar's mission corner (its most urgent chat), or the dashboard counts until the mission loads.
+    private var signal: SessionSignal? {
+        guard let live = model.client.mission(mission.id) else { return mission.signal }
+        return MissionSidebarSummary.signal(mission: live, members: model.members(of: live),
+                                            isUnread: { model.isUnread($0) })
+    }
+
+    /// Its working chats only wait on background jobs, as the sidebar's mission row reads it.
+    private var waitingOnJobs: Bool {
+        guard let live = model.client.mission(mission.id) else { return false }
+        return MissionSidebarSummary.waitingOnJobs(mission: live, members: model.members(of: live))
+    }
 }
 
+/// A finished chat on one line: title, then its sidebar second line (mission or coordinator, PR badge, branch).
 private struct ProjectRecentRow: View {
     let item: DashboardRecentItem
     let missionTitle: String?
@@ -1012,16 +985,18 @@ private struct ProjectRecentRow: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let meta = [missionTitle, item.pullRequest.map { "\($0.state.compactLabel) #\($0.number)" }]
-            .compactMap { $0 }.joined(separator: " · ")
+        let session = model.client.session(item.sessionId)
+        let detail = InboxRowDetail(session: session, missionTitle: missionTitle)
+        let meta = session == nil ? fallbackMeta : detail.accessibilityText
         let time = SessionTimeFormatting.relative(item.outcomeAt, now: now)
         Button { model.selectedSessionId = item.sessionId } label: {
             HoverRow(verticalPadding: 5) { _ in
                 HStack(spacing: 10) {
-                    SessionStatusIcon(status: item.outcome.status).frame(width: 16)
                     Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                         .layoutPriority(1)
-                    if !meta.isEmpty {
+                    if session != nil {
+                        detail
+                    } else if !meta.isEmpty {
                         Text(meta).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                     }
                     Spacer(minLength: 8)
@@ -1031,8 +1006,16 @@ private struct ProjectRecentRow: View {
             }
         }
         .buttonStyle(.plain)
+        .inboxCorner(session.map { $0.signal(unread: model.isUnread($0)) } ?? item.signal,
+                     background: session?.isWaitingOnJobs == true)
         .accessibilityLabel([item.title, item.outcome.status.rawValue, meta, time].filter { !$0.isEmpty }
             .joined(separator: ", "))
+    }
+
+    /// Until the chat's summary arrives: its mission and PR from the dashboard.
+    private var fallbackMeta: String {
+        [missionTitle, item.pullRequest.map { "\($0.state.compactLabel) #\($0.number)" }]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -1095,6 +1078,12 @@ enum ProjectPageText {
     /// Mode, model and branch of a running chat. The mission, when any, is shown before it.
     static func workingMeta(_ item: DashboardWorkingItem) -> String {
         [item.mode == .ask ? "Ask" : "Build", item.model.map(shortModel), item.branch]
+            .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    /// Mode and model of a running chat, after the PR badge and branch its sidebar line already shows.
+    static func workingMode(_ item: DashboardWorkingItem) -> String {
+        [item.mode == .ask ? "Ask" : "Build", item.model.map(shortModel)]
             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
     }
 

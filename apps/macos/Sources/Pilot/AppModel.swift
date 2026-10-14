@@ -489,13 +489,14 @@ final class AppModel: ObservableObject {
         selectedProjectId = nil
     }
 
-    /// Shows the Inbox, its project filter preset to the focused project (every project when none is focused).
-    func showInbox() {
+    /// Shows the Inbox, its project filter preset to `projectId` (from a project's Overview), else to the focused
+    /// project (every project when none is focused).
+    func showInbox(for projectId: String? = nil) {
         showingArchive = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
-        inboxProjectId = focusedProject?.id
+        inboxProjectId = projectId ?? focusedProject?.id
         showingInbox = true
     }
 

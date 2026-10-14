@@ -57,6 +57,11 @@ private func pullRequest(_ state: DashboardPullRequestState = .open,
 }
 
 @Test func pullRequestsWithoutReadinessReadAsOpen() {
+    // Working rows: mode and model follow the sidebar line, which already shows the PR badge and branch.
+    let item = DashboardWorkingItem(sessionId: "w", title: "w", mode: .ask, model: "anthropic/claude-opus-5-5",
+                                    branch: "feat/x", startedAt: 1)
+    #expect(ProjectPageText.workingMode(item) == "Ask · claude-opus-5-5")
+    #expect(ProjectPageText.workingMeta(item) == "Ask · claude-opus-5-5 · feat/x")
     #expect(PullRequestReadinessStyle(pullRequest()).kind == .open)
     #expect(PullRequestReadinessStyle(pullRequest()).label == "Open")
     #expect(PullRequestReadinessStyle(pullRequest(.draft, readiness: .init(state: .ready))).label == "Draft")

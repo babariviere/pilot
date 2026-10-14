@@ -129,7 +129,7 @@ private struct InboxSections: View {
                 .padding(.horizontal, 8).padding(.vertical, 4)
             }
             ForEach(Array(section.items.enumerated()), id: \.element.id) { index, row in
-                if index > 0 { HairlineDivider(leading: 34) }
+                if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
                 ProjectNeedsYouRow(item: row.item, now: now, context: projectName(row.projectId))
                     .inboxCorner(row.item.signal)
             }
@@ -143,7 +143,7 @@ private struct InboxSections: View {
         return VStack(alignment: .leading, spacing: 6) {
             PageSectionHeader(title: "Ready to merge", count: section.total)
             ForEach(Array(section.items.enumerated()), id: \.element.id) { index, row in
-                if index > 0 { HairlineDivider(leading: 34) }
+                if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
                 InboxReadyToMergeRow(pr: row.pullRequest, context: projectName(row.projectId))
                     .inboxCorner(.readyToMerge)
             }
@@ -166,7 +166,8 @@ private struct InboxSections: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 TrackedItemRow(item: item, actions: actions, now: now, context: projectName(item.projectId),
                                changed: reload)
-                    .inboxCorner(linkedSignal(item), background: linkedSession(item)?.isWaitingOnJobs == true)
+                    .inboxCorner(model.trackedItemSignal(item),
+                                 background: model.trackedItemSession(item)?.isWaitingOnJobs == true)
             }
             capNote(shown: items.count, total: total)
         }
@@ -193,17 +194,6 @@ private struct InboxSections: View {
     /// Rows name their project only when the Inbox lists every project.
     private func projectName(_ id: String) -> String? {
         scope == nil ? model.client.project(id)?.name : nil
-    }
-
-    /// A ticket's corner follows the latest chat it started (working, failed, unread, ready to merge), like that
-    /// chat's sidebar row. Tickets nothing has started yet stay quiet.
-    private func linkedSignal(_ item: TrackedItem) -> SessionSignal? {
-        guard let session = linkedSession(item) else { return nil }
-        return session.signal(unread: model.isUnread(session))
-    }
-
-    private func linkedSession(_ item: TrackedItem) -> SessionSummary? {
-        item.sessionId.flatMap { model.client.session($0) }
     }
 
     /// Slack triage is per project: every project in scope that tracks Slack, in sidebar order.
