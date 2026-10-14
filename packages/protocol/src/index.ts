@@ -48,6 +48,7 @@ export interface SessionPullRequest {
 
 /** POST /api/sessions/:id/pull-requests. Returns SessionSummary & PullRequestBindingResult. */
 export interface BindPullRequestRequest {
+	/** GitHub PR URL, or a positive number (123 or #123, no leading zero) in the project's GitHub upstream. */
 	url: string;
 	/** Optional mission task ID or number to disambiguate the owning task. */
 	taskId?: string;

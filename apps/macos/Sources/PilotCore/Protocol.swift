@@ -8,6 +8,7 @@ public struct UpdatePreparation: Codable, Sendable {
 
 /// POST /api/sessions/:id/pull-requests. Returns SessionSummary.
 public struct BindPullRequestRequest: Codable, Equatable, Sendable {
+    /// GitHub PR URL, or a positive number (123 or #123, no leading zero) in the project's GitHub upstream.
     public let url: String
     /// Optional mission task ID or number to disambiguate the owning task.
     public let taskId: String?
