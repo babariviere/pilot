@@ -178,7 +178,7 @@ private struct ProjectToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button(action: showTracked) { Label("Tracked Items…", systemImage: "tray") }
+                Button(action: showTracked) { Label("Linear and Slack…", systemImage: "tray") }
                 if !(project.tracking?.slackChannels ?? []).isEmpty {
                     Button { model.openSlackTriage(project.id) } label: {
                         Label("Slack Triage", systemImage: "bubble.left.and.bubble.right")
@@ -589,7 +589,7 @@ private struct ProjectCycleSection: View {
             } else if let team = project.tracking?.linearTeam, !team.isEmpty {
                 ProjectQuietLine(text: "Your cycle appears after the first sync.")
             } else {
-                ProjectQuietLine(text: "Attach a Linear team in Tracking settings to follow your current cycle here.")
+                ProjectQuietLine(text: "Attach a Linear team in Linear and Slack settings to follow your current cycle here.")
             }
         }
     }
@@ -610,10 +610,10 @@ private struct ProjectTrackedSection: View {
 
     var body: some View {
         let known = groups.filter { TrackedKind(rawValue: $0.source) != nil }
-        ProjectPageSection(header: PageSectionHeader(title: "Tracked", linkTitle: "Tracking settings",
+        ProjectPageSection(header: PageSectionHeader(title: "Slack", linkTitle: "Settings",
                                                       link: openSettings)) {
             if known.isEmpty {
-                ProjectQuietLine(text: "Add Slack channels in Tracking settings to triage their messages here.")
+                ProjectQuietLine(text: "Add Slack channels in Linear and Slack settings to triage their messages here.")
             }
             ForEach(known) { group in
                 if let kind = TrackedKind(rawValue: group.source) { sourceGroup(group, kind: kind) }

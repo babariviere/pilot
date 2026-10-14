@@ -51,7 +51,7 @@ struct TrackingSettingsSection: View {
                                 source: client.source(projectId: project.id, kind: .slack),
                                 saved: Set(project.tracking?.slackChannels ?? []), query: channelQuery)
         } header: {
-            Text("Tracking")
+            Text("Linear and Slack")
         } footer: {
             SettingsFooter("Pilot reads your Linear issues and Slack messages through your pi MCP servers. It never posts, comments or changes tickets, and never starts work on its own.")
         }
@@ -116,8 +116,8 @@ struct LinearTeamPicker: View {
     }
 
     private var detail: String {
-        guard let selection else { return "Attach a team to track your issues in it, including its sub-teams." }
-        guard selection.id == saved, let source, source.configured else { return "Save to start tracking." }
+        guard let selection else { return "Attach a team to follow your issues in it, including its sub-teams." }
+        guard selection.id == saved, let source, source.configured else { return "Save to start syncing." }
         // The account row below says what to do.
         if source.status == .signInRequired { return "Your issues and its current cycle." }
         let line = TrackedItemText.sourceLine(source, signIn: signIns[.linear])
@@ -322,7 +322,7 @@ private struct SlackChannelRow: View {
             .help(status?.error ?? (status?.status == .signInRequired ? "Sign in to Slack below." : line.text))
             Button(action: remove) { Image(systemName: "minus.circle") }
                 .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
-                .help("Stop tracking \(channel.display)")
+                .help("Stop reading \(channel.display)")
                 .accessibilityLabel("Remove \(channel.display)")
         }
         .accessibilityElement(children: .combine)

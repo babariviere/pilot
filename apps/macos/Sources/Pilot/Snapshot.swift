@@ -1058,7 +1058,7 @@ enum Snapshot {
         let slackSource = TrackingSource(
             id: "p1:slack", projectId: "p1", kind: .slack, label: "Slack", configured: true, status: .error,
             lastPolledAt: now - 4 * minute,
-            error: "A Slack channel could not be read. Check its access in Tracking settings.",
+            error: "A Slack channel could not be read. Check its access in project settings.",
             channels: [
                 SlackChannelStatus(id: "C0BUGS0001", name: "bugs", status: .ok, lastPulledAt: now - 4 * minute),
                 SlackChannelStatus(id: "C0SUPPORT2", name: "support-escalations", status: .ok,

@@ -155,7 +155,7 @@ enum TrackedItemText {
     }
 
     static func channelStatus(_ channel: SlackChannelStatus?, saved: Bool, now: Date = Date()) -> SourceLine {
-        guard saved else { return SourceLine(text: "Save to start tracking", tone: .quiet) }
+        guard saved else { return SourceLine(text: "Save to start syncing", tone: .quiet) }
         guard let channel else { return SourceLine(text: "Waiting for the first sync", tone: .quiet) }
         switch channel.status {
         case .pending: return SourceLine(text: "Waiting for the first sync", tone: .quiet)
@@ -947,13 +947,22 @@ struct TrackedInboxSheet: View {
             .sorted { $0.kind == .linear && $1.kind != .linear }
     }
 
+    /// "Current cycle", "Slack" or "Linear and Slack", by the sources the sheet shows.
+    private var title: String {
+        switch kinds {
+        case [.linear]: "Current cycle"
+        case [.slack]: "Slack"
+        default: "Linear and Slack"
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(project.name) · \(kinds == [.linear] ? "Current cycle" : "Tracked")").font(.pilot(.title))
+                Text("\(project.name) · \(title)").font(.pilot(.title))
                     .foregroundStyle(Theme.foreground).lineLimit(1)
                 Spacer(minLength: 8)
-                Button("Tracking Settings…") { finish(openSettings) }
+                Button("Linear and Slack Settings…") { finish(openSettings) }
                     .buttonStyle(.plain).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
             }
             content
@@ -977,9 +986,9 @@ struct TrackedInboxSheet: View {
 
     @ViewBuilder private var content: some View {
         if sources.isEmpty {
-            EmptyStateView(icon: "tray", title: "Nothing is tracked yet",
+            EmptyStateView(icon: "tray", title: "No Linear team or Slack channels yet",
                            message: "Attach a Linear team or Slack channels to see your tickets and messages here. Pilot only reads them.") {
-                Button("Tracking Settings…") { finish(openSettings) }.buttonStyle(.borderedProminent)
+                Button("Linear and Slack Settings…") { finish(openSettings) }.buttonStyle(.borderedProminent)
             }
             .frame(maxHeight: .infinity)
         } else if !inbox.loaded {

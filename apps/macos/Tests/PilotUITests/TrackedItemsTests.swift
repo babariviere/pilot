@@ -146,7 +146,7 @@ private let slack = TrackedItem(
         == "Couldn't read Linear. Pilot will retry at \(retry).")
     #expect(TrackedItemText.sourceLine(source(.error), now: now).text == "Couldn't read Linear.")
     #expect(TrackedItemText.sourceLine(source(.idle), now: now).text == "Waiting for the first sync.")
-    #expect(TrackedItemText.channelStatus(nil, saved: false).text == "Save to start tracking")
+    #expect(TrackedItemText.channelStatus(nil, saved: false).text == "Save to start syncing")
     #expect(TrackedItemText.channelStatus(.init(id: "C1", status: .ok, lastPulledAt: ms - 60_000), saved: true, now: now).text
         == "Pulled 1m ago")
     #expect(TrackedItemText.channelStatus(.init(id: "C1", status: .error), saved: true).tone == .attention)

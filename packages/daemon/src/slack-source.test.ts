@@ -682,5 +682,5 @@ test("inspector excerpt is read on demand from a tracked channel, latest selecti
 	const linear = (await f.store.list({ projectId: project.id, kind: "linear" })).items[0]!;
 	await assert.rejects(registry.slackExcerpt(linear.id), /Only Slack/);
 	await projects.update(project.id, { tracking: { slackChannels: ["C2"] } });
-	await assert.rejects(registry.slackExcerpt(a.id), /no longer tracked/);
+	await assert.rejects(registry.slackExcerpt(a.id), /removed from this project/);
 });

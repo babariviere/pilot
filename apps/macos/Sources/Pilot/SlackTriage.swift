@@ -234,7 +234,7 @@ enum SlackTriageText {
         return "You changed the \(list). Pilot keeps your choice and learns from it."
     }
 
-    /// "Bug · No label" for a correction in Tracking settings.
+    /// "Bug · No label" for a correction in Linear and Slack settings.
     static func correction(_ values: SlackOverrides) -> String {
         var parts: [String] = []
         if let type = values.type { parts.append(type.title) }
@@ -523,7 +523,7 @@ struct SlackTriagePage: View {
                         Label("Sync Now", systemImage: "arrow.clockwise")
                     }
                 }
-                Button { openTrackingSettings(project) } label: { Label("Tracking Settings…", systemImage: "gearshape") }
+                Button { openTrackingSettings(project) } label: { Label("Linear and Slack Settings…", systemImage: "gearshape") }
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -536,8 +536,8 @@ struct SlackTriagePage: View {
     @ViewBuilder private func content(_ project: Project) -> some View {
         if (project.tracking?.slackChannels ?? []).isEmpty, triage.items.isEmpty {
             EmptyStateView(icon: "bubble.left.and.bubble.right", title: "No Slack channels yet",
-                           message: "Add channels in Tracking settings. Pilot reads new messages, sorts them by type and severity, and lists them here.") {
-                Button("Tracking Settings…") { openTrackingSettings(project) }.buttonStyle(.borderedProminent)
+                           message: "Add channels in Linear and Slack settings. Pilot reads new messages, sorts them by type and severity, and lists them here.") {
+                Button("Linear and Slack Settings…") { openTrackingSettings(project) }.buttonStyle(.borderedProminent)
             }
             .frame(maxHeight: .infinity)
         } else if !triage.loaded {
