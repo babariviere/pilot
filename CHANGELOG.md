@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.33.0](https://github.com/babariviere/pilot/compare/v1.32.0...v1.33.0) (2026-10-14)
+
+
+### Features
+
+* **attention:** add shared reasons to Needs you rows ([bde5f0c](https://github.com/babariviere/pilot/commit/bde5f0c37e85bbde9d1ab0130f28779e45ae81d2))
+* **chat:** render automatic updates as inline timeline events ([a00e043](https://github.com/babariviere/pilot/commit/a00e043958b814674327de40df482994c60f8c19))
+* **macos:** put Home and Inbox above the project selector in the sidebar ([68484b9](https://github.com/babariviere/pilot/commit/68484b9b806b7f45403fec2733966f07cb3de5c1))
+* **macos:** sidebar mission rows open their page, chat rows name mission and coordinator ([c45538c](https://github.com/babariviere/pilot/commit/c45538cc9532bf9183aff99232f67797d275f0b0))
+* **power:** manage Mac sleep around durable agent work ([2adfdd5](https://github.com/babariviere/pilot/commit/2adfdd5dab4b8eed1418ec376dffc5df93204413))
+* **updates:** pause agents at safe tool boundaries ([77f1994](https://github.com/babariviere/pilot/commit/77f1994626404dc1fd02c9cb0544448aa3b11bd1))
+
+
+### Bug Fixes
+
+* **chat:** simplify event byte accounting for Swift 6.2 ([eb0a48b](https://github.com/babariviere/pilot/commit/eb0a48b191bb4fff09de3e7b02d5cbbdbc36fd4d))
+* **daemon:** reduce activity reads and timestamp diagnostics ([61d1fb7](https://github.com/babariviere/pilot/commit/61d1fb7ef4740d8a61b3efcd309b9aa49006dccb))
+* **deps:** update dependency mermaid to v12.2.0 ([5c7debe](https://github.com/babariviere/pilot/commit/5c7debea53e8b628afd8ecee5e290945e33de0d8))
+* **macos:** handle paused mission coordinators after rebase ([39820bf](https://github.com/babariviere/pilot/commit/39820bf93dc9976a2fb006a53436025e1226808c))
+* **macos:** offer forget only on memory summaries, not single notes ([55f111d](https://github.com/babariviere/pilot/commit/55f111dc46c6670a959f147c5451b7b39550de27))
+* **sessions:** count background jobs as working ([b7a8446](https://github.com/babariviere/pilot/commit/b7a8446251f63ede5b0bbcc639936283a4e79886))
+* **sidebar:** open mission from chat row icon and keep hover marks legible on dither ([9b71dfb](https://github.com/babariviere/pilot/commit/9b71dfbd7ab1d1fc65edab2e4659d9eb045facfc))
+* **workspaces:** refresh idle chats when main advances ([7fa19eb](https://github.com/babariviere/pilot/commit/7fa19ebc9a986c2196b68c7dbeabb645b7bd8fd0))
+
 ## [1.32.0](https://github.com/babariviere/pilot/compare/v1.31.0...v1.32.0) (2026-10-14)
 
 
