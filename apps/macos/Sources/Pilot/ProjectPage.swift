@@ -949,6 +949,16 @@ private struct ProjectMissionRow: View {
                              mission.needsYou > 0 ? "\(mission.needsYou) need you" : nil,
                              mission.tasksTotal == 0 ? "no tasks" : "\(done) of \(mission.tasksTotal) tasks done"]
             .compactMap { $0 }.joined(separator: ", "))
+        .contextMenu {
+            MissionEditAction(missionId: mission.id)
+            Divider()
+            // Dashboard rows carry counts, not status. Use the live mission summary.
+            if let summary = model.client.mission(mission.id) {
+                MissionStatusActions(missionId: mission.id, status: summary.status)
+            }
+            Divider()
+            MissionDeleteAction(missionId: mission.id)
+        }
     }
 }
 

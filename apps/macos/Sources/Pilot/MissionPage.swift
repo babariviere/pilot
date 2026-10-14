@@ -20,7 +20,6 @@ struct MissionPage: View {
     let missionId: String
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @State private var confirmingDeletion = false
     @State private var width: CGFloat = 1000
 
     var body: some View {
@@ -31,9 +30,8 @@ struct MissionPage: View {
                     .navigationTitle(mission.title)
                     .navigationSubtitle(subtitle(mission))
                     .toolbar {
-                        MissionToolbar(mission: mission, model: model, client: client,
-                                       compactTabs: width < MissionPage.compactTabsWidth,
-                                       confirmingDeletion: $confirmingDeletion)
+                        MissionToolbar(mission: mission, model: model,
+                                       compactTabs: width < MissionPage.compactTabsWidth)
                     }
             } else {
                 EmptyStateView(icon: "scope", title: "This mission no longer exists",
@@ -52,16 +50,6 @@ struct MissionPage: View {
         // lays out the blocks on screen.
         .task(id: client.missionDetails[missionId]?.brief?.revision) {
             if let markdown = client.missionDetails[missionId]?.brief?.markdown { await MarkdownView.prewarm(markdown) }
-        }
-        .confirmationDialog("Delete this mission?", isPresented: $confirmingDeletion) {
-            Button("Delete Mission", role: .destructive) {
-                model.missionAction { [client, missionId, model] in
-                    try await client.deleteMission(missionId)
-                    if model.selectedMissionId == missionId { model.selectedMissionId = nil }
-                }
-            }
-        } message: {
-            Text("Its brief, tasks and activity are deleted. Member chats are kept and detached from the mission.")
         }
     }
 
@@ -125,9 +113,7 @@ private struct MissionTabContent: View {
 private struct MissionToolbar: ToolbarContent {
     let mission: Mission
     let model: AppModel
-    let client: PilotClient
     let compactTabs: Bool
-    @Binding var confirmingDeletion: Bool
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .principal) {
@@ -148,27 +134,15 @@ private struct MissionToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button { model.missionSheet = .edit(missionId: mission.id) } label: {
-                    Label("Edit Title and Goal…", systemImage: "pencil")
-                }
+                MissionEditAction(missionId: mission.id)
                 coordinatorItems
                 Button { model.showArchive(in: mission.projectId, missionId: mission.id) } label: {
                     Label("Browse Archived Chats", systemImage: "archivebox")
                 }
                 Divider()
-                if mission.status != .done {
-                    Button { setStatus(.done) } label: { Label("Mark as Done", systemImage: "checkmark.circle") }
-                }
-                if mission.status != .active {
-                    Button { setStatus(.active) } label: { Label("Reopen", systemImage: "arrow.uturn.backward") }
-                }
-                if mission.status != .archived {
-                    Button { setStatus(.archived) } label: { Label("Archive", systemImage: "archivebox") }
-                }
+                MissionStatusActions(missionId: mission.id, status: mission.status)
                 Divider()
-                Button(role: .destructive) { confirmingDeletion = true } label: {
-                    Label("Delete Mission…", systemImage: "trash")
-                }
+                MissionDeleteAction(missionId: mission.id)
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -198,12 +172,6 @@ private struct MissionToolbar: ToolbarContent {
                     Button(session.title) { model.setCoordinator(session.id, missionId: mission.id) }
                 }
             }
-        }
-    }
-
-    private func setStatus(_ status: MissionStatus) {
-        model.missionAction { [client, id = mission.id] in
-            try await client.updateMission(id, UpdateMissionRequest(status: status))
         }
     }
 }

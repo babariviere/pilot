@@ -66,23 +66,11 @@ struct MissionSidebarRow: View {
             Divider()
             Button("Open Mission") { model.openMission(mission.id) }
             Button(isExpanded ? "Hide Chats" : "Show Chats") { isExpanded.toggle() }
-            Button("Edit Title and Goal…") { model.missionSheet = .edit(missionId: mission.id) }
+            MissionEditAction(missionId: mission.id)
             Divider()
-            if mission.status != .done {
-                Button("Mark as Done") { setStatus(.done) }
-            }
-            if mission.status != .active {
-                Button("Reopen") { setStatus(.active) }
-            }
-            if mission.status != .archived {
-                Button("Archive Mission") { setStatus(.archived) }
-            }
-        }
-    }
-
-    private func setStatus(_ status: MissionStatus) {
-        model.missionAction { [client = model.client, id = mission.id] in
-            try await client.updateMission(id, UpdateMissionRequest(status: status))
+            MissionStatusActions(missionId: mission.id, status: mission.status)
+            Divider()
+            MissionDeleteAction(missionId: mission.id)
         }
     }
 }

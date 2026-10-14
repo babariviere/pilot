@@ -55,6 +55,16 @@ struct MainWindow: View {
         } message: {
             Text(model.sessionActionError ?? "")
         }
+        .confirmationDialog("Delete this mission?", isPresented: Binding(
+            get: { model.pendingMissionDeletionId != nil },
+            set: { if !$0 { model.pendingMissionDeletionId = nil } }
+        ), presenting: model.pendingMissionDeletionId) { missionId in
+            Button("Delete Mission", role: .destructive) {
+                model.missionAction { try await model.deleteMission(missionId) }
+            }
+        } message: { _ in
+            Text("Its brief, tasks and activity are deleted. Member chats are kept and detached from the mission.")
+        }
         .sheet(item: $model.missionSheet) { sheet in
             MissionSheetView(sheet: sheet).environmentObject(model)
         }
