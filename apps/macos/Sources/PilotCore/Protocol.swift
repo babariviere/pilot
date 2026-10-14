@@ -73,6 +73,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let state: String
     /// Daemon-derived user-visible work, including live jobs and their pending follow-up.
     public let working: Bool?
+    /// Work paused by the Mac sleep policy. Omitted by older daemons.
+    public var sleepPaused: Bool? = nil
     /// Worker startup failed. Retry reloads it without replacing queued messages or history.
     public let canRetryStartup: Bool?
     /// Live jobs owned by this worker. Nil when none.
@@ -108,7 +110,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// The workspace has work no PR carries, so terminal-PR rules do not apply. Omitted when none, or by older daemons.
     public let unpublishedWork: Bool?
 
-    public var isWorking: Bool { working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty) }
+    public var isWorking: Bool { sleepPaused != true && (working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty)) }
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }
     public var workspaceLabel: String {

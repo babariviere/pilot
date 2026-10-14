@@ -49,7 +49,7 @@ import type {
 } from "@pilot/protocol";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
-import { Conflict, NotFound } from "./errors.ts";
+import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { ModelCatalog } from "./models.ts";
@@ -228,6 +228,8 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	/** Work closed by the system sleep policy, never a user Stop. */
+	sleepPaused?: boolean;
 	id: string;
 	title: string;
 	/** Latest attempt list reported by the kernel, kept while it is parked. */
@@ -837,6 +839,14 @@ export class SessionManager {
 	private readonly kernelErrors = new Map<string, string>();
 	private readonly kernelRestartBackoffMs: number;
 
+	private sleepPause?: { since: number; wakeToken?: string };
+	private sleepTransition?: Promise<void>;
+	private sleepResuming?: Promise<void>;
+	private sleepRevision = 0;
+	get powerPause() {
+		return this.sleepPause ? { ...this.sleepPause } : undefined;
+	}
+
 	private readonly home: string;
 	private readonly autoRebase: PullRequestAutoRebase;
 	private readonly projects: ProjectStore;
@@ -916,12 +926,19 @@ export class SessionManager {
 
 	private async loadAdmitted(): Promise<void> {
 		await mkdir(this.sessionsDir, { recursive: true, mode: 0o700 });
+		try {
+			const pause = JSON.parse(await readFile(join(this.home, "power-pause.json"), "utf8"));
+			if (!this.sleepPause && pause && Number.isFinite(pause.since)) this.sleepPause = pause;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
 		for (const id of await readdir(this.sessionsDir)) {
 			if (!ID_PATTERN.test(id)) continue;
 			try {
 				const meta = JSON.parse(await readFile(join(this.sessionsDir, id, "meta.json"), "utf8")) as SessionMeta;
 				if (meta.id !== id) throw new Error("Session metadata ID does not match its directory");
 				normalizeLegacyOutcome(meta);
+				if (this.sleepPause && (meta.working || meta.initializing || meta.pending?.length)) meta.sleepPaused = true;
 				this.metas.set(meta.id, meta);
 			} catch (error) {
 				console.warn(`pilotd: skipping unreadable session ${id}: ${error}`);
@@ -940,7 +957,7 @@ export class SessionManager {
 			if (
 				meta.archivedAt === undefined &&
 				!meta.failure &&
-				(meta.initializing || meta.pending?.length || meta.working)
+				(meta.initializing || meta.pending?.length || meta.working || meta.sleepPaused)
 			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
@@ -1728,6 +1745,7 @@ export class SessionManager {
 			meta.prActivities.push({ type: "activity", requestId: `main-workspace:${target}:${id}:${suffix}`, text });
 		};
 		const busy =
+			meta.sleepPaused ||
 			meta.working ||
 			meta.initializing ||
 			meta.preparing ||
@@ -1798,6 +1816,7 @@ export class SessionManager {
 								mergedPrs: prs.filter((pr) => pr.state === "merged"),
 								allowed: () =>
 									this.closing ||
+									meta.sleepPaused ||
 									meta.working ||
 									worker?.busy ||
 									worker?.awaitingJobFollowUp ||
@@ -2076,6 +2095,10 @@ export class SessionManager {
 			.catch(() => undefined)
 			.then(async () => {
 				const meta = this.require(id);
+				if (this.sleepPause) {
+					await this.sleepTransition;
+					if (staleBefore !== undefined || autoArchivedPullRequest !== undefined) return this.summary(meta);
+				}
 				// Work outside every PR keeps the chat active until it is published or discarded. Checked first,
 				// so the rechecks below see any activity, pin or restoration that arrived meanwhile.
 				if (
@@ -2111,6 +2134,7 @@ export class SessionManager {
 				const worker = this.workers.get(id);
 				if (
 					archived &&
+					!(this.sleepPause && !worker) &&
 					(meta.working ||
 						// A terminal startup failure cannot drain its outbox. Keep those messages and
 						// preparation markers for restoration, but do not mistake them for live work.
@@ -2479,6 +2503,7 @@ export class SessionManager {
 		return (
 			!!meta &&
 			!this.closing &&
+			!this.sleepPause &&
 			meta.archivedAt === undefined &&
 			!meta.failure &&
 			!this.kernelBackingOff(id) &&
@@ -2561,6 +2586,7 @@ export class SessionManager {
 			if (worker?.state === "failed")
 				return { delivery: "rejected", mode, reason: "failed", error: worker.error ?? "Chat failed" };
 			await this.sendAdmitted(id, message, mode, requestId, true);
+			if (this.sleepPause) return { delivery: "queued", mode };
 			const report = this.deliveryReports.get(requestId);
 			if (report)
 				return report.delivery === "not_started" ? { ...report, delivery: "rejected", mode } : { ...report, mode };
@@ -2715,6 +2741,10 @@ export class SessionManager {
 	}
 
 	async stop(id: string): Promise<StopResponse> {
+		if (this.sleepPause)
+			throw new ServiceUnavailable(
+				"Agents are paused for sleep. Wake this Mac before stopping work, or archive the chat.",
+			);
 		const meta = this.require(id);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
@@ -3318,6 +3348,7 @@ export class SessionManager {
 		if (meta.failure || (meta.preparing && meta.cancelled)) listener([emptySnapshot]);
 		if (worker) worker.send({ type: "watch", watchId });
 		else if (
+			!this.sleepPause &&
 			!meta.failure &&
 			meta.archivedAt === undefined &&
 			!(meta.preparing && meta.cancelled) &&
@@ -3361,7 +3392,7 @@ export class SessionManager {
 					listener(structuredClone(view.events));
 					// Recover a committed attention version without treating viewing as activity,
 					// writing durable state, or fabricating a new completion timestamp.
-					if (view.completion && applyActivity(meta, false, view.completion)) this.emit(meta);
+					if (!this.sleepPause && view.completion && applyActivity(meta, false, view.completion)) this.emit(meta);
 				})
 				.catch((error: unknown) => {
 					if (error instanceof Error && error.name === "AbortError") return;
@@ -3442,6 +3473,106 @@ export class SessionManager {
 		}
 	}
 
+	/** Close kernels without aborting durable tasks. Block admissions synchronously before the first write. */
+	pauseForSleep(wakeToken?: string): Promise<void> {
+		this.sleepRevision++;
+		const latch = { since: Date.now(), ...(wakeToken ? { wakeToken } : {}) };
+		if (this.sleepResuming) this.sleepPause = latch;
+		else this.sleepPause ??= latch;
+		if (this.sleepTransition) return this.sleepTransition;
+		const resuming = this.sleepResuming;
+		const pause = async () => {
+			await resuming;
+			await this.savePowerPause();
+			// Detach synchronously before persistence so shutdown packets cannot complete/fail paused work.
+			const workers = [...this.workers];
+			for (const [id, worker] of workers) {
+				const meta = this.require(id);
+				if (
+					meta.working ||
+					meta.initializing ||
+					meta.pending?.length ||
+					worker.busy ||
+					worker.runningJobs?.length ||
+					worker.awaitingJobFollowUp ||
+					meta.subagents?.some((agent) => agent.state === "working")
+				)
+					meta.sleepPaused = true;
+				this.parked.add(worker);
+				this.workers.delete(id);
+				this.lastUse.delete(id);
+			}
+			// Bound concurrent kernel teardown and metadata writes. Admissions remain blocked during preparation.
+			for (let offset = 0; offset < workers.length; offset += 4) {
+				await Promise.all(
+					workers.slice(offset, offset + 4).map(async ([id, worker]) => {
+						const meta = this.require(id);
+						await this.save(meta);
+						const closing = worker.close().finally(() => {
+							if (this.parking.get(id) === closing) this.parking.delete(id);
+						});
+						this.parking.set(id, closing);
+						this.emit(meta);
+						await closing;
+					}),
+				);
+			}
+			await Promise.all([...this.parking.values()]);
+			await Promise.all([...this.saving.values()]);
+			await this.savePowerPause();
+			for (const meta of this.metas.values()) this.emit(meta);
+		};
+		const transition = pause().finally(() => {
+			if (this.sleepTransition === transition) this.sleepTransition = undefined;
+		});
+		this.sleepTransition = transition;
+		return transition;
+	}
+
+	/** Called only after a later full wake with connectivity, or an explicit policy disable. */
+	resumeAfterSleep(): Promise<void> {
+		if (this.sleepResuming) return this.sleepResuming;
+		const revision = this.sleepRevision;
+		const resume = async () => {
+			await this.sleepTransition;
+			// A paused admission may still be finishing workspace preparation or a rejected kernel request.
+			await Promise.allSettled([...this.starting.values()]);
+			if (!this.sleepPause || this.closing || revision !== this.sleepRevision) return;
+			await this.savePowerPause(null);
+			if (revision !== this.sleepRevision) {
+				await this.savePowerPause();
+				return;
+			}
+			this.sleepPause = undefined;
+			for (const meta of this.metas.values()) {
+				if (revision !== this.sleepRevision || this.closing) return;
+				if (!(meta.sleepPaused || meta.working || meta.initializing || meta.pending?.length)) continue;
+				if (meta.archivedAt === undefined && !meta.failure) {
+					// Keep the per-chat marker until its new kernel is ready. A second sleep cannot lose parked work.
+					void this.start(meta.id, true).catch((error: unknown) => console.warn(`pilotd: sleep resume: ${error}`));
+				} else {
+					delete meta.sleepPaused;
+					await this.save(meta);
+				}
+				this.emit(meta);
+			}
+		};
+		const transition = resume().finally(() => {
+			if (this.sleepResuming === transition) this.sleepResuming = undefined;
+		});
+		this.sleepResuming = transition;
+		return transition;
+	}
+
+	private async savePowerPause(
+		value: { since: number; wakeToken?: string } | null = this.sleepPause ?? null,
+	): Promise<void> {
+		const file = join(this.home, "power-pause.json");
+		const temp = `${file}.${randomUUID()}.tmp`;
+		await writeFile(temp, JSON.stringify(value), { mode: 0o600 });
+		await rename(temp, file);
+	}
+
 	async shutdown(): Promise<void> {
 		this.closing = true;
 		clearTimeout(this.archiveTimer);
@@ -3478,7 +3609,7 @@ export class SessionManager {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
-		if (this.closing || meta.failure) return Promise.resolve(new Map());
+		if (this.closing || this.sleepPause || meta.failure) return Promise.resolve(new Map());
 		// An existing drain owns its admission. Do not recheck its gate after any await.
 		if (!admitted && !this.workers.has(id)) this.updateGate.assertOpen();
 		const rejected = new Map<string, Error>();
@@ -3508,7 +3639,7 @@ export class SessionManager {
 						if (!this.factories.workspace && existsSync(join(plan.source, ".jj")))
 							await this.sharedWorkspaces.discardPartial(meta.cwd, plan.source);
 						else await rm(meta.cwd, { recursive: true, force: true });
-						if (this.closing) return;
+						if (this.closing || this.sleepPause) return;
 						const preparation = this.factories.workspace
 							? this.factories.workspace(
 									plan.source,
@@ -3533,7 +3664,7 @@ export class SessionManager {
 									);
 						this.preparations.add(preparation);
 						const created = await preparation.finally(() => this.preparations.delete(preparation));
-						if (this.closing) return;
+						if (this.closing || this.sleepPause) return;
 						meta.workspace = {
 							source: plan.source,
 							...(created.branch ? { branch: created.branch } : {}),
@@ -3550,23 +3681,25 @@ export class SessionManager {
 					}
 				}
 				await this.unparked(id);
-				if (this.closing) return;
+				if (this.closing || this.sleepPause) return;
 				const refresh = this.workspaceRefreshes.get(id);
 				if (refresh) await refresh;
-				if (this.closing) return;
+				if (this.closing || this.sleepPause) return;
 				const worker = this.ensureWorker(id);
 				await worker.ready;
-				while (!this.closing && meta.prActivities?.length) {
+				if (this.closing || this.sleepPause) return;
+				delete meta.sleepPaused;
+				while (!this.closing && !this.sleepPause && meta.prActivities?.length) {
 					const activity = meta.prActivities[0]!;
 					await worker.request(activity);
 					meta.prActivities = meta.prActivities.filter((item) => item !== activity);
 					await this.save(meta);
 				}
-				while (!this.closing) {
-					while (!this.closing && meta.pending?.length) {
+				while (!this.closing && !this.sleepPause) {
+					while (!this.closing && !this.sleepPause && meta.pending?.length) {
 						const command = meta.pending[0];
 						await this.save(meta);
-						if (this.closing) return;
+						if (this.closing || this.sleepPause) return;
 						// Stop can replace the queue while this write is in flight.
 						if (meta.pending[0] !== command) continue;
 						// User work arriving during persistence wins over an automatic notification.
@@ -3594,7 +3727,7 @@ export class SessionManager {
 							await this.deliver(id, worker, command);
 							if (command.type === "input") delete meta.inputError;
 						} catch (error) {
-							if (this.closing) return;
+							if (this.closing || this.sleepPause) return;
 							const failure = error instanceof Error ? error : new Error(String(error));
 							rejected.set(command.requestId, failure);
 							if (
@@ -3622,12 +3755,12 @@ export class SessionManager {
 							}
 							// Explicitly rejected input is removed, but other queued work and abort stay usable.
 						}
-						if (this.closing) return;
+						if (this.closing || this.sleepPause) return;
 						meta.pending = meta.pending.filter((pending) => pending !== command);
 						await this.save(meta);
 						this.emit(meta);
 					}
-					if (this.closing) return;
+					if (this.closing || this.sleepPause) return;
 					delete meta.initializing;
 					await this.save(meta);
 					// Input can arrive during the final metadata write.
@@ -3636,7 +3769,7 @@ export class SessionManager {
 					return;
 				}
 			} catch (error) {
-				if (this.closing) return;
+				if (this.closing || this.sleepPause) return;
 				if (error instanceof WorkerUnavailable) {
 					// Startup may have committed state before its acknowledgement was lost. Keep stable IDs.
 					// Without queued commands nothing is uncertain: the kernel failed, the session is still usable.
@@ -3673,6 +3806,7 @@ export class SessionManager {
 	}
 
 	private ensureWorker(id: string): SessionWorker {
+		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
 		if (this.closing) throw new Error("pilotd is shutting down");
@@ -3759,6 +3893,7 @@ export class SessionManager {
 	}
 
 	private onPacket(meta: SessionMeta, worker: SessionWorker, packet: KernelPacket): void {
+		if (this.parked.has(worker)) return;
 		if (
 			packet.type === "accepted" &&
 			packet.delivery &&
@@ -4025,16 +4160,27 @@ export class SessionManager {
 	}
 
 	private summary(meta: SessionMeta, worker = this.workers.get(meta.id)): SessionSummary {
+		const paused =
+			!!this.sleepPause &&
+			meta.archivedAt === undefined &&
+			!meta.failure &&
+			!!(meta.sleepPaused || meta.working || meta.initializing || meta.pending?.length);
 		const usage = this.usage(meta, worker);
-		const state = meta.failure
-			? "failed"
-			: meta.initializing
-				? "starting"
-				: meta.inputError && (!meta.working || !worker)
-					? "failed"
-					: (worker?.state ?? "parked");
+		const state = paused
+			? "parked"
+			: meta.failure
+				? "failed"
+				: meta.initializing
+					? "starting"
+					: meta.inputError && (!meta.working || !worker)
+						? "failed"
+						: (worker?.state ?? "parked");
 		const working =
-			state === "working" || state === "starting" || !!worker?.runningJobs?.length || !!worker?.awaitingJobFollowUp;
+			!paused &&
+			(state === "working" ||
+				state === "starting" ||
+				!!worker?.runningJobs?.length ||
+				!!worker?.awaitingJobFollowUp);
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
@@ -4068,6 +4214,7 @@ export class SessionManager {
 				: {}),
 			...(meta.workspaceReclaimedAt !== undefined ? { workspaceReclaimedAt: meta.workspaceReclaimedAt } : {}),
 			...(meta.workspaceCleanupError ? { workspaceCleanupError: meta.workspaceCleanupError } : {}),
+			...(paused ? { sleepPaused: true } : {}),
 			state,
 			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
@@ -4307,6 +4454,7 @@ export class SessionManager {
 			!meta.pinned &&
 			Date.now() >= target.mergedAt + DAY_MS &&
 			!this.closing &&
+			!this.sleepPause &&
 			meta.archivedAt === undefined &&
 			meta.autoArchivedPullRequest !== target.url
 		) {
@@ -4372,6 +4520,7 @@ export class SessionManager {
 				!meta.failure &&
 				!meta.inputError &&
 				!this.kernelBackingOff(meta.id) &&
+				!this.sleepPause &&
 				!meta.working &&
 				!meta.initializing &&
 				!meta.preparing &&

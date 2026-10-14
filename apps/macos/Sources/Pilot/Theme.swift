@@ -309,7 +309,7 @@ extension SessionStatus {
         case .done: "checkmark"
         case .failed: "exclamationmark.triangle.fill"
         case .stopped: "stop.circle.fill"
-        case .idle: "moon.zzz.fill"
+        case .idle, .paused: "moon.zzz.fill"
         }
     }
 

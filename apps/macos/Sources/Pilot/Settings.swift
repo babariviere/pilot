@@ -125,15 +125,16 @@ extension EnvironmentValues {
 
 /// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, notifications, terminal, updates
+    case appearance, notifications, energy, terminal, updates
     case project(String)
 
-    static let general: [SettingsTab] = [.appearance, .notifications, .terminal, .updates]
+    static let general: [SettingsTab] = [.appearance, .notifications, .energy, .terminal, .updates]
 
     var title: String {
         switch self {
         case .appearance: "Appearance"
         case .notifications: "Notifications"
+        case .energy: "Energy"
         case .terminal: "Terminal"
         case .updates: "Updates"
         case .project: "Project"
@@ -144,6 +145,7 @@ enum SettingsTab: Hashable {
         switch self {
         case .appearance: "textformat"
         case .notifications: "bell"
+        case .energy: "leaf"
         case .terminal: "terminal"
         case .updates: "arrow.down.circle"
         case .project: "folder"
@@ -188,6 +190,8 @@ struct SettingsView: View {
             SettingsPage("Appearance", subtitle: "Fonts for chat, code and tool output.") { AppearanceSettings() }
         case .notifications:
             SettingsPage("Notifications", subtitle: "Pilot only interrupts you for things that need you.") { NotificationSettings() }
+        case .energy:
+            SettingsPage("Energy", subtitle: "Keep work moving. Let the display rest.") { EnergySettings() }
         case .terminal:
             SettingsPage("Terminal", subtitle: "The session terminal runs on Ghostty.") { TerminalSettings() }
         case .updates:

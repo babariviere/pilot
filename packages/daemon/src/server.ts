@@ -60,6 +60,7 @@ import type { TerminalManager } from "./terminals.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import type { ScheduleService } from "./schedules.ts";
 import type { SourceRegistry } from "./sources.ts";
+import type { PowerService } from "./power.ts";
 import { validatePatch } from "./tracked-items.ts";
 
 const MAX_BODY = 1024 * 1024;
@@ -220,6 +221,7 @@ export function createDaemonServer(
 	memory?: ProjectMemoryService,
 	schedules?: ScheduleService,
 	tracking?: SourceRegistry,
+	power?: PowerService,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -253,6 +255,12 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "power" && parts.length === 2) {
+			if (!power) throw new ServiceUnavailable("Energy management is unavailable");
+			if (req.method === "GET") return json(res, 200, power.status());
+			if (req.method === "PATCH") return json(res, 200, await power.configure(await readJson(req)));
+			throw new HttpError(405, "Method not allowed");
+		}
 		if (parts[1] === "schedules" && parts.length <= 3) {
 			if (!schedules) throw new ServiceUnavailable("Scheduling is unavailable");
 			const id = parts[2];
@@ -768,6 +776,8 @@ export function createDaemonServer(
 		const data = JSON.stringify(message);
 		for (const send of clients.values()) send(data);
 	};
+	const stopPowerWatch = power?.onChange(() => broadcast({ type: "power", power: power.status() }));
+	server.on("close", () => stopPowerWatch?.());
 	// Coalesce claim/finalize and CRUD bursts. No serialization when no clients are connected.
 	let schedulesTimer: NodeJS.Timeout | undefined;
 	let schedulesVersion = 0;
@@ -914,6 +924,7 @@ export function createDaemonServer(
 
 	wss.on("connection", (ws: WebSocket) => {
 		clients.set(ws, boundedSender(ws));
+		if (power) send(ws, { type: "power", power: power.status() });
 		send(ws, { type: "projects", projects: projects.list() });
 		if (schedules) {
 			const version = schedulesVersion;

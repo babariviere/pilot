@@ -1037,6 +1037,40 @@ for (const scenario of ["working", "jobs", "follow-up", "dirty", "open", "bindin
 	});
 }
 
+test("main updates preserve sleep-paused job result workspaces until wake", async (t) => {
+	const f = await fixture(t);
+	const member = await f.spawn();
+	const { mission } = await f.service.create({ projectId: f.project.id, title: "M" });
+	f.service.join(member.id, { missionId: mission.id });
+	const meta = f.sessions["require"](member.id);
+	meta.workspace = {
+		source: f.project.path,
+		base: "a".repeat(40),
+		jj: true,
+		shared: { repository: "/owned", name: member.id },
+	};
+	t.mock.method(f.sessions["sharedWorkspaces"], "fetchMain", async () => "b".repeat(40));
+	const refresh = t.mock.method(f.sessions["sharedWorkspaces"], "refreshBase", async () => ({ base: "b".repeat(40) }));
+	const worker = f.workers.get(member.id)!;
+	worker.onPacket({
+		type: "jobs.changed",
+		jobs: [{ id: "tests", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }],
+	});
+	worker.onPacket({ type: "jobs.changed", jobs: [] });
+	await f.sessions.pauseForSleep("100:1");
+	assert.equal(meta.sleepPaused, true);
+	await f.sessions.refreshProjectMain(f.project.id);
+	assert.equal(refresh.mock.calls.length, 0, "a closed worker still owns unfinished durable work");
+	assert.equal(meta.workspace.base, "a".repeat(40));
+	assert.equal(meta.workspaceMainDue, "b".repeat(40));
+	await f.sessions.resumeAfterSleep();
+	await until(() => f.workers.get(member.id) !== worker);
+	await f.sessions.refreshMainWorkspace(member.id);
+	await until(() => !f.sessions["workspaceRefreshes"].size && !f.sessions["starting"].size);
+	assert.equal(refresh.mock.calls.length, 1, "wake retries the deferred main head");
+	assert.equal(meta.workspace.base, "b".repeat(40));
+});
+
 test("main updates fan out to idle members without a PR; busy bursts keep only latest main", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();

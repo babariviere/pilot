@@ -2,6 +2,7 @@ import Foundation
 
 /// Fully decoded WebSocket updates, prepared before crossing onto the UI actor.
 public enum ServerUpdate: Sendable {
+    case power(PowerStatus)
     case schedules([ScheduledItem])
     case projects([Project])
     case sources([TrackingSource])
@@ -30,6 +31,9 @@ public enum ServerUpdate: Sendable {
     public static func decode(_ data: Data) throws -> ServerUpdate? {
         let json = try JSONValue.decode(data)
         switch json["type"]?.string {
+        case "power":
+            guard let value = json["power"] else { return nil }
+            return .power(try value.decode(PowerStatus.self))
         case "schedules":
             guard let list = json["schedules"] else { return nil }
             return .schedules(try list.decode([ScheduledItem].self))
