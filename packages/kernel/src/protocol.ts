@@ -101,6 +101,7 @@ export type KernelPacket =
 			/** Omitted while the session has a single attempt. */
 			attempts?: SessionAttempt[];
 	  }
+	| { type: "jobs.changed"; jobs: SessionJob[] }
 	| { type: "usage"; usage: KernelUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
 	| { type: "jobs"; requestId: string; jobs: SessionJob[] }

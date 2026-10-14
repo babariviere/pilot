@@ -533,9 +533,15 @@ export class MissionService {
 						id: member.id,
 						title: member.title,
 						coordinator: member.id === mission.coordinatorSessionId,
-						state: member.state,
+						state:
+							member.runningJobs?.length && member.state !== "working" && member.state !== "starting"
+								? "waiting on background job"
+								: member.state,
+						...(member.runningJobs?.length
+							? { runningJobs: member.runningJobs.map(({ id, name, startedAt }) => ({ id, name, startedAt })) }
+							: {}),
 						boundPullRequests: member.boundPullRequests ?? [],
-						...(member.outcome !== undefined ? { outcome: member.outcome } : {}),
+						...(!member.runningJobs?.length && member.outcome !== undefined ? { outcome: member.outcome } : {}),
 						...(member.outcomeAt !== undefined ? { outcomeAt: member.outcomeAt } : {}),
 						...(member.outcomeReason !== undefined ? { outcomeReason: member.outcomeReason } : {}),
 						...(member.archivedAt !== undefined ? { archivedAt: member.archivedAt } : {}),
@@ -582,11 +588,24 @@ export class MissionService {
 											(member.archivedAt === undefined &&
 												(!detail.tasks.some((task) => task.sessionId === member.id) ||
 													member.state === "working" ||
-													member.state === "starting")),
+													member.state === "starting" ||
+													!!member.runningJobs?.length)),
 									)
 									.map((member) => ({
 										title: member.title,
-										state: member.state,
+										state:
+											member.runningJobs?.length && member.state !== "working" && member.state !== "starting"
+												? "waiting on background job"
+												: member.state,
+										...(member.runningJobs?.length
+											? {
+													runningJobs: member.runningJobs.map(({ id, name, startedAt }) => ({
+														id,
+														name,
+														startedAt,
+													})),
+												}
+											: {}),
 										...(member.archivedAt !== undefined ? { archived: true } : {}),
 										tasks: open.filter((task) => task.sessionId === member.id).map((task) => task.number),
 									})),

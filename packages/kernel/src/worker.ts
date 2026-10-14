@@ -313,6 +313,7 @@ export function runKernelWorker(): void {
 				const opened = await KernelSession.open(command.spec, {
 					onWorking: (working, completion) =>
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),
+					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),

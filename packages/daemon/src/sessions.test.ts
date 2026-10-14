@@ -1527,6 +1527,28 @@ for (const telemetry of ["usage", "artifacts.changed"] as const) {
 	});
 }
 
+test("reported running jobs prevent parking even when process inspection misses their children", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { idleParkMs: 60_000 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions.stop(created.id);
+	const worker = f.workers[0]!;
+	const meta = sessions["metas"].get(created.id)!;
+	const jobs = [
+		{ id: "tests", name: "Tests", state: "running" as const, startedAt: Date.now(), outputPath: "/tmp/tests.log" },
+	];
+	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+	t.mock.method(Date, "now", () => jobs[0]!.startedAt + 120_000);
+	assert.equal(worker.children, false);
+	await sessions["parkIdleWorkers"]();
+	assert.equal(worker.closed, false);
+	sessions["onPacket"](meta, worker, { type: "jobs.changed", jobs: [] });
+	await sessions["parkIdleWorkers"]();
+	await sessions["unparked"](created.id);
+	assert.equal(worker.closed, true);
+});
+
 test("execution packets reset the parking deadline and working workers remain protected", async (t) => {
 	const f = await fixture(t);
 	const idleParkMs = 60_000;
@@ -1907,6 +1929,38 @@ async function outcomeFixture(run: (manager: SessionManager, meta: Meta, home: s
 async function flush(manager: SessionManager) {
 	await Promise.all(manager["saving"].values());
 }
+
+test("live job snapshots clear on worker exit and daemon restart, ignoring a replaced worker", async () => {
+	await outcomeFixture(async (manager, meta, home) => {
+		const worker = fakeWorker();
+		manager["workers"].set(meta.id, worker);
+		const jobs = [
+			{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" },
+		];
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+		assert.deepEqual(manager.get(meta.id)?.runningJobs, jobs);
+		await manager["save"](meta);
+		const reopened = new SessionManager(home, new ProjectStore(home));
+		await reopened.load();
+		try {
+			assert.equal(reopened.get(meta.id)?.runningJobs, undefined);
+		} finally {
+			await reopened.shutdown();
+		}
+		manager["onExit"](meta, worker, 0);
+		assert.equal(manager.get(meta.id)?.runningJobs, undefined);
+		const replacement = fakeWorker();
+		manager["workers"].set(meta.id, replacement);
+		manager["onPacket"](meta, worker, { type: "jobs.changed", jobs });
+		assert.equal(manager.get(meta.id)?.runningJobs, undefined);
+		manager["onPacket"](meta, replacement, { type: "jobs.changed", jobs });
+		assert.deepEqual(manager.get(meta.id)?.runningJobs, jobs);
+		replacement.state = "failed";
+		manager["onExit"](meta, replacement, 1);
+		assert.equal(manager.get(meta.id)?.runningJobs, undefined);
+		assert.equal(manager.get(meta.id)?.outcome, "failed");
+	});
+});
 
 test("ready and working completions survive restart parked, replay does not change completion version", async () => {
 	await outcomeFixture(async (manager, meta, home) => {

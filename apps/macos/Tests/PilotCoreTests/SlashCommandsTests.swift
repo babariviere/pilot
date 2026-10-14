@@ -59,6 +59,16 @@ private func token(_ text: String, at location: Int? = nil) -> String? {
     #expect(try JSONDecoder().decode(SessionJobsResponse.self, from: Data(#"{"jobs":[]}"#.utf8)).jobs.isEmpty)
 }
 
+@Test func sessionSummaryAcceptsLiveJobsAndOlderDaemons() throws {
+    let job = SessionJob(id: "tests", name: "Tests", startedAt: 1000, outputPath: "/tmp/tests.log")
+    let summary = SessionSummary(id: "chat", title: "Chat", cwd: "/tmp", createdAt: 0, updatedAt: 0,
+                                 state: "idle", runningJobs: [job])
+    let encoded = try JSONEncoder().encode(summary)
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: encoded).runningJobs == [job])
+    let old = Data(#"{"id":"chat","title":"Chat","cwd":"/tmp","createdAt":0,"updatedAt":0,"state":"parked"}"#.utf8)
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: old).runningJobs == nil)
+}
+
 @Test func compactInstructionsRecognizeOnlyTheCompactCommand() {
     #expect(SlashCommands.compactInstructions("/compact") == "")
     #expect(SlashCommands.compactInstructions("  /compact  ") == "")

@@ -1,8 +1,101 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runningJobs } from "./jobs.ts";
+import { JobsMonitor, runningJobs } from "./jobs.ts";
 
 const job = { id: "job-1", name: "Tests", state: "running", startedAt: 1000, outputPath: "/tmp/tests/output.log" };
+
+test("monitoring probes only live jobs, coalesces, detects exits and stops on close", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	let registry: (typeof job)[] = [];
+	let reads = 0;
+	const changes: unknown[] = [];
+	const monitor = new JobsMonitor(
+		async () => {
+			reads++;
+			return runningJobs(registry);
+		},
+		(jobs) => changes.push(jobs),
+	);
+	await monitor.refresh();
+	t.mock.timers.tick(10_000);
+	assert.equal(reads, 1, "empty sessions have no probe timer");
+	registry = [job];
+	const first = monitor.refresh();
+	assert.equal(monitor.refresh(), first);
+	await first;
+	assert.deepEqual(changes, [[job]]);
+	t.mock.timers.tick(1_000);
+	await monitor.refresh();
+	assert.deepEqual(changes, [[job]], "unchanged probes do not emit IPC or daemon updates");
+	registry = [];
+	t.mock.timers.tick(1_000);
+	await monitor.refresh();
+	assert.deepEqual(changes, [[job], []]);
+	const idleReads = reads;
+	t.mock.timers.tick(10_000);
+	assert.equal(reads, idleReads);
+	registry = [job];
+	await monitor.refresh();
+	await monitor.close();
+	assert.deepEqual(changes, [[job], [], [job], []]);
+	const closedReads = reads;
+	t.mock.timers.tick(10_000);
+	await monitor.refresh();
+	assert.equal(reads, closedReads);
+});
+
+test("inspection failures retain known jobs, and close discards an in-flight read", async () => {
+	let fail = false;
+	let release!: (jobs: ReturnType<typeof runningJobs>) => void;
+	let delayed = false;
+	const changes: unknown[] = [];
+	const monitor = new JobsMonitor(
+		async () => {
+			if (fail) throw new Error("unavailable");
+			if (delayed)
+				return new Promise((resolve) => {
+					release = resolve;
+				});
+			return runningJobs([job]);
+		},
+		(jobs) => changes.push(jobs),
+	);
+	await monitor.refresh();
+	fail = true;
+	await monitor.refresh();
+	assert.deepEqual(changes, [[job]]);
+	fail = false;
+	delayed = true;
+	const reading = monitor.refresh();
+	const closing = monitor.close();
+	release(runningJobs([{ ...job, id: "late" }]));
+	await Promise.all([reading, closing]);
+	assert.deepEqual(changes, [[job], []]);
+});
+
+test("a start racing an older empty snapshot forces a fresh read before releasing callers", async () => {
+	let release!: (jobs: ReturnType<typeof runningJobs>) => void;
+	let first = true;
+	const changes: unknown[] = [];
+	const monitor = new JobsMonitor(
+		() => {
+			if (first) {
+				first = false;
+				return new Promise((resolve) => {
+					release = resolve;
+				});
+			}
+			return Promise.resolve(runningJobs([job]));
+		},
+		(jobs) => changes.push(jobs),
+	);
+	const stale = monitor.refresh();
+	const afterStart = monitor.refresh();
+	release([]);
+	await Promise.all([stale, afterStart]);
+	assert.deepEqual(changes, [[job]]);
+	await monitor.close();
+});
 
 test("jobs snapshots contain only running jobs and client fields", () => {
 	assert.deepEqual(

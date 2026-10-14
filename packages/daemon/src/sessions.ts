@@ -180,6 +180,7 @@ export interface SessionWorker {
 	/** Whether the kernel has live subprocesses (background jobs, subagents). Such workers are never parked. */
 	hasChildren?(): Promise<boolean>;
 	jobs?(): Promise<SessionJob[]>;
+	runningJobs?: SessionJob[];
 }
 
 export interface SessionManagerOptions {
@@ -940,6 +941,7 @@ export class SessionManager {
 		return (
 			this.workers.get(id) === worker &&
 			worker.state === "idle" &&
+			!worker.runningJobs?.length &&
 			!(worker.busy ?? true) &&
 			!this.watchers.get(id)?.size &&
 			!this.starting.has(id) &&
@@ -3346,6 +3348,7 @@ export class SessionManager {
 		// Display-only background refreshes must not keep an unwatched idle kernel resident.
 		if (
 			packet.type !== "usage" &&
+			packet.type !== "jobs.changed" &&
 			packet.type !== "artifacts.changed" &&
 			packet.type !== "children" &&
 			this.workers.get(meta.id) === worker
@@ -3472,6 +3475,12 @@ export class SessionManager {
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}
+		if (packet.type === "jobs.changed") {
+			if (this.workers.get(meta.id) !== worker) return;
+			worker.runningJobs = packet.jobs;
+			this.emit(meta, worker);
+			return;
+		}
 		if (packet.type === "subagents") {
 			if (this.workers.get(meta.id) !== worker) return;
 			if (JSON.stringify(packet.subagents) === JSON.stringify(meta.subagents ?? [])) return;
@@ -3570,6 +3579,7 @@ export class SessionManager {
 					: meta.inputError && (!meta.working || !worker)
 						? "failed"
 						: (worker?.state ?? "parked"),
+			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
