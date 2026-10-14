@@ -227,7 +227,7 @@ extension MissionEventKind {
         case .artifact: "cube.transparent"
         case .resource: "link"
         case .member: "person.badge.plus"
-        case .coordinator: "star"
+        case .coordinator: MissionCoordinatorIndicator.symbol
         case .github: "arrow.triangle.branch"
         }
     }
