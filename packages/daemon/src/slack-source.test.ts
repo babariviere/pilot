@@ -261,9 +261,16 @@ test("format errors are visible through registry health, retain last data, and n
 	);
 	assert.equal((await registry.poll(`${project.id}:slack`)).status, "ok");
 	bad = true;
+	const warn = t.mock.method(console, "warn", () => {});
 	const failed = await registry.poll(`${project.id}:slack`);
 	assert.equal(failed.status, "error");
-	assert.equal(failed.error, new SlackFormatChanged().message);
+	assert.equal(failed.error, "Couldn't read some Slack messages.");
+	// One log line with the technical cause, never the message content.
+	assert.equal(warn.mock.callCount(), 1);
+	const line = String(warn.mock.calls[0]?.arguments[0]);
+	assert.match(line, /^pilotd: Slack sync failed for project .+: Slack response format changed \(channel header\)$/);
+	assert.doesNotMatch(line, /private|malformed/);
+	warn.mock.restore();
 	assert.equal(registry.dashboard(project.id)[0]?.total, 1);
 	assert.equal(calls, 1);
 });

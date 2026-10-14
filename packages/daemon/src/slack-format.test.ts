@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { TrackingJson } from "@pilot/protocol";
-import { slackEmptyFixture, slackHistoryFixture, slackThreadFixture } from "./slack-fixtures.ts";
+import {
+	slackEmptyFixture,
+	slackHistoryFixture,
+	slackMetadataFixture,
+	slackMetadataThreadFixture,
+	slackThreadFixture,
+} from "./slack-fixtures.ts";
 import { parseSlackPage, parseSlackThread, SlackFormatChanged } from "./slack-format.ts";
 
 test("observed history wire shape: multiline content, bot/user headers, thread counts, pagination and empty pages", () => {
@@ -14,11 +20,11 @@ test("observed history wire shape: multiline content, bot/user headers, thread c
 	assert.equal(page.messages[0]?.replies, 2);
 	assert.equal(page.messages[1]?.replies, 0);
 	assert.match(page.messages[0]!.text, /Steps:\n1\./);
-	assert.doesNotMatch(page.messages[0]!.text, /Thread:/);
+	assert.doesNotMatch(page.messages[0]!.text, /Thread:|Reactions:/);
 	assert.equal(parseSlackPage(slackEmptyFixture, 8).messages.length, 0);
 	assert.deepEqual(
 		parseSlackPage(
-			{ ...slackHistoryFixture, messages: slackHistoryFixture.messages.replaceAll("===\n", "=== \n") },
+			{ ...slackHistoryFixture, messages: slackHistoryFixture.messages.replaceAll("=== \n", "===\n") },
 			8,
 		),
 		page,
@@ -44,6 +50,87 @@ test("observed thread wire shape is distinct from history: parent and numbered r
 			30,
 		).next,
 		"REPLIES",
+	);
+});
+test("trailing Thread, Reactions and Files lines are metadata in any order; attachments stay as content", () => {
+	const page = parseSlackPage(slackMetadataFixture, 8);
+	assert.equal(page.channel, "C000000002");
+	assert.deepEqual(
+		page.messages.map(({ ts, replies, text }) => ({ ts, replies, text })),
+		[
+			{
+				ts: "1791961960.000201",
+				replies: 2,
+				text: "The invoice preview shows the wrong currency for <https://example.test/accounts/42|account 42>.",
+			},
+			{ ts: "1791961500.000202", replies: 0, text: "Same here after the last deploy, screenshot attached." },
+			// The file-only message has nothing to classify and is skipped.
+			{
+				ts: "1791961200.000204",
+				replies: 1,
+				text: "*Alert:* checkout latency above threshold\nAttachment: monitor: [Triggered] checkout latency (https://monitor.example.test/alerts/7)\np95 latency 2.4s over the last 10 minutes.\n\nMetric value: 2.4",
+			},
+		],
+	);
+	// Same result whatever the order of the metadata lines, with or without blank lines between them.
+	const reordered = slackMetadataFixture.messages.replace(
+		/(Thread: 2 [^\n]+)\n(Reactions: [^\n]+)\n(Files: [^\n]+)/,
+		"$3\n\n$1\n$2",
+	);
+	assert.notEqual(reordered, slackMetadataFixture.messages);
+	assert.deepEqual(parseSlackPage({ ...slackMetadataFixture, messages: reordered }, 8), page);
+	// A file-only message with replies is kept, so its thread is still read.
+	const fileThread = slackMetadataFixture.messages.replace(
+		"Files: recording.mov",
+		"Thread: 1 replies (latest: 2026-10-14 09:06:00 CEST)\nFiles: recording.mov",
+	);
+	const withThread = parseSlackPage({ ...slackMetadataFixture, messages: fileThread }, 8).messages[2];
+	assert.deepEqual([withThread?.ts, withThread?.text, withThread?.replies], ["1791961450.000203", "", 1]);
+	// Without the Thread line, metadata still never leaks into the text.
+	const noThread = parseSlackPage(
+		{ ...slackMetadataFixture, messages: slackMetadataFixture.messages.replace(/Thread: 2 [^\n]+\n/, "") },
+		8,
+	);
+	assert.equal(noThread.messages[0]?.replies, 0);
+	assert.equal(noThread.messages[0]?.text, page.messages[0]?.text);
+	// A repeated metadata line is ambiguous: the earlier one stays in the text and is never dropped silently.
+	const repeated = slackMetadataFixture.messages.replace("\nThread: 2", "\nFiles: notes.txt\nThread: 2");
+	assert.match(parseSlackPage({ ...slackMetadataFixture, messages: repeated }, 8).messages[0]!.text, /Files: notes/);
+	// The Thread line keeps its strict format.
+	assert.throws(
+		() =>
+			parseSlackPage(
+				{ ...slackMetadataFixture, messages: slackMetadataFixture.messages.replace("2 replies", "two replies") },
+				8,
+			),
+		SlackFormatChanged,
+	);
+});
+test("thread messages drop trailing Reactions and Files lines and may be file only", () => {
+	const thread = parseSlackThread(slackMetadataThreadFixture, "1791961960.000201", 30);
+	assert.deepEqual(
+		thread.messages.map((message) => message.text),
+		[
+			"The invoice preview shows the wrong currency for <https://example.test/accounts/42|account 42>.",
+			"",
+			"It only happens for accounts created this month.",
+		],
+	);
+	assert.equal(
+		parseSlackThread(slackThreadFixture, "1791885305.000001", 30).messages[1]?.text.includes("Reactions"),
+		false,
+	);
+	assert.throws(
+		() =>
+			parseSlackThread(
+				{
+					...slackMetadataThreadFixture,
+					messages: slackMetadataThreadFixture.messages.replace("Reactions: pray (1)", "Thread: 1 replies"),
+				},
+				"1791961960.000201",
+				30,
+			),
+		SlackFormatChanged,
 	);
 });
 test("format drift, missing IDs, ambiguous framing, bad counts and oversized pages fail visibly rather than becoming empty", () => {

@@ -381,7 +381,7 @@ export class SourceRegistry {
 							? `${label} is rate limiting requests. Try again in a minute.`
 							: controller.signal.aborted
 								? "The search was cancelled. Try again."
-								: `Could not reach ${label}. Check pi mcp list and retry.`,
+								: `Couldn't reach ${label}. Try again in a moment.`,
 				};
 			})
 			.finally(() => {
@@ -398,6 +398,9 @@ export class SourceRegistry {
 	private failed(id: string, key: string, error: unknown): void {
 		if (this.currentKey(id) !== key || this.stopped) return;
 		const failures = (this.health.get(id)?.failures ?? 0) + 1;
+		const label = id.endsWith(":slack") ? "Slack" : "Linear";
+		// The app shows plain text and the retry time. The technical cause goes to the daemon log only.
+		console.warn(`pilotd: ${label} sync failed for project ${id.slice(0, id.lastIndexOf(":"))}: ${logCause(error)}`);
 		this.health.set(id, {
 			key,
 			failures,
@@ -414,10 +417,10 @@ export class SourceRegistry {
 				error instanceof SourceSignInRequired
 					? "Sign in required"
 					: error instanceof SourceRateLimited
-						? "Rate limited. Sync will retry after a pause."
+						? `${label} is limiting requests.`
 						: error instanceof SlackFormatChanged || error instanceof SlackModelUnavailable
 							? error.message
-							: "Could not sync this source. Check pi mcp list and retry.",
+							: `Couldn't read ${label}.`,
 		});
 	}
 	private describe(project: Project, kind: TrackedKind): TrackingSource {
@@ -518,4 +521,11 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 		signal.addEventListener("abort", abort, { once: true });
 		work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
 	});
+}
+/** One bounded line for the daemon log. Never message content: JSON syntax errors quote their input. */
+export function logCause(error: unknown): string {
+	if (error instanceof SlackFormatChanged) return `Slack response format changed (${error.reason})`;
+	if (error instanceof SyntaxError) return "SyntaxError: invalid JSON";
+	const text = error instanceof Error ? `${error.name}: ${error.message}` : `non-error ${typeof error}`;
+	return text.replace(/\s+/g, " ").slice(0, 200);
 }

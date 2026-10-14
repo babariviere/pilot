@@ -8,7 +8,9 @@ const PAGE_SIZE = 100;
 const MAX_PAGES = 5;
 const FULL_REFRESH_MS = 15 * 60_000;
 const OPEN_TYPES = new Set(["triage", "backlog", "unstarted", "started"]);
-const TYPES = new Set([...OPEN_TYPES, "completed", "canceled"]);
+/** Linear reports issues closed as duplicates with their own state type. */
+const CLOSED_TYPES = new Set(["completed", "canceled", "duplicate"]);
+const TYPES = new Set([...OPEN_TYPES, ...CLOSED_TYPES]);
 const DETAIL_FIELDS = [
 	"id",
 	"uuid",
@@ -45,7 +47,7 @@ export async function pollLinear(context: SourcePollContext): Promise<SourcePoll
 	const since = !full && typeof previous?.updatedAt === "string" ? previous.updatedAt : undefined;
 	const details = await listEligible(context, cycle?.id, DETAIL_FIELDS, since);
 	const items = details.filter((issue) => ids.has(issueId(issue))).map((issue) => normalize(issue, cycle?.id));
-	const done = eligible.filter((issue) => ["completed", "canceled"].includes(stateType(issue))).length;
+	const done = eligible.filter((issue) => CLOSED_TYPES.has(stateType(issue))).length;
 	const inProgress = eligible.filter((issue) => stateType(issue) === "started").length;
 	return {
 		items,
@@ -162,12 +164,10 @@ function normalize(issue: ObjectJson, cycleId?: string): TrackedInput {
 	if (cycleId && issue.cycleId !== cycleId) throw new Error("Issue is outside the requested cycle");
 	const statusType = stateType(issue);
 	const status = typeof issue.status === "string" ? issue.status : object(issue.status!).name;
-	const priority =
-		typeof issue.priority === "object" && issue.priority !== null ? object(issue.priority).value : issue.priority;
-	if (priority !== null && (typeof priority !== "number" || priority < 0 || priority > 4))
-		throw new Error("Invalid priority");
-	if (issue.estimate !== null && (typeof issue.estimate !== "number" || issue.estimate < 0))
-		throw new Error("Invalid estimate");
+	const priority = numeric(issue.priority, "priority");
+	if (priority !== null && (priority < 0 || priority > 4)) throw new Error("Invalid priority");
+	const estimate = numeric(issue.estimate, "estimate");
+	if (estimate !== null && estimate < 0) throw new Error("Invalid estimate");
 	const url = string(issue.url, 4000);
 	if (new URL(url).protocol !== "https:") throw new Error("Invalid issue URL");
 	return {
@@ -181,7 +181,7 @@ function normalize(issue: ObjectJson, cycleId?: string): TrackedInput {
 			statusType,
 			state: string(status, 200),
 			priority,
-			estimate: issue.estimate,
+			estimate,
 			cycleId: issue.cycleId === null ? null : string(issue.cycleId, 200),
 			assigneeId: string(issue.assigneeId, 200),
 			teamId: string(issue.teamId, 200),
@@ -232,6 +232,13 @@ export async function linearPrefill(context: SourcePollContext, item: TrackedIte
 function object(value: TrackingJson): ObjectJson {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected Linear object");
 	return value;
+}
+/** Priority and estimate arrive as {value, name} objects (or plain numbers), and null or absent when unset. */
+function numeric(value: TrackingJson | undefined, field: string): number | null {
+	const number = value !== null && typeof value === "object" && !Array.isArray(value) ? value.value : value;
+	if (number === null || number === undefined) return null;
+	if (typeof number !== "number" || !Number.isFinite(number)) throw new Error(`Invalid ${field}`);
+	return number;
 }
 function string(value: TrackingJson | undefined, max: number): string {
 	if (typeof value !== "string" || !value.trim() || value.length > max) throw new Error("Invalid Linear text");

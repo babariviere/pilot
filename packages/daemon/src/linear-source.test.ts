@@ -6,7 +6,7 @@ import { test, type TestContext } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
 import { linearPrefill, pollLinear } from "./linear-source.ts";
 import { ProjectStore } from "./projects.ts";
-import { SourceRegistry, type SourcePollContext } from "./sources.ts";
+import { logCause, SourceRegistry, type SourcePollContext } from "./sources.ts";
 import { SourceRateLimited } from "./source-mcp.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 
@@ -71,6 +71,38 @@ test("recorded issue pages are mine/team scoped, normalize branch/metadata and u
 	await pollLinear(delta.ctx);
 	assert.equal(delta.calls[1]?.args.updatedAt, undefined, "membership is reconciled, not incremental");
 	assert.equal(delta.calls[3]?.args.updatedAt, (result.cursor as Record<string, TrackingJson>).updatedAt);
+});
+test("estimate and priority accept {value, name} objects, plain numbers, null and absent values", async () => {
+	for (const [estimate, expected] of [
+		[{ value: 5, name: "5 Points" }, 5],
+		[2, 2],
+		[null, null],
+		[undefined, null],
+		[{ value: null, name: "No estimate" }, null],
+	] as const) {
+		const recording = await fixture("current");
+		const issue = recording.pages[0]!.issues[0]!;
+		if (estimate === undefined) delete issue.estimate;
+		else issue.estimate = estimate as TrackingJson;
+		const result = await pollLinear(context(recording).ctx);
+		assert.equal(result.items[0]?.metadata.estimate, expected);
+		assert.equal(result.items[0]?.metadata.priority, 2);
+	}
+	for (const estimate of [{ value: -1, name: "?" }, { value: "3" }, "3", [3]] as TrackingJson[]) {
+		const recording = await fixture("current");
+		recording.pages[0]!.issues[0]!.estimate = estimate;
+		await assert.rejects(pollLinear(context(recording).ctx), /Invalid estimate/);
+	}
+	const recording = await fixture("current");
+	recording.pages[0]!.issues[0]!.priority = { value: 7, name: "?" };
+	await assert.rejects(pollLinear(context(recording).ctx), /Invalid priority/);
+});
+test("issues closed as duplicates count as done in the cycle", async () => {
+	const recording = await fixture("current");
+	recording.pages[1]!.issues[0]!.statusType = "duplicate";
+	const result = await pollLinear(context(recording).ctx);
+	assert.equal(result.linear?.currentCycle?.done, 1);
+	assert.equal(result.items[1]?.metadata.statusType, "duplicate");
 });
 test("rollover resets updatedAt and refetches all new cycle issues", async () => {
 	const initial = await pollLinear(context(await fixture("current")).ctx);
@@ -220,13 +252,36 @@ test("rate limits preserve items/checkpoint and enforce retry-after without a re
 	f.setFailure(new SourceRateLimited(120_000));
 	const status = await f.registry.poll(id);
 	assert.equal(status.status, "error");
-	assert.match(status.error!, /Rate limited/);
+	assert.equal(status.error, "Linear is limiting requests.");
 	assert.equal(status.nextPollAt, Date.now() + 120_000);
 	assert.deepEqual(f.items.checkpoint(id), checkpoint);
 	assert.throws(() => f.registry.poll(id), /backing off/);
 	t.mock.timers.tick(120_000);
 	f.setFailure();
 	assert.equal((await f.registry.poll(id)).status, "ok");
+});
+test("sync failures show plain text and log one technical line without response content", async (t) => {
+	const f = await registryFixture(t),
+		id = `${f.project.id}:linear`;
+	const warn = t.mock.method(console, "warn", () => {});
+	f.setFailure(new Error("Invalid estimate"));
+	const failed = await f.registry.poll(id);
+	assert.equal(failed.status, "error");
+	assert.equal(failed.error, "Couldn't read Linear.");
+	assert.ok(failed.nextPollAt! > Date.now());
+	assert.deepEqual(warn.mock.calls[0]?.arguments, [
+		`pilotd: Linear sync failed for project ${f.project.id}: Error: Invalid estimate`,
+	]);
+	// JSON syntax errors quote the response. Only the error kind is logged.
+	let parseError: unknown;
+	try {
+		JSON.parse("secret ticket text");
+	} catch (error) {
+		parseError = error;
+	}
+	assert.equal(logCause(parseError), "SyntaxError: invalid JSON");
+	assert.equal(logCause(new Error("a\nb".repeat(200))).length, 200);
+	assert.doesNotMatch(logCause(new Error("a\nb")), /\n/);
 });
 test("background polling starts only when configured, coalesces changes, and releases timers on stop", async (t) => {
 	const f = await registryFixture(t);
