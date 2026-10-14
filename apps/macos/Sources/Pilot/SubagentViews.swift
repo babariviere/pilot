@@ -134,20 +134,12 @@ final class SubagentFeeds {
 
 struct SubagentStatusGlyph: View {
     let state: SubagentDisplayState
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Group {
             switch state {
             case .working:
-                // The same braille spinner as working sessions, at chip size.
-                TimelineView(.animation(minimumInterval: BrailleProgress.interval, paused: reduceMotion)) { context in
-                    Image(nsImage: BrailleProgress.images[reduceMotion ? 0 : BrailleProgress.frameIndex(at: context.date)])
-                        .resizable()
-                        .frame(width: 12, height: 12)
-                }
-                .foregroundStyle(Theme.info)
-                .frame(width: 12, height: 12)
+                PilotSymbol(PilotIcon.working, context: .row)
             case .newAnswer:
                 Circle().fill(Theme.success).frame(width: 7, height: 7)
             case .failed:
@@ -184,8 +176,7 @@ struct SubagentsStrip: View {
         let subagents = session.subagents ?? []
         if !subagents.isEmpty {
             HStack(spacing: 6) {
-                Image(systemName: "person.2")
-                    .font(.pilot(.caption))
+                PilotSymbol(PilotIcon.subagents)
                     .foregroundStyle(Theme.mutedForeground)
                     .help("Subagents")
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -342,7 +333,7 @@ private struct SubagentActivityLine: View {
             ForEach(items.suffix(3)) { item in
                 let summary = item.summary
                 HStack(spacing: 6) {
-                    Image(systemName: summary.icon).font(.pilot(.small)).frame(width: 12)
+                    PilotSymbol(summary.icon.pilotIcon).frame(width: 12)
                     Text(summary.title).font(.pilot(.caption, weight: .medium))
                     if let detail = summary.detail {
                         Text(detail).font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
@@ -378,7 +369,7 @@ struct SubagentsPane: View {
         let subagents = session.subagents ?? []
         if subagents.isEmpty {
             VStack(spacing: 8) {
-                Image(systemName: "person.2").font(.pilot(.title)).foregroundStyle(Theme.faintForeground)
+                PilotSymbol(PilotIcon.subagents, context: .emptyState).foregroundStyle(Theme.faintForeground)
                 Text("No subagents").font(.pilot(.body, weight: .medium))
                 Text("Subagents this chat starts appear here, with their transcripts.")
                     .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
@@ -466,11 +457,11 @@ private struct SubagentDetail: View {
                     }
                 }
                 HStack(spacing: 10) {
-                    if let modelName = subagent.model { meta("cpu", modelName) }
-                    meta("folder", URL(filePath: subagent.cwd).lastPathComponent)
+                    if let modelName = subagent.model { meta(PilotIcon.model, modelName) }
+                    meta(PilotIcon.project, URL(filePath: subagent.cwd).lastPathComponent)
                         .help(subagent.cwd.abbreviatingHome)
                     HStack(spacing: 3) {
-                        Image(systemName: "clock").font(.pilot(.micro))
+                        PilotSymbol(PilotIcon.pending)
                         Text(Date(timeIntervalSince1970: subagent.createdAt / 1000), style: .relative)
                     }
                     .font(.pilot(.small))
@@ -577,9 +568,9 @@ private struct SubagentDetail: View {
         }
     }
 
-    private func meta(_ icon: String, _ text: String) -> some View {
+    private func meta(_ icon: PilotIcon, _ text: String) -> some View {
         HStack(spacing: 3) {
-            Image(systemName: icon).font(.pilot(.micro))
+            PilotSymbol(icon)
             Text(text).lineLimit(1)
         }
         .font(.pilot(.small))
@@ -597,7 +588,7 @@ struct SubagentAnswerRow: View {
 
     var body: some View {
         NotificationCard(
-            icon: notification.failed ? "exclamationmark.triangle" : "person.2",
+            icon: notification.failed ? PilotIcon.warning : PilotIcon.subagents,
             title: notification.failed ? "\(notification.name) failed" : "\(notification.name) answered",
             text: notification.text,
             tint: notification.failed ? Theme.destructive : Theme.mutedForeground,

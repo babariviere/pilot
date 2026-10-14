@@ -20,12 +20,12 @@ extension SlackMessageType {
         }
     }
 
-    var symbolName: String {
+    var icon: PilotIcon {
         switch self {
-        case .bug: "ladybug"
-        case .question: "questionmark.bubble"
-        case .request: "hand.raised"
-        case .unknown: "bubble.left"
+        case .bug: PilotIcon.bug
+        case .question: PilotIcon.question
+        case .request: PilotIcon.claim
+        case .unknown: PilotIcon.message
         }
     }
 }
@@ -496,7 +496,7 @@ struct SlackTriagePage: View {
                     .toolbar { toolbar(project) }
                     .searchable(text: $filter.query, placement: .toolbar, prompt: "Search messages")
             } else {
-                EmptyStateView(icon: "folder", title: "This project no longer exists",
+                EmptyStateView(icon: PilotIcon.project, title: "This project no longer exists",
                                message: "It was removed from Pilot. Its folder is unchanged.")
             }
         }
@@ -509,7 +509,7 @@ struct SlackTriagePage: View {
     @ToolbarContentBuilder
     private func toolbar(_ project: Project) -> some ToolbarContent {
         ToolbarItem(placement: .navigation) {
-            Button { model.openProject(project.id) } label: { Image(systemName: "chevron.left") }
+            Button { model.openProject(project.id) } label: { PilotSymbol(PilotIcon.back) }
                 .help("Back to \(project.name)")
                 .accessibilityLabel("Back to \(project.name)")
         }
@@ -520,12 +520,12 @@ struct SlackTriagePage: View {
             Menu {
                 if let source = client.source(projectId: project.id, kind: .slack) {
                     Button { actions.sync(source, client: client) } label: {
-                        Label("Sync Now", systemImage: "arrow.clockwise")
+                        Label("Sync Now", icon: PilotIcon.refresh)
                     }
                 }
-                Button { openTrackingSettings(project) } label: { Label("Linear and Slack Settings…", systemImage: "gearshape") }
+                Button { openTrackingSettings(project) } label: { Label("Linear and Slack Settings…", icon: PilotIcon.settings) }
             } label: {
-                Image(systemName: "ellipsis")
+                PilotSymbol(PilotIcon.more, context: .toolbar)
             }
             .menuIndicator(.hidden)
             .help("Slack triage actions")
@@ -535,7 +535,7 @@ struct SlackTriagePage: View {
 
     @ViewBuilder private func content(_ project: Project) -> some View {
         if (project.tracking?.slackChannels ?? []).isEmpty, triage.items.isEmpty {
-            EmptyStateView(icon: "bubble.left.and.bubble.right", title: "No Slack channels yet",
+            EmptyStateView(icon: PilotIcon.chats, title: "No Slack channels yet",
                            message: "Add channels in Linear and Slack settings. Pilot reads new messages, sorts them by type and severity, and lists them here.") {
                 Button("Linear and Slack Settings…") { openTrackingSettings(project) }.buttonStyle(.borderedProminent)
             }
@@ -611,12 +611,12 @@ struct SlackTriagePage: View {
         if visible.isEmpty {
             Group {
                 if filter.isNarrowed {
-                    EmptyStateView(icon: "line.3.horizontal.decrease.circle", title: "No messages match",
+                    EmptyStateView(icon: PilotIcon.filter, title: "No messages match",
                                    message: "Try another filter or search.") {
                         Button("Clear Filters") { filter = SlackTriageText.Filter(showHidden: filter.showHidden) }
                     }
                 } else {
-                    EmptyStateView(icon: "tray", title: "Nothing to triage",
+                    EmptyStateView(icon: PilotIcon.inbox, title: "Nothing to triage",
                                    message: "New messages from your Slack channels appear here after the next sync.")
                 }
             }
@@ -742,7 +742,7 @@ struct SlackTriageFilterBar: View {
                     Text("All Types").tag(SlackMessageType?.none)
                     Divider()
                     ForEach(SlackMessageType.ordered, id: \.self) { type in
-                        Label(type.title, systemImage: type.symbolName).tag(SlackMessageType?.some(type))
+                        Label(type.title, icon: type.icon).tag(SlackMessageType?.some(type))
                     }
                 }
                 .pickerStyle(.inline)
@@ -1067,7 +1067,7 @@ struct SlackTypeLabel: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: type.symbolName).font(.pilot(.caption)).frame(width: 14)
+            PilotSymbol(type.icon).frame(width: 14)
             Text(type.title).lineLimit(1)
         }
         .font(.pilot(.caption))
@@ -1205,7 +1205,7 @@ struct SlackTriageInspector: View {
                     Link(destination: url) {
                         HStack(spacing: 3) {
                             Text("Open in Slack")
-                            Image(systemName: "arrow.up.right").font(.pilot(.micro, weight: .semibold))
+                            PilotSymbol(PilotIcon.openExternal)
                         }
                     }
                     .font(.pilot(.label))

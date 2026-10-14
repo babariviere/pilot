@@ -2,12 +2,6 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// The one mission mark, everywhere a mission appears (sidebar, inspector, pages, menus). It pairs with the
-/// coordinator compass in `MissionCoordinatorIndicator`.
-enum MissionSymbol {
-    static let name = "map"
-}
-
 enum MissionTab: String, CaseIterable, Hashable {
     case overview, tasks, brief, chats, artifacts, activity
 
@@ -158,31 +152,31 @@ struct SessionMissionActions: View {
                 Button("Make coordinator") { model.setCoordinator(session.id, missionId: missionId) }
             }
             Button { model.openMission(missionId) } label: {
-                Label("Open mission", systemImage: MissionSymbol.name)
+                Label("Open mission", icon: PilotIcon.mission)
             }
             Button { model.removeFromMission(session.id) } label: {
-                Label("Remove from mission", systemImage: "minus.circle")
+                Label("Remove from mission", icon: PilotIcon.remove)
             }
         } else if session.projectId != nil {
             Button { model.missionSheet = .make(sessionId: session.id) } label: {
-                Label("Make a mission…", systemImage: MissionSymbol.name)
+                Label("Make a mission…", icon: PilotIcon.mission)
             }
             Button { model.missionSheet = .add(sessionId: session.id) } label: {
-                Label("Add to mission…", systemImage: "plus.circle")
+                Label("Add to mission…", icon: PilotIcon.addTo)
             }
         }
     }
 }
 
 extension MissionTaskStatus {
-    var symbol: String {
+    var icon: PilotIcon {
         switch self {
-        case .todo: "circle"
-        case .inProgress: "circle.lefthalf.filled"
-        case .blocked: "exclamationmark.octagon"
-        case .inReview: "eye.circle"
-        case .done: "checkmark.circle.fill"
-        case .dropped: "xmark.circle"
+        case .todo: PilotIcon.todo
+        case .inProgress: PilotIcon.inProgress
+        case .blocked: PilotIcon.blocked
+        case .inReview: PilotIcon.inReview
+        case .done: PilotIcon.complete
+        case .dropped: PilotIcon.cancelled
         }
     }
 
@@ -227,34 +221,34 @@ extension MissionStatus {
 }
 
 extension MissionEventKind {
-    var symbol: String {
+    var icon: PilotIcon {
         switch self {
-        case .created: "sparkles"
-        case .status: "flag"
-        case .handoff: "arrow.right.circle"
-        case .update: "text.bubble"
-        case .brief: "doc.text"
-        case .decision: "checkmark.seal"
-        case .comment: "text.quote"
-        case .task: "checklist"
-        case .claim: "hand.raised"
-        case .artifact: ArtifactSymbol.name
-        case .resource: "link"
-        case .member: "person.badge.plus"
-        case .coordinator: MissionCoordinatorIndicator.symbol
-        case .github: "arrow.triangle.branch"
+        case .created: PilotIcon.skill
+        case .status: PilotIcon.status
+        case .handoff: PilotIcon.handoff
+        case .update: PilotIcon.update
+        case .brief: PilotIcon.document
+        case .decision: PilotIcon.decision
+        case .comment: PilotIcon.quote
+        case .task: PilotIcon.tasks
+        case .claim: PilotIcon.claim
+        case .artifact: PilotIcon.artifact
+        case .resource: PilotIcon.link
+        case .member: PilotIcon.addMember
+        case .coordinator: PilotIcon.coordinator
+        case .github: PilotIcon.branch
         }
     }
 }
 
 extension MissionResourceKind {
-    var symbol: String {
+    var icon: PilotIcon {
         switch self {
-        case .linearProject, .linearIssue: "list.bullet.rectangle"
-        case .githubIssue: "exclamationmark.bubble"
-        case .githubPullRequest: "arrow.triangle.pull"
-        case .slackThread: "number"
-        case .url: "link"
+        case .linearProject, .linearIssue: PilotIcon.linearIssue
+        case .githubIssue: PilotIcon.githubIssue
+        case .githubPullRequest: PilotIcon.pullRequest
+        case .slackThread: PilotIcon.slackChannel
+        case .url: PilotIcon.link
         }
     }
 
@@ -297,15 +291,10 @@ struct MissionLinkIcon: View {
 
     var body: some View {
         Group {
-            if let mark = BrandMark(kind) {
-                Image(nsImage: mark.image)
-                    .renderingMode(.template)
-                    .resizable()
-                    .interpolation(.high)
-                    .frame(width: size, height: size)
+            if let mark = PilotMark(kind) {
+                PilotMarkIcon(mark: mark, context: size > 11 ? .row : .inline)
             } else {
-                Image(systemName: kind.symbol)
-                    .font(.system(size: size - 1, weight: .medium))
+                PilotSymbol(kind.icon)
             }
         }
             .foregroundStyle(Theme.mutedForeground)
@@ -359,7 +348,7 @@ struct MissionEditAction: View {
 
     var body: some View {
         Button { model.missionSheet = .edit(missionId: missionId) } label: {
-            Label("Edit Title and Goal…", systemImage: "pencil")
+            Label("Edit Title and Goal…", icon: PilotIcon.edit)
         }
     }
 }
@@ -371,13 +360,13 @@ struct MissionStatusActions: View {
 
     var body: some View {
         if status != .done {
-            Button { setStatus(.done) } label: { Label("Mark as Done", systemImage: "checkmark.circle") }
+            Button { setStatus(.done) } label: { Label("Mark as Done", icon: PilotIcon.complete) }
         }
         if status != .active {
-            Button { setStatus(.active) } label: { Label("Reopen", systemImage: "arrow.uturn.backward") }
+            Button { setStatus(.active) } label: { Label("Reopen", icon: PilotIcon.restore) }
         }
         if status != .archived {
-            Button { setStatus(.archived) } label: { Label("Archive", systemImage: "archivebox") }
+            Button { setStatus(.archived) } label: { Label("Archive", icon: PilotIcon.archive) }
         }
     }
 
@@ -394,7 +383,7 @@ struct MissionDeleteAction: View {
 
     var body: some View {
         Button(role: .destructive) { model.pendingMissionDeletionId = missionId } label: {
-            Label("Delete Mission…", systemImage: "trash")
+            Label("Delete Mission…", icon: PilotIcon.delete)
         }
     }
 }

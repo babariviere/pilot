@@ -10,41 +10,38 @@ struct CompletionItem: Identifiable, Equatable {
     var suffix: String?
     /// Muted, truncated description after the title.
     var detail: String?
-    let symbol: String
+    let icon: PilotIcon
     let tint: Color
     var help: String
     var accessibilityLabel: String
     var accessibilityHint: String
 
-    private static let accent = Color(hex: 0x6366F1)
-
     static func path(_ candidate: String) -> CompletionItem {
         let directory = candidate.hasSuffix("/")
         let path = directory ? String(candidate.dropLast()) : candidate
         let name = (path as NSString).lastPathComponent.replacingOccurrences(of: "\\ ", with: " ")
-        let ext = (name as NSString).pathExtension
         return CompletionItem(
             id: candidate, title: name, suffix: directory ? "/" : nil,
-            symbol: directory ? "folder.fill" : "doc.text",
-            tint: directory ? accent : (ext == "swift" ? Color(hex: 0xEA580C) : Theme.info),
+            icon: directory ? PilotIcon.project : PilotIcon.document,
+            tint: Theme.mutedForeground,
             help: candidate, accessibilityLabel: "\(name), \(directory ? "folder" : "file")",
             accessibilityHint: "Insert this path"
         )
     }
 
     static func command(_ command: SlashCommand) -> CompletionItem {
-        let symbol: String
+        let icon: PilotIcon
         let tint: Color
         let kind: String
         switch command.kind {
-        case .builtin: (symbol, tint, kind) = ("command", accent, "Pilot command")
-        case .prompt: (symbol, tint, kind) = ("text.bubble", Theme.info, "Prompt template")
-        case .skill: (symbol, tint, kind) = ("sparkles", Color(hex: 0xEA580C), "Skill")
+        case .builtin: (icon, tint, kind) = (PilotIcon.command, Theme.mutedForeground, "Pilot command")
+        case .prompt: (icon, tint, kind) = (PilotIcon.update, Theme.mutedForeground, "Prompt template")
+        case .skill: (icon, tint, kind) = (PilotIcon.skill, Theme.mutedForeground, "Skill")
         }
         let detail = command.description?.split(whereSeparator: \.isNewline).first.map(String.init)
         return CompletionItem(
             id: command.name, title: command.invocation, suffix: command.argumentHint, detail: detail,
-            symbol: symbol, tint: tint,
+            icon: icon, tint: tint,
             help: [command.invocation, command.description].compactMap { $0 }.joined(separator: "\n"),
             accessibilityLabel: [command.invocation, kind, detail].compactMap { $0 }.joined(separator: ", "),
             accessibilityHint: "Insert this command"
@@ -234,8 +231,7 @@ private struct CompletionPickerView: View {
             model.choose?(index)
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: item.symbol)
-                    .font(.system(size: 14, weight: .medium)).foregroundStyle(item.tint)
+                PilotSymbol(item.icon, context: .row).foregroundStyle(item.tint)
                     .frame(width: 18)
                 Text(item.title).font(.system(size: 13, weight: selected ? .medium : .regular))
                     .foregroundStyle(Theme.foreground).lineLimit(1).truncationMode(.middle)

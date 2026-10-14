@@ -232,13 +232,13 @@ struct TerminalPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Image(systemName: "terminal").font(.caption)
+                PilotSymbol(PilotIcon.terminal)
                 Text(session.cwd.abbreviatingHome).font(.caption).lineLimit(1).truncationMode(.head)
                 Spacer()
                 Button {
                     store.restart(session)
                 } label: {
-                    Image(systemName: "arrow.clockwise").font(.caption)
+                    PilotSymbol(PilotIcon.refresh, context: .toolbar)
                 }
                 .buttonStyle(.borderless)
                 .disabled(session.state == "starting")
@@ -246,7 +246,7 @@ struct TerminalPane: View {
                 Button {
                     AppModel.shared.inspectorVisible = false
                 } label: {
-                    Image(systemName: "xmark").font(.caption)
+                    PilotSymbol(PilotIcon.dismiss, context: .toolbar)
                 }
                 .buttonStyle(.borderless)
                 .help("Hide terminal (⌘J)")
@@ -299,7 +299,7 @@ private struct ExitedPlaceholder: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            Image(systemName: "terminal").font(.title2).foregroundStyle(Theme.faintForeground)
+            PilotSymbol(PilotIcon.terminal, context: .emptyState).foregroundStyle(Theme.faintForeground)
             Text("Shell exited").font(.callout).foregroundStyle(Theme.mutedForeground)
             Button("Restart Shell", action: restart)
         }

@@ -184,15 +184,15 @@ struct SessionInspectorControls: View {
     @ViewBuilder
     var body: some View {
         if session.missionId != nil {
-            InspectorToggle(tab: .mission, icon: MissionSymbol.name, help: "Mission")
+            InspectorToggle(tab: .mission, icon: PilotIcon.mission, help: "Mission")
         }
         if session.supportsChanges {
-            InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
-            InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+            InspectorToggle(tab: .changes, icon: PilotIcon.changes, help: "Changes (⇧⌘D)")
+            InspectorToggle(tab: .terminal, icon: PilotIcon.terminal, help: "Terminal (⌘J)")
         }
         if !session.isAsk {
             if !(session.subagents ?? []).isEmpty {
-                InspectorToggle(tab: .agents, icon: "person.2", help: "Subagents")
+                InspectorToggle(tab: .agents, icon: PilotIcon.subagents, help: "Subagents")
                     .overlay(alignment: .topTrailing) {
                         if model.unreadSubagents(in: session) > 0 {
                             Circle().fill(Theme.success).frame(width: 6, height: 6).offset(x: -3, y: 3)
@@ -200,8 +200,8 @@ struct SessionInspectorControls: View {
                     }
             }
         }
-        InspectorToggle(tab: .artifacts, icon: ArtifactSymbol.name, help: "Artifacts")
-        InspectorToggle(tab: .links, icon: "link", help: "Links")
+        InspectorToggle(tab: .artifacts, icon: PilotIcon.artifact, help: "Artifacts")
+        InspectorToggle(tab: .links, icon: PilotIcon.link, help: "Links")
     }
 }
 
@@ -218,15 +218,15 @@ struct SessionMoreActions: View {
             SessionArchiveAction(session: session)
             if session.isArchived {
                 Button { model.showArchive(in: model.archiveProjectId, missionId: model.archiveMissionId) } label: {
-                    Label("Archived chats", systemImage: "archivebox")
+                    Label("Archived chats", icon: PilotIcon.archive)
                 }
             }
             Divider()
             Button { model.debugSession(session) } label: {
-                Label("Debug session", systemImage: "ladybug")
+                Label("Debug session", icon: PilotIcon.bug)
             }
         } label: {
-            Image(systemName: "ellipsis")
+            PilotSymbol(PilotIcon.more, context: .toolbar)
                 .frame(width: 36, height: 36)
         }
         .menuIndicator(.hidden)
@@ -237,13 +237,13 @@ struct SessionMoreActions: View {
 
 struct InspectorToggle: View {
     let tab: InspectorTab
-    let icon: String
+    let icon: PilotIcon
     let help: String
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         Toggle(isOn: Self.selection(for: tab, in: model)) {
-            Image(systemName: icon)
+            PilotSymbol(icon, context: .toolbar)
         }
         .toggleStyle(.button)
         .help(help)
@@ -286,7 +286,7 @@ struct Inspector: View {
                 tab("Links", .links)
                 Spacer()
                 Button { model.inspectorVisible = false } label: {
-                    Image(systemName: "sidebar.right").font(.system(size: 12))
+                    PilotSymbol(PilotIcon.inspector, context: .toolbar)
                 }
                 .buttonStyle(.borderless)
                 .foregroundStyle(Theme.mutedForeground)
@@ -363,7 +363,7 @@ private struct DaemonProblem: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "exclamationmark.triangle").font(.largeTitle).foregroundStyle(.orange)
+            PilotSymbol(PilotIcon.warning, context: .emptyState).foregroundStyle(.orange)
             Text(message).multilineTextAlignment(.center).textSelection(.enabled)
             HStack {
                 Button("Start pilotd") { Task { await daemon.restart() } }

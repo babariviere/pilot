@@ -134,8 +134,7 @@ struct MissionLinksSection: View {
         return VStack(alignment: .leading, spacing: 8) {
             Button { disclosure.otherExpanded = !expanded } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.pilot(.micro, weight: .semibold)).foregroundStyle(Theme.faintForeground).frame(width: 10)
+                    PilotSymbol(expanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 10)
                     Text("Other links").font(.pilot(.label, weight: .medium)).foregroundStyle(Theme.mutedForeground)
                     Text("\(links.count)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     Spacer(minLength: 0)
@@ -293,7 +292,7 @@ struct MissionLinkRow: View, Equatable {
                         .foregroundStyle(Theme.faintForeground).lineLimit(1).fixedSize()
                         .frame(minWidth: 28, alignment: .trailing)
                 }
-                Menu { MissionLinkMenuItems(link: link, missionId: missionId) } label: { Image(systemName: "ellipsis") }
+                Menu { MissionLinkMenuItems(link: link, missionId: missionId) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                     .menuStyle(.button)
                     .buttonStyle(QuietIconButtonStyle())
                     .menuIndicator(.hidden)

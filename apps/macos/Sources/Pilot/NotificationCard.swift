@@ -5,7 +5,7 @@ import SwiftUI
 /// PR follow-ups. Use it for conversational automatic messages so it never looks like a user bubble. Collapsed, it previews two
 /// muted lines; expanded, it renders the full Markdown.
 struct NotificationCard<Accessory: View>: View {
-    let icon: String
+    let icon: PilotIcon
     let title: String
     let text: String
     var tint: Color = Theme.mutedForeground
@@ -15,8 +15,7 @@ struct NotificationCard<Accessory: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.pilot(.caption))
+                PilotSymbol(icon)
                     .foregroundStyle(tint)
                 Text(title)
                     .font(.pilot(.label, weight: .semibold))
@@ -25,8 +24,7 @@ struct NotificationCard<Accessory: View>: View {
                 Button {
                     withAnimation(.easeOut(duration: 0.15)) { expansion.expanded.toggle() }
                 } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.pilot(.micro, weight: .semibold))
+                    PilotSymbol(PilotIcon.disclosure, context: .disclosure)
                         .rotationEffect(.degrees(expansion.expanded ? 90 : 0))
                         .foregroundStyle(Theme.mutedForeground)
                         .frame(width: 16, height: 16)
@@ -84,14 +82,14 @@ extension InputOrigin {
         }
     }
 
-    var icon: String {
+    var icon: PilotIcon {
         switch self {
-        case .job: "terminal"
-        case .subagent: "person.2"
-        case .extension: "puzzlepiece.extension"
-        case .coordinator: MissionCoordinatorIndicator.symbol
-        case .mission: MissionSymbol.name
-        case .pullRequest: "arrow.triangle.pull"
+        case .job: PilotIcon.terminal
+        case .subagent: PilotIcon.subagents
+        case .extension: PilotIcon.extensionTool
+        case .coordinator: PilotIcon.coordinator
+        case .mission: PilotIcon.mission
+        case .pullRequest: PilotIcon.pullRequest
         }
     }
 }

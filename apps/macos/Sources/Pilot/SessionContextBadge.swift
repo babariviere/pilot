@@ -19,7 +19,7 @@ struct SessionContextBadge: View {
 
     private func context(_ title: String) -> some View {
         HStack(spacing: 5) {
-            Image(systemName: session.isAsk ? "questionmark.bubble" : "hammer")
+            PilotSymbol(session.isAsk ? PilotIcon.askMode : PilotIcon.buildMode)
                 .accessibilityHidden(true)
             Text(title)
         }

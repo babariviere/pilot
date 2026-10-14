@@ -23,7 +23,7 @@ struct TodosPanel: View {
                 expanded.toggle()
             } label: {
                 HStack(spacing: 8) {
-                    Image(systemName: "checklist")
+                    PilotSymbol(PilotIcon.tasks)
                         .foregroundStyle(allDone ? Theme.success : Theme.mutedForeground)
                     Text(allDone ? "All tasks done" : "Tasks")
                     Text("\(done) of \(todos.count)")
@@ -42,7 +42,7 @@ struct TodosPanel: View {
                         Text(active.title).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    PilotSymbol(expanded ? PilotIcon.collapse : PilotIcon.disclosureOpen, context: .disclosure)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.horizontal, 12)
@@ -107,12 +107,11 @@ struct TodosPanel: View {
         if todo.isClosed {
             Circle().fill(Theme.success.opacity(0.15))
                 .overlay {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 9, weight: .bold))
+                    PilotSymbol(PilotIcon.complete)
                         .foregroundStyle(Theme.success)
                 }
         } else if working {
-            Circle().fill(Theme.foreground.opacity(0.7)).frame(width: 8, height: 8)
+            PilotSymbol(PilotIcon.working, context: .row)
         } else {
             Circle().strokeBorder(Theme.mutedForeground.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
                 .frame(width: 14, height: 14)

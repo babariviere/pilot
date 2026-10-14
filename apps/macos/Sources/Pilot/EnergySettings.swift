@@ -62,7 +62,7 @@ struct EnergySettingsContent: View {
             SettingsFooter("The display can sleep and the screen can lock. Closing Pilot’s window or quitting the app does not stop agents.")
         }
         Section {
-            Label("On power and Wi-Fi", systemImage: "powerplug")
+            Label("On power and Wi-Fi", icon: PilotIcon.power)
                 .foregroundStyle(Theme.foreground)
             Text("When closed-lid work is enabled, agents can keep working only with both connected. If either disconnects, Pilot pauses agents and lets this Mac sleep.")
                 .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
@@ -76,7 +76,7 @@ struct EnergySettingsContent: View {
         Section {
             HStack(alignment: .top, spacing: 8) {
                 if busy { ProgressView().controlSize(.small) }
-                else { Image(systemName: status.paused ? "moon.zzz" : "leaf").foregroundStyle(Theme.mutedForeground) }
+                else { PilotSymbol(status.paused ? PilotIcon.idle : PilotIcon.energy).foregroundStyle(Theme.mutedForeground) }
                 Text(busy ? "Updating energy settings…" : status.summary)
                     .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)

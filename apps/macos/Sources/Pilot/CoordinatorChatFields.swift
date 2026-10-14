@@ -76,17 +76,17 @@ struct CoordinatorChatFields: View {
         let levels = option?.thinkingLevels ?? ["off"]
         return Menu {
             Button { form.thinking = "" } label: {
-                if form.thinking.isEmpty { Label("Default", systemImage: "checkmark") } else { Text("Default") }
+                if form.thinking.isEmpty { Label("Default", icon: PilotIcon.selectedOption) } else { Text("Default") }
             }
             ForEach(levels, id: \.self) { level in
                 Button { form.thinking = level } label: {
-                    if form.thinking == level { Label(thinkingLabel(level), systemImage: "checkmark") }
+                    if form.thinking == level { Label(thinkingLabel(level), icon: PilotIcon.selectedOption) }
                     else { Text(thinkingLabel(level)) }
                 }
             }
         } label: {
             ChipLabel(title: form.thinking.isEmpty ? "Thinking: default" : "Thinking: \(thinkingLabel(form.thinking))",
-                      icon: "brain")
+                      icon: PilotIcon.thinking)
         }
         .chipMenuStyle()
         .fixedSize()

@@ -125,7 +125,7 @@ struct ScheduleStateIcon: View {
     let state: ScheduleState
 
     var body: some View {
-        Image(systemName: state.symbolName)
+        PilotSymbol(state.icon)
             .foregroundStyle(state.color)
             .accessibilityLabel(state.accessibilityLabel)
     }
@@ -146,7 +146,7 @@ struct SendLaterMenu: View {
                 Button("At a Time…") { choosing = .at }
             }
         } label: {
-            Image(systemName: "clock").font(.pilot(.body, weight: .medium))
+            PilotSymbol(PilotIcon.pending)
         }
         .menuStyle(.button)
         .buttonStyle(QuietIconButtonStyle(size: 26))
@@ -295,7 +295,7 @@ struct ScheduledItemRow: View {
                         .lineLimit(1).fixedSize()
                         .help(when)
                 }
-                Button(action: remove) { Image(systemName: "xmark") }
+                Button(action: remove) { PilotSymbol(PilotIcon.close) }
                     .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                     .revealed(hovered)
                     .help(pending ? "Cancel this scheduled item" : "Dismiss")
@@ -401,12 +401,12 @@ private struct ScheduledMessageBubble: View {
                     .onTapGesture { editing = true }
             }
             HStack(spacing: 2) {
-                Button { editing = true } label: { Image(systemName: "pencil") }
+                Button { editing = true } label: { PilotSymbol(PilotIcon.edit) }
                     .buttonStyle(QuietIconButtonStyle())
                     .help("Edit when this message is sent")
                     .accessibilityLabel("Edit schedule")
                     .revealed(hovered)
-                Button(action: cancel) { Image(systemName: "xmark") }
+                Button(action: cancel) { PilotSymbol(PilotIcon.close) }
                     .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                     .help("Cancel this scheduled message")
                     .accessibilityLabel("Cancel schedule")

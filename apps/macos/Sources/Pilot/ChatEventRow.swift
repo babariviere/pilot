@@ -12,15 +12,15 @@ struct ChatEventRow: View {
         _expansion = StateObject(wrappedValue: expansion ?? ExpansionState())
     }
 
-    private var icon: String {
+    private var icon: PilotIcon {
         switch event.kind {
-        case "push": "arrow.up"
-        case "pr_opened", "pr_ready", "pr_draft", "pr_edited", "pr_reopened": "arrow.triangle.pull"
-        case "pi.compaction": "arrow.down.right.and.arrow.up.left"
-        case "pi.reset": "arrow.counterclockwise"
-        case "stopped": "stop"
-        case "mission_updated", "mission_decisions_changed", "mission_task_done", "mission_member_finished": MissionSymbol.name
-        default: "circle.dotted"
+        case "push": PilotIcon.push
+        case "pr_opened", "pr_ready", "pr_draft", "pr_edited", "pr_reopened": PilotIcon.pullRequest
+        case "pi.compaction": PilotIcon.compaction
+        case "pi.reset": PilotIcon.reset
+        case "stopped": PilotIcon.stopped
+        case "mission_updated", "mission_decisions_changed", "mission_task_done", "mission_member_finished": PilotIcon.mission
+        default: PilotIcon.unset
         }
     }
 
@@ -33,7 +33,7 @@ struct ChatEventRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
-                Image(systemName: icon).font(.pilot(.caption)).accessibilityHidden(true)
+                PilotSymbol(icon).accessibilityHidden(true)
                 Text(event.sentence).lineLimit(1)
                 if let branch = event.branch {
                     Text(branch)

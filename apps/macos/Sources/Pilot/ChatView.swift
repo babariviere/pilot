@@ -223,7 +223,7 @@ struct ChatView: View {
                                         catch { composer.error = error.localizedDescription }
                                     }
                                 } label: {
-                                    Label("Retry Startup", systemImage: "arrow.clockwise")
+                                    Label("Retry Startup", icon: PilotIcon.refresh)
                                 }
                                 .controlSize(.small)
                                 .accessibilityIdentifier("retry-startup")
@@ -277,7 +277,7 @@ struct ChatView: View {
                         Button {
                             model.buildWithContext(from: session, rows: transcript.rows)
                         } label: {
-                            Label("Start a Build chat with this context", systemImage: "hammer")
+                            Label("Start a Build chat with this context", icon: PilotIcon.buildMode)
                         }
                         .buttonStyle(.link)
                         .font(.pilot(.caption))
@@ -643,7 +643,7 @@ private struct ErrorRow: View {
             Label {
                 Text(text).textSelection(.enabled)
             } icon: {
-                Image(systemName: "exclamationmark.triangle.fill")
+                PilotSymbol(PilotIcon.warning)
             }
             .foregroundStyle(.red)
             .frame(maxWidth: .infinity, alignment: .leading)

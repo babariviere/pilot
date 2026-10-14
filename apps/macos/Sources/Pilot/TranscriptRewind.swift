@@ -131,7 +131,7 @@ private struct RewindMenu: ViewModifier {
                     rewind.request(action, entryID: entryID)
                 } label: {
                     Label(TranscriptRewind.menuTitle(action),
-                          systemImage: action == .edit ? "pencil" : "arrow.uturn.backward")
+                          icon: action == .edit ? PilotIcon.edit : PilotIcon.restore)
                 }
                 .help(action == .edit
                     ? "Continue from before this message with it in the composer. Files are not reverted."
@@ -164,7 +164,7 @@ struct MessageEditButton: View {
         Button {
             rewind.request(.edit, entryID: entryID)
         } label: {
-            Image(systemName: "pencil")
+            PilotSymbol(PilotIcon.edit, context: .toolbar)
         }
         .buttonStyle(QuietIconButtonStyle())
         .disabled(rewind.pending)
@@ -184,7 +184,7 @@ struct RetryButton: View {
             Button {
                 rewind.request(.retry, entryID: entryID)
             } label: {
-                Label("Retry", systemImage: "arrow.clockwise")
+                Label("Retry", icon: PilotIcon.refresh)
             }
             .controlSize(.small)
             .disabled(rewind.pending)
@@ -218,7 +218,7 @@ struct AttemptsMenu: View {
                         if session.isWorking { switching.confirming = attempt } else { activate(attempt) }
                     } label: {
                         if attempt.isActive {
-                            Label(itemTitle(attempt), systemImage: "checkmark")
+                            Label(itemTitle(attempt), icon: PilotIcon.selectedOption)
                         } else {
                             Text(itemTitle(attempt))
                         }
@@ -226,7 +226,7 @@ struct AttemptsMenu: View {
                 }
             } label: {
                 HStack(spacing: 4) {
-                    Image(systemName: "arrow.triangle.branch")
+                    PilotSymbol(PilotIcon.branch)
                     Text(label).lineLimit(1)
                 }
                 .font(.system(size: 11, weight: .medium))

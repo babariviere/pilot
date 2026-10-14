@@ -24,8 +24,7 @@ struct MissionSidebarRow: View {
             Button { model.openMission(mission.id) } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: MissionSymbol.name)
-                            .font(.pilot(.label))
+                        PilotSymbol(PilotIcon.mission, context: .row)
                             .foregroundStyle(active ? Theme.foreground : Theme.faintForeground)
                             .frame(width: 14)
                         Text(mission.title)
@@ -55,7 +54,7 @@ struct MissionSidebarRow: View {
                 MissionSidebarCoordinatorAction(mission: mission)
                     .revealed(hovered)
                 if active {
-                    Button { model.newSession(in: mission) } label: { Image(systemName: "plus") }
+                    Button { model.newSession(in: mission) } label: { PilotSymbol(PilotIcon.compose, context: .toolbar) }
                         .buttonStyle(QuietIconButtonStyle())
                         .help("New chat in \(mission.title)")
                         .accessibilityLabel("New chat in \(mission.title)")
@@ -125,7 +124,7 @@ struct MissionSidebarCoordinatorAction: View {
                 Button("Open Coordinator") { model.selectedSessionId = coordinator }
             } else {
                 Button { model.selectedSessionId = coordinator } label: {
-                    Image(systemName: MissionCoordinatorIndicator.symbol)
+                    PilotSymbol(PilotIcon.coordinator)
                 }
                 .buttonStyle(QuietIconButtonStyle())
                 .help("Open coordinator")
@@ -144,7 +143,7 @@ struct SessionMissionLabel: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: 3) {
-                Image(systemName: MissionSymbol.name).font(.system(size: 9))
+                PilotSymbol(PilotIcon.mission)
                 Text(title).lineLimit(1).truncationMode(.tail)
             }
             .contentShape(Rectangle())
@@ -167,7 +166,7 @@ struct SessionCoordinatorLine: View {
         let detail = MissionCoordinatorStatus.detail(session, unread: unread)
         HStack(spacing: 4) {
             HStack(spacing: 3) {
-                Image(systemName: MissionCoordinatorIndicator.symbol).font(.system(size: 9))
+                PilotSymbol(PilotIcon.coordinator)
                 Text("Coordinator").fontWeight(.semibold)
             }
             .foregroundStyle(Theme.warning)

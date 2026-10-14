@@ -100,7 +100,7 @@ struct MessageCopyButton: View {
             Self.copy(text)
             copied = true
         } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            PilotSymbol(copied ? PilotIcon.done : PilotIcon.copy, context: .toolbar)
         }
         .buttonStyle(QuietIconButtonStyle())
         .help("Copy message")

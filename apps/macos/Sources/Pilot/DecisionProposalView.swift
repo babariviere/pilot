@@ -15,7 +15,7 @@ struct DecisionProposalView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Proposed change").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
             if proposal.kind == "remove" {
-                Label("Remove this decision", systemImage: "minus.circle")
+                Label("Remove this decision", icon: PilotIcon.remove)
                     .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
             } else {
                 Text(oldText).strikethrough().foregroundStyle(Theme.faintForeground)
@@ -23,7 +23,7 @@ struct DecisionProposalView: View {
                     TextField("Replacement wording", text: $replacement, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
                 } else {
-                    Label(proposal.text ?? "", systemImage: "arrow.right")
+                    Label(proposal.text ?? "", icon: PilotIcon.proposal)
                         .foregroundStyle(Theme.foreground)
                 }
             }

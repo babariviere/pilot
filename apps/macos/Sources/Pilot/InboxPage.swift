@@ -42,7 +42,7 @@ struct InboxPage: View {
                 }
             }
         } else if let error = inbox.error {
-            EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load the Inbox", message: error) {
+            EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load the Inbox", message: error) {
                 Button("Retry") { inbox.reload() }
             }
         } else {
@@ -69,7 +69,7 @@ private struct InboxProjectFilter: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
-            Label(InboxText.filterTitle(scope), systemImage: "line.3.horizontal.decrease.circle")
+            Label(InboxText.filterTitle(scope), icon: PilotIcon.filter)
                 .labelStyle(.titleAndIcon)
         }
         .menuIndicator(.visible)
@@ -122,7 +122,7 @@ private struct InboxSections: View {
             PageSectionHeader(title: "Needs you", count: section.total, countStyle: .attention)
             if section.items.isEmpty {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
+                    PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success).frame(width: 16)
                     Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
                 }
                 .font(.pilot(.body))

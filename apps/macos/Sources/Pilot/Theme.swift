@@ -163,9 +163,9 @@ struct CircleIconButtonStyle: ButtonStyle {
 /// read as the same kind of control: a muted fill, a leading symbol and a trailing chevron.
 struct ChipLabel: View {
     let title: String
-    var icon: String? = nil
+    var icon: PilotIcon? = nil
     var dot: Color?
-    var templateImage: NSImage?
+    var mark: PilotMark?
     /// Long titles, such as model names, truncate in the middle beyond this width.
     var maxTitleWidth: CGFloat? = nil
     var loading = false
@@ -174,10 +174,10 @@ struct ChipLabel: View {
         HStack(spacing: 5) {
             if let dot {
                 Circle().fill(dot).frame(width: 6, height: 6)
-            } else if let templateImage {
-                Image(nsImage: templateImage).resizable().frame(width: 12, height: 12)
+            } else if let mark {
+                PilotMarkIcon(mark: mark, context: .toolbar)
             } else if let icon {
-                Image(systemName: icon).font(.pilot(.caption))
+                PilotSymbol(icon)
             }
             Text(title)
                 .foregroundStyle(Theme.foreground)
@@ -187,7 +187,7 @@ struct ChipLabel: View {
             if loading {
                 ProgressView().controlSize(.mini)
             } else {
-                Image(systemName: "chevron.up.chevron.down").font(.pilot(.glyph, weight: .semibold)).opacity(0.6)
+                PilotSymbol(PilotIcon.popUp, context: .disclosure).opacity(0.6)
             }
         }
         .font(.pilot(.label))
@@ -236,12 +236,12 @@ struct CountBadge: View {
 /// Use it instead of uppercase labels so section headers read the same across the app.
 struct SectionLabel: View {
     let title: String
-    var icon: String? = nil
+    var icon: PilotIcon? = nil
     var count: Int? = nil
 
     var body: some View {
         HStack(spacing: 6) {
-            if let icon { Image(systemName: icon).font(.pilot(.caption)) }
+            if let icon { PilotSymbol(icon) }
             Text(title).font(.pilot(.label, weight: .medium))
             if let count, count > 0 { CountBadge(count: count) }
         }
@@ -252,19 +252,9 @@ struct SectionLabel: View {
 /// Colored agent status symbol, with details available without adding row text.
 struct SessionStatusIcon: View {
     let status: SessionStatus
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Group {
-            if let symbolName = status.symbolName {
-                Image(systemName: symbolName)
-            } else if reduceMotion {
-                Image(nsImage: BrailleProgress.images[0])
-            } else {
-                ClockedBrailleImage()
-            }
-        }
-            .font(.system(size: 12, weight: .semibold))
+        PilotSymbol(status.icon, context: .row)
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(status.color)
             .frame(width: 14, height: 14)
@@ -279,43 +269,22 @@ struct SessionStatusIcon: View {
     }
 }
 
-private struct ClockedBrailleImage: View {
-    @ObservedObject private var clock = BrailleProgressClock.shared
-    @StateObject private var lifetime = BrailleClockLifetime()
-
-    var body: some View {
-        Image(nsImage: BrailleProgress.images[clock.frameIndex])
-            .onAppear { lifetime.start() }
-            .onDisappear { lifetime.stop() }
-    }
-}
-
-@MainActor
-private final class BrailleClockLifetime: ObservableObject {
-    private let id = UUID()
-    func start() { BrailleProgressClock.shared.subscribe(id) }
-    func stop() { BrailleProgressClock.shared.unsubscribe(id) }
-    deinit {
-        let id = id
-        Task { @MainActor in BrailleProgressClock.shared.unsubscribe(id) }
-    }
-}
-
 extension SessionStatus {
-    var symbolName: String? {
+    var icon: PilotIcon {
         switch self {
-        case .working: nil
-        case .question: "questionmark.bubble.fill"
-        case .done: "checkmark"
-        case .failed: "exclamationmark.triangle.fill"
-        case .stopped: "stop.circle.fill"
-        case .idle, .paused: "moon.zzz.fill"
+        case .working: PilotIcon.working
+        case .question: PilotIcon.question
+        case .done: PilotIcon.complete
+        case .failed: PilotIcon.warning
+        case .stopped: PilotIcon.stopped
+        case .idle: PilotIcon.idle
+        case .paused: PilotIcon.paused
         }
     }
 
     var color: Color {
         switch self {
-        case .working: Theme.foreground
+        case .working: Theme.working
         case .question: Theme.warning
         case .done: Theme.success
         case .failed: Theme.destructive
@@ -335,12 +304,12 @@ struct UnreadBadge: View {
 /// Symbol and colour of each scheduled item state, used the same way on Home, the project page (including
 /// its Needs you row) and in the target chat. Only an item that could not start takes a signal colour.
 extension ScheduleState {
-    var symbolName: String {
+    var icon: PilotIcon {
         switch self {
-        case .pending, .dispatching: "calendar.badge.clock"
-        case .fired: "checkmark"
-        case .failed: "calendar.badge.exclamationmark"
-        case .cancelled: "xmark"
+        case .pending, .dispatching: PilotIcon.scheduled
+        case .fired: PilotIcon.done
+        case .failed: PilotIcon.scheduleFailed
+        case .cancelled: PilotIcon.cancelled
         }
     }
 

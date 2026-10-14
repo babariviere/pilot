@@ -133,7 +133,7 @@ struct QuestionComposer: View {
                 if sending {
                     ProgressView().controlSize(.small).tint(.white)
                 } else {
-                    Image(systemName: "arrow.up")
+                    PilotSymbol(PilotIcon.send, context: .toolbar)
                 }
             }
             .buttonStyle(CircleIconButtonStyle())
@@ -334,7 +334,7 @@ private struct QuestionCheckCap: View {
             RoundedRectangle(cornerRadius: 5).fill(checked ? Theme.primary : Theme.card)
             RoundedRectangle(cornerRadius: 5).strokeBorder(checked ? Color.clear : Theme.border)
             if checked {
-                Image(systemName: "checkmark").font(.pilot(.micro, weight: .bold)).foregroundStyle(.white)
+                PilotSymbol(PilotIcon.selectedOption).foregroundStyle(.white)
             } else {
                 Text(key).font(.pilot(.small, weight: .semibold).monospacedDigit()).foregroundStyle(Theme.mutedForeground)
             }
@@ -351,8 +351,7 @@ struct QuestionRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Image(systemName: "questionmark.bubble")
-                    .font(.pilot(.caption))
+                PilotSymbol(PilotIcon.question)
                     .foregroundStyle(Theme.mutedForeground)
                     .accessibilityHidden(true)
                 Text(question.question)

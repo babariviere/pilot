@@ -547,7 +547,7 @@ struct TrackedItemRow: View {
     }
 
     private func moreMenu(link: TrackedItemText.LinkSummary?) -> some View {
-        Menu { menu(link: link) } label: { Image(systemName: "ellipsis") }
+        Menu { menu(link: link) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .buttonStyle(QuietIconButtonStyle())
@@ -614,14 +614,14 @@ struct TrackedLinkButton: View {
                 if let status = link.sessionStatus {
                     SessionStatusIcon(status: status)
                 } else {
-                    Image(systemName: MissionSymbol.name).font(.pilot(.caption)).foregroundStyle(color)
+                    PilotSymbol(PilotIcon.mission).foregroundStyle(color)
                 }
                 Text(link.status).font(.pilot(.caption)).foregroundStyle(color).lineLimit(1)
                 if link.count > 1 {
                     CountBadge(count: link.count).help("Started \(link.count) chats and missions")
                 }
                 Text(link.action).font(.pilot(.label, weight: .medium)).foregroundStyle(Theme.foreground).fixedSize()
-                Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
+                PilotSymbol(PilotIcon.disclosure, context: .disclosure)
                     .foregroundStyle(Theme.faintForeground)
             }
             .contentShape(Rectangle())
@@ -648,17 +648,17 @@ struct TrackedItemIcon: View {
     var body: some View {
         let triage = item.kind == .slack ? SlackTriageText.triage(item) : nil
         let type = triage?.type
-        let (symbol, color): (String, Color) = switch item.kind {
-        case .slack: (type?.symbolName ?? "bubble.left", Theme.mutedForeground)
+        let (symbol, color): (PilotIcon, Color) = switch item.kind {
+        case .slack: (type?.icon ?? PilotIcon.message, Theme.mutedForeground)
         case .linear:
             switch item.metadata["statusType"]?.string {
-            case "started": ("circle.lefthalf.filled", Theme.foreground)
-            case "completed": ("checkmark.circle.fill", Theme.success)
-            case "canceled": ("xmark.circle", Theme.faintForeground)
-            default: ("circle", Theme.faintForeground)
+            case "started": (PilotIcon.inProgress, Theme.foreground)
+            case "completed": (PilotIcon.complete, Theme.success)
+            case "canceled": (PilotIcon.cancelled, Theme.faintForeground)
+            default: (PilotIcon.todo, Theme.faintForeground)
             }
         }
-        Image(systemName: symbol).font(.pilot(.label)).foregroundStyle(color)
+        PilotSymbol(symbol, context: .row).foregroundStyle(color)
             .accessibilityLabel(type.map { "Slack \($0.title.lowercased())" } ?? item.status)
             .overlay(alignment: .bottomTrailing) {
                 // Critical and high Slack messages carry triage's severity dot, so they stand out in a list.
@@ -695,8 +695,8 @@ struct TrackedSourceStatusLine: View {
             switch line.tone {
             case .progress: ProgressView().controlSize(.mini)
             case .attention:
-                Image(systemName: source.status == .signInRequired ? "person.crop.circle.badge.exclamationmark"
-                    : "exclamationmark.triangle")
+                PilotSymbol(source.status == .signInRequired ? PilotIcon.signInRequired
+                    : PilotIcon.warning)
                     .foregroundStyle(Theme.blocked).accessibilityHidden(true)
             case .quiet: EmptyView()
             }
@@ -711,7 +711,7 @@ struct TrackedSourceStatusLine: View {
             if waiting || needsSignIn {
                 SourceSignInButton(kind: source.kind, label: source.label)
             } else if !syncing {
-                Button { actions.sync(source, client: model.client) } label: { Image(systemName: "arrow.clockwise") }
+                Button { actions.sync(source, client: model.client) } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
                     .buttonStyle(QuietIconButtonStyle())
                     .help("Sync now")
                     .accessibilityLabel("Sync \(source.label) now")
@@ -815,7 +815,7 @@ struct LinearIssueGroups: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button { withAnimation(Theme.Motion.quick) { showDone.toggle() } } label: {
                         HStack(spacing: 5) {
-                            Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
+                            PilotSymbol(PilotIcon.disclosure, context: .disclosure)
                                 .rotationEffect(.degrees(showDone ? 90 : 0))
                             Text(TrackedItemText.LinearGroup.done.title).font(.pilot(.label, weight: .medium))
                             CountBadge(count: doneCount)
@@ -986,7 +986,7 @@ struct TrackedInboxSheet: View {
 
     @ViewBuilder private var content: some View {
         if sources.isEmpty {
-            EmptyStateView(icon: "tray", title: "No Linear team or Slack channels yet",
+            EmptyStateView(icon: PilotIcon.inbox, title: "No Linear team or Slack channels yet",
                            message: "Attach a Linear team or Slack channels to see your tickets and messages here. Pilot only reads them.") {
                 Button("Linear and Slack Settings…") { finish(openSettings) }.buttonStyle(.borderedProminent)
             }

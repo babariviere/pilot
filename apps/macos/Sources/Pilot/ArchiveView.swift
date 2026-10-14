@@ -19,7 +19,7 @@ struct ArchiveView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Label("Archived chats", systemImage: "archivebox")
+                Label("Archived chats", icon: PilotIcon.archive)
                     .font(.title2.weight(.semibold))
                 Spacer()
             }
@@ -41,7 +41,7 @@ struct ArchiveView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if sessions.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "archivebox").font(.largeTitle)
+                    PilotSymbol(PilotIcon.archive, context: .emptyState)
                     Text(browser.query.isEmpty ? "No archived chats" : "No matching archived chats")
                 }
                 .foregroundStyle(Theme.mutedForeground)
@@ -144,7 +144,7 @@ struct SessionArchiveAction: View {
         Button {
             model.setArchived(!session.isArchived, sessionId: session.id)
         } label: {
-            Label(title(pending: pending), systemImage: session.isArchived ? "arrow.uturn.backward" : "archivebox")
+            Label(title(pending: pending), icon: session.isArchived ? PilotIcon.restore : PilotIcon.archive)
         }
         .disabled(pending || (!session.isArchived && !session.canArchive))
         .help(session.isArchived ? "Restore this chat to send messages again" :
@@ -165,7 +165,7 @@ struct ArchivedComposer: View {
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Label("Archived chat · Read-only", systemImage: "archivebox")
+                Label("Archived chat · Read-only", icon: PilotIcon.archive)
                     .font(.callout.weight(.medium))
                 Text("Restore to send messages. History and workspace are kept.")
                     .font(.caption).foregroundStyle(Theme.mutedForeground)

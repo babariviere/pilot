@@ -7,9 +7,9 @@ struct MemoryCompactionLine: View {
     var body: some View {
         HStack(spacing: 7) {
             if compaction.state == .running || compaction.state == .pending {
-                ProgressView().controlSize(.small).frame(width: 16)
+                PilotSymbol(PilotIcon.working, context: .row).frame(width: 16)
             } else {
-                Image(systemName: compaction.state == .backoff ? "exclamationmark.circle" : "checkmark.circle")
+                PilotSymbol(compaction.state == .backoff ? PilotIcon.warning : PilotIcon.complete)
                     .foregroundStyle(compaction.state == .backoff ? Theme.warning : Theme.faintForeground)
                     .frame(width: 16)
             }
@@ -62,7 +62,7 @@ struct ProjectMemoryBrowser: View {
                     .keyboardShortcut(.return, modifiers: [.command])
             }
             if let error = state.error {
-                Label(error, systemImage: "exclamationmark.triangle")
+                Label(error, icon: PilotIcon.warning)
                     .font(.pilot(.caption)).foregroundStyle(Theme.warning).textSelection(.enabled)
             }
             if let resultCount = state.resultCount {
@@ -82,7 +82,7 @@ struct ProjectMemoryBrowser: View {
             } else if state.loading {
                 ProgressView("Loading memory…").frame(maxWidth: .infinity, alignment: .leading)
             } else if state.roots.isEmpty {
-                EmptyStateView(icon: "brain.head.profile", title: "No memories yet",
+                EmptyStateView(icon: PilotIcon.memory, title: "No memories yet",
                                message: "Lasting project notes from agents will appear here.")
             } else {
                 ScrollView {
@@ -111,9 +111,8 @@ struct ProjectMemoryBrowser: View {
         return AnyView(VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 8) {
                 Button { Task { await state.expand(node) } } label: {
-                    Image(systemName: canExpand ? (state.expanded.contains(node.key) ? "chevron.down" : "chevron.right") :
-                          (node.isReplaced ? "circle" : "circle.fill"))
-                        .font(.pilot(.glyph)).foregroundStyle(Theme.faintForeground).frame(width: 14)
+                    PilotSymbol(canExpand ? (state.expanded.contains(node.key) ? PilotIcon.disclosureOpen : PilotIcon.disclosure) :
+                          PilotIcon.memoryEntry, filled: !canExpand && !node.isReplaced, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 14)
                 }
                 .buttonStyle(.plain).disabled(!canExpand || state.busy)
                 .accessibilityLabel(state.expanded.contains(node.key) ? "Collapse entries \(node.lo) through \(node.hi)" :
@@ -130,7 +129,7 @@ struct ProjectMemoryBrowser: View {
                 }
                 Spacer(minLength: 4)
                 if node.canForget {
-                    Button { state.requestForget(node) } label: { Image(systemName: "trash") }
+                    Button { state.requestForget(node) } label: { PilotSymbol(PilotIcon.delete, context: .toolbar) }
                         .buttonStyle(.plain).help("Forget this summary")
                         .accessibilityLabel("Forget summary for entries \(node.lo) through \(node.hi)")
                 }

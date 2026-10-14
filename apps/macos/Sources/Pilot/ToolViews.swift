@@ -34,8 +34,7 @@ struct WorkGroupView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: toggle) {
                 HStack(spacing: 6) {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
+                    PilotSymbol(PilotIcon.disclosure, context: .disclosure)
                         .foregroundStyle(Theme.faintForeground)
                         .rotationEffect(.degrees(open ? 90 : 0))
                         .frame(width: 10)
@@ -122,7 +121,7 @@ private struct WorkStepView: View {
 
 /// The leading mark of a step: its tool icon, a small ripple while it runs, a red cross when it failed.
 private struct StepMark: View {
-    let icon: String
+    let icon: PilotIcon
     var status: ToolStatus = .done
     var active = false
 
@@ -130,11 +129,11 @@ private struct StepMark: View {
         Group {
             switch status {
             case .running where active, .pending where active:
-                DitherRipple().frame(width: 12, height: 12).clipped()
+                DitherRipple(markSize: 12)
             case .error:
-                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.destructive)
+                PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.destructive)
             default:
-                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                PilotSymbol(icon).foregroundStyle(Theme.faintForeground)
             }
         }
         .frame(width: 14)
@@ -179,7 +178,7 @@ private struct ThinkingStep: View {
                 withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
             } label: {
                 HStack(spacing: 7) {
-                    StepMark(icon: "brain")
+                    StepMark(icon: PilotIcon.thinking)
                     StepSentence(verb: streaming ? "Thinking…" : "Thought", subject: nil, highlighted: hovered)
                 }
                 .contentShape(Rectangle())
@@ -212,7 +211,7 @@ private struct ReadsStep: View {
                 withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
             } label: {
                 HStack(spacing: 7) {
-                    StepMark(icon: "doc.text")
+                    StepMark(icon: PilotIcon.document)
                     StepSentence(verb: sentence.verb, subject: sentence.subject, highlighted: hovered)
                 }
                 .contentShape(Rectangle())
@@ -333,7 +332,7 @@ struct ToolStepRow: View {
                 withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
             } label: {
                 HStack(spacing: 7) {
-                    StepMark(icon: summary.icon, status: item.status, active: active)
+                    StepMark(icon: summary.icon.pilotIcon, status: item.status, active: active)
                     StepSentence(verb: summary.verb, subject: summary.subject, failed: item.status == .error,
                                  highlighted: hovered)
                     if summary.additions + summary.deletions > 0 {

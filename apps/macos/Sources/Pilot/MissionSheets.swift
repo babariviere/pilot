@@ -53,7 +53,7 @@ struct CreateMissionSheet: View {
                     projectMenu
                         .disabled(tracked != nil)
                 } else if let name = client.project(source?.projectId)?.name {
-                    Label(name, systemImage: "folder").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                    Label(name, icon: PilotIcon.project).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                 }
             }
             if let source {
@@ -62,7 +62,7 @@ struct CreateMissionSheet: View {
             }
             if let tracked {
                 Label("Prefilled from \(tracked.label). Its text is quoted as external content, and the mission is linked to it once created. Pilot never changes the ticket.",
-                      systemImage: "link")
+                      icon: PilotIcon.link)
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 6) {
@@ -120,11 +120,11 @@ struct CreateMissionSheet: View {
                 Button {
                     form.projectId = project.id
                 } label: {
-                    if project.id == form.projectId { Label(project.name, systemImage: "checkmark") } else { Text(project.name) }
+                    if project.id == form.projectId { Label(project.name, icon: PilotIcon.selectedOption) } else { Text(project.name) }
                 }
             }
         } label: {
-            ChipLabel(title: client.project(form.projectId)?.name ?? "Choose project", icon: "folder")
+            ChipLabel(title: client.project(form.projectId)?.name ?? "Choose project", icon: PilotIcon.project)
         }
         .chipMenuStyle()
         .fixedSize()

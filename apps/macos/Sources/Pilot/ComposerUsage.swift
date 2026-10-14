@@ -77,7 +77,7 @@ struct SubscriptionUsageNotice: View {
         if let notice = state.display(usage: usage).notice {
             Button { state.showingDetails.toggle() } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle")
+                    PilotSymbol(PilotIcon.warning)
                         .foregroundStyle(Theme.warning)
                     Text(notice.text)
                         .foregroundStyle(Theme.mutedForeground)

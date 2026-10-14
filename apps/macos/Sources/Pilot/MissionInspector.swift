@@ -14,7 +14,7 @@ struct MissionInspectorPane: View {
             if let missionId = session.missionId, let mission = client.mission(missionId) {
                 content(mission, detail: client.missionDetails[missionId])
             } else {
-                EmptyStateView(icon: MissionSymbol.name, title: "Not in a mission",
+                EmptyStateView(icon: PilotIcon.mission, title: "Not in a mission",
                                message: "Use Make a mission… or Add to mission… from the chat's menu.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -60,8 +60,7 @@ struct MissionInspectorPane: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Button { decisionsExpanded.toggle() } label: {
                                 HStack(spacing: 6) {
-                                    Image(systemName: decisionsExpanded ? "chevron.down" : "chevron.right")
-                                        .font(.pilot(.micro, weight: .semibold)).foregroundStyle(Theme.faintForeground)
+                                    PilotSymbol(decisionsExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).foregroundStyle(Theme.faintForeground)
                                         .frame(width: 10)
                                     Text("Decisions").font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
                                     Text("\(detail.decisions.count)").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
@@ -90,8 +89,8 @@ struct MissionInspectorPane: View {
                         }
                     }
                     HStack(spacing: 14) {
-                        Button { model.openMission(mission.id, tab: .brief) } label: { Label("Brief", systemImage: "doc.text") }
-                        Button { model.openMission(mission.id, tab: .activity) } label: { Label("Activity", systemImage: "clock") }
+                        Button { model.openMission(mission.id, tab: .brief) } label: { Label("Brief", icon: PilotIcon.document) }
+                        Button { model.openMission(mission.id, tab: .activity) } label: { Label("Activity", icon: PilotIcon.pending) }
                     }
                     .buttonStyle(.plain)
                     .font(.pilot(.caption))
@@ -107,14 +106,14 @@ struct MissionInspectorPane: View {
     private func header(_ mission: Mission, detail: MissionDetail?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: MissionSymbol.name).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.mutedForeground)
                 Text(mission.title).font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground).lineLimit(2)
                 if mission.status != .active { MissionStatusChip(status: mission.status) }
                 Spacer(minLength: 6)
                 Button { model.openMission(mission.id) } label: {
                     HStack(spacing: 3) {
                         Text("Open")
-                        Image(systemName: "arrow.up.right").font(.pilot(.micro, weight: .semibold))
+                        PilotSymbol(PilotIcon.openExternal)
                     }
                     .font(.pilot(.caption))
                     .foregroundStyle(Theme.mutedForeground)
@@ -176,7 +175,7 @@ struct MissionChip: View {
     var body: some View {
         Button { model.openMission(missionId) } label: {
             HStack(spacing: 4) {
-                Image(systemName: MissionSymbol.name)
+                PilotSymbol(PilotIcon.mission)
                 Text(client.mission(missionId)?.title ?? "Mission").lineLimit(1)
             }
             .font(.pilot(.caption, weight: .medium))

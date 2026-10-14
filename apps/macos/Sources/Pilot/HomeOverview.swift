@@ -258,7 +258,7 @@ struct HomeOverview: View {
                             Text(row.countsLine).lineLimit(1)
                             if let mission = row.missionLine {
                                 Text("·")
-                                Image(systemName: MissionSymbol.name).font(.pilot(.micro))
+                                PilotSymbol(PilotIcon.mission)
                                 Text(mission).lineLimit(1).truncationMode(.tail)
                             }
                         }
@@ -298,7 +298,7 @@ struct HomeOverview: View {
                             Text(project).lineLimit(1)
                             if let mission {
                                 Text("·")
-                                Image(systemName: MissionSymbol.name).font(.pilot(.micro))
+                                PilotSymbol(PilotIcon.mission)
                                 Text(mission).lineLimit(1)
                             }
                         }
@@ -338,7 +338,7 @@ struct HomeOverview: View {
             HStack(spacing: 10) {
                 Button { app.openMission(mission.id) } label: {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: MissionSymbol.name).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                        PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.mutedForeground)
                             .frame(width: 14).accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(mission.title).font(.pilot(.body, weight: .medium))
@@ -361,7 +361,7 @@ struct HomeOverview: View {
                     }
                     if let coordinator {
                         Button { app.reveal(session: coordinator) } label: {
-                            Label("Coordinator", systemImage: MissionCoordinatorIndicator.symbol)
+                            Label("Coordinator", icon: PilotIcon.coordinator)
                                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize()
                         }
                         .buttonStyle(.plain)

@@ -56,7 +56,7 @@ struct DecisionAudiencePicker: View {
         Menu {
             DecisionAudienceOptions(selection: $selection)
         } label: {
-            ChipLabel(title: selection.label, icon: "person.2")
+            ChipLabel(title: selection.label, icon: PilotIcon.subagents)
         }
         .chipMenuStyle()
         .fixedSize()

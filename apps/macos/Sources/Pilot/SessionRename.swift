@@ -16,7 +16,7 @@ struct SessionRenameAction: View {
         Button {
             model.renamingSession = SessionRenameTarget(id: session.id, title: session.title)
         } label: {
-            Label("Rename…", systemImage: "pencil")
+            Label("Rename…", icon: PilotIcon.edit)
         }
         .disabled(model.pendingSessionActions.contains(session.id))
         .help("Change this chat's title")

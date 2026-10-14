@@ -141,14 +141,14 @@ enum SettingsTab: Hashable {
         }
     }
 
-    var symbol: String {
+    var icon: PilotIcon {
         switch self {
-        case .appearance: "textformat"
-        case .notifications: "bell"
-        case .energy: "leaf"
-        case .terminal: "terminal"
-        case .updates: "arrow.down.circle"
-        case .project: "folder"
+        case .appearance: PilotIcon.appearance
+        case .notifications: PilotIcon.notifications
+        case .energy: PilotIcon.energy
+        case .terminal: PilotIcon.terminal
+        case .updates: PilotIcon.updates
+        case .project: PilotIcon.project
         }
     }
 }
@@ -235,12 +235,12 @@ private struct SettingsSidebar: View {
             List(selection: Binding(get: { selection }, set: { if let next = $0 { selection = next } })) {
                 Section {
                     ForEach(SettingsTab.general, id: \.self) { tab in
-                        Label(tab.title, systemImage: tab.symbol).tag(tab)
+                        Label(tab.title, icon: tab.icon).tag(tab)
                     }
                 }
                 Section("Projects") {
                     ForEach(projects) { project in
-                        Label(project.name, systemImage: "folder")
+                        Label(project.name, icon: PilotIcon.project)
                             .lineLimit(1)
                             .help(project.path.abbreviatingHome)
                             .tag(SettingsTab.project(project.id))
@@ -257,7 +257,7 @@ private struct SettingsSidebar: View {
             .listStyle(.sidebar)
             Divider()
             Button(action: addProject) {
-                Label("Add Project…", systemImage: "plus")
+                Label("Add Project…", icon: PilotIcon.newProject)
                     .font(.pilot(.label))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -571,7 +571,7 @@ private struct ProjectSettings: View {
             HStack(spacing: 12) {
                 Button("Remove Project…", role: .destructive) { confirmingRemoval = true }
                 if let error = editor.error {
-                    Label(error, systemImage: "exclamationmark.triangle")
+                    Label(error, icon: PilotIcon.warning)
                         .font(.pilot(.caption))
                         .foregroundStyle(Theme.destructive)
                         .lineLimit(2)

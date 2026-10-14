@@ -401,11 +401,11 @@ private struct ComposerSendButtons: View {
     var body: some View {
         HStack(spacing: 8) {
             if working {
-                Button(action: onStop) { Image(systemName: "stop.fill") }
+                Button(action: onStop) { PilotSymbol(PilotIcon.stop, context: .toolbar) }
                     .buttonStyle(CircleIconButtonStyle(tint: Theme.destructive))
                     .help("Stop the current run")
             }
-            Button(action: onSend) { Image(systemName: "arrow.up") }
+            Button(action: onSend) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                 .buttonStyle(CircleIconButtonStyle())
                 .disabled(!state.canSend(changingModel: modelPicker.changing))
                 .help(working ? "Steer (↩)" : "Send (↩)")

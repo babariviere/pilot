@@ -19,7 +19,7 @@ struct PullRequestBadge: View {
                 }
             } else if session.pullRequestError != nil {
                 HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle")
+                    PilotSymbol(PilotIcon.warning)
                     if presentation == .details { Text("PR status unavailable") }
                 }
                 .font(.system(size: 10, weight: .medium))
@@ -64,17 +64,13 @@ struct PullRequestLink: View {
         let pr = pullRequest
         let ready = isReady
         return HStack(spacing: 4) {
-            if ready {
-                Image(systemName: "checkmark.circle")
-                    .font(.pilot(.caption, weight: .medium))
-                    .accessibilityHidden(true)
-            } else if presentation == .badge { pr.state.icon.accessibilityHidden(true) }
+            if presentation == .badge { pr.state.icon.accessibilityHidden(true) }
             Text(label)
             if stale || pr.browserURL == nil {
-                Image(systemName: "exclamationmark.triangle")
+                PilotSymbol(PilotIcon.warning)
             }
             if presentation == .details, pr.browserURL != nil {
-                Image(systemName: "arrow.up.right").accessibilityHidden(true)
+                PilotSymbol(PilotIcon.openExternal).accessibilityHidden(true)
             }
         }
         .font(.pilot(.small, weight: .medium))
@@ -109,10 +105,10 @@ struct PullRequestLink: View {
 extension PullRequestState {
     @MainActor @ViewBuilder var icon: some View {
         switch self {
-        case .draft: Image(systemName: "pencil.circle")
-        case .open: Image(nsImage: GitBranchGlyph.image).resizable().frame(width: 11, height: 11)
-        case .merged: Image(nsImage: PullRequestGlyph.merged.image).resizable().frame(width: 11, height: 11)
-        case .closed: Image(nsImage: PullRequestGlyph.closed.image).resizable().frame(width: 11, height: 11)
+        case .draft: PilotMarkIcon(mark: .gitBranch)
+        case .open: PilotMarkIcon(mark: .gitBranch)
+        case .merged: PilotMarkIcon(mark: .pullRequestMerged)
+        case .closed: PilotMarkIcon(mark: .pullRequestClosed)
         }
     }
 

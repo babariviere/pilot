@@ -27,14 +27,14 @@ struct PageSectionHeader: View {
                 Menu {
                     ForEach(linkChoices) { choice in Button(choice.title, action: choice.action) }
                 } label: {
-                    linkLabel(linkTitle, symbol: "chevron.down")
+                    linkLabel(linkTitle, symbol: PilotIcon.disclosureOpen)
                 }
                 .chipMenuStyle()
                 .fixedSize()
                 .accessibilityLabel(linkTitle)
             } else if let linkTitle, let link {
                 Button(action: link) {
-                    linkLabel(linkTitle, symbol: "chevron.right")
+                    linkLabel(linkTitle, symbol: PilotIcon.disclosure)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(linkTitle)
@@ -42,10 +42,10 @@ struct PageSectionHeader: View {
         }
     }
 
-    private func linkLabel(_ title: String, symbol: String) -> some View {
+    private func linkLabel(_ title: String, symbol: PilotIcon) -> some View {
         HStack(spacing: 3) {
             Text(title)
-            Image(systemName: symbol).font(.pilot(.glyph, weight: .semibold))
+            PilotSymbol(symbol)
         }
         .font(.pilot(.caption))
         .foregroundStyle(Theme.mutedForeground)
@@ -150,12 +150,12 @@ struct QuoteBlock<Content: View>: View {
 /// Centered empty state: a faint symbol, a short title, one sentence and the obvious next actions.
 /// Use it where a whole pane or section is empty; use a single quiet line inside busy pages.
 struct EmptyStateView<Actions: View>: View {
-    let icon: String
+    let icon: PilotIcon
     let title: String
     let message: String
     @ViewBuilder var actions: () -> Actions
 
-    init(icon: String, title: String, message: String, @ViewBuilder actions: @escaping () -> Actions = { EmptyView() }) {
+    init(icon: PilotIcon, title: String, message: String, @ViewBuilder actions: @escaping () -> Actions = { EmptyView() }) {
         self.icon = icon
         self.title = title
         self.message = message
@@ -164,7 +164,7 @@ struct EmptyStateView<Actions: View>: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: icon).font(.pilot(.title)).foregroundStyle(Theme.faintForeground)
+            PilotSymbol(icon, context: .emptyState).foregroundStyle(Theme.faintForeground)
                 .accessibilityHidden(true)
             Text(title).font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
             Text(message).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)

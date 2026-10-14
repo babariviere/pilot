@@ -83,7 +83,7 @@ struct SessionLinksPane: View {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.links.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: "link").font(.title2).foregroundStyle(Theme.faintForeground)
+                    PilotSymbol(PilotIcon.link, context: .emptyState).foregroundStyle(Theme.faintForeground)
                     Text("No links yet").font(.callout).foregroundStyle(Theme.mutedForeground)
                     Text("Links mentioned in this chat appear here.")
                         .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)

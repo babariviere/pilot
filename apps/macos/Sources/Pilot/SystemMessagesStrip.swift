@@ -71,13 +71,11 @@ struct SystemMessagesStrip: View {
             Button(action: toggle) {
                 HStack(spacing: 8) {
                     if held {
-                        Image(systemName: "pause.circle.fill")
-                            .font(.pilot(.caption, weight: .semibold))
+                        PilotSymbol(PilotIcon.paused)
                             .foregroundStyle(Theme.warning)
                             .frame(width: 14)
                     } else {
-                        Image(systemName: "arrow.right")
-                            .font(.pilot(.caption, weight: .semibold))
+                        PilotSymbol(PilotIcon.proposal)
                             .foregroundStyle(Theme.faintForeground)
                             .frame(width: 14)
                     }
@@ -91,7 +89,7 @@ struct SystemMessagesStrip: View {
                     }
                     HStack(spacing: 5) {
                         ForEach(origins, id: \.self) { origin in
-                            Image(systemName: origin.icon).help(origin.title)
+                            PilotSymbol(origin.icon).help(origin.title)
                         }
                     }
                     .font(.pilot(.small))
@@ -132,8 +130,7 @@ struct SystemMessagesStrip: View {
     }
 
     private var chevron: some View {
-        Image(systemName: "chevron.right")
-            .font(.pilot(.micro, weight: .semibold))
+        PilotSymbol(PilotIcon.disclosure, context: .disclosure)
             .rotationEffect(.degrees(expanded ? 90 : 0))
             .foregroundStyle(Theme.faintForeground)
             .frame(width: 16, height: 16)
@@ -159,8 +156,7 @@ private struct SystemMessageRow: View {
     var body: some View {
         HStack(spacing: 8) {
             QueueModeSymbol(mode: input.mode)
-            Image(systemName: input.origin.icon)
-                .font(.pilot(.small))
+            PilotSymbol(input.origin.icon)
                 .foregroundStyle(Theme.faintForeground)
                 .frame(width: 14)
             Text(input.origin.title)
@@ -183,7 +179,7 @@ private struct SystemMessageRow: View {
             }
             if let onDiscard {
                 Button(action: onDiscard) {
-                    Image(systemName: "xmark").font(.pilot(.micro))
+                    PilotSymbol(PilotIcon.dismiss, context: .toolbar)
                 }
                 .buttonStyle(.plain)
                 .help("Discard this held system message")

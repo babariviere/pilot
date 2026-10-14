@@ -62,7 +62,7 @@ struct ProjectPage: View {
                         .task { await loadFullList(projectId: project.id) }
                     }
             } else if client.hasProjectSnapshot {
-                EmptyStateView(icon: "folder", title: "This project no longer exists",
+                EmptyStateView(icon: PilotIcon.project, title: "This project no longer exists",
                                message: "It was removed from Pilot. Its folder is unchanged.")
             } else {
                 ProgressView("Loading project…")
@@ -85,7 +85,7 @@ struct ProjectPage: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         banner
-                        EmptyStateView(icon: "folder", title: "Start the first chat",
+                        EmptyStateView(icon: PilotIcon.project, title: "Start the first chat",
                                        message: "Chats, pull requests and missions for \(project.name) appear here.") {
                             Button("New Chat") { model.newSession(in: project.id) }
                                 .buttonStyle(.borderedProminent)
@@ -107,7 +107,7 @@ struct ProjectPage: View {
                                      openSettings: { openProjectSettings(project) })
             }
         } else if let error = client.dashboardErrors[projectId] {
-            EmptyStateView(icon: "exclamationmark.triangle", title: "Couldn't load this project", message: error) {
+            EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load this project", message: error) {
                 Button("Retry", action: retry).disabled(retrying)
             }
         } else {
@@ -165,12 +165,12 @@ private struct ProjectToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button { model.newSession(in: project.id) } label: { Label("New Chat", systemImage: "plus") }
+                Button { model.newSession(in: project.id) } label: { Label("New Chat", icon: PilotIcon.compose) }
                 Button { model.missionSheet = .create(projectId: project.id) } label: {
-                    Label("New Mission…", systemImage: MissionSymbol.name)
+                    Label("New Mission…", icon: PilotIcon.mission)
                 }
             } label: {
-                Label("New chat", systemImage: "plus")
+                Label("New chat", icon: PilotIcon.compose)
                     .labelStyle(.titleAndIcon)
             } primaryAction: {
                 model.newSession(in: project.id)
@@ -179,33 +179,33 @@ private struct ProjectToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button(action: showTracked) { Label("Linear and Slack…", systemImage: "tray") }
+                Button(action: showTracked) { Label("Linear and Slack…", icon: PilotIcon.inbox) }
                 if !(project.tracking?.slackChannels ?? []).isEmpty {
                     Button { model.openSlackTriage(project.id) } label: {
-                        Label("Slack Triage", systemImage: "bubble.left.and.bubble.right")
+                        Label("Slack Triage", icon: PilotIcon.chats)
                     }
                 }
-                Button(action: openSettings) { Label("Project Settings…", systemImage: "gearshape") }
+                Button(action: openSettings) { Label("Project Settings…", icon: PilotIcon.settings) }
                 Button { NSWorkspace.shared.open(URL(filePath: project.path)) } label: {
-                    Label("Open in Finder", systemImage: "folder")
+                    Label("Open in Finder", icon: PilotIcon.project)
                 }
                 Divider()
                 Button { model.showArchive(in: project.id) } label: {
-                    Label("Browse Archived Chats", systemImage: "archivebox")
+                    Label("Browse Archived Chats", icon: PilotIcon.archive)
                 }
-                Button(action: showArtifacts) { Label("Artifacts…", systemImage: ArtifactSymbol.name) }
+                Button(action: showArtifacts) { Label("Artifacts…", icon: PilotIcon.artifact) }
                 Divider()
                 if model.sidebarScope == project.id {
                     Button { model.focus(on: nil) } label: {
-                        Label("Show All Projects", systemImage: "square.grid.2x2")
+                        Label("Show All Projects", icon: PilotIcon.allProjects)
                     }
                 } else {
                     Button { model.focus(on: project.id) } label: {
-                        Label("Focus on This Project", systemImage: "sidebar.left")
+                        Label("Focus on This Project", icon: PilotIcon.focusProject)
                     }
                 }
             } label: {
-                Image(systemName: "ellipsis")
+                PilotSymbol(PilotIcon.more, context: .toolbar)
             }
             .menuIndicator(.hidden)
             .help("Project actions")
@@ -268,7 +268,7 @@ private struct ProjectDashboardBody: View {
             }) {
                 if overview.upNext.isEmpty {
                     HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
+                        PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success).frame(width: 16)
                         Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
                     }
                     .font(.pilot(.body))
@@ -347,7 +347,7 @@ private struct ProjectDashboardBody: View {
                         ForEach(Array(memory.recent.prefix(3).enumerated()), id: \.element.id) { index, entry in
                             if index > 0 { HairlineDivider(leading: 34) }
                             HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: "brain.head.profile").foregroundStyle(Theme.faintForeground).frame(width: 16)
+                                PilotSymbol(PilotIcon.memory).foregroundStyle(Theme.faintForeground).frame(width: 16)
                                 Text(entry.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                                     .lineLimit(2).textSelection(.enabled)
                                 Spacer(minLength: 0)
@@ -485,7 +485,7 @@ private struct ProjectFullListSheet: View {
                     }
                 }
             } else if let error {
-                ContentUnavailableView("Couldn't load this list", systemImage: "exclamationmark.triangle", description: Text(error))
+                ContentUnavailableView("Couldn't load this list", systemImage: PilotIcon.warning.systemName!, description: Text(error))
                 Button("Retry", action: retry)
             } else {
                 ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -514,7 +514,7 @@ struct ProjectRefreshBanner: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             HStack(spacing: 10) {
-                Image(systemName: "exclamationmark.triangle").foregroundStyle(Theme.warning).frame(width: 16)
+                PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.warning).frame(width: 16)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Couldn't refresh this project").font(.pilot(.body)).foregroundStyle(Theme.foreground)
@@ -864,9 +864,9 @@ struct PullRequestReadinessStyle: Equatable {
 
     @MainActor @ViewBuilder var icon: some View {
         switch kind {
-        case .ready: Image(systemName: "checkmark.circle.fill")
-        case .pending: Image(systemName: "clock")
-        case .blocked: Image(systemName: "xmark.octagon")
+        case .ready: PilotSymbol(PilotIcon.complete)
+        case .pending: PilotSymbol(PilotIcon.pending)
+        case .blocked: PilotSymbol(PilotIcon.blocked)
         case .draft: PullRequestState.draft.icon
         case .open: PullRequestState.open.icon
         }
@@ -889,7 +889,7 @@ private struct ProjectPullRequestRow: View {
             HoverRow(verticalPadding: 7) { hovered in
                 InboxRowLabel(title: pr.title) { detail } trailing: {
                     if url != nil {
-                        Image(systemName: "arrow.up.right").font(.pilot(.micro, weight: .semibold))
+                        PilotSymbol(PilotIcon.openExternal)
                             .foregroundStyle(hovered ? Theme.mutedForeground : Theme.faintForeground)
                             .accessibilityHidden(true)
                     }
@@ -926,7 +926,7 @@ private struct ProjectMissionRow: View {
         Button { model.openMission(mission.id) } label: {
             HoverRow(verticalPadding: 7) { _ in
                 HStack(spacing: 10) {
-                    Image(systemName: MissionSymbol.name).font(.pilot(.label)).foregroundStyle(Theme.foreground).frame(width: 16)
+                    PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.foreground).frame(width: 16)
                     Text(mission.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if mission.working > 0 { CountBadge(count: mission.working).help("\(mission.working) working") }

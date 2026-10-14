@@ -50,7 +50,7 @@ struct MissionTaskDescription: View {
                 if expansion.expanded || truncated {
                     Button { expansion.expanded.toggle() } label: {
                         Label(expansion.expanded ? "Show less" : "Show more",
-                              systemImage: expansion.expanded ? "chevron.up" : "chevron.down")
+                              icon: expansion.expanded ? PilotIcon.collapse : PilotIcon.disclosureOpen)
                     }
                     .buttonStyle(.link)
                     .help(expansion.expanded ? "Collapse task description" : "Read the full task description")

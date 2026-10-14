@@ -2,12 +2,6 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// The one artifact mark, everywhere an artifact appears (inspector, lists, mission tabs, menus). Image
-/// artifacts use `photo` instead.
-enum ArtifactSymbol {
-    static let name = "rectangle.on.rectangle.angled"
-}
-
 @MainActor
 final class ArtifactViewState: ObservableObject {
     @Published var preview = true
@@ -206,7 +200,7 @@ struct ArtifactViewerHeader: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Button(action: close) { Image(systemName: "xmark").font(.system(size: 12, weight: .medium)).padding(6) }
+            Button(action: close) { PilotSymbol(PilotIcon.dismiss, context: .row).padding(6) }
                 .buttonStyle(.plain)
                 .keyboardShortcut(.cancelAction)
                 .help("Close artifact")
@@ -309,7 +303,7 @@ private struct ArtifactShareMenu: View {
                 .disabled(render.loading || render.error != nil)
                 .help("Save the full preview as a PNG image")
         } label: {
-            Label("Share", systemImage: "square.and.arrow.up")
+            Label("Share", icon: PilotIcon.share)
         }
         .fixedSize()
         .disabled(state.exporting)
@@ -380,7 +374,7 @@ struct SessionArtifactsPane: View {
                 Spacer()
                 if state.loading { ProgressView().controlSize(.mini) }
                 Button { Task { await load() } } label: {
-                    Image(systemName: "arrow.clockwise").font(.caption)
+                    PilotSymbol(PilotIcon.refresh, context: .toolbar)
                 }
                 .buttonStyle(.borderless)
                 .disabled(state.loading)
@@ -401,7 +395,7 @@ struct SessionArtifactsPane: View {
                 ProgressView("Loading artifacts…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if artifacts.isEmpty {
                 VStack(spacing: 8) {
-                    Image(systemName: ArtifactSymbol.name).font(.title2).foregroundStyle(Theme.faintForeground)
+                    PilotSymbol(PilotIcon.artifact, context: .emptyState).foregroundStyle(Theme.faintForeground)
                     Text(state.error == nil ? "No artifacts yet" : "Artifacts unavailable")
                         .font(.callout).foregroundStyle(Theme.mutedForeground)
                 }
@@ -412,7 +406,7 @@ struct SessionArtifactsPane: View {
                         ForEach(artifacts) { artifact in
                             Button { state.selected = artifact.reference } label: {
                                 HStack(spacing: 10) {
-                                    Image(systemName: artifact.kind == .image ? "photo" : ArtifactSymbol.name)
+                                    PilotSymbol(artifact.kind == .image ? PilotIcon.image : PilotIcon.artifact)
                                         .foregroundStyle(Theme.mutedForeground)
                                     Text(artifact.title).font(.callout).lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -463,7 +457,7 @@ struct ProjectArtifactsButton: View {
 
     var body: some View {
         Button { state.viewer = true } label: {
-            Image(systemName: ArtifactSymbol.name)
+            PilotSymbol(PilotIcon.artifact)
         }
         .buttonStyle(.borderless)
         .help("Browse artifacts in \(project.name)")
@@ -502,7 +496,7 @@ struct ProjectArtifactsBrowser: View {
                 HStack {
                     Button { state.selected = artifact.reference } label: {
                         HStack {
-                            Label(artifact.title, systemImage: ArtifactSymbol.name)
+                            Label(artifact.title, icon: PilotIcon.artifact)
                             Spacer()
                             Text("r\(artifact.revision)").font(.caption.monospaced()).foregroundStyle(.secondary)
                         }
@@ -511,7 +505,7 @@ struct ProjectArtifactsBrowser: View {
                         AppModel.shared.selectedSessionId = artifact.sessionId
                         dismiss()
                     } label: {
-                        Label(client.session(artifact.sessionId)?.title ?? "Open chat", systemImage: "bubble.left")
+                        Label(client.session(artifact.sessionId)?.title ?? "Open chat", icon: PilotIcon.message)
                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                     }
                     .buttonStyle(.borderless)
