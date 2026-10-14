@@ -217,7 +217,7 @@ export async function slackExcerpt(context: SourcePollContext, item: TrackedItem
 		(configured) =>
 			configured === channel || (typeof channelName === "string" && configured.replace(/^#/, "") === channelName),
 	);
-	if (!tracked) throw new Conflict("This message's channel is no longer tracked");
+	if (!tracked) throw new Conflict("This message's channel was removed from this project");
 	const parent = parseSlackThreadParent(
 		// Only the parent is shown. Fetch as few replies as the tool allows.
 		await context.call("thread", { channel_id: channel, message_ts: ts, limit: 1, response_format: "detailed" }),

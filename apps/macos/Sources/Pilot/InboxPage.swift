@@ -77,7 +77,7 @@ private struct InboxSections: View {
             if let hidden = InboxText.hiddenFooter(inbox.slack?.hidden ?? []) {
                 Text(hidden).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
                     .padding(.horizontal, 8)
-                    .help("Labels marked Hide from Inbox in Tracking settings")
+                    .help("Labels marked Hide from Inbox in Linear and Slack settings")
             }
         }
     }

@@ -194,7 +194,7 @@ export class SourceRegistry {
 	poll(id: string): Promise<TrackingSource> {
 		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
 		const source = this.require(id);
-		if (!source.configured) throw new Conflict("Configure tracking in Project settings first");
+		if (!source.configured) throw new Conflict("Attach a Linear team or Slack channels in project settings first");
 		const key = this.currentKey(id)!;
 		if ((this.health.get(id)?.nextPollAt ?? 0) > Date.now() && this.health.get(id)?.status !== "ok")
 			throw new Conflict("Source is backing off. Retry after nextPollAt.");
@@ -252,7 +252,7 @@ export class SourceRegistry {
 									result.issue === "slack_budget"
 										? "Slack classification daily budget reached. Remaining threads will resume tomorrow."
 										: result.issue === "slack_channel"
-											? "A Slack channel could not be read. Check its access in Tracking settings."
+											? "A Slack channel could not be read. Check its access in project settings."
 											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
 							}
 						: {}),
