@@ -108,6 +108,53 @@ test("retry-startup POST returns the recovered session and preserves route guard
 	assert.equal(retries.mock.callCount(), 3);
 });
 
+test("held routes send once or discard all and per row, and reject invalid IDs", async (t) => {
+	const projects = new ProjectStore("/unused");
+	const sessions = new SessionManager("/unused", projects);
+	const calls: unknown[] = [];
+	t.mock.method(sessions, "heldMessages", async (...args: unknown[]) => {
+		if (args[0] === "missing") throw new NotFound("Unknown session");
+		calls.push(args);
+	});
+	const terminals = new TerminalManager();
+	const server = createDaemonServer(
+		{ home: "/unused", host: "127.0.0.1", port: 0 },
+		sessions,
+		projects,
+		new ModelCatalog("/unused"),
+		terminals,
+	);
+	t.after(async () => {
+		terminals.shutdown();
+		await new Promise<void>((resolve) => server.close(() => resolve()));
+	});
+	server.listen(0, "127.0.0.1");
+	await once(server, "listening");
+	const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/sessions`;
+	for (const [path, method] of [
+		["chat/held/send", "POST"],
+		["chat/held", "DELETE"],
+		["chat/held/42", "DELETE"],
+	]) {
+		const response = await fetch(`${base}/${path}`, { method });
+		assert.equal(response.status, 200);
+		assert.deepEqual(await response.json(), { ok: true });
+	}
+	assert.deepEqual(calls, [
+		["chat", "send"],
+		["chat", "discard", undefined],
+		["chat", "discard", 42],
+	]);
+	for (const id of ["0", "-1", "no", "1.5", "9007199254740992"]) {
+		const response = await fetch(`${base}/chat/held/${id}`, { method: "DELETE" });
+		assert.equal(response.status, 400);
+		await response.arrayBuffer();
+	}
+	const missing = await fetch(`${base}/missing/held`, { method: "DELETE" });
+	assert.equal(missing.status, 404);
+	await missing.arrayBuffer();
+});
+
 test("PR binding routes use the user actor, return summaries and validate request shape", async (t) => {
 	const projects = new ProjectStore("/unused");
 	const sessions = new SessionManager("/unused", projects);

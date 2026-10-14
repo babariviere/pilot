@@ -337,3 +337,199 @@ test("live composer queue lists jobs separately initially, on updates and after 
 	assert.equal((await receipt?.status(context))?.status, "queued", "hidden notification is still admitted");
 	assert.equal((await session.harness.snapshot(InboxDoc, session.conversation.id, context))?.items.length, 4);
 });
+
+for (const nextUser of [false, true]) {
+	test(`Stop holds both automatic modes across reopen, then ${nextUser ? "user input" : "Send now"} starts one run`, {
+		timeout: 15_000,
+	}, async (t) => {
+		const f = await fixture(t, []);
+		const openAdapter = NativeAdapter.open;
+		t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+			openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+		);
+		let started!: () => void;
+		const generating = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		f.faux.setResponses([
+			async (_context, options) => {
+				started();
+				await new Promise<void>((resolve) =>
+					options!.signal!.addEventListener("abort", () => resolve(), { once: true }),
+				);
+				return fauxAssistantMessage("Interrupted");
+			},
+			fauxAssistantMessage("Resumed"),
+		]);
+		const storageDir = join(f.root, "storage");
+		const spec = { sessionId: "held", cwd: f.root, storageDir };
+		const events: import("./held-inputs.ts").SystemMessageStateEvent[] = [];
+		let session = await KernelSession.open(spec, {
+			onWorking: () => {},
+			onSystemMessageState: (event) => events.push(event),
+		});
+		f.cleanup.push(() => session.close());
+		assert.deepEqual(await session.submit("first", "Start", "steer", false, true), { delivery: "delivered" });
+		await generating;
+		assert.deepEqual(await session.submit("mission:send:follow", "Follow-up", "followUp", false, true), {
+			delivery: "queued",
+		});
+		assert.deepEqual(await session.submit("mission:send:steer", "Correction", "steer", false, true), {
+			delivery: "queued",
+		});
+		await session.submit("user-queued", "My unsent message", "followUp");
+		assert.deepEqual(await session.abort(), [{ requestId: "user-queued", content: "My unsent message" }]);
+		assert.equal(session.working, false);
+		assert.equal(f.faux.state.callCount, 1);
+		assert.deepEqual(
+			events.map((event) => event.state),
+			["held", "held"],
+		);
+		await session.close();
+		session = await KernelSession.open(spec, {
+			onWorking: () => {},
+			onSystemMessageState: (event) => events.push(event),
+		});
+		const frames: QueueUpdateEvent[] = [];
+		await session.watch(
+			"held",
+			(batch) => {
+				for (const event of batch) if (event.type === "queue_update") frames.push(event);
+			},
+			false,
+		);
+		assert.equal(frames.at(-1)?.automatic?.length, 2);
+		assert.ok(frames.at(-1)?.automatic?.every((item) => item.held));
+		assert.equal(f.faux.state.callCount, 1, "reopen must not deliver held input");
+		if (nextUser) await session.submit("next-user", "Next", "steer");
+		else await session.sendHeldMessages();
+		await session.harness.waitForIdle(context);
+		assert.equal(f.faux.state.callCount, 2, "all held messages use one run");
+		const view = await session.conversation.context(context);
+		const text = view.entries
+			.flatMap((entry) => entry.model ?? [])
+			.filter((message) => message.role === "user")
+			.map((message) => message.content);
+		assert.deepEqual(text, ["Start", "Correction", "Follow-up", ...(nextUser ? ["Next"] : [])]);
+		await session.sendHeldMessages();
+		assert.equal(f.faux.state.callCount, 2, "repeat Send now is a no-op");
+	});
+}
+
+test("busy steering joins the current turn at its next tool boundary, while follow-up waits", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t, []);
+	const openAdapter = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+	);
+	let release!: () => void;
+	let started!: () => void;
+	const generating = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	t.after(() => release());
+	f.faux.setResponses([
+		async () => {
+			started();
+			await gate;
+			return fauxAssistantMessage(
+				{ type: "toolCall", id: "missing", name: "missing", arguments: {} },
+				{ stopReason: "toolUse" },
+			);
+		},
+		(transcript) => {
+			const users = transcript.messages.filter((message) => message.role === "user");
+			assert.deepEqual(
+				users.map((message) => message.content),
+				["Start", "Correction"],
+			);
+			return fauxAssistantMessage("Current answer");
+		},
+		(transcript) => {
+			const users = transcript.messages.filter((message) => message.role === "user");
+			assert.deepEqual(
+				users.map((message) => message.content),
+				["Start", "Correction", "Later"],
+			);
+			return fauxAssistantMessage("Follow-up answer");
+		},
+	]);
+	const session = await KernelSession.open(
+		{ sessionId: "steering", cwd: f.root, storageDir: join(f.root, "storage") },
+		{ onWorking: () => {} },
+	);
+	f.cleanup.push(() => session.close());
+	await session.submit("first", "Start", "steer");
+	await generating;
+	assert.deepEqual(await session.submit("mission:send:later", "Later", "followUp", false, true), {
+		delivery: "queued",
+	});
+	assert.deepEqual(await session.submit("mission:send:correction", "Correction", "steer", false, true), {
+		delivery: "queued",
+	});
+	release();
+	await session.harness.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 3);
+});
+
+test("discard held actions keep the kernel stopped, emit per-message events, and leave waiting input read-only", {
+	timeout: 15_000,
+}, async (t) => {
+	const f = await fixture(t, []);
+	const openAdapter = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+	);
+	const states: import("./held-inputs.ts").SystemMessageStateEvent[] = [];
+	const session = await KernelSession.open(
+		{ sessionId: "discard", cwd: f.root, storageDir: join(f.root, "storage") },
+		{
+			onWorking: () => {},
+			onSystemMessageState: (event) => states.push(event),
+		},
+	);
+	f.cleanup.push(() => session.close());
+	const ids = await session.harness.commit(async (tx) => {
+		const inbox = await tx.doc(InboxDoc, session.conversation.id);
+		const ids: number[] = [];
+		for (const suffix of ["first", "second"]) {
+			const input = await tx.createSubmission({
+				conversationId: session.conversation.id,
+				requestId: `mission:send:${suffix}`,
+				type: "input",
+				status: "queued",
+			});
+			inbox.items.push({ id: input.id, mode: "followUp", content: suffix });
+			ids.push(input.id);
+		}
+		return ids;
+	}, context);
+	await assert.rejects(session.editQueuedMessage(ids[0]!, "Changed"), /read-only/);
+	await assert.rejects(session.removeQueuedMessage(ids[0]!), /read-only/);
+	await session.abort();
+	await session.discardHeldMessages(ids[0]);
+	await session.discardHeldMessages();
+	const unique = new Map(states.map((event) => [event.id, event]));
+	assert.deepEqual(
+		[...unique.values()].map((event) => event.state),
+		["held", "held", "discarded", "discarded"],
+	);
+	for (const id of ids) {
+		const submission = await session.harness.submission(
+			id as import("@earendil-works/pi-durable").SubmissionId,
+			context,
+		);
+		assert.equal((await submission!.status(context)).status, "unanswered");
+	}
+	for (const event of unique.values()) await session.acknowledgeSystemMessageState(event.id);
+	const published = states.length;
+	await session.publishSystemMessageStates();
+	assert.equal(states.length, published, "acknowledged events leave the durable outbox");
+	assert.equal(session.working, false);
+	assert.equal(f.faux.state.callCount, 0);
+});

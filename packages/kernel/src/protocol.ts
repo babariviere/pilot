@@ -64,6 +64,9 @@ export type KernelCommand =
 	/** Manual compaction, acknowledged with `accepted` once its task is committed. */
 	| { type: "compact"; requestId: string; instructions?: string }
 	| { type: "abort"; requestId: string }
+	| { type: "sendHeldMessages"; requestId: string }
+	| { type: "discardHeldMessages"; requestId: string; submissionId?: number }
+	| { type: "systemMessageState.ack"; id: string }
 	/** Stop work and continue from an earlier point in a new attempt. Answered by `rewound`. */
 	| { type: "rewind"; requestId: string; action: RewindAction; entryId: number }
 	/** Stop work and continue another attempt. Answered by `rewound`. */
@@ -89,6 +92,7 @@ export type KernelCommand =
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {
 			type: "ready";
 			model: string;

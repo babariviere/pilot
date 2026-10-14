@@ -14,3 +14,4 @@ export const snapshotWorkerEntry = new URL("./snapshot-worker.ts", import.meta.u
 
 /** A long-lived, read-only watcher for one subagent transcript. */
 export const subagentWatchWorkerEntry = new URL("./subagent-watch-worker.ts", import.meta.url);
+export type { SystemMessageStateEvent } from "./held-inputs.ts";

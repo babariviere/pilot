@@ -1146,6 +1146,15 @@ export interface RemoveQueuedMessageResponse {
 	ok: true;
 }
 
+/**
+ * POST /api/sessions/:id/held/send starts one run with every held input (steering first, then follow-ups).
+ * DELETE /api/sessions/:id/held discards all held input; /held/:submissionId discards one.
+ * Waiting automatic input is never editable or discardable. The next user input also carries held input.
+ */
+export interface HeldMessagesResponse {
+	ok: true;
+}
+
 /** Client to daemon, over /api/ws. */
 export type ClientMessage =
 	/** Receive `mission` details for one mission: the current detail first, then after every change. */

@@ -155,6 +155,7 @@ export class MissionService {
 							...new Map([...owned, ...linked].map((target) => [target.url.toLowerCase(), target])).values(),
 						];
 					}),
+			systemMessageState: (sessionId, event) => store.recordSystemMessageState(sessionId, event),
 			workspaceBehind: (sessionId, text) => {
 				const id = store.missionOf(sessionId);
 				if (id) store.addComment(id, { text }, { sessionId });
@@ -555,13 +556,17 @@ export class MissionService {
 				if (this.store.missionOf(args.targetSessionId) !== missionId)
 					throw new Conflict("That chat is not in this mission");
 				if (typeof args.message !== "string" || !args.message.trim()) throw new Error("send requires message");
+				if (args.mode !== undefined && args.mode !== "steer" && args.mode !== "followUp")
+					throw new Error("mode must be steer or followUp");
+				const mode = args.mode ?? "followUp";
 				// Coordinator messages reach the chat without appearing as the user's queued messages.
 				const result = await this.sessions.sendReported(
 					args.targetSessionId,
 					args.message,
-					`mission:send:${randomUUID()}`,
+					`mission:send:${missionId}:${randomUUID()}`,
+					mode,
 				);
-				return { sessionId: args.targetSessionId, sent: result.delivery !== "not_started", ...result };
+				return { sessionId: args.targetSessionId, sent: result.delivery !== "rejected", ...result };
 			}
 			case "status": {
 				const target = args.targetSessionId;

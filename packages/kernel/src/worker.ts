@@ -205,6 +205,17 @@ export function runKernelWorker(): void {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
+			case "systemMessageState.ack":
+				await session.acknowledgeSystemMessageState(command.id);
+				break;
+			case "sendHeldMessages":
+				await session.sendHeldMessages();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
+			case "discardHeldMessages":
+				await session.discardHeldMessages(command.submissionId);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "activity":
 				await session.recordActivity(command.requestId, command.text);
 				await send({ type: "accepted", requestId: command.requestId });
@@ -311,6 +322,9 @@ export function runKernelWorker(): void {
 				// Extensions resolve pi's agent directory from the environment, e.g. for the shared usage cache.
 				if (command.spec.agentDir) process.env.PI_CODING_AGENT_DIR = command.spec.agentDir;
 				const opened = await KernelSession.open(command.spec, {
+					onSystemMessageState: (event) => {
+						void send({ type: "systemMessageState", event });
+					},
 					onWorking: (working, completion) =>
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),

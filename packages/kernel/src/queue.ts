@@ -30,8 +30,11 @@ export async function queueUpdateForDisplay(
 	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
 	pendingSince?: Map<number, number>,
 	now = Date.now(),
+	held: Readonly<InboxState> | null = null,
 ): Promise<QueueUpdateEvent> {
-	const event = queueUpdate(inbox);
+	const items = new Map([...(inbox?.items ?? []), ...(held?.items ?? [])].map((item) => [item.id, item]));
+	const event = queueUpdate({ items: [...items.values()] });
+	const heldIds = new Set(held?.items.map((item) => item.id) ?? []);
 	const origins = await Promise.all(
 		event.items.map(async (item) => inputOrigin((await readSubmission(item.id as SubmissionId))?.requestId)),
 	);
@@ -40,6 +43,7 @@ export async function queueUpdateForDisplay(
 		const origin = origins[index];
 		if (origin === undefined) return;
 		const input: PendingAutomaticInput = { id: item.id, origin, mode: item.mode, preview: previewText(item.content) };
+		if (heldIds.has(item.id as SubmissionId)) input.held = true;
 		if (pendingSince) {
 			input.queuedAt = pendingSince.get(item.id) ?? now;
 			pendingSince.set(item.id, input.queuedAt);

@@ -76,6 +76,13 @@ You can also archive a failed startup without discarding its queued messages. Re
 
 ## Working with Pilot
 
+### Stopping and system messages
+
+Stop ends the current run and returns your undelivered queued messages to the composer. System messages
+from background jobs, PR follow-ups and other chats stay held, without restarting the chat. Use **Send now**
+to start one run with them, **Discard** to remove all or an individual held message, or send your next
+message to carry them along. Waiting system messages are read-only.
+
 ### Ask and Build
 
 | | Ask | Build |
