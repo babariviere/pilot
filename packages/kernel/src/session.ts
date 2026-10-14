@@ -663,6 +663,10 @@ export class KernelSession {
 		onlyIfIdle = false,
 		reportDelivery = false,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
+		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
+		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
+			return Promise.reject(new ConversationBusy(this.conversation.id));
+		this.#admissions++;
 		return this.serializeInput(() => this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery));
 	}
 
@@ -673,10 +677,8 @@ export class KernelSession {
 		onlyIfIdle = false,
 		reportDelivery = false,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
-		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
-			throw new ConversationBusy(this.conversation.id);
-		this.#admissions++;
 		try {
+			if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
 			// Native input handlers (prompt templates, skill commands) expand the text first.
 			const prepared = await this.adapter.prepareInput(content);
 			const heldAdmission = await admitWithHeld(

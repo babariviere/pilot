@@ -92,7 +92,7 @@ test("stop returns the user's withdrawn queued messages as a composer draft", as
 	assert.equal(f.sessions["stopResults"].size, 0);
 });
 
-test("stop restores undelivered input once, leaving input in flight to the kernel", async (t) => {
+test("stop restores undelivered user input once and preserves automatic input after abort", async (t) => {
 	const f = await fixture(t);
 	await f.sessions.send(f.id, "start", "followUp");
 	const gate = deferred();
@@ -116,11 +116,19 @@ test("stop restores undelivered input once, leaving input in flight to the kerne
 	gate.resolve();
 	assert.deepEqual(await stopping, { ok: true, draft: "in flight\n\nnot sent yet" });
 	await Promise.allSettled([first, second, automatic]);
-	const sent = f.workers.flatMap((worker) => worker.commands).filter((command) => command.type === "input");
+	const commands = f.workers.flatMap((worker) => worker.commands);
+	const sent = commands.filter((command) => command.type === "input");
 	assert.deepEqual(
 		sent.map((command) => (command.type === "input" ? command.content : "")),
-		["start", "in flight"],
-		"withdrawn input is never delivered",
+		["start", "in flight", "coordinator"],
+		"withdrawn user input is never delivered; automatic input is preserved",
+	);
+	assert.deepEqual(
+		commands
+			.filter((command) => command.type === "input" || command.type === "abort")
+			.map((command) => (command.type === "input" ? command.content : "abort")),
+		["start", "in flight", "abort", "coordinator"],
+		"automatic input reaches the stopped kernel only after the abort so it can be held",
 	);
 	assert.equal(f.sessions["delivering"].size, 0);
 });
