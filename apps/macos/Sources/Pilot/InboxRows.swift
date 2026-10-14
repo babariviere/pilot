@@ -14,6 +14,63 @@ extension View {
     }
 }
 
+/// The body of an Inbox or Overview row: the title, the sidebar-like second line and a trailing action or time.
+/// There is no leading status icon: the row's dithered corner (`inboxCorner`) carries its state, as in the
+/// sidebar. Divide these rows with `HairlineDivider(leading: InboxRowLayout.dividerInset)`.
+struct InboxRowLabel<Detail: View, Trailing: View>: View {
+    let title: String
+    @ViewBuilder var detail: Detail
+    @ViewBuilder var trailing: Trailing
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                detail
+            }
+            Spacer(minLength: 8)
+            trailing
+        }
+    }
+}
+
+enum InboxRowLayout {
+    /// Lines dividers up with the text of rows without a leading icon, which starts at the row's own padding.
+    static let dividerInset: CGFloat = 8
+}
+
+/// A row's trailing action, such as "Review" or "Open PR", brighter while the row is hovered.
+struct InboxRowAction: View {
+    let title: String
+    var symbol = "chevron.right"
+    let hovered: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(title).font(.pilot(.label, weight: .medium))
+                .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
+                .fixedSize()
+            Image(systemName: symbol).font(.pilot(.micro, weight: .semibold))
+                .foregroundStyle(Theme.faintForeground)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+extension AppModel {
+    /// A Linear or Slack row's corner follows the latest chat it started (working, failed, unread, ready to
+    /// merge), like that chat's sidebar row. Items nothing has started yet stay quiet.
+    func trackedItemSignal(_ item: TrackedItem) -> SessionSignal? {
+        guard let session = trackedItemSession(item) else { return nil }
+        return session.signal(unread: isUnread(session))
+    }
+
+    /// The latest chat a Linear or Slack item started, when it is still listed.
+    func trackedItemSession(_ item: TrackedItem) -> SessionSummary? {
+        item.sessionId.flatMap { client.session($0) }
+    }
+}
+
 /// The second line of an Inbox row, as in the chat's sidebar row: the project when the list mixes projects, then
 /// "<compass> Coordinator · <state>" for an active coordinator, or the chat's mission, PR badge, branch and the
 /// row's reason. A ready-to-merge row passes its pull request, shown in place of the chat's badge. Rows show no
@@ -146,23 +203,9 @@ struct InboxReadyToMergeRow: View {
                                     pullRequest: pr)
         Button { if let url { BrowserLinkOpener.shared.open(url) } else { openChat() } } label: {
             HoverRow(verticalPadding: 7) { hovered in
-                HStack(spacing: 10) {
-                    PullRequestReadinessStyle(pr).icon
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(PullRequestReadinessStyle(pr).color)
-                        .frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(pr.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        detail
-                    }
-                    Spacer(minLength: 8)
-                    Text(url == nil ? "Open chat" : "Open PR").font(.pilot(.label, weight: .medium))
-                        .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
-                        .fixedSize()
-                    Image(systemName: url == nil ? "chevron.right" : "arrow.up.right")
-                        .font(.pilot(.micro, weight: .semibold))
-                        .foregroundStyle(Theme.faintForeground)
-                        .accessibilityHidden(true)
+                InboxRowLabel(title: pr.title) { detail } trailing: {
+                    InboxRowAction(title: url == nil ? "Open chat" : "Open PR",
+                                   symbol: url == nil ? "chevron.right" : "arrow.up.right", hovered: hovered)
                 }
             }
         }

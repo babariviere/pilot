@@ -46,6 +46,17 @@ private let dotfiles = Project(id: "p2", name: "dotfiles", path: "/tmp/dotfiles"
     #expect(SidebarSelection.restoring(.inbox, in: "p1", sessions: [], missions: [], projectIds: ["p1"]) == .inbox)
 }
 
+@Test @MainActor func overviewOpensTheInboxFilteredToItsProject() {
+    let app = fixture()
+    // Every project is listed in the sidebar; Open Inbox on dotfiles' Overview still filters to dotfiles.
+    app.openProject("p2")
+    app.showInbox(for: "p2")
+    #expect(app.currentSelection == .inbox && app.inboxProjectId == "p2" && app.sidebarScope == nil)
+    app.focus(on: "p1")
+    app.showInbox()
+    #expect(app.inboxProjectId == "p1", "without a project, the focused one is preset")
+}
+
 @Test func scopeTotalsAddTrackedItemsForTheInboxBadge() {
     let counts = ["p1": ProjectDashboardCount(working: 1, needsYou: 1, tracked: 3), "p2": ProjectDashboardCount(tracked: 2)]
     let total = SidebarScopeCounts.total(counts)
