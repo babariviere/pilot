@@ -11,4 +11,5 @@
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>NSLocationUsageDescription</key><string>Pilot uses your Wi-Fi network name to send scheduled work when you join or leave a chosen network. Network names stay on this Mac. Your location is not collected.</string>
     <key>NSLocationWhenInUseUsageDescription</key><string>Pilot uses your Wi-Fi network name for scheduled work. Network names stay on this Mac.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>Pilot uses your Wi-Fi network name to send scheduled work while the main app is closed. Network names stay on this Mac. Your location is not collected.</string>
 </dict></plist>
