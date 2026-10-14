@@ -1077,3 +1077,34 @@ test("settled PRs check unpublished work after a finished turn and keep the last
 		await cleanup();
 	}
 });
+test("renames persist, broadcast, keep activity and win over a pending generated title", async () => {
+	const { sessions, ids, manager, cleanup } = await fixture();
+	const id = ids[0]!;
+	try {
+		const original = sessions.get(id)!;
+		const changes: SessionSummary[] = [];
+		sessions.onChange((summary) => changes.push(summary));
+		const renamed = await sessions.rename(id, "  Fix\n the   sidebar  ");
+		assert.deepEqual(renamed, { ...original, title: "Fix the sidebar" }, "renaming never changes activity");
+		assert.equal(changes.length, 1);
+		assert.deepEqual(await sessions.rename(id, "Fix the sidebar"), renamed);
+		assert.equal(changes.length, 1, "an unchanged title does not broadcast");
+		assert.equal((await manager()).get(id)?.title, "Fix the sidebar");
+		assert.equal((await sessions.rename(id, "x".repeat(500))).title.length, 200);
+		await assert.rejects(sessions.rename(id, "   "), /title is required/);
+		await assert.rejects(sessions.rename(randomUUID(), "Other"), NotFound);
+
+		let release!: (title: string) => void;
+		sessions["factories"].title = () => new Promise<string>((resolve) => (release = resolve));
+		const meta = sessions["metas"].get(ids[1]!)!;
+		meta.titlePending = { cwd: meta.cwd, message: "task" };
+		sessions["generateTitle"](meta);
+		await sessions.rename(ids[1]!, "Chosen");
+		release("Generated");
+		await Promise.allSettled([...sessions["titleTasks"]]);
+		assert.equal(sessions.get(ids[1]!)?.title, "Chosen");
+		assert.equal((await manager()).get(ids[1]!)?.title, "Chosen");
+	} finally {
+		await cleanup();
+	}
+});

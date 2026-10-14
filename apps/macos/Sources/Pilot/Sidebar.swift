@@ -529,6 +529,7 @@ struct SessionRow: View {
         .padding(.vertical, 2)
         .help(session.cwd.abbreviatingHome)
         .contextMenu {
+            SessionRenameAction(session: session)
             Button {
                 model.setPinned(!session.isPinned, sessionId: session.id)
             } label: {

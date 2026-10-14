@@ -4,6 +4,7 @@ import { getLibraryAsset, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
 	ChangeModelRequest,
+	RenameSessionRequest,
 	ClientMessage,
 	CompactRequest,
 	CreateMissionRequest,
@@ -502,6 +503,12 @@ export function createDaemonServer(
 			if (parts[3] === "restore") return json(res, 200, await sessions.restore(id));
 			if (parts[3] === "pin") return json(res, 200, await sessions.setPinned(id, true));
 			if (parts[3] === "unpin") return json(res, 200, await sessions.setPinned(id, false));
+			if (parts[3] === "title") {
+				const body = await readJson<RenameSessionRequest>(req);
+				if (!body || typeof body.title !== "string" || !body.title.trim())
+					throw new HttpError(400, "title is required");
+				return json(res, 200, await sessions.rename(id, body.title));
+			}
 			if (parts[3] === "reclaim-workspace") return json(res, 200, await sessions.reclaimWorkspace(id));
 			if (parts[3] === "model") {
 				const body = await readJson<ChangeModelRequest>(req);

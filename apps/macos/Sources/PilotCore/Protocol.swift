@@ -517,6 +517,15 @@ public struct ChangeModelRequest: Codable, Sendable {
     }
 }
 
+/// POST /api/sessions/:id/title. The daemon trims the title and rejects an empty one.
+public struct RenameSessionRequest: Codable, Sendable {
+    public let title: String
+
+    public init(title: String) {
+        self.title = title
+    }
+}
+
 public struct ChangedFile: Codable, Identifiable, Equatable, Sendable {
     public var id: String { path }
     public let path: String
