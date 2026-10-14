@@ -44,17 +44,19 @@ struct SessionSidebar: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            // One row: scope, Home, Inbox and compose. Archived chats live in the scope menu, search behind ⌘F.
-            let scopeCount = focused.map { counts[$0.id] ?? ProjectDashboardCount() }
-                ?? SidebarScopeCounts.total(counts)
+            // Home and the Inbox cover every project; the selector heads the scoped list below them. Archived
+            // chats live in the selector's menu, search behind ⌘F.
+            let needsYou = SidebarScopeCounts.total(counts).needsYou
             let archived = focused.map { project in
                 client.archivedSessions.filter { $0.projectId == project.id }.count
             } ?? client.archivedSessions.count
             VStack(spacing: 6) {
-                SidebarScopeSwitcher(model: model, client: client, counts: counts, needsYou: scopeCount.needsYou,
-                                     homeSelected: homeSelected(focused), inboxCount: InboxText.badge(scopeCount),
-                                     inboxSelected: inboxSelected, archivedCount: archived,
-                                     onNewFolder: { folderEditor.begin() })
+                SidebarHeader(model: model, client: client, counts: counts, homeSelected: homeSelected,
+                              inboxSelected: inboxSelected, overviewSelected: overviewSelected(focused),
+                              needsYou: needsYou,
+                              needsYouHelp: SidebarScopeCounts.needsYouReasons(total: needsYou,
+                                                                               reasons: needsYouReasons),
+                              archivedCount: archived, onNewFolder: { folderEditor.begin() })
                 if showsSearch {
                     SearchField(text: $model.sidebarQuery, focused: $searchFocused) { model.hideSidebarSearch() }
                         .transition(.opacity.combined(with: .move(edge: .top)))
@@ -105,12 +107,23 @@ struct SessionSidebar: View {
         }
     }
 
-    /// Home is selected when the detail shows it: today's Home, or the focused project's page.
-    private func homeSelected(_ focused: Project?) -> Bool {
-        guard model.selectedSessionId == nil else { return false }
-        if let focused { return model.selectedProjectId == focused.id }
-        return model.selectedMissionId == nil && model.selectedProjectId == nil && !model.showingArchive
-            && !model.showingInbox
+    /// Home is selected when the detail shows it, in any scope.
+    private var homeSelected: Bool {
+        model.selectedSessionId == nil && model.selectedMissionId == nil && model.selectedProjectId == nil
+            && !model.showingArchive && !model.showingInbox
+    }
+
+    private func overviewSelected(_ focused: Project?) -> Bool {
+        guard let focused else { return false }
+        return model.selectedSessionId == nil && model.selectedProjectId == focused.id
+    }
+
+    /// Why every project's chats need the user, for the Inbox badge's tooltip.
+    private var needsYouReasons: NeedsYouReasons {
+        let unread = { (session: SessionSummary) in model.isUnread(session) }
+        let groups = SidebarUrgency.groups(client.activeSessions, unread: unread,
+                                           awaitingReply: { model.isAwaitingReply($0) })
+        return NeedsYouReasons(groups.needsYou, unread: unread)
     }
 
     private var inboxSelected: Bool {

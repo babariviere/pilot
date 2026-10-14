@@ -5,10 +5,11 @@ import SwiftUI
 
 /// What the detail area shows, remembered per sidebar scope so switching back returns to it.
 enum SidebarSelection: Equatable {
-    /// Home: today's Home with every project, the project page when focused.
+    /// Home, which always covers every project.
     case home
     case session(String)
     case mission(String)
+    /// A project's Overview.
     case project(String)
     case archive(projectId: String?, missionId: String?)
     /// The Inbox, scoped like the sidebar.
@@ -17,24 +18,25 @@ enum SidebarSelection: Equatable {
     /// Key for `AppModel.scopeSelections`: the project id, or "" for every project.
     static func scopeKey(_ scope: String?) -> String { scope ?? "" }
 
-    /// The saved selection when it still exists and belongs to `scope`, else Home.
+    /// The saved selection when it still exists and belongs to `scope`. Otherwise the scope's first row: the
+    /// focused project's Overview, or Home for every project.
     static func restoring(_ saved: SidebarSelection?, in scope: String?, sessions: [SessionSummary],
                           missions: [Mission], projectIds: Set<String>) -> SidebarSelection {
-        guard let saved else { return .home }
+        let fallback: SidebarSelection = scope.map { .project($0) } ?? .home
+        guard let saved else { return fallback }
         switch saved {
         case .home, .inbox:
             return saved
         case let .session(id):
             guard let session = sessions.first(where: { $0.id == id }),
-                  scope == nil || session.projectId == scope else { return .home }
+                  scope == nil || session.projectId == scope else { return fallback }
             return saved
         case let .mission(id):
             guard let mission = missions.first(where: { $0.id == id }),
-                  scope == nil || mission.projectId == scope else { return .home }
+                  scope == nil || mission.projectId == scope else { return fallback }
             return saved
         case let .project(id):
-            // A focused scope's own page is its Home.
-            guard scope == nil, projectIds.contains(id) else { return .home }
+            guard projectIds.contains(id), scope == nil || scope == id else { return fallback }
             return saved
         case let .archive(projectId, missionId):
             guard let scope else {
@@ -47,7 +49,7 @@ enum SidebarSelection: Equatable {
     }
 }
 
-/// Working and needs-you figures for the scope switcher, the Home badge and the Elsewhere line.
+/// Working and needs-you figures for the project selector and the Inbox badge.
 enum SidebarScopeCounts {
     /// Every project's counts added up, optionally leaving one project out.
     static func total(_ counts: [String: ProjectDashboardCount], excluding projectId: String? = nil)
@@ -64,33 +66,171 @@ enum SidebarScopeCounts {
     static func summary(_ count: ProjectDashboardCount) -> String? {
         var parts: [String] = []
         if count.working > 0 { parts.append("\(count.working) working") }
-        if count.needsYou > 0 { parts.append("\(count.needsYou) \(count.needsYou == 1 ? "needs" : "need") you") }
+        if count.needsYou > 0 { parts.append(needsYou(count.needsYou)) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// The line under a focused switcher. Only shown when other projects have activity. The compact form,
-    /// for narrow sidebars, keeps what needs the user and drops the working count when both are present.
-    static func elsewhere(_ count: ProjectDashboardCount, compact: Bool = false) -> String? {
-        let shown = compact && count.needsYou > 0 ? ProjectDashboardCount(needsYou: count.needsYou) : count
-        return summary(shown).map { "Elsewhere: \($0)" }
+    static func needsYou(_ count: Int) -> String { "\(count) \(count == 1 ? "needs" : "need") you" }
+
+    /// The Inbox badge's tooltip and VoiceOver label: "5 need you: 2 questions, 1 failed, 2 not reviewed".
+    /// The reasons come from the chats in the sidebar, so they are only listed when they account for the whole
+    /// count; otherwise the total stands alone. nil when nothing needs the user.
+    static func needsYouReasons(total: Int, reasons: NeedsYouReasons) -> String? {
+        guard total > 0 else { return nil }
+        let parts = [
+            reasons.questions > 0 ? "\(reasons.questions) \(reasons.questions == 1 ? "question" : "questions")" : nil,
+            reasons.failed > 0 ? "\(reasons.failed) failed" : nil,
+            reasons.notReviewed > 0 ? "\(reasons.notReviewed) not reviewed" : nil,
+        ].compactMap { $0 }
+        guard !parts.isEmpty, reasons.total == total else { return needsYou(total) }
+        return "\(needsYou(total)): \(parts.joined(separator: ", "))"
+    }
+}
+
+/// Why chats are in Needs you, counted from the sidebar's urgency groups.
+struct NeedsYouReasons: Equatable {
+    var questions = 0
+    var failed = 0
+    var notReviewed = 0
+
+    var total: Int { questions + failed + notReviewed }
+
+    init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0) {
+        self.questions = questions
+        self.failed = failed
+        self.notReviewed = notReviewed
+    }
+
+    /// Counts the Needs you group of `SidebarUrgency.groups` by reason.
+    init(_ needsYou: [SessionSummary], unread: (SessionSummary) -> Bool) {
+        for session in needsYou {
+            switch session.signal(unread: unread(session)) {
+            case .failed: failed += 1
+            case .needsYou where session.status == .question: questions += 1
+            default: notReviewed += 1
+            }
+        }
     }
 }
 
 // MARK: - Views
 
-/// The top of the sidebar, in one row: the scope switcher ("All projects" or one focused project), Home for that
-/// scope with what needs the user, and a compose button. When focused, a quiet line about work in other projects
-/// follows; it opens the switcher. Archived chats, search and grouping live in the switcher's menu.
-struct SidebarScopeSwitcher: View {
+/// The top of the sidebar: Home (with compose) and the Inbox, which always cover every project, then the project
+/// selector ("All projects" or one focused project) heading everything scoped to it, and the focused project's
+/// Overview as its first row. Archived chats, search and grouping live in the selector's menu.
+struct SidebarHeader: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
     let counts: [String: ProjectDashboardCount]
-    /// Things that need the user in this scope, badged on Home.
-    let needsYou: Int
     let homeSelected: Bool
-    /// What the Inbox lists in this scope (needs you plus open tracked items), a neutral count on its button.
-    let inboxCount: Int
     let inboxSelected: Bool
+    let overviewSelected: Bool
+    /// What needs the user across every project, badged on the Inbox.
+    let needsYou: Int
+    /// The badge's tooltip and VoiceOver detail, summing the reasons when known.
+    let needsYouHelp: String?
+    let archivedCount: Int
+    let onNewFolder: () -> Void
+
+    var body: some View {
+        let project = model.focusedProject
+        VStack(alignment: .leading, spacing: 1) {
+            SidebarNavRow(title: "Home", icon: "house", selected: homeSelected, help: "Every project at a glance",
+                          action: { model.openHome() }) {
+                composeButton(project: project)
+            }
+            SidebarNavRow(title: "Inbox", icon: "tray", selected: inboxSelected,
+                          help: needsYouHelp ?? "Nothing needs you",
+                          accessibilityDetail: needsYouHelp, action: { model.showInbox() }) {
+                if needsYou > 0 {
+                    CountBadge(count: needsYou, style: .attention)
+                        .help(needsYouHelp ?? SidebarScopeCounts.needsYou(needsYou))
+                        .padding(.trailing, 6)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(Theme.Motion.quick, value: needsYou > 0)
+            SidebarProjectSelector(model: model, counts: counts, archivedCount: archivedCount,
+                                   onNewFolder: onNewFolder)
+                .padding(.top, 8)
+            if let project {
+                SidebarNavRow(title: "Overview", icon: "square.grid.2x2", selected: overviewSelected,
+                              help: "Open \(project.name)'s Overview", action: { model.openOverview() }) {
+                    EmptyView()
+                }
+                .padding(.top, 2)
+            }
+        }
+    }
+
+    private func composeButton(project: Project?) -> some View {
+        Menu {
+            Button("New Chat") { model.newChatInScope() }
+            Button("New Mission…") { model.missionSheet = .create(projectId: project?.id) }
+                .disabled(client.projects.isEmpty)
+        } label: {
+            Image(systemName: "square.and.pencil")
+        } primaryAction: {
+            model.newChatInScope()
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .frame(width: 28, height: 28)
+        .help(project.map { "New chat in \($0.name) (⌘N). Hold for New Mission." } ?? "New chat (⌘N). Hold for New Mission.")
+        .accessibilityLabel(project.map { "New chat in \($0.name)" } ?? "New chat")
+    }
+}
+
+/// One navigation row at the top of the sidebar (Home, Inbox, Overview): a symbol, a title and an optional trailing
+/// accessory such as a badge or button. Hover and selection use the sidebar's selection fill.
+struct SidebarNavRow<Accessory: View>: View {
+    let title: String
+    let icon: String
+    let selected: Bool
+    var help: String?
+    var accessibilityDetail: String?
+    let action: () -> Void
+    @ViewBuilder var accessory: () -> Accessory
+    @State private var hovered = false
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Button(action: action) {
+                HStack(spacing: 7) {
+                    Image(systemName: selected ? "\(icon).fill" : icon)
+                        .font(.pilot(.label))
+                        .foregroundStyle(selected ? Theme.foreground : Theme.mutedForeground)
+                        .frame(width: 16)
+                    Text(title)
+                        .font(.pilot(.body, weight: selected ? .semibold : .regular))
+                        .foregroundStyle(Theme.foreground)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(help ?? "")
+            .accessibilityLabel([title, accessibilityDetail].compactMap { $0 }.joined(separator: ", "))
+            .accessibilityAddTraits(selected ? .isSelected : [])
+            accessory()
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 2)
+        .frame(height: 28)
+        .background(RoundedRectangle(cornerRadius: 7).fill(selected || hovered ? Theme.selected : .clear))
+        .onHover { hovered = $0 }
+        .animation(Theme.Motion.quick, value: hovered)
+    }
+}
+
+/// The project selector: "All projects" or the focused project, opening the list of projects and the sidebar's
+/// secondary actions. ⌘0 to ⌘9 switch from anywhere (`SidebarScopeCommands`).
+struct SidebarProjectSelector: View {
+    @ObservedObject var model: AppModel
+    let counts: [String: ProjectDashboardCount]
     let archivedCount: Int
     let onNewFolder: () -> Void
     @State private var showingList = false
@@ -98,66 +238,32 @@ struct SidebarScopeSwitcher: View {
 
     var body: some View {
         let project = model.focusedProject
-        let elsewhere = project.map { SidebarScopeCounts.total(counts, excluding: $0.id) }
-        let elsewhereText = elsewhere.flatMap { SidebarScopeCounts.elsewhere($0) }
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 4) {
-                Button { showingList.toggle() } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: project == nil ? "square.grid.2x2" : "folder")
-                            .font(.pilot(.label))
-                            .frame(width: 16)
-                        Text(project?.name ?? "All projects")
-                            .font(.pilot(.body, weight: .semibold))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.pilot(.glyph, weight: .semibold))
-                            .foregroundStyle(Theme.mutedForeground)
-                        Spacer(minLength: 0)
-                    }
-                    .foregroundStyle(Theme.foreground)
-                    .frame(height: 28)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Sidebar shows \(project?.name ?? "all projects")")
-                .accessibilityHint("Choose which projects the sidebar lists")
-                .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
-                homeButton(project: project)
-                inboxButton(project: project)
-                composeButton(project: project)
+        Button { showingList.toggle() } label: {
+            HStack(spacing: 7) {
+                Image(systemName: project == nil ? "square.stack" : "folder")
+                    .font(.pilot(.label))
+                    .frame(width: 16)
+                Text(project?.name ?? "All projects")
+                    .font(.pilot(.body, weight: .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.pilot(.glyph, weight: .semibold))
+                    .foregroundStyle(Theme.mutedForeground)
+                Spacer(minLength: 0)
             }
-            if let elsewhereText, let elsewhere {
-                Button { showingList.toggle() } label: {
-                    HStack(spacing: 7) {
-                        Circle()
-                            .fill(elsewhere.needsYou > 0 ? Theme.warning : Theme.faintForeground)
-                            .frame(width: 6, height: 6)
-                            .frame(width: 16)
-                        ViewThatFits(in: .horizontal) {
-                            Text(elsewhereText)
-                            Text(SidebarScopeCounts.elsewhere(elsewhere, compact: true) ?? elsewhereText)
-                                .lineLimit(1)
-                        }
-                        .font(.pilot(.caption))
-                        .foregroundStyle(Theme.mutedForeground)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.bottom, 6)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(elsewhereText)
-                .accessibilityLabel(elsewhereText)
-                .accessibilityHint("Shows every project and what it needs")
-            }
+            .foregroundStyle(Theme.foreground)
+            .padding(.horizontal, 8)
+            .frame(height: 28)
+            .background(RoundedRectangle(cornerRadius: 7).fill(showingList || hovered ? Theme.selected : Theme.muted))
+            .contentShape(Rectangle())
         }
-        .padding(.leading, 8)
-        .padding(.trailing, 2)
-        .background(RoundedRectangle(cornerRadius: 7).fill(showingList || hovered ? Theme.selected : Theme.muted))
+        .buttonStyle(.plain)
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
+        .accessibilityLabel("Sidebar shows \(project?.name ?? "all projects")")
+        .accessibilityHint("Choose which projects the sidebar lists")
+        .help("Switch projects: ⌘0 for all projects, ⌘1 to ⌘9 for one")
         .popover(isPresented: $showingList, arrowEdge: .bottom) {
             SidebarScopeList(projects: model.orderedProjects, scope: project?.id, counts: counts,
                              archivedCount: archivedCount, groupsByUrgency: model.sidebarGroupsByUrgency,
@@ -184,77 +290,6 @@ struct SidebarScopeSwitcher: View {
                              })
         }
     }
-
-    /// Home for the scope: today's Home, or the focused project's page. Badged with what needs the user.
-    private func homeButton(project: Project?) -> some View {
-        let title = project.map { "Open \($0.name)'s project page" } ?? "Open Home"
-        return Button { model.openScopeHome() } label: {
-            Image(systemName: homeSelected ? "house.fill" : "house")
-                .font(.pilot(.label))
-                .foregroundStyle(homeSelected ? Theme.foreground : Theme.mutedForeground)
-                .frame(width: 24, height: 24)
-                .overlay(alignment: .topTrailing) {
-                    if needsYou > 0 {
-                        CountBadge(count: needsYou, style: .attention)
-                            .scaleEffect(0.85)
-                            .offset(x: 7, y: -4)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .animation(Theme.Motion.quick, value: needsYou > 0)
-        .padding(.trailing, needsYou > 0 ? 6 : 0)
-        .help(title)
-        .accessibilityLabel(needsYou > 0 ? "\(title), \(needsYou) \(needsYou == 1 ? "needs" : "need") you" : title)
-        .accessibilityAddTraits(homeSelected ? .isSelected : [])
-    }
-
-    /// The Inbox for the scope: what waits on the user, with open tracked items. Its count is neutral, since
-    /// tickets do not interrupt; Home keeps the attention badge.
-    private func inboxButton(project: Project?) -> some View {
-        let title = project.map { "Open the Inbox for \($0.name)" } ?? "Open the Inbox"
-        return Button { model.showInbox() } label: {
-            Image(systemName: inboxSelected ? "tray.fill" : "tray")
-                .font(.pilot(.label))
-                .foregroundStyle(inboxSelected ? Theme.foreground : Theme.mutedForeground)
-                .frame(width: 24, height: 24)
-                .overlay(alignment: .topTrailing) {
-                    if inboxCount > 0 {
-                        CountBadge(count: inboxCount)
-                            .scaleEffect(0.85)
-                            .offset(x: 7, y: -4)
-                            .transition(.scale.combined(with: .opacity))
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .animation(Theme.Motion.quick, value: inboxCount > 0)
-        .padding(.trailing, inboxCount > 0 ? 6 : 0)
-        .help(title)
-        .accessibilityLabel(inboxCount > 0 ? "\(title), \(inboxCount) waiting" : title)
-        .accessibilityAddTraits(inboxSelected ? .isSelected : [])
-    }
-
-    private func composeButton(project: Project?) -> some View {
-        Menu {
-            Button("New Chat") { model.newChatInScope() }
-            Button("New Mission…") { model.missionSheet = .create(projectId: project?.id) }
-                .disabled(client.projects.isEmpty)
-        } label: {
-            Image(systemName: "square.and.pencil")
-        } primaryAction: {
-            model.newChatInScope()
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .frame(width: 28, height: 28)
-        .help(project.map { "New chat in \($0.name) (⌘N). Hold for New Mission." } ?? "New chat (⌘N). Hold for New Mission.")
-        .accessibilityLabel(project.map { "New chat in \($0.name)" } ?? "New chat")
-    }
 }
 
 /// The open switcher: All projects, then each project in sidebar order with its counts and shortcut, then the
@@ -276,7 +311,7 @@ struct SidebarScopeList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SidebarScopeRow(title: "All projects", icon: "square.grid.2x2", checked: scope == nil,
+            SidebarScopeRow(title: "All projects", icon: "square.stack", checked: scope == nil,
                             count: SidebarScopeCounts.total(counts), shortcut: "⌘0") { choose(nil) }
             if !projects.isEmpty {
                 HairlineDivider().padding(.vertical, 4)

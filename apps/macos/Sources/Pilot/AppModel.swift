@@ -550,8 +550,8 @@ final class AppModel: ObservableObject {
     }
 
     /// Lists every project (nil) or focuses the sidebar on one. Remembers the selection of the scope being
-    /// left and restores the last selection of the new scope; a scope seen for the first time opens its Home.
-    /// The Inbox stays open and follows the new scope.
+    /// left and restores the last selection of the new scope; a project seen for the first time opens its
+    /// Overview. Home and the Inbox stay open.
     func focus(on projectId: String?) {
         let target = projectId.flatMap { client.project($0)?.id }
         guard projectId == nil || target != nil, target != sidebarScope else { return }
@@ -565,13 +565,15 @@ final class AppModel: ObservableObject {
                                          projectIds: Set(client.projects.map(\.id))))
     }
 
-    /// Home for the current scope: today's Home with every project, the project page when focused.
-    func openScopeHome() {
-        if let project = focusedProject {
-            openProject(project.id)
-        } else {
-            newSession(in: draftProjectId)
-        }
+    /// Home, which always covers every project, whatever the sidebar's scope.
+    func openHome() {
+        newSession(in: draftProjectId)
+    }
+
+    /// The focused project's Overview, the first row of a focused sidebar.
+    func openOverview() {
+        guard let project = focusedProject else { return }
+        openProject(project.id)
     }
 
     /// A new chat in the focused project, or in the last chosen project otherwise.
@@ -591,15 +593,11 @@ final class AppModel: ObservableObject {
     private func apply(_ selection: SidebarSelection) {
         switch selection {
         case .home:
-            if let scope = sidebarScope {
-                openProject(scope)
-            } else {
-                showingArchive = false
-                showingInbox = false
-                selectedSessionId = nil
-                selectedMissionId = nil
-                selectedProjectId = nil
-            }
+            showingArchive = false
+            showingInbox = false
+            selectedSessionId = nil
+            selectedMissionId = nil
+            selectedProjectId = nil
         case let .session(id):
             showingArchive = false
             selectedSessionId = id
