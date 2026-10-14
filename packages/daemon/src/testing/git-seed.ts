@@ -18,10 +18,21 @@ export function copyGitSeed(target: string, files: Record<string, string>): void
 		root ??= mkdtempSync(join(tmpdir(), "pilot-git-seeds-"));
 		seed = join(root, String(seeds.size));
 		const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")));
+		// Auto maintenance runs detached after a commit and can rewrite .git while cpSync copies it.
+		const quiet = ["-c", "maintenance.auto=false", "-c", "gc.auto=0"];
 		const git = (...args: string[]) =>
 			execFileSync(
 				"git",
-				["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", "-c", "init.templateDir=", ...args],
+				[
+					"-c",
+					"core.hooksPath=/dev/null",
+					"-c",
+					"commit.gpgSign=false",
+					"-c",
+					"init.templateDir=",
+					...quiet,
+					...args,
+				],
 				{
 					cwd: root,
 					stdio: "pipe",
@@ -37,6 +48,9 @@ export function copyGitSeed(target: string, files: Record<string, string>): void
 				},
 			);
 		git("init", "--quiet", "-b", "main", seed);
+		// Copies inherit this, so later commits in a test cannot race its teardown either.
+		git("-C", seed, "config", "maintenance.auto", "false");
+		git("-C", seed, "config", "gc.auto", "0");
 		for (const [path, content] of Object.entries(files)) {
 			mkdirSync(dirname(join(seed, path)), { recursive: true });
 			writeFileSync(join(seed, path), content);
