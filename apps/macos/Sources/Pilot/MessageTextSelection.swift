@@ -104,6 +104,12 @@ final class MessageTextSelection: ObservableObject {
         entireMessage = true
     }
 
+    var hasSelection: Bool {
+        if entireMessage { return !source.isEmpty }
+        guard let anchor, let end else { return false }
+        return anchor != end
+    }
+
     func extend(toWindowPoint point: NSPoint) {
         guard let anchor else { return }
         // Use the nearest text region in vertical gaps, such as code headers and rules.
@@ -369,6 +375,27 @@ final class MessageSelectionTextView: NSTextView {
     override func copy(_ sender: Any?) {
         guard let selectionOwner else { super.copy(sender); return }
         copySelection(selectionOwner.selectedText, to: .general)
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        // A drag can start at the end of this block and select only later blocks. AppKit's
+        // local range is then empty, but Edit > Copy must still enable the shared selection.
+        if menuItem.action == #selector(copy(_:)), let selectionOwner {
+            return selectionOwner.hasSelection
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        selectionOwner == nil ? super.writablePasteboardTypes : [.string]
+    }
+
+    override func writeSelection(to pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard let selectionOwner else { return super.writeSelection(to: pasteboard, type: type) }
+        guard type == .string else { return false }
+        let selected = selectionOwner.selectedText
+        guard !selected.isEmpty else { return false }
+        return pasteboard.setString(selected, forType: .string)
     }
 
     func copySelection(_ selected: String, to pasteboard: NSPasteboard) {

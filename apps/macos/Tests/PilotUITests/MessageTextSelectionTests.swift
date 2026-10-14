@@ -50,7 +50,74 @@ struct MessageTextSelectionTests {
         #expect(owner.selectedText == owner.source)
         let board = NSPasteboard(name: .init("pilot-selection-test-\(UUID())"))
         defer { board.releaseGlobally() }
-        last.copySelection(owner.selectedText, to: board)
+        #expect(last.writeSelection(to: board, type: .string))
+        #expect(board.string(forType: .string) == owner.source)
+    }
+
+    @Test func nativeCopyExportsTheSharedSelectionAndValidatesAnEmptyFocusedBlock() {
+        let owner = MessageTextSelection()
+        let first = region("First paragraph", block: 0, owner: owner)
+        let code = region("let answer = 42", block: 1, owner: owner)
+        let last = region("Last 🧑‍💻 paragraph", block: 2, owner: owner)
+        let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        let start = MessageTextSelection.Position(key: first.selectionKey, offset: first.string.utf16.count)
+        let finish = MessageTextSelection.Position(key: last.selectionKey, offset: last.string.utf16.count)
+        let board = NSPasteboard(name: .init("pilot-native-copy-test-\(UUID())"))
+        defer { board.releaseGlobally() }
+        for (a, b) in [(start, finish), (finish, start)] {
+            owner.select(from: a, to: b)
+            #expect(first.selectedRange().length == 0)
+            #expect(first.validateMenuItem(copy))
+            #expect(first.writablePasteboardTypes == [.string])
+            #expect(first.writeSelection(to: board, type: .string))
+            #expect(board.string(forType: .string) == "let answer = 42\n\nLast 🧑‍💻 paragraph")
+            #expect(!first.writeSelection(to: board, type: .rtf))
+            #expect(code.selectedRange().length == code.string.utf16.count)
+        }
+        owner.clear()
+        #expect(!first.validateMenuItem(copy))
+        #expect(!first.writeSelection(to: board, type: .string))
+        #expect(board.string(forType: .string) == "let answer = 42\n\nLast 🧑‍💻 paragraph")
+    }
+
+    @Test func commandCCopiesAcrossBlocksAndLeavesTheComposerAlone() throws {
+        let owner = MessageTextSelection()
+        owner.source = "**First paragraph**\n\n```swift\nlet answer = 42\n```"
+        let first = region("First paragraph", block: 0, owner: owner)
+        let code = region("let answer = 42", block: 1, owner: owner)
+        let editor = NSTextView(frame: NSRect(x: 0, y: 150, width: 400, height: 40))
+        editor.string = "Composer draft"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        code.frame.origin.y = 80
+        for view in [first, code, editor] { window.contentView?.addSubview(view) }
+        let commandC = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+            timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "c",
+            charactersIgnoringModifiers: "c", isARepeat: false, keyCode: 8))
+        let board = NSPasteboard.general
+        // Exercise the real copy action without leaving the developer's clipboard changed.
+        let saved = (board.pasteboardItems ?? []).map { item in
+            let copy = NSPasteboardItem()
+            for type in item.types {
+                if let data = item.data(forType: type) { copy.setData(data, forType: type) }
+            }
+            return copy
+        }
+        defer { board.clearContents(); if !saved.isEmpty { board.writeObjects(saved) } }
+        board.clearContents()
+        board.setString("sentinel", forType: .string)
+        #expect(window.makeFirstResponder(first))
+        owner.select(from: .init(key: first.selectionKey, offset: first.string.utf16.count),
+                     to: .init(key: code.selectionKey, offset: code.string.utf16.count))
+        #expect(window.performKeyEquivalent(with: commandC))
+        #expect(board.string(forType: .string) == "let answer = 42")
+        first.selectAll(nil)
+        #expect(window.performKeyEquivalent(with: commandC))
+        #expect(board.string(forType: .string) == owner.source)
+        #expect(window.makeFirstResponder(editor))
+        #expect(!first.performKeyEquivalent(with: commandC))
+        #expect(!code.performKeyEquivalent(with: commandC))
         #expect(board.string(forType: .string) == owner.source)
     }
 
