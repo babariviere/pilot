@@ -15,7 +15,7 @@ import {
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-durable";
 import type { AgentEvent, GitHubAction } from "@pilot/protocol";
-import { GitHubActionsDoc } from "./github-actions.ts";
+import { actionText, GitHubActionsDoc } from "./github-actions.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { PullRequestsDoc } from "./pull-request-provenance.ts";
 import { KernelSession, type KernelSessionHooks } from "./session.ts";
@@ -80,6 +80,36 @@ test("GitHub audit records direct and discarded nested results, cold reads and r
 	session = await f.open({ onGitHubAction: (action) => replay.push(action) });
 	assert.deepEqual(replay, observed);
 	assert.equal(f.calls.length, 6, "reopen must not execute external mutations again");
+});
+
+test("compound delivery stays unverified while separate tool calls retain individual outcomes", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const observed: GitHubAction[] = [];
+	const session = await f.open({ onGitHubAction: (action) => observed.push(action) });
+	await f.run(session, "compound", "codemode", {
+		code: 'await tools.bash({command:"jj git push --bookmark fix/example && gh pr create --head fix/example | tail -3"});',
+	});
+	assert.deepEqual(
+		observed.map((action) => action.exitCode),
+		[null, null],
+	);
+	assert.deepEqual(
+		observed.map(actionText).map((text) => text.split(" · ")[0]),
+		["jj git push (fix/example) (outcome unverified)", "gh pr create (branch fix/example) (outcome unverified)"],
+	);
+	await f.run(session, "separate", "codemode", {
+		code: `
+await tools.bash({command:"jj git push --bookmark fix/example"});
+await tools.bash({command:"gh pr create --head fix/example --fail"});`,
+	});
+	assert.deepEqual(
+		observed.slice(2).map((action) => action.exitCode),
+		[0, 1],
+	);
+	assert.match(actionText(observed[2]!), /^pushed branch fix\/example/);
+	assert.match(actionText(observed[3]!), /^attempted:.*failed, exit 1/);
 });
 
 async function fixture(t: TestContext) {

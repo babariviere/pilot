@@ -15,11 +15,20 @@ private func json(_ text: String) -> JSONValue {
     #expect(transcript.entries.count == 4)
     #expect(transcript.entries[1].activity?.contains("marked PR #12 ready") == true)
     #expect(transcript.entries[2].activity?.contains("attempted: edited PR #12 (failed, exit 1)") == true)
-    #expect(transcript.entries[3].activity?.contains("exit status unknown") == true)
+    #expect(transcript.entries[3].activity == "git push (outcome unverified) · 1970-01-01T00:00:03Z")
     #expect(transcript.rows.contains { if case let .notice(_, text) = $0 { return text.contains("marked PR #12 ready") }; return false })
     transcript.apply(json(#"{"type":"github_actions_update","actions":[]}"#))
     #expect(transcript.entries.count == 1)
     #expect(transcript.entries[0].messages[0].text == "Work")
+}
+
+@Test func unverifiedGitHubActionsNameCommandsAndTargetsWithoutClaimingSuccessOrFailure() {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"github_actions_update","actions":[{"summary":"jj git push","description":"pushed branch fix/example","target":"fix/example","at":1000,"exitCode":null},{"summary":"gh pr create","description":"created a PR from fix/example","target":"branch fix/example","at":1000}]}"#))
+    #expect(transcript.entries.map(\.activity) == [
+        "jj git push (fix/example) (outcome unverified) · 1970-01-01T00:00:01Z",
+        "gh pr create (branch fix/example) (outcome unverified) · 1970-01-01T00:00:01Z",
+    ])
 }
 
 @Test func githubAuditStaysBoundedAndDoesNotCopyHistoryForStreamingDeltas() {

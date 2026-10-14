@@ -206,12 +206,9 @@ export function githubCommandSummaries(
 	return { summaries, single: parts.length === 1 && !/[;&|\n`$()<>]/.test(source.trim()) };
 }
 export function actionText(action: GitHubAction): string {
-	const outcome =
-		action.exitCode === 0
-			? ""
-			: action.exitCode === null
-				? " (exit status unknown)"
-				: ` (failed, exit ${action.exitCode})`;
+	if (action.exitCode === null)
+		return `${action.summary}${action.target ? ` (${action.target})` : ""} (outcome unverified) · ${new Date(action.at).toISOString()}`;
+	const outcome = action.exitCode === 0 ? "" : ` (failed, exit ${action.exitCode})`;
 	const description = action.exitCode === 0 ? action.description : `attempted: ${action.description}`;
 	return `${description}${outcome} · ${action.summary} · ${new Date(action.at).toISOString()}`;
 }

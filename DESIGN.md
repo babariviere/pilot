@@ -20,6 +20,8 @@ file records the intent behind them.
 - **Bounded and scannable.** Lists show a handful of rows and a count, titles stay on one line, long details are
   clamped. Full lists are one click away.
 - **Plain language.** Short sentences that say what happened and what to do next, without jargon or alarm.
+  GitHub activity with no attributable exit status names the command and target with "outcome unverified",
+  not a failure or a completed action. Confirmed failures retain their exit code.
 
 ## Beautiful
 

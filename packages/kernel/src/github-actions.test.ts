@@ -66,7 +66,14 @@ test("reads, literal source and dry runs are not GitHub actions", () => {
 test("failure and unknown status never claim success", () => {
 	const action = { id: "a", summary: "gh pr ready", description: "marked PR #12 ready", at: 1, exitCode: 1 };
 	assert.match(actionText(action), /attempted:.*failed, exit 1/);
-	assert.match(actionText({ ...action, exitCode: null }), /attempted:.*unknown/);
+	assert.equal(
+		actionText({ ...action, exitCode: null }),
+		"gh pr ready (outcome unverified) · 1970-01-01T00:00:00.001Z",
+	);
+	assert.equal(
+		actionText({ ...action, target: "PR #12", exitCode: null }),
+		"gh pr ready (PR #12) (outcome unverified) · 1970-01-01T00:00:00.001Z",
+	);
 	assert.doesNotMatch(actionText({ ...action, exitCode: 0 }), /attempted|failed|unknown/);
 });
 test("session audit is bounded, deduplicated and independent of conversation forks", async () => {

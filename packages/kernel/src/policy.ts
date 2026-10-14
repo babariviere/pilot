@@ -226,7 +226,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 		if (requirePullRequest) {
 			lines.push(
 				"- Name a new branch or bookmark `<type>/<short-description>` with the conventional type that matches the task: `feat/`, `fix/`, `docs/`, `refactor/`, `test/`, `build/`, `ci/`, `perf/`, `style/`, `chore/` or `revert/` (for example `fix/branch-prefix-policy`), not `pilot/`. Keep an existing branch or bookmark name, including a PR head, even if it does not follow this convention.",
-				"- When the work is ready, push the task branch and open a pull request with `gh pr create`; it is opened as the user. Never push the default branch or merge.",
+				"- When the work is ready, push the task branch and open a pull request with `gh pr create`; it is opened as the user. Run push and PR creation as separate shell tool calls, without pipelines or output redirection, so each action retains its exit status. Never push the default branch or merge.",
 			);
 		} else {
 			lines.push(

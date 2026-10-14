@@ -2158,14 +2158,19 @@ export class MissionStore {
 			action.exitCode === 0
 				? ""
 				: action.exitCode === null
-					? " (exit status unknown)"
+					? " (outcome unverified)"
 					: ` (failed, exit ${action.exitCode})`;
-		const description = action.exitCode === 0 ? action.description : `attempted: ${action.description}`;
+		const description =
+			action.exitCode === null
+				? `${action.summary}${action.target ? ` (${action.target})` : ""}`
+				: action.exitCode === 0
+					? action.description
+					: `attempted: ${action.description}`;
 		this.transaction(() => {
 			const event = this.event(
 				id,
 				"github",
-				`${chat} ${description}${status} · ${action.summary}`,
+				`${chat} ${description}${status}${action.exitCode === null ? "" : ` · ${action.summary}`}`,
 				{ sessionId },
 				{ at: action.at },
 			);

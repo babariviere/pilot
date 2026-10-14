@@ -385,12 +385,14 @@ public struct Transcript: Equatable, Sendable {
             let actions = Array((event["actions"]?.array ?? []).suffix(200))
             let formatter = ISO8601DateFormatter()
             let projected = actions.enumerated().compactMap { index, action -> Entry? in
-                let description = action["description"]?.string ?? "GitHub action"
                 let code = action["exitCode"]?.int
-                let outcome = code == 0 ? "" : code.map { " (failed, exit \($0))" } ?? " (exit status unknown)"
+                let outcome = code == 0 ? "" : code.map { " (failed, exit \($0))" } ?? " (outcome unverified)"
                 let summary = action["summary"]?.string ?? ""
+                let description = code == nil
+                    ? summary + (action["target"]?.string.map { " (\($0))" } ?? "")
+                    : (code == 0 ? "" : "attempted: ") + (action["description"]?.string ?? "GitHub action")
                 let time = action["at"]?.number.map { formatter.string(from: Date(timeIntervalSince1970: $0 / 1000)) } ?? ""
-                let text = "\(code == 0 ? "" : "attempted: ")\(description)\(outcome) · \(summary) · \(time)"
+                let text = "\(description)\(outcome)\(code == nil ? "" : " · \(summary)") · \(time)"
                 return Entry(json: .object([
                     "id": .number(Double(-index - 1)), "kind": .string("pilot.activity"),
                     "data": .object(["text": .string(text)]), "model": .array([]),

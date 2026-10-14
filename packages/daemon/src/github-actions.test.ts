@@ -29,8 +29,12 @@ test("GitHub mission activity attributes the execution-time chat, survives reope
 		assert.equal(event.at, 10);
 		assert.match(event.text, /^Build settings marked PR #12 ready/);
 		store.recordGitHubAction("chat", { ...action, id: "failed", exitCode: 1 }, "Build settings");
-		store.recordGitHubAction("chat", { ...action, id: "unknown", exitCode: null }, "Build settings");
-		assert.match(store.events(mission.id)[0]!.text, /attempted:.*unknown/);
+		store.recordGitHubAction(
+			"chat",
+			{ ...action, id: "unknown", target: "PR #12", exitCode: null },
+			"Build settings",
+		);
+		assert.equal(store.events(mission.id)[0]!.text, "Build settings gh pr ready (PR #12) (outcome unverified)");
 		assert.match(store.events(mission.id)[1]!.text, /attempted:.*failed/);
 		store.recordGitHubAction("chat", { ...action, id: "outside", missionId: undefined }, "Build settings");
 		store.close();

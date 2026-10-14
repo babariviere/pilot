@@ -461,6 +461,8 @@ test("explicit project delivery policy also applies without a private workspace"
 	assert.match(pilotPrompt({ requirePullRequest: false }), /does not require a pull request/);
 	assert.match(pilotPrompt({ requirePullRequest: true }), /gh pr create/);
 	assert.match(pilotPrompt({ requirePullRequest: true }), /Never push the default branch/);
+	assert.match(pilotPrompt({ requirePullRequest: true }), /Run push and PR creation as separate shell tool calls/);
+	assert.match(pilotPrompt({ requirePullRequest: true }), /without pipelines or output redirection/);
 	assert.doesNotMatch(pilotPrompt({}), /gh pr create/);
 });
 
