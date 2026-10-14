@@ -17,4 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
-      - run: echo "Cancelled CI for closed PR #${{ github.event.pull_request.number }}"
+      # Quoted because an unquoted " #" starts a YAML comment and truncates the command.
+      - run: 'echo "Cancelled CI for closed PR #$PR_NUMBER"'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
