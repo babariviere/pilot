@@ -41,6 +41,120 @@ function pr(number = 1, state: SessionPullRequest["state"] = "open"): SessionPul
 	};
 }
 
+test("startup silently baselines historical terminal PRs and does not replay them after restart", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const home = await mkdtemp(join(tmpdir(), "pilot-pr-baseline-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const file = join(home, "state.sqlite");
+	const initial = setup(file);
+	const { id, chat } = initial;
+	// Simulate an upgrade: linked caches exist, but the transition observer has never run.
+	t.mock.timers.tick(1_000);
+	const linked = Array.from({ length: 51 }, (_, i) => pr(i + 60, "merged"));
+	for (const old of linked) {
+		initial.store.addResource(id, { taskId: "1", url: old.url });
+		initial.store.updatePullRequest(old);
+	}
+	assert.equal(initial.store.resolveTask(id, "1").status, "done");
+	initial.store.close();
+	let owned = [pr(1, "merged"), pr(2, "closed"), { ...pr(3, "merged"), mergedAt: undefined }];
+	const archived = { ...chat, archivedAt: 1_500, outcome: "done" as const, outcomeAt: 500 };
+	const delivered: string[] = [];
+	const sessions = {
+		list: () => [archived],
+		get: (sessionId: string) => (sessionId === chat.id ? archived : { ...chat, id: "lead" }),
+		ownedPullRequests: (sessionId: string) => (sessionId === chat.id ? owned : []),
+		onChange: () => () => {},
+		canSendNotice: () => true,
+		sendNotice: async (_id: string, content: string) => {
+			delivered.push(content);
+			return true;
+		},
+	} as unknown as SessionManager;
+	for (let run = 0; run < 2; run++) {
+		const store = new MissionStore(file);
+		const before = store.events(id);
+		const delivery = new MissionNotices(store, sessions);
+		delivery.start();
+		try {
+			assert.deepEqual(store.events(id), before, "baselines create no activity");
+			assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+			t.mock.timers.tick(30_000);
+			await delivery.flush();
+			assert.deepEqual(delivered, []);
+		} finally {
+			await delivery.stop();
+			store.close();
+		}
+		// Later refreshes, including a newly available merge timestamp, remain consumed.
+		owned = owned.map((old) => ({
+			...old,
+			checkedAt: Date.now(),
+			...(old.state === "merged" ? { mergedAt: 2_000 } : {}),
+		}));
+	}
+	const db = new DatabaseSync(file);
+	try {
+		assert.equal(db.prepare("SELECT COUNT(*) AS n FROM member_pull_requests").get()!.n, 54);
+		assert.equal(db.prepare("SELECT COUNT(*) AS n FROM pull_request_transitions").get()!.n, 54);
+	} finally {
+		db.close();
+	}
+});
+
+test("newly linked terminal PRs reconcile tasks but do not announce historical merges or closes", (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id, chat } = setup();
+	try {
+		// A prior observation of another PR does not turn new URLs into transitions.
+		store.updatePullRequest(pr(), [chat]);
+		t.mock.timers.tick(1_000);
+		for (const [number, state] of [
+			[2, "merged"],
+			[3, "closed"],
+		] as const) {
+			const task = store.addTask(id, { title: `Imported ${number}` });
+			store.claimTask(id, task.id, chat.id);
+			const terminal = pr(number, state);
+			store.addResource(id, { taskId: task.id, url: terminal.url });
+			store.updatePullRequest(terminal, [chat]);
+			store.updatePullRequest({ ...terminal, checkedAt: 3_000 }, [chat]);
+			assert.equal(store.task(id, task.id).status, state === "merged" ? "done" : "in_progress");
+		}
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+		assert.equal(store.events(id).filter((event) => event.text.startsWith("PR #")).length, 0);
+	} finally {
+		store.close();
+	}
+});
+
+test("an open baseline survives restart and a later real merge queues exactly one notice", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const home = await mkdtemp(join(tmpdir(), "pilot-pr-open-baseline-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const file = join(home, "state.sqlite");
+	const { store, id, chat } = setup(file);
+	store.addResource(id, { taskId: "1", url: pr().url });
+	store.updatePullRequest(pr(), [chat]);
+	assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+	store.close();
+	const restarted = new MissionStore(file);
+	try {
+		t.mock.timers.tick(1_000);
+		const merged = pr(1, "merged");
+		restarted.updatePullRequest(merged, [chat]);
+		restarted.updatePullRequest({ ...merged, checkedAt: 3_000 }, [chat]);
+		const notice = restarted.prepareNotice(id, "lead", 32_000)!;
+		assert.equal(notice.content.match(/merged/g)?.length, 1);
+		assert.match(notice.content, /task #1 marked done/);
+		restarted.acknowledgeNotice(notice, 32_000);
+		restarted.updatePullRequest({ ...merged, checkedAt: 50_000 }, [chat]);
+		assert.deepEqual(restarted.noticeDeadlines(80_000), []);
+	} finally {
+		restarted.close();
+	}
+});
+
 test("task merge queues one PR-keyed event with done, newly ready dependents and open stacked PRs", (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 	const { store, id, chat } = setup();
@@ -209,6 +323,7 @@ test("merge ledger, PR summary key, and consumed notice survive restart and refr
 	const { store, id, chat } = setup(file);
 	const merged = pr(1, "merged");
 	store.addResource(id, { taskId: "1", url: merged.url });
+	store.updatePullRequest(pr(), [chat]);
 	store.updatePullRequest(merged, [chat]);
 	store.close();
 	const db = new DatabaseSync(file);
@@ -286,6 +401,7 @@ test("PR notice respects the oldest-event safety cap but never interrupts the re
 	const delivery = new MissionNotices(store, sessions);
 	delivery.start();
 	try {
+		store.updatePullRequest(pr(), [chat]);
 		store.updatePullRequest(pr(1, "merged"), [chat]);
 		t.mock.timers.tick(NOTICE_MAX_DELAY_MS - 1);
 		await delivery.flush();
