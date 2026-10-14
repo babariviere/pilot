@@ -13,10 +13,11 @@ private func json(_ text: String) -> JSONValue {
     transcript.apply(event)
     transcript.apply(event)
     #expect(transcript.entries.count == 4)
-    #expect(transcript.entries[1].activity?.contains("marked PR #12 ready") == true)
-    #expect(transcript.entries[2].activity?.contains("attempted: edited PR #12 (failed, exit 1)") == true)
-    #expect(transcript.entries[3].activity?.contains("exit status unknown") == true)
-    #expect(transcript.rows.contains { if case let .notice(_, text) = $0 { return text.contains("marked PR #12 ready") }; return false })
+    #expect(transcript.entries[1].githubAction?.event.text == "marked PR #12 ready")
+    #expect(transcript.entries[2].githubAction?.event.destructive == true)
+    #expect(transcript.entries[3].githubAction?.event.destructive == false)
+    #expect(transcript.entries[3].githubAction?.event.uncertainty != nil)
+    #expect(transcript.rows.contains { if case let .event(event) = $0 { return event.text.contains("marked PR #12 ready") }; return false })
     transcript.apply(json(#"{"type":"github_actions_update","actions":[]}"#))
     #expect(transcript.entries.count == 1)
     #expect(transcript.entries[0].messages[0].text == "Work")
@@ -35,7 +36,7 @@ private func json(_ text: String) -> JSONValue {
     ]) }
     transcript.apply(.object(["type": .string("github_actions_update"), "actions": .array(actions)]))
     #expect(transcript.entries.count == 2200)
-    #expect(transcript.entries[2000].activity?.contains("PR #101 ready") == true)
+    #expect(transcript.entries[2000].githubAction?.event.text.contains("PR #101 ready") == true)
     let committed = transcript.committedRowRevision
     let buffer = transcript.entries.withUnsafeBufferPointer { $0.baseAddress }
     transcript.apply(json(#"{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":""}]}}"#))

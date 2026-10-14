@@ -7,7 +7,7 @@ import { actionText, appendGitHubAction, GitHubActionsDoc, githubCommandSummarie
 const summaries = (command: string) => githubCommandSummaries("bash", { command }).summaries;
 test("write summaries retain operations and validated targets, never bodies or credentials", () => {
 	assert.deepEqual(summaries("gh pr ready 12"), [
-		{ summary: "gh pr ready", target: "PR #12", description: "marked PR #12 ready" },
+		{ kind: "pr_ready", prNumber: 12, summary: "gh pr ready", target: "PR #12", description: "marked PR #12 ready" },
 	]);
 	assert.equal(
 		summaries("gh pr ready https://github.com/example/repo/pull/12 --undo")[0]?.description,
@@ -30,6 +30,19 @@ test("write summaries retain operations and validated targets, never bodies or c
 	assert.equal(audit.includes("private"), false);
 	assert.equal(summaries("gh pr create --head ghp_secret")[0]?.target, undefined);
 	assert.equal(summaries("git push https://user:private@github.com/owner/repo feat/a")[0]?.target, "feat/a");
+});
+test("structured events expose branch, PR number and bounded literal title", () => {
+	const [push] = summaries("jj git push --bookmark feat/events");
+	assert.equal(push?.kind, "push");
+	assert.equal(push?.branch, "feat/events");
+	const [opened] = summaries("gh pr create --head feat/events --title 'Quiet chat events'");
+	assert.equal(opened?.kind, "pr_opened");
+	assert.equal(opened?.branch, "feat/events");
+	assert.equal(opened?.title, "Quiet chat events");
+	assert.equal(summaries("gh pr ready 441 --undo")[0]?.kind, "pr_draft");
+	assert.equal(summaries("gh pr edit 441")[0]?.prNumber, 441);
+	assert.equal(summaries("gh pr create --title '$PRIVATE'")[0]?.title, undefined);
+	assert.equal(summaries("gh pr create --title '" + "a".repeat(500) + "'")[0]?.title?.length, 200);
 });
 test("reads, literal source and dry runs are not GitHub actions", () => {
 	for (const command of [

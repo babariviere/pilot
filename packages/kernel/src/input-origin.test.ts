@@ -56,6 +56,10 @@ test("only automatic user entries are annotated, and later entries trigger one r
 		const [event] = await origins.events([{ type: "entry_appended", entry: job }]);
 		assert.equal(event?.type === "entry_appended" && (event.entry as { origin?: string }).origin, "job");
 		assert.equal(scan.mock.callCount(), 2);
+		const notice = await place(conversation.id, "mission-notice:3");
+		const [projectedNotice] = await origins.entries([notice]);
+		assert.deepEqual(projectedNotice?.data, { event: { kind: "mission_updated", text: "Mission updated" } });
+		assert.equal(projectedNotice?.model, notice.model, "full agent-facing input remains intact");
 	} finally {
 		await session.close(context);
 	}

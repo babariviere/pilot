@@ -49,9 +49,11 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
     case question(id: String, question: AgentQuestion)
     case error(id: String, text: String)
     case notice(id: String, text: String)
+    case event(ChatEvent)
 
     public var id: String {
         switch self {
+        case let .event(event): event.id
         case let .user(id, _, _), let .text(id, _, _), let .thinking(id, _, _), let .tools(id, _), let .error(id, _),
              let .notice(id, _), let .artifact(id, _), let .automatic(id, _, _, _), let .question(id, _):
             id
@@ -96,7 +98,16 @@ extension Transcript {
                 toolGroup.append(contentsOf: items)
             } else {
                 flushTools()
-                rows.append(row)
+                if case var .event(event) = row, case let .event(previous) = rows.last,
+                   previous.canCollapse(with: event) {
+                    let latest = event.timestamp
+                    let doubt = previous.uncertainty ?? event.uncertainty
+                    event = previous
+                    event.uncertainty = doubt
+                    event.endTimestamp = latest
+                    event.count += 1
+                    rows[rows.count - 1] = .event(event)
+                } else { rows.append(row) }
             }
         }
 
@@ -121,26 +132,49 @@ extension Transcript {
             if message.stopReason == "error", let error = message.errorMessage {
                 append(.error(id: "\(id)-error", text: error))
             } else if message.stopReason == "aborted" {
-                append(.notice(id: "\(id)-aborted", text: "Stopped"))
+                append(.event(ChatEvent(id: "\(id)-aborted", kind: "stopped", text: "Stopped", timestamp: message.timestamp)))
             }
         }
 
         for entry in entries {
             switch entry.kind {
             case "pilot.activity":
-                if let text = entry.activity { append(.notice(id: "\(entry.id)", text: text)) }
+                if let text = entry.activity {
+                    let summary = entry.eventSummary
+                    append(.event(ChatEvent(id: "\(entry.id)", kind: summary?.kind ?? "activity",
+                                           text: summary?.text ?? text, timestamp: entry.messages.first?.timestamp,
+                                           detail: summary == nil ? nil : text)))
+                }
+            case "pilot.github-event":
+                if let action = entry.githubAction { append(.event(action.event)) }
             case "pilot.artifact":
                 if let artifact = entry.artifact { append(.artifact(id: "\(entry.id)-artifact", reference: artifact)) }
             case AgentQuestion.entryKind:
                 if let question = entry.question { append(.question(id: "\(entry.id)-question", question: question)) }
-            case "pi.compaction": append(.notice(id: "\(entry.id)", text: "Context compacted"))
-            case "pi.reset": append(.notice(id: "\(entry.id)", text: "Context reset"))
+            case "pi.compaction", "pi.reset":
+                let compacted = entry.kind == "pi.compaction"
+                var text = compacted ? "Context compacted" : "Context reset"
+                if let before = entry.data?["tokensBefore"]?.int, let after = entry.data?["tokensAfter"]?.int {
+                    let tokens = { (value: Int) in value >= 1000 ? "\(value / 1000)k" : String(value) }
+                    text += " · \(tokens(before)) to \(tokens(after)) tokens"
+                }
+                let detail = entry.data?["summary"]?.string
+                    ?? entry.messages.map(\.text).filter { !$0.isEmpty }.joined(separator: "\n")
+                append(.event(ChatEvent(id: "\(entry.id)", kind: entry.kind, text: text,
+                                       timestamp: entry.messages.first?.timestamp,
+                                       uncertainty: entry.data?["tokensEstimated"]?.bool == true ? "Token counts are estimates." : nil,
+                                       detail: detail.isEmpty ? nil : detail)))
             default:
                 for (index, message) in entry.messages.enumerated() {
                     let id = "\(entry.id)-\(index)"
                     switch message.role {
                     case "user":
-                        if let origin = entry.origin {
+                        if entry.origin == .mission {
+                            let summary = entry.eventSummary
+                            append(.event(ChatEvent(id: id, kind: summary?.kind ?? "mission_updated",
+                                                   text: summary?.text ?? "Mission updated",
+                                                   timestamp: message.timestamp, detail: message.text)))
+                        } else if let origin = entry.origin {
                             append(.automatic(id: id, text: message.text, origin: origin, timestamp: message.timestamp))
                         } else {
                             append(.user(id: id, text: message.text, timestamp: message.timestamp))

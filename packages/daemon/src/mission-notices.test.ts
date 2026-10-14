@@ -382,6 +382,9 @@ test("frozen payload, stable request ID and completion high-water mark survive r
 	f.store.recordMemberCompletion(completion("done", 50));
 	const now = Date.now() + 30_000;
 	const notice = f.store.prepareNotice(f.id, "lead", now)!;
+	assert.equal(notice.event.kind, "mission_member_finished");
+	assert.match(notice.event.text, /finished/);
+	assert.doesNotMatch(notice.event.text, /Read|instructions|propose/);
 	f.store.close();
 	const store = new MissionStore(file);
 	try {

@@ -27,13 +27,17 @@ async function fixture(t: TestContext) {
 test("idle input atomically commits entry, placed submission and Harness generation, and retries idempotently", async (t) => {
 	const { storage, harness, conversation, resume } = await fixture(t);
 	const commit = t.mock.method(conversation, "commit", conversation.commit.bind(conversation));
-	await submitIdleInput(harness, conversation, "idle", "Prepared user input", context);
+	await submitIdleInput(harness, conversation, "idle", "Prepared user input", context, {
+		kind: "mission_updated",
+		text: "Task #3 marked done",
+	});
 	assert.equal(commit.mock.callCount(), 1);
 	assert.equal(resume.mock.callCount(), 1);
 	const entry = (await conversation.entries({}, 100, undefined, context)).items.find(
 		(entry) => entry.kind === UserEntry.kind,
 	);
 	assert.ok(entry);
+	assert.deepEqual(entry.data, { event: { kind: "mission_updated", text: "Task #3 marked done" } });
 	assert.deepEqual(
 		entry.model?.map((message) => ({ role: message.role, content: message.content })),
 		[{ role: "user", content: "Prepared user input" }],

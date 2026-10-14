@@ -146,6 +146,9 @@ public struct TranscriptPresentation: Equatable, Sendable {
             case let .user(_, text, _), let .text(_, text, _), let .thinking(_, text, _),
                  let .error(_, text), let .notice(_, text), let .automatic(_, text, _, _):
                 return base + text.utf8.count
+            case let .event(event):
+                return base + event.text.utf8.count + (event.detail?.utf8.count ?? 0)
+                    + (event.branch?.utf8.count ?? 0) + (event.title?.utf8.count ?? 0)
             case let .tools(_, items):
                 return base + items.reduce(0) { $0 + byteCount(of: $1) }
             case let .artifact(_, reference): return base + artifactByteCount(reference)

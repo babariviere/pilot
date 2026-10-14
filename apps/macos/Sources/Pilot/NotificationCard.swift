@@ -2,7 +2,7 @@ import PilotCore
 import SwiftUI
 
 /// Compact, left-aligned card for input the user did not type: subagent answers, mission messages, job results and
-/// PR follow-ups. Use it for any automatic message so it never looks like a user bubble. Collapsed, it previews two
+/// PR follow-ups. Use it for conversational automatic messages so it never looks like a user bubble. Collapsed, it previews two
 /// muted lines; expanded, it renders the full Markdown.
 struct NotificationCard<Accessory: View>: View {
     let icon: String
@@ -64,7 +64,11 @@ struct AutomaticMessageRow: View {
     }
 
     var body: some View {
-        NotificationCard(icon: origin.icon, title: origin.title, text: text, expansion: expansion) { EmptyView() }
+        if origin == .mission {
+            ChatEventRow(event: ChatEvent(id: "mission", kind: "mission_updated", text: "Mission updated", detail: text), expansion: expansion)
+        } else {
+            NotificationCard(icon: origin.icon, title: origin.title, text: text, expansion: expansion) { EmptyView() }
+        }
     }
 }
 

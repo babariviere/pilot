@@ -129,7 +129,7 @@ function options(words: string[]): { flags: Map<string, string>; positional: str
 	}
 	return { flags, positional, fields };
 }
-type Summary = Pick<GitHubAction, "summary" | "target" | "description">;
+type Summary = Pick<GitHubAction, "summary" | "target" | "description" | "kind" | "branch" | "prNumber" | "title">;
 export function githubCommandSummaries(
 	name: string,
 	args: Record<string, unknown>,
@@ -155,6 +155,10 @@ export function githubCommandSummaries(
 		const { flags, positional, fields: fieldValues } = options(words.slice(start));
 		const flag = (long: string, short?: string) => flags.get(long) ?? (short ? flags.get(short) : undefined);
 		if (flags.has("--help") || flags.has("-h") || flags.has("--dry-run")) continue;
+		let kind: GitHubAction["kind"],
+			branchName: string | undefined,
+			prNumber: number | undefined,
+			title: string | undefined;
 		let summary: string | undefined,
 			description = "",
 			target: string | undefined;
@@ -167,6 +171,8 @@ export function githubCommandSummaries(
 			const bookmark = flag("--bookmark", "-b");
 			const value = bookmark ?? (words[0] === "git" ? positional[1]?.split(":").at(-1) : undefined);
 			target = branch(value);
+			kind = "push";
+			branchName = target;
 			description = target ? `pushed branch ${target}` : "pushed branches";
 		} else if (
 			words[0] === "gh" &&
@@ -174,10 +180,31 @@ export function githubCommandSummaries(
 			["create", "ready", "edit", "reopen"].includes(words[2] ?? "")
 		) {
 			const action = words[2]!;
+			kind =
+				action === "create"
+					? "pr_opened"
+					: action === "ready"
+						? flags.has("--undo")
+							? "pr_draft"
+							: "pr_ready"
+						: action === "edit"
+							? "pr_edited"
+							: "pr_reopened";
+			// Titles are bounded display metadata, never retain bodies, headers or dynamic shell text.
+			const candidate = flag("--title", "-t");
+			if (
+				candidate &&
+				!/[\x00-\x1f\x7f`$]/.test(candidate) &&
+				!/(?:gh[pousr]_|github_pat_|token|secret|password)/i.test(candidate)
+			)
+				title = candidate.slice(0, 200);
 			summary = `gh pr ${action}`;
 			const pr = positional[0]?.match(/^(?:[1-9]\d*|https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/([1-9]\d*))$/);
 			const number = pr ? (pr[1] ?? pr[0]) : undefined;
-			const head = branch(flag("--head", "-H")) ?? (action !== "create" ? branch(positional[0]) : undefined);
+			const head =
+				branch(flag("--head", "-H")) ?? (action !== "create" && !number ? branch(positional[0]) : undefined);
+			prNumber = number ? Number(number) : undefined;
+			branchName = head;
 			target = number ? `PR #${number}` : head ? `branch ${head}` : undefined;
 			const label = number ? `PR #${number}` : head && action !== "create" ? `PR for branch ${head}` : "a PR";
 			description =
@@ -198,9 +225,20 @@ export function githubCommandSummaries(
 				.find((w) => /^\/?repos\/[\w.-]+\/[\w.-]+\/pulls\/[1-9]\d*(?:\/|$)/.test(w))
 				?.match(/\/pulls\/([1-9]\d*)/);
 			target = pr ? `PR #${pr[1]}` : undefined;
+			kind = "github_updated";
+			prNumber = pr ? Number(pr[1]) : undefined;
 			description = `updated GitHub${target ? ` (${target})` : ""}`;
 		}
-		if (summary) summaries.push({ summary, description, ...(target ? { target } : {}) });
+		if (summary)
+			summaries.push({
+				summary,
+				description,
+				kind,
+				...(target ? { target } : {}),
+				...(branchName ? { branch: branchName } : {}),
+				...(prNumber ? { prNumber } : {}),
+				...(title ? { title } : {}),
+			});
 		if (summaries.length > GITHUB_ACTION_LIMIT) summaries.shift();
 	}
 	return { summaries, single: parts.length === 1 && !/[;&|\n`$()<>]/.test(source.trim()) };
@@ -221,7 +259,13 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 	prepare(extension: Extension): Extension;
 } {
 	const active = new Map<string, { error?: unknown }>();
-	const observe = async (id: string, name: string, args: Record<string, unknown>, result: Result) => {
+	const observe = async (
+		id: string,
+		toolCallId: string,
+		name: string,
+		args: Record<string, unknown>,
+		result: Result,
+	) => {
 		const { summaries, single } = githubCommandSummaries(name, args);
 		const code = (result.structuredContent as { exit_code?: unknown } | undefined)?.exit_code;
 		const exitCode = single && typeof code === "number" && Number.isSafeInteger(code) ? code : null;
@@ -230,7 +274,13 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 			if (single && exitCode === 0 && initial.summary === "gh pr create") {
 				const url = createdPullRequest({ ...result, toolName: name, input: args });
 				const number = url?.match(/\/pull\/([1-9]\d*)$/)?.[1];
-				if (number) summary = { ...initial, target: `PR #${number}`, description: `created PR #${number}` };
+				if (number)
+					summary = {
+						...initial,
+						prNumber: Number(number),
+						target: `PR #${number}`,
+						description: `created PR #${number}`,
+					};
 			}
 			if (single && exitCode === 0 && initial.summary.startsWith("gh pr ") && !initial.target) {
 				const output = (result.structuredContent as { output?: unknown } | undefined)?.output;
@@ -250,12 +300,14 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 				if (numbers.length === 1)
 					summary = {
 						...initial,
+						prNumber: Number(numbers[0]),
 						target: `PR #${numbers[0]}`,
 						description: initial.description.replace("a PR", `PR #${numbers[0]}`),
 					};
 			}
 			await record({
 				id: `${id}:${index}`,
+				toolCallId,
 				...summary,
 				at: Date.now(),
 				exitCode,
@@ -266,10 +318,17 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 		native: (pi) => {
 			pi.on("tool_result", async (event) => {
 				if (!event.parentToolCallId) return;
-				const root = [...active].find(([id]) => event.toolCallId.startsWith(`${id}/`))?.[1];
+				const match = [...active].find(([id]) => event.toolCallId.startsWith(`${id}/`));
+				const root = match?.[1];
 				if (!root) return;
 				try {
-					await observe(event.toolCallId, event.toolName, event.input as Record<string, unknown>, event);
+					await observe(
+						event.toolCallId,
+						match![0],
+						event.toolName,
+						event.input as Record<string, unknown>,
+						event,
+					);
 				} catch (error) {
 					root.error = error;
 					throw error;
@@ -287,14 +346,14 @@ export function githubActions(record: (action: GitHubAction) => Promise<void>): 
 					try {
 						result = await tool.execute(args, api, context);
 					} catch (error) {
-						await observe(api.callId, tool.name, args as Record<string, unknown>, { isError: true });
+						await observe(api.callId, api.callId, tool.name, args as Record<string, unknown>, { isError: true });
 						throw error;
 					} finally {
 						active.delete(api.callId);
 					}
 					if (root.error !== undefined) throw root.error;
 					const details = result.details as { __piNativeAdapter?: { structuredContent?: unknown } } | undefined;
-					await observe(api.callId, tool.name, args as Record<string, unknown>, {
+					await observe(api.callId, api.callId, tool.name, args as Record<string, unknown>, {
 						...result,
 						structuredContent: details?.__piNativeAdapter?.structuredContent,
 					});

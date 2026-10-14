@@ -76,7 +76,16 @@ export class InputOrigins {
 		await this.#ensure(entries);
 		return entries.map((entry) => {
 			const origin = entry.kind === "pi.user" ? this.#origins.get(Number(entry.id)) : undefined;
-			return origin ? ({ ...entry, origin } as EntryRecord) : entry;
+			if (!origin) return entry;
+			if (origin !== "mission") return { ...entry, origin } as EntryRecord;
+			const data =
+				typeof entry.data === "object" && entry.data !== null && !Array.isArray(entry.data) ? entry.data : {};
+			// Legacy notices and non-notice automatic inputs still get a user-facing summary from the kernel.
+			return {
+				...entry,
+				origin,
+				data: { ...data, event: data.event ?? { kind: "mission_updated", text: "Mission updated" } },
+			} as EntryRecord;
 		});
 	}
 

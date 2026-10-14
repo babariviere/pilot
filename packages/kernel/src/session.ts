@@ -51,6 +51,7 @@ import {
 	publicAttempts,
 } from "./attempts.ts";
 import { reconcileCompletion } from "./attention.ts";
+import { chatEvents, compactionEvents } from "./chat-events.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
@@ -276,6 +277,12 @@ export class KernelSession {
 						if (!artifactConversation) throw new Error("GitHub audit requires a bound conversation");
 						const added = await artifactConversation.commit(async (tx) => {
 							const state = await tx.doc(GitHubActionsDoc);
+							const latest = (await tx.scanEntries({ conversationId: artifactConversation!.id }, 1)).items[0];
+							action = {
+								...action,
+								conversationId: String(artifactConversation!.id),
+								...(latest ? { afterEntryId: Number(latest.id) } : {}),
+							};
 							return appendGitHubAction(state, action);
 						}, context);
 						if (added) hooks.onGitHubAction?.(action);
@@ -365,7 +372,7 @@ export class KernelSession {
 				);
 				const audited = audit ? audit.prepare(prepared) : prepared;
 				const tracked = jobs.prepare(refs ? refs.prepare(audited) : audited);
-				return provenance ? provenance.prepare(tracked) : tracked;
+				return compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness);
 			};
 			const registry = createRegistry();
 			registry.install(prepare(adapter.extension));
@@ -620,7 +627,7 @@ export class KernelSession {
 							requestId: `mission-decisions:${randomUUID()}`,
 							entry: {
 								kind: "pilot.activity",
-								data: { text },
+								data: { text, event: { kind: "mission_decisions_changed", text: "Mission decisions changed" } },
 								model: [{ role: "user", content: text, timestamp: Date.now() }],
 							},
 						},
@@ -662,12 +669,13 @@ export class KernelSession {
 		mode: DeliveryMode,
 		onlyIfIdle = false,
 		reportDelivery = false,
+		event?: import("@pilot/protocol").ChatEventSummary,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		// Reserve admission before serialization yields, so model changes and idle-only sends cannot race preparation.
 		if (this.#closing || this.#changingModel || this.#moving || (onlyIfIdle && this.#admissions))
 			return Promise.reject(new ConversationBusy(this.conversation.id));
 		this.#admissions++;
-		return this.serializeInput(() => this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery));
+		return this.serializeInput(() => this.submitInput(requestId, content, mode, onlyIfIdle, reportDelivery, event));
 	}
 
 	private async submitInput(
@@ -676,6 +684,7 @@ export class KernelSession {
 		mode: DeliveryMode,
 		onlyIfIdle = false,
 		reportDelivery = false,
+		event?: import("@pilot/protocol").ChatEventSummary,
 	): Promise<{ delivery: "delivered" | "queued" | "not_started"; reason?: string } | undefined> {
 		try {
 			if (this.#closing || this.#changingModel || this.#moving) throw new ConversationBusy(this.conversation.id);
@@ -703,7 +712,7 @@ export class KernelSession {
 				return { delivery: status?.status === "queued" ? "queued" : "delivered" };
 			}
 			if (onlyIfIdle) {
-				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context);
+				await submitIdleInput(this.harness, this.conversation, requestId, prepared, context, event);
 				return { delivery: "delivered" };
 			}
 			const submission = await this.conversation.submit(
@@ -973,7 +982,10 @@ export class KernelSession {
 			throw error;
 		}
 		try {
-			await listener([...(await this.#origins.events([stream.snapshot])), await displayQueue(queue.value)]);
+			await listener([
+				...(await chatEvents(this.harness, await this.#origins.events([stream.snapshot]), context)),
+				await displayQueue(queue.value),
+			]);
 			await listener([{ type: "github_actions_update", actions: [...(audit?.value?.actions ?? [])] }]);
 			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
 			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
@@ -994,7 +1006,7 @@ export class KernelSession {
 			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop()]);
 		});
 		stream.start(async (events) => {
-			await listener(await this.#origins.events(events));
+			await listener(await chatEvents(this.harness, await this.#origins.events(events), context));
 		});
 		queue.start(async (inbox) => {
 			await listener([await displayQueue(inbox)]);

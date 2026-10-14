@@ -167,6 +167,15 @@ export interface SnapshotPrefixEvent {
 /** Sanitized execution audit. Null means no authoritative command exit was exposed. */
 export type GitHubAction = {
 	id: string;
+	/** Optional only for audits recorded by older kernels. */
+	kind?: "push" | "pr_opened" | "pr_ready" | "pr_draft" | "pr_edited" | "pr_reopened" | "github_updated";
+	branch?: string;
+	prNumber?: number;
+	title?: string;
+	/** Top-level call, including when a nested codemode call performed the action. */
+	toolCallId?: string;
+	afterEntryId?: number;
+	conversationId?: string;
 	/** Membership at execution time, not at replay time. */
 	missionId?: string;
 	summary: string;
@@ -175,6 +184,11 @@ export type GitHubAction = {
 	at: number;
 	exitCode: number | null;
 };
+/** User-facing automatic event. The full agent-facing message remains on the entry. */
+export interface ChatEventSummary {
+	kind: "mission_updated" | "mission_decisions_changed" | "mission_task_done" | "mission_member_finished";
+	text: string;
+}
 export interface GitHubActionsUpdateEvent {
 	type: "github_actions_update";
 	actions: GitHubAction[];
