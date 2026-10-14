@@ -143,7 +143,7 @@ enum ComposerTab: Hashable {
     case running
 }
 
-/// Home: a sky band, the task composer, and a dashboard of what agents are doing.
+/// Home: a sky band, the task composer, and how every project is doing (`HomeOverview`).
 struct HomeView: View {
     @EnvironmentObject private var app: AppModel
     @ObservedObject private var client = AppModel.shared.client
@@ -151,7 +151,8 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             ZStack(alignment: .top) {
-                DitherSky()
+                // The softened cloud photo; DitherScene falls back to the procedural DitherSky without it.
+                DitherScene(source: .homeSky, cell: 2, fade: 0.45)
                     .frame(height: 300)
                 VStack(spacing: 0) {
                     Text("What’s on your mind?")
@@ -164,8 +165,8 @@ struct HomeView: View {
                         .padding(.bottom, 16)
                     TaskComposer(form: app.newSessionForm, client: app.client)
                         .frame(maxWidth: 640)
-                    Dashboard()
-                        .frame(maxWidth: 1180)
+                    HomeOverview()
+                        .frame(maxWidth: Theme.column)
                         .padding(.top, 48)
                 }
                 .padding(.horizontal, 24)

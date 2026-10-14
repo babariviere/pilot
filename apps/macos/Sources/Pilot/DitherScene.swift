@@ -1,14 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// A bundled painting of a calm coast (`Resources/CoastScene.png`), drawn in the pixel language of `DitherSky`:
-/// sampled at one pixel per `cell` points, its lightness ordered-dithered (Bayer) with hard pixels, and dissolving
-/// dot by dot into the page at its foot. Rendered off the main actor once per size and cached. Falls back to the
-/// procedural `DitherSky` when the image is missing.
+/// A bundled picture (`DitherSceneSource`), drawn in the pixel language of `DitherSky`: sampled at one pixel per
+/// `cell` points, toned, its lightness ordered-dithered (Bayer) with hard pixels, and dissolving dot by dot into the
+/// page at its foot. Rendered off the main actor once per size and cached. Falls back to the procedural
+/// `DitherSky` when the image is missing.
 ///
-/// Use it for a large, restful moment such as an empty Inbox. Keep `DitherSky` for Home.
+/// Use it for a large, restful moment: the calm coast for an empty Inbox, the softened clouds for Home's sky.
 struct DitherScene: View {
-    /// Finer than the Home sky, so the painting keeps its detail while its pixels stay hard.
+    var source: DitherSceneSource = .coast
+    /// The coast's default is finer than the Home sky, so the painting keeps its detail while its pixels stay hard.
     var cell: CGFloat = 1.5
     var fade: Double = 0.22
 
@@ -18,7 +19,7 @@ struct DitherScene: View {
         GeometryReader { geometry in
             let width = max(1, Int(geometry.size.width / cell))
             let height = max(1, Int(geometry.size.height / cell))
-            let key = DitherSceneKey(width: width, height: height, fade: fade)
+            let key = DitherSceneKey(source: source, width: width, height: height, fade: fade)
             ZStack(alignment: .topLeading) {
                 if scene.missing {
                     DitherSky(cell: cell, fade: fade)
@@ -37,7 +38,33 @@ struct DitherScene: View {
     }
 }
 
+/// The bundled pictures `DitherScene` draws, each with its tone. Add new ones as SwiftPM resources.
+enum DitherSceneSource: String, Hashable, Sendable {
+    /// A painted calm coast (`Resources/CoastScene.png`), in full colour. The empty Inbox.
+    case coast = "CoastScene"
+    /// A photo of light clouds (`Resources/HomeSky.png`, free to use), softened toward the sky's horizon blue so it
+    /// sits quietly behind Home's composer.
+    case homeSky = "HomeSky"
+
+    var tone: DitherSceneTone {
+        switch self {
+        case .coast: DitherSceneTone()
+        case .homeSky: DitherSceneTone(saturation: 0.8, lift: 0.3, levels: 12)
+        }
+    }
+}
+
+/// How a scene is toned before dithering: `saturation` scales colour against grey (1 keeps it), `lift` mixes it
+/// toward `DitherSky`'s horizon blue, and `levels` sets the lightness steps of the dither.
+struct DitherSceneTone: Hashable, Sendable {
+    var saturation: Double = 1
+    var lift: Double = 0
+    var levels: Double = 16
+    static let horizon = (0.84, 0.91, 0.98)
+}
+
 struct DitherSceneKey: Hashable, Sendable {
+    var source: DitherSceneSource = .coast
     let width: Int
     let height: Int
     let fade: Double
@@ -86,8 +113,8 @@ private actor SceneRenderer {
         let bytes: Int
     }
 
-    /// Decoded once, on first use.
-    private var source: CGImage??
+    /// Each picture is decoded once, on first use. A missing resource is remembered as nil.
+    private var sources: [DitherSceneSource: CGImage?] = [:]
     private var cache: [Entry] = [] // Least recently used first.
     private var cachedBytes = 0
     private let maximumEntries = 4
@@ -100,9 +127,12 @@ private actor SceneRenderer {
             cache.append(entry)
             return .image(entry.image)
         }
-        if source == nil { source = DitherSceneRenderer.loadSource() }
-        guard let source = source ?? nil else { return .missing }
-        guard let image = DitherSceneRenderer.render(source, width: key.width, height: key.height, fade: key.fade),
+        if sources[key.source] == nil {
+            sources[key.source] = .some(DitherSceneRenderer.loadSource(url: DitherSceneRenderer.sourceURL(key.source)))
+        }
+        guard let source = sources[key.source] ?? nil else { return .missing }
+        guard let image = DitherSceneRenderer.render(source, width: key.width, height: key.height, fade: key.fade,
+                                                     tone: key.source.tone),
               !Task.isCancelled else { return .cancelled }
         let bytes = image.bytesPerRow * image.height
         if bytes <= maximumBytes {
@@ -117,11 +147,12 @@ private actor SceneRenderer {
 }
 
 enum DitherSceneRenderer {
-    static let resource = "CoastScene"
+    static let resource = DitherSceneSource.coast.rawValue
 
     /// The app's SwiftPM resource bundle: in Contents/Resources when packaged, beside the binary in a build.
     /// Looked up by hand because `Bundle.module` traps when its bundle is missing.
-    static func sourceURL(main: Bundle = .main) -> URL? {
+    static func sourceURL(_ scene: DitherSceneSource = .coast, main: Bundle = .main) -> URL? {
+        let resource = scene.rawValue
         let name = "PilotMac_Pilot.bundle"
         let candidates = [main.resourceURL?.appending(path: name), main.bundleURL.appending(path: name)]
         for url in candidates.compactMap({ $0 }) {
@@ -130,7 +161,7 @@ enum DitherSceneRenderer {
         return nil
     }
 
-    static func loadSource(url: URL? = sourceURL()) -> CGImage? {
+    static func loadSource(url: URL?) -> CGImage? {
         guard let url, let data = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         return CGImageSourceCreateImageAtIndex(data, 0, nil)
     }
@@ -140,9 +171,12 @@ enum DitherSceneRenderer {
         3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25, 15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
     ].map { ($0 + 0.5) / 64 }
 
-    /// Samples `source` to fill `width` x `height` pixels (centered, cropped to the aspect), then dithers its
-    /// lightness in `levels` steps, keeping hue smooth, and dissolves the bottom `fade` of the height.
-    static func render(_ source: CGImage, width: Int, height: Int, fade: Double, levels: Double = 16) -> CGImage? {
+    /// Samples `source` to fill `width` x `height` pixels (centered, cropped to the aspect), tones it, then dithers
+    /// its lightness in the tone's levels, keeping hue smooth, and dissolves the bottom `fade` of the height.
+    static func render(_ source: CGImage, width: Int, height: Int, fade: Double,
+                       tone: DitherSceneTone = DitherSceneTone()) -> CGImage? {
+        let levels = tone.levels
+        let horizon = DitherSceneTone.horizon
         guard width > 0, height > 0, width <= 4096, height <= 4096, fade.isFinite, !Task.isCancelled,
               let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
@@ -163,9 +197,18 @@ enum DitherSceneRenderer {
                 let index = (y * width + x) * 4
                 let alpha = Double(pixels[index + 3]) / 255
                 guard alpha > 0 else { continue }
-                // Unpremultiply, then quantize lightness with the ordered threshold.
+                // Unpremultiply, tone, then quantize lightness with the ordered threshold.
                 var color = (Double(pixels[index]) / 255 / alpha, Double(pixels[index + 1]) / 255 / alpha,
                              Double(pixels[index + 2]) / 255 / alpha)
+                if tone.saturation != 1 {
+                    let grey = (color.0 + color.1 + color.2) / 3
+                    color = (grey + (color.0 - grey) * tone.saturation, grey + (color.1 - grey) * tone.saturation,
+                             grey + (color.2 - grey) * tone.saturation)
+                }
+                if tone.lift > 0 {
+                    color = (color.0 + (horizon.0 - color.0) * tone.lift, color.1 + (horizon.1 - color.1) * tone.lift,
+                             color.2 + (horizon.2 - color.2) * tone.lift)
+                }
                 let threshold = bayer[(y & 7) * 8 + (x & 7)]
                 let lightness = (color.0 + color.1 + color.2) / 3
                 let quantized = floor(lightness * levels + threshold) / levels
