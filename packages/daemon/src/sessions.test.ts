@@ -2126,13 +2126,13 @@ test("a kernel crash without queued input stays usable and backs off automatic r
 	t.after(() => warning.mock.restore());
 	const sessions = await f.manager({}, { kernelRestartBackoffMs: 100 });
 	const created = await sessions.spawn({ cwd: f.source, message: "before crash" });
-	await until(() => sessions.get(created.id)?.state === "working");
+	await sessions["starting"].get(created.id);
+	assert.deepEqual((await f.stored(created.id)).pending, []);
 	f.workers[0]!.crash();
 	await until(() => sessions.get(created.id)?.state === "parked");
 	assert.equal(sessions.get(created.id)?.error, "IPC connection failed");
 	assert.equal((await f.stored(created.id)).inputError, undefined, "nothing was uncertain");
 	assert.equal(sessions.canSendNotice(created.id), false, "automatic work waits after a crash");
-	await until(() => sessions.canSendNotice(created.id));
 	// User input is never delayed, and a fresh kernel clears the crash.
 	await sessions.send(created.id, "after crash");
 	assert.equal(f.workers.length, 2);
@@ -2155,6 +2155,10 @@ test("an interrupted run reopens automatically after backoff without submitting 
 	f.workers[0]!.crash();
 	assert.equal(sessions["metas"].get(created.id)?.kernelRestartPending, true);
 	assert.deepEqual(sessions.prepareUpdate(), { ready: false }, "interrupted work still blocks an idle-only update");
+	const meta = sessions["metas"].get(created.id)!;
+	assert.throws(() => sessions["assertModelIdle"](meta), /must be idle/);
+	assert.throws(() => sessions["assertWorkspaceQuiescent"](meta), /Session is in use/);
+	assert.equal(sessions.canSendNotice(created.id), false);
 	t.mock.timers.tick(99);
 	await Promise.resolve();
 	assert.equal(f.workers.length, 1);
