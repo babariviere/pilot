@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import type { MemoryEntry, MemoryNode, MemoryRecall, MemoryView, ProjectMemorySummary } from "@pilot/protocol";
-import { ServiceUnavailable } from "./errors.ts";
+import { Conflict, ServiceUnavailable } from "./errors.ts";
 
 type Nap = { lo: number; hi: number; epoch: number; prompt: string };
 export type MemorySummarizer = (prompt: string, signal: AbortSignal) => Promise<string>;
@@ -37,7 +37,13 @@ export class ProjectMemoryService {
 		this.worker = new Worker(new URL("./memory-worker.ts", import.meta.url), { workerData: { root: this.root } });
 		this.worker.on(
 			"message",
-			(reply: { id: number; value?: unknown; error?: string; summary?: ProjectMemorySummary }) => {
+			(reply: {
+				id: number;
+				value?: unknown;
+				error?: string;
+				conflict?: boolean;
+				summary?: ProjectMemorySummary;
+			}) => {
 				const pending = this.pending.get(reply.id);
 				if (!pending) return;
 				this.pending.delete(reply.id);
@@ -45,7 +51,7 @@ export class ProjectMemoryService {
 					this.summaries.set(pending.projectId, reply.summary);
 					this.emit();
 				}
-				if (reply.error) pending.reject(new Error(reply.error));
+				if (reply.error) pending.reject(reply.conflict ? new Conflict(reply.error) : new Error(reply.error));
 				else pending.resolve(reply.value);
 				if (!this.pending.size) this.worker.unref();
 			},
@@ -116,8 +122,9 @@ export class ProjectMemoryService {
 		this.summaries.delete(projectId);
 		this.emit();
 	}
-	async note(projectId: string, text: string, sessionId: string): Promise<MemoryEntry> {
-		const entry = await this.rpc<MemoryEntry>(projectId, "note", { text, sessionId });
+	/** `replaces` lists indices of notes this one corrects; a normalized duplicate of a live note is a Conflict. */
+	async note(projectId: string, text: string, sessionId: string, replaces?: number[]): Promise<MemoryEntry> {
+		const entry = await this.rpc<MemoryEntry>(projectId, "note", { text, sessionId, replaces });
 		this.schedule(projectId);
 		return entry;
 	}

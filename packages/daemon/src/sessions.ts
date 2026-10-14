@@ -3473,7 +3473,9 @@ export class SessionManager {
 						return this.memory.wake(meta.projectId, 96);
 					case "note":
 						if (typeof args.text !== "string") throw new Error("Memory note requires text");
-						return this.memory.note(meta.projectId, args.text, meta.id);
+						if (args.replaces !== undefined && !Array.isArray(args.replaces))
+							throw new Error("Memory note replaces must be a list of note indices");
+						return this.memory.note(meta.projectId, args.text, meta.id, args.replaces as number[] | undefined);
 					case "recall":
 						if (typeof args.regex !== "string") throw new Error("Memory recall requires regex");
 						return this.memory.recall(meta.projectId, args.regex, 96);

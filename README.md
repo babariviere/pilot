@@ -30,8 +30,9 @@ use a stand-in window header. See [screenshot notes](docs/screenshots/README.md)
 - **Coordinate bigger goals.** Missions group chats around a shared brief, decisions, tasks, dependencies,
   artifacts and activity, with an optional coordinator agent.
 - **Keep useful context.** Build agents can save lasting decisions, preferences and lessons in project
-  memory for later chats, rather than task status or secrets. Pi skills, prompt templates, packages and
-  compatible extensions are available in Build sessions.
+  memory for later chats, rather than task status or secrets. A note can replace an outdated one, and
+  duplicates are refused. Pi skills, prompt templates, packages and compatible extensions are available in
+  Build sessions.
 - **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams and
   static SwiftUI renders. Artifacts stay attached to their chat and can be linked to missions and tasks.
 - **Bring work into Pilot.** Track Linear issues and Slack messages from configured sources, triage Slack
