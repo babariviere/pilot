@@ -3302,8 +3302,8 @@ export class SessionManager {
 	}
 
 	/**
-	 * Queue a manual compaction. Resolves once the kernel has committed its task; the conversation keeps working and
-	 * the summary is placed when idle or at the next turn boundary. Stop cancels it.
+	 * Queue a manual compaction. Resolves once the kernel has committed its task. Idle compaction queues new input
+	 * until its summary is placed; active runs retain turn-boundary placement. Stop cancels it.
 	 */
 	async compact(id: string, instructions?: string): Promise<void> {
 		const end = this.updateGate.begin();
