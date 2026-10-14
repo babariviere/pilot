@@ -79,22 +79,26 @@ test("turn end with a job holds completion, then one final notice includes the f
 	const { store, id } = setup();
 	const f = jobDelivery(store, id);
 	try {
-		f.change({ state: "working", runningJobs: [backgroundJob] });
+		f.change({ state: "working", working: true, runningJobs: [backgroundJob] });
 		f.change({ state: "idle", outcome: "done", outcomeAt: Date.now() });
-		assert.match(store.events(id)[0]!.text, /waiting on background job/);
-		assert.doesNotMatch(store.events(id)[0]!.text, /chat finished/);
+		assert.equal(store.events(id).filter((event) => event.kind === "update").length, 0);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
 		t.mock.timers.tick(60_000);
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 0);
 		// The registry empties before the extension's completion follow-up is admitted.
 		f.change({ runningJobs: [] });
-		t.mock.timers.tick(2_000);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+		t.mock.timers.tick(60_000);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0);
 		f.change({ state: "working", outcome: undefined });
 		t.mock.timers.tick(60_000);
 		await f.delivery.flush();
 		assert.equal(f.sent.length, 0);
 		f.change({
 			state: "idle",
+			working: false,
 			outcome: "done",
 			outcomeAt: Date.now(),
 			pullRequest: completion("done", 0).pullRequest,
@@ -116,41 +120,73 @@ test("turn end with a job holds completion, then one final notice includes the f
 });
 
 for (const olderJob of [false, true]) {
-	test(`job cap reports a still-running job (${olderJob ? "job" : "event"} deadline wins)`, async (t) => {
+	test(`jobs never create a deadline or notice (${olderJob ? "old" : "new"} job)`, async (t) => {
 		t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
 		const { store, id } = setup();
 		const f = jobDelivery(store, id);
 		try {
 			if (olderJob) t.mock.timers.tick(10 * 60_000);
-			const job = { ...backgroundJob, startedAt: olderJob ? 1_000 : Date.now() + 10_000 };
-			f.change({ state: "working", runningJobs: [job] });
+			const job = { ...backgroundJob, startedAt: olderJob ? 1_000 : Date.now() };
+			f.change({ state: "working", working: true, runningJobs: [job] });
 			f.change({ state: "idle", outcome: "done", outcomeAt: Date.now() });
-			const deadline = Math.min(Date.now(), job.startedAt) + NOTICE_MAX_DELAY_MS;
-			assert.equal(store.noticeDeadlines(Date.now())[0]!.at, deadline);
-			t.mock.timers.tick(deadline - Date.now() - 1);
-			await f.delivery.flush();
-			assert.equal(f.sent.length, 0);
-			f.lead.state = "working";
-			t.mock.timers.tick(1);
-			await f.delivery.flush();
-			assert.equal(f.sent.length, 0, "the cap cannot interrupt the lead");
-			f.lead.state = "idle";
-			await f.delivery.flush();
-			assert.equal(f.sent.length, 1);
-			assert.match(f.sent[0]!, /waiting on background job/);
-			assert.match(
-				f.sent[0]!,
-				olderJob
-					? /still has a running job "Test suite" \(running for 30m 0s\)/
-					: /still has a running job "Test suite" \(running for 29m 50s\)/,
-			);
-			assert.doesNotMatch(f.sent[0]!, /chat finished/);
+			for (const elapsed of [NOTICE_MAX_DELAY_MS, NOTICE_WINDOW_MS, 24 * NOTICE_WINDOW_MS]) {
+				t.mock.timers.tick(elapsed);
+				await f.delivery.flush();
+				assert.equal(f.sent.length, 0);
+				assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+			}
+			assert.equal(store.events(id).filter((event) => event.kind === "update").length, 0);
 		} finally {
 			await f.delivery.stop();
 			store.close();
 		}
 	});
 }
+
+test("pending updates stay unsettled between job exit and follow-up admission", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id } = setup();
+	const f = jobDelivery(store, id);
+	try {
+		f.change({ state: "idle", working: true, runningJobs: [backgroundJob] });
+		store.addComment(id, { text: "A real update" });
+		t.mock.timers.tick(60_000);
+		f.change({ runningJobs: [] });
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0, "the job-exit gap is still busy");
+		f.change({ working: false });
+		t.mock.timers.tick(29_999);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0);
+		t.mock.timers.tick(1);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 1);
+		assert.match(f.sent[0]!, /A real update/);
+		assert.doesNotMatch(f.sent[0]!, /waiting on background job|still has a running job/);
+	} finally {
+		await f.delivery.stop();
+		store.close();
+	}
+});
+
+test("the coordinator's own running jobs do not delay updates", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id } = setup();
+	const f = jobDelivery(store, id);
+	try {
+		f.lead.working = true;
+		f.lead.runningJobs = [backgroundJob];
+		store.addComment(id, { text: "Update for the coordinator" });
+		t.mock.timers.tick(30_000);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 1);
+		assert.match(f.sent[0]!, /Update for the coordinator/);
+		assert.doesNotMatch(f.sent[0]!, /running job/);
+	} finally {
+		await f.delivery.stop();
+		store.close();
+	}
+});
 
 test("pending job holds recover across daemon restart; dead jobs cannot leave activity stuck", async (t) => {
 	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
@@ -159,7 +195,7 @@ test("pending job holds recover across daemon restart; dead jobs cannot leave ac
 	const file = join(home, "missions.sqlite");
 	const original = setup(new MissionStore(file));
 	const f = jobDelivery(original.store, original.id);
-	f.change({ state: "working", runningJobs: [backgroundJob] });
+	f.change({ state: "working", working: true, runningJobs: [backgroundJob] });
 	f.change({ state: "idle", outcome: "done", outcomeAt: Date.now() });
 	await f.delivery.stop();
 	original.store.close();
@@ -178,6 +214,48 @@ test("pending job holds recover across daemon restart; dead jobs cannot leave ac
 		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
 	} finally {
 		await next.delivery.stop();
+		store.close();
+	}
+});
+
+test("upgraded stores ignore persisted job deadlines", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const home = await mkdtemp(join(tmpdir(), "pilot-job-deadline-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const file = join(home, "missions.sqlite");
+	const original = setup(new MissionStore(file));
+	original.store.close();
+	const db = new DatabaseSync(file);
+	db.exec("ALTER TABLE notice_activity ADD COLUMN job_deadline INTEGER");
+	db.prepare("INSERT INTO notice_activity (mission_id, busy, idle_at, job_deadline) VALUES (?, 1, 1000, 1000)").run(
+		original.id,
+	);
+	db.close();
+	const store = new MissionStore(file);
+	const f = jobDelivery(store, original.id);
+	try {
+		f.change({ state: "idle", working: true, runningJobs: [backgroundJob] });
+		store.addComment(original.id, { text: "A real update" });
+		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now() + NOTICE_MAX_DELAY_MS);
+		t.mock.timers.tick(30_000);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0, "an old job deadline cannot make the update due");
+	} finally {
+		await f.delivery.stop();
+		store.close();
+	}
+});
+
+test("an idle member with a pending job follow-up cannot record a stale outcome", () => {
+	const { store, id } = setup();
+	try {
+		const before = store.events(id);
+		store.recordMemberCompletion({ ...completion("done", 1), working: true });
+		assert.deepEqual(store.events(id), before);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+		store.recordMemberCompletion({ ...completion("done", 2), working: false });
+		assert.equal(store.events(id)[0]!.text, "#1 Pagination: chat finished, PR #12 open");
+	} finally {
 		store.close();
 	}
 });
