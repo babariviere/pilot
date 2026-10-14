@@ -711,7 +711,8 @@ private struct ProjectNeedsYouRow: View {
         switch item.kind {
         case .unread: SessionStatusIcon(status: item.outcome == .stopped ? .stopped : .done)
         case .failed: SessionStatusIcon(status: .failed)
-        case .question: MissionCoordinatorIndicator()
+        case .question:
+            if item.sessionId != nil { SessionStatusIcon(status: .question) } else { MissionCoordinatorIndicator() }
         case .scheduledFailed: ScheduleStateIcon(state: .failed)
         }
     }
@@ -719,7 +720,8 @@ private struct ProjectNeedsYouRow: View {
     private func open() {
         switch item.kind {
         case .question:
-            if let missionId = item.missionId { model.openMission(missionId) }
+            if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
+            else if let missionId = item.missionId { model.openMission(missionId) }
         case .unread, .failed, .scheduledFailed:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
         }
@@ -1014,6 +1016,7 @@ private extension SessionOutcome {
         case .done: .done
         case .failed: .failed
         case .stopped: .stopped
+        case .question: .question
         }
     }
 }
@@ -1073,7 +1076,7 @@ enum ProjectPageText {
         switch item.kind {
         case .unread: item.sessionId == nil ? nil : "Review"
         case .failed: item.sessionId == nil ? nil : "Open chat"
-        case .question: item.missionId == nil ? nil : "Answer"
+        case .question: item.sessionId == nil && item.missionId == nil ? nil : "Answer"
         case .scheduledFailed: item.sessionId == nil ? nil : "Open chat"
         }
     }
@@ -1087,6 +1090,10 @@ enum ProjectPageText {
         case .failed:
             return item.reason.map { "Failed \(when): \($0)" } ?? "Failed \(when). Open the chat to see why."
         case .question:
+            // A chat's own question, rather than a mission's blocked tasks.
+            if item.sessionId != nil {
+                return item.reason.map { "Asked \(when): \($0)" } ?? "Asked \(when). Open the chat to answer."
+            }
             let count = item.count ?? 0
             if count <= 0 { return "The mission is waiting on you." }
             return count == 1 ? "1 question or blocked task is waiting on you."

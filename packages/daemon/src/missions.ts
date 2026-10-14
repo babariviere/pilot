@@ -715,7 +715,7 @@ export class MissionStore {
 			jobs.map((job) => [job.id, job.name, job.startedAt]).sort(),
 		]);
 		const label = tasks.length ? tasks.map((task) => `#${task.number} ${task.title}`).join(", ") : session.title;
-		const legacyNote = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${prs.length ? `, ${prs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+		const legacyNote = `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${prs.length ? `, ${prs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
 		const unchangedLegacy =
 			previous &&
 			previous.signature === null &&
@@ -758,7 +758,7 @@ export class MissionStore {
 				return;
 			const note = waiting
 				? `${label}: waiting on background job`
-				: `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
+				: `${label}: chat ${session.outcome === "done" ? "finished" : session.outcome === "question" ? "asked a question" : session.outcome}${relevantPrs.length ? `, ${relevantPrs.map((pr) => `PR #${pr.number} ${pr.state}`).join(", ")}` : ""}${session.outcomeReason ? `: ${session.outcomeReason}` : ""}`;
 			const suffix = note.slice(label.length);
 			this.event(
 				id,

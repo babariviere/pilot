@@ -341,6 +341,7 @@ enum TrackedItemText {
         let status = session.status
         let (label, tone): (String, LinkSummary.Tone) = switch status {
         case .working: ("Working", .working)
+        case .question: ("Needs you", .attention)
         case .failed: ("Needs you", .attention)
         case .done where unread(session): ("Needs you", .attention)
         default:

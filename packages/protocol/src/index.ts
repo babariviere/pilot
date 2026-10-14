@@ -14,14 +14,17 @@ export type {
 /** Lifecycle as seen by the daemon. "parked" means no worker is running; the session resumes on demand. */
 export type SessionState = "parked" | "starting" | "idle" | "working" | "failed";
 
-/** Result of the latest settled run, independent of whether a worker is parked. */
-export type SessionOutcome = "done" | "failed" | "stopped";
+/**
+ * Result of the latest settled run, independent of whether a worker is parked. "question": the run ended on an
+ * ask_user question, so the chat waits for the user's reply.
+ */
+export type SessionOutcome = "done" | "failed" | "stopped" | "question";
 
 export interface SessionCompletion {
 	outcome: SessionOutcome;
 	/** Stable completion version, in milliseconds. Reopening a session does not change it. */
 	outcomeAt: number;
-	/** Bounded, redacted failure diagnostic, including the failing step and available causes. */
+	/** Bounded, redacted failure diagnostic, including the failing step and available causes. For a question, its text. */
 	outcomeReason?: string;
 }
 
@@ -737,7 +740,8 @@ export interface DashboardSection<T> {
 /**
  * Why something needs the user, most urgent first.
  * - `failed`: a chat's latest run failed and has not been reviewed.
- * - `question`: an active mission has blocked tasks, or open agent comments with no coordinator chat to take them.
+ * - `question`: a chat's agent asked a question that is not answered yet (with `sessionId`), or an active mission
+ *   has blocked tasks or open agent comments with no coordinator chat to take them (with `missionId` and `count`).
  * - `scheduled_failed`: a scheduled item could not start.
  * - `unread`: a chat finished or stopped and its result has not been reviewed.
  */

@@ -45,7 +45,8 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 ## Attention budget
 
 Only things that need the user may interrupt: notifications, sidebar and menu bar badges, and colored status.
-Failed chats, unreviewed results, mission questions and failed scheduled items qualify. Working, finished and
+Failed chats, unreviewed results, agent and mission questions and failed scheduled items qualify. An agent's question
+stays until it is answered, not until the chat is viewed. Working, finished and
 merged things do not, they wait on the page. When lists mix states, sort by urgency: failed, question, scheduled
 failure, unread, then the rest.
 
@@ -57,7 +58,7 @@ the project page. Do not restyle a state for a single screen.
 | State | Meaning | Interrupts |
 | --- | --- | --- |
 | Working | An agent is running | No |
-| Needs you | Failed, unreviewed result, mission question, scheduled item that could not start | Yes |
+| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start | Yes |
 | Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |

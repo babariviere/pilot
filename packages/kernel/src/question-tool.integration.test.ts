@@ -12,6 +12,7 @@ import {
 	InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import type { SessionCompletion } from "@pilot/protocol";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { QUESTION_ENTRY } from "./question-tool.ts";
 import { KernelSession } from "./session.ts";
@@ -71,15 +72,21 @@ async function open(t: TestContext, name: string) {
 			sessionOptions: { ...adapterOptions.sessionOptions, ...options.sessionOptions },
 		}),
 	);
+	const completions: SessionCompletion[] = [];
 	const session = await KernelSession.open(
 		{ sessionId: name, cwd: root, storageDir: join(root, "storage") },
-		{ onWorking: () => {} },
+		{
+			onWorking: (working, completion) => {
+				if (!working && completion && completion.outcomeAt !== completions.at(-1)?.outcomeAt)
+					completions.push(completion);
+			},
+		},
 	);
 	cleanup.push(async () => {
 		await Promise.all(refreshes);
 		await session.close();
 	});
-	return { session, faux };
+	return { session, faux, completions };
 }
 
 async function questions(session: KernelSession) {
@@ -87,10 +94,16 @@ async function questions(session: KernelSession) {
 	return view.entries.filter((entry) => entry.kind === QUESTION_ENTRY).map((entry) => entry.data);
 }
 
-test("a direct ask_user call records the question and ends the run without another model call", {
+async function settled(completions: SessionCompletion[], count: number) {
+	const deadline = Date.now() + 10_000;
+	while (completions.length < count && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+	return completions[count - 1];
+}
+
+test("a direct ask_user call records the question, ends the run and waits for the user", {
 	timeout: 20_000,
 }, async (t) => {
-	const { session, faux } = await open(t, "direct-question");
+	const { session, faux, completions } = await open(t, "direct-question");
 	let requests = 0;
 	faux.setResponses([
 		() => {
@@ -105,7 +118,7 @@ test("a direct ask_user call records the question and ends the run without anoth
 		},
 		() => {
 			requests++;
-			return fauxAssistantMessage("Must not run");
+			return fauxAssistantMessage("Retries now live in the sync worker.");
 		},
 	]);
 	await session.submit("ask", "Add retries", "followUp");
@@ -117,10 +130,20 @@ test("a direct ask_user call records the question and ends the run without anoth
 			options: [{ label: "Shared client", suggested: true }, { label: "Sync worker" }],
 		},
 	]);
+	const asked = await settled(completions, 1);
+	assert.equal(asked?.outcome, "question");
+	assert.equal(asked?.outcomeReason, "Where should retries live?");
+
+	// The reply is an ordinary user message; its run settles as done.
+	await session.submit("reply", "Sync worker", "followUp");
+	await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+	const answered = await settled(completions, 2);
+	assert.equal(answered?.outcome, "done");
+	assert.ok(answered!.outcomeAt > asked!.outcomeAt);
 });
 
 test("ask_user through codemode still records the question", { timeout: 20_000 }, async (t) => {
-	const { session, faux } = await open(t, "codemode-question");
+	const { session, faux, completions } = await open(t, "codemode-question");
 	faux.setResponses([
 		fauxAssistantMessage(
 			fauxToolCall("codemode", {
@@ -135,4 +158,5 @@ test("ask_user through codemode still records the question", { timeout: 20_000 }
 	assert.deepEqual(await questions(session), [
 		{ question: "Which checks?", options: [{ label: "Typecheck" }, { label: "Tests" }], multiSelect: true },
 	]);
+	assert.equal((await settled(completions, 1))?.outcome, "question");
 });

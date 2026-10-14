@@ -4,6 +4,8 @@ public enum SessionOutcome: String, Codable, Sendable {
     case done
     case failed
     case stopped
+    /// The run ended on an ask_user question. The chat waits for the user's reply.
+    case question
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -26,6 +28,8 @@ public enum SessionOutcome: String, Codable, Sendable {
 
 public enum SessionStatus: String, Sendable {
     case working = "Working"
+    /// The agent asked a question and waits for the user's answer.
+    case question = "Needs you"
     case done = "Done"
     case failed = "Failed"
     case stopped = "Stopped"
@@ -38,6 +42,7 @@ extension SessionSummary {
         if isWorking { return .working }
         switch outcome {
         case .done: return isActiveMissionCoordinator ? .idle : .done
+        case .question: return .question
         case .failed: return .failed
         case .stopped: return .stopped
         case nil: return state == "failed" ? .failed : .idle
@@ -90,7 +95,8 @@ public final class SessionAttention {
     }
 
     public func isUnread(_ session: SessionSummary) -> Bool {
-        guard !session.hasTerminalPullRequest else { return false }
+        // A question waits on the user even when the chat's PRs have settled.
+        guard session.outcome == .question || !session.hasTerminalPullRequest else { return false }
         guard let version = session.visibleOutcomeAt else { return false }
         return reviewed[session.id].map { $0 < version } ?? true
     }
@@ -120,6 +126,7 @@ public final class SessionAttention {
             let title: String
             switch session.outcome {
             case .done: title = session.isActiveMissionCoordinator ? "New result" : "Session done"
+            case .question: title = "Question"
             case .failed: title = "Session failed"
             case .stopped: title = "Session stopped"
             case nil: continue

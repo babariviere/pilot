@@ -190,7 +190,10 @@ enum Snapshot {
 
         if CommandLine.arguments.contains("--questions-only") {
             // An agent question in place of the composer, single and multi-select, then its answered record.
-            let session = Fixtures.sessions.first { $0.id == "s5" }!
+            let base = Fixtures.sessions.first { $0.id == "s5" }!
+            let session = SessionSummary(id: base.id, title: base.title, cwd: base.cwd, createdAt: base.createdAt,
+                                         updatedAt: base.updatedAt, state: "parked", outcome: .question,
+                                         outcomeAt: base.outcomeAt, outcomeReason: "Where should the retry logic live?")
             for (name, transcript) in [
                 ("question-single", Fixtures.questionTranscript(multiSelect: false, answered: false)),
                 ("question-multi", Fixtures.questionTranscript(multiSelect: true, answered: false)),

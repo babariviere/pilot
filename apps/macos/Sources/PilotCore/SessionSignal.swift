@@ -34,7 +34,8 @@ extension SessionSummary {
     public func signal(unread: Bool) -> SessionSignal? {
         if isWorking { return .working }
         if status == .failed && !hasTerminalPullRequest { return .failed }
-        if unread { return .needsYou }
+        // A question waits on the user until answered, even once viewed or after its PRs settled.
+        if unread || status == .question { return .needsYou }
         if isReadyToMerge { return .readyToMerge }
         return nil
     }
@@ -42,7 +43,7 @@ extension SessionSummary {
     /// Finished and reviewed, with no live work, failure, open PR or active coordination. Quiet chats are the
     /// only ones a long sidebar list folds away.
     public var isQuiet: Bool {
-        !isWorking && !isActiveMissionCoordinator && status != .failed
+        !isWorking && !isActiveMissionCoordinator && status != .failed && status != .question
             && !linkedPullRequests.contains { !$0.isTerminal }
     }
 }

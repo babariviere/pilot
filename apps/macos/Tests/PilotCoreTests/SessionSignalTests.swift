@@ -21,6 +21,9 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     #expect(session("p", outcome: .done, pr: .open, readiness: .pending).signal(unread: false) == nil)
     #expect(session("d", outcome: .done, pr: .draft, readiness: .ready).signal(unread: false) == nil)
     #expect(session("q", outcome: .done).signal(unread: false) == nil)
+    // An agent question needs the user until it is answered, even once viewed.
+    #expect(session("a", outcome: .question).signal(unread: false) == .needsYou)
+    #expect(!session("a", outcome: .question).isQuiet)
     // A failure whose PR has since merged no longer asks for attention.
     #expect(session("m", outcome: .failed, pr: .merged).signal(unread: false) == nil)
 }

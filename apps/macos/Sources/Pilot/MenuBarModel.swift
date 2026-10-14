@@ -55,9 +55,11 @@ struct MenuBarSnapshot: Equatable {
         switch status {
         case .running:
             let working = active.filter(\.isWorking).count
-            let unread = active.filter(isUnread).count
+            let waiting = active.filter { $0.status == .question }.count
+            let unread = active.filter { $0.status != .question && isUnread($0) }.count
             var activity: [String] = []
             if working > 0 { activity.append("\(working) working") }
+            if waiting > 0 { activity.append("\(waiting) waiting for you") }
             if unread > 0 { activity.append("\(unread) unread") }
             statusText = "pilotd running · \(activity.isEmpty ? "idle" : activity.joined(separator: " · "))"
         case .starting, .unknown: statusText = "pilotd starting…"
