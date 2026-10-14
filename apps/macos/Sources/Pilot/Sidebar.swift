@@ -559,7 +559,8 @@ private struct ProjectHeader: View {
 
 /// One chat: its title, and its project (when the list is not grouped by project) and repository metadata.
 /// The dithered corner carries its state, so the row needs no status column. Time, pin and mission marks show
-/// under the pointer, in space the row always reserves, so hovering never reflows the title.
+/// under the pointer, in space the row always reserves, so hovering never reflows the title. The corner clears
+/// behind them while they show, so they stay legible on a working or needs-you row. The mission mark opens its mission.
 struct SessionRow: View {
     let session: SessionSummary
     /// Off under the mission's own sidebar entry, where the mark would repeat.
@@ -583,28 +584,33 @@ struct SessionRow: View {
                     MissionCoordinatorIndicator()
                 }
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if showsMission, session.missionId != nil {
-                        Image(systemName: MissionSymbol.name)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                            .help("In mission: \(model.client.mission(session.missionId)?.title ?? "")")
-                            .accessibilityLabel("Mission chat")
+                    if showsMission, let missionId = session.missionId {
+                        Button { model.openMission(missionId) } label: {
+                            Image(systemName: MissionSymbol.name)
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Theme.foreground)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open mission: \(model.client.mission(missionId)?.title ?? "")")
+                        .accessibilityLabel("Open mission")
                     }
                     if session.isPinned {
                         Image(systemName: "pin.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Theme.foreground)
                             .help("Pinned chat. Automatic archiving is disabled until unpinned.")
                             .accessibilityLabel("Pinned chat")
                     }
                     TimelineView(.periodic(from: .now, by: 30)) { context in
                         Text(SessionTimeFormatting.relative(session.listActivityAt, now: context.date))
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Theme.mutedForeground)
                             .monospacedDigit()
                             .fixedSize()
                     }
                 }
+                .ditherCornerClearance(hovered)
                 .revealed(hovered)
             }
             HStack(spacing: 4) {
