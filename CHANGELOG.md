@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.27.0](https://github.com/babariviere/pilot/compare/v1.26.0...v1.27.0) (2026-10-14)
+
+
+### Features
+
+* **schedules:** add Wi-Fi join and leave triggers ([3e026af](https://github.com/babariviere/pilot/commit/3e026afbed9be57fe691d0ceeba6f0a5b6431d44))
+
+
+### Bug Fixes
+
+* **ci:** quote closed PR cancel step command ([ce6c89c](https://github.com/babariviere/pilot/commit/ce6c89c1a7871d5aa851311de6e12accd5c0c801))
+* **schedules:** activate helper for Location authorization ([74d99aa](https://github.com/babariviere/pilot/commit/74d99aaede11d0a6d239906389c3ed4dc7a0939e))
+
 ## [1.26.0](https://github.com/babariviere/pilot/compare/v1.25.2...v1.26.0) (2026-10-14)
 
 
