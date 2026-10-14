@@ -152,7 +152,9 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   capability boundary, not a prompt convention. Ask sessions
   cannot open a terminal or publish repository changes. They can create, update and preview their own
   artifacts using the isolated offline renderers, without arbitrary image-file reads. Codemode can only
-  call this restricted tool set; artifacts and completion reporting are session-local capabilities.
+  call this restricted tool set; Ask always uses codemode-only presentation, with other tools available
+  through scripts rather than direct model declarations. Artifacts and completion reporting are
+  session-local capabilities.
   Mode is immutable for a chat; implementation starts a separate Build draft with the conversation
   as context, preserving the Ask chat and its selected source.
 

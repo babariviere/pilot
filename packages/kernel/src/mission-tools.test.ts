@@ -511,7 +511,7 @@ for (const ask of [false, true]) {
 				const declared = (await session.conversation.agent(BACKGROUND_CONTEXT)).tools.find(
 					(tool) => tool.name === MISSION_TOOL,
 				);
-				assert.equal(!!declared, role !== undefined);
+				assert.equal(!!declared, !ask && role !== undefined);
 				assert.equal(adapter.session.getCallableToolNames().includes(MISSION_TOOL), role !== undefined);
 				const schema = native.parameters as {
 					properties: {
@@ -549,7 +549,12 @@ for (const ask of [false, true]) {
 					async (context) => {
 						try {
 							const tool = getCurrentTools(context.messages).find((tool) => tool.name === MISSION_TOOL);
-							assert.equal(!!tool, role !== undefined);
+							assert.equal(!!tool, !ask && role !== undefined);
+							if (ask)
+								assert.deepEqual(
+									getCurrentTools(context.messages).map((tool) => tool.name),
+									["codemode"],
+								);
 							if (tool) assert.deepEqual(tool.parameters, native.parameters);
 							const prompt = getCurrentSystemPrompt(context.messages);
 							assert.equal(prompt.includes("You coordinate this mission"), coordinator);

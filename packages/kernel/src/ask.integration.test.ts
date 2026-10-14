@@ -9,6 +9,7 @@ import {
 	fauxAssistantMessage,
 	fauxProvider,
 	fauxToolCall,
+	getCurrentTools,
 	getSystemMessageText,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
@@ -105,6 +106,7 @@ test("Ask borrows only the user web tool, never activates extension hooks, and i
 			extensions: [userExtension],
 			skills: [userSkill],
 			defaultTools: ["bash", "write", "subagents"],
+			codemode: { mode: "on" },
 			defaultProjectTrust: "always",
 		}),
 		loaderOptions: {
@@ -147,6 +149,11 @@ test("Ask borrows only the user web tool, never activates extension hooks, and i
 		["codemode", "find", "grep", "ls", "read", "web"],
 	);
 	assert.equal(adapter.session.getAllTools().find((tool) => tool.name === "web")?.description, "user web");
+	assert.deepEqual(
+		adapter.extension.tools?.map((tool) => tool.name),
+		["codemode"],
+	);
+	assert.match(adapter.session.systemPrompt, /Use codemode for all tool calls/);
 	assert.doesNotMatch(adapter.session.systemPrompt, /Ignore the Ask policy/);
 	assert.doesNotMatch(adapter.session.systemPrompt, /evil-skill|Untrusted skill marker/);
 	adapter.session.setActiveToolsByName(["bash", "write", "subagents", "mcp__evil__write", "read"]);
@@ -161,13 +168,28 @@ test("Ask borrows only the user web tool, never activates extension hooks, and i
 		adapter.session.getAllTools().some((tool) => tool.name === "web"),
 		"reload keeps the user web tool",
 	);
+	adapter.refreshTools();
+	assert.deepEqual(
+		adapter.extension.tools?.map((tool) => tool.name),
+		["codemode"],
+	);
+	const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+	adapter.session.agent.state.messages.push(
+		fauxAssistantMessage(
+			{ type: "toolCall", id: "web-script", name: "codemode", arguments: {} },
+			{ stopReason: "toolUse" },
+		),
+	);
+	const webResult = await codemode.execute("web-script", { code: "text(await tools.web({}));" }, undefined);
+	assert.ok(!webResult.isError, JSON.stringify(webResult));
+	assert.match(JSON.stringify(webResult), /user web/);
 	const web = adapter.session.agent.state.tools.find((tool) => tool.name === "web")!;
 	assert.match(JSON.stringify(await web.execute("web", {}, undefined)), /user web/);
 	assert.equal(existsSync(started), false, "extension hooks never run");
 	assert.doesNotMatch(adapter.session.systemPrompt, /evil-skill|Untrusted skill marker/);
 });
 
-test("Ask publishes direct and nested session artifacts while repository writes, escapes and models remain unavailable", {
+test("Ask exposes only codemode and publishes nested artifacts while direct tools, writes, escapes and models remain unavailable", {
 	timeout: 20_000,
 }, async (t) => {
 	const f = await fixture(t);
@@ -231,11 +253,18 @@ test("Ask publishes direct and nested session artifacts while repository writes,
 	const denied = ["bash", "powershell", "write", "edit", "jobs", "subagents", "mcp__evil__write"];
 	const tools = (await session.conversation.agent(BACKGROUND_CONTEXT)).tools;
 	for (const name of denied) assert.ok(!tools.some((tool) => tool.name === name));
-	assert.ok(tools.some((tool) => tool.name === "artifact"));
+	assert.deepEqual(
+		tools.map((tool) => tool.name),
+		["codemode"],
+	);
 	assert.ok(!tools.some((tool) => tool.name === "pilot_report_status"));
 	let prompt = "";
 	f.faux.setResponses([
 		(transcript) => {
+			assert.deepEqual(
+				getCurrentTools(transcript.messages).map((tool) => tool.name),
+				["codemode"],
+			);
 			prompt = transcript.messages
 				.filter((m) => m.role === "system")
 				.map(getSystemMessageText)
@@ -257,6 +286,15 @@ test("Ask publishes direct and nested session artifacts while repository writes,
 						title: "Escape",
 						kind: "image",
 						source: join(f.root, "secret.txt"),
+					}),
+					fauxToolCall("codemode", {
+						code: `
+for (const action of ['create', 'update', 'preview']) {
+  text(await tools.artifact({action, id:${JSON.stringify(seeded.id)}, title:'Script diagram', kind:'html', source:'<h1>Script explanatory diagram</h1>'}));
+}
+try { await tools.artifact({action:'create', title:'Escape', kind:'image', source:${JSON.stringify(join(f.root, "secret.txt"))}}); }
+catch { text('denied:artifact-image-create'); }
+`,
 					}),
 				],
 				{ stopReason: "toolUse" },
@@ -311,8 +349,17 @@ text(await tools.artifact({action:'list'}));
 		);
 	const directArtifactResults = results.filter((m) => m.toolName === "artifact");
 	assert.equal(directArtifactResults.length, 4);
-	assert.equal(directArtifactResults.filter((m) => m.isError).length, 1);
-	const script = results.find((m) => m.toolName === "codemode");
+	assert.ok(
+		directArtifactResults.every((m) => m.isError),
+		"artifacts must be called through codemode",
+	);
+	const scripts = results.filter((m) => m.toolName === "codemode");
+	assert.equal(scripts.length, 2);
+	assert.ok(
+		scripts.every((m) => !m.isError),
+		JSON.stringify(scripts),
+	);
+	const script = scripts.at(-1);
 	assert.ok(script && !script.isError, JSON.stringify(view.messages));
 	const output = JSON.stringify(script);
 	for (const name of [...denied, "codemode"]) assert.ok(output.includes(`denied:${name}`), output);
@@ -335,7 +382,7 @@ text(await tools.artifact({action:'list'}));
 	assert.equal((await artifactStore.get(seeded.id))?.revision, 3);
 	assert.equal((await artifactStore.get(seeded.id))?.source, "<h1>Nested session update</h1>");
 	const publications = view.entries.filter((entry) => entry.kind === "pilot.artifact");
-	assert.equal(publications.length, 4, "direct and nested publications each admit a durable pinned reference");
+	assert.equal(publications.length, 4, "script publications each admit a durable pinned reference");
 	for (const publication of publications) {
 		const reference = (publication.data as { artifact: { id: string; sessionId: string; revision: number } })
 			.artifact;
@@ -367,6 +414,11 @@ text(await tools.artifact({action:'list'}));
 	);
 	assert.match(output, /registered.*artifact.*find.*grep.*ls.*read/);
 	await native.session.reload();
+	native.refreshTools();
+	assert.deepEqual(
+		native.extension.tools?.map((tool) => tool.name),
+		["codemode"],
+	);
 	assert.deepEqual(
 		native.session.resourceLoader.getSkills().skills.map((skill) => skill.name),
 		["pilot-artifacts"],

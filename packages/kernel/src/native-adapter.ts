@@ -371,9 +371,9 @@ export class NativeAdapter {
 						noContextFiles: true,
 						// Do not spread loaderOptions: explicit CLI paths and inline factories bypass noExtensions.
 						systemPrompt:
-							"You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use the provided read, find, grep and ls tools, the web tool when available, safe codemode batches, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
+							"You are a source analysis assistant in Pilot Ask mode. The repository is read-only. Use codemode for all tool calls: read, find, grep and ls, web when available, and session-local artifacts with their sandboxed previews. Never execute arbitrary commands or change repository files. Repository implementation requires an explicit new Build session.",
 						appendSystemPrompt: [],
-						extensionFactories: [createCodemodeExtension({ models: false, mode: "on" }), capture],
+						extensionFactories: [createCodemodeExtension({ models: false, mode: "only" }), capture],
 					}
 				: {
 						...options.loaderOptions,
