@@ -97,6 +97,7 @@ export function mainViewSandbox(paths: string[]): string {
 export function forkMainViewWorker(entry: string, view: { scratch: string; protectedPaths: string[] }): ChildProcess {
 	if (process.platform !== "darwin") throw new Error("Read-only source workers require the macOS sandbox");
 	return fork(entry, [], {
+		cwd: view.scratch,
 		execPath: "/usr/bin/sandbox-exec",
 		execArgv: ["-p", mainViewSandbox(view.protectedPaths), process.execPath],
 		env: { ...process.env, TMPDIR: view.scratch, TMP: view.scratch, TEMP: view.scratch, GIT_OPTIONAL_LOCKS: "0" },

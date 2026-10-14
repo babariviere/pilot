@@ -186,9 +186,9 @@ struct SessionInspectorControls: View {
         }
         if session.supportsChanges {
             InspectorToggle(tab: .changes, icon: "plusminus", help: "Changes (⇧⌘D)")
-        }
-        if session.supportsChanges {
             InspectorToggle(tab: .terminal, icon: "terminal", help: "Terminal (⌘J)")
+        }
+        if !session.isAsk {
             if !(session.subagents ?? []).isEmpty {
                 InspectorToggle(tab: .agents, icon: "person.2", help: "Subagents")
                     .overlay(alignment: .topTrailing) {

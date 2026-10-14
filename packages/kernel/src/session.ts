@@ -294,7 +294,13 @@ export class KernelSession {
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage, active), detectGhStack(spec.cwd)]);
 			const pilot = { ...spec.pilot, ghStack, projectMemory: !!spec.projectId && !!hooks.callMemory };
-			const prepareWorkspace = undefined;
+			const refreshWorkspace = hooks.prepareWorkspace;
+			const prepareWorkspace = refreshWorkspace
+				? async () => {
+						const workspace = await refreshWorkspace();
+						if (workspace) pilot.workspace = workspace;
+					}
+				: undefined;
 			const artifacts = new ArtifactStore(dirname(spec.storageDir), {
 				sessionId: spec.sessionId,
 				projectId: spec.projectId,
