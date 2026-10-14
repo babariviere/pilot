@@ -208,6 +208,10 @@ Decided: **Build sessions use the project's workspace policy; Ask sessions are r
   subprocesses, viewers or terminals, sparse checkouts and submodules. Ignored regenerable dependency
   and build directories are discarded, including the ignored, untracked generated checkout at
   `apps/macos/Vendor/libghostty-spm` (not arbitrary vendor directories). jj 0.46+ and Git 2.42+ are required for shared colocation.
+  Shared-workspace cleanup also discards ignored regular files within known build-output directories
+  containing tracked placeholders or sources; the pinned snapshot preserves those tracked files. Unignored
+  omitted files, untracked symlinks and nested repositories still block cleanup in these mixed trees.
+  The exact generated vendor exception remains whole-directory-only, not mixed vendor inputs.
   Resume restores the pinned jj snapshot, not a moving bookmark or the current remote head. Cleanup
   failures are protocol metadata and appear in the existing workspace badge tooltip, without another screen.
   Automatic cleanup errors retry per session after 5, 10, 20 and 40 minutes, then pause after five failures
