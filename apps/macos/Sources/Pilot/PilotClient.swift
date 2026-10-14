@@ -548,6 +548,13 @@ final class PilotClient: ObservableObject {
         try await missionRequest(["tracked-items", id, "prefill"])
     }
 
+    /// The project's latest Slack triage corrections, newest first (at most 20). The classifier learns from them.
+    func slackCorrections(projectId: String) async throws -> [SlackCorrection] {
+        if let fixture = fixtureTracking { return fixture.corrections }
+        return try await missionRequest(["tracking", "slack", "corrections"],
+                                        query: [URLQueryItem(name: "projectId", value: projectId)])
+    }
+
     private func upsert(_ project: Project) {
         projects.removeAll { $0.id == project.id }
         projects.append(project)

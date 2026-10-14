@@ -2,8 +2,8 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-// Project settings → Tracking: attach a Linear team and pick Slack channels. Lookups are read-only MCP calls
-// made by pilotd; nothing is tracked until the project is saved.
+// Project settings → Tracking: attach a Linear team, pick Slack channels and define the labels Slack messages
+// are sorted into. Lookups are read-only MCP calls made by pilotd; nothing is tracked until the project is saved.
 
 /// A configured Slack channel: its ID and, when picked from Slack, its name.
 struct TrackedChannelRef: Hashable, Identifiable {
@@ -53,7 +53,10 @@ struct TrackingSettingsSection: View {
         } header: {
             Text("Tracking")
         } footer: {
-            SettingsFooter("Pilot reads your Linear issues and Slack bug reports through your pi MCP servers. It never posts, comments or changes tickets, and never starts work on its own.")
+            SettingsFooter("Pilot reads your Linear issues and Slack messages through your pi MCP servers. It never posts, comments or changes tickets, and never starts work on its own.")
+        }
+        if !editor.slackChannels.isEmpty || !editor.slackLabels.isEmpty {
+            SlackLabelsSection(project: project, editor: editor)
         }
     }
 }
@@ -175,7 +178,7 @@ struct SlackChannelsEditor: View {
             EmptyView()
         } label: {
             Text("Slack channels")
-            Text(editor.slackChannels.isEmpty ? "Add the channels where bugs are reported. New messages are classified with a small model."
+            Text(editor.slackChannels.isEmpty ? "Add the channels to follow. New messages are sorted into bugs, questions and requests by a small model."
                 : "Each channel is read from the moment you add it, with a short look back.")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -200,7 +203,7 @@ struct SlackChannelsEditor: View {
                              || source?.status == .signInRequired,
                          connected: mine?.status == .ok || results?.status == .ok || source?.status == .ok
                              || source?.status == .syncing,
-                         purpose: "Sign in to find channels and read bug reports.")
+                         purpose: "Sign in to find channels and read their messages.")
             .onChange(of: signIns[.slack]?.state) { _, state in
                 guard state == .done else { return }
                 Task {
@@ -345,6 +348,141 @@ private struct TrackingLookupProblem<Item: Codable & Equatable & Sendable>: View
             Button("Retry", action: retry).controlSize(.small)
         }
         .font(.caption)
+    }
+}
+
+/// A label row in the settings editor. The id keeps rows stable while their name is edited.
+struct EditableSlackLabel: Identifiable, Equatable {
+    let id = UUID()
+    var name: String
+    var description: String
+    var hideFromInbox: Bool
+
+    init(_ label: SlackProjectLabel) {
+        name = label.name
+        description = label.description
+        hideFromInbox = label.hideFromInbox == true
+    }
+
+    /// The label as saved: one trimmed line each, within pilotd's limits.
+    var label: SlackProjectLabel {
+        SlackProjectLabel(name: Self.line(name, limit: 80), description: Self.line(description, limit: 240),
+                          hideFromInbox: hideFromInbox ? true : nil)
+    }
+
+    private static func line(_ value: String, limit: Int) -> String {
+        let flat = value.components(separatedBy: .controlCharacters).joined(separator: " ")
+        return String(flat.trimmingCharacters(in: .whitespaces).prefix(limit))
+    }
+}
+
+/// Labels Slack messages are sorted into, defined per project, then the latest corrections. The classifier
+/// reads each label's name and description and picks at most one; "Hide from Inbox" keeps that label's
+/// messages out of the Inbox (they stay in Slack triage behind Show hidden).
+struct SlackLabelsSection: View {
+    let project: Project
+    @ObservedObject var editor: ProjectEditor
+
+    var body: some View {
+        let names = editor.slackLabels.map(\.label.name).filter { !$0.isEmpty }
+        let duplicates = Set(names.filter { name in names.filter { $0 == name }.count > 1 })
+        Section {
+            if editor.slackLabels.isEmpty {
+                Text("No labels yet. Add one for each kind of message you sort, such as an owning team.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach($editor.slackLabels) { $label in
+                SlackLabelRow(label: $label, duplicate: duplicates.contains(label.label.name)) {
+                    editor.removeLabel(label.id)
+                }
+            }
+            HStack {
+                Button("Add Label") { editor.addLabel() }
+                    .disabled(editor.slackLabels.count >= 50)
+                Spacer()
+            }
+            SlackCorrectionsList(projectId: project.id)
+        } header: {
+            Text("Slack labels")
+        } footer: {
+            SettingsFooter("The classifier gives each message at most one label, using its description and your corrections in Slack triage.")
+        }
+    }
+}
+
+private struct SlackLabelRow: View {
+    @Binding var label: EditableSlackLabel
+    let duplicate: Bool
+    let remove: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                TextField("Name", text: $label.name, prompt: Text("Label name"))
+                    .textFieldStyle(.plain).labelsHidden()
+                    .fontWeight(.medium)
+                TextField("Description", text: $label.description,
+                          prompt: Text("Which messages get this label, in one line"))
+                    .textFieldStyle(.plain).labelsHidden()
+                    .font(.caption).foregroundStyle(.secondary)
+                if duplicate {
+                    Text("Another label has this name.").font(.caption).foregroundStyle(Theme.blocked)
+                }
+            }
+            Spacer(minLength: 8)
+            Toggle("Hide from Inbox", isOn: $label.hideFromInbox)
+                .toggleStyle(.checkbox).font(.caption).fixedSize()
+                .help("Messages with this label stay out of the Inbox. Slack triage lists them behind Show hidden.")
+            Button(action: remove) { Image(systemName: "minus.circle") }
+                .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                .help("Remove this label")
+                .accessibilityLabel(label.name.isEmpty ? "Remove label" : "Remove \(label.name)")
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The latest triage corrections, newest first. Read-only; they change as the user reclassifies messages.
+private struct SlackCorrectionsList: View {
+    let projectId: String
+    @ObservedObject private var client = AppModel.shared.client
+    @State private var corrections: [SlackCorrection]?
+    @State private var failed = false
+    private static let shown = 5
+
+    var body: some View {
+        let items = corrections ?? []
+        LabeledContent {
+            EmptyView()
+        } label: {
+            Text("Recent corrections")
+            Text(failed ? "Couldn't load your corrections."
+                : items.isEmpty ? "Changes you make in Slack triage appear here. The latest 20 teach the classifier."
+                : "The latest 20 teach the classifier.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .task(id: projectId) { await load() }
+        ForEach(Array(items.prefix(Self.shown).enumerated()), id: \.offset) { _, correction in
+            HStack(spacing: 8) {
+                Text(correction.summary).lineLimit(1).truncationMode(.tail)
+                Spacer(minLength: 8)
+                Text(SlackTriageText.correction(correction.values)).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize()
+            }
+            .accessibilityElement(children: .combine)
+        }
+        if items.count > Self.shown {
+            Text("And \(items.count - Self.shown) more").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func load() async {
+        do {
+            corrections = try await client.slackCorrections(projectId: projectId)
+            failed = false
+        } catch {
+            failed = true
+        }
     }
 }
 

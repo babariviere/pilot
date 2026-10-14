@@ -179,6 +179,11 @@ private struct ProjectToolbar: ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
             Menu {
                 Button(action: showTracked) { Label("Tracked Items…", systemImage: "tray") }
+                if !(project.tracking?.slackChannels ?? []).isEmpty {
+                    Button { model.openSlackTriage(project.id) } label: {
+                        Label("Slack Triage", systemImage: "bubble.left.and.bubble.right")
+                    }
+                }
                 Button(action: openSettings) { Label("Project Settings…", systemImage: "gearshape") }
                 Button { NSWorkspace.shared.open(URL(filePath: project.path)) } label: {
                     Label("Open in Finder", systemImage: "folder")
@@ -590,8 +595,9 @@ private struct ProjectCycleSection: View {
     }
 }
 
-/// Every other tracking source (Slack bug reports today), one group each with its own sync, sign-in or error
-/// status, at most five rows and "Show all N". One quiet line until a source is configured.
+/// Every other tracking source (Slack messages today), one group each with its own sync, sign-in or error
+/// status, at most five rows and "Show all N". Slack opens its triage view. One quiet line until a source is
+/// configured.
 private struct ProjectTrackedSection: View {
     let project: Project
     /// Dashboard groups other than Linear, which has the Current cycle section.
@@ -607,7 +613,7 @@ private struct ProjectTrackedSection: View {
         ProjectPageSection(header: PageSectionHeader(title: "Tracked", linkTitle: "Tracking settings",
                                                       link: openSettings)) {
             if known.isEmpty {
-                ProjectQuietLine(text: "Add Slack channels in Tracking settings to follow bug reports here.")
+                ProjectQuietLine(text: "Add Slack channels in Tracking settings to triage their messages here.")
             }
             ForEach(known) { group in
                 if let kind = TrackedKind(rawValue: group.source) { sourceGroup(group, kind: kind) }
@@ -618,10 +624,19 @@ private struct ProjectTrackedSection: View {
     private func sourceGroup(_ group: DashboardTrackedSource, kind: TrackedKind) -> some View {
         let source = projectTrackingSource(group, projectId: project.id, kind: kind, client: model.client)
         let items = group.items.map { TrackedItem(dashboard: $0, projectId: project.id, kind: kind) }
+        let openAll = { kind == .slack ? model.openSlackTriage(project.id) : showAll(kind) }
         return VStack(alignment: .leading, spacing: 4) {
-            SectionLabel(title: TrackedItemText.sourceTitle(kind, teamName: project.tracking?.linearTeamName),
-                         count: group.total)
-                .padding(.horizontal, 8).padding(.top, 2)
+            HStack(spacing: 6) {
+                SectionLabel(title: TrackedItemText.sourceTitle(kind, teamName: project.tracking?.linearTeamName),
+                             count: group.total)
+                Spacer(minLength: 8)
+                if kind == .slack {
+                    Button("Open triage", action: openAll)
+                        .buttonStyle(.plain).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        .help("Sort, filter and reclassify every message")
+                }
+            }
+            .padding(.horizontal, 8).padding(.top, 2)
             TrackedSourceStatusLine(source: source, actions: actions, now: now)
             if items.isEmpty, source.status == .ok || source.status == .syncing {
                 ProjectQuietLine(text: TrackedItemText.emptySource(source, project: project))
@@ -631,7 +646,7 @@ private struct ProjectTrackedSection: View {
                 TrackedItemRow(item: item, actions: actions, now: now)
             }
             ProjectMoreLine(hidden: max(0, group.total - items.count), total: group.total,
-                            noun: kind == .slack ? "bug reports" : "items") { showAll(kind) }
+                            noun: kind == .slack ? "messages" : "items", action: openAll)
         }
     }
 }

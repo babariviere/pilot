@@ -23,7 +23,7 @@ private func linear(_ id: String = "i1", statusType: String = "started", priorit
 
 private let slack = TrackedItem(
     id: "s1", projectId: "p", kind: .slack, externalId: "C1/1.000001", title: "Checkout button does nothing on Safari",
-    url: "https://slack.com/archives/C1/p1000001", status: "bug_report",
+    url: "https://slack.com/archives/C1/p1000001", status: "open",
     metadata: ["channel": .string("C1"), "channelName": .string("bugs"), "severity": .string("high"),
                "summary": .string("Checkout button does nothing on Safari")],
     createdAt: ms - 600_000, updatedAt: ms - 600_000)
@@ -163,7 +163,7 @@ private let slack = TrackedItem(
         SourceSignIn(kind: .slack, state: state, again: again, startedAt: ms, expiresAt: ms + 300_000,
                      finishedAt: state == .waiting ? nil : ms + 1_000, error: error)
     }
-    let purpose = "Sign in to find channels and read bug reports."
+    let purpose = "Sign in to find channels and read their messages."
     func account(_ value: SourceSignIn?, needs: Bool = false, connected: Bool = false) -> TrackingAccountText.State {
         TrackingAccountText.state(value, needsSignIn: needs, connected: connected, purpose: purpose)
     }
@@ -213,7 +213,7 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.linearEmpty(nil, status: .idle, doneCount: 0) == nil)
     #expect(TrackedItemText.linearEmpty(nil, status: .signInRequired, doneCount: 0) == nil)
     #expect(TrackedItemText.sourceTitle(.linear, teamName: "Platform") == "Linear · Platform")
-    #expect(TrackedItemText.sourceTitle(.slack, teamName: "Platform") == "Slack bug reports")
+    #expect(TrackedItemText.sourceTitle(.slack, teamName: "Platform") == "Slack messages")
     #expect(TrackedSheetScope.all.kinds == [.linear, .slack])
     #expect(TrackedSheetScope.linear.kinds == [.linear])
     #expect(TrackedSheetScope.only(.slack).id == "slack")

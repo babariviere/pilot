@@ -82,7 +82,7 @@ import Testing
 @Test func trackingDecodesLinksChannelsAndLookups() throws {
     let item = try JSONDecoder().decode(TrackedItem.self, from: Data(#"""
     {"id":"i","projectId":"p","kind":"slack","externalId":"C1/1.000001","title":"Bug","url":"https://example.com",
-     "status":"bug_report","metadata":{},"dismissed":false,"sessionId":"s2","sessionIds":["s1","s2"],
+     "status":"open","metadata":{},"dismissed":false,"sessionId":"s2","sessionIds":["s1","s2"],
      "createdAt":1,"updatedAt":2}
     """#.utf8))
     #expect(item.sessionIds == ["s1", "s2"])

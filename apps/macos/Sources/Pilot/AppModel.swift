@@ -52,8 +52,13 @@ final class AppModel: ObservableObject {
     }
     /// The project page shown in the detail area when no chat or mission is selected.
     @Published var selectedProjectId: String? {
-        didSet { if selectedProjectId != nil, selectedMissionId != nil { selectedMissionId = nil } }
+        didSet {
+            if selectedProjectId != nil, selectedMissionId != nil { selectedMissionId = nil }
+            if selectedProjectId != slackTriageProjectId, slackTriageProjectId != nil { slackTriageProjectId = nil }
+        }
     }
+    /// The project whose Slack triage view replaces its page. Cleared when another page is selected.
+    @Published private(set) var slackTriageProjectId: String?
     /// What the sidebar lists: nil for every project (the default), or one focused project's id.
     /// Change it with `focus(on:)`, which remembers the selection of the scope being left.
     @Published private(set) var sidebarScope: String?
@@ -476,6 +481,13 @@ final class AppModel: ObservableObject {
         showingArchive = false
         selectedSessionId = nil
         selectedProjectId = id
+        slackTriageProjectId = nil
+    }
+
+    /// Shows a project's Slack triage view in place of its page.
+    func openSlackTriage(_ projectId: String) {
+        openProject(projectId)
+        slackTriageProjectId = projectId
     }
 
     // MARK: Sidebar scope
