@@ -260,9 +260,10 @@ struct SessionSidebar: View {
     private func projectSessions(_ sessions: [SessionSummary], listId: String, searching: Bool,
                                  indented: Bool = false) -> some View {
         let showingAll = searching || model.expandedSessionLists.contains(listId)
-        let list = showingAll ? (shown: sessions, hidden: 0) : SidebarSessionList.collapsed(sessions) { session in
+        let collapsed = SidebarSessionList.collapsed(sessions) { session in
             session.id == model.selectedSessionId || session.isWorking || model.isUnread(session)
         }
+        let list = showingAll ? (shown: sessions, hidden: 0) : collapsed
         ForEach(list.shown) { session in
             SessionRow(session: session).padding(.leading, indented ? 20 : 0).tag(session.id)
         }
@@ -277,8 +278,7 @@ struct SessionSidebar: View {
             }
             .padding(.leading, indented ? 20 : 0)
             .selectionDisabled(true)
-        } else if !searching, model.expandedSessionLists.contains(listId),
-                  sessions.count > SidebarSessionList.defaultLimit + 1 {
+        } else if !searching, showingAll, collapsed.hidden > 0 {
             SidebarDisclosureRow(title: "Show less", expanded: true) {
                 model.expandedSessionLists.remove(listId)
             }
