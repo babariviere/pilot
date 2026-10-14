@@ -24,7 +24,7 @@ export interface SessionCompletion {
 	outcomeReason?: string;
 }
 
-/** A GitHub pull request opened from one of the session's branches, read by the daemon. */
+/** A GitHub pull request discovered from a session branch or explicitly bound to the session. */
 export interface SessionPullRequest {
 	number: number;
 	url: string;
@@ -40,6 +40,18 @@ export interface SessionPullRequest {
 	stack?: PullRequestStack;
 	/** Merge readiness from the last successful health lookup. Absent until checked, or for terminal PRs. */
 	readiness?: PullRequestReadiness;
+}
+
+/** POST /api/sessions/:id/pull-requests. Returns SessionSummary. */
+export interface BindPullRequestRequest {
+	url: string;
+	/** Optional mission task ID or number to disambiguate the owning task. */
+	taskId?: string;
+}
+
+/** DELETE /api/sessions/:id/pull-requests. Detaches the PR from the chat; returns SessionSummary. */
+export interface UnbindPullRequestRequest {
+	url: string;
 }
 
 export interface PullRequestReadiness {
@@ -172,10 +184,10 @@ export interface SessionSummary {
 	outcome?: SessionOutcome;
 	outcomeAt?: number;
 	outcomeReason?: string;
-	/** PR for the current branch. */
+	/** Primary discovered or explicitly bound PR. */
 	pullRequest?: SessionPullRequest;
 	/**
-	 * Every PR the session opened, the current branch's first, then earlier branches newest first.
+	 * Every discovered or explicitly bound PR associated with the session, primary first.
 	 * Omitted when there are none, or by older daemons (use pullRequest).
 	 */
 	pullRequests?: SessionPullRequest[];

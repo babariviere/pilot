@@ -499,9 +499,20 @@ test("direct project origin heads are available only with Ask branches mode, and
 		assert.equal(response.status, 409);
 		assert.match((await response.json()).error, /read-only/);
 	}
-	for (const route of ["publish", "pull-request", "pull-requests", "pr"]) {
+	for (const route of ["publish", "pull-request", "pr"]) {
 		assert.equal((await fetch(`${base}/api/sessions/${ask.id}/${route}`, { method: "POST" })).status, 404);
 	}
+	// PR bindings edit daemon metadata, not the read-only workspace. Empty requests remain invalid.
+	assert.equal(
+		(
+			await fetch(`${base}/api/sessions/${ask.id}/pull-requests`, {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: "{}",
+			})
+		).status,
+		400,
+	);
 	// A terminal socket is refused for good before any input can reach a shell.
 	const terminal = new WebSocket(`${base.replace("http:", "ws:")}/api/sessions/${ask.id}/terminal/ws?cols=80&rows=24`);
 	t.after(() => terminal.terminate());

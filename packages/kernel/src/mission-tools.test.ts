@@ -81,7 +81,7 @@ test("the mission tool declares and forwards coordinator actions", async () => {
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message: unknown; model: unknown; thinking: unknown };
 	};
-	assert.deepEqual(schema.properties.action.enum.slice(-3), ["start", "send", "status"]);
+	assert.deepEqual(schema.properties.action.enum.slice(-5), ["start", "send", "status", "bindPr", "unbindPr"]);
 	assert.ok(schema.properties.message);
 	assert.equal(tool.annotations?.destructiveHint, true);
 	assert.match(tool.description, /batch is atomic/);
@@ -120,7 +120,7 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	const schema = tool.parameters as {
 		properties: { action: { enum: string[] }; message?: unknown; model?: unknown; thinking?: unknown };
 	};
-	for (const action of ["delete", "group", "start", "send", "status"]) {
+	for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"]) {
 		assert.ok(!schema.properties.action.enum.includes(action));
 		assert.ok(!tool.description.includes(`- ${action} (`));
 	}
@@ -134,8 +134,46 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.equal((schema.properties as Record<string, unknown>).artifacts, undefined);
 	assert.equal((schema.properties as Record<string, unknown>).links, undefined);
 	assert.doesNotMatch(JSON.stringify(tool.parameters), /claim, start|comment or send|Opening instructions/);
+	assert.doesNotMatch(tool.description, /owns the PR head|One owner per PR|transfers ownership|stop its tracking/);
+	assert.doesNotMatch(JSON.stringify(tool.parameters), /bindPr|unbindPr/);
 	assert.match(tool.description, /- claim:/);
 	assert.ok(schema.properties.action.enum.includes("get"));
+});
+
+test("coordinator PR binding actions forward targets and optional owning tasks unchanged", async () => {
+	const calls: unknown[] = [];
+	const tool = createMissionTool(async (action, args) => {
+		calls.push([action, args]);
+		return { id: "member", state: "idle" };
+	}, true);
+	const schema = tool.parameters as { properties: Record<string, { maxLength?: number; description?: string }> };
+	assert.equal(schema.properties.url.maxLength, 2048);
+	assert.equal(schema.properties.targetSessionId.maxLength, 128);
+	assert.equal(schema.properties.taskId.maxLength, 128);
+	assert.match(schema.properties.taskId.description!, /bindPr/);
+	assert.match(tool.description, /resource link does not bind a PR to a chat/);
+	assert.match(tool.description, /The bound chat owns the PR head for follow-ups and pushes/);
+	assert.match(tool.description, /One owner per PR: binding transfers ownership from the previous chat/);
+	assert.match(tool.description, /moves unfinished task links to the selected task/);
+	assert.match(tool.description, /without changing its branches/);
+	assert.match(tool.description, /Use resource links for dependencies or references, not ownership/);
+	assert.match(tool.description, /stop its tracking, follow-ups and pushes for that chat/);
+	assert.match(tool.description, /Repository branches and mission-level references stay unchanged/);
+	const url = "https://github.com/example/repo/pull/7";
+	for (const params of [
+		{ action: "bindPr", targetSessionId: "member", url },
+		{ action: "bindPr", targetSessionId: "member", url, taskId: "#3" },
+		{ action: "unbindPr", targetSessionId: "member", url },
+	]) {
+		const result = await tool.execute("call", params as never, undefined, undefined, {} as never);
+		assert.deepEqual(result.details, { id: "member", state: "idle" });
+	}
+	assert.deepEqual(calls, [
+		["bindPr", { targetSessionId: "member", url }],
+		["bindPr", { targetSessionId: "member", url, taskId: "#3" }],
+		["unbindPr", { targetSessionId: "member", url }],
+	]);
+	assert.doesNotMatch(JSON.stringify(createMissionTool(async () => null).parameters), /bindPr|unbindPr/);
 });
 
 test("coordinator declares bounded start references and forwards them unchanged", async () => {
@@ -354,7 +392,7 @@ for (const ask of [false, true]) {
 						thinking?: unknown;
 					};
 				};
-				for (const action of ["delete", "group", "start", "send", "status"]) {
+				for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"]) {
 					assert.equal(schema.properties.action.enum.includes(action), coordinator);
 					assert.equal(native.description.includes(`- ${action} (`), coordinator);
 				}
@@ -373,7 +411,7 @@ for (const ask of [false, true]) {
 					.join("\n");
 				if (role !== undefined) {
 					assert.ok(!result.isError, description);
-					for (const action of ["delete", "group", "start", "send", "status"])
+					for (const action of ["delete", "group", "start", "send", "status", "bindPr", "unbindPr"])
 						assert.equal(description.includes(`"${action}"`), coordinator, description);
 				} else assert.doesNotMatch(description, /- start \(coordinator only\)/);
 				let requestChecked = false;
@@ -387,7 +425,9 @@ for (const ask of [false, true]) {
 							const prompt = getCurrentSystemPrompt(context.messages);
 							assert.equal(prompt.includes("You coordinate this mission"), coordinator);
 							assert.equal(
-								prompt.includes("coordinator actions (delete, group, task order, start, send, status)"),
+								prompt.includes(
+									"coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr)",
+								),
 								coordinator,
 							);
 							requestChecked = true;

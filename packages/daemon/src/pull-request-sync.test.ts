@@ -497,6 +497,154 @@ test("a known open PR is looked up by number instead of its head", async () => {
 	}
 });
 
+test("bound numbers share discovery and health batches with sibling heads and mission links", async () => {
+	const github = new FakeGitHub();
+	const target = session("a", "repo", {
+		boundPullRequests: ["https://github.com/octo/repo/pull/42"],
+	});
+	const sibling = session("b", "repo");
+	github.heads.set("repo/feat/a", [row("repo", 1, "feat/a")]);
+	github.heads.set("repo/feat/b", [row("repo", 2, "feat/b")]);
+	github.numbers.set("repo#42", row("repo", 42, "external", { isCrossRepository: true }));
+	const link: LinkedPullRequest = { url: target.boundPullRequests![0]!, cwd: "/project" };
+	const sync = new PullRequestSync(
+		host([target, sibling], {
+			linked: {
+				targets: () => [link],
+				apply: (pr) => {
+					link.pullRequest = pr;
+				},
+			},
+		}),
+		{ runner: github.runner },
+	);
+	try {
+		sync.start();
+		await sync.settled();
+		assert.deepEqual(
+			github.calls.map((call) => call.query),
+			["query PilotPullRequests", "query PilotPullRequestHealth"],
+		);
+		assert.deepEqual(
+			github.calls[0]!.variables.filter((value) => /^[hn]\d+=/.test(value)),
+			["h0=feat/a", "h1=feat/b", "n0=42"],
+		);
+		assert.equal(target.previousPullRequests?.[0]?.number, 42);
+		assert.equal(target.previousPullRequests?.[0]?.readiness?.state, "ready");
+		assert.equal(link.pullRequest?.readiness?.state, "ready");
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("an unresolved binding keeps terminal sessions eligible and pending bound checks poll faster", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_800_000_000_000 });
+	const github = new FakeGitHub();
+	const target = session("a", "repo", {
+		workspace: { upstream: "git@github.com:octo/repo.git" },
+		pullRequest: {
+			number: 1,
+			url: "https://github.com/octo/repo/pull/1",
+			title: "Done",
+			state: "merged",
+			checkedAt: 1,
+		},
+		boundPullRequests: ["https://github.com/octo/repo/pull/42"],
+	});
+	github.numbers.set("repo#42", row("repo", 42, "external", { checks: "PENDING" }));
+	const sync = new PullRequestSync(host([target]), { runner: github.runner, intervalMs: 1_000 });
+	const discoveries = () => github.calls.filter((call) => call.query === "query PilotPullRequests");
+	try {
+		sync.start();
+		await sync.settled();
+		assert.equal(discoveries().length, 1);
+		assert.equal(target.previousPullRequests?.[0]?.number, 42);
+		t.mock.timers.tick(500);
+		await sync.settled();
+		assert.equal(discoveries().length, 2);
+		github.numbers.set("repo#42", row("repo", 42, "external", { state: "MERGED" }));
+		t.mock.timers.tick(500);
+		await sync.settled();
+		assert.equal(discoveries().length, 3);
+		t.mock.timers.tick(2_000);
+		await sync.settled();
+		assert.equal(discoveries().length, 3, "all bound and cached PRs are terminal");
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("direct-project bound PRs batch with workspace heads, poll health and support explicit refresh", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_800_000_000_000 });
+	const github = new FakeGitHub();
+	const target = session("direct", "repo", {
+		workspace: undefined,
+		boundPullRequests: ["https://github.com/octo/repo/pull/42"],
+	});
+	const sibling = session("workspace", "repo");
+	const recovery = session("recovery", "repo", {
+		workspace: undefined,
+		workspaceRecovery: {},
+		boundPullRequests: target.boundPullRequests,
+	});
+	github.numbers.set("repo#42", row("repo", 42, "external", { checks: "PENDING", isCrossRepository: true }));
+	github.heads.set("repo/feat/workspace", [row("repo", 1, "feat/workspace")]);
+	const runner: Runner = async (file, args, ...rest) => {
+		if (file === "git" && rest[0] === target.cwd) {
+			assert.deepEqual(args, ["remote", "get-url", "origin"]);
+			return "git@github.com:octo/repo.git";
+		}
+		assert.notEqual(rest[0], recovery.cwd);
+		return github.runner(file, args, ...rest);
+	};
+	const sync = new PullRequestSync(host([target, sibling, recovery]), { runner, intervalMs: 1_000 });
+	const discoveries = () => github.calls.filter((call) => call.query === "query PilotPullRequests");
+	try {
+		sync.start();
+		await sync.settled();
+		assert.equal(discoveries().length, 1);
+		assert.deepEqual(
+			discoveries()[0]!.variables.filter((value) => /^[hn]\d+=/.test(value)),
+			["h0=feat/workspace", "n0=42"],
+		);
+		assert.equal(target.previousPullRequests?.[0]?.number, 42);
+		assert.equal(target.previousPullRequests?.[0]?.readiness?.state, "ready");
+		t.mock.timers.tick(500);
+		await sync.settled();
+		assert.equal(discoveries().length, 2, "pending direct binding polls at half cadence");
+		await sync.refresh(target);
+		assert.equal(discoveries().length, 3, "explicit refresh accepts a direct-project chat");
+		await sync.refresh(recovery);
+		assert.equal(discoveries().length, 3, "recovery remains excluded");
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("binding and exclusion changes invalidate cached inspections", async () => {
+	const cwd = await mkdtemp(join(tmpdir(), "pilot-sync-bindings-"));
+	await mkdir(join(cwd, ".git"));
+	await writeFile(join(cwd, ".git", "HEAD"), "ref: refs/heads/main\n");
+	const github = new FakeGitHub();
+	const target = session("a", "repo", { cwd, workspace: { upstream: "git@github.com:octo/repo.git" } });
+	github.numbers.set("repo#42", row("repo", 42, "external"));
+	const sync = new PullRequestSync(host([target]), { runner: github.runner });
+	try {
+		await sync.refresh(target);
+		assert.equal(github.calls.length, 0);
+		target.boundPullRequests = ["https://github.com/octo/repo/pull/42"];
+		await sync.refresh(target);
+		assert.equal(target.previousPullRequests?.[0]?.number, 42);
+		const count = github.calls.length;
+		target.unboundPullRequests = [...target.boundPullRequests];
+		await sync.refresh(target);
+		assert.ok(github.calls.slice(count).every((call) => !call.variables.includes("n0=42")));
+	} finally {
+		await sync.stop();
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
 test("failures back off exponentially and recover", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 1_800_000_000_000 });
 	t.mock.method(console, "warn", () => {});

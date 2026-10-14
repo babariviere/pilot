@@ -4,6 +4,21 @@ import Testing
 
 private let oldSessionJSON = #"{"id":"s","title":"Task","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"idle"}"#
 
+@Test func pullRequestBindingRequestsMirrorTheWireBodies() throws {
+    let url = "https://github.com/example/repo/pull/7"
+    for taskId in [nil, "#3"] as [String?] {
+        let request = BindPullRequestRequest(url: url, taskId: taskId)
+        let data = try JSONEncoder().encode(request)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: String])
+        #expect(object == (taskId.map { ["url": url, "taskId": $0] } ?? ["url": url]))
+        #expect(try JSONDecoder().decode(BindPullRequestRequest.self, from: data) == request)
+    }
+    let request = UnbindPullRequestRequest(url: url)
+    let data = try JSONEncoder().encode(request)
+    #expect(try JSONSerialization.jsonObject(with: data) as? [String: String] == ["url": url])
+    #expect(try JSONDecoder().decode(UnbindPullRequestRequest.self, from: data) == request)
+}
+
 private func pr(_ state: PullRequestState = .open, url: String = "https://github.com/example/repo/pull/7") -> SessionPullRequest {
     SessionPullRequest(number: 7, url: url, title: "Add PR indicators", state: state, checkedAt: 1_781_524_800_000)
 }

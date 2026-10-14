@@ -21,6 +21,90 @@ const url = "https://github.com/octo/repo/pull/10";
 const branch = "fix-pr-follow-ups";
 const cooldown = 1_000;
 
+async function bindingProject(f: Awaited<ReturnType<typeof setup>>) {
+	const project = await f.manager["projects"].create({ path: f.home });
+	for (const meta of f.manager["metas"].values()) meta.projectId = project.id;
+	return project;
+}
+
+test("bound arbitrary heads receive follow-ups; unbinding suppresses rediscovery and rebinding restores ownership", async () => {
+	await fixture(async (f) => {
+		await bindingProject(f);
+		f.controls.checks = false;
+		f.controls.reviews = false;
+		f.controls.conflicts = false;
+		const other: SessionPullRequest = {
+			number: 12,
+			url: "https://github.com/octo/repo/pull/12",
+			title: "Hand-built",
+			state: "open",
+			checkedAt: 1,
+			branch: "feat/elsewhere",
+		};
+		f.controls.others = [other];
+		f.controls.healthOutputs.set(
+			12,
+			JSON.stringify({
+				state: "OPEN",
+				headRefName: other.branch,
+				statusCheckRollup: [{ __typename: "CheckRun", name: "tests", status: "COMPLETED", conclusion: "FAILURE" }],
+				mergeable: "MERGEABLE",
+			}),
+		);
+		await f.manager.bindPullRequest(f.id, other.url);
+		await f.refresh();
+		await Promise.allSettled(f.manager["starting"].values());
+		assert.ok(f.manager.get(f.id)?.pullRequests?.some((pr) => pr.url === other.url));
+		assert.equal(f.inputs.length, 1);
+		assert.match(f.inputs[0]!.content, /feat\/elsewhere/);
+		assert.ok(f.meta.boundPullRequests?.includes(other.url));
+		await f.manager.unbindPullRequest(f.id, other.url);
+		await f.manager.unbindPullRequest(f.id, other.url);
+		f.meta.prFollowUp = undefined;
+		await f.refresh();
+		await f.apply({ others: [other] }); // An already-running lookup is also revoked.
+		assert.equal(f.inputs.length, 1);
+		assert.ok(!f.manager.get(f.id)?.pullRequests?.some((pr) => pr.url === other.url));
+		assert.deepEqual((await f.saved()).unboundPullRequests, [other.url]);
+		await f.manager.bindPullRequest(f.id, other.url);
+		await f.refresh();
+		await Promise.allSettled(f.manager["starting"].values());
+		assert.equal(f.inputs.length, 2);
+		assert.deepEqual(f.meta.unboundPullRequests, []);
+		assert.deepEqual(f.meta.boundPullRequests, [other.url]);
+	});
+});
+
+test("binding moves discovered ownership and rejects URLs outside the project repository", async () => {
+	await fixture(async (f) => {
+		await bindingProject(f);
+		const previous = [...f.manager["metas"].values()].find((meta) => meta.id !== f.id)!;
+		previous.agentPullRequests = [url];
+		previous.pullRequest = { number: 10, url, title: "Wrongly attached", state: "open", checkedAt: 1, branch };
+		delete f.meta.agentPullRequests;
+		await f.manager.bindPullRequest(f.id, url);
+		assert.deepEqual(previous.unboundPullRequests, [url]);
+		assert.deepEqual(previous.agentPullRequests, []);
+		assert.equal(previous.pullRequest, undefined);
+		await f.manager["applyPullRequest"](previous, {
+			pullRequest: { number: 10, url, title: "Stale", state: "open", checkedAt: 1, branch },
+		});
+		assert.equal(previous.pullRequest, undefined);
+		assert.equal(f.manager["pullRequestOwner"](url), f.id);
+		for (const bad of [
+			"https://github.com/other/repo/pull/10",
+			"https://example.com/octo/repo/pull/10",
+			"https://github.com/octo/repo/issues/10",
+			"https://github.com/octo/repo/pull/10?x=1",
+		]) {
+			await assert.rejects(f.manager.bindPullRequest(f.id, bad), /project repository|GitHub pull request URL/);
+		}
+		await f.manager.bindPullRequest(f.id, url);
+		assert.deepEqual(f.meta.boundPullRequests, [url]);
+		assert.deepEqual((await f.saved()).boundPullRequests, [url]);
+	});
+});
+
 function deferred() {
 	let resolve!: () => void;
 	const promise = new Promise<void>((done) => {

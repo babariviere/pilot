@@ -131,6 +131,9 @@ export class MissionService {
 			readArtifactReference: (sessionId, id, revision) => this.readArtifactReference(sessionId, id, revision),
 			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
 			pullRequestsDiscovered: (sessionId, urls) => this.linkPullRequests(sessionId, urls),
+			validatePullRequestBinding: (sessionId, url, taskId) =>
+				store.validatePullRequestBinding(sessionId, url, taskId),
+			applyPullRequestBinding: (operation) => store.applyPullRequestBinding(operation),
 			linkedPullRequests: () =>
 				store
 					.list()
@@ -449,7 +452,7 @@ export class MissionService {
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
 		if (
-			(["delete", "group", "start", "send", "status"].includes(action) ||
+			(["delete", "group", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
 				(action === "task" && args.order !== undefined)) &&
 			mission.coordinatorSessionId !== sessionId
 		)
@@ -458,6 +461,18 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "bindPr":
+			case "unbindPr": {
+				const target = str("targetSessionId");
+				const url = str("url");
+				if (!target?.trim() || !url?.trim()) throw new Error(`${action} requires targetSessionId and url`);
+				if (this.store.missionOf(target) !== missionId) throw new Conflict("That chat is not in this mission");
+				if (args.taskId !== undefined && typeof args.taskId !== "string")
+					throw new Error("taskId must be a task ID or number");
+				return action === "bindPr"
+					? this.sessions.bindPullRequest(target, url, actor, str("taskId"))
+					: this.sessions.unbindPullRequest(target, url, actor);
+			}
 			case "delete": {
 				if (typeof args.id !== "string" || !args.id.trim())
 					throw new Error("delete requires the task id or number");

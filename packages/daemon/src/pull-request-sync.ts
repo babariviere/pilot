@@ -13,7 +13,6 @@
  */
 import type { SessionPullRequest } from "@pilot/protocol";
 import {
-	type Candidate,
 	githubRepository,
 	type HealthRequest,
 	type HealthResult,
@@ -29,9 +28,10 @@ import {
 import { discoverPullRequestHealth } from "./pull-request-health.ts";
 import {
 	checksState,
+	hasPendingBoundPullRequests,
 	inspectionHeads,
-	inspectWorkspace,
 	inspectionInputs,
+	inspectWorkspace,
 	isTerminalPullRequest,
 	knownPullRequests,
 	type LinkedPullRequest,
@@ -121,7 +121,17 @@ function linkedKey(url: string): string {
 
 function upstreamGroup(session: PullRequestSession): string | undefined {
 	const upstream = session.workspace?.upstream;
-	if (!upstream) return undefined;
+	if (!upstream) {
+		if (!session.workspace)
+			for (const url of session.boundPullRequests ?? []) {
+				try {
+					return linkedPullRequest(url).repo.identity;
+				} catch {
+					// Invalid persisted links are ignored by inspection too.
+				}
+			}
+		return undefined;
+	}
 	try {
 		return githubRepository(upstream.trim()).identity;
 	} catch {
@@ -168,7 +178,8 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 
 	/** Explicit refresh after activity. Settles after a run that started after this call. */
 	refresh(session: Session): Promise<void> {
-		if (this.stopped || !session.workspace) return Promise.resolve();
+		if (this.stopped || session.workspaceRecovery || (!session.workspace && !session.boundPullRequests?.length))
+			return Promise.resolve();
 		return this.request(this.entry(sessionKey(session.id), upstreamGroup(session)));
 	}
 
@@ -261,9 +272,14 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 
 	/** Sessions worth polling at all. Explicit refreshes may still check the others. */
 	private eligible(session: PullRequestSession): boolean {
-		if (session.archivedAt !== undefined || !session.workspace || session.workspaceRecovery) return false;
+		if (
+			session.archivedAt !== undefined ||
+			(!session.workspace && !session.boundPullRequests?.length) ||
+			session.workspaceRecovery
+		)
+			return false;
 		const prs = sessionPullRequests(session);
-		return !prs.length || prs.some((pr) => !isTerminalPullRequest(pr));
+		return hasPendingBoundPullRequests(session) || !prs.length || prs.some((pr) => !isTerminalPullRequest(pr));
 	}
 
 	/** Track new sessions and linked PRs, and forget settled or removed ones. Cheap, in-memory only. */
@@ -406,7 +422,8 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 		for (const entry of batch) {
 			if (entry.key.startsWith("session:")) {
 				const session = this.host.session(entry.key.slice("session:".length));
-				if (session?.workspace) work.push({ entry, kind: "session", session });
+				if (session && !session.workspaceRecovery && (session.workspace || session.boundPullRequests?.length))
+					work.push({ entry, kind: "session", session });
 			} else {
 				const url = entry.key.slice("linked:".length);
 				const target = linked.get(url) ?? this.linkedTargets.get(url);
@@ -463,6 +480,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				if (!inspection || inspection.result) continue;
 				const target = group(inspection.repo!, item.session.cwd);
 				for (const head of inspectionHeads(inspection)) target.heads.add(head);
+				for (const number of inspection.bound ?? []) target.numbers.add(number);
 				for (const [head, number] of knownPullRequests(item.session, inspection)) target.known.set(head, number);
 			} else group(item.repo, item.target.cwd).numbers.add(item.number);
 		}
@@ -480,12 +498,13 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 			if (item.kind === "session") {
 				if (!item.result && item.inspection) {
 					const batch = item.inspection.repo ? found.get(item.inspection.repo.identity) : undefined;
-					const heads: ReadonlyMap<string, Candidate | undefined> | Error =
-						batch instanceof Error ? batch : (batch?.heads ?? new Map());
-					item.result = resolvePullRequests(item.session, item.inspection, heads, now);
+					const answers = batch ?? { heads: new Map(), numbers: new Map(), numberErrors: new Map() };
+					item.result = resolvePullRequests(item.session, item.inspection, answers, now);
 					outcomes.set(item.entry, {
-						failed: heads instanceof Error,
-						checks: heads instanceof Error ? undefined : checksState(item.inspection, heads),
+						failed:
+							answers instanceof Error ||
+							(item.inspection.bound ?? []).some((number) => answers.numberErrors.has(number)),
+						checks: answers instanceof Error ? undefined : checksState(item.session, item.inspection, answers),
 					});
 				} else outcomes.set(item.entry, { failed: false });
 			} else {
@@ -529,7 +548,10 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 	 * session's own inputs changed. The fingerprint is read first, so a change during inspection is seen next time.
 	 */
 	private async inspect(session: Session): Promise<WorkspaceInspection> {
-		const state = session.workspace && !session.workspaceRecovery ? await repositoryState(session.cwd) : undefined;
+		const state =
+			(session.workspace || session.boundPullRequests?.length) && !session.workspaceRecovery
+				? await repositoryState(session.cwd)
+				: undefined;
 		const key = state === undefined ? undefined : `${state}\0${inspectionInputs(session)}`;
 		const cached = this.inspections.get(session.id);
 		if (key !== undefined && cached?.key === key && Date.now() - cached.at < inspectionTtl) return cached.inspection;

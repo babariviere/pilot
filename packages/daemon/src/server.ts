@@ -3,6 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { getLibraryAsset, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
+	BindPullRequestRequest,
 	ChangeModelRequest,
 	ClientMessage,
 	CompactRequest,
@@ -34,6 +35,7 @@ import type {
 	SubagentMessageRequest,
 	TerminalSocketMessage,
 	UpdateMissionRequest,
+	UnbindPullRequestRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { boundedSender } from "./backpressure.ts";
@@ -495,6 +497,23 @@ export function createDaemonServer(
 					await sessions.artifact(parts[2]!, parts[4]!, value === undefined ? undefined : Number(value)),
 				);
 			}
+		}
+		if (
+			parts[1] === "sessions" &&
+			parts.length === 4 &&
+			parts[3] === "pull-requests" &&
+			(req.method === "POST" || req.method === "DELETE")
+		) {
+			const body = await readJson<BindPullRequestRequest | UnbindPullRequestRequest>(req);
+			if (!body || typeof body.url !== "string" || !body.url.trim() || body.url.length > 2048)
+				throw new HttpError(400, "url must be a non-empty string of at most 2048 characters");
+			if (req.method === "POST") {
+				const taskId = (body as BindPullRequestRequest).taskId;
+				if (taskId !== undefined && (typeof taskId !== "string" || !taskId.trim() || taskId.length > 128))
+					throw new HttpError(400, "taskId must be a non-empty string of at most 128 characters");
+				return json(res, 200, await sessions.bindPullRequest(parts[2]!, body.url, {}, taskId));
+			}
+			return json(res, 200, await sessions.unbindPullRequest(parts[2]!, body.url, {}));
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;
