@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.28.1](https://github.com/babariviere/pilot/compare/v1.28.0...v1.28.1) (2026-10-14)
+
+
+### Bug Fixes
+
+* **macos:** use shared message selection for native copy ([1266770](https://github.com/babariviere/pilot/commit/126677024e88ad88a894f2631aefac5f6e291c10))
+
+
+### Performance Improvements
+
+* **macos:** make mission tab switches fast ([a861054](https://github.com/babariviere/pilot/commit/a86105425f1bde10a7ea7f14286d225b165e6ba2))
+
 ## [1.28.0](https://github.com/babariviere/pilot/compare/v1.27.0...v1.28.0) (2026-10-14)
 
 
