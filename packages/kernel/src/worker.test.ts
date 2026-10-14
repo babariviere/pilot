@@ -74,14 +74,40 @@ test("IPC callback failure and disconnect reject pending sends without unhandled
 	assert.equal(failures.length, 2);
 });
 
-test("stalled IPC callback has a bounded deadline", async (t) => {
+test("a stalled but connected IPC channel preserves FIFO past repeated send deadlines", async (t) => {
 	t.mock.timers.enable({ apis: ["setTimeout"] });
 	const channel = new Channel();
 	const failures: Error[] = [];
 	const sender = new IpcSender(channel, (error) => failures.push(error), options);
-	const rejected = assert.rejects(sender.send(packet("stalled")), /timed out/);
+	const first = sender.send(packet("stalled"));
+	const second = sender.send(packet("queued"));
+	t.mock.timers.tick(options.timeoutMs * 100);
+	assert.deepEqual(failures, []);
+	assert.equal(sender.pendingPackets, 2);
+	assert.deepEqual(channel.sent, [packet("stalled")]);
+	channel.callbacks[0]!(null);
+	channel.callbacks[1]!(null);
+	await Promise.all([first, second]);
+	assert.deepEqual(channel.sent, [packet("stalled"), packet("queued")]);
+	assert.equal(sender.pendingBytes, 0);
+	t.mock.timers.tick(options.timeoutMs * 100);
+	assert.deepEqual(failures, []);
+});
+
+test("a closed channel rejects stalled and queued sends at its next channel check", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const channel = new Channel();
+	const failures: Error[] = [];
+	const sender = new IpcSender(channel, (error) => failures.push(error), options);
+	const rejected = Promise.all([
+		assert.rejects(sender.send(packet("stalled")), /disconnected/),
+		assert.rejects(sender.send(packet("queued")), /disconnected/),
+	]);
+	channel.connected = false;
 	t.mock.timers.tick(options.timeoutMs);
 	await rejected;
 	assert.equal(failures.length, 1);
 	assert.equal(sender.pendingBytes, 0);
+	channel.callbacks[0]!(null);
+	assert.equal(channel.sent.length, 1);
 });
