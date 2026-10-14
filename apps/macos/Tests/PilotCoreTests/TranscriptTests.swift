@@ -6,6 +6,48 @@ private func json(_ text: String) -> JSONValue {
     try! JSONValue.decode(Data(text.utf8))
 }
 
+@Test func githubAuditUsesBoundedReplacementWithoutChangingMessages() {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"snapshot","entries":[{"id":10,"kind":"pi.user","model":[{"role":"user","content":"Work"}]}],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{}}"#))
+    let event = json(#"{"type":"github_actions_update","actions":[{"id":"call:0","summary":"gh pr ready","description":"marked PR #12 ready","target":"PR #12","at":1000,"exitCode":0},{"id":"call:1","summary":"gh pr edit","description":"edited PR #12","at":2000,"exitCode":1},{"id":"call:2","summary":"git push","description":"pushed branches","at":3000,"exitCode":null}]}"#)
+    transcript.apply(event)
+    transcript.apply(event)
+    #expect(transcript.entries.count == 4)
+    #expect(transcript.entries[1].activity?.contains("marked PR #12 ready") == true)
+    #expect(transcript.entries[2].activity?.contains("attempted: edited PR #12 (failed, exit 1)") == true)
+    #expect(transcript.entries[3].activity?.contains("exit status unknown") == true)
+    #expect(transcript.rows.contains { if case let .notice(_, text) = $0 { return text.contains("marked PR #12 ready") }; return false })
+    transcript.apply(json(#"{"type":"github_actions_update","actions":[]}"#))
+    #expect(transcript.entries.count == 1)
+    #expect(transcript.entries[0].messages[0].text == "Work")
+}
+
+@Test func githubAuditStaysBoundedAndDoesNotCopyHistoryForStreamingDeltas() {
+    var transcript = Transcript()
+    let messages = (1...2000).map { id in JSONValue.object([
+        "id": .number(Double(id)), "kind": .string("pi.user"),
+        "model": .array([.object(["role": .string("user"), "content": .string(String(repeating: "context ", count: 64))])]),
+    ]) }
+    transcript.apply(.object(["type": .string("snapshot"), "entries": .array(messages)]))
+    let actions = (0..<300).map { id in JSONValue.object([
+        "id": .string("call:\(id)"), "summary": .string("gh pr ready"),
+        "description": .string("marked PR #\(id + 1) ready"), "at": .number(1000), "exitCode": .number(0),
+    ]) }
+    transcript.apply(.object(["type": .string("github_actions_update"), "actions": .array(actions)]))
+    #expect(transcript.entries.count == 2200)
+    #expect(transcript.entries[2000].activity?.contains("PR #101 ready") == true)
+    let committed = transcript.committedRowRevision
+    let buffer = transcript.entries.withUnsafeBufferPointer { $0.baseAddress }
+    transcript.apply(json(#"{"type":"message_start","message":{"role":"assistant","content":[{"type":"text","text":""}]}}"#))
+    let delta = json(#"{"type":"message_update","changes":[{"type":"text_delta","contentIndex":0,"delta":"a"}]}"#)
+    for _ in 0..<1000 { transcript.apply(delta) }
+    #expect(transcript.committedRowRevision == committed)
+    #expect(transcript.entries.withUnsafeBufferPointer { $0.baseAddress } == buffer)
+    #expect(transcript.streaming?.text.count == 1000)
+    transcript.apply(.object(["type": .string("snapshot"), "entries": .array(messages)]))
+    #expect(transcript.entries.count == 2200, "activity survives replacement snapshots without becoming paginated history")
+}
+
 @Test func streamsTextDeltasAndCommitsTheEntryOnce() {
     var transcript = Transcript()
     transcript.apply([

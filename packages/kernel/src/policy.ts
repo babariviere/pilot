@@ -1,6 +1,7 @@
 /** Pilot's rules for agents: where they work, how they deliver, and what they may not do on GitHub. */
-import { type Extension, hook, section, ToolTask, type PromptInput } from "@earendil-works/pi-durable";
+
 import type { Context } from "@earendil-works/chord";
+import { type Extension, hook, type PromptInput, section, ToolTask } from "@earendil-works/pi-durable";
 
 export interface WorkspaceContext {
 	/** The user's checkout this isolated workspace came from. */
@@ -146,7 +147,7 @@ function strings(value: unknown): string[] {
 }
 
 /** Select execution-bearing fields, not metadata or content-only tool arguments. */
-function commandArguments(name: string, args: Record<string, unknown>): unknown {
+export function commandArguments(name: string, args: Record<string, unknown>): unknown {
 	// Conservatively scan script source to retain coverage of nested tool calls.
 	if (name === "codemode") return args.code;
 	if (name === "jobs") return args.action === "start" ? args.command : undefined;

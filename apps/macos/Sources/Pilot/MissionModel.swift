@@ -228,6 +228,7 @@ extension MissionEventKind {
         case .resource: "link"
         case .member: "person.badge.plus"
         case .coordinator: "star"
+        case .github: "arrow.triangle.branch"
         }
     }
 }

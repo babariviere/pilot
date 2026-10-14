@@ -8,8 +8,8 @@ import type {
 	RewindAction,
 	SessionAttempt,
 	SessionCommand,
-	SessionJob,
 	SessionCompletion,
+	SessionJob,
 	SessionSubagent,
 } from "@pilot/protocol";
 import type { MissionAction } from "./mission-tools.ts";
@@ -110,6 +110,7 @@ export type KernelPacket =
 	| { type: "pullRequest.created"; url: string }
 	/** The agent may have created, moved or pushed a branch. A hint to recheck PRs, not ownership. */
 	| { type: "refs.changed" }
+	| { type: "github.action"; action: import("@pilot/protocol").GitHubAction }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	| {

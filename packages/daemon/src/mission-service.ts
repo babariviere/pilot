@@ -5,18 +5,18 @@ import type {
 	ArtifactRevision,
 	CreateMissionRequest,
 	JoinMissionRequest,
-	MissionArtifactLinkWrite,
 	MissionArtifactLink,
-	MissionResource,
+	MissionArtifactLinkWrite,
 	MissionDetail,
+	MissionResource,
 	MissionTask,
 	SessionSummary,
-	StartMissionTaskRequest,
 	StartMissionCoordinatorRequest,
+	StartMissionTaskRequest,
 } from "@pilot/protocol";
+import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { Conflict, NotFound } from "./errors.ts";
 import { MissionNotices } from "./mission-notices.ts";
-import { CoordinatorCompaction } from "./coordinator-compaction.ts";
 import { parseTaskRefs } from "./mission-task-refs.ts";
 import { type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
@@ -119,6 +119,8 @@ export class MissionService {
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
 			readArtifactReference: (sessionId, id, revision) => this.readArtifactReference(sessionId, id, revision),
 			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
+			githubAction: (sessionId, action) =>
+				store.recordGitHubAction(sessionId, action, this.sessions.get(sessionId)?.title ?? "Chat"),
 			pullRequestsDiscovered: (sessionId, urls) => this.linkPullRequests(sessionId, urls),
 			validatePullRequestBinding: (sessionId, url, taskId) =>
 				store.validatePullRequestBinding(sessionId, url, taskId),

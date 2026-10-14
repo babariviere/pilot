@@ -98,6 +98,12 @@ and no user messages are queued. Automatic follow-ups are limited to three per s
 five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
 not GitHub comments or reviews. Ask and direct-checkout sessions do not receive automatic PR follow-ups.
 
+GitHub writes are attributed to the chat in its activity and, for mission members, in mission activity.
+The audit records a sanitized operation, PR or branch target when available, time and exit status, not
+tokens, request bodies or command output. It retains the latest 200 actions per chat and 1,000 GitHub
+events per mission. Compound commands and background starts show an unknown per-command exit status
+rather than an inferred success.
+
 Archiving keeps the conversation, but not necessarily its working directory. After the retention period,
 Pilot can reclaim safe archived jj workspaces and restore them from a saved snapshot on resume. It can
 also prune generated build and dependency output from legacy clones. Dependencies may need reinstalling

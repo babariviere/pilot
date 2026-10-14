@@ -30,6 +30,7 @@ import { ArtifactStore } from "@pilot/artifacts";
 import type {
 	AgentEvent,
 	DeliveryMode,
+	GitHubAction,
 	RewindAction,
 	SessionAttempt,
 	SessionCommand,
@@ -49,6 +50,7 @@ import {
 } from "./attempts.ts";
 import { reconcileCompletion } from "./attention.ts";
 import { detectGhStack } from "./gh-stack.ts";
+import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { submitIdleInput } from "./idle-input.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
@@ -108,6 +110,7 @@ export interface KernelSessionHooks {
 	onPullRequestCreated?(url: string): void;
 	/** A tool call may have changed branches or bookmarks. Hint only; may repeat. */
 	onRefsChanged?(): void;
+	onGitHubAction?(action: GitHubAction): void;
 	/** Full replacement whenever the subagents extension reports a change. */
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
@@ -225,6 +228,17 @@ export class KernelSession {
 				spec.pilot?.workspace && !spec.pilot.ask && hooks.onRefsChanged
 					? refActivity(hooks.onRefsChanged)
 					: undefined;
+			const audit = !spec.pilot?.ask
+				? githubActions(async (action) => {
+						if (mission.current) action = { ...action, missionId: mission.current.id };
+						if (!artifactConversation) throw new Error("GitHub audit requires a bound conversation");
+						const added = await artifactConversation.commit(async (tx) => {
+							const state = await tx.doc(GitHubActionsDoc);
+							return appendGitHubAction(state, action);
+						}, context);
+						if (added) hooks.onGitHubAction?.(action);
+					})
+				: undefined;
 			const active = await activeConversation(owned.storage, context);
 			const [pinned, ghStack] = await Promise.all([pinnedAgent(owned.storage, active), detectGhStack(spec.cwd)]);
 			const pilot = { ...spec.pilot, ghStack, projectMemory: !!spec.projectId && !!hooks.callMemory };
@@ -268,7 +282,11 @@ export class KernelSession {
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
-				hostExtensions: [...(provenance ? [provenance.native] : []), ...(refs ? [refs.native] : [])],
+				hostExtensions: [
+					...(provenance ? [provenance.native] : []),
+					...(refs ? [refs.native] : []),
+					...(audit ? [audit.native] : []),
+				],
 				subagents,
 				hostTools: missionTools,
 				...(spec.pilot?.ask
@@ -301,7 +319,8 @@ export class KernelSession {
 						prepareWorkspace,
 					),
 				);
-				const tracked = refs ? refs.prepare(prepared) : prepared;
+				const audited = audit ? audit.prepare(prepared) : prepared;
+				const tracked = refs ? refs.prepare(audited) : audited;
 				return provenance ? provenance.prepare(tracked) : tracked;
 			};
 			const registry = createRegistry();
@@ -337,6 +356,14 @@ export class KernelSession {
 					: ((await harness.conversation(active, context)) ?? (await root()));
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			artifactConversation = conversation;
+			if (audit) {
+				// Install the document before a viewer subscribes, including chats with no writes yet.
+				await conversation.commit(async (tx) => {
+					await tx.doc(GitHubActionsDoc);
+				}, context);
+				const stored = await harness.snapshot(GitHubActionsDoc, context);
+				for (const action of stored?.actions ?? []) hooks.onGitHubAction?.(action);
+			}
 			if (provenance) {
 				const stored = await harness.snapshot(PullRequestsDoc, conversation.id, context);
 				for (const url of stored?.urls ?? []) hooks.onPullRequestCreated?.(url);
@@ -793,18 +820,22 @@ export class KernelSession {
 				return submission?.status(context);
 			});
 		let queue: DocumentWatch<InboxState>;
+		let audit: DocumentWatch<{ actions: GitHubAction[] }> | undefined;
 		try {
+			audit = (await this.harness.watchDoc(GitHubActionsDoc, context)) ?? undefined;
 			queue = await watchQueue(this.harness, this.conversation.id, context);
 		} catch (error) {
+			await audit?.stop();
 			await stream.stop();
 			throw error;
 		}
 		try {
 			await listener([...(await this.#origins.events([stream.snapshot])), await displayQueue(queue.value)]);
+			await listener([{ type: "github_actions_update", actions: [...(audit?.value?.actions ?? [])] }]);
 			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
 			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
 		} catch (error) {
-			await Promise.all([stream.stop(), queue.stop()]);
+			await Promise.all([stream.stop(), queue.stop(), audit?.stop()]);
 			throw error;
 		}
 		const stopTodos =
@@ -817,13 +848,16 @@ export class KernelSession {
 				: () => {};
 		this.#watches.set(watchId, async () => {
 			stopTodos();
-			await Promise.all([stream.stop(), queue.stop()]);
+			await Promise.all([stream.stop(), queue.stop(), audit?.stop()]);
 		});
 		stream.start(async (events) => {
 			await listener(await this.#origins.events(events));
 		});
 		queue.start(async (inbox) => {
 			await listener([await displayQueue(inbox)]);
+		});
+		audit?.start(async (state) => {
+			await listener([{ type: "github_actions_update", actions: [...(state?.actions ?? [])] }]);
 		});
 	}
 

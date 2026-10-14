@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import type {
 	ArtifactKind,
+	GitHubAction,
 	Mission,
 	MissionArtifactLink,
 	MissionBrief,
@@ -139,6 +140,17 @@ CREATE TABLE IF NOT EXISTS events (
 	at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS events_by_mission ON events (mission_id, id);
+CREATE INDEX IF NOT EXISTS events_by_mission_kind ON events (mission_id, kind, id);
+CREATE TABLE IF NOT EXISTS github_action_events (
+	session_id TEXT NOT NULL,
+	action_id TEXT NOT NULL,
+	event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+	PRIMARY KEY (session_id, action_id)
+);
+CREATE TABLE IF NOT EXISTS github_action_retention (
+	mission_id TEXT PRIMARY KEY REFERENCES missions(id) ON DELETE CASCADE,
+	pruned_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS members (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -447,7 +459,7 @@ export class MissionStore {
 				at,
 				extra.userNote ? 1 : 0,
 			);
-		this.run("UPDATE missions SET updated_at = ? WHERE id = ?", at, missionId);
+		this.run("UPDATE missions SET updated_at = MAX(updated_at, ?) WHERE id = ?", at, missionId);
 		const eventId = Number(result.lastInsertRowid);
 		if (extra.wake && (!actor.sessionId || actor.sessionId !== this.require(missionId).coordinatorSessionId)) {
 			this.run(
@@ -1949,6 +1961,65 @@ export class MissionStore {
 	}
 
 	// Activity
+
+	/** Replay-safe attribution. Only the execution-time mission receives the event. */
+	recordGitHubAction(sessionId: string, action: GitHubAction, chat: string): void {
+		const id = action.missionId;
+		if (!id || !this.one("SELECT id FROM missions WHERE id = ?", id)) return;
+		const retention = this.one("SELECT pruned_at FROM github_action_retention WHERE mission_id = ?", id);
+		if (retention && action.at <= num(retention.pruned_at!)) return;
+		if (
+			this.one(
+				"SELECT event_id FROM github_action_events WHERE session_id = ? AND action_id = ?",
+				sessionId,
+				action.id,
+			)
+		)
+			return;
+		const status =
+			action.exitCode === 0
+				? ""
+				: action.exitCode === null
+					? " (exit status unknown)"
+					: ` (failed, exit ${action.exitCode})`;
+		const description = action.exitCode === 0 ? action.description : `attempted: ${action.description}`;
+		this.transaction(() => {
+			const event = this.event(
+				id,
+				"github",
+				`${chat} ${description}${status} · ${action.summary}`,
+				{ sessionId },
+				{ at: action.at },
+			);
+			this.run(
+				"INSERT INTO github_action_events (session_id, action_id, event_id) VALUES (?, ?, ?)",
+				sessionId,
+				action.id,
+				event.id,
+			);
+			const pruned = this.one(
+				`SELECT MAX(at) AS at FROM events WHERE mission_id = ? AND kind = 'github' AND id NOT IN
+				(SELECT id FROM events WHERE mission_id = ? AND kind = 'github' ORDER BY id DESC LIMIT 1000)`,
+				id,
+				id,
+			);
+			if (pruned?.at !== null && pruned?.at !== undefined)
+				this.run(
+					`INSERT INTO github_action_retention (mission_id, pruned_at) VALUES (?, ?)
+					ON CONFLICT(mission_id) DO UPDATE SET pruned_at = MAX(pruned_at, excluded.pruned_at)`,
+					id,
+					num(pruned.at),
+				);
+			// Delete only automatic GitHub records, never authored notes or unrelated history.
+			this.run(
+				`DELETE FROM events WHERE mission_id = ? AND kind = 'github' AND id NOT IN
+				(SELECT id FROM events WHERE mission_id = ? AND kind = 'github' ORDER BY id DESC LIMIT 1000)`,
+				id,
+				id,
+			);
+		});
+		this.changed(id);
+	}
 
 	/** User-authored notes have their own bounded window, independent of automatic and agent activity. */
 	userNotes(id: string, limit: number): MissionEvent[] {
