@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.29.0](https://github.com/babariviere/pilot/compare/v1.28.1...v1.29.0) (2026-10-14)
+
+
+### Features
+
+* **daemon:** auto-rebase diverged stacked PRs ([7b9bd43](https://github.com/babariviere/pilot/commit/7b9bd432b7a868595c5d56f12bddeeecf9d7b421))
+* **macos:** attach and detach pull requests from the Changes pane ([f6f2106](https://github.com/babariviere/pilot/commit/f6f2106d1e1de7911fefabf53ccec4a1af8b2bcc))
+* **slack:** add project-local classification and triage state ([d0adf2b](https://github.com/babariviere/pilot/commit/d0adf2b44b83d7af791ccec7ce313d32ad747ea5))
+* **tracking:** advance Linear state after confirmed starts ([4918c41](https://github.com/babariviere/pilot/commit/4918c411cab2be23250ba88c42938051e1755995))
+
+
+### Bug Fixes
+
+* **chats:** report follow-up delivery outcomes ([9777e54](https://github.com/babariviere/pilot/commit/9777e5468840131215709d87bb40be641aec88fd))
+* **daemon:** expose PR owners and preserve reference links ([06c4701](https://github.com/babariviere/pilot/commit/06c4701c75915203c923e97c75a01a6fedec1b52))
+* **daemon:** reclaim mixed build-output directories safely ([301a027](https://github.com/babariviere/pilot/commit/301a0278e17240314382f73d517fa5fea0d12a6b))
+* **macos:** expose mission deletion in row menus ([9cc51b6](https://github.com/babariviere/pilot/commit/9cc51b63ba268ad81920230b399dc9ecb3ba709f))
+* **schedules:** require sleep before a full wake ([cde48ca](https://github.com/babariviere/pilot/commit/cde48ca7ac959819588c375af3445984564643c4))
+* **tasks:** allow releasing held claims ([b2531bd](https://github.com/babariviere/pilot/commit/b2531bde6a068b19f6c4ad9a652501c222e1106f))
+
+
+### Performance Improvements
+
+* **agents:** trim mission context and add decision audiences ([0a073fc](https://github.com/babariviere/pilot/commit/0a073fc0a20981baac630c8bcd1e6b893c1d4df3))
+
 ## [1.28.1](https://github.com/babariviere/pilot/compare/v1.28.0...v1.28.1) (2026-10-14)
 
 
