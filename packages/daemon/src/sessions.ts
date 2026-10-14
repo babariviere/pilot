@@ -3423,6 +3423,9 @@ export class SessionManager {
 			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),
 			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
 			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
+			...(meta.boundPullRequests?.some((url) => !this.excludedPullRequest(meta, url))
+				? { boundPullRequests: meta.boundPullRequests.filter((url) => !this.excludedPullRequest(meta, url)) }
+				: {}),
 			...(sessionBranches(meta).length ? { branches: sessionBranches(meta) } : {}),
 			...(meta.pullRequestError ? { pullRequestError: meta.pullRequestError } : {}),
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),

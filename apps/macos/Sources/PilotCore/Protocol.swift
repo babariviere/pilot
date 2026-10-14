@@ -89,6 +89,9 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let pullRequest: SessionPullRequest?
     /// Every discovered or explicitly bound PR associated with the session, primary first. Omitted when none, or by older daemons.
     public let pullRequests: [SessionPullRequest]?
+    /// URLs explicitly bound to this chat from the Changes pane or by the coordinator, excluding detached ones.
+    /// Their head can be a branch the chat never used. Omitted when none, or by older daemons.
+    public let boundPullRequests: [String]?
     /// Every branch or bookmark the session created or used, the current one first. Omitted when none, or by older daemons.
     public let branches: [String]?
     /// A lookup failed. Any retained pull request is last-known, not a fresh result.
@@ -153,6 +156,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         outcome: SessionOutcome? = nil, outcomeAt: Double? = nil, outcomeReason: String? = nil,
         pullRequest: SessionPullRequest? = nil, pullRequestError: String? = nil,
         pullRequests: [SessionPullRequest]? = nil,
+        boundPullRequests: [String]? = nil,
         archivedAt: Double? = nil, sessionPath: String? = nil, thinking: String? = nil,
         mode: ChatMode? = nil, sourceBranch: String? = nil, sourceCommit: String? = nil, workspace: WorkspaceMode? = nil,
         lastUserMessageAt: Double? = nil,
@@ -196,6 +200,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.outcomeReason = outcomeReason
         self.pullRequest = pullRequest
         self.pullRequests = pullRequests
+        self.boundPullRequests = boundPullRequests
         self.branches = branches
         self.pullRequestError = pullRequestError
         self.attempts = attempts

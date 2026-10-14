@@ -233,6 +233,23 @@ test("direct-project bindings receive durable idle-only follow-ups without chang
 	});
 });
 
+test("summaries list explicit bindings until they are detached or moved", async () => {
+	await fixture(async (f) => {
+		assert.equal(f.manager.get(f.ids[0])!.boundPullRequests, undefined);
+		// Returned before GitHub is refreshed, so clients can show the binding while its PR is pending.
+		const bound = await f.manager.bindPullRequest(f.ids[0], "https://github.com/Octo/Repo/pull/42");
+		assert.deepEqual(bound.boundPullRequests, [url]);
+		await f.settle();
+		const moved = await f.manager.bindPullRequest(f.ids[1], url);
+		assert.deepEqual(moved.boundPullRequests, [url]);
+		assert.equal(f.manager.get(f.ids[0])!.boundPullRequests, undefined);
+		const detached = await f.manager.unbindPullRequest(f.ids[1], url);
+		assert.equal(detached.boundPullRequests, undefined);
+		assert.equal(detached.pullRequests, undefined);
+		await f.settle();
+	});
+});
+
 test("binding returns after the local commit without waiting for blocked GitHub health", async () => {
 	await fixture(async (f) => {
 		const gate = { entered: deferred(), release: deferred() };
