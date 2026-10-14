@@ -41,6 +41,10 @@ parentPort!.on("message", ({ id, method, args }) => {
 				disk.commit(args.projectId, args.kind, args.items, args.checkpoint, args.activeIds);
 				projectId = args.projectId;
 				break;
+			case "linearStartResult":
+				disk.linearStartResult(args.id, args.outcome);
+				projectId = disk.require(args.id).projectId;
+				break;
 			case "patch":
 				value = disk.patch(args.id, args.patch);
 				projectId = disk.require(args.id).projectId;

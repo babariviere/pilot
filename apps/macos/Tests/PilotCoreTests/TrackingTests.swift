@@ -144,3 +144,19 @@ import Testing
     """#.utf8))
     #expect(slack.done == nil)
 }
+
+@Test func confirmedTrackedStartsAreExplicitAndErrorsDecodeInRowMetadata() throws {
+    let linked = try JSONValue.decode(JSONEncoder().encode(TrackedItemPatch(missionId: "existing")))
+    #expect(linked["start"] == nil)
+    for patch in [TrackedItemPatch(sessionId: "chat", start: true), TrackedItemPatch(missionId: "mission", start: true)] {
+        let json = try JSONValue.decode(JSONEncoder().encode(patch))
+        #expect(json["start"] == .bool(true))
+    }
+    let item = try JSONDecoder().decode(TrackedItem.self, from: Data(#"""
+    {"id":"i","projectId":"p","kind":"linear","externalId":"ENG-7","title":"Sample","url":"https://example.com",
+     "status":"Todo","metadata":{"linearStart":{"outcome":"error","attemptedAt":1,
+     "error":"Couldn't move ticket to In progress."}},"dismissed":false,"sessionId":"chat","createdAt":1,"updatedAt":2}
+    """#.utf8))
+    #expect(item.metadata["linearStart"]?["outcome"]?.string == "error")
+    #expect(item.sessionId == "chat")
+}

@@ -32,7 +32,12 @@ test("MCP decoding accepts structured data or JSON envelopes, not markdown or er
 	assert.throws(() => decodeMcpResult({ structuredContent: { text: "x".repeat(513 * 1024) } }), /512/);
 });
 
-test("Linear exposes only fixed read tools and preserves sanitized retry-after timing", () => {
+test("Linear exposes fixed read tools and exactly one narrow state write and preserves sanitized retry-after timing", () => {
+	assert.equal(dedicatedSourceTool("linear", "startIssue"), "save_issue");
+	assert.equal(dedicatedSourceTool("slack", "startIssue"), undefined);
+	assert.equal(dedicatedSourceTool("linear", "save_issue"), undefined);
+	assert.equal(dedicatedSourceTool("linear", "states"), "list_issue_statuses");
+	assert.equal(dedicatedSourceTool("linear", "me"), "get_user");
 	assert.equal(dedicatedSourceTool("linear", "cycles"), "list_cycles");
 	assert.equal(dedicatedSourceTool("linear", "issue"), "get_issue");
 	assert.equal(dedicatedSourceTool("linear", "issues"), "list_issues");
@@ -161,13 +166,20 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 			};
 		if (message.method === "tools/list")
 			result = {
-				tools: ["list_issues", "list_cycles", "get_issue", "slack_read_channel", "slack_read_thread"].map(
-					(name) => ({
-						name,
-						inputSchema: { type: "object" },
-						annotations: { readOnlyHint: !writes },
-					}),
-				),
+				tools: [
+					"list_issues",
+					"list_cycles",
+					"get_issue",
+					"list_issue_statuses",
+					"get_user",
+					"save_issue",
+					"slack_read_channel",
+					"slack_read_thread",
+				].map((name) => ({
+					name,
+					inputSchema: { type: "object" },
+					annotations: { readOnlyHint: name !== "save_issue" && !writes },
+				})),
 			};
 		if (message.method === "tools/call" && hanging) {
 			called();
@@ -255,6 +267,23 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 			before,
 			"write-annotated tools never execute",
 		);
+		await client.call("linear", "startIssue", { id: "issue-1", state: "started-1" }, signal);
+		assert.deepEqual(seen.filter((request) => request.method === "tools/call").at(-1)?.params, {
+			name: "save_issue",
+			arguments: { id: "issue-1", state: "started-1" },
+		});
+		const beforeInvalid = seen.length;
+		for (const args of [
+			{ state: "started-1" },
+			{ id: "issue-1" },
+			{ id: "issue-1", state: "" },
+			{ id: "issue-1", state: "started-1", title: "not allowed" },
+		])
+			await assert.rejects(client.call("linear", "startIssue", args, signal), /Invalid Linear/);
+		for (const tool of ["save_issue", "update_issue", "create_issue", "save_comment", "delete_issue"])
+			await assert.rejects(client.call("linear", tool, {}, signal), /Unknown dedicated MCP/);
+		assert.equal(seen.length, beforeInvalid, "invalid writes never connect");
+
 		writes = false;
 		const requestsBeforeMissing = seen.length;
 		await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { alternative: { url } } }));

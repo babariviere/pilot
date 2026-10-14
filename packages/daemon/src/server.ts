@@ -328,7 +328,7 @@ export function createDaemonServer(
 						throw new HttpError(400, "Chat must belong to this project");
 					if (patch.missionId && missions?.store.get(patch.missionId)?.projectId !== item.projectId)
 						throw new HttpError(400, "Mission must belong to this project");
-					return json(res, 200, await tracking.items.patch(item.id, patch));
+					return json(res, 200, await tracking.patch(item.id, patch));
 				}
 			}
 			throw new HttpError(404, "Unknown tracking operation");

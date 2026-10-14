@@ -2,17 +2,34 @@ import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 
-/** Fixed read-only tools on the dedicated server named by kind. No overrides or fallback. */
+/** Fixed tools on the dedicated server named by kind. startIssue is the sole write exception. No overrides or fallback. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
 	if (kind === "linear" && tool === "issues") return "list_issues";
 	if (kind === "linear" && tool === "cycles") return "list_cycles";
 	if (kind === "linear" && tool === "issue") return "get_issue";
+	if (kind === "linear" && tool === "states") return "list_issue_statuses";
+	if (kind === "linear" && tool === "me") return "get_user";
+	if (kind === "linear" && tool === "startIssue") return "save_issue";
 	if (kind === "linear" && tool === "teams") return "list_teams";
 	if (kind === "slack" && tool === "history") return "slack_read_channel";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
 	if (kind === "slack" && tool === "searchChannels") return "slack_search_channels";
 	if (kind === "slack" && tool === "myChannels") return "slack_list_user_channels";
 	return undefined;
+}
+
+/** Even the sole write capability cannot create issues or edit any field other than state. */
+export function validSourceArguments(tool: string, args: Record<string, unknown>): boolean {
+	return (
+		tool !== "startIssue" ||
+		(Object.keys(args).length === 2 &&
+			typeof args.id === "string" &&
+			!!args.id.trim() &&
+			args.id.length <= 200 &&
+			typeof args.state === "string" &&
+			!!args.state.trim() &&
+			args.state.length <= 200)
+	);
 }
 
 export class SourceSignInRequired extends Error {}
@@ -145,6 +162,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		if (Buffer.byteLength(JSON.stringify(args)) > 256 * 1024)
 			return Promise.reject(new Error("MCP arguments exceed 256 KiB"));
 		if (this.running.size >= 2) return Promise.reject(new Error("MCP client busy, retry shortly"));
+		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear state update"));
 		if (!dedicatedSourceTool(kind, tool)) return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = new Worker(new URL("./source-mcp-worker.ts", import.meta.url), {
 			workerData: { agentDir: this.agentDir, kind, tool, args },
