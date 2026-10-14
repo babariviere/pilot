@@ -14,8 +14,8 @@ Pilot runs background [pi](https://github.com/earendil-works/pi) agents on durab
 
 Docs to use when the task touches them:
 
-- [PLAN.md](PLAN.md) is the spec. Read the section for the area you change (workspaces and policy in §5,
-  missions §5.7, project memory §5.8, integrations §6, the app §7) and keep it current when scope changes.
+- [README.md](README.md) describes the current product, setup and architecture. Keep it accurate when
+  user-facing capabilities or requirements change; use the implementation and tests for detailed behavior.
 - [DESIGN.md](DESIGN.md) holds the UI intent, state vocabulary and review checklist for UI changes.
 - `scripts/bench` holds reopen, workspace and memory benchmarks for hot-path changes;
   [docs/performance-check.md](docs/performance-check.md) records a past CPU and memory audit and its method.

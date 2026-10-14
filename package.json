@@ -2,7 +2,7 @@
 	"name": "pilot",
 	"version": "1.30.0",
 	"private": true,
-	"description": "Background pi agents: durable sessions, a native macOS app, and triggers from GitHub, Slack and Linear.",
+	"description": "A native macOS app for background pi coding agents, with durable chats, isolated workspaces, and reviewable pull requests.",
 	"type": "module",
 	"license": "MIT",
 	"author": "babariviere",

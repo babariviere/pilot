@@ -1,146 +1,211 @@
 # Pilot
 
-Autopilot for your backlog. Pilot runs background [pi](https://github.com/earendil-works/pi) agents on
-[pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable) sessions, so work survives restarts,
-and gives you a native macOS app to spawn, steer and stop them, with a libghostty terminal per Build session.
+**Background coding agents. A native macOS app. You stay in control.**
 
-Sessions load your pi configuration from `~/.pi/agent` (settings, packages, extensions, skills, MCP),
-so packages such as [pi-extensions](https://github.com/babariviere/pi-extensions) work by default.
+Pilot runs [pi](https://github.com/earendil-works/pi) agents in the background, with durable chats and
+isolated Build workspaces. Start a task, steer it when needed, and review the result as a
+code diff, pull request or artifact. Agents keep working when you close the app.
 
-New chats default to **Build**. Choose **Ask** to explore code without creating a clone or granting
-write access. The existing branch picker offers **Current checkout** (including local changes) or
-an origin branch's committed snapshot. Branch snapshots are pinned for the chat and never switch
-your checkout. Ask loads only Pilot's read/search and session-local artifact tools, not user extensions,
-MCP, shell tools or repository-write tools. It can create, update and preview its own artifacts while
-the repository stays read-only. To implement an idea, use **Start a Build chat** to carry the discussion
-into a separate chat. Build keeps the project's workspace default, with an optional per-chat override.
+Pilot is local-first. It uses your existing pi models, authentication and configuration, with a local
+daemon managing sessions independently of the SwiftUI app.
 
-New isolated **Build** sessions for jj projects (jj 0.46+ and Git 2.42+) use separate working copies of a shared repository in
-`$PILOT_HOME/repositories`. Workspace edits leave your own checkout untouched, but repository history
-and bookmarks are shared with sibling sessions. Agents use task-specific bookmarks for PR delivery,
-do not rewrite other sessions or run repository-wide undo/operation restore, and push only the chosen
-bookmark with `--bookmark`, never a broad `--all` push or rebase. Projects with **Require PR** disabled
-keep direct default-branch delivery after reconciling upstream, without force-pushing. Existing private
-clones, Git-only projects, direct checkouts, and Ask sessions keep their current behavior.
+[Get started](#get-started) · [Working with Pilot](#working-with-pilot) · [Development](#development)
 
-Archiving retains chat history, not a guarantee that its working directory stays on disk. Archived
-shared jj workspaces are eligible for cleanup after 1 day, configurable with
-`PILOT_WORKSPACE_RETENTION_DAYS` (`0` disables cleanup). Safe cleanup pins the exact commit and change
-IDs plus the base for recovery, preserves the known ignored mise local configs (`mise.local.toml`,
-`.mise.local.toml`, `mise/config.local.toml`, `.mise/config.local.toml`) and bounded `.pi/todos` files,
-and blocks deletion when unknown files would be lost. Live workers/subprocesses, viewers, terminals,
-open/draft pull requests, non-default sparse checkouts and submodules prevent reclamation. Ignored
-dependency/build output is regenerated rather than backed up. Resuming restores a reclaimed workspace
-from its recoverable jj snapshot without fetching origin. Legacy private clones are pruned in place
-after the same retention: only ignored dependency and build directories (`node_modules`, `dist`,
-`build`, `.build`, ...) are deleted. After either cleanup, the agent is told its workspace was reset
-and that dependencies and build output need rebuilding.
+![A Build chat with its task checklist and code changes side by side](docs/screenshots/readme-build.png)
 
-Agents can create **Artifacts**: plain images or interactive HTML/JavaScript and React/JSX previews,
-including diagrams, graphs and animations. Revisions persist with their originating session and project.
-Chat cards open the revision published there; the session sidebar opens the latest. Expanded previews
-fill most of the screen. Previews run offline in an isolated
-WebKit view, with bundled React, Mermaid, ECharts and Motion (D3 and Three.js are opt-in).
-The `artifact` tool (actions: `create`, `update`, `get`, `list`, `preview`) has a compact description and
-an `artifacts` namespace that remains visible in codemode even when its full declaration does not fit.
-Pilot supplies the bundled `pilot-artifacts` skill for detailed libraries, examples and authoring rules,
-loaded only when needed, including in Ask. Use `describeTool("artifact")` for an omitted schema.
-For agent-side screenshots and runtime diagnostics, install the optional preview browser once with
-`pnpm artifacts:browser`. A missing preview renderer does not prevent HTML, React or image publication.
+*Screenshots are rendered from current native views with demo data, not live conversations. Chat captures
+use a stand-in window header. See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 
-The chat footer shows the session's context-window estimate. With pi-extensions' `usage` extension
-enabled, it also shows Claude or Codex subscription windows. Hover for reset times and snapshot freshness.
-Subscription data uses the extension's existing OAuth polling; Pilot does not read credentials or poll
-usage endpoints separately. Without that extension or subscription credentials, only context is shown.
+## What you can do
 
-For PRs an agent opens from its private Build workspace, Pilot uses local `gh` authentication to check
-failed CI, unresolved current review threads and merge conflicts on every agent-owned open or draft PR,
-including earlier heads in a stack even if the current PR is closed. It sends one combined follow-up only
-when the agent is idle with no queued messages. Automatic follow-ups share a persistent limit of three
-per session, with a five-minute cooldown after each run finishes. Sending a user message resets that
-limit. Agents investigate flaky CI rather than blindly retrying it and report blocked or declined work
-in Pilot, never in GitHub comments or reviews. Ask and direct-workspace chats are not monitored for
-automatic PR work.
+- **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
+  a run. Every session has its own worker process.
+- **Explore before implementing.** Ask chats can read code and produce artifacts without repository write
+  access. Move the discussion into a separate Build chat when you're ready to make changes.
+- **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)
+  terminal in the session workspace, task progress and pull request status.
+- **Coordinate bigger goals.** Missions group chats around a shared brief, decisions, tasks, dependencies,
+  artifacts and activity, with an optional coordinator agent.
+- **Keep useful context.** Build agents can save lasting decisions, preferences and lessons in project
+  memory for later chats, rather than task status or secrets. Pi skills, prompt templates, packages and
+  compatible extensions are available in Build sessions.
+- **Get more than text back.** Agents can publish images, interactive HTML and React previews, diagrams and
+  static SwiftUI renders. Artifacts stay attached to their chat and can be linked to missions and tasks.
+- **Bring work into Pilot.** Track Linear issues and Slack bug reports from configured sources, then start
+  a chat or mission from an item. Schedule work for later or for supported wake, network and Wi-Fi events.
 
-Merged and closed PRs are no longer polled. When an agent later becomes idle, an explicit refresh can
-discover a reopened or new PR. Merged chats still archive after 24 hours using the saved merge time,
-without another GitHub request.
+## Get started
 
-See [PLAN.md](PLAN.md) for the spec and milestones (GitHub, Slack and Linear triggers, human-in-the-loop
-specs, hosting).
+### Install a release
 
-In the task and chat composers, press Tab while typing a path to complete files or folders. Relative
-paths use the selected project or session's working directory (home if no project is selected).
-Absolute paths and `~/` are supported. For multiple matches, use the path picker's arrow keys and
-Tab or Return to choose, or Escape to dismiss. Quote paths containing spaces or escape the spaces with `\`.
+Download `Pilot-arm64.zip` from the [latest release](https://github.com/babariviere/pilot/releases/latest),
+unzip it and move `Pilot.app` to Applications.
 
-## Architecture
+- Released builds target **Apple Silicon Macs running macOS 14 or later**.
+- Releases bundle Node and the daemon, so you don't need a source checkout or a separate Node installation.
+- Set up a model provider in [pi](https://github.com/earendil-works/pi) first. Pilot uses your pi agent directory
+  (normally `~/.pi/agent`), including provider authentication.
+- Install and authenticate [GitHub CLI](https://cli.github.com) (`gh auth login`) if you want agents to create
+  pull requests or Pilot to monitor them.
+- Install [Jujutsu](https://jj-vcs.github.io/jj/) **0.46+** and **Git 2.42+** for shared, isolated jj workspaces.
+  Git-only projects use private clones instead.
 
-```text
- Pilot.app (apps/macos) ──HTTP/WS──▶ pilotd (packages/daemon, launchd agent)
-                                       │ fork + IPC, one per session
-                                       ▼
-                              kernel worker (packages/kernel)
-                              ├─ pi-durable Harness (SQLite, model loop, tasks)
-                              └─ native Pi SDK kernel (extensions, tools, prompts, auth)
-```
+These personal builds are ad-hoc signed, not notarized. If macOS blocks the first launch, verify the
+release source before using **System Settings → Privacy & Security → Open Anyway**.
+[Release and update setup](apps/macos/UPDATES.md) explains signing, packaging and automatic updates.
 
-- The Harness owns the transcript and the model loop. The native kernel provides tools, the system prompt,
-  extension hooks and provider authentication (adapter ported from pi-extensions `subagents`).
-- One worker process per session isolates extension globals, sandbox state and crashes.
-- pilotd runs as a per-user launchd agent installed by the app. Closing or quitting the app leaves agents
-  running.
-- Session data lives in `$PILOT_HOME` (default `~/.local/share/pilot`), one directory per session.
-- pilotd listens on `127.0.0.1:4319` and rejects browser requests (any `Origin` header). There is no
-  authentication yet, so do not expose it.
+### Start your first chat
+
+1. Open Pilot and **Add Project** to select a local repository.
+2. Create a chat, choose **Build** or **Ask**, select a model and describe the task.
+3. Let the agent work. Send a follow-up to steer it, or stop it if the direction is wrong.
+4. Review its response, artifacts and, for Build chats, the changes and pull request. You decide what to merge.
+
+The app installs `pilotd` as a per-user launchd agent. Closing or quitting Pilot does not stop running
+agents. Chat history is stored locally using [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable).
+
+## Working with Pilot
+
+### Ask and Build
+
+| | Ask | Build |
+| --- | --- | --- |
+| Purpose | Understand code, discuss options, plan | Implement, test and deliver changes |
+| Code source | Current checkout or a pinned origin-branch snapshot | Project workspace setting, with a per-chat override |
+| Tools | Pilot's read/search tools and session-local artifacts | Pi tools, compatible extensions, MCP and shell tools |
+| Repository writes | No | Yes |
+| Diff inspector and terminal | No | Yes |
+
+Ask can inspect the current checkout, including local changes, without switching branches. An
+origin-branch snapshot stays pinned for that chat. **Start a Build chat** carries the discussion into a
+new implementation chat; it does not give the existing Ask chat write access.
+
+![An Ask chat exploring durable session resume without repository write access](docs/screenshots/readme-ask.png)
+
+### Workspaces and pull requests
+
+Isolated Build workspaces keep file edits out of your own checkout. For jj projects, sessions use
+separate working copies of a shared repository. **History and bookmarks are shared**, so agents must keep
+rewrites and pushes scoped to their own task. Git-only projects use private clones. Direct-checkout mode
+is also available, but edits there affect your checkout.
+
+Project policy controls delivery. With **Require PR** enabled, agents deliver on a task branch for review.
+Disabling it permits direct default-branch delivery. Pilot never auto-merges pull requests.
+
+Pilot monitors agent-owned PRs from isolated Build sessions for failed CI, unresolved review threads and
+merge conflicts, including earlier PRs in a stack. It sends follow-up work only when the agent is idle
+and no user messages are queued. Automatic follow-ups are limited to three per session, with a
+five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
+not GitHub comments or reviews. Ask and direct-checkout sessions do not receive automatic PR follow-ups.
+
+Archiving keeps the conversation, but not necessarily its working directory. After the retention period,
+Pilot can reclaim safe archived jj workspaces and restore them from a saved snapshot on resume. It can
+also prune generated build and dependency output from legacy clones. Dependencies may need reinstalling
+after recovery.
+
+### Missions
+
+Use a mission when one goal needs several chats. Its shared brief and decisions give agents a common
+starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
+yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
+
+![A mission task list grouped by status, with linked chats, pull requests and progress](docs/screenshots/readme-mission.png)
+
+### Artifacts and integrations
+
+Artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
+such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. Published revisions are
+retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
+SwiftUI artifacts are static renders, not live app views.
+
+Build sessions load pi configuration from `~/.pi/agent`, including packages such as
+[pi-extensions](https://github.com/babariviere/pi-extensions). Linear and Slack tracking use the configured
+pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
+Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
 
 ## Development
 
+### Build from source
+
+Use **Node 24+**, the pnpm version pinned in `package.json`, and **Swift 6.2+** on macOS. Xcode Command Line
+Tools are sufficient with a compatible SDK. On SDKs where SwiftUI's `@State` requires an Xcode-only macro
+plugin, the build scripts select an older installed SDK; install full Xcode if none is available.
+
 ```sh
+git clone https://github.com/babariviere/pilot.git
+cd pilot
 pnpm install
-pnpm app:macos               # builds apps/macos/build/Pilot.app (Command Line Tools are enough)
+pnpm app:macos
 open apps/macos/build/Pilot.app
 ```
 
-Daemon only, in the foreground: `pnpm dev:daemon`. Checks: `pnpm typecheck`, `pnpm test`,
-`apps/macos/scripts/test.sh`.
+The development app uses the checkout and local Node runtime. To run only the daemon in the foreground:
 
-For quick feedback use `pnpm test:fast`; `pnpm test:integration` and `pnpm test:stress` select the heavier
-groups. `pnpm test` still runs every group in CI. See [testing.md](docs/testing.md) for timing reports,
-offline API cassettes and fixture/cache conventions.
+```sh
+pnpm dev:daemon
+```
 
-Dependencies use [pnpm](https://pnpm.io) so that per-session workspaces clone packages from one shared store
-instead of each holding a full `node_modules`. The Swift scripts likewise share SwiftPM's binary artifacts
-(libghostty, Sparkle) between checkouts through APFS clones (`apps/macos/scripts/share-artifacts.sh`).
+Don't start a second daemon on the same port as the app-managed one. Use a separate `PILOT_HOME` and
+`PILOT_PORT` for isolated development state.
 
-Offline transcript-opening regression (cached history, session switches, width changes, and delayed snapshots):
-`apps/macos/.build/debug/Pilot --transcript-opening-check /tmp/pilot-opening-check`.
-Add `--transcript-fixture <snapshot.json>` to replay a saved snapshot without connecting to the daemon.
+### Checks
 
-Offline scroll-anchoring regression (large inline artifacts, lazy rows realized above the viewport, first artifact
-measurement): `apps/macos/.build/debug/Pilot --artifact-scroll-check`.
+```sh
+pnpm fmt:check
+pnpm typecheck
+pnpm test:fast                    # quick unit and offline feedback
+pnpm test                         # full gate, including integration and stress tests
+apps/macos/scripts/test.sh        # Swift tests
+apps/macos/scripts/build.sh       # native app build
+```
 
-## Private releases and updates
+See [testing](docs/testing.md) for suite selection and offline fixtures, and the
+[CPU/memory](docs/performance-check.md) and [I/O](docs/io-performance-check.md) audits for measurement methods.
+For agent-side artifact preview screenshots, install the optional renderer with `pnpm artifacts:browser`.
+Publication still works without it.
 
-GitHub Actions can build self-contained Apple Silicon releases on `main`. Pilot authenticates private
-downloads using local `gh` authentication (with a Keychain token fallback) and installs Sparkle-signed
-updates when agents are idle.
-No Apple developer membership is required (personal builds are ad-hoc signed, not notarized).
-See [the one-time setup](apps/macos/UPDATES.md) for signing keys, GitHub access and initial installation.
+### Architecture
+
+```text
+Pilot.app (SwiftUI + libghostty)
+    │ HTTP / WebSocket on loopback
+    ▼
+pilotd (per-user launchd agent)
+    │ fork + IPC, one worker per session
+    ▼
+Kernel worker
+    ├── pi-durable Harness: SQLite history, tasks and model loop
+    └── native pi SDK: tools, prompts, extensions and provider authentication
+```
+
+| Path | Responsibility |
+| --- | --- |
+| [`apps/macos`](apps/macos) | Native app, terminal, artifact viewer and `PilotCore` protocol mirror |
+| [`packages/daemon`](packages/daemon) | HTTP/WebSocket API, sessions, workspaces and worker supervision |
+| [`packages/kernel`](packages/kernel) | Durable agent worker and native pi SDK integration |
+| [`packages/protocol`](packages/protocol) | Shared client/daemon types |
+| [`packages/artifacts`](packages/artifacts) | Artifact storage, preview rendering and bundled libraries |
+
+The Harness owns history and the model loop. The native SDK supplies tools and extensions, not a second
+model loop. Keep protocol changes in sync with `apps/macos/Sources/PilotCore`.
+
+### Configuration and boundaries
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PILOT_HOME` | `~/.local/share/pilot` | Session metadata and durable storage |
-| `PILOT_WORKSPACE_RETENTION_DAYS` | `1` | Archived workspace retention before cleanup (shared jj reclaim, legacy clone pruning); `0` disables it |
+| `PILOT_HOME` | `~/.local/share/pilot` (or `$XDG_DATA_HOME/pilot`) | Local session data and managed repositories |
 | `PILOT_PORT` | `4319` | Daemon port |
-| `PILOT_AGENT_DIR` | pi's agent dir | Pi settings, packages and auth to load |
+| `PILOT_AGENT_DIR` | pi's agent directory | Pi settings, packages and authentication |
+| `PILOT_WORKSPACE_RETENTION_DAYS` | `1` | Archived workspace cleanup delay; `0` disables cleanup |
 
-## Caveats
+These are daemon environment variables. The app-managed daemon runs under launchd; exporting a variable
+in your terminal does not change an already running daemon.
 
-- Native tools are replay-unsafe. A crash mid-tool yields an interrupted result instead of a rerun.
-- Extensions that start their own model loop or replace the SDK session are unsupported, the same as
-  pi-extensions subagents. Extension messages that start a turn (`sendMessage` with `triggerTurn`, or
-  `sendUserMessage`) become durable Harness input, so subagent answers wake the parent chat as follow-ups.
-  Custom messages without `triggerTurn` stay native-only and are not added to the durable transcript.
-  Subagent display and controls need a pi-extensions version with the `subagents:*` host events.
-- Project-local `.pi` resources load only for directories pi already trusts (or `defaultProjectTrust: always`).
+- **Keep the daemon local.** It binds to `127.0.0.1`, rejects requests with an `Origin` header and has no
+  authentication. Do not expose it to a network.
+- **Durability is not tool replay.** If a native tool is interrupted by a crash, it is reported as
+  interrupted rather than automatically rerun.
+- **Extensions must fit the host.** Extensions that replace the SDK session or start their own model loop
+  are unsupported. Subagent controls require a pi-extensions version with the `subagents:*` host events.
+- **Project trust still applies.** Project-local `.pi` resources load only for directories pi trusts
+  (or when `defaultProjectTrust` is set to `always`).

@@ -1884,7 +1884,7 @@ enum Fixtures {
             SessionSubagent(name: "test-runner", state: .idle, task: "Run the kernel tests and summarize failures.",
                             createdAt: now - 300_000, cwd: projects[0].path, model: "anthropic/claude-sonnet-5-5",
                             error: "model_error: overloaded"),
-            SessionSubagent(name: "docs-check", state: .idle, task: "Find stale references in PLAN.md.",
+            SessionSubagent(name: "docs-check", state: .idle, task: "Check README.md against the current implementation.",
                             createdAt: now - 500_000, cwd: projects[0].path, model: "anthropic/claude-sonnet-5-5", lastAnswerId: "12"),
         ]
     )
@@ -1897,7 +1897,7 @@ enum Fixtures {
           {"id":2,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"toolUse","content":[{"type":"text","text":"I'll split this across four subagents and merge their findings."},{"type":"toolCall","id":"s1","name":"subagent","arguments":{"action":"spawn","name":"protocol-audit","message":"Map every SessionEvent the daemon emits."}},{"type":"toolCall","id":"s2","name":"subagent","arguments":{"action":"spawn","name":"swift-mirror","message":"Check that PilotCore mirrors packages/protocol."}}]}]},
           {"id":3,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"s1","toolName":"subagent","isError":false,"content":[{"type":"text","text":"Started protocol-audit."}]}]},
           {"id":4,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"s2","toolName":"subagent","isError":false,"content":[{"type":"text","text":"Started swift-mirror."}]}]},
-          {"id":5,"kind":"pi.user","model":[{"role":"user","content":"[subagent \"docs-check\" answered, no reply needed] No stale references in PLAN.md. The milestone table already lists subagents as experimental."}]},
+          {"id":5,"kind":"pi.user","model":[{"role":"user","content":"[subagent \"docs-check\" answered, no reply needed] README.md matches the current implementation. The development section lists the supported checks."}]},
           {"id":6,"kind":"pi.assistant","model":[{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"docs-check found nothing stale. Waiting on protocol-audit before editing Protocol.swift."}]}]},
           {"id":7,"kind":"pi.user","model":[{"role":"user","content":"[subagent \"swift-mirror\" answered, no reply needed] SessionSummary is missing three fields on the Swift side: sourceCommit, outcomeReason and pullRequestError."}]}
         ],"tools":[],"compactions":[],"inbox":[],"agent":{},"usage":{},"run":{"inputs":[7]}}]
