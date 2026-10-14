@@ -182,6 +182,8 @@ export interface SessionWorker {
 	/** Whether the kernel has live subprocesses (background jobs, subagents). Such workers are never parked. */
 	hasChildren?(): Promise<boolean>;
 	jobs?(): Promise<SessionJob[]>;
+	/** Stop one running job for the user. The kernel tells the agent, whose follow-up turn ends the wait. */
+	stopJob?(jobId: string): Promise<void>;
 	runningJobs?: SessionJob[];
 	/** Live-worker work continues between the last job ending and its result turn completing. */
 	awaitingJobFollowUp?: boolean;
@@ -651,12 +653,18 @@ export class Worker implements SessionWorker {
 		return this.checkingJobs;
 	}
 
+	stopJob(jobId: string): Promise<void> {
+		return this.request({ type: "stopJob", requestId: `stopJob:${randomUUID()}`, jobId });
+	}
+
 	/** Send a command and wait for its accepted/aborted/error acknowledgement. */
 	request(command: Extract<KernelCommand, { requestId: string }>): Promise<void> {
 		if (this.unavailable) return Promise.reject(this.unavailable);
 		if (!this.child.connected) return Promise.reject(new WorkerUnavailable("Kernel is disconnected"));
 		return new Promise((resolve, reject) => {
-			const inspection = command.type === "inspectChildren" || command.type === "inspectJobs";
+			// A slow or rejected job command concerns that job, not the worker's transport or session error.
+			const inspection =
+				command.type === "inspectChildren" || command.type === "inspectJobs" || command.type === "stopJob";
 			const timer = setTimeout(
 				() => {
 					const error = new WorkerUnavailable(`Kernel ${command.type} acknowledgement timed out`);
@@ -2953,6 +2961,24 @@ export class SessionManager {
 		const worker = this.workers.get(id);
 		if (!worker || worker.state === "failed" || worker.state === "starting") return [];
 		return (await worker.jobs?.()) ?? [];
+	}
+
+	/** Stop one of a live worker's running jobs. Never reopens a parked worker, which has none. */
+	async stopJob(id: string, jobId: string): Promise<void> {
+		const meta = this.require(id);
+		if (this.sleepPause)
+			throw new ServiceUnavailable("Agents are paused for sleep. Wake this Mac before stopping a job.");
+		if (this.closing) throw new Error("pilotd is shutting down");
+		const worker = meta.archivedAt === undefined && meta.mode !== "ask" ? this.workers.get(id) : undefined;
+		if (!worker?.stopJob || !worker.runningJobs?.some((job) => job.id === jobId))
+			throw new NotFound("This job is no longer running");
+		try {
+			await worker.stopJob(jobId);
+		} catch (error) {
+			// It ended between the list and the stop.
+			if (error instanceof CommandRejected) throw new NotFound("This job is no longer running");
+			throw error;
+		}
 	}
 
 	/**

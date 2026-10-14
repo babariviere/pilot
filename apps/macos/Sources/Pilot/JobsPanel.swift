@@ -2,31 +2,23 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// A read-only snapshot, fetched on opening and explicit refresh only.
+/// The chat's running background jobs, live from the session summary (no fetch of its own), with Stop on each.
+/// Opened from the working line or /jobs. Stopping a job tells the agent, which then takes a short turn.
 struct JobsPanel: View {
     let sessionId: String
+    let jobs: [SessionJob]
     let close: () -> Void
-    @State private var jobs: [SessionJob] = []
-    @State private var loading = true
-    @State private var error: String?
-    @State private var refresh = 0
-    @State private var fetchedAt = 0.0
     @State private var expanded: Set<String> = []
+    @State private var stopping: Set<String> = []
+    @State private var error: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
                 Text("Running jobs").fontWeight(.medium)
-                if !loading, error == nil {
-                    Text("\(jobs.count)").monospacedDigit().foregroundStyle(Theme.mutedForeground)
-                }
+                Text("\(jobs.count)").monospacedDigit().foregroundStyle(Theme.mutedForeground)
                 Spacer()
-                Button { refresh += 1 } label: {
-                    Image(systemName: "arrow.clockwise").frame(width: 20, height: 20)
-                }
-                    .disabled(loading)
-                    .help("Refresh jobs").accessibilityLabel("Refresh jobs")
                 Button(action: close) {
                     Image(systemName: "xmark").frame(width: 20, height: 20)
                 }
@@ -36,13 +28,12 @@ struct JobsPanel: View {
             .buttonStyle(.plain)
             .padding(.horizontal, 12).padding(.vertical, 6)
             Divider().opacity(0.5)
-            if loading {
-                ProgressView("Loading jobs…").controlSize(.small)
-                    .font(.pilot(.caption)).padding(12)
-            } else if let error {
+            if let error {
                 Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
-                    .textSelection(.enabled).lineLimit(3).padding(12)
-            } else if jobs.isEmpty {
+                    .textSelection(.enabled).lineLimit(3)
+                    .padding(.horizontal, 12).padding(.top, 8)
+            }
+            if jobs.isEmpty {
                 Text("No running jobs.").font(.pilot(.label))
                     .foregroundStyle(Theme.mutedForeground).padding(12)
             } else {
@@ -59,44 +50,44 @@ struct JobsPanel: View {
         .padding(.horizontal, 28).padding(.vertical, 8)
         .frame(maxWidth: Theme.column + 56)
         .frame(maxWidth: .infinity)
-        .task(id: refresh) {
-            loading = true
-            error = nil
-            do {
-                let result = try await AppModel.shared.client.jobs(sessionId)
-                guard !Task.isCancelled else { return }
-                jobs = result
-                expanded.formIntersection(result.map(\.id))
-                fetchedAt = Date().timeIntervalSince1970 * 1000
-            } catch {
-                guard !Task.isCancelled else { return }
-                self.error = error.localizedDescription
-            }
-            loading = false
+        .onChange(of: jobs.map(\.id)) { _, ids in
+            expanded.formIntersection(ids)
+            stopping.formIntersection(ids)
         }
     }
 
     private func jobRow(_ job: SessionJob) -> some View {
         let isExpanded = expanded.contains(job.id)
+        let isStopping = stopping.contains(job.id)
         return VStack(alignment: .leading, spacing: 0) {
-            Button {
-                if isExpanded { expanded.remove(job.id) } else { expanded.insert(job.id) }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.pilot(.micro)).foregroundStyle(Theme.faintForeground).frame(width: 10)
-                    Text(job.name).font(.pilot(.label)).lineLimit(1)
-                    Spacer(minLength: 8)
-                    Text("Running · \(job.elapsed(at: fetchedAt))")
-                        .font(.pilot(.caption)).monospacedDigit()
-                        .foregroundStyle(Theme.mutedForeground).fixedSize()
+            HStack(spacing: 8) {
+                Button {
+                    if isExpanded { expanded.remove(job.id) } else { expanded.insert(job.id) }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.pilot(.micro)).foregroundStyle(Theme.faintForeground).frame(width: 10)
+                        Text(job.name).font(.pilot(.label)).lineLimit(1)
+                        Spacer(minLength: 8)
+                        TimelineView(JobElapsedSchedule(startedAt: job.startedAt)) { context in
+                            Text(isStopping ? "Stopping…" : "Running · \(Self.elapsed(job, at: context.date))")
+                                .font(.pilot(.caption)).monospacedDigit()
+                                .foregroundStyle(Theme.mutedForeground).fixedSize()
+                        }
+                    }
+                    .frame(height: 30).contentShape(Rectangle())
                 }
-                .frame(height: 30).contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .help(job.name)
+                .accessibilityLabel("\(job.name), running for \(Self.elapsed(job, at: Date()))")
+                .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                Button("Stop") { stop(job) }
+                    .buttonStyle(.link)
+                    .font(.pilot(.caption))
+                    .disabled(isStopping)
+                    .help("Stop \(job.name). The agent is told you stopped it.")
+                    .accessibilityLabel("Stop \(job.name)")
             }
-            .buttonStyle(.plain)
-            .help(job.name)
-            .accessibilityLabel("\(job.name), running for \(job.elapsed(at: fetchedAt))")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
             if isExpanded {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(job.id).foregroundStyle(Theme.faintForeground)
@@ -114,6 +105,24 @@ struct JobsPanel: View {
                         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: job.outputPath)])
                     }
                 }
+            }
+        }
+    }
+
+    private static func elapsed(_ job: SessionJob, at date: Date) -> String {
+        WorkingLine.compactElapsed(milliseconds: date.timeIntervalSince1970 * 1000 - job.startedAt)
+    }
+
+    /// The row stays, marked Stopping…, until the session summary drops the job.
+    private func stop(_ job: SessionJob) {
+        stopping.insert(job.id)
+        error = nil
+        Task {
+            do {
+                try await AppModel.shared.client.stopJob(sessionId, jobId: job.id)
+            } catch {
+                stopping.remove(job.id)
+                self.error = "Could not stop \(job.name): \(error.localizedDescription)"
             }
         }
     }

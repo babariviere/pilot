@@ -210,9 +210,22 @@ final class PilotClient: ObservableObject {
         return response.commands
     }
 
-    func jobs(_ sessionId: String) async throws -> [SessionJob] {
-        let response: SessionJobsResponse = try await call("api/sessions/\(sessionId)/jobs", method: "GET")
-        return response.jobs
+    /// Stops one running job. The session summary drops it once the worker reports its jobs again.
+    func stopJob(_ sessionId: String, jobId: String) async throws {
+        var allowed = CharacterSet.urlPathAllowed
+        allowed.remove("/")
+        guard let baseURL else { throw ClientError("pilotd is not connected") }
+        guard let job = jobId.addingPercentEncoding(withAllowedCharacters: allowed),
+              var components = URLComponents(url: baseURL.appending(path: "api/sessions/\(sessionId)/jobs"),
+                                             resolvingAgainstBaseURL: false) else {
+            throw ClientError("Invalid job id")
+        }
+        // One path segment, even when the id holds a slash.
+        components.percentEncodedPath += "/\(job)/stop"
+        guard let url = components.url else { throw ClientError("Invalid job id") }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let _: Ack = try await call(request)
     }
 
     /// Starts a manual compaction; returns once it is queued, not when the summary is placed.

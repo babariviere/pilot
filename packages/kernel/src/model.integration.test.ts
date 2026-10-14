@@ -89,6 +89,54 @@ test("host jobs inspection is empty when no jobs extension is installed", async 
 	const f = await fixture(t);
 	const session = await f.open();
 	assert.deepEqual(await session.jobs(), []);
+	await assert.rejects(session.stopJob("tests"), /No running job tests/);
+});
+
+test("stopping a job for the user claims it and tells the agent once in a follow-up turn", async (t) => {
+	const actions: unknown[] = [];
+	const job = { id: "tests", name: "Test suite", state: "running", startedAt: 1000, outputPath: "/tmp/tests.log" };
+	const entered = deferred();
+	const f = await fixture(t, [
+		(pi) => {
+			pi.registerTool({
+				name: "jobs",
+				label: "Jobs",
+				description: "Offline jobs fixture",
+				parameters: Type.Object({ action: Type.String(), id: Type.Optional(Type.String()) }),
+				outputSchema: Type.Unknown(),
+				exposure: "codemode",
+				async execute(_id: string, args: { action: string; id?: string }) {
+					actions.push(args);
+					if (args.action === "stop") {
+						if (args.id !== job.id) throw new Error(`Unknown job: ${args.id}`);
+						job.state = "cancelled";
+						return { content: [], details: undefined, structuredContent: { ...job, endedAt: 2000 } };
+					}
+					return { content: [], details: undefined, structuredContent: [job] };
+				},
+			});
+		},
+	]);
+	f.a.setResponses([
+		() => {
+			entered.resolve();
+			return fauxAssistantMessage("Understood, the tests were stopped.");
+		},
+	]);
+	const session = await f.open();
+	await assert.rejects(session.stopJob("other"), /No running job other/);
+	assert.ok(!actions.some((action) => (action as { action: string }).action === "stop"));
+	await session.stopJob("tests");
+	assert.deepEqual(actions.at(-2), { action: "stop", id: "tests" });
+	assert.deepEqual(await session.jobs(), []);
+	await entered.promise;
+	await session.conversation.waitForIdle(context);
+	assert.equal(f.a.state.callCount, 1);
+	await assert.rejects(session.stopJob("tests"), /No running job tests/);
+	const view = await session.conversation.context(context);
+	const messages = view.messages.filter((message) => message.role === "user").map((message) => message.content);
+	assert.equal(messages.length, 1);
+	assert.match(JSON.stringify(messages[0]), /The user stopped background job Test suite \(tests\)/);
 });
 
 test("durable jobs recovery keeps its storage anchor and admits one completion across reopen", {

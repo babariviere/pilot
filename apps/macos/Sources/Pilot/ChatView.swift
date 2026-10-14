@@ -203,7 +203,9 @@ struct ChatView: View {
                             messageExpansions: messageExpansions).equatable()
                     }
                     if showsWorkingIndicator(transcript) {
-                        WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting)
+                        WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting,
+                                         agentWorking: transcript.working || session.state == "starting",
+                                         jobs: runningJobs, showJobs: { showingJobs.toggle() })
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     }
@@ -286,7 +288,7 @@ struct ChatView: View {
                     SubagentsStrip(session: session)
                 }
                 if showingJobs, !session.isArchived {
-                    JobsPanel(sessionId: session.id) { showingJobs = false }
+                    JobsPanel(sessionId: session.id, jobs: runningJobs) { showingJobs = false }
                 }
                 if session.isArchived {
                     ArchivedComposer(session: session)
@@ -345,9 +347,14 @@ struct ChatView: View {
     /// "Working…" stays under the transcript for the whole run, including while text streams
     /// and tools run, so activity never looks like it stopped. A manual compaction can run
     /// while idle, so it shows too. A starting session shows it once the loading spinner is gone.
+    /// Background jobs keep it after the agent's turn ends ("Waiting on 2 jobs · Tests 4m").
     private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
         transcript.working || transcript.compacting || (session.state == "starting" && !feed.loading)
+            || !runningJobs.isEmpty
     }
+
+    /// Live from the session summary, which pilotd updates whenever the worker's jobs change.
+    private var runningJobs: [SessionJob] { session.isArchived ? [] : session.runningJobs ?? [] }
 
     /// The agent's question replaces the composer once its run has ended.
     private func pendingQuestion(_ transcript: TranscriptPresentation) -> AgentQuestion? {

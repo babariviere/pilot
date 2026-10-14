@@ -788,6 +788,13 @@ export class KernelSession {
 		return this.adapter.jobs();
 	}
 
+	/** Stop one running job for the user, then publish the shorter list without waiting for the next probe. */
+	async stopJob(id: string): Promise<void> {
+		if (this.#closing) throw new Error("Session is closing");
+		await this.adapter.stopJob(id);
+		await this.jobsMonitor?.refresh();
+	}
+
 	/**
 	 * Queue a manual compaction. Returns once its task is committed; the summary is placed when idle or at the next
 	 * turn boundary, and `abort()` cancels it.

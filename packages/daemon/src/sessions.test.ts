@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
 import type { AgentEvent, SessionCompletion, SessionPullRequest, SessionState, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
-import { Conflict } from "./errors.ts";
+import { Conflict, NotFound } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
@@ -200,6 +200,28 @@ test("jobs failures and deadlines do not fail or stop the worker, including late
 	await failed;
 	assert.equal(worker.error, undefined);
 	assert.equal(worker["jobResults"].size, 0);
+});
+
+test("job stop commands correlate replies and never fail the worker", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t, 60_000);
+	ready();
+	await worker.ready;
+	const stop = worker.stopJob("tests");
+	const command = child.sent.find((item) => item.type === "stopJob")!;
+	assert.ok(command.type === "stopJob");
+	assert.equal(command.jobId, "tests");
+	child.emit("message", { type: "accepted", requestId: command.requestId });
+	await stop;
+	const missing = assert.rejects(worker.stopJob("gone"), /No running job gone/);
+	const next = child.sent.filter((item) => item.type === "stopJob").at(-1)!;
+	child.emit("message", { type: "error", requestId: next.requestId, message: "No running job gone" });
+	await missing;
+	const slow = assert.rejects(worker.stopJob("slow"), /timed out/);
+	t.mock.timers.tick(10_000);
+	await slow;
+	assert.equal(worker.error, undefined, "a job command never becomes the session's error");
+	assert.equal(worker.state, "idle");
+	assert.deepEqual(child.killed, []);
 });
 
 test("transport retirement sends SIGTERM first, escalates once after eight seconds, and waits for confirmed exit", async (t) => {
@@ -456,6 +478,12 @@ class FakeWorker implements SessionWorker {
 
 	async jobs() {
 		return [{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" }];
+	}
+
+	readonly stoppedJobs: string[] = [];
+	async stopJob(jobId: string) {
+		this.stoppedJobs.push(jobId);
+		if (jobId === "ended") throw new CommandRejected("No running job ended");
 	}
 
 	async close(): Promise<void> {
@@ -1763,6 +1791,33 @@ test("jobs listing is session-local and never wakes parked, archived or unknown 
 	assert.deepEqual(await sessions.jobs(created.id), []);
 	assert.equal(f.workers.length, 1);
 	await assert.rejects(sessions.jobs("missing"), /Unknown session/);
+});
+
+test("stopping a job reaches only a live worker's running job", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { idleParkMs: 60_000 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	const worker = f.workers[0]!;
+	const meta = sessions["metas"].get(created.id)!;
+	await assert.rejects(sessions.stopJob(created.id, "tests"), NotFound);
+	const job = { name: "Tests", state: "running" as const, startedAt: Date.now(), outputPath: "/tmp/tests.log" };
+	sessions["onPacket"](meta, worker, {
+		type: "jobs.changed",
+		jobs: [
+			{ id: "tests", ...job },
+			{ id: "ended", ...job },
+		],
+	});
+	await sessions.stopJob(created.id, "tests");
+	await assert.rejects(sessions.stopJob(created.id, "ended"), /no longer running/);
+	await assert.rejects(sessions.stopJob(created.id, "other"), /no longer running/);
+	assert.deepEqual(worker.stoppedJobs, ["tests", "ended"]);
+	await assert.rejects(sessions.stopJob("missing", "tests"), /Unknown session/);
+	await sessions.stop(created.id);
+	await sessions.archive(created.id);
+	await assert.rejects(sessions.stopJob(created.id, "tests"), NotFound);
+	assert.deepEqual(worker.stoppedJobs, ["tests", "ended"]);
 });
 
 test("idle unwatched kernels without subprocesses park, and reopen only after releasing storage", async (t) => {

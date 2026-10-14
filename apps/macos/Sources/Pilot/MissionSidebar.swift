@@ -11,6 +11,8 @@ struct MissionSidebarRow: View {
     let working: Int
     /// Most urgent state of the mission's chats, from MissionSidebarSummary.signal.
     let signal: SessionSignal?
+    /// Its working chats only wait on background jobs: the corner uses the slower background ripple.
+    var waitingOnJobs = false
     let selected: Bool
     @EnvironmentObject private var model: AppModel
     @State private var hovered = false
@@ -71,7 +73,7 @@ struct MissionSidebarRow: View {
         .padding(.trailing, 16)
         .padding(.vertical, 3)
         .padding(.leading, 4)
-        .ditherCorner(signal, outset: EdgeInsets(), cornerRadius: 6)
+        .ditherCorner(signal, background: waitingOnJobs, outset: EdgeInsets(), cornerRadius: 6)
         .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.selected : (hovered ? Theme.muted : Color.clear)))
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)

@@ -161,6 +161,13 @@ public enum MissionSidebarSummary {
         if signals.contains(.working) { return .working }
         return nil
     }
+
+    /// The mission's working chats are all idle agents waiting on background jobs, so a working corner uses the
+    /// slower background motion.
+    public static func waitingOnJobs(mission: Mission, members: [SessionSummary]) -> Bool {
+        let working = members.filter { $0.missionId == mission.id && !$0.isArchived && $0.isWorking }
+        return !working.isEmpty && working.allSatisfy(\.isWaitingOnJobs)
+    }
 }
 
 /// The second line of a coordinator's sidebar row: "Coordinator", then its reason or state.

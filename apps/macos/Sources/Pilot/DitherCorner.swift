@@ -16,12 +16,15 @@ import SwiftUI
 /// Larger surfaces that carry one state, such as the agent question tray, pass their own outset and corner
 /// radius so the dither stays inside their shape, and an `extent` above 1 to grow the corner with the surface.
 /// Extent adds cells rather than enlarging them, so the pixels stay the sidebar's size.
+/// A working chat whose agent is idle while only its background jobs run passes `background: true`: the ripple
+/// is fainter and half as fast, so it still reads as working, in the background.
 extension View {
     /// The defaults fit sidebar rows: they reach the edges of the native selection highlight.
-    func ditherCorner(_ signal: SessionSignal?,
+    func ditherCorner(_ signal: SessionSignal?, background: Bool = false,
                       outset: EdgeInsets = EdgeInsets(top: -3, leading: 0, bottom: -3, trailing: -6),
                       cornerRadius: CGFloat = 5, extent: Double = 1) -> some View {
-        modifier(DitherCornerModifier(signal: signal, outset: outset, cornerRadius: cornerRadius, extent: extent))
+        modifier(DitherCornerModifier(signal: signal, background: background && signal == .working, outset: outset,
+                                      cornerRadius: cornerRadius, extent: extent))
     }
 
     /// Keeps the enclosing `ditherCorner` empty behind this view while `active`, with a small margin of cells.
@@ -64,6 +67,8 @@ enum DitherCorner {
     }
     /// One loop of the working ripple and the needs-you breath.
     static let frameCount = 36
+    /// One loop of the background ripple, half as fast. The shared clock counts this far.
+    static let backgroundFrameCount = 72
     static let frameInterval: TimeInterval = 1.0 / 12
     /// How far the corner reaches toward the pointer, as a fraction of the pointer's distance, in cells.
     static let maximumLean = CGPoint(x: 30, y: 12)
@@ -75,7 +80,12 @@ enum DitherCorner {
     }
 
     static func frameIndex(at date: Date) -> Int {
-        Int((date.timeIntervalSinceReferenceDate / frameInterval).rounded(.down)) % frameCount
+        Int((date.timeIntervalSinceReferenceDate / frameInterval).rounded(.down)) % backgroundFrameCount
+    }
+
+    /// The clock frame a drawing uses. Faster loops repeat within the clock's count, so their images are shared.
+    static func loopFrame(_ frame: Int, background: Bool) -> Int {
+        background ? frame % backgroundFrameCount : frame % frameCount
     }
 
     /// The lean for a pointer at `pointer` in a row of `size`: a fraction of the way from the corner toward the
@@ -115,6 +125,7 @@ extension SessionSignal {
 
 private struct DitherCornerModifier: ViewModifier {
     let signal: SessionSignal?
+    let background: Bool
     let outset: EdgeInsets
     let cornerRadius: CGFloat
     let extent: Double
@@ -125,8 +136,9 @@ private struct DitherCornerModifier: ViewModifier {
     @State private var mix = 1.0
     @State private var pointer: CGPoint?
 
-    init(signal: SessionSignal?, outset: EdgeInsets, cornerRadius: CGFloat, extent: Double) {
+    init(signal: SessionSignal?, background: Bool, outset: EdgeInsets, cornerRadius: CGFloat, extent: Double) {
         self.signal = signal
+        self.background = background
         self.outset = outset
         self.cornerRadius = cornerRadius
         self.extent = extent
@@ -142,7 +154,8 @@ private struct DitherCornerModifier: ViewModifier {
                         let clear = clearance.flatMap {
                             DitherCorner.clearedCells(proxy[$0], in: proxy.size, extent: extent)
                         }
-                        DitherCornerClocked(signal: shown, previous: previous, mix: mix, lean: lean,
+                        DitherCornerClocked(signal: shown, background: background && shown == .working,
+                                            previous: previous, mix: mix, lean: lean,
                                             hover: pointer == nil ? 0 : 1, still: reduceMotion, extent: extent,
                                             clear: clear)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
@@ -151,7 +164,7 @@ private struct DitherCornerModifier: ViewModifier {
                     .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                     .allowsHitTesting(false)
                     .accessibilityElement()
-                    .accessibilityLabel(shown.map { "Status: \($0.label)" } ?? "")
+                    .accessibilityLabel(shown.map { "Status: \($0.label)\(background ? " in the background" : "")" } ?? "")
                     .accessibilityHidden(shown == nil)
                 }
             }
@@ -186,6 +199,7 @@ private struct DitherCornerModifier: ViewModifier {
 /// Observes the shared clock only while something on the corner moves.
 private struct DitherCornerClocked: View {
     let signal: SessionSignal?
+    let background: Bool
     let previous: SessionSignal?
     let mix: Double
     let lean: CGPoint
@@ -204,14 +218,15 @@ private struct DitherCornerClocked: View {
     }
 
     private func layer(frame: Int) -> some View {
-        DitherCornerLayer(signal: signal, previous: previous, frame: frame, mix: mix,
+        DitherCornerLayer(signal: signal, background: background, previous: previous, frame: frame, mix: mix,
                           leanX: lean.x, leanY: lean.y, hover: hover, extent: extent, clear: clear)
             .animation(still ? nil : .spring(response: 0.5, dampingFraction: 0.78), value: lean)
             .animation(still ? nil : .easeOut(duration: 0.25), value: hover)
     }
 }
 
-private struct DitherCornerTicking<Content: View>: View {
+/// Redraws `content` on each shared clock frame while it is on screen. Also drives `DitherRipple`.
+struct DitherCornerTicking<Content: View>: View {
     @ViewBuilder let content: (Int) -> Content
     @ObservedObject private var clock = DitherCornerClock.shared
     @StateObject private var lifetime = DitherCornerClockLifetime()
@@ -226,6 +241,7 @@ private struct DitherCornerTicking<Content: View>: View {
 /// Lean, hover and dissolve progress are animatable, so springs and dissolves redraw the dither each frame.
 private struct DitherCornerLayer: View, Animatable {
     let signal: SessionSignal?
+    let background: Bool
     let previous: SessionSignal?
     let frame: Int
     var mix: Double
@@ -246,9 +262,11 @@ private struct DitherCornerLayer: View, Animatable {
     }
 
     var body: some View {
-        let request = DitherCornerRequest(signal: signal, previous: mix < 1 ? previous : nil, frame: frame,
+        let request = DitherCornerRequest(signal: signal, previous: mix < 1 ? previous : nil,
+                                          frame: DitherCorner.loopFrame(frame, background: background),
                                           mix: min(1, max(0, mix)), leanX: leanX, leanY: leanY,
-                                          hover: min(1, max(0, hover)), extent: extent, clear: clear)
+                                          hover: min(1, max(0, hover)), extent: extent, clear: clear,
+                                          background: background)
         if let image = DitherCornerRenderer.image(for: request) {
             let grid = DitherCorner.grid(extent: extent)
             Image(decorative: image, scale: 1)
@@ -274,6 +292,8 @@ struct DitherCornerRequest: Hashable {
     var extent: Double = 1
     /// Cells left empty under controls drawn over the corner. See `ditherCornerClearance(_:)`.
     var clear: DitherCornerCells?
+    /// A working corner whose agent waits on background jobs: fainter and half as fast.
+    var background = false
 
     /// Resting corners repeat across rows and frames. Pointer-driven, dissolving and cleared ones are one-offs.
     var isCacheable: Bool { previous == nil && mix >= 1 && leanX == 0 && leanY == 0 && hover == 0 && clear == nil }
@@ -283,8 +303,9 @@ struct DitherCornerRequest: Hashable {
 /// hovered or dissolving row renders outside the cache.
 @MainActor
 enum DitherCornerRenderer {
-    /// Bounded by construction: four signals times `frameCount` resting frames per extent in use, about 5 KB each
-    /// for rows (the question tray's larger corner is about 30 KB per frame, and only needs you).
+    /// Bounded by construction: four signals times `frameCount` resting frames, plus `backgroundFrameCount` for the
+    /// background ripple, per extent in use, about 5 KB each for rows (the question tray's larger corner is about
+    /// 30 KB per frame, and only needs you).
     private static var cache: [DitherCornerRequest: CGImage] = [:]
 
     static func image(for request: DitherCornerRequest) -> CGImage? {
@@ -313,7 +334,7 @@ enum DitherCornerRenderer {
 
     /// Coverage in 0...1 of one cell. `u` and `v` are the cell's distance in cells from the right and bottom.
     nonisolated static func coverage(_ signal: SessionSignal?, u: Double, v: Double, frame: Int, lean: (x: CGFloat, y: CGFloat),
-                         hover: Double, extent: Double = 1) -> Double {
+                         hover: Double, extent: Double = 1, background: Bool = false) -> Double {
         guard let signal else { return 0 }
         let reachX = -Double(lean.x) / Double(DitherCorner.maximumLean.x)
         let reachY = -Double(lean.y) / Double(DitherCorner.maximumLean.y)
@@ -333,6 +354,9 @@ enum DitherCornerRenderer {
         let phase = 2 * Double.pi * Double(frame) / Double(DitherCorner.frameCount)
         let level: Double
         switch signal {
+        case .working where background:
+            let slow = 2 * Double.pi * Double(frame) / Double(DitherCorner.backgroundFrameCount)
+            level = 0.36 + 0.12 * (0.5 + 0.5 * sin(distance * 10 - slow))
         case .working: level = 0.42 + 0.26 * (0.5 + 0.5 * sin(distance * 14 - phase))
         case .needsYou: level = 0.5 + 0.22 * (0.5 + 0.5 * sin(phase))
         case .failed: level = 0.68
@@ -353,7 +377,8 @@ enum DitherCornerRenderer {
                 // Each cell flips to the new state at its own threshold, so the change dissolves.
                 let signal = request.previous != nil && threshold > request.mix ? request.previous : request.signal
                 let amount = coverage(signal, u: u, v: v, frame: request.frame, lean: (request.leanX, request.leanY),
-                                      hover: request.hover, extent: request.extent)
+                                      hover: request.hover, extent: request.extent,
+                                      background: request.background && signal == request.signal)
                 guard let signal, threshold < amount, let tint = tints[signal] else { continue }
                 let alpha = 0.62 * (0.55 + 0.45 * amount)
                 let index = (y * width + x) * 4
