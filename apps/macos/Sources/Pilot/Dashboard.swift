@@ -6,13 +6,17 @@ struct Dashboard: View {
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], spacing: 14) {
-            WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
-            ActivityCard(sessions: client.activeSessions)
-            ReadyToMergeCard(sessions: client.activeSessions)
-            IdleCard(sessions: client.activeSessions.filter(\.isIdleAwaitingReview))
-            ScheduledCard(items: ScheduleText.listed(client.schedules, includeFailed: true))
-            ProjectsCard(projects: client.projects, sessions: client.activeSessions)
+        VStack(spacing: 32) {
+            HomeOverview()
+                .frame(maxWidth: Theme.column)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], spacing: 14) {
+                WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
+                ActivityCard(sessions: client.activeSessions)
+                ReadyToMergeCard(sessions: client.activeSessions)
+                IdleCard(sessions: client.activeSessions.filter(\.isIdleAwaitingReview))
+                ScheduledCard(items: ScheduleText.listed(client.schedules, includeFailed: true))
+                ProjectsCard(projects: client.projects, sessions: client.activeSessions)
+            }
         }
     }
 }

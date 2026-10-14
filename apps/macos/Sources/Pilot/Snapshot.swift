@@ -69,6 +69,46 @@ enum Snapshot {
         model.daemon.markRunningForSnapshot()
         let size = CGSize(width: 1360, height: 860)
 
+        if CommandLine.arguments.contains("--home-overview-only") {
+            let now = Fixtures.now
+            let sessions = [
+                SessionSummary(id: "home-failed", title: "Fix checkout validation", cwd: "/tmp/demo", projectId: "p1",
+                               createdAt: now, updatedAt: now, state: "idle", outcome: .failed, outcomeAt: now),
+                SessionSummary(id: "home-result", title: "Review the accessibility audit and keyboard navigation improvements",
+                               cwd: "/tmp/demo", projectId: "p2", createdAt: now, updatedAt: now, state: "idle",
+                               outcome: .done, outcomeAt: now),
+                SessionSummary(id: "home-coordinator", title: "Release coordinator", cwd: "/tmp/demo", projectId: "p1",
+                               createdAt: now, updatedAt: now, state: "working"),
+                SessionSummary(id: "home-archived", title: "Previous coordinator", cwd: "/tmp/demo", projectId: "p2",
+                               createdAt: now, updatedAt: now, state: "idle", archivedAt: now),
+            ]
+            model.client.loadFixture(projects: Fixtures.projects, sessions: sessions)
+            let missions = [
+                Mission(id: "home-release", projectId: "p1", title: "Ship the next release", goal: "",
+                        coordinatorSessionId: "home-coordinator", createdAt: now, updatedAt: now, needsYouCount: 2),
+                Mission(id: "home-long", projectId: "p2", title: "Improve accessibility across every window, toolbar and composer",
+                        goal: "", createdAt: now - 1, updatedAt: now),
+                Mission(id: "home-done", projectId: "p2", title: "Previous release", goal: "", status: .done,
+                        coordinatorSessionId: "home-archived", createdAt: now, updatedAt: now),
+                Mission(id: "home-missing", projectId: "p1", title: "Older migration", goal: "", status: .archived,
+                        coordinatorSessionId: "missing", createdAt: now, updatedAt: now),
+            ]
+            model.client.handle(.missions(missions))
+            for (name, width, appearance) in [("wide", 800.0, NSAppearance.Name.aqua),
+                                              ("narrow", 420.0, .aqua), ("dark", 800.0, .darkAqua)] {
+                NSApp.appearance = NSAppearance(named: appearance)
+                await render(HomeOverview().padding(24).background(Theme.background),
+                             size: CGSize(width: width, height: 500),
+                             to: directory.appending(path: "home-overview-\(name).png"), appearance: appearance)
+            }
+            model.client.loadFixture(projects: Fixtures.projects, sessions: [])
+            model.client.handle(.missions([]))
+            await render(HomeOverview().padding(24).background(Theme.background), size: CGSize(width: 800, height: 240),
+                         to: directory.appending(path: "home-overview-empty.png"))
+            NSApp.terminate(nil)
+            return
+        }
+
         // Capture workspace context in the real native toolbar, not above the composer.
         if CommandLine.arguments.contains("--session-context-only") {
             model.inspectorVisible = false
@@ -1575,7 +1615,8 @@ enum Snapshot {
 
     private static func render<V: View>(_ view: V, size: CGSize, to url: URL, completionPreview: Bool = false,
                                        completionText: String? = nil,
-                                       scrollEditorToEnd: Bool = false, scrollTranscriptUp: Bool = false) async {
+                                       scrollEditorToEnd: Bool = false, scrollTranscriptUp: Bool = false,
+                                       appearance: NSAppearance.Name = .aqua) async {
         let root = view
             .environmentObject(AppModel.shared)
             .environment(\.pilotFonts, AppSettings.shared.fonts)
@@ -1583,7 +1624,7 @@ enum Snapshot {
         let hosting = NSHostingView(rootView: root)
         hosting.frame = CGRect(origin: .zero, size: size)
         let window = NSWindow(contentRect: hosting.frame, styleMask: completionPreview ? [.titled] : [.borderless], backing: .buffered, defer: false)
-        window.appearance = NSAppearance(named: .aqua)
+        window.appearance = NSAppearance(named: appearance)
         window.contentView = hosting
         window.setFrameOrigin(completionPreview ? NSPoint(x: 100, y: 100) : NSPoint(x: -10000, y: -10000))
         window.orderFrontRegardless()

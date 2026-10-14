@@ -836,6 +836,11 @@ reports), producing a morning summary in the app and Slack.
 
 ## 7. App (macOS)
 
+- Home: Needs you lists unreviewed agent results and failures across projects, failed first. Missions
+  lists every mission, active before done and archived, with a direct coordinator-chat link (including
+  archived chats), or a quiet no-coordinator/unavailable label. Both show five rows with an inline
+  "Show all N" expansion. They use existing live session and mission summaries, without polling or
+  loading every mission's detail; disconnection keeps the last known lists visible.
 - New-chat composer: Build/Ask mode switch, defaulting to Build, with the existing project, branch and
   model chips. Ask adds Current checkout to the branch menu and labels read-only/no-clone access;
   committed branch sources show their pinned revision in the chat. Build exposes a per-chat workspace
