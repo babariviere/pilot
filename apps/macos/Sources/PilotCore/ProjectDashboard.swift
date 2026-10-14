@@ -285,6 +285,7 @@ public enum DashboardSourceStatus: String, LenientStringEnum {
 }
 
 public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
+    public let slack: SlackTriage?
     public let id: String
     public let title: String
     public let url: String?
@@ -301,7 +302,8 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
     public init(id: String, title: String, url: String? = nil, status: String? = nil, updatedAt: Double? = nil,
                 externalId: String? = nil, metadata: [String: JSONValue]? = nil,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
-                missionIds: [String]? = nil) {
+                missionIds: [String]? = nil, slack: SlackTriage? = nil) {
+        self.slack = slack
         self.id = id
         self.title = title
         self.url = url

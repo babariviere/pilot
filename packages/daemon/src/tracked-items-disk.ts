@@ -3,6 +3,9 @@ import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type {
 	LinearSourceSummary,
+	SlackCorrection,
+	SlackOverrides,
+	SlackTriage,
 	TrackedItem,
 	TrackedItemList,
 	TrackedItemPatch,
@@ -37,6 +40,8 @@ type Row = {
 	mission_id: string | null;
 	links: string | null;
 	linear_start: string | null;
+	slack_overrides: string;
+	slack_status: SlackTriage["status"];
 	created_at: number;
 	updated_at: number;
 };
@@ -57,6 +62,7 @@ export class TrackedItemDisk {
 		this.db = new DatabaseSync(path);
 		this.db.exec(`
 			PRAGMA journal_mode=WAL;
+			BEGIN IMMEDIATE;
 			CREATE TABLE IF NOT EXISTS tracked_items (
 			 id TEXT PRIMARY KEY, project_id TEXT NOT NULL, kind TEXT NOT NULL, external_id TEXT NOT NULL,
 			 title TEXT NOT NULL, url TEXT NOT NULL, status TEXT NOT NULL, metadata TEXT NOT NULL,
@@ -94,39 +100,84 @@ export class TrackedItemDisk {
 				.some((column) => column.name === "linear_start")
 		)
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_start TEXT");
+		const columns = this.db.prepare("PRAGMA table_info(tracked_items)").all();
+		if (!columns.some((column) => column.name === "slack_overrides"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_overrides TEXT NOT NULL DEFAULT '{}'");
+		if (!columns.some((column) => column.name === "slack_status")) {
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_status TEXT NOT NULL DEFAULT 'open'");
+			this.db.exec(
+				"UPDATE tracked_items SET slack_status=CASE WHEN dismissed=1 THEN 'dismissed' WHEN session_id IS NOT NULL OR mission_id IS NOT NULL THEN 'in_progress' ELSE 'open' END WHERE kind='slack'",
+			);
+		}
+		// Legacy global results have no project label. Keep them for lazy, scoped adoption without model calls.
+		this.db.exec(`
+			CREATE TABLE IF NOT EXISTS slack_project_classifications (
+			 project_id TEXT NOT NULL, channel TEXT NOT NULL, thread_ts TEXT NOT NULL, state TEXT NOT NULL, result TEXT,
+			 PRIMARY KEY(project_id, channel, thread_ts)
+			);
+			CREATE TABLE IF NOT EXISTS slack_corrections (
+			 seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, value TEXT NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS slack_corrections_project ON slack_corrections(project_id, seq DESC);
+		`);
+		if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1)
+			this.db.exec(`
+			UPDATE slack_classifications SET result=json_object(
+			 'type', CASE json_extract(result, '$.isBugReport') WHEN 1 THEN 'bug' ELSE 'unknown' END,
+			 'label', NULL, 'confidence', json_extract(result, '$.confidence'),
+			 'severity', json_extract(result, '$.severity'), 'summary', json_extract(result, '$.summary'))
+			 WHERE state='done' AND json_type(result, '$.isBugReport') IS NOT NULL;
+			UPDATE tracked_items SET metadata=json_remove(json_set(metadata, '$.type', CASE json_extract(metadata, '$.isBugReport') WHEN 0 THEN 'unknown' ELSE 'bug' END, '$.label', NULL), '$.isBugReport', '$.guessedProject')
+			 WHERE kind='slack' AND json_type(metadata, '$.type') IS NULL;
+			PRAGMA user_version=1;
+		`);
 		this.db.exec(`
 			CREATE INDEX IF NOT EXISTS tracked_active_project_kind ON tracked_items(project_id, kind, dismissed, updated_at DESC, id) WHERE active=1;
 			CREATE INDEX IF NOT EXISTS tracked_active_project ON tracked_items(project_id, dismissed, updated_at DESC, id) WHERE active=1;
+			COMMIT;
 		`);
 	}
 	close(): void {
 		this.db.close();
 	}
-	/** Global thread cache, including negative results and failed/interrupted attempts. No raw text. */
-	slackCached(channel: string, ts: string): SlackCache | undefined {
-		validateSlackKey(channel, ts);
-		const row = this.db
-			.prepare("SELECT state, result FROM slack_classifications WHERE channel=? AND thread_ts=?")
-			.get(channel, ts);
+	/** Project-scoped thread cache. Legacy global entries are lazily adopted with no label. No raw text. */
+	slackCached(channel: string, ts: string, projectId: string): SlackCache | undefined {
+		validateSlackKey(channel, ts, projectId);
+		let row = this.db
+			.prepare(
+				"SELECT state, result FROM slack_project_classifications WHERE project_id=? AND channel=? AND thread_ts=?",
+			)
+			.get(projectId, channel, ts);
+		if (!row) {
+			row = this.db
+				.prepare("SELECT state, result FROM slack_classifications WHERE channel=? AND thread_ts=?")
+				.get(channel, ts);
+			if (row)
+				this.db
+					.prepare("INSERT OR IGNORE INTO slack_project_classifications VALUES (?, ?, ?, ?, ?)")
+					.run(projectId, channel, ts, row.state!, row.result!);
+		}
 		if (!row) return undefined;
 		return row.state === "done"
 			? { state: "done", result: parseSlackClassification(String(row.result)) }
 			: { state: row.state === "error" ? "error" : "pending" };
 	}
-	/** Crash-safe admission before any model call. One attempt per thread, across projects/restarts. */
-	reserveSlack(channel: string, ts: string, now: number): SlackReservation {
-		validateSlackKey(channel, ts);
+	/** Crash-safe admission before any model call. One attempt per project/thread, across restarts. */
+	reserveSlack(channel: string, ts: string, now: number, projectId: string): SlackReservation {
+		validateSlackKey(channel, ts, projectId);
 		const day = new Date(now).toISOString().slice(0, 10);
 		this.db.exec("BEGIN IMMEDIATE");
 		try {
-			const cached = this.slackCached(channel, ts);
+			const cached = this.slackCached(channel, ts, projectId);
 			let result: SlackReservation;
 			if (cached) result = cached;
 			else {
 				const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
 				if (used >= SLACK_DAILY_BUDGET) result = { state: "budget" };
 				else {
-					this.db.prepare("INSERT INTO slack_classifications VALUES (?, ?, 'pending', NULL)").run(channel, ts);
+					this.db
+						.prepare("INSERT INTO slack_project_classifications VALUES (?, ?, ?, 'pending', NULL)")
+						.run(projectId, channel, ts);
 					this.db
 						.prepare("INSERT INTO slack_budget VALUES (?, 1) ON CONFLICT(day) DO UPDATE SET used=used+1")
 						.run(day);
@@ -143,14 +194,20 @@ export class TrackedItemDisk {
 			throw error;
 		}
 	}
-	finishSlack(channel: string, ts: string, result?: SlackClassification): void {
-		validateSlackKey(channel, ts);
+	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): void {
+		validateSlackKey(channel, ts, projectId);
 		const value = result ? JSON.stringify(parseSlackClassification(JSON.stringify(result))) : null;
 		this.db
 			.prepare(
-				"UPDATE slack_classifications SET state=?, result=? WHERE channel=? AND thread_ts=? AND state='pending'",
+				"UPDATE slack_project_classifications SET state=?, result=? WHERE project_id=? AND channel=? AND thread_ts=? AND state='pending'",
 			)
-			.run(value ? "done" : "error", value, channel, ts);
+			.run(value ? "done" : "error", value, projectId, channel, ts);
+	}
+	corrections(projectId: string): SlackCorrection[] {
+		return this.db
+			.prepare("SELECT value FROM slack_corrections WHERE project_id=? ORDER BY seq DESC LIMIT 20")
+			.all(projectId)
+			.map((row) => JSON.parse(String(row.value)) as SlackCorrection);
 	}
 	onChange(listener: (projectId: string) => void): () => void {
 		this.listeners.add(listener);
@@ -308,25 +365,82 @@ export class TrackedItemDisk {
 	patch(id: string, patch: TrackedItemPatch): TrackedItem {
 		validatePatch(patch);
 		const item = this.require(id);
+		if (patch.slack && item.kind !== "slack") throw new Error("Slack overrides require a Slack item");
 		const sessions = bind(item.sessionIds ?? [], patch.sessionId),
 			missions = bind(item.missionIds ?? [], patch.missionId);
-		const next = {
-			dismissed: patch.dismissed ?? item.dismissed,
-			sessionId: sessions.at(-1),
-			missionId: missions.at(-1),
-		};
-		const links = JSON.stringify({ sessions, missions });
+		const overrides: SlackOverrides = { ...item.slack?.overrides, ...patch.slack };
+		let status = item.slack?.status ?? "open";
+		// Linking occurs on confirmed send/create, never on prefill. Local only.
 		if (
-			next.dismissed !== item.dismissed ||
-			links !== JSON.stringify({ sessions: item.sessionIds ?? [], missions: item.missionIds ?? [] })
-		) {
+			patch.start &&
+			((patch.sessionId && !item.sessionIds?.includes(patch.sessionId)) ||
+				(patch.missionId && !item.missionIds?.includes(patch.missionId)))
+		)
+			status = "in_progress";
+		if (patch.dismissed !== undefined) status = patch.dismissed ? "dismissed" : "open";
+		if (patch.slack?.status !== undefined) status = patch.slack.status;
+		if (item.slack && status !== item.slack.status) overrides.status = status;
+		const dismissed = item.slack ? status === "dismissed" : (patch.dismissed ?? item.dismissed);
+		const links = JSON.stringify({ sessions, missions });
+		const correction =
+			(patch.dismissed !== undefined && patch.dismissed !== item.dismissed && item.kind === "slack") ||
+			(patch.slack &&
+				Object.keys(patch.slack).some(
+					(key) => patch.slack![key as keyof SlackOverrides] !== item.slack?.[key as keyof SlackOverrides],
+				));
+		if (
+			dismissed === item.dismissed &&
+			status === (item.slack?.status ?? "open") &&
+			links === JSON.stringify({ sessions: item.sessionIds ?? [], missions: item.missionIds ?? [] }) &&
+			JSON.stringify(overrides) === JSON.stringify(item.slack?.overrides ?? {})
+		)
+			return item;
+		this.db.exec("BEGIN");
+		try {
 			this.db
-				.prepare("UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=?, links=? WHERE id=?")
-				.run(next.dismissed ? 1 : 0, next.sessionId ?? null, next.missionId ?? null, links, id);
-			this.emit(item.projectId);
+				.prepare(
+					"UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=?, links=?, slack_overrides=?, slack_status=? WHERE id=?",
+				)
+				.run(
+					dismissed ? 1 : 0,
+					sessions.at(-1) ?? null,
+					missions.at(-1) ?? null,
+					links,
+					JSON.stringify(overrides),
+					status,
+					id,
+				);
+			if (correction) {
+				const value: SlackCorrection = {
+					itemId: id,
+					summary: item.title.slice(0, 240),
+					correctedAt: Date.now(),
+					values: {
+						type: overrides.type ?? item.slack!.type,
+						label: overrides.label !== undefined ? overrides.label : item.slack!.label,
+						severity: overrides.severity ?? item.slack!.severity,
+						status,
+					},
+				};
+				this.db
+					.prepare("INSERT INTO slack_corrections(project_id, value) VALUES (?, ?)")
+					.run(item.projectId, JSON.stringify(value));
+				this.db
+					.prepare(
+						"DELETE FROM slack_corrections WHERE project_id=? AND seq NOT IN (SELECT seq FROM slack_corrections WHERE project_id=? ORDER BY seq DESC LIMIT 20)",
+					)
+					.run(item.projectId, item.projectId);
+			}
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
 		}
-		return this.require(id);
+		const next = this.require(id);
+		if (JSON.stringify(next) !== JSON.stringify(item)) this.emit(item.projectId);
+		return next;
 	}
+
 	/** Slack rows stay stored when a channel is removed, with their links, and show again if it is re-added. */
 	retainSlack(projectId: string, channels: string[]): void {
 		if (!Array.isArray(channels) || channels.length > 100 || channels.some((channel) => typeof channel !== "string"))
@@ -351,7 +465,9 @@ export class TrackedItemDisk {
 		for (const listener of this.listeners) listener(projectId);
 	}
 }
-function validateSlackKey(channel: string, ts: string): void {
+function validateSlackKey(channel: string, ts: string, projectId: string): void {
+	if (typeof projectId !== "string" || !projectId.trim() || projectId.length > 200)
+		throw new Error("Invalid Slack project");
 	if (
 		typeof channel !== "string" ||
 		typeof ts !== "string" ||
@@ -365,6 +481,19 @@ function decode(row: Row): TrackedItem {
 	// Rows linked before link history existed have only their single latest link.
 	const sessionIds = links.sessions ?? (row.session_id ? [row.session_id] : []),
 		missionIds = links.missions ?? (row.mission_id ? [row.mission_id] : []);
+	const metadata = JSON.parse(row.metadata);
+	const overrides: SlackOverrides = JSON.parse(row.slack_overrides);
+	const slack: SlackTriage | undefined =
+		row.kind === "slack"
+			? {
+					type: metadata.type ?? "unknown",
+					label: metadata.label ?? null,
+					severity: metadata.severity ?? "low",
+					...overrides,
+					status: row.slack_status,
+					overrides,
+				}
+			: undefined;
 	return {
 		id: row.id,
 		projectId: row.project_id,
@@ -372,11 +501,11 @@ function decode(row: Row): TrackedItem {
 		externalId: row.external_id,
 		title: row.title,
 		url: row.url,
-		status: row.status,
-		metadata: {
-			...JSON.parse(row.metadata),
-			...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}),
-		},
+		status: slack?.status ?? row.status,
+		metadata: slack
+			? { ...metadata, type: slack.type, label: slack.label, severity: slack.severity }
+			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
+		...(slack ? { slack } : {}),
 		dismissed: !!row.dismissed,
 		...(row.session_id ? { sessionId: row.session_id } : {}),
 		...(row.mission_id ? { missionId: row.mission_id } : {}),
@@ -399,6 +528,7 @@ function previewItem(item: TrackedItem): import("@pilot/protocol").DashboardTrac
 		updatedAt,
 		externalId,
 		metadata,
+		...(item.slack ? { slack: item.slack } : {}),
 		...(sessionId ? { sessionId } : {}),
 		...(missionId ? { missionId } : {}),
 		...(sessionIds ? { sessionIds } : {}),
@@ -434,7 +564,7 @@ function validateInput(item: TrackedInput): void {
 export function validatePatch(value: unknown): asserts value is TrackedItemPatch {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid tracked item patch");
 	const patch = value as TrackedItemPatch;
-	if (Object.keys(value).some((key) => !["dismissed", "sessionId", "missionId", "start"].includes(key)))
+	if (Object.keys(value).some((key) => !["dismissed", "sessionId", "missionId", "slack", "start"].includes(key)))
 		throw new Error("Unknown tracked item field");
 	if (patch.start !== undefined && typeof patch.start !== "boolean") throw new Error("start must be a boolean");
 	if (
@@ -445,6 +575,37 @@ export function validatePatch(value: unknown): asserts value is TrackedItemPatch
 			patch.missionId === null)
 	)
 		throw new Error("start requires exactly one chat or mission link");
+	if (patch.slack !== undefined) {
+		const fields = patch.slack;
+		if (
+			!fields ||
+			typeof fields !== "object" ||
+			Array.isArray(fields) ||
+			Object.keys(fields).some((key) => !["type", "label", "severity", "status"].includes(key))
+		)
+			throw new Error("Invalid Slack overrides");
+		if (fields.type !== undefined && !["bug", "question", "request", "unknown"].includes(fields.type))
+			throw new Error("Invalid Slack type");
+		if (fields.severity !== undefined && !["low", "medium", "high", "critical"].includes(fields.severity))
+			throw new Error("Invalid Slack severity");
+		if (fields.status !== undefined && !["open", "in_progress", "done", "dismissed"].includes(fields.status))
+			throw new Error("Invalid Slack status");
+		if (
+			fields.status !== undefined &&
+			patch.dismissed !== undefined &&
+			patch.dismissed !== (fields.status === "dismissed")
+		)
+			throw new Error("Conflicting Slack status and dismissed fields");
+		if (
+			fields.label !== undefined &&
+			fields.label !== null &&
+			(typeof fields.label !== "string" ||
+				!fields.label.trim() ||
+				fields.label.length > 80 ||
+				/[\x00-\x1f]/.test(fields.label))
+		)
+			throw new Error("Invalid Slack label");
+	}
 	if (patch.dismissed !== undefined && typeof patch.dismissed !== "boolean")
 		throw new Error("dismissed must be a boolean");
 	for (const link of [patch.sessionId, patch.missionId])

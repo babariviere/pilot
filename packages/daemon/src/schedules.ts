@@ -259,7 +259,7 @@ export class ScheduleService {
 				await this.validateTrackedItem(claimed.target.trackedItemId, claimed.projectId);
 				sessionId = (await this.deps.sessions.spawn(claimed.target.spawn)).id;
 				if (claimed.target.trackedItemId)
-					await this.deps.trackedItems!.patch(claimed.target.trackedItemId, { sessionId });
+					await this.deps.trackedItems!.patch(claimed.target.trackedItemId, { sessionId, start: true });
 			} else {
 				sessionId = claimed.target.sessionId;
 				if (!this.deps.sessions.get(sessionId)) throw new NotFound("Target chat was deleted");

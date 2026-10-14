@@ -2,6 +2,16 @@ import PilotCore
 import Testing
 @testable import Pilot
 
+@Test @MainActor func projectEditorPreservesSlackLabelsWithoutAnEditor() {
+    let labels = [SlackProjectLabel(name: "Client", description: "App support", hideFromInbox: true)]
+    let editor = ProjectEditor()
+    editor.load(Project(id: "p", name: "Example", path: "/example", tracking: .init(slackChannels: ["C1"], slackLabels: labels), createdAt: 0))
+    editor.name = "Renamed example"
+    #expect(editor.request.tracking?.slackLabels == labels)
+    editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 0))
+    #expect(editor.request.tracking?.slackLabels == nil)
+}
+
 @Test @MainActor func projectEditorLoadsDefaultPolicyAndSavesDisabledPolicy() {
     let editor = ProjectEditor()
     #expect(editor.requirePullRequest)

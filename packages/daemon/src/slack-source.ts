@@ -6,7 +6,7 @@ import { SourceToolError } from "./source-mcp.ts";
 import type { SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { SlackCache } from "./tracked-items-disk.ts";
-import type { SlackClassification } from "./slack-classifier.ts";
+import { parseSlackClassification, type SlackClassifierContext, type SlackClassification } from "./slack-classifier.ts";
 
 export const SLACK_CONFIDENCE_THRESHOLD = 0.8;
 export const SLACK_BATCH_SIZE = 8;
@@ -22,7 +22,7 @@ type ChannelCursor = [
 	failedAt: number | null,
 ];
 type Cursor = { version: 2; last: string | null; channels: Record<string, ChannelCursor> };
-type CacheStore = Pick<TrackedItemStore, "slackCached" | "reserveSlack" | "finishSlack">;
+type CacheStore = Pick<TrackedItemStore, "slackCached" | "reserveSlack" | "finishSlack" | "corrections">;
 
 /** Per-channel progress for source status. Old or foreign checkpoints report nothing. */
 export function slackChannelProgress(
@@ -82,18 +82,23 @@ export function createSlackPoller(
 			);
 			if (/^[CDG][A-Z0-9]+$/.test(name) && name !== page.channel) throw new SlackFormatChanged();
 			if (!/^[CDG][A-Z0-9]+$/.test(name) && name.replace(/^#/, "") !== page.name) throw new SlackFormatChanged();
+			let classifierContext: SlackClassifierContext | undefined;
 			let classify: ((text: string) => Promise<SlackClassification>) | undefined;
 			for (const message of page.messages) {
 				context.signal.throwIfAborted();
-				const threadKey = `${page.channel}/${message.threadTs}`;
-				let cached = await store.slackCached(page.channel, message.threadTs);
+				const threadKey = `${context.project.id}/${page.channel}/${message.threadTs}`;
+				let cached = await store.slackCached(page.channel, message.threadTs, context.project.id);
 				if (cached?.state === "pending") {
 					cached = active.has(threadKey) ? await active.get(threadKey)! : { state: "error" };
 				}
 				if (!cached) {
+					classifierContext ??= {
+						labels: context.config.slackLabels ?? [],
+						corrections: await store.corrections(context.project.id),
+					};
 					classify ??= models.prepareSlackClassifier
-						? await models.prepareSlackClassifier(context.project.path, context.signal)
-						: (text) => models.classifySlack(context.project.path, text, context.signal);
+						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)
+						: (text) => models.classifySlack(context.project.path, text, context.signal, classifierContext);
 					// Read only a bounded prefix, once. Later replies never cause reclassification.
 					const thread = message.replies
 						? parseSlackThread(
@@ -108,7 +113,7 @@ export function createSlackPoller(
 							)
 						: { messages: [message] };
 					context.signal.throwIfAborted();
-					const reservation = await store.reserveSlack(page.channel, message.threadTs, now());
+					const reservation = await store.reserveSlack(page.channel, message.threadTs, now(), context.project.id);
 					if (reservation.state === "budget") {
 						issue = "slack_budget";
 						deferred = true;
@@ -119,16 +124,17 @@ export function createSlackPoller(
 						const work = (async (): Promise<SlackCache> => {
 							try {
 								context.signal.throwIfAborted();
-								const result = await classify!(
+								const classified = await classify!(
 									thread.messages
 										.map((reply) => reply.text)
 										.join("\n\n")
 										.slice(0, 12_000),
 								);
-								await store.finishSlack(channel, message.threadTs, result);
+								const result = parseSlackClassification(JSON.stringify(classified), classifierContext!.labels);
+								await store.finishSlack(channel, message.threadTs, result, context.project.id);
 								return { state: "done", result };
 							} catch {
-								await store.finishSlack(channel, message.threadTs);
+								await store.finishSlack(channel, message.threadTs, undefined, context.project.id);
 								return { state: "error" };
 							}
 						})();
@@ -150,14 +156,25 @@ export function createSlackPoller(
 					continue;
 				}
 				const result = cached.result;
-				if (!result.isBugReport || result.confidence < SLACK_CONFIDENCE_THRESHOLD) continue;
+				const type = result.confidence < SLACK_CONFIDENCE_THRESHOLD ? "unknown" : result.type;
+				const label = context.config.slackLabels?.some((label) => label.name === result.label)
+					? result.label
+					: null;
 				items.push({
 					externalId: `${page.channel}/${message.threadTs}`,
 					title: result.summary,
 					url: `https://slack.com/archives/${page.channel}/p${message.threadTs.replace(".", "")}`,
-					status: "bug_report",
+					status: "open",
 					updatedAt: Number(message.threadTs) * 1000,
-					metadata: { channel: page.channel, channelName: page.name, thread_ts: message.threadTs, ...result },
+					metadata: {
+						channel: page.channel,
+						channelName: page.name,
+						thread_ts: message.threadTs,
+						replies: message.replies,
+						...result,
+						type,
+						label,
+					},
 				});
 			}
 		} catch (error) {

@@ -681,7 +681,7 @@ dashboard projects the reasons and sorts Ready to merge first. No new timer, pol
 **Done when.** A failing PR gets a fix commit or an explanation in the app within one poll interval plus run
 time; no duplicate sessions or pushes across restarts; Pilot never reacts to its own commits.
 
-### 6.3 Slack: bug reports (M5)
+### 6.3 Slack: classified messages (M5)
 
 **Tracking foundation (implemented).** Opt-in project settings hold `tracking.slackChannels: string[]`
 and `tracking.linearTeam?: string`. Empty settings fetch nothing. The daemon stores external items
@@ -774,18 +774,42 @@ response content.
 Standalone messages use their parent text. Threads read at most 30 replies; classification sees only
 a bounded 12,000-character excerpt. `ModelCatalog` reuses title-price selection restricted to scoped,
 authenticated `openai-codex/gpt-6-luna`, resolves once per poll, disables thinking/tools, requests strict
-provider-side JSON schema, and strictly validates the five fields: `isBugReport`, confidence (0..1),
-severity, one-line summary and guessed project. Missing model scope/auth fails before admission.
-Only bug reports with confidence ≥ 0.8 become tracked items. Guessed project never changes routing;
-URLs and thread identity come from validated source fields, never the model. No agents start.
+provider-side JSON schema, and strictly validates five fields: type (`bug`, `question`, `request`,
+`unknown`), label (one configured project label name or null), confidence (0..1), severity and
+one-line summary. Missing model scope/auth fails before admission. All classified messages surface;
+confidence below 0.8 forces Unknown rather than dropping the thread. URLs and thread identity come
+from validated source fields, never the model. No agents start.
 
-The SQLite worker stores a global `(channel, thread_ts)` classification cache, including negative
-results, plus a global limit of 100 attempts per UTC day. Atomic admission precedes the model call
-and survives restart. A thread has at most one attempt, even across projects; failed, malformed or
-interrupted attempts are cached, surfaced as source errors, and never retried automatically.
-Concurrent projects share an in-flight result. Budget exhaustion retains the unfinished page and
-pauses that source until the next UTC midnight, without blocking Linear. Cached classification
-errors retain a five-minute cadence. Raw Slack text and raw model errors are not persisted or echoed in diagnostics.
+**Slack triage data (implemented, no new UI).** `tracking.slackLabels` defines up to 50 project-local
+labels, each with a unique name (up to 80 characters), one-line description (up to 240 characters),
+and optional `hideFromInbox`. No built-in labels. Existing project create/update APIs replace this
+configuration; the current app settings editor preserves labels without exposing new controls. Classifier prompts quote label names/descriptions and the project's last 20 corrections
+as JSON data, never instructions. Output labels are schema-constrained and validated against that
+project's configuration. Corrections store bounded summaries and corrected values, not raw threads;
+`GET /api/tracking/slack/corrections?projectId=...` returns at most 20, newest first.
+
+`TrackedItem.slack` and dashboard rows expose effective type, label, severity, local status and the
+explicit `overrides`. `PATCH /api/tracked-items/:id` accepts `slack: { type?, label?, severity?, status? }`;
+null clears the label, omission leaves the override unchanged. HTTP rejects labels not configured in
+that project, invalid enums and Slack overrides on Linear items. Overrides live in separate SQLite
+columns and source refreshes never overwrite them. Local status uses `open`, `in_progress`, `done`,
+`dismissed`; legacy dismiss/restore stays in sync with it. Confirmed chat/mission binding (`start: true`) sets In progress
+(including scheduled chat dispatch), never ordinary linking or prefill/composer open. Nothing is written to Slack.
+User corrections are atomically recorded and pruned to 20 per project; automatic start status changes
+are not training examples. Protocol and PilotCore mirror these types, including explicit null labels.
+The triage view, label editor and global Inbox consume these APIs in separate UI work.
+
+The SQLite worker stores new classifications by `(project_id, channel, thread_ts)`, so label decisions
+and corrections cannot leak between projects. The global limit remains 100 attempts per UTC day.
+Atomic admission precedes the model call and survives restart. A thread has at most one attempt per
+project; failed, malformed or interrupted attempts are cached, surfaced as source errors, and never
+retried automatically. Concurrent polls in the same project share an in-flight result. A transactional,
+versioned migration converts legacy global results (true → Bug, false → Unknown, label null), preserves
+errors, interrupted attempts and daily budgets, and lazily adopts results per project without new
+model calls. Existing items keep their identity, dismissals and links; linked items start In progress.
+Budget exhaustion retains the unfinished page and pauses that source until the next UTC midnight,
+without blocking Linear. Cached classification errors retain a five-minute cadence. Raw Slack text
+and raw model errors are not persisted or echoed in diagnostics.
 Source polling never posts to Slack or Linear. Socket Mode and inbox actions remain later work.
 
 **Inbox and settings UI (implemented).** Project settings → Tracking holds a Linear team picker
@@ -797,7 +821,7 @@ Config stores channel IDs with display names (`slackChannelNames`) and the team 
 status. Lookups are read-only, latest-wins per source and share the two MCP slots with polls.
 The project page’s “Tracked Items…” sheet lists each configured source with its own status (sync now,
 Sign in, errors), my current cycle with progress, my issues grouped In progress / To do /
-Done, and Slack bug reports. Rows open the ticket; Start chat opens the new-chat composer in Build
+Done, and classified Slack messages. Rows open the ticket; Start chat opens the new-chat composer in Build
 mode, prefilled with the ticket quoted as untrusted JSON and its branch name, with the project locked;
 Start mission opens the new-mission sheet prefilled (title “ID: title”, goal and coordinator message).
 Nothing starts until the user sends or creates. The started chat or mission is bound through
@@ -807,8 +831,8 @@ link to an existing mission, dismiss and restore. Ordinary linking, prefill and 
 write externally. Confirmed Linear starts have the narrow state-change exception in §6.4; Slack
 remains read-only.
 
-**Slack checks.** Parser fixtures, strict malformed-output tests, threshold/negative caching,
-cross-project dedupe, concurrent and interrupted attempts, restart/UTC budget rollover, bounded
+**Slack checks.** Parser fixtures, strict malformed-output tests, low-confidence Unknown and all-type caching,
+project-isolated classifications, concurrent and interrupted attempts, restart/UTC budget rollover, bounded
 pagination, opt-in timer disposal and registry status/last-data tests cover the adapter. Bounded
 read-only checks verified the history empty/end and thread prefix/end formats. A synthetic report
 also verified the scoped Luna completion with strict JSON schema and no tools. No private payloads
@@ -818,6 +842,13 @@ On a busy development host, 100 parses each of ~500 KiB history and thread fixtu
 was noisy under concurrent builds (3.11 ms median / 57.65 ms p95 in that run, up to 479.87 ms in an
 earlier run). The timer never queues work; source pages, excerpts and retained in-flight results are
 bounded. Live multi-project throughput and app scrolling during remote source traffic are unverified.
+A before/after synthetic worker-store check for classified-message data (5,000 rows in ten 500-row
+pages, ~500 bytes padding per item, 100 chat-link patches) measured 1.17 s / 1.08 s batch time,
+0.62 s / 0.58 s patch time, and 13.6 ms / 15.0 ms daemon event-loop p99 on a busy host. Dashboard
+snapshots remained five rows plus the full count. One hundred new correction patches took 0.59 s;
+retained examples stay capped at 20 per project. These single noisy samples do not establish a
+speedup. Migration scans run once, transactionally on the SQLite worker, not on the daemon event loop.
+
 
 **Verification.** Store/restart/dedupe/action tests, config/cursor/cancellation/concurrency tests, HTTP/WS
 dashboard integration, a local real MCP fixture (stored OAuth, required sign-in, fixed tools, write-tool
@@ -962,7 +993,7 @@ reports), producing a morning summary in the app and Slack.
   team's current cycle (cycle name, dates, days left and a progress bar over my issues), open ones grouped
   In progress / To do (at most 5, by priority) and Done collapsed, with "All N issues" opening the tracked
   items sheet on Linear. With no active cycle it says so and lists my open issues in the team; with no team
-  attached it is one quiet line. Tracked follows with one group per other source (Slack bug reports today),
+  attached it is one quiet line. Tracked follows with one group per other source (classified Slack messages),
   each with its own sync, sign-in or error status, 5 rows and "Show all N", or one line until a source is
   configured. Rows reuse the tracked items sheet's row: Start chat and a menu on hover, or the linked chat
   or mission's status. The dashboard's Linear group carries open issues in `items` and done ones in `done`.
@@ -1495,7 +1526,8 @@ reports), producing a morning summary in the app and Slack.
 | `/api/missions/:id/decisions`, `/comments`, `/resources`, `/artifacts` (POST, PATCH/DELETE by id), `/events` (GET, POST) | Decisions, anchored comments, external links, artifact links and activity |
 | `PUT/DELETE /api/sessions/:id/mission`, `SessionSummary.missionId`; `CreateMissionRequest.fromSessionId`, `.coordinator`, `.draft` | Join or leave a mission (same project only); Make a mission from a chat, which then drafts it |
 | `GET /api/sources?projectId=...`, `POST /api/sources/:id/poll` | Project-scoped tracking status and single-flight manual poll; id is `<projectId>:linear/slack`; WS `sources` sends status on connection/change |
-| `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or bind a chat/mission (each link joins a bounded history, latest shown; null clears that kind). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
+| `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal, Slack type/label/severity/local status overrides, or bind a chat/mission (each link joins a bounded history, latest shown; null clears that kind). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
+| `GET /api/tracking/slack/corrections?projectId=...` | Last 20 local corrections, newest first, with bounded summary and corrected type/label/severity/status. Per-project label config is `tracking.slackLabels` on project create/update. No remote writes |
 | `GET /api/tracked-items/:id/prefill` | Transient Linear ticket prefill after fresh mine/team membership verification; bounded description and quoted external JSON prompt, gitBranchName, no storage or automatic start |
 | `GET /api/tracking/linear/teams?query=...`, `GET /api/tracking/slack/channels?query=...` | Read-only settings lookups through the dedicated servers (`list_teams`; `slack_search_channels` with a query, else `slack_list_user_channels`). Returns `{status: ok/sign_in_required/error, items, more?, error?, signInCommand?}`; latest wins per source |
 | `POST /api/tracking/:kind/sign-in` (`{again?}`), `DELETE /api/tracking/:kind/sign-in` | Start (or return the waiting) browser sign-in to the dedicated `linear`/`slack` server through pi's MCP OAuth login, or cancel it. Returns `SourceSignIn` (`waiting/done/failed/cancelled`); progress also arrives as `TrackingSource.signIn` in the sources list and WS. Tokens stay in `mcp-auth.json` |

@@ -271,6 +271,12 @@ export function createDaemonServer(
 		if (parts[1] === "sources" || parts[1] === "tracked-items" || parts[1] === "tracking") {
 			if (!tracking) throw new ServiceUnavailable("Tracking is unavailable");
 			if (parts[1] === "tracking") {
+				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "corrections" && req.method === "GET") {
+					const projectId = url.searchParams.get("projectId");
+					if (!projectId) throw new HttpError(400, "projectId is required");
+					projects.require(projectId);
+					return json(res, 200, await tracking.items.corrections(projectId));
+				}
 				// Read-only pickers for project settings. Nothing is stored until the project is saved.
 				const query = url.searchParams.get("query")?.trim().slice(0, 100) || undefined;
 				if (parts.length === 4 && parts[2] === "linear" && parts[3] === "teams" && req.method === "GET")
@@ -324,6 +330,13 @@ export function createDaemonServer(
 					projects.require(item.projectId);
 					const patch: unknown = await readJson(req);
 					validatePatch(patch);
+					if (
+						patch.slack?.label &&
+						!projects
+							.require(item.projectId)
+							.tracking?.slackLabels?.some((label) => label.name === patch.slack!.label)
+					)
+						throw new HttpError(400, "Unknown project Slack label");
 					if (patch.sessionId && sessions.get(patch.sessionId)?.projectId !== item.projectId)
 						throw new HttpError(400, "Chat must belong to this project");
 					if (patch.missionId && missions?.store.get(patch.missionId)?.projectId !== item.projectId)
