@@ -596,6 +596,16 @@ operators (common for PR bodies). It still rejects other substitutions, `--web`,
 controls, lookups and ambiguous results as creation proof; discovery then claims such PRs instead.
 The kernel rechecks idle/inbox state before admission, including after reopening a parked session.
 
+Stack divergence first gets a bounded mechanical rebase attempt for owned, idle jj chats. The daemon
+fetches into a disposable repository, trials only the PR's provenanced commits onto GitHub's current
+base with `--skip-emptied`, and rejects conflicts, foreign/merge commits and moved heads. It pushes only
+the PR head with an explicit old-OID lease, never a default branch or existing checkout. Owned stack
+members run bottom-to-top in one pass, at most two passes concurrently, once per PR/base OID across
+restarts and ownership handoffs (a full 256-admission chat budget fails closed). Success records a passive chat activity notice,
+not an agent message; unsafe attempts retain the existing follow-up with a skip reason. A deleted base
+is never retargeted by the daemon: only GitHub's already-retargeted current base is used. Git-only or
+handed-off histories without jj provenance remain manual. Existing follow-up cooldowns and budgets hold.
+
 Each session has one persisted budget of three automatic follow-ups total, shared across PRs and all
 problem types. At three, polling continues for display but automatic work stops. A user message resets
 the budget to zero; automatic messages, new commits and PR changes do not. Each follow-up waits for the

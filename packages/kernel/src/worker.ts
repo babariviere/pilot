@@ -202,6 +202,10 @@ export function runKernelWorker(): void {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
+			case "activity":
+				await session.recordActivity(command.requestId, command.text);
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "input":
 				await session.submit(command.requestId, command.content, command.mode, command.onlyIfIdle);
 				await send({ type: "accepted", requestId: command.requestId });

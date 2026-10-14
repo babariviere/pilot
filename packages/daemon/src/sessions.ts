@@ -1,6 +1,6 @@
 /** Session registry and kernel worker supervision. */
 import { type ChildProcess, fork } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
@@ -53,6 +53,7 @@ import { ModelCatalog } from "./models.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
+import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import {
 	isTerminalPullRequest,
 	type LinkedPullRequest,
@@ -60,6 +61,7 @@ import {
 	type PullRequestResult,
 	sessionBranches,
 	sessionPullRequests,
+	workspaceChangeIds,
 } from "./pull-requests.ts";
 import {
 	applyActivity,
@@ -288,6 +290,9 @@ interface SessionMeta extends OutcomeMeta {
 	prFollowUp?: { attempts: number; nextAttemptAt: number; generation: number; requestId?: string };
 	/** Transport retries of a user submission must not replenish the automatic budget again. */
 	prFollowUpResetRequests?: string[];
+	/** Bounded, durable auto-rebase admission. Full budgets fail closed, never forget old attempts. */
+	prAutoRebases?: { url: string; base: string }[];
+	prActivities?: Extract<KernelCommand, { type: "activity" }>[];
 	/** PRs opened from branches the session used before its current one, newest first. */
 	previousPullRequests?: SessionPullRequest[];
 	/** Earlier branches without a known PR, still checked in case one is opened from them. */
@@ -769,6 +774,7 @@ export class SessionManager {
 	private readonly kernelRestartBackoffMs: number;
 
 	private readonly home: string;
+	private readonly autoRebase: PullRequestAutoRebase;
 	private readonly projects: ProjectStore;
 	private memory?: ProjectMemoryService;
 	private readonly agentDir?: string;
@@ -799,6 +805,7 @@ export class SessionManager {
 		this.factories = factories;
 		this.modelCatalog = options.models ?? new ModelCatalog(agentDir);
 		this.runner = pullRequests.runner ?? run;
+		this.autoRebase = new PullRequestAutoRebase(this.runner);
 		this.pullRequests = new PullRequestSync<SessionMeta, FollowUpContext>(
 			{
 				sessions: () => this.metas.values(),
@@ -2996,6 +3003,12 @@ export class SessionManager {
 				if (this.closing) return;
 				const worker = this.ensureWorker(id);
 				await worker.ready;
+				while (!this.closing && meta.prActivities?.length) {
+					const activity = meta.prActivities[0]!;
+					await worker.request(activity);
+					meta.prActivities = meta.prActivities.filter((item) => item !== activity);
+					await this.save(meta);
+				}
 				while (!this.closing) {
 					while (!this.closing && meta.pending?.length) {
 						const command = meta.pending[0];
@@ -3791,7 +3804,7 @@ export class SessionManager {
 		meta: SessionMeta,
 		branch: string | undefined,
 		generation: number,
-		issues: { pr: SessionPullRequest; problems: PullRequestProblems }[],
+		issues: { pr: SessionPullRequest; problems: PullRequestProblems; rebaseSkipped?: string }[],
 	): Promise<void> {
 		// Recheck after GitHub I/O. Never notify from a stale lookup after user input or a branch change.
 		if (
@@ -3807,6 +3820,180 @@ export class SessionManager {
 			),
 		);
 		if (!issues.length) return;
+		if (issues.some(({ problems }) => problems.divergedFrom)) {
+			let releaseAuto: () => void;
+			try {
+				releaseAuto = this.updateGate.begin();
+			} catch {
+				return;
+			}
+			const affected = new Set(
+				issues.filter(({ problems }) => problems.divergedFrom).map(({ pr }) => pr.stack?.number),
+			);
+			const prs = current.filter(
+				(pr) =>
+					issues.some((issue) => issue.pr.url === pr.url && issue.problems.divergedFrom) ||
+					(pr.stack && affected.has(pr.stack.number) && this.ownsOpenPullRequest(meta, pr)),
+			);
+			const allowed = (pr: SessionPullRequest) => {
+				if (this.pullRequestOwner(pr.url) !== meta.id || !this.ownsOpenPullRequest(meta, pr))
+					return "PR is not bound to this chat";
+				if (
+					!this.canFollowUp(meta) ||
+					meta.workspace?.branch !== branch ||
+					(meta.prFollowUp?.generation ?? 0) !== generation
+				)
+					return "Chat is busy or changed during the rebase";
+				if (!meta.workspace?.jj) return "Chat has no jj commit provenance for a safe automatic rebase";
+				return undefined;
+			};
+			const results = await this.autoRebase
+				.restack(
+					prs,
+					meta.cwd,
+					meta.workspace?.upstream ?? "",
+					{
+						allowed,
+						reserve: async (pr, base) => {
+							if (meta.prAutoRebases?.some((attempt) => attempt.url === pr.url && attempt.base === base))
+								return false;
+							if ((meta.prAutoRebases?.length ?? 0) >= 256) return false;
+							// A handoff (or deleting a chat) must not retry a PR/base already attempted by
+							// another owner. Exclusive, daemon-owned markers also survive failed meta saves.
+							const directory = join(this.home, "pr-auto-rebases");
+							await mkdir(directory, { recursive: true, mode: 0o700 });
+							const key = createHash("sha256").update(`${pr.url.toLowerCase()}\0${base}`).digest("hex");
+							try {
+								await writeFile(
+									join(directory, key),
+									JSON.stringify({ url: pr.url, base, sessionId: meta.id }),
+									{
+										flag: "wx",
+										mode: 0o600,
+									},
+								);
+							} catch (error) {
+								if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+								throw error;
+							}
+							meta.prAutoRebases ??= [];
+							meta.prAutoRebases.push({ url: pr.url, base });
+							await this.save(meta);
+							return true;
+						},
+						ownedChanges: async (pr, signal) => {
+							const machine: Runner = (file, args, cwd, timeout, _signal, env) =>
+								this.runner(
+									file,
+									file === "jj" ? ["--no-pager", "--color=never", ...args] : args,
+									cwd,
+									timeout,
+									signal,
+									env,
+								);
+							const own = await workspaceChangeIds(meta.cwd, meta.workspace?.shared?.name ?? "default", machine);
+							const lowerChanges = new Set<string>();
+							// A chat may own several PRs. Lower/merged PR commits are not this PR's commits,
+							// even when a squash merge erased their change IDs from the new base's ancestry.
+							for (const lower of current.filter(
+								(other) =>
+									other.url !== pr.url &&
+									other.branch &&
+									(other.state === "merged" ||
+										(other.stack?.number === pr.stack?.number &&
+											(other.stack?.position ?? Infinity) < (pr.stack?.position ?? 0))),
+							)) {
+								const ref = JSON.stringify(lower.branch);
+								const changes = await machine(
+									"jj",
+									[
+										"--ignore-working-copy",
+										"log",
+										"--no-graph",
+										"--limit",
+										"1025",
+										"-r",
+										`::(bookmarks(${ref}) | remote_bookmarks(${ref}))`,
+										"-T",
+										'change_id ++ "\\n"',
+									],
+									meta.cwd,
+									10_000,
+								);
+								const ids = changes.split("\n").filter(Boolean);
+								if (ids.length > 1024) throw new Error("Lower PR provenance exceeds the safety limit");
+								for (const id of ids) {
+									own.delete(id);
+									lowerChanges.add(id);
+								}
+							}
+							return { own, lower: lowerChanges };
+						},
+						rebased: async (pr, base) => {
+							meta.prActivities ??= [];
+							meta.prActivities.push({
+								type: "activity",
+								requestId: `auto-rebase:${randomUUID()}`,
+								text: `Rebased PR #${pr.number} onto ${base}`,
+							});
+							await this.save(meta);
+						},
+					},
+					this.shutdownSignal.signal,
+				)
+				.finally(releaseAuto);
+			issues = issues.flatMap((issue) => {
+				const result = results.get(issue.pr.url);
+				if (result && "rebased" in result) {
+					// Health belongs to the old head. Wait for fresh CI/mergeability, not a stale follow-up.
+					return [];
+				}
+				if (result && "unchanged" in result) {
+					const { divergedFrom: _diverged, ...problems } = issue.problems;
+					return problems.failedChecks.length || problems.reviewComments || problems.mergeConflicts
+						? [{ ...issue, problems }]
+						: [];
+				}
+				return [
+					{
+						...issue,
+						rebaseSkipped: result && "skipped" in result ? result.skipped : "PR is not bound to this chat",
+					},
+				];
+			});
+			for (const pr of prs) {
+				const result = results.get(pr.url);
+				if (
+					result &&
+					"skipped" in result &&
+					result.divergedFrom &&
+					!issues.some((issue) => issue.pr.url === pr.url)
+				)
+					issues.push({
+						pr,
+						problems: {
+							failedChecks: [],
+							reviewComments: 0,
+							mergeConflicts: false,
+							divergedFrom: result.divergedFrom,
+						},
+						rebaseSkipped: result.skipped,
+					});
+			}
+			if (
+				!issues.length ||
+				!this.canFollowUp(meta) ||
+				meta.workspace?.branch !== branch ||
+				(meta.prFollowUp?.generation ?? 0) !== generation
+			) {
+				// Passive writes open storage, not a model turn. Stable request IDs survive restarts.
+				if (meta.prActivities?.length)
+					void this.start(meta.id, true).catch((error: unknown) =>
+						console.warn(`pilotd: could not record rebase activity: ${error}`),
+					);
+				return;
+			}
+		}
 		let end: () => void;
 		try {
 			end = this.updateGate.begin();
@@ -3816,7 +4003,7 @@ export class SessionManager {
 		const requestId = `pr-follow-up:${randomUUID()}`;
 		const previous = meta.prFollowUp;
 		const attempt = (previous?.attempts ?? 0) + 1;
-		const reports = issues.flatMap(({ pr, problems }) => [
+		const reports = issues.flatMap(({ pr, problems, rebaseSkipped }) => [
 			`PR ${pr.url}${pr.branch ? ` (branch ${pr.branch})` : ""}:`,
 			...(problems.failedChecks.length ? [`Failed CI checks: ${JSON.stringify(problems.failedChecks)}.`] : []),
 			...(problems.reviewComments ? [`${problems.reviewComments} unresolved, non-outdated review thread(s).`] : []),
@@ -3824,6 +4011,7 @@ export class SessionManager {
 			...(problems.divergedFrom
 				? [
 						`The PR has diverged from its stacked base branch ${JSON.stringify(problems.divergedFrom)} and must be rebased onto it.`,
+						...(rebaseSkipped ? [`Automatic rebase skipped: ${rebaseSkipped}.`] : []),
 					]
 				: []),
 		]);

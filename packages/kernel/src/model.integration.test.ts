@@ -127,6 +127,24 @@ async function fixture(
 	return { open, a, b, bus, changes, adapters, spec };
 }
 
+test("daemon activity is durable, idempotent and never starts a model turn", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	await session.recordActivity("rebase:1", "Rebased PR #1 onto main");
+	await session.recordActivity("rebase:1", "Rebased PR #1 onto main");
+	await session.conversation.waitForIdle(context);
+	assert.equal(session.working, false);
+	await session.close();
+	const view = await readSessionSnapshot(f.spec.storageDir, f.spec.cwd);
+	const snapshot = view.events.find((event) => event.type === "snapshot");
+	assert.ok(snapshot && snapshot.type === "snapshot");
+	const entries = snapshot.entries.filter((entry) => entry.kind === "pilot.activity");
+	assert.equal(entries.length, 1);
+	assert.deepEqual(entries[0]!.model, []);
+	assert.deepEqual(entries[0]!.data, { text: "Rebased PR #1 onto main" });
+	assert.equal(snapshot.run, undefined);
+});
+
 test("kernel coalesces durable progress without losing short final responses", {
 	timeout: 15_000,
 }, async (t) => {
