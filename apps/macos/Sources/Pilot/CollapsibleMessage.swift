@@ -85,11 +85,11 @@ struct CollapsibleMessage<Content: View>: View {
                         content()
                         HStack(spacing: 12) {
                             Button(action: toggle) {
-                                Label("Show less", systemImage: "chevron.up").font(.caption)
+                                Label("Show less", icon: PilotIcon.collapse).font(.caption)
                             }
                             .buttonStyle(.plain)
                             Button(action: copy) {
-                                Image(systemName: "doc.on.doc").font(.caption)
+                                PilotSymbol(PilotIcon.copy, context: .toolbar)
                             }
                             .buttonStyle(.plain)
                             .help("Copy full message")
@@ -114,8 +114,7 @@ struct CollapsibleMessage<Content: View>: View {
                                     .init(color: .clear, location: 1),
                                 ], startPoint: .top, endPoint: .bottom))
                         }
-                        Image(systemName: "chevron.down")
-                            .font(.system(size: 10, weight: .medium))
+                        PilotSymbol(PilotIcon.disclosureOpen, context: .disclosure)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity)
                     }

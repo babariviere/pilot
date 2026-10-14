@@ -150,11 +150,11 @@ struct SidebarHeader: View {
     var body: some View {
         let project = model.focusedProject
         VStack(alignment: .leading, spacing: 1) {
-            SidebarNavRow(title: "Home", icon: "house", selected: homeSelected, help: "Every project at a glance",
+            SidebarNavRow(title: "Home", icon: PilotIcon.home, selected: homeSelected, help: "Every project at a glance",
                           action: { model.openHome() }) {
                 composeButton(project: project)
             }
-            SidebarNavRow(title: "Inbox", icon: "tray", selected: inboxSelected,
+            SidebarNavRow(title: "Inbox", icon: PilotIcon.inbox, selected: inboxSelected,
                           help: needsYouHelp ?? "Nothing needs you",
                           accessibilityDetail: needsYouHelp, action: { model.showInbox() }) {
                 if needsYou > 0 {
@@ -169,7 +169,7 @@ struct SidebarHeader: View {
                                    onNewFolder: onNewFolder)
                 .padding(.top, 8)
             if let project {
-                SidebarNavRow(title: "Overview", icon: "square.grid.2x2", selected: overviewSelected,
+                SidebarNavRow(title: "Overview", icon: PilotIcon.overview, selected: overviewSelected,
                               help: "Open \(project.name)'s Overview", action: { model.openOverview() }) {
                     EmptyView()
                 }
@@ -184,7 +184,7 @@ struct SidebarHeader: View {
             Button("New Mission…") { model.missionSheet = .create(projectId: project?.id) }
                 .disabled(client.projects.isEmpty)
         } label: {
-            Image(systemName: "square.and.pencil")
+            PilotSymbol(PilotIcon.compose)
         } primaryAction: {
             model.newChatInScope()
         }
@@ -201,7 +201,7 @@ struct SidebarHeader: View {
 /// accessory such as a badge or button. Hover and selection use the sidebar's selection fill.
 struct SidebarNavRow<Accessory: View>: View {
     let title: String
-    let icon: String
+    let icon: PilotIcon
     let selected: Bool
     var help: String?
     var accessibilityDetail: String?
@@ -213,8 +213,7 @@ struct SidebarNavRow<Accessory: View>: View {
         HStack(spacing: 0) {
             Button(action: action) {
                 HStack(spacing: 7) {
-                    Image(systemName: selected ? "\(icon).fill" : icon)
-                        .font(.pilot(.label))
+                    PilotSymbol(icon, filled: selected, context: .row)
                         .foregroundStyle(selected ? Theme.foreground : Theme.mutedForeground)
                         .frame(width: 16)
                     Text(title)
@@ -255,15 +254,13 @@ struct SidebarProjectSelector: View {
         let project = model.focusedProject
         Button { showingList.toggle() } label: {
             HStack(spacing: 7) {
-                Image(systemName: project == nil ? "square.stack" : "folder")
-                    .font(.pilot(.label))
+                PilotSymbol(project == nil ? PilotIcon.allProjects : PilotIcon.project, context: .row)
                     .frame(width: 16)
                 Text(project?.name ?? "All projects")
                     .font(.pilot(.body, weight: .semibold))
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.pilot(.glyph, weight: .semibold))
+                PilotSymbol(PilotIcon.popUp, context: .disclosure)
                     .foregroundStyle(Theme.mutedForeground)
                 Spacer(minLength: 0)
             }
@@ -326,14 +323,14 @@ struct SidebarScopeList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SidebarScopeRow(title: "All projects", icon: "square.stack", checked: scope == nil,
+            SidebarScopeRow(title: "All projects", icon: PilotIcon.allProjects, checked: scope == nil,
                             count: SidebarScopeCounts.total(counts), shortcut: "⌘0") { choose(nil) }
             if !projects.isEmpty {
                 HairlineDivider().padding(.vertical, 4)
                 ScrollView {
                     VStack(spacing: 0) {
                         ForEach(Array(projects.enumerated()), id: \.element.id) { index, project in
-                            SidebarScopeRow(title: project.name, icon: "folder", checked: scope == project.id,
+                            SidebarScopeRow(title: project.name, icon: PilotIcon.project, checked: scope == project.id,
                                             count: counts[project.id] ?? ProjectDashboardCount(),
                                             shortcut: index < 9 ? "⌘\(index + 1)" : nil,
                                             help: project.path.abbreviatingHome) { choose(project.id) }
@@ -345,16 +342,16 @@ struct SidebarScopeList: View {
                 .scrollBounceBehavior(.basedOnSize)
             }
             HairlineDivider().padding(.vertical, 4)
-            SidebarScopeRow(title: "Archived chats (\(archivedCount))", icon: "archivebox", action: showArchive)
-            SidebarScopeRow(title: "Search chats", icon: "magnifyingglass", shortcut: "⌘F", action: search)
+            SidebarScopeRow(title: "Archived chats (\(archivedCount))", icon: PilotIcon.archive, action: showArchive)
+            SidebarScopeRow(title: "Search chats", icon: PilotIcon.search, shortcut: "⌘F", action: search)
             if scope == nil {
-                SidebarScopeRow(title: "Group chats by urgency", icon: "list.bullet.indent", checked: groupsByUrgency,
+                SidebarScopeRow(title: "Group chats by urgency", icon: PilotIcon.groupByUrgency, checked: groupsByUrgency,
                                 help: "List Needs you, Ready to merge, Working and Recent instead of projects and folders",
                                 action: toggleGrouping)
             }
             HairlineDivider().padding(.vertical, 4)
-            SidebarScopeRow(title: "Add Project…", icon: "folder.badge.plus", action: addProject)
-            SidebarScopeRow(title: "New Folder…", icon: "folder.fill.badge.plus", action: newFolder)
+            SidebarScopeRow(title: "Add Project…", icon: PilotIcon.newProject, action: addProject)
+            SidebarScopeRow(title: "New Folder…", icon: PilotIcon.chatFolder, action: newFolder)
         }
         .padding(5)
         .frame(width: 300)
@@ -363,7 +360,7 @@ struct SidebarScopeList: View {
 
 private struct SidebarScopeRow: View {
     let title: String
-    let icon: String
+    let icon: PilotIcon
     var checked = false
     var count: ProjectDashboardCount?
     var shortcut: String?
@@ -374,11 +371,10 @@ private struct SidebarScopeRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Image(systemName: "checkmark")
-                    .font(.pilot(.small, weight: .semibold))
+                PilotSymbol(PilotIcon.selectedOption)
                     .opacity(checked ? 1 : 0)
                     .frame(width: 12)
-                Image(systemName: icon).font(.pilot(.label)).frame(width: 16)
+                PilotSymbol(icon, context: .row).frame(width: 16)
                 Text(title).font(.pilot(.body)).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 8)
                 if let count {

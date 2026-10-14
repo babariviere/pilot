@@ -182,7 +182,7 @@ struct CopyButton: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
         } label: {
-            Image(systemName: "doc.on.doc").font(.caption)
+            PilotSymbol(PilotIcon.copy, context: .toolbar)
         }
         .buttonStyle(.borderless)
         .foregroundStyle(.secondary)

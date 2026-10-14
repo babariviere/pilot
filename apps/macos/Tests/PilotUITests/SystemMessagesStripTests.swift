@@ -29,9 +29,9 @@ private func fittingHeight(_ view: some View) -> CGFloat {
 }
 
 @Test func coordinatorAndMissionMessagesUseTheSharedMarks() {
-    #expect(InputOrigin.coordinator.icon == MissionCoordinatorIndicator.symbol)
+    #expect(InputOrigin.coordinator.icon == PilotIcon.coordinator)
     #expect(InputOrigin.coordinator.title == "Coordinator")
-    #expect(InputOrigin.mission.icon == MissionSymbol.name)
+    #expect(InputOrigin.mission.icon == PilotIcon.mission)
 }
 
 @Test @MainActor func systemMessagesHideWhenNoneWaitOrTheChatIsIdle() {

@@ -199,10 +199,10 @@ struct MissionBriefTab: View {
                         // menu has the same actions.
                         if hovered {
                             HStack(spacing: 2) {
-                                Button { editDecision(item) } label: { Image(systemName: "pencil") }
+                                Button { editDecision(item) } label: { PilotSymbol(PilotIcon.edit, context: .toolbar) }
                                     .buttonStyle(QuietIconButtonStyle())
                                     .help("Edit decision").accessibilityLabel("Edit decision")
-                                Button { removeDecision(item) } label: { Image(systemName: "trash") }
+                                Button { removeDecision(item) } label: { PilotSymbol(PilotIcon.delete, context: .toolbar) }
                                     .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                                     .help("Remove decision").accessibilityLabel("Remove decision")
                             }
@@ -245,7 +245,7 @@ struct MissionBriefTab: View {
                     .keyboardShortcut("s", modifiers: .command)
                     .disabled(!editor.dirty || editor.saving)
                 } else if !editor.text.isEmpty {
-                    Button { editor.editing = true } label: { Label("Edit", systemImage: "pencil") }
+                    Button { editor.editing = true } label: { Label("Edit", icon: PilotIcon.edit) }
                         .help("Edit the brief. Saving creates a new revision.")
                 }
             }
@@ -260,9 +260,9 @@ struct MissionBriefTab: View {
                     .card(radius: 8)
                     .accessibilityLabel("Brief Markdown")
             } else if editor.text.isEmpty {
-                EmptyStateView(icon: "doc.text", title: "No brief yet",
+                EmptyStateView(icon: PilotIcon.document, title: "No brief yet",
                                message: "The brief is the shared spec every mission chat reads.") {
-                    Button { editor.editing = true } label: { Label("Write the Brief", systemImage: "pencil") }
+                    Button { editor.editing = true } label: { Label("Write the Brief", icon: PilotIcon.edit) }
                         .buttonStyle(.borderedProminent)
                 }
             } else {
@@ -276,7 +276,7 @@ struct MissionBriefTab: View {
     @ViewBuilder private var notices: some View {
         if let conflict = editor.conflict {
             HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Theme.warning)
+                PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.warning)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Revision \(conflict) was saved while you were editing, so your changes were not saved.")
                         .font(.pilot(.body, weight: .medium))
@@ -314,7 +314,7 @@ struct MissionBriefTab: View {
             if editor.revisions.isEmpty { Text("No revisions yet") }
         } label: {
             ChipLabel(title: editor.baseRevision == 0 ? "No revisions" : "Revision \(editor.baseRevision)",
-                      icon: "clock.arrow.circlepath")
+                      icon: PilotIcon.queued)
         }
         .chipMenuStyle()
         .fixedSize()
@@ -353,7 +353,7 @@ struct MissionBriefTab: View {
                         .accessibilityLabel("Comment")
                 }
             } controls: {
-                Button { comment.confirming.toggle() } label: { Image(systemName: "text.quote") }
+                Button { comment.confirming.toggle() } label: { PilotSymbol(PilotIcon.quote) }
                     .buttonStyle(QuietIconButtonStyle())
                     .help(comment.confirming ? "Remove the quote" : "Quote a passage of the brief")
                     .accessibilityLabel(comment.confirming ? "Remove quote" : "Add quote")
@@ -362,13 +362,13 @@ struct MissionBriefTab: View {
                     if !members.isEmpty { Divider() }
                     ForEach(members) { session in Button(session.title) { comment.option = session.id } }
                 } label: {
-                    ChipLabel(title: "To \(recipient)", icon: "arrowshape.turn.up.right", maxTitleWidth: 200)
+                    ChipLabel(title: "To \(recipient)", icon: PilotIcon.recipient, maxTitleWidth: 200)
                 }
                 .chipMenuStyle()
                 .fixedSize()
                 .help("Who should read this comment")
                 Spacer()
-                Button(action: addComment) { Image(systemName: "arrow.up") }
+                Button(action: addComment) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(comment.busy || comment.trimmed(comment.text).isEmpty)
                     .help("Post comment")
@@ -452,7 +452,7 @@ struct QuietAddButton: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 4) {
-                Image(systemName: "plus").font(.pilot(.micro, weight: .semibold))
+                PilotSymbol(PilotIcon.add)
                 Text(title)
             }
             .font(.pilot(.label))
@@ -510,8 +510,7 @@ private struct CommentRow: View {
     var body: some View {
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: comment.isOpen ? "text.bubble" : "checkmark.bubble")
-                    .font(.pilot(.label))
+                PilotSymbol(comment.isOpen ? PilotIcon.update : PilotIcon.resolvedComment, context: .row)
                     .foregroundStyle(comment.isOpen ? Theme.info : Theme.faintForeground).frame(width: 16)
                 VStack(alignment: .leading, spacing: 4) {
                     if let anchor = comment.anchor, !anchor.isEmpty {
@@ -529,7 +528,7 @@ private struct CommentRow: View {
                     if comment.isOpen {
                         Button("Resolve", action: resolve).controlSize(.small)
                     }
-                    Button(action: delete) { Image(systemName: "trash") }
+                    Button(action: delete) { PilotSymbol(PilotIcon.delete, context: .toolbar) }
                         .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                         .help("Delete comment").accessibilityLabel("Delete comment")
                 }
@@ -592,11 +591,11 @@ struct MissionTasksTab: View {
             }
             addField
             if groups.isEmpty {
-                EmptyStateView(icon: "checklist", title: "No tasks yet",
+                EmptyStateView(icon: PilotIcon.tasks, title: "No tasks yet",
                                message: "Add the first task above, or ask a mission chat to plan them.")
             } else if counts.total > 0, counts.done == counts.total, mission.status == .active {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark.circle").foregroundStyle(Theme.success)
+                    PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success)
                     Text("Every task is done.").foregroundStyle(Theme.mutedForeground)
                     Button("Mark Mission as Done") {
                         model.missionAction { [client, id = mission.id] in
@@ -656,7 +655,7 @@ struct MissionTasksTab: View {
 
     private var addField: some View {
         HStack(spacing: 8) {
-            Image(systemName: "plus").font(.pilot(.body)).foregroundStyle(Theme.mutedForeground).frame(width: 16)
+            PilotSymbol(PilotIcon.add, context: .row).foregroundStyle(Theme.mutedForeground).frame(width: 16)
             TextField("Add a task", text: $input.text)
                 .textFieldStyle(.plain)
                 .font(.pilot(.body))
@@ -676,8 +675,7 @@ struct MissionTasksTab: View {
             if folded { collapsed.remove(group.status) } else { collapsed.insert(group.status) }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: folded ? "chevron.right" : "chevron.down")
-                    .font(.pilot(.micro, weight: .semibold)).foregroundStyle(Theme.faintForeground).frame(width: 12)
+                PilotSymbol(folded ? PilotIcon.disclosure : PilotIcon.disclosureOpen, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 12)
                 Text(group.status.label).font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
                 Text("\(group.tasks.count)").font(.pilot(.label)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                 Spacer()
@@ -779,7 +777,7 @@ struct MissionTaskRow: View {
                             ForEach(artifactLinks) { item in
                                 Button { open(item) } label: {
                                     Label("\(item.title) · \(item.revision.map { "r\($0)" } ?? "latest")",
-                                          systemImage: item.kind == "image" ? "photo" : ArtifactSymbol.name)
+                                          icon: item.kind == "image" ? PilotIcon.image : PilotIcon.artifact)
                                         .lineLimit(1)
                                         .font(.pilot(.caption))
                                         .foregroundStyle(Theme.mutedForeground)
@@ -795,7 +793,7 @@ struct MissionTaskRow: View {
                 if let sessionId = task.sessionId {
                     let chat = client.session(sessionId)?.title
                     Button { model.selectedSessionId = sessionId } label: {
-                        Label(MissionTaskOwnerLabel.text(task: task, chatTitle: chat), systemImage: "bubble.left")
+                        Label(MissionTaskOwnerLabel.text(task: task, chatTitle: chat), icon: PilotIcon.message)
                             .lineLimit(1).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     }
                     .buttonStyle(.plain)
@@ -807,7 +805,7 @@ struct MissionTaskRow: View {
                         MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
                     }
                     if hovered {
-                        Menu { menuItems } label: { Image(systemName: "ellipsis") }
+                        Menu { menuItems } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                             .menuStyle(.button)
                             .buttonStyle(QuietIconButtonStyle())
                             .menuIndicator(.hidden)
@@ -840,7 +838,7 @@ struct MissionTaskRow: View {
     /// "Waiting on #12, #14": each number scrolls to that task.
     private var waitingLine: some View {
         HStack(spacing: 4) {
-            Image(systemName: "lock").font(.pilot(.micro))
+            PilotSymbol(PilotIcon.privateChannel)
             Text("Waiting on")
             ForEach(Array(dependencies.waitingOn.enumerated()), id: \.element.id) { index, dependency in
                 Button { onShowTask(dependency.id) } label: {
@@ -883,7 +881,7 @@ struct MissionTaskRow: View {
         }
         Menu("Status") {
             ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-                Button { setStatus(status) } label: { Label(status.label, systemImage: status.symbol) }
+                Button { setStatus(status) } label: { Label(status.label, icon: status.icon) }
                     .disabled(status == task.status)
             }
         }
@@ -973,7 +971,7 @@ struct MissionTaskStatusMenu: View {
             if interactive {
                 Menu {
                     ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-                        Button { set(status) } label: { Label(status.label, systemImage: status.symbol) }
+                        Button { set(status) } label: { Label(status.label, icon: status.icon) }
                             .disabled(status == task.status)
                     }
                 } label: {
@@ -990,8 +988,7 @@ struct MissionTaskStatusMenu: View {
     }
 
     private var icon: some View {
-        Image(systemName: task.status.symbol)
-            .font(.pilot(.body, weight: .medium))
+        PilotSymbol(task.status.icon, context: .row)
             .foregroundStyle(subdued ? Theme.faintForeground : task.status.color)
             .frame(width: 16)
             .contentShape(Rectangle())
@@ -1047,9 +1044,9 @@ struct MissionChatsTab: View {
                 .padding(.bottom, 6)
             }
             if all.isEmpty || (members.isEmpty && state.filter == .active) {
-                EmptyStateView(icon: "bubble.left.and.bubble.right", title: "No chats yet",
+                EmptyStateView(icon: PilotIcon.chats, title: "No chats yet",
                                message: "Start a chat to work on the mission, or bring in a chat from this project.") {
-                    Button { model.newSession(in: mission) } label: { Label("New Chat", systemImage: "plus") }
+                    Button { model.newSession(in: mission) } label: { Label("New Chat", icon: PilotIcon.compose) }
                         .buttonStyle(.borderedProminent)
                         .disabled(mission.status != .active)
                     Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
@@ -1102,7 +1099,7 @@ private struct MissionChatRow: View {
                     Text(SessionTimeFormatting.relative(session.listActivityAt))
                         .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                         .opacity(hovered ? 0 : 1)
-                    Menu { actions(coordinator: coordinator) } label: { Image(systemName: "ellipsis") }
+                    Menu { actions(coordinator: coordinator) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                         .menuStyle(.button)
                         .buttonStyle(QuietIconButtonStyle())
                         .menuIndicator(.hidden)
@@ -1165,7 +1162,7 @@ struct MissionArtifactsTab: View {
             }
             .padding(.bottom, 6)
             if detail.artifacts.isEmpty {
-                EmptyStateView(icon: ArtifactSymbol.name, title: "No linked artifacts",
+                EmptyStateView(icon: PilotIcon.artifact, title: "No linked artifacts",
                                message: "Link a chat's mockups, diagrams or reports so every mission chat can find them.") {
                     linkMenu(members: members)
                 }
@@ -1174,7 +1171,7 @@ struct MissionArtifactsTab: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 HoverRow(verticalPadding: 7) { hovered in
                     HStack(spacing: 10) {
-                        Image(systemName: link.kind == "image" ? "photo" : ArtifactSymbol.name)
+                        PilotSymbol(link.kind == "image" ? PilotIcon.image : PilotIcon.artifact)
                             .foregroundStyle(Theme.mutedForeground).frame(width: 16)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(link.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
@@ -1186,7 +1183,7 @@ struct MissionArtifactsTab: View {
                         Spacer(minLength: 8)
                         Text("\(link.kind.uppercased()) · \(link.revision.map { "r\($0)" } ?? "latest")")
                             .font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
-                        Button { unlink(link) } label: { Image(systemName: "xmark") }
+                        Button { unlink(link) } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
                             .buttonStyle(QuietIconButtonStyle())
                             .help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
                             .accessibilityLabel("Unlink \(link.title)")
@@ -1228,7 +1225,7 @@ struct MissionArtifactsTab: View {
             }
             if linkable.isEmpty { Text("No unlinked artifacts in mission chats") }
         } label: {
-            ChipLabel(title: "Link artifact", icon: "link")
+            ChipLabel(title: "Link artifact", icon: PilotIcon.link)
         }
         .chipMenuStyle()
         .fixedSize()
@@ -1275,7 +1272,7 @@ struct MissionActivityTab: View {
             composer
                 .padding(.bottom, 20)
             if events.isEmpty {
-                EmptyStateView(icon: "clock", title: "No activity yet",
+                EmptyStateView(icon: PilotIcon.pending, title: "No activity yet",
                                message: "Updates, handoffs, task changes and brief revisions appear here.")
             }
             ForEach(MissionActivityItem.items(days)) { item in
@@ -1308,11 +1305,11 @@ struct MissionActivityTab: View {
                 .accessibilityLabel("Update text")
         } controls: {
             Menu {
-                Button { state.kind = .update } label: { Label("Update", systemImage: "text.bubble") }
-                Button { state.kind = .handoff } label: { Label("Handoff", systemImage: "arrow.right.circle") }
+                Button { state.kind = .update } label: { Label("Update", icon: PilotIcon.update) }
+                Button { state.kind = .handoff } label: { Label("Handoff", icon: PilotIcon.handoff) }
             } label: {
                 ChipLabel(title: state.kind == .handoff ? "Handoff" : "Update",
-                          icon: state.kind == .handoff ? "arrow.right.circle" : "text.bubble")
+                          icon: state.kind == .handoff ? PilotIcon.handoff : PilotIcon.update)
             }
             .chipMenuStyle()
             .fixedSize()
@@ -1324,14 +1321,14 @@ struct MissionActivityTab: View {
                     Button(health.label) { state.health = health }
                 }
             } label: {
-                ChipLabel(title: state.health?.label ?? "Health", icon: state.health == nil ? "circle.dotted" : nil,
+                ChipLabel(title: state.health?.label ?? "Health", icon: state.health == nil ? PilotIcon.unset : nil,
                           dot: state.health?.color)
             }
             .chipMenuStyle()
             .fixedSize()
             .help("Optional mission health")
             Spacer()
-            Button(action: post) { Image(systemName: "arrow.up") }
+            Button(action: post) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                 .buttonStyle(CircleIconButtonStyle())
                 .keyboardShortcut(.return, modifiers: .command)
                 .disabled(input.busy || input.trimmed(input.text).isEmpty)
@@ -1427,8 +1424,7 @@ private struct MissionTimelineRow: View {
     var body: some View {
         let handoff = event.kind == .handoff
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: event.kind.symbol)
-                .font(.pilot(.small, weight: .semibold))
+            PilotSymbol(event.kind.icon)
                 .foregroundStyle(handoff ? Theme.info : Theme.mutedForeground)
                 .frame(width: 22, height: 22)
                 .background(Circle().fill(handoff ? Theme.info.opacity(0.14) : Theme.muted))

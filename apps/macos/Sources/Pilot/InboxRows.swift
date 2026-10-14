@@ -42,7 +42,7 @@ enum InboxRowLayout {
 /// A row's trailing action, such as "Review" or "Open PR", brighter while the row is hovered.
 struct InboxRowAction: View {
     let title: String
-    var symbol = "chevron.right"
+    var icon: PilotIcon = .disclosure
     let hovered: Bool
 
     var body: some View {
@@ -50,7 +50,7 @@ struct InboxRowAction: View {
             Text(title).font(.pilot(.label, weight: .medium))
                 .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
                 .fixedSize()
-            Image(systemName: symbol).font(.pilot(.micro, weight: .semibold))
+            PilotSymbol(icon, context: .disclosure)
                 .foregroundStyle(Theme.faintForeground)
                 .accessibilityHidden(true)
         }
@@ -158,7 +158,7 @@ struct InboxMissionLabel: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            Image(systemName: MissionSymbol.name).font(.system(size: 9))
+            PilotSymbol(PilotIcon.mission)
             Text(title).lineLimit(1).truncationMode(.tail)
         }
         .font(.system(size: 10, weight: .medium))
@@ -174,7 +174,7 @@ struct InboxPullRequestMark: View {
     var body: some View {
         let readiness = PullRequestReadinessStyle(pr)
         HStack(spacing: 3) {
-            readiness.icon
+            PilotMarkIcon(mark: .gitBranch)
             Text(verbatim: "#\(pr.number)").monospacedDigit()
         }
         .font(.system(size: 10, weight: .medium))
@@ -204,7 +204,7 @@ struct InboxReadyToMergeRow: View {
             HoverRow(verticalPadding: 7) { hovered in
                 InboxRowLabel(title: pr.title) { detail } trailing: {
                     InboxRowAction(title: url == nil ? "Open chat" : "Open PR",
-                                   symbol: url == nil ? "chevron.right" : "arrow.up.right", hovered: hovered)
+                                   icon: url == nil ? PilotIcon.disclosure : PilotIcon.openExternal, hovered: hovered)
                 }
             }
         }

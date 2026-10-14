@@ -187,7 +187,7 @@ struct SlackChannelsEditor: View {
                             saved: saved.contains(channel.id)) { editor.removeChannel(channel.id) }
         }
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
+            PilotSymbol(PilotIcon.search).foregroundStyle(.secondary).accessibilityHidden(true)
             TextField("Add channel", text: $query, prompt: Text("Search channels to add"))
                 .textFieldStyle(.plain)
                 .labelsHidden()
@@ -219,7 +219,7 @@ struct SlackChannelsEditor: View {
             Text(query.isEmpty ? "Channels you're in" : "Matching channels").font(.caption).foregroundStyle(.secondary)
             ForEach(candidates.prefix(6)) { option in
                 HStack(spacing: 6) {
-                    Image(systemName: option.isPrivate ? "lock" : "number").font(.caption).foregroundStyle(.secondary)
+                    PilotSymbol(option.isPrivate ? PilotIcon.privateChannel : PilotIcon.slackChannel).foregroundStyle(.secondary)
                         .frame(width: 14)
                         .accessibilityLabel(option.isPrivate ? "Private channel" : "Channel")
                     Text(option.name).lineLimit(1)
@@ -313,14 +313,14 @@ private struct SlackChannelRow: View {
             Spacer(minLength: 8)
             HStack(spacing: 4) {
                 if line.tone == .attention {
-                    Image(systemName: "exclamationmark.triangle").accessibilityHidden(true)
+                    PilotSymbol(PilotIcon.warning).accessibilityHidden(true)
                 }
                 Text(line.text)
             }
             .font(.caption)
             .foregroundStyle(line.tone == .attention ? Theme.blocked : Color.secondary)
             .help(status?.error ?? (status?.status == .signInRequired ? "Sign in to Slack below." : line.text))
-            Button(action: remove) { Image(systemName: "minus.circle") }
+            Button(action: remove) { PilotSymbol(PilotIcon.remove) }
                 .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                 .help("Stop reading \(channel.display)")
                 .accessibilityLabel("Remove \(channel.display)")
@@ -339,7 +339,7 @@ private struct TrackingLookupProblem<Item: Codable & Equatable & Sendable>: View
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: "exclamationmark.triangle")
+            PilotSymbol(PilotIcon.warning)
                 .foregroundStyle(Theme.blocked)
                 .accessibilityHidden(true)
             Text(lookup.error ?? "Couldn't reach \(service).").foregroundStyle(.secondary)
@@ -433,7 +433,7 @@ private struct SlackLabelRow: View {
             Toggle("Hide from Inbox", isOn: $label.hideFromInbox)
                 .toggleStyle(.checkbox).font(.caption).fixedSize()
                 .help("Messages with this label stay out of the Inbox. Slack triage lists them behind Show hidden.")
-            Button(action: remove) { Image(systemName: "minus.circle") }
+            Button(action: remove) { PilotSymbol(PilotIcon.remove) }
                 .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                 .help("Remove this label")
                 .accessibilityLabel(label.name.isEmpty ? "Remove label" : "Remove \(label.name)")
@@ -509,7 +509,7 @@ private struct SourceAccountRow: View {
             Text("\(label) account")
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 if state.attention {
-                    Image(systemName: "person.crop.circle.badge.exclamationmark").accessibilityHidden(true)
+                    PilotSymbol(PilotIcon.signInRequired).accessibilityHidden(true)
                 }
                 Text(state.text).fixedSize(horizontal: false, vertical: true)
             }

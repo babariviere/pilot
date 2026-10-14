@@ -42,7 +42,7 @@ struct SessionSidebar: View {
         .overlay {
             if client.projects.isEmpty, client.sessions.isEmpty, model.projectFolders.folders.isEmpty {
                 VStack(spacing: 10) {
-                    Image(systemName: "folder.badge.plus").font(.title2).foregroundStyle(.secondary)
+                    PilotSymbol(PilotIcon.newProject, context: .emptyState).foregroundStyle(.secondary)
                     Text("Add a project to get started").font(.callout).foregroundStyle(.secondary)
                     Button("Add Project…") { model.addProject() }
                 }
@@ -303,10 +303,10 @@ struct SessionSidebar: View {
                 }
             } header: {
                 HStack(spacing: 6) {
-                    Image(systemName: MissionSymbol.name).font(.system(size: 10)).frame(width: 14)
+                    PilotSymbol(PilotIcon.mission).frame(width: 14)
                     Text("Missions").font(.system(size: 11, weight: .semibold))
                     Spacer(minLength: 0)
-                    Button { model.missionSheet = .create(projectId: projectId) } label: { Image(systemName: "plus") }
+                    Button { model.missionSheet = .create(projectId: projectId) } label: { PilotSymbol(PilotIcon.add) }
                         .buttonStyle(.borderless)
                         .frame(width: 16, height: 16)
                         .help("New mission…")
@@ -405,8 +405,7 @@ struct SidebarDisclosureRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 9, weight: .semibold)).frame(width: 14)
+                PilotSymbol(expanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).frame(width: 14)
                 Text(title).font(.caption)
                 Spacer(minLength: 0)
             }
@@ -453,7 +452,7 @@ private struct ProjectHeader: View {
             // The name opens the project page without changing the sidebar; the chevron folds its chats.
             Button { model.openProject(project.id) } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "folder").font(.system(size: 10)).frame(width: 14)
+                    PilotSymbol(PilotIcon.project).frame(width: 14)
                     Text(project.name)
                         .font(.system(size: 11, weight: .semibold))
                         .lineLimit(1)
@@ -475,12 +474,12 @@ private struct ProjectHeader: View {
             Group {
                 ProjectArtifactsButton(project: project, client: client)
                     .frame(width: 16, height: 16)
-                Button(action: onArchive) { Image(systemName: "archivebox") }
+                Button(action: onArchive) { PilotSymbol(PilotIcon.archive) }
                     .buttonStyle(.borderless)
                     .frame(width: 16, height: 16)
                     .help("Browse archived chats in \(project.name)")
                     .accessibilityLabel("Browse archived chats in \(project.name)")
-                Button(action: onNew) { Image(systemName: "plus") }
+                Button(action: onNew) { PilotSymbol(PilotIcon.compose, context: .toolbar) }
                     .buttonStyle(.borderless)
                     .frame(width: 16, height: 16)
                     .help("New session in \(project.name)")
@@ -488,8 +487,7 @@ private struct ProjectHeader: View {
             }
             .revealed(hovered)
             Button { isExpanded.toggle() } label: {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
+                PilotSymbol(isExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure)
                     // Faint at rest, never hidden: SwiftUI does not hit-test fully transparent views, and the
                     // chevron must stay clickable before hover tracking catches up. A folded project shows it fully.
                     .foregroundStyle(hovered || !isExpanded ? Theme.mutedForeground : Theme.faintForeground.opacity(0.6))
@@ -517,7 +515,7 @@ private struct ProjectHeader: View {
                     model.projectFolders.move(projectId: project.id, to: nil)
                 } label: {
                     if model.projectFolders.folderId(for: project.id) == nil {
-                        Label("Ungrouped", systemImage: "checkmark")
+                        Label("Ungrouped", icon: PilotIcon.selectedOption)
                     } else {
                         Text("Ungrouped")
                     }
@@ -527,7 +525,7 @@ private struct ProjectHeader: View {
                         model.projectFolders.move(projectId: project.id, to: folder.id)
                     } label: {
                         if model.projectFolders.folderId(for: project.id) == folder.id {
-                            Label(folder.name, systemImage: "checkmark")
+                            Label(folder.name, icon: PilotIcon.selectedOption)
                         } else {
                             Text(folder.name)
                         }
@@ -586,8 +584,7 @@ struct SessionRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     if session.isPinned {
-                        Image(systemName: "pin.fill")
-                            .font(.system(size: 10, weight: .semibold))
+                        PilotSymbol(PilotIcon.pin, filled: true)
                             .foregroundStyle(Theme.foreground)
                             .help("Pinned chat. Automatic archiving is disabled until unpinned.")
                             .accessibilityLabel("Pinned chat")
@@ -650,7 +647,7 @@ struct SessionRow: View {
             Button {
                 model.setPinned(!session.isPinned, sessionId: session.id)
             } label: {
-                Label(session.isPinned ? "Unpin" : "Pin", systemImage: session.isPinned ? "pin.slash" : "pin")
+                Label(session.isPinned ? "Unpin" : "Pin", icon: session.isPinned ? PilotIcon.unpin : PilotIcon.pin)
             }
             .disabled(model.pendingSessionActions.contains(session.id))
             .help(session.isPinned ? "Return this chat to its usual list position and allow automatic archiving" :
@@ -697,14 +694,14 @@ private struct SearchField: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
+            PilotSymbol(PilotIcon.search).foregroundStyle(Theme.faintForeground)
             TextField("Search chats", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused(focused)
                 .onExitCommand(perform: onDismiss)
             Button(action: onDismiss) {
-                Image(systemName: "xmark.circle.fill").font(.system(size: 11)).foregroundStyle(Theme.faintForeground)
+                PilotSymbol(PilotIcon.clearField, context: .toolbar).foregroundStyle(Theme.faintForeground)
             }
             .buttonStyle(.plain)
             .help("Close search (Esc)")

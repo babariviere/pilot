@@ -9,6 +9,8 @@ import SwiftUI
 /// Motion keeps it still. It is decorative: the text beside it carries the state for VoiceOver.
 struct DitherRipple: View {
     var background = false
+    /// A square mark for icon columns. Nil preserves the working line's original 20×6 strip.
+    var markSize: CGFloat? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static var columns: Int { DitherRippleRenderer.columns }
@@ -22,7 +24,8 @@ struct DitherRipple: View {
                 DitherCornerTicking { frame in strip(frame: frame) }
             }
         }
-        .frame(width: CGFloat(Self.columns) * DitherCorner.cell, height: CGFloat(Self.rows) * DitherCorner.cell)
+        .frame(width: markSize ?? CGFloat(Self.columns) * DitherCorner.cell,
+               height: markSize ?? CGFloat(Self.rows) * DitherCorner.cell)
         .accessibilityHidden(true)
     }
 
@@ -31,7 +34,7 @@ struct DitherRipple: View {
 
     @ViewBuilder private func strip(frame: Int) -> some View {
         if let image = DitherRippleRenderer.image(frame: DitherCorner.loopFrame(frame, background: background),
-                                                  background: background) {
+                                                  background: background, compact: markSize != nil) {
             Image(decorative: image, scale: 1).interpolation(.none).resizable()
         }
     }
@@ -41,8 +44,8 @@ struct DitherRipple: View {
 enum DitherRippleRenderer {
     nonisolated static let columns = 20
     nonisolated static let rows = 6
-    private struct Key: Hashable { let frame: Int; let background: Bool }
-    /// Bounded: `frameCount` plus `backgroundFrameCount` images of 20 × 6 pixels.
+    private struct Key: Hashable { let frame: Int; let background: Bool; let compact: Bool }
+    /// Two bounded geometries: the working line's 20×6 strip and an 8×8 icon mark, on the same clock/pattern.
     private static var cache: [Key: CGImage] = [:]
     static var cachedCount: Int { cache.count }
 
@@ -53,19 +56,20 @@ enum DitherRippleRenderer {
         return (Double(color.redComponent), Double(color.greenComponent), Double(color.blueComponent))
     }()
 
-    static func image(frame: Int, background: Bool) -> CGImage? {
-        let key = Key(frame: frame, background: background)
+    static func image(frame: Int, background: Bool, compact: Bool = false) -> CGImage? {
+        let frame = DitherCorner.loopFrame(frame, background: background)
+        let key = Key(frame: frame, background: background, compact: compact)
         if let image = cache[key] { return image }
-        let image = render(frame: frame, background: background)
+        let image = render(frame: frame, background: background, compact: compact)
         if let image { cache[key] = image }
         return image
     }
 
     /// Coverage in 0...1 of the cell at `x`, `y`: a crest travelling rightwards, fading toward the strip's ends
     /// and its top and bottom rows.
-    nonisolated static func coverage(x: Int, y: Int, frame: Int, background: Bool) -> Double {
-        let u = (Double(x) + 0.5) / Double(columns)
-        let v = (Double(y) + 0.5) / Double(rows)
+    nonisolated static func coverage(x: Int, y: Int, frame: Int, background: Bool, compact: Bool = false) -> Double {
+        let u = (Double(x) + 0.5) / Double(compact ? 8 : columns)
+        let v = (Double(y) + 0.5) / Double(compact ? 8 : rows)
         let loop = Double(background ? DitherCorner.backgroundFrameCount : DitherCorner.frameCount)
         let phase = 2 * Double.pi * Double(frame) / loop
         let wave = 0.5 + 0.5 * sin(u * 2 * Double.pi * 1.5 - phase)
@@ -75,12 +79,12 @@ enum DitherRippleRenderer {
         return level * ends * band
     }
 
-    private static func render(frame: Int, background: Bool) -> CGImage? {
-        let width = columns, height = rows
+    private static func render(frame: Int, background: Bool, compact: Bool) -> CGImage? {
+        let width = compact ? 8 : columns, height = compact ? 8 : rows
         let alpha = background ? 0.6 : 0.85
         var pixels = [UInt8](repeating: 0, count: width * height * 4)
         for y in 0 ..< height {
-            for x in 0 ..< width where bayer[(y & 3) * 4 + (x & 3)] < coverage(x: x, y: y, frame: frame, background: background) {
+            for x in 0 ..< width where bayer[(y & 3) * 4 + (x & 3)] < coverage(x: x, y: y, frame: frame, background: background, compact: compact) {
                 let index = (y * width + x) * 4
                 pixels[index] = UInt8(clamping: Int(tint.0 * alpha * 255))
                 pixels[index + 1] = UInt8(clamping: Int(tint.1 * alpha * 255))

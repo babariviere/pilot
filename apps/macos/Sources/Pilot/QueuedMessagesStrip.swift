@@ -25,11 +25,11 @@ struct QueuedMessagesStrip: View {
         VStack(alignment: .leading, spacing: 2) {
             if let error = state.queueRemovalError {
                 HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.pilot(.caption))
+                    PilotSymbol(PilotIcon.warning)
                     Text(error).font(.pilot(.caption)).textSelection(.enabled).lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
-                    Button { state.dismissQueueRemovalError() } label: { Image(systemName: "xmark") }
+                    Button { state.dismissQueueRemovalError() } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
                         .buttonStyle(QuietIconButtonStyle())
                         .help("Dismiss removal error")
                         .accessibilityLabel("Dismiss removal error")
@@ -152,12 +152,12 @@ private struct QueuedMessageRow: View {
                 ProgressView().controlSize(.mini)
             } else if isHovered {
                 HStack(spacing: 0) {
-                    Button { state.selectQueuedMessage(message) } label: { Image(systemName: "pencil") }
+                    Button { state.selectQueuedMessage(message) } label: { PilotSymbol(PilotIcon.edit, context: .toolbar) }
                         .buttonStyle(QuietIconButtonStyle())
                         .disabled(state.mutatingQueue)
                         .help("Edit this queued message")
                         .accessibilityLabel("Edit queued message")
-                    Button(action: onRemove) { Image(systemName: "xmark") }
+                    Button(action: onRemove) { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
                         .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                         .disabled(state.mutatingQueue || !available)
                         .help("Remove this queued message")
@@ -187,8 +187,7 @@ struct QueueModeSymbol: View {
     let mode: DeliveryMode
 
     var body: some View {
-        Image(systemName: mode == .steer ? "arrow.turn.down.right" : "clock.arrow.circlepath")
-            .font(.pilot(.caption, weight: .semibold))
+        PilotSymbol(mode == .steer ? PilotIcon.steer : PilotIcon.queued)
             .foregroundStyle(mode == .steer ? Theme.info : Theme.faintForeground)
             .frame(width: 14)
             .help(mode == .steer ? "Steering: delivered during the current run" : "Follow-up: sent after the current run")

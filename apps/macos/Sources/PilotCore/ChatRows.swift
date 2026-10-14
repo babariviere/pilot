@@ -256,6 +256,11 @@ extension Transcript {
     }
 }
 
+/// UI-independent icon meanings; the app maps these to its shared visual vocabulary.
+public enum ToolIcon: String, Equatable, Sendable, CaseIterable {
+    case terminal, code, document, edit, search, web, subagents, extensionTool, tool
+}
+
 /// A short, human description of a tool call.
 public struct ToolSummary: Equatable, Sendable {
     /// What a call did, for work-line counts and step sentences.
@@ -263,7 +268,7 @@ public struct ToolSummary: Equatable, Sendable {
         case read, edit, command, script, search, fetch, other
     }
 
-    public let icon: String
+    public let icon: ToolIcon
     public let title: String
     public let detail: String?
     /// The most useful argument to show expanded (a command, script or patch), else nil for JSON.
@@ -284,14 +289,14 @@ public struct ToolSummary: Equatable, Sendable {
         var verb: String?
         switch name {
         case "bash":
-            icon = "terminal"
+            icon = .terminal
             title = "Ran command"
             detail = string("command").map(Self.firstLine)
             body = string("command")
             kind = .command
         case "codemode":
             let code = string("code") ?? ""
-            icon = "curlybraces"
+            icon = .code
             if let command = Self.match(code, #"tools\.bash\(\{\s*command:\s*"((?:[^"\\]|\\.)*)""#) {
                 title = "Ran command"
                 detail = Self.firstLine(command.replacingOccurrences(of: "\\\"", with: "\""))
@@ -312,13 +317,13 @@ public struct ToolSummary: Equatable, Sendable {
             }
             body = code
         case "read":
-            icon = "doc.text"
+            icon = .document
             title = "Read file"
             detail = string("path")
             body = nil
             kind = .read
         case "edit", "write":
-            icon = "pencil"
+            icon = .edit
             title = name == "edit" ? "Edited file" : "Wrote file"
             detail = string("path")
             body = string("content") ?? string("newText")
@@ -336,34 +341,34 @@ public struct ToolSummary: Equatable, Sendable {
                 }
             }
         case "applyPatch":
-            icon = "pencil"
+            icon = .edit
             title = "Edited files"
             detail = string("patch").flatMap(Self.patchedFiles)
             body = string("patch")
             diffs = string("patch").map(Diff.parsePatch) ?? []
             kind = .edit
         case "web_search":
-            icon = "magnifyingglass"
+            icon = .search
             title = "Searched the web"
             detail = string("query")
             body = nil
             kind = .search
             verb = "Searched the web for"
         case "fetch_content":
-            icon = "globe"
+            icon = .web
             title = "Fetched page"
             detail = string("url")
             body = nil
             kind = .fetch
             verb = "Fetched"
         case "subagent":
-            icon = "person.2"
+            icon = .subagents
             title = "Subagent \(string("action") ?? "")".trimmingCharacters(in: .whitespaces)
             detail = string("name")
             body = string("message")
             verb = title
         default:
-            icon = name.hasPrefix("mcp__") ? "puzzlepiece.extension" : "wrench.and.screwdriver"
+            icon = name.hasPrefix("mcp__") ? .extensionTool : .tool
             title = name.replacingOccurrences(of: "_", with: " ")
             detail = Self.firstStringArgument(arguments).map(Self.firstLine)
             body = nil

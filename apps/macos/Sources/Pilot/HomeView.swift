@@ -259,7 +259,7 @@ struct TaskComposer: View {
                 .padding(.horizontal, 4)
             HStack(spacing: 6) {
                 if let mission = form.mission {
-                    Label(mission.title, systemImage: MissionSymbol.name)
+                    Label(mission.title, icon: PilotIcon.mission)
                         .font(.system(size: 12)).lineLimit(1)
                         .foregroundStyle(Theme.mutedForeground)
                         .padding(.horizontal, 8).padding(.vertical, 4)
@@ -268,8 +268,8 @@ struct TaskComposer: View {
                 }
                 if let tracked = form.trackedItem {
                     HStack(spacing: 4) {
-                        Label(tracked.label, systemImage: "link").lineLimit(1)
-                        Button { form.trackedItem = nil } label: { Image(systemName: "xmark").font(.pilot(.glyph, weight: .bold)) }
+                        Label(tracked.label, icon: PilotIcon.link).lineLimit(1)
+                        Button { form.trackedItem = nil } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
                             .buttonStyle(.plain)
                             .disabled(form.busy)
                             .help("Don't link this chat to \(tracked.label)")
@@ -314,7 +314,7 @@ struct TaskComposer: View {
                         Button("Isolated workspace") { form.workspace = .clone }
                         Button("Current checkout") { form.workspace = .direct }
                     } label: {
-                        ChipLabel(title: form.effectiveWorkspace(for: project) == .clone ? "Isolated workspace" : "Checkout", icon: "square.on.square")
+                        ChipLabel(title: form.effectiveWorkspace(for: project) == .clone ? "Isolated workspace" : "Checkout", icon: PilotIcon.isolatedWorkspace)
                     }
                     .chipMenuStyle().fixedSize()
                     .disabled(form.busy)
@@ -326,7 +326,7 @@ struct TaskComposer: View {
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
                 SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat)
-                Button(action: start) { Image(systemName: "arrow.up") }
+                Button(action: start) { PilotSymbol(PilotIcon.send, context: .toolbar) }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
                     .help("Start session (↩)")
@@ -523,7 +523,7 @@ struct ProjectMenu: View {
                 Button {
                     choose(.project(project.id))
                 } label: {
-                    if project.id == selected?.id { Label(project.name, systemImage: "checkmark") } else { Text(project.name) }
+                    if project.id == selected?.id { Label(project.name, icon: PilotIcon.selectedOption) } else { Text(project.name) }
                 }
             }
             if !projects.isEmpty { Divider() }
@@ -532,7 +532,7 @@ struct ProjectMenu: View {
         } label: {
             ChipLabel(
                 title: selected?.name ?? (folder.isEmpty ? "Choose project" : URL(filePath: folder).lastPathComponent),
-                icon: "folder"
+                icon: PilotIcon.project
             )
         }
         .chipMenuStyle()
@@ -554,7 +554,7 @@ struct ModelMenu: View {
                 model = ""
             } label: {
                 let name = fallback.map(displayName) ?? "pi settings"
-                if model.isEmpty { Label("Default (\(name))", systemImage: "checkmark") } else { Text("Default (\(name))") }
+                if model.isEmpty { Label("Default (\(name))", icon: PilotIcon.selectedOption) } else { Text("Default (\(name))") }
             }
             ForEach(groups, id: \.provider) { group in
                 Section(group.provider) {
@@ -562,13 +562,13 @@ struct ModelMenu: View {
                         Button {
                             model = option.id
                         } label: {
-                            if model == option.id { Label(option.name, systemImage: "checkmark") } else { Text(option.name) }
+                            if model == option.id { Label(option.name, icon: PilotIcon.selectedOption) } else { Text(option.name) }
                         }
                     }
                 }
             }
         } label: {
-            ChipLabel(title: displayName(model.isEmpty ? fallback ?? "Default model" : model), icon: "cpu", maxTitleWidth: 200)
+            ChipLabel(title: displayName(model.isEmpty ? fallback ?? "Default model" : model), icon: PilotIcon.model, maxTitleWidth: 200)
         }
         .chipMenuStyle()
         .fixedSize()

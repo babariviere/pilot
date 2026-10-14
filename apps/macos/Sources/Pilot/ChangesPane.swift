@@ -93,7 +93,7 @@ struct ChangesPane: View {
             }
             Spacer()
             if model.loading { ProgressView().controlSize(.mini) }
-            Button { Task { await model.load() } } label: { Image(systemName: "arrow.clockwise").font(.pilot(.small)) }
+            Button { Task { await model.load() } } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
                 .buttonStyle(.borderless)
                 .help("Refresh")
         }
@@ -106,9 +106,9 @@ struct ChangesPane: View {
         if session.state == "starting", model.changes == nil {
             ProgressView("Preparing task…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = model.error, model.changes == nil {
-            placeholder(icon: "exclamationmark.triangle", text: error)
+            placeholder(icon: PilotIcon.warning, text: error)
         } else if let changes = model.changes, changes.files.isEmpty {
-            placeholder(icon: "checkmark.circle", text: "The working copy matches \(changes.base).")
+            placeholder(icon: PilotIcon.complete, text: "The working copy matches \(changes.base).")
         } else if let changes = model.changes {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -133,9 +133,9 @@ struct ChangesPane: View {
         }
     }
 
-    private func placeholder(icon: String, text: String) -> some View {
+    private func placeholder(icon: PilotIcon, text: String) -> some View {
         VStack(spacing: 8) {
-            Image(systemName: icon).font(.title2).foregroundStyle(Theme.faintForeground)
+            PilotSymbol(icon, context: .emptyState).foregroundStyle(Theme.faintForeground)
             Text(text).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground).multilineTextAlignment(.center)
         }
         .padding()
@@ -166,7 +166,7 @@ struct ChangesRepositoryContext: View {
                     SectionLabel(title: "Branches", count: links.count + pending.count)
                     Spacer(minLength: 8)
                 }
-                Label(session.workspaceLabel, systemImage: workspaceIcon)
+                Label(session.workspaceLabel, icon: workspaceIcon)
                     .font(.pilot(.small))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
@@ -210,7 +210,7 @@ struct ChangesRepositoryContext: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .textSelection(.enabled)
                     Spacer(minLength: 0)
-                    Button { self.detachError = nil } label: { Image(systemName: "xmark") }
+                    Button { self.detachError = nil } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
                         .buttonStyle(QuietIconButtonStyle())
                         .help("Dismiss")
                         .accessibilityLabel("Dismiss error")
@@ -273,10 +273,10 @@ struct ChangesRepositoryContext: View {
         }
     }
 
-    private var workspaceIcon: String {
-        if session.isAsk { return "eye" }
-        if session.workspaceStorage == .shared { return "square.stack.3d.up" }
-        return session.workspace == .direct ? "folder" : "doc.on.doc"
+    private var workspaceIcon: PilotIcon {
+        if session.isAsk { return PilotIcon.askMode }
+        if session.workspaceStorage == .shared { return PilotIcon.sharedWorkspace }
+        return session.workspace == .direct ? PilotIcon.project : PilotIcon.isolatedWorkspace
     }
 }
 
@@ -299,9 +299,7 @@ private struct BranchLinkRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(nsImage: GitBranchGlyph.image)
-                .resizable()
-                .frame(width: 10, height: 10)
+            PilotMarkIcon(mark: .gitBranch)
                 .foregroundStyle(current ? Theme.foreground : Theme.faintForeground)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
@@ -373,9 +371,7 @@ private struct PendingAttachedRow: View {
     var body: some View {
         let number = PullRequestURL.number(of: url)
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(nsImage: GitBranchGlyph.image)
-                .resizable()
-                .frame(width: 10, height: 10)
+            PilotMarkIcon(mark: .gitBranch)
                 .foregroundStyle(Theme.faintForeground)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
@@ -431,7 +427,7 @@ private struct PullRequestRowMenu: View {
         if busy {
             ProgressView().controlSize(.mini).frame(width: 20, height: 20)
         } else {
-            Menu { PullRequestRowActions(url: url, detach: detach) } label: { Image(systemName: "ellipsis") }
+            Menu { PullRequestRowActions(url: url, detach: detach) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                 .menuStyle(.button)
                 .buttonStyle(QuietIconButtonStyle())
                 .menuIndicator(.hidden)
@@ -468,7 +464,7 @@ private struct AttachPullRequestButton: View {
     var body: some View {
         Button { presented = true } label: {
             HStack(spacing: 4) {
-                Image(systemName: "plus").font(.pilot(.micro, weight: .semibold))
+                PilotSymbol(PilotIcon.add)
                 Text("Attach pull request…")
             }
             .font(.pilot(.caption))
@@ -530,7 +526,7 @@ struct AttachPullRequestForm: View {
                     .foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
             } else if let owner {
-                Label("Moves from “\(owner.title)”", systemImage: "arrow.turn.down.right")
+                Label("Moves from “\(owner.title)”", icon: PilotIcon.steer)
                     .font(.pilot(.caption))
                     .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(2)
@@ -658,9 +654,9 @@ private struct PullRequestPill: View {
             pr.state.icon
             Text("\(pr.state.compactLabel) #\(String(pr.number))")
             if stale || pr.browserURL == nil {
-                Image(systemName: "exclamationmark.triangle")
+                PilotSymbol(PilotIcon.warning)
             } else {
-                Image(systemName: "arrow.up.right").font(.pilot(.glyph, weight: .bold))
+                PilotSymbol(PilotIcon.openExternal)
             }
         }
         .font(.pilot(.small, weight: .semibold))
@@ -681,8 +677,7 @@ private struct FileRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 8) {
-                Image(systemName: "chevron.right")
-                    .font(.pilot(.micro, weight: .semibold))
+                PilotSymbol(PilotIcon.disclosure, context: .disclosure)
                     .foregroundStyle(Theme.faintForeground)
                     .rotationEffect(.degrees(expanded ? 90 : 0))
                 Text(letter)

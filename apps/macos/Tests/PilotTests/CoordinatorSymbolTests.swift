@@ -3,6 +3,6 @@ import Testing
 @testable import Pilot
 
 @Test func coordinatorActivityUsesTheSharedCompassSymbol() {
-    #expect(MissionCoordinatorIndicator.symbol == "safari")
-    #expect(MissionEventKind.coordinator.symbol == MissionCoordinatorIndicator.symbol)
+    #expect(PilotIcon.coordinator.systemName == "safari")
+    #expect(MissionEventKind.coordinator.icon == PilotIcon.coordinator)
 }

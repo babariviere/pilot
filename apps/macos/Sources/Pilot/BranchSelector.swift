@@ -94,11 +94,11 @@ struct BranchMenu: View {
                 choose(nil)
             } label: {
                 let title = mode == .ask ? "Current checkout" : (list.defaultBranch.map { "Default (\($0))" } ?? "Default branch")
-                if selected == nil { Label(title, systemImage: "checkmark") } else { Text(title) }
+                if selected == nil { Label(title, icon: PilotIcon.selectedOption) } else { Text(title) }
             }
             if mode == .ask, let branch = list.defaultBranch {
                 Button { choose(branch) } label: {
-                    if selected == branch { Label("Default (origin/\(branch))", systemImage: "checkmark") }
+                    if selected == branch { Label("Default (origin/\(branch))", icon: PilotIcon.selectedOption) }
                     else { Text("Default (origin/\(branch))") }
                 }
             }
@@ -107,7 +107,7 @@ struct BranchMenu: View {
                 Button {
                     choose(branch)
                 } label: {
-                    if selected == branch { Label(branch, systemImage: "checkmark") } else { Text(branch) }
+                    if selected == branch { Label(branch, icon: PilotIcon.selectedOption) } else { Text(branch) }
                 }
             }
             if state.loading { Text("Loading branches…") }
@@ -117,7 +117,7 @@ struct BranchMenu: View {
             Button("Refresh branches", action: refresh).disabled(state.loading)
         } label: {
             ChipLabel(title: selected ?? (mode == .ask ? "Current checkout" : list.defaultBranch ?? "Default branch"),
-                      templateImage: GitBranchGlyph.image, maxTitleWidth: 150)
+                      mark: .gitBranch, maxTitleWidth: 150)
         }
         .chipMenuStyle()
         .fixedSize()

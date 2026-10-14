@@ -5,45 +5,22 @@ import Testing
 @testable import Pilot
 
 @Test func settledSessionStatusesUseDistinctAvailableSymbols() {
-    let symbols: [(SessionStatus, String)] = [
-        (.done, "checkmark"),
-        (.failed, "exclamationmark.triangle.fill"),
-        (.stopped, "stop.circle.fill"),
-        (.idle, "moon.zzz.fill"),
+    let symbols: [(SessionStatus, PilotIcon)] = [
+        (.done, .complete),
+        (.failed, .warning),
+        (.stopped, .stopped),
+        (.idle, .idle),
     ]
     #expect(Set(symbols.map { $0.1 }).count == symbols.count)
     for (status, symbol) in symbols {
-        #expect(status.symbolName == symbol)
-        #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil)
+        #expect(status.icon == symbol)
+        #expect(NSImage(systemSymbolName: symbol.systemName!, accessibilityDescription: nil) != nil)
     }
-    #expect(SessionStatus.working.symbolName == nil)
+    #expect(SessionStatus.working.icon == .working)
 }
 
-@Test func brailleProgressAdvancesAndLoops() {
-    #expect(BrailleProgress.frames.count == 10)
-    #expect(Set(BrailleProgress.frames).count == 10)
-    for index in 0..<20 {
-        let date = Date(timeIntervalSinceReferenceDate: Double(index) * BrailleProgress.interval + 0.01)
-        #expect(BrailleProgress.frameIndex(at: date) == index % 10)
-    }
-    #expect(BrailleProgress.frameIndex(at: Date(timeIntervalSinceReferenceDate: -0.01)) == 9)
-}
-
-@Test func brailleProgressUsesFixedSizeTemplateImages() {
-    #expect(BrailleProgress.images.count == BrailleProgress.frames.count)
-    for image in BrailleProgress.images {
-        #expect(image.isTemplate)
-        #expect(image.size == NSSize(width: 14, height: 14))
-    }
-}
-
-@Test func brailleProgressRendersDistinctGlyphsInsteadOfMissingCharacterBoxes() throws {
-    let frames = try BrailleProgress.images.map { try #require($0.tiffRepresentation) }
-    #expect(Set(frames).count == BrailleProgress.frames.count)
-}
-
-@Test func sessionStatusIconsUseNeutralWorkingAndColoredOutcomes() {
-    #expect(SessionStatus.working.color == Theme.foreground)
+@Test func sessionStatusIconsUseSharedWorkingAndOutcomeColors() {
+    #expect(SessionStatus.working.color == Theme.working)
     #expect(SessionStatus.done.color == Theme.success)
     #expect(SessionStatus.failed.color == Theme.destructive)
     #expect(SessionStatus.stopped.color == Theme.mutedForeground)

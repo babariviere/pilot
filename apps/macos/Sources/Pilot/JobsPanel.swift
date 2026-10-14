@@ -15,12 +15,12 @@ struct JobsPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
-                Image(systemName: "terminal").foregroundStyle(Theme.mutedForeground)
+                PilotSymbol(PilotIcon.terminal, context: .row).foregroundStyle(Theme.mutedForeground)
                 Text("Running jobs").fontWeight(.medium)
                 Text("\(jobs.count)").monospacedDigit().foregroundStyle(Theme.mutedForeground)
                 Spacer()
                 Button(action: close) {
-                    Image(systemName: "xmark").frame(width: 20, height: 20)
+                    PilotSymbol(PilotIcon.close, context: .row).frame(width: 20, height: 20)
                 }
                 .help("Close jobs").accessibilityLabel("Close jobs")
             }
@@ -65,8 +65,7 @@ struct JobsPanel: View {
                     if isExpanded { expanded.remove(job.id) } else { expanded.insert(job.id) }
                 } label: {
                     HStack(spacing: 8) {
-                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.pilot(.micro)).foregroundStyle(Theme.faintForeground).frame(width: 10)
+                        PilotSymbol(isExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 10)
                         Text(job.name).font(.pilot(.label)).lineLimit(1)
                         Spacer(minLength: 8)
                         TimelineView(JobElapsedSchedule(startedAt: job.startedAt)) { context in

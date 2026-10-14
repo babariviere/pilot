@@ -1,6 +1,6 @@
-// Compare status clocks without a daemon or the user's settings. Run from the repository root:
+// Historical baseline, not the production work indicator. Compare status clocks without a daemon or the user's settings. Run from the repository root:
 // xcrun swiftc -O -parse-as-library apps/macos/scripts/bench-status.swift \
-//   apps/macos/Sources/Pilot/BrailleProgress.swift -o /tmp/pilot-status-bench
+//   apps/macos/scripts/fixtures/BrailleProgress.swift -o /tmp/pilot-status-bench
 // /tmp/pilot-status-bench --animation  # Previous display-linked schedule.
 // /tmp/pilot-status-bench              # Current periodic schedule.
 // Reports process CPU over eight seconds after a two-second warmup. No timing assertions.

@@ -41,7 +41,7 @@ struct SessionRepositoryMetadata: View {
 
     var body: some View {
         if session.isAsk {
-            Label("Ask · \(session.sourceLabel)", systemImage: "questionmark.bubble")
+            Label("Ask · \(session.sourceLabel)", icon: PilotIcon.askMode)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground).lineLimit(1)
                 .help("Read-only · no isolated workspace" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))

@@ -292,7 +292,7 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
     #expect(summary.detail == "café.txt, 二.txt")
     // Fixed UTF-8 byte totals make this independent of the accounting implementation.
     let argumentsBytes = 32 + 5 + 32 + patch.utf8.count + 32
-    var summaryBytes = 256 + 6 + 12 + patch.utf8.count
+    var summaryBytes = 256 + MemoryLayout<ToolIcon>.stride + 12 + patch.utf8.count
     // Foundation may decompose accents when extracting filenames for the detail.
     summaryBytes += summary.detail?.utf8.count ?? 0
     summaryBytes += 2 * MemoryLayout<FileDiff>.stride + 16

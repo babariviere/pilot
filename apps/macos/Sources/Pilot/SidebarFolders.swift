@@ -58,10 +58,9 @@ struct ProjectFolderHeader: View {
         HStack(spacing: 6) {
             Button { isExpanded.toggle() } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
+                    PilotSymbol(isExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure)
                         .frame(width: 12)
-                    Image(systemName: "folder.fill")
+                    PilotSymbol(PilotIcon.chatFolder)
                     Text(folder.name).lineLimit(1)
                     Text("\(count)").foregroundStyle(Theme.faintForeground)
                     Spacer(minLength: 0)
@@ -75,7 +74,7 @@ struct ProjectFolderHeader: View {
             Menu {
                 actions
             } label: {
-                Image(systemName: "ellipsis").frame(width: 16, height: 16)
+                PilotSymbol(PilotIcon.more, context: .toolbar).frame(width: 16, height: 16)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)

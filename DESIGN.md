@@ -87,6 +87,10 @@ pilotd is unreachable.
 
 - Reuse shared components and `Theme` tokens (color, type, spacing, radius, motion). Add missing tokens or
   components centrally instead of styling a screen on its own.
+- Icons come from `PilotIcon` (`PilotIcon.swift`): one SF Symbol per concept, sized by its context (row,
+  toolbar, inline, empty state, structural disclosure) and outlined unless its documented state fills it.
+  Use symbols, not emoji or Unicode stand-ins. Add a missing concept there instead of
+  picking a symbol per screen; service and Git marks use `PilotMark`.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
 - Check every change with long content and with loading, empty, error and disabled states. Keep keyboard access

@@ -172,7 +172,7 @@ struct ImageAttachmentPreviews: View {
                             .clipShape(RoundedRectangle(cornerRadius: 8))
                             .overlay(alignment: .topTrailing) {
                                 Button { attachments.remove(image.id) } label: {
-                                    Image(systemName: "xmark.circle.fill")
+                                    PilotSymbol(PilotIcon.clearField, context: .toolbar)
                                         .symbolRenderingMode(.palette)
                                         .foregroundStyle(Theme.foreground, Theme.background)
                                 }

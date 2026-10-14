@@ -400,7 +400,7 @@ enum DitherCornerRenderer {
 
 // MARK: - Clock
 
-/// One publication per tick for every animated corner, like `BrailleProgressClock`. Runs only while a working or
+/// One publication per tick for animated corners and working ripples. Runs only while a working or
 /// needs-you corner is on screen, and skips ticks while the app is hidden or has no visible window.
 @MainActor
 final class DitherCornerClock: ObservableObject {

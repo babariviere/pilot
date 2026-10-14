@@ -191,7 +191,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
 
     static func byteCount(of item: ToolItem) -> Int {
         let summary = item.summary
-        var summaryBytes = 256 + summary.icon.utf8.count + summary.title.utf8.count
+        var summaryBytes = 256 + MemoryLayout<ToolIcon>.stride + summary.title.utf8.count
         summaryBytes += summary.detail?.utf8.count ?? 0
         summaryBytes += summary.body?.utf8.count ?? 0
         for diff in summary.diffs {

@@ -30,7 +30,7 @@ struct ChatThinkingPicker: View {
             ForEach(levels, id: \.self) { level in
                 Button { state.selectThinking(level, session: session, working: working) } label: {
                     if level == session.thinking {
-                        Label(label(level), systemImage: "checkmark")
+                        Label(label(level), icon: PilotIcon.selectedOption)
                     } else {
                         Text(label(level))
                     }
@@ -38,7 +38,7 @@ struct ChatThinkingPicker: View {
             }
             if levels.isEmpty { Text("No thinking levels reported") }
         } label: {
-            ChipLabel(title: levelLabel, icon: "brain")
+            ChipLabel(title: levelLabel, icon: PilotIcon.thinking)
         }
         .chipMenuStyle()
         .fixedSize(horizontal: true, vertical: false)

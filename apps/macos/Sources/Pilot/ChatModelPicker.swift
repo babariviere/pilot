@@ -139,7 +139,7 @@ struct ChatModelPicker: View {
                     ForEach(state.modelsByProvider[provider] ?? []) { option in
                         Button { state.selectModel(option.id, session: session, working: working) } label: {
                             if session.model == option.id {
-                                Label(option.name, systemImage: "checkmark")
+                                Label(option.name, icon: PilotIcon.selectedOption)
                             } else {
                                 Text(option.name)
                             }
@@ -152,7 +152,7 @@ struct ChatModelPicker: View {
                 Button("Reload models") { Task { await state.loadModels(cwd: session.cwd) } }
             }
         } label: {
-            ChipLabel(title: state.displayName(for: session.model), icon: "cpu", maxTitleWidth: 200, loading: state.changing)
+            ChipLabel(title: state.displayName(for: session.model), icon: PilotIcon.model, maxTitleWidth: 200, loading: state.changing)
         }
         .chipMenuStyle()
         .fixedSize(horizontal: true, vertical: false)

@@ -34,7 +34,7 @@ struct MissionPage: View {
                                        compactTabs: width < MissionPage.compactTabsWidth)
                     }
             } else {
-                EmptyStateView(icon: MissionSymbol.name, title: "This mission no longer exists",
+                EmptyStateView(icon: PilotIcon.mission, title: "This mission no longer exists",
                                message: "It was deleted. Its chats are kept in their project.")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -123,10 +123,10 @@ private struct MissionToolbar: ToolbarContent {
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
-                Button { model.newSession(in: mission) } label: { Label("New Chat", systemImage: "plus") }
+                Button { model.newSession(in: mission) } label: { Label("New Chat", icon: PilotIcon.compose) }
                 Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
             } label: {
-                Label("New chat", systemImage: "plus")
+                Label("New chat", icon: PilotIcon.compose)
                     .labelStyle(.titleAndIcon)
             } primaryAction: {
                 model.newSession(in: mission)
@@ -139,14 +139,14 @@ private struct MissionToolbar: ToolbarContent {
                 MissionEditAction(missionId: mission.id)
                 coordinatorItems
                 Button { model.showArchive(in: mission.projectId, missionId: mission.id) } label: {
-                    Label("Browse Archived Chats", systemImage: "archivebox")
+                    Label("Browse Archived Chats", icon: PilotIcon.archive)
                 }
                 Divider()
                 MissionStatusActions(missionId: mission.id, status: mission.status)
                 Divider()
                 MissionDeleteAction(missionId: mission.id)
             } label: {
-                Image(systemName: "ellipsis")
+                PilotSymbol(PilotIcon.more, context: .toolbar)
             }
             .menuIndicator(.hidden)
             .help("Mission actions")
@@ -158,12 +158,12 @@ private struct MissionToolbar: ToolbarContent {
         let members = model.members(of: mission).filter { !$0.isArchived }
         if let coordinator = mission.coordinatorSessionId {
             Button { model.selectedSessionId = coordinator } label: {
-                Label("Open Coordinator", systemImage: MissionCoordinatorIndicator.symbol)
+                Label("Open Coordinator", icon: PilotIcon.coordinator)
             }
             Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
         } else {
             Button { model.missionSheet = .startCoordinator(missionId: mission.id) } label: {
-                Label("Start a Coordinator…", systemImage: MissionCoordinatorIndicator.symbol)
+                Label("Start a Coordinator…", icon: PilotIcon.coordinator)
             }
             .disabled(mission.status != .active)
         }
@@ -305,7 +305,7 @@ struct MissionOverviewTab: View {
                 PageSectionHeader(title: "Needs you", count: needs.count, countStyle: .attention)
                 if needs.isEmpty {
                     HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle").foregroundStyle(Theme.success).frame(width: 16)
+                        PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success).frame(width: 16)
                         Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
                     }
                     .font(.pilot(.body))
@@ -510,7 +510,7 @@ private struct NeedsYouRow: View {
                     Spacer(minLength: 8)
                     Text(action).font(.pilot(.label, weight: .medium))
                         .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
-                    Image(systemName: "chevron.right").font(.pilot(.micro, weight: .semibold))
+                    PilotSymbol(PilotIcon.disclosure, context: .disclosure)
                         .foregroundStyle(Theme.faintForeground)
                 }
             }
@@ -526,9 +526,9 @@ private struct NeedsYouRow: View {
         case let .chat(session):
             if session.isActiveMissionCoordinator { MissionCoordinatorIndicator() }
             else { SessionStatusIcon(status: session.attentionReason?.kind == .longJob ? .question : session.status) }
-        case .blockedTask: Image(systemName: MissionTaskStatus.blocked.symbol).foregroundStyle(MissionTaskStatus.blocked.color)
-        case .comment: Image(systemName: "text.bubble").foregroundStyle(Theme.info)
-        case .decisionProposal: Image(systemName: "pencil.circle").foregroundStyle(Theme.blocked)
+        case .blockedTask: PilotSymbol(MissionTaskStatus.blocked.icon).foregroundStyle(MissionTaskStatus.blocked.color)
+        case .comment: PilotSymbol(PilotIcon.update).foregroundStyle(Theme.info)
+        case .decisionProposal: PilotSymbol(PilotIcon.draft).foregroundStyle(Theme.blocked)
         }
     }
 
@@ -572,7 +572,7 @@ struct CompactTaskRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: task.status.symbol).foregroundStyle(task.status.color).frame(width: 16)
+            PilotSymbol(task.status.icon).foregroundStyle(task.status.color).frame(width: 16)
                 .help(task.status.label)
                 .accessibilityLabel(task.status.label)
             Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
@@ -583,7 +583,7 @@ struct CompactTaskRow: View {
             if showsOwner, let sessionId = task.sessionId {
                 let title = client.session(sessionId)?.title
                 Button { model.selectedSessionId = sessionId } label: {
-                    Label(MissionTaskOwnerLabel.text(task: task, chatTitle: title), systemImage: "bubble.left")
+                    Label(MissionTaskOwnerLabel.text(task: task, chatTitle: title), icon: PilotIcon.message)
                         .lineLimit(1).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 }
                 .buttonStyle(.plain)
@@ -603,7 +603,7 @@ struct MissionEventRow: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: event.kind.symbol).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).frame(width: 16)
+            PilotSymbol(event.kind.icon).foregroundStyle(Theme.mutedForeground).frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text(event.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
@@ -742,7 +742,7 @@ struct MissionAddLinkButton: View {
     var body: some View {
         Button { presented = true } label: {
             HStack(spacing: 4) {
-                Image(systemName: "plus").font(.pilot(.micro, weight: .semibold))
+                PilotSymbol(PilotIcon.add, context: .toolbar)
                 Text("Add link")
             }
             .font(.pilot(compact ? .caption : .label))
