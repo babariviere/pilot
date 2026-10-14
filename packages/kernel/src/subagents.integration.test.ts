@@ -114,6 +114,7 @@ async function fixture(t: TestContext, extensions: ExtensionFactory[]) {
 		projectTrusted: false,
 		settingsManager: SettingsManager.inMemory({ defaultTools: [] }),
 		sessionOptions: { modelRuntime, model: faux.getModel() },
+		bundledExtensions: false,
 		loaderOptions: {
 			cwd: root,
 			agentDir: join(root, "agent"),

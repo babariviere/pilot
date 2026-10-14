@@ -9,6 +9,7 @@ import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { clampThinkingLevel, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { getAgentDir, ModelRuntime, resolveModelScopeWithDiagnostics } from "@earendil-works/pi-coding-agent";
+import { installBundledAnthropicAuth } from "@pilot/kernel";
 import type { ModelList, ModelOption } from "@pilot/protocol";
 import { ServiceUnavailable } from "./errors.ts";
 import { readModelSettings } from "./model-settings.ts";
@@ -269,6 +270,7 @@ export class ModelCatalog {
 				modelsPath: join(this.agentDir, "models.json"),
 				allowModelNetwork: false,
 			});
+			await installBundledAnthropicAuth(created, this.agentDir);
 			this.runtimeModels = definitions;
 			return created;
 		})();

@@ -13,6 +13,46 @@ assert.equal(process.platform, 'darwin');
 assert.equal(process.arch, 'arm64');
 assert.equal(Number(process.versions.node.split('.')[0]), 24);
 await import('@pilot/kernel');
+// Exercise Pi's TS extension loader from the staged installation, with no personal configuration.
+const { mkdtemp, rm } = await import('node:fs/promises');
+const { tmpdir } = await import('node:os');
+const { join } = await import('node:path');
+const { ModelRuntime, SettingsManager } = await import('@earendil-works/pi-coding-agent');
+const { InMemoryCredentialStore, InMemoryModelsStore } = await import('@earendil-works/pi-ai');
+const { EmbeddedResourceLoader } = await import('@babariviere/pi-extensions/resource-loader');
+const { PILOT_CHILD_PROFILE_PATH } = await import('@babariviere/pi-extensions/profile');
+const { bundledAskTools, installBundledAnthropicAuth, ANTHROPIC_AUTH_PATH } = await import('./packages/kernel/src/bundled-extensions.ts');
+const { NativeAdapter } = await import('./packages/kernel/src/native-adapter.ts');
+const { fauxProvider } = await import('@earendil-works/pi-ai');
+const isolated = await mkdtemp(join(tmpdir(), 'pilot-runtime-profile-'));
+const originalFetch = globalThis.fetch;
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = isolated;
+let parent;
+globalThis.fetch = () => { throw new Error('Runtime profile smoke test must stay offline'); };
+try {
+  const options = { cwd: isolated, agentDir: isolated, settingsManager: SettingsManager.inMemory(), noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true, noContextFiles: true };
+  const models = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null, modelsStore: new InMemoryModelsStore(), refreshOnCreate: false, allowModelNetwork: false });
+  const faux = fauxProvider();
+  models.registerNativeProvider(faux.provider);
+  parent = await NativeAdapter.open({ cwd: isolated, agentDir: isolated, projectTrusted: false, sessionId: 'runtime-profile', sessionFile: join(isolated, 'native.jsonl'), settingsManager: SettingsManager.inMemory(), sessionOptions: { modelRuntime: models, model: faux.getModel() } });
+  const names = loader => loader.getExtensions().extensions.flatMap(extension => [...extension.tools.keys()]);
+  for (const name of ['applyPatch', 'web', 'browser', 'todo', 'jobs', 'subagent']) assert.ok(parent.session.getCallableToolNames().includes(name), name);
+  const child = new EmbeddedResourceLoader(options, { requiredPaths: [PILOT_CHILD_PROFILE_PATH, ANTHROPIC_AUTH_PATH], ownedPackages: {} });
+  await child.reload();
+  assert.deepEqual(child.getExtensions().errors, []);
+  assert.ok(names(child).includes('web'));
+  assert.ok(!names(child).includes('jobs') && !names(child).includes('subagent'));
+  assert.deepEqual((await bundledAskTools(isolated, isolated)).map(tool => tool.name), ['web']);
+  await installBundledAnthropicAuth(models, isolated);
+  assert.equal(typeof models.getRegisteredProviderConfig('anthropic')?.streamSimple, 'function');
+} finally {
+  await parent?.close();
+  globalThis.fetch = originalFetch;
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  await rm(isolated, { recursive: true, force: true });
+}
 const { prepareArtifact, getLibrary } = await import('@pilot/artifacts');
 const artifact = await prepareArtifact({
   title: 'Runtime smoke test',

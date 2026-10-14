@@ -56,6 +56,7 @@ async function fixture(t: TestContext, mode: "on" | "only" = "on", inlineBudget?
 		projectTrusted: false,
 		settingsManager: SettingsManager.inMemory({ defaultTools: ["read", "codemode"] }),
 		sessionOptions: { modelRuntime, model: faux.getModel() },
+		bundledExtensions: false,
 		loaderOptions: {
 			cwd: root,
 			agentDir: join(root, "agent"),
@@ -202,6 +203,7 @@ test("bundled authoring skill extends configured skills and survives resource re
 	});
 	const adapter = await NativeAdapter.open({
 		...f.options,
+		bundledExtensions: false,
 		loaderOptions: { ...f.options.loaderOptions!, additionalSkillPaths: [userSkill] },
 		sessionOptions: { ...f.options.sessionOptions, customTools: tools },
 	});

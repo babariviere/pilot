@@ -8,11 +8,13 @@
 		"./worker": "./src/worker.ts"
 	},
 	"dependencies": {
+		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#e13644d24d2918f9894fd2af383d440ca8c92deb",
 		"@earendil-works/chord": "1.1.0",
 		"@earendil-works/pi-agent-core": "1.1.0",
 		"@earendil-works/pi-ai": "1.1.0",
 		"@earendil-works/pi-coding-agent": "1.1.0",
 		"@earendil-works/pi-durable": "1.1.0",
+		"@gotgenes/pi-anthropic-auth": "3.4.2",
 		"@pilot/artifacts": "workspace:*",
 		"@pilot/protocol": "workspace:*"
 	}

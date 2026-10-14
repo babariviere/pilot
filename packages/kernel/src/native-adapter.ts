@@ -30,7 +30,7 @@ import {
 	createCodemodeExtension,
 	createMcpExtension,
 	createToolSearchExtension,
-	DefaultResourceLoader,
+	type DefaultResourceLoader,
 	type ExtensionFactory,
 	getAgentDir,
 	type McpExtensionOptions,
@@ -62,7 +62,7 @@ import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
 import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
-import { loadAskExtensionTools } from "./ask-extension-tools.ts";
+import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
@@ -90,8 +90,10 @@ export interface NativeAdapterOptions {
 	askArtifacts?: ArtifactToolOptions;
 	/** Additional host-owned tools for Ask sessions, allowed by ASK_TOOL_NAMES. */
 	askTools?: ToolDefinition[];
-	/** Ask tools borrowed from user-level extensions (ASK_EXTENSION_TOOL_NAMES). Defaults to loading them. */
+	/** Offline test injection for the bundled Ask web definition. */
 	askExtensionTools?: ToolDefinition[];
+	/** Offline test injection only. Production workers always use the bundled profile and required auth. */
+	bundledExtensions?: boolean;
 	/** Host tools registered through the native extension API, so their declarations can change live. */
 	hostTools?: ToolDefinition[];
 	/** Working directory for tools, context files and project configuration. */
@@ -326,15 +328,9 @@ export class NativeAdapter {
 		const agentDir = options.agentDir ?? getAgentDir();
 		const originalSettings = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 		const settingsManager = options.ask ? askSettings(originalSettings) : originalSettings;
-		// Before the Ask overrides below; reads the user's own packages, never project resources.
+		// Ask borrows only the bundled web definition, never runs arbitrary personal factories.
 		const askExtensionTools = options.ask
-			? (options.askExtensionTools ??
-				(await loadAskExtensionTools({
-					cwd,
-					agentDir,
-					settingsManager: originalSettings,
-					onError: (message) => console.error(message),
-				})))
+			? (options.askExtensionTools ?? (await bundledAskTools(cwd, agentDir)))
 			: [];
 		const projectTrusted = options.ask
 			? false
@@ -374,7 +370,7 @@ export class NativeAdapter {
 				renderPrompt = () => event.systemPrompt;
 			});
 		};
-		const loader = new DefaultResourceLoader(
+		const loader = bundledResourceLoader(
 			options.ask
 				? {
 						cwd,
@@ -412,8 +408,10 @@ export class NativeAdapter {
 							capture,
 						],
 					},
+			projectTrusted,
+			!options.ask && options.bundledExtensions !== false,
 		);
-		await loader.reload({ resolveProjectTrust: async () => projectTrusted });
+		await loader.reload();
 		const failures = loader.getExtensions().errors;
 		if (failures.length)
 			throw new Error(`Native extension loading failed: ${failures.map((e) => e.error).join("; ")}`);

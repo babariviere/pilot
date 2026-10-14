@@ -367,7 +367,10 @@ test("cold parked and archived Ask subscriptions suppress live checkout TODOs wi
 				message: "explain",
 				title: "Ask",
 			});
-			await waitFor(() => original.get(ask.id)?.state === "idle");
+			// The fake worker is idle before the daemon finishes draining its startup outbox.
+			// biome-ignore lint/complexity/useLiteralKeys: Await the published startup/admission barrier.
+			await original["start"](ask.id);
+			assert.equal(original.get(ask.id)?.state, "idle");
 			if (archived) await original.archive(ask.id);
 			created.push({ ask, baseBranch, archived });
 		}

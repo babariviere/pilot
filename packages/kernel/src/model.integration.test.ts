@@ -246,6 +246,7 @@ async function fixture(
 			projectTrusted: false,
 			settingsManager: settings,
 			sessionOptions: { modelRuntime: runtime, model: a.getModel() },
+			bundledExtensions: false,
 			loaderOptions: {
 				cwd: root,
 				agentDir: join(root, "agent"),
