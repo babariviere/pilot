@@ -142,10 +142,20 @@ public struct TranscriptPresentation: Equatable, Sendable {
                 return base + items.reduce(0) { $0 + byteCount(of: $1) }
             case let .artifact(_, reference): return base + artifactByteCount(reference)
             case let .question(_, question):
-                return base + question.question.utf8.count + (question.context?.utf8.count ?? 0)
-                    + question.options.reduce(0) { $0 + 64 + $1.label.utf8.count + ($1.detail?.utf8.count ?? 0) }
+                return base + questionByteCount(question)
             }
         }
+    }
+
+    /// Separate, typed steps: CI's compiler times out type-checking this inline in the reduce above.
+    static func questionByteCount(_ question: AgentQuestion) -> Int {
+        var bytes: Int = question.question.utf8.count
+        bytes += question.context?.utf8.count ?? 0
+        for option in question.options {
+            bytes += 64 + option.label.utf8.count
+            bytes += option.detail?.utf8.count ?? 0
+        }
+        return bytes
     }
 
     static func byteCount(of item: ToolItem) -> Int {
