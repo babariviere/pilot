@@ -204,6 +204,7 @@ struct Composer: View {
     var body: some View {
         let systemMessages = systemMessages
         VStack(spacing: 8) {
+            if let session { SubscriptionUsageNotice(usage: session.usage ?? SessionUsage()) }
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
                 if let session, onSchedule != nil {
@@ -302,12 +303,10 @@ struct Composer: View {
     private var controls: some View {
         HStack(alignment: .controlsFirstRow, spacing: 10) {
             if let session {
-                ResponsiveControlsLayout(horizontalSpacing: 16, verticalSpacing: 8) {
-                    modelControls(session)
-                    UsageFooter(usage: session.usage ?? SessionUsage(), model: session.model)
-                }
+                modelControls(session)
             }
             Spacer(minLength: 8)
+            if let session { ContextUsageIndicator(usage: session.usage ?? SessionUsage()) }
             if let onSchedule {
                 ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker) { when in
                     guard state.canSend(changingModel: modelPicker.changing) else { return }

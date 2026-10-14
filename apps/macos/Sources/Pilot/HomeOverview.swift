@@ -121,6 +121,19 @@ enum HomeStatus {
             .sorted { ($0.listActivityAt, $0.id) > ($1.listActivityAt, $1.id) }
     }
 
+    /// Account-wide subscription usage, once per provider (Claude, then Codex): the newest snapshot with limits
+    /// that any chat carries. pilotd forwards its cached readings with chat updates, so Home adds no polling.
+    static func subscriptions(_ sessions: [SessionSummary]) -> [SubscriptionUsage] {
+        var newest: [SubscriptionProvider: SubscriptionUsage] = [:]
+        for session in sessions {
+            guard let usage = session.usage?.subscription, let provider = usage.provider,
+                  !usage.limitWindows.isEmpty, usage.fetchedAt > (newest[provider]?.fetchedAt ?? -.infinity)
+            else { continue }
+            newest[provider] = usage
+        }
+        return [SubscriptionProvider.anthropic, .openai].compactMap { newest[$0] }
+    }
+
     /// Active missions first, then done and archived, newest first within each.
     static func missions(_ missions: [Mission]) -> [Mission] {
         missions.sorted {
@@ -176,6 +189,10 @@ struct HomeOverview: View {
                     Text(HomeStatus.summary(rows))
                         .font(.pilot(.headline)).foregroundStyle(Theme.foreground)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                let subscriptions = HomeStatus.subscriptions(client.sessions)
+                if !subscriptions.isEmpty {
+                    SubscriptionUsageBars(subscriptions: subscriptions, now: now).padding(.top, 4)
                 }
             }
 
@@ -404,6 +421,53 @@ private struct ActivityStrip: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Activity: \(total) chats started in the last 14 days")
+    }
+}
+
+/// Subscription usage, shown once on Home under the summary: quiet bars per provider for its 5-hour and weekly
+/// limits. A window past 80% turns its bar amber; chats then also show one line above their composer.
+struct SubscriptionUsageBars: View {
+    let subscriptions: [SubscriptionUsage]
+    let now: Date
+
+    var body: some View {
+        ResponsiveControlsLayout(horizontalSpacing: 20, verticalSpacing: 6) {
+            ForEach(subscriptions, id: \.provider) { usage in
+                let stale = usage.isStale(now: now)
+                HStack(spacing: 8) {
+                    Text(usage.providerLabel).foregroundStyle(stale ? Theme.mutedForeground : Theme.foreground)
+                    ForEach(Array(usage.limitWindows.enumerated()), id: \.offset) { _, window in
+                        HStack(spacing: 6) {
+                            bar(window)
+                            Text("\(window.shortLabel) \(window.percentLabel)")
+                        }
+                    }
+                }
+                .fixedSize()
+                .help(usage.displayHelpText(now: now))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(accessibilityLabel(usage, stale: stale))
+            }
+        }
+        .font(.pilot(.caption))
+        .monospacedDigit()
+        .foregroundStyle(Theme.mutedForeground)
+    }
+
+    private func bar(_ window: SubscriptionWindow) -> some View {
+        let fraction = window.gaugeFraction ?? 0
+        return ZStack(alignment: .leading) {
+            Capsule().fill(Theme.border)
+            Capsule()
+                .fill(window.usedPercent >= SubscriptionUsage.noticePercent ? Theme.warning : Theme.faintForeground)
+                .frame(width: 48 * fraction)
+        }
+        .frame(width: 48, height: 4)
+    }
+
+    private func accessibilityLabel(_ usage: SubscriptionUsage, stale: Bool) -> String {
+        let windows = usage.limitWindows.map { "\($0.limitName) limit \($0.percentLabel) used" }
+        return "\(usage.providerLabel) subscription: " + windows.joined(separator: ", ") + (stale ? ", not recent" : "")
     }
 }
 

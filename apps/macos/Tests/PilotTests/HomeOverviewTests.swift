@@ -99,6 +99,22 @@ private func project(_ id: String, _ name: String? = nil) -> Project {
     print("Home 10,000-session snapshot: project rows \(Date().timeIntervalSince(start) * 1_000 / 20) ms")
 }
 
+@Test func homeShowsSubscriptionUsageOncePerProviderFromTheNewestSnapshot() {
+    func chat(_ id: String, _ usage: SubscriptionUsage?) -> SessionSummary {
+        SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: 1, state: "idle",
+                       usage: SessionUsage(subscription: usage))
+    }
+    let old = SubscriptionUsage(fetchedAt: 1, provider: .anthropic, windows: [SubscriptionWindow(label: "5h", usedPercent: 10)])
+    let new = SubscriptionUsage(fetchedAt: 5, provider: .anthropic, windows: [SubscriptionWindow(label: "5h", usedPercent: 34),
+                                                                              SubscriptionWindow(label: "Week", usedPercent: 61)])
+    let failed = SubscriptionUsage(fetchedAt: 9, provider: .anthropic, windows: [], error: "Timed out")
+    let codex = SubscriptionUsage(fetchedAt: 2, provider: .openai, windows: [SubscriptionWindow(label: "Week", usedPercent: 12)])
+    let usage = HomeStatus.subscriptions([chat("codex", codex), chat("old", old), chat("new", new), chat("failed", failed),
+                                          chat("none", nil)])
+    #expect(usage == [new, codex])
+    #expect(HomeStatus.subscriptions([chat("none", nil)]).isEmpty)
+}
+
 @Test @MainActor func homeLinksNavigateFromMissionToArchivedCoordinatorChat() {
     let name = "home-navigation-\(UUID())"
     let defaults = UserDefaults(suiteName: name)!

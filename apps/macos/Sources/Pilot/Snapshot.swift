@@ -742,21 +742,27 @@ enum Snapshot {
         await render(SettingsView().environmentObject(model), size: CGSize(width: 780, height: 580), to: directory.appending(path: "settings.png"))
         await render(
             VStack(alignment: .leading, spacing: 16) {
-                UsageFooter(usage: Fixtures.codexUsage)
-                UsageFooter(usage: Fixtures.claudeUsage)
-                UsageFooter(usage: SessionUsage(
-                    context: ContextUsage(contextWindow: 200_000),
-                    subscription: SubscriptionUsage(fetchedAt: Fixtures.now - 3_600_000, provider: .anthropic,
-                                                    windows: [], error: "Could not refresh subscription limits")
-                ))
-                UsageFooter(usage: SessionUsage(subscription: SubscriptionUsage(fetchedAt: Fixtures.now, provider: .openai, windows: [])))
-                UsageFooter(usage: SessionUsage(), model: "openai-codex/gpt-6.1-sol")
-                UsageFooter(usage: SessionUsage(), model: "anthropic/claude-sonnet-5")
+                SubscriptionUsageNotice(usage: SessionUsage(subscription: SubscriptionUsage(
+                    fetchedAt: Date().timeIntervalSince1970 * 1_000, provider: .anthropic,
+                    windows: [SubscriptionWindow(label: "5h", usedPercent: 86,
+                                                 resetsAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(7_200)))])))
+                SubscriptionUsageNotice(usage: SessionUsage(subscription: SubscriptionUsage(
+                    fetchedAt: Date().timeIntervalSince1970 * 1_000, provider: .openai,
+                    windows: [SubscriptionWindow(label: "Week", usedPercent: 100)])))
+                HStack(spacing: 16) {
+                    ContextUsageIndicator(usage: Fixtures.codexUsage)
+                    ContextUsageIndicator(usage: Fixtures.claudeUsage)
+                    ContextUsageIndicator(usage: SessionUsage(context: ContextUsage(contextWindow: 200_000)))
+                }
+                .padding(.horizontal, 10)
+                SubscriptionUsageBars(subscriptions: [Fixtures.claudeUsage.subscription!, Fixtures.codexUsage.subscription!],
+                                      now: Date(timeIntervalSince1970: Fixtures.now / 1000))
+                    .padding(.horizontal, 10)
             }
             .padding(.vertical, 16)
             .background(Theme.background),
-            size: CGSize(width: 760, height: 300),
-            to: directory.appending(path: "usage-footers.png")
+            size: CGSize(width: 760, height: 200),
+            to: directory.appending(path: "usage-indicators.png")
         )
         for width in [760, 420] {
             await render(
@@ -773,21 +779,6 @@ enum Snapshot {
                 to: directory.appending(path: width == 760 ? "usage-composer.png" : "usage-composer-narrow.png")
             )
         }
-        await render(
-            VStack(spacing: 16) {
-                UsageFooter(usage: Fixtures.codexUsage)
-                UsageFooter(usage: Fixtures.claudeUsage)
-                UsageFooter(usage: SessionUsage(
-                    context: ContextUsage(tokens: 0, contextWindow: 200_000),
-                    subscription: SubscriptionUsage(fetchedAt: Fixtures.now, windows: [])
-                ))
-                UsageFooter(usage: SessionUsage(), model: "openai-codex/gpt-6.1-sol")
-            }
-            .padding(.vertical, 16)
-            .background(Theme.background),
-            size: CGSize(width: 360, height: 220),
-            to: directory.appending(path: "usage-footer-narrow.png")
-        )
         for (name, working) in [("menubar-idle", false), ("menubar-working", true)] {
             let image = PlaneImage.menuBar(working: working)
             let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 72, pixelsHigh: 72, bitsPerSample: 8,

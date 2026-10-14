@@ -2,7 +2,7 @@ import Foundation
 
 // Mirrors packages/protocol NeedsYouReason. Long-job attention is added separately.
 public enum NeedsYouReasonKind: String, LenientStringEnum {
-    case failed, asks, mission
+    case failed, asks, mission, limit
     case notReviewed = "not_reviewed"
     case couldntStart = "couldnt_start"
     public static let fallback = NeedsYouReasonKind.notReviewed
@@ -11,10 +11,13 @@ public enum NeedsYouReasonKind: String, LenientStringEnum {
 public struct NeedsYouReason: Codable, Equatable, Sendable {
     public let kind: NeedsYouReasonKind
     public let detail: String?
+    /// `limit`: epoch milliseconds when the used-up subscription window resets, when known.
+    public let resumesAt: Double?
 
-    public init(kind: NeedsYouReasonKind, detail: String? = nil) {
+    public init(kind: NeedsYouReasonKind, detail: String? = nil, resumesAt: Double? = nil) {
         self.kind = kind
         self.detail = Self.firstLine(detail)
+        self.resumesAt = resumesAt
     }
 
     public func label(at: Double, now: Date = Date()) -> String {
@@ -24,6 +27,10 @@ public struct NeedsYouReason: Codable, Equatable, Sendable {
         case .asks: return "Asks: \(detail ?? "A question is waiting for your answer")"
         case .couldntStart: return "Couldn't start: \(detail ?? "The scheduled chat could not start")"
         case .mission: return "Mission: \(detail ?? "A question or blocked task is waiting on you")"
+        case .limit:
+            guard let resumesAt, resumesAt.isFinite else { return "Limit reached" }
+            let date = Date(timeIntervalSince1970: resumesAt / 1000)
+            return "Limit reached · resumes \(UsageFormatting.clock(date, now: now))"
         case .notReviewed:
             let age = SessionTimeFormatting.relative(at.isFinite ? at : now.timeIntervalSince1970 * 1000, now: now)
             return "Not reviewed: finished \(age == "now" ? "just now" : "\(age) ago")"
@@ -57,14 +64,34 @@ extension DashboardNeedsYouItem {
 
 extension SessionSummary {
     /// Derive sidebar reasons from the same outcome fields pilotd uses. `unread` includes awaiting-reply rows.
-    public func needsYouReason(unread: Bool) -> NeedsYouReason? {
+    public func needsYouReason(unread: Bool, now: Date = Date()) -> NeedsYouReason? {
         guard signal(unread: unread)?.needsUser == true else { return nil }
         if status == .failed {
+            if let limit = subscriptionLimit(now: now) { return limit }
             return NeedsYouReason(kind: .failed, detail: NeedsYouReason.firstLine(outcomeReason) ?? error)
         }
         if status == .question { return NeedsYouReason(kind: .asks, detail: outcomeReason) }
         return NeedsYouReason(kind: .notReviewed)
     }
+
+    /// Same rule as pilotd: a failure whose error reads as a usage or rate limit, or whose provider has a window
+    /// used up that has not reset yet. Resumes when the latest used-up window resets.
+    public func subscriptionLimit(now: Date = Date()) -> NeedsYouReason? {
+        var resets: [Date] = []
+        var exhausted = false
+        for window in usage?.subscription?.windows ?? [] where !window.isExtra && window.usedPercent >= 100 {
+            let reset = window.resetDate
+            if let reset, reset <= now { continue }
+            exhausted = true
+            if let reset { resets.append(reset) }
+        }
+        let text = "\(outcomeReason ?? "")\n\(error ?? "")"
+        guard exhausted || text.range(of: Self.limitError, options: [.regularExpression, .caseInsensitive]) != nil
+        else { return nil }
+        return NeedsYouReason(kind: .limit, resumesAt: resets.max().map { $0.timeIntervalSince1970 * 1000 })
+    }
+
+    private static let limitError = #"usage[ _-]?limit|rate[ _-]?limit|limit reached|quota|too many requests|\b429\b"#
 }
 
 extension MissionNeedsYouItem {
@@ -94,6 +121,7 @@ extension InboxText {
         let vocabulary = [("asks", "question", "questions"), ("failed", "failed", "failed"),
                           ("not_reviewed", "not reviewed", "not reviewed"),
                           ("couldnt_start", "couldn't start", "couldn't start"),
+                          ("limit", "limit reached", "limits reached"),
                           ("mission", "mission", "missions")]
         let parts = vocabulary.compactMap { key, singular, plural -> String? in
             let number = reasons[key, default: 0]

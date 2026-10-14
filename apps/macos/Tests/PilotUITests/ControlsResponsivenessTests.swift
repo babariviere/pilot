@@ -59,45 +59,39 @@ import Testing
     #expect(picker.providers.isEmpty)
 }
 
-@Test @MainActor func responsiveUsagePresentationInvalidatesAndPreservesHelp() {
-    let state = UsageFooterState()
-    let window = SubscriptionWindow(label: "Weekly", usedPercent: 42, resetsAt: "2026-01-01T00:00:00Z")
+@Test @MainActor func composerUsagePresentationCachesAndShowsOnlyWhatMatters() {
+    let state = ComposerUsageState()
+    let now = Date()
     let context = ContextUsage(tokens: 1000, contextWindow: 10000)
     // A recent snapshot: stale ones add an age note to the help (covered by UsageTests).
-    let subscription = SubscriptionUsage(fetchedAt: Date().timeIntervalSince1970 * 1_000, provider: .anthropic,
-                                         windows: [window])
-    let usage = SessionUsage(context: context, subscription: subscription)
+    let quiet = SubscriptionUsage(fetchedAt: now.timeIntervalSince1970 * 1_000, provider: .anthropic,
+                                  windows: [SubscriptionWindow(label: "Week", usedPercent: 42)])
     for _ in 0..<3 {
-        let display = state.display(usage: usage, model: "anthropic/model")
+        let display = state.display(usage: SessionUsage(context: context, subscription: quiet), now: now)
         #expect(display.context?.help == context.helpText)
-        #expect(display.windows.first?.help == window.helpText)
-        #expect(display.subscriptionHelp == subscription.helpText)
+        #expect(display.context?.label == "10%")
+        #expect(display.notice == nil)
     }
-    let fallback = state.display(usage: SessionUsage(), model: "openai-codex/model")
-    #expect(fallback.windows.isEmpty)
-    #expect(fallback.hasSubscription)
-    #expect(fallback.subscriptionHelp == SubscriptionProvider.openai.unavailableHelpText)
-    let cleared = state.display(usage: SessionUsage(subscription: SubscriptionUsage(fetchedAt: 2000, windows: [])),
-                                model: "anthropic/model")
-    #expect(!cleared.hasSubscription)
-    #expect(cleared.context == nil)
+    let busy = SubscriptionUsage(fetchedAt: now.timeIntervalSince1970 * 1_000, provider: .anthropic,
+                                 windows: [SubscriptionWindow(label: "5h", usedPercent: 86)])
+    let display = state.display(usage: SessionUsage(subscription: busy), now: now)
+    #expect(display.context == nil)
+    #expect(display.notice?.text == "Claude 5-hour limit at 86%")
+    #expect(display.notice?.help == busy.helpText)
+    #expect(state.display(usage: SessionUsage(), now: now) == ComposerUsageState.Display())
 }
 
-@Test @MainActor func responsiveNestedUsageControlsWrapAtNarrowWidths() {
+@Test @MainActor func subscriptionNoticeTakesNoRoomUntilItMatters() {
     _ = NSApplication.shared
-    let usage = SessionUsage(context: ContextUsage(tokens: 10000, contextWindow: 200000),
-                             subscription: SubscriptionUsage(fetchedAt: 1000, provider: .anthropic, windows: [
-                                SubscriptionWindow(label: "Session", usedPercent: 12),
-                                SubscriptionWindow(label: "Weekly", usedPercent: 45),
-                             ]))
-    func size(_ width: CGFloat) -> CGSize {
-        NSHostingView(rootView: UsageFooter(usage: usage)
-            .frame(width: width, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)).fittingSize
+    func height(_ percent: Double) -> CGFloat {
+        let usage = SessionUsage(subscription: SubscriptionUsage(
+            fetchedAt: Date().timeIntervalSince1970 * 1_000, provider: .anthropic,
+            windows: [SubscriptionWindow(label: "5h", usedPercent: percent)]))
+        return NSHostingView(rootView: VStack(spacing: 8) {
+            SubscriptionUsageNotice(usage: usage)
+            Color.clear.frame(height: 10)
+        }.frame(width: 400)).fittingSize.height
     }
-    let wide = size(600)
-    let narrow = size(145)
-    #expect(wide.height > 0)
-    #expect(narrow.height > wide.height * 2)
-    #expect(abs(narrow.width - 145) < 0.01)
+    #expect(height(40) == 10)
+    #expect(height(86) > 18)
 }

@@ -167,4 +167,6 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     let groups = SidebarUrgency.groups(sessions, unread: { _ in true })
     let reasons = NeedsYouReasons(groups.needsYou, unread: { _ in true })
     #expect(reasons == NeedsYouReasons(questions: 1, failed: 1, notReviewed: 1))
+    #expect(SidebarScopeCounts.needsYouReasons(total: 2, reasons: NeedsYouReasons(failed: 1, limited: 1))
+        == "2 need you: 1 failed, 1 limit reached")
 }
