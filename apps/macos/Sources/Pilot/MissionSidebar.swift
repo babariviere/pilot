@@ -2,7 +2,7 @@ import PilotCore
 import SwiftUI
 
 /// A mission in the sidebar: opens the mission page, and expands to its chats. The needs-you badge is
-/// always visible; New chat and the disclosure chevron appear on hover (the chevron also while expanded).
+/// always visible; chat actions and the disclosure chevron appear on hover (the chevron also while expanded).
 struct MissionSidebarRow: View {
     let mission: Mission
     let needsYou: Int
@@ -40,6 +40,8 @@ struct MissionSidebarRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            MissionSidebarCoordinatorAction(mission: mission)
+                .revealed(hovered)
             if mission.status == .active {
                 Button { model.newSession(in: mission) } label: { Image(systemName: "plus") }
                     .buttonStyle(QuietIconButtonStyle())
@@ -65,6 +67,7 @@ struct MissionSidebarRow: View {
             Menu("Add Existing Chat") { MissionExistingChatItems(mission: mission) }
             Divider()
             Button("Open Mission") { model.openMission(mission.id) }
+            MissionSidebarCoordinatorAction(mission: mission, inMenu: true)
             Button(isExpanded ? "Hide Chats" : "Show Chats") { isExpanded.toggle() }
             MissionEditAction(missionId: mission.id)
             Divider()
@@ -95,3 +98,24 @@ struct MissionExistingChatItems: View {
     }
 }
 
+/// Both shortcuts select by ID, independent of expansion, archive state and sidebar filters.
+struct MissionSidebarCoordinatorAction: View {
+    let mission: Mission
+    var inMenu = false
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let coordinator = mission.coordinatorSessionId {
+            if inMenu {
+                Button("Open Coordinator") { model.selectedSessionId = coordinator }
+            } else {
+                Button { model.selectedSessionId = coordinator } label: {
+                    Image(systemName: MissionCoordinatorIndicator.symbol)
+                }
+                .buttonStyle(QuietIconButtonStyle())
+                .help("Open coordinator")
+                .accessibilityLabel("Open coordinator")
+            }
+        }
+    }
+}
