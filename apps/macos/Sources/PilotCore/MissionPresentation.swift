@@ -168,6 +168,7 @@ public enum MissionCoordinatorStatus {
     public static func detail(_ session: SessionSummary, unread: Bool) -> String {
         switch session.status {
         case .working: return "Working"
+        case .paused: return session.status.rawValue
         case .question: return firstLine(session.outcomeReason).map { "Asks: \($0)" } ?? "Asks a question"
         case .failed:
             return firstLine(session.outcomeReason ?? session.error).map { "Failed: \($0)" } ?? "Failed"
