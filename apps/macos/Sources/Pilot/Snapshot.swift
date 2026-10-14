@@ -1528,7 +1528,7 @@ enum Snapshot {
         snapshot(frame, to: directory.appending(path: "scope-focused-window.png"))
 
         model.focus(on: nil)
-        model.openScopeHome()
+        model.openHome()
         for _ in 0..<8 { try? await Task.sleep(for: .milliseconds(100)) }
         snapshot(frame, to: directory.appending(path: "scope-all-window.png"))
 

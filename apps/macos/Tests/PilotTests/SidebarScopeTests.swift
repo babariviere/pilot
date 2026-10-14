@@ -27,11 +27,11 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     return app
 }
 
-@Test @MainActor func focusingOpensProjectHomeAndRemembersSelectionPerScope() throws {
+@Test @MainActor func focusingOpensOverviewAndRemembersSelectionPerScope() throws {
     let app = try fixture()
     app.selectedSessionId = "b"
     app.focus(on: "p1")
-    // A scope seen for the first time opens its Home: the project page.
+    // A project seen for the first time opens its Overview.
     #expect(app.sidebarScope == "p1" && app.selectedProjectId == "p1" && app.selectedSessionId == nil)
     app.selectedSessionId = "c"
     app.focus(on: nil)
@@ -64,18 +64,35 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     #expect(app.sidebarScope == nil && app.selectedSessionId == "b")
 }
 
-@Test @MainActor func scopeHomeAndNewChatFollowTheFocusedProject() throws {
+@Test @MainActor func homeCoversEveryProjectWhileNewChatFollowsTheFocus() throws {
     let app = try fixture()
     app.draftProjectId = "p2"
     app.selectedSessionId = "a"
-    app.openScopeHome()
+    app.openHome()
     #expect(app.selectedSessionId == nil && app.selectedProjectId == nil && app.draftProjectId == "p2")
     app.focus(on: "p1")
     app.selectedSessionId = "a"
-    app.openScopeHome()
-    #expect(app.selectedProjectId == "p1")
+    app.openOverview()
+    #expect(app.selectedProjectId == "p1" && app.selectedSessionId == nil)
+    // Home stays the all-projects Home even when the sidebar is focused.
+    app.openHome()
+    #expect(app.sidebarScope == "p1" && app.currentSelection == .home && app.draftProjectId == "p2")
     app.newChatInScope()
     #expect(app.draftProjectId == "p1" && app.selectedProjectId == nil)
+}
+
+@Test @MainActor func homeIsRestoredAsHomeInAFocusedScope() throws {
+    let app = try fixture()
+    app.focus(on: "p1")
+    app.openHome()
+    app.focus(on: "p2")
+    #expect(app.selectedProjectId == "p2")
+    app.focus(on: "p1")
+    #expect(app.currentSelection == .home && app.sidebarScope == "p1")
+    app.openOverview()
+    app.focus(on: nil)
+    // Leaving Home in every project and returning restores it, never a project page.
+    #expect(app.currentSelection == .home)
 }
 
 @Test @MainActor func removedFocusedProjectFallsBackToAllProjects() throws {
@@ -102,14 +119,18 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     func restore(_ saved: SidebarSelection?, _ scope: String?) -> SidebarSelection {
         SidebarSelection.restoring(saved, in: scope, sessions: sessions, missions: missions, projectIds: projects)
     }
-    #expect(restore(nil, "p1") == .home)
+    #expect(restore(nil, "p1") == .project("p1"))
+    #expect(restore(nil, nil) == .home)
+    #expect(restore(.home, "p1") == .home)
     #expect(restore(.session("a"), "p1") == .session("a"))
-    #expect(restore(.session("b"), "p1") == .home)
+    #expect(restore(.session("b"), "p1") == .project("p1"))
     #expect(restore(.session("gone"), nil) == .home)
-    #expect(restore(.mission("m1"), "p2") == .home)
+    #expect(restore(.mission("m1"), "p2") == .project("p2"))
     #expect(restore(.mission("m1"), nil) == .mission("m1"))
     #expect(restore(.project("p2"), nil) == .project("p2"))
-    #expect(restore(.project("p1"), "p1") == .home)
+    #expect(restore(.project("p1"), "p1") == .project("p1"))
+    #expect(restore(.project("p2"), "p1") == .project("p1"))
+    #expect(restore(.project("gone"), nil) == .home)
     #expect(restore(.archive(projectId: "p2", missionId: "m1"), "p1") == .archive(projectId: "p1", missionId: "m1"))
     #expect(restore(.archive(projectId: "gone", missionId: "gone"), nil) == .archive(projectId: nil, missionId: nil))
 }
@@ -123,13 +144,23 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     #expect(SidebarScopeCounts.total(counts, excluding: "p1") == ProjectDashboardCount(needsYou: 1))
 }
 
-@Test func elsewhereLineAppearsOnlyWithActivity() {
-    #expect(SidebarScopeCounts.elsewhere(ProjectDashboardCount()) == nil)
-    #expect(SidebarScopeCounts.elsewhere(ProjectDashboardCount(working: 1, needsYou: 1))
-        == "Elsewhere: 1 working · 1 needs you")
-    #expect(SidebarScopeCounts.elsewhere(ProjectDashboardCount(needsYou: 3)) == "Elsewhere: 3 need you")
-    #expect(SidebarScopeCounts.elsewhere(ProjectDashboardCount(working: 1, needsYou: 2), compact: true)
-        == "Elsewhere: 2 need you")
-    #expect(SidebarScopeCounts.elsewhere(ProjectDashboardCount(working: 1), compact: true) == "Elsewhere: 1 working")
+@Test func inboxBadgeHelpSumsReasonsWhenTheyCoverTheCount() {
+    #expect(SidebarScopeCounts.needsYouReasons(total: 0, reasons: NeedsYouReasons()) == nil)
+    #expect(SidebarScopeCounts.needsYouReasons(total: 5, reasons: NeedsYouReasons(questions: 2, failed: 1,
+                                                                                   notReviewed: 2))
+        == "5 need you: 2 questions, 1 failed, 2 not reviewed")
+    #expect(SidebarScopeCounts.needsYouReasons(total: 1, reasons: NeedsYouReasons(questions: 1))
+        == "1 needs you: 1 question")
+    // Reasons that do not add up to the count (missions, other sources) leave the total alone.
+    #expect(SidebarScopeCounts.needsYouReasons(total: 3, reasons: NeedsYouReasons(failed: 1)) == "3 need you")
+    #expect(SidebarScopeCounts.needsYouReasons(total: 2, reasons: NeedsYouReasons()) == "2 need you")
     #expect(SidebarScopeCounts.summary(ProjectDashboardCount(working: 4)) == "4 working")
+}
+
+@Test func needsYouReasonsCountTheUrgencyGroup() {
+    let sessions = [chat("f", project: "p1", outcome: .failed), chat("q", project: "p1", outcome: .question),
+                    chat("d", project: "p2", outcome: .done), chat("w", project: "p1", state: "working")]
+    let groups = SidebarUrgency.groups(sessions, unread: { _ in true })
+    let reasons = NeedsYouReasons(groups.needsYou, unread: { _ in true })
+    #expect(reasons == NeedsYouReasons(questions: 1, failed: 1, notReviewed: 1))
 }

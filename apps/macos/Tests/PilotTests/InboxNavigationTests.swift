@@ -22,7 +22,7 @@ private let dotfiles = Project(id: "p2", name: "dotfiles", path: "/tmp/dotfiles"
     // Switching scope keeps the Inbox open, now scoped to the focused project.
     app.focus(on: "p1")
     #expect(app.sidebarScope == "p1" && app.currentSelection == .inbox && app.selectedProjectId == nil)
-    app.openScopeHome()
+    app.openOverview()
     #expect(app.selectedProjectId == "p1" && !app.showingInbox)
     app.focus(on: nil)
     // Back in every project, the selection left there (the Inbox) is restored.
