@@ -1,5 +1,49 @@
 # Changelog
 
+## [1.32.0](https://github.com/babariviere/pilot/compare/v1.31.0...v1.32.0) (2026-10-14)
+
+
+### Features
+
+* add targeted task detail and paged activity reads ([0cb82d3](https://github.com/babariviere/pilot/commit/0cb82d3e57e097deb2cc6d93d6507844eac8a289))
+* **decisions:** number decisions and add user-approved proposals ([44a3cd8](https://github.com/babariviere/pilot/commit/44a3cd8280a4ad30f81e1c2f31a0f43f2bdc65b2))
+* expose cached subscription windows in orchestration results ([1f4a0c9](https://github.com/babariviere/pilot/commit/1f4a0c91a2b2ca224275792e9c52921d6771e6ee))
+* **inbox:** add a cross-project Inbox sidebar tab ([4e2dd0b](https://github.com/babariviere/pilot/commit/4e2dd0bf0d3f8dc5cad27a85435adac9845a203f))
+* **inbox:** open Slack triage for each project from the Inbox ([af4dc2e](https://github.com/babariviere/pilot/commit/af4dc2e848c3de39b9713327c54c1c6987ae1176))
+* **inbox:** show a dithered coast when the Inbox is empty ([4335a04](https://github.com/babariviere/pilot/commit/4335a0436e86a2fc03229d9d9302aa20f28d1d3b))
+* **inbox:** show dithered status corners and a calm sky ([fa73aeb](https://github.com/babariviere/pilot/commit/fa73aeb0ebf58a6b3dcbef6ed4c503dbebffca71))
+* **kernel:** bundle shared extensions and required Anthropic auth ([019daaf](https://github.com/babariviere/pilot/commit/019daafa1f026810c0eed0127f254bae3f5d640c))
+* let agents ask the user a question with suggested answers ([886b832](https://github.com/babariviere/pilot/commit/886b832823934bfee3fea0271ff407e93c3a89ad))
+* **macos:** add decision audience picker ([12a7a0f](https://github.com/babariviere/pilot/commit/12a7a0faa70a845c181fda750038a8b95ea2c55c))
+* **macos:** enlarge the question tray dither corner ([ce3c605](https://github.com/babariviere/pilot/commit/ce3c605c550beb51131f24494d04fe2d6e33f200))
+* **macos:** give agent questions the dithered needs-you state ([6444349](https://github.com/babariviere/pilot/commit/64443498ba15e0fc6955aad9c7f9c8e80b93dddd))
+* **macos:** open Slack and Linear links in desktop apps ([3e2fa55](https://github.com/babariviere/pilot/commit/3e2fa5548f8b59a43b5a9d0d22391a84ef6b0665))
+* **macos:** show replaced notes and emptied summaries in the memory browser ([8321246](https://github.com/babariviere/pilot/commit/8321246c3d40d1dbcdb50fa2a2c7be4ba528af5a))
+* **memory:** let notes replace outdated ones and refuse duplicates ([9b4bdc7](https://github.com/babariviere/pilot/commit/9b4bdc77dade8750798fc04596f9fc8e92b7ec1f))
+* show chats waiting on an agent question as needing you ([89187d4](https://github.com/babariviere/pilot/commit/89187d4290f2f56c5704a34179c32e832880ad45))
+* show waiting system messages above the composer ([a59969e](https://github.com/babariviere/pilot/commit/a59969efdbd9ba55eee33fc586a7b174649b1ea4))
+* **status:** flag unpublished chat results and expose member detail ([eb050c4](https://github.com/babariviere/pilot/commit/eb050c4f6aeb00b5ff4ee6ee1b2a5e10f3f87abc))
+* **tracking:** quote the Slack message in the triage inspector ([e876cee](https://github.com/babariviere/pilot/commit/e876cee8dead3cf26ad61f1e96856206b1aead4f))
+
+
+### Bug Fixes
+
+* **chat:** hold system messages when stopping a run ([17d088b](https://github.com/babariviere/pilot/commit/17d088b2335813f8ace21494a91eed779f312122))
+* **ci:** refresh restored extension pin after main lockfile update ([48edb56](https://github.com/babariviere/pilot/commit/48edb56bde063c6d177275fe0d9a32489b8fd233))
+* **ci:** repair source assertions and verify every dependency PR ([a253374](https://github.com/babariviere/pilot/commit/a253374f86c52a4ba5e0003e922f4896985badc3))
+* **ci:** restore compatible extensions and native lockfile updates ([a747b59](https://github.com/babariviere/pilot/commit/a747b59b5e676c7a75a61ae395e8e716456c93df))
+* **daemon:** baseline historical pull request states ([461b6ac](https://github.com/babariviere/pilot/commit/461b6ac7edcc20a3d30281b02335cca76d988ae7))
+* **daemon:** keep ignored paths from blocking workspace cleanup ([1874934](https://github.com/babariviere/pilot/commit/1874934bd3b6948bbd6bb73b67268e1be871cd53))
+* **kernel:** reserve admission before serializing input ([f0d5c0b](https://github.com/babariviere/pilot/commit/f0d5c0b89845a1af73e64b5b0f771884775fe0c6))
+* **kernel:** support durable jobs recovery with Pi 1.1 ([4aae50a](https://github.com/babariviere/pilot/commit/4aae50ad4552989aba0fa39456936ad7ea622692))
+* **macos:** assign held-action failures to composer state ([2d4bc7e](https://github.com/babariviere/pilot/commit/2d4bc7eb74989ab64dc0b8bd43538e164e8ce89b))
+* **macos:** keep viewed chats under Needs you until answered ([6758814](https://github.com/babariviere/pilot/commit/6758814bd41a150b9349dd68cb41340edcef9a40))
+* **macos:** name Linear and Slack instead of "Tracked" in the UI ([8db9f19](https://github.com/babariviere/pilot/commit/8db9f195d53b5afa070c06ecd94996766c439cfb))
+* **macos:** retain unsaved brief drafts across tab switches ([c49c56b](https://github.com/babariviere/pilot/commit/c49c56b7b5798f52f3c24f0a10246907109c3ed9))
+* **macos:** split question byte count so CI type-checks it in time ([b2233a4](https://github.com/babariviere/pilot/commit/b2233a4c9b4660d2bdec1ac0d7aac8a3b817fff8))
+* **sessions:** allow archiving terminal startup failures ([6cf5aa0](https://github.com/babariviere/pilot/commit/6cf5aa052c40a04266c6e09fc62ad2ccfc0e39d5))
+* **sessions:** allow retrying failed worker startup ([87810ab](https://github.com/babariviere/pilot/commit/87810ab275d0717c1e239d701bdfc596e40c5f10))
+
 ## [1.31.0](https://github.com/babariviere/pilot/compare/v1.30.0...v1.31.0) (2026-10-14)
 
 
