@@ -527,10 +527,10 @@ export class MissionService {
 						.map((task) => ({ id: task.id, number: task.number, milestone: task.milestone ?? "" })),
 				};
 			}
-			case "start":
+			case "start": {
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 				if (typeof args.id !== "string" || !args.id.trim()) throw new Error("start requires the task id or number");
-				return this.startTask(missionId, args.id, {
+				const started = await this.startTask(missionId, args.id, {
 					...(args.message !== undefined ? { message: args.message as string } : {}),
 					...(args.model !== undefined ? { model: args.model as string } : {}),
 					...(args.thinking !== undefined ? { thinking: args.thinking as string } : {}),
@@ -539,6 +539,16 @@ export class MissionService {
 						: {}),
 					...(args.links !== undefined ? { links: args.links as StartMissionTaskRequest["links"] } : {}),
 				});
+				// Role/membership can change during spawn. Never disclose readings to a former lead.
+				if (
+					this.store.missionOf(sessionId) !== missionId ||
+					this.store.require(missionId).coordinatorSessionId !== sessionId
+				)
+					throw new Conflict("Only the mission coordinator can use start");
+				// Raw session usage includes provider errors and is not an agent-facing contract.
+				const { usage: _usage, ...summary } = started;
+				return { ...summary, subscriptionUsage: this.sessions.subscriptionUsageSnapshot() };
+			}
 			case "send": {
 				if (typeof args.targetSessionId !== "string" || !args.targetSessionId.trim())
 					throw new Error("send requires targetSessionId");
@@ -556,6 +566,7 @@ export class MissionService {
 			case "status": {
 				const tasks = this.store.tasks(missionId);
 				return {
+					subscriptionUsage: this.sessions.subscriptionUsageSnapshot(),
 					members: this.sessions.list({ missionId, archived: "all" }).map((member) => ({
 						id: member.id,
 						title: member.title,

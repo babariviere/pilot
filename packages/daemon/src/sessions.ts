@@ -80,6 +80,7 @@ import {
 	type SubscriptionProvider,
 	SubscriptionUsageCache,
 	type SubscriptionUsageSource,
+	subscriptionUsageReadings,
 	subscriptionProvider,
 } from "./subscription-usage.ts";
 import { hasUnpublishedWork } from "./unpublished-work.ts";
@@ -4283,6 +4284,11 @@ export class SessionManager {
 	/** The live kernel's physical provider (resolving virtual routers), else the pinned model's. */
 	private subscriptionProviderOf(meta: SessionMeta, worker?: SessionWorker): SubscriptionProvider | undefined {
 		return subscriptionProvider(worker?.usage?.provider ?? modelProvider(meta.model));
+	}
+
+	/** In-memory, read-only projection for orchestration. Never refresh or call a provider here. */
+	subscriptionUsageSnapshot() {
+		return subscriptionUsageReadings(this.subscriptionUsage);
 	}
 
 	private usage(meta: SessionMeta, worker?: SessionWorker): SessionUsage | undefined {

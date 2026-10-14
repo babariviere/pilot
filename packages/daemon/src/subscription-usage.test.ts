@@ -9,7 +9,64 @@ import {
 	type SubscriptionProvider,
 	SubscriptionUsageCache,
 	subscriptionProvider,
+	subscriptionUsageReadings,
+	SUBSCRIPTION_USAGE_MAX_AGE_MS,
+	type SubscriptionUsageSource,
 } from "./subscription-usage.ts";
+
+test("agent readings label missing, failed and old snapshots without leaking metadata", () => {
+	const now = 1_000_000;
+	let fetchedAt = now;
+	let error: string | undefined;
+	let windows = [{ label: "5h", usedPercent: 67.3, resetsAt: "2026-10-15T12:00:00Z", cost: 50 }];
+	const source: SubscriptionUsageSource = {
+		get: (provider) =>
+			provider === "openai" ? undefined : { fetchedAt, provider, windows, error, account: "private-account" },
+		start: async () => assert.fail("agent reads must not refresh"),
+		close() {},
+	};
+	const unknown = { status: "unknown", windows: [] };
+	assert.deepEqual(subscriptionUsageReadings(undefined, now), { anthropic: unknown, openai: unknown });
+	const expected = {
+		status: "current",
+		fetchedAt: now,
+		windows: [{ label: "5h", usedPercent: 67.3, resetsAt: "2026-10-15T12:00:00Z" }],
+	};
+	assert.deepEqual(subscriptionUsageReadings(source, now), { anthropic: expected, openai: unknown });
+	fetchedAt = now - SUBSCRIPTION_USAGE_MAX_AGE_MS + 1;
+	assert.equal(subscriptionUsageReadings(source, now).anthropic.status, "current");
+	fetchedAt--;
+	assert.deepEqual(subscriptionUsageReadings(source, now).anthropic, { ...expected, fetchedAt, status: "stale" });
+	fetchedAt = now + 1;
+	assert.equal(subscriptionUsageReadings(source, now).anthropic.status, "stale");
+	error = "private-account: billing unavailable";
+	assert.deepEqual(subscriptionUsageReadings(source, now).anthropic, unknown);
+	error = undefined;
+	windows = [];
+	assert.deepEqual(subscriptionUsageReadings(source, now).anthropic, unknown);
+	assert.deepEqual(
+		subscriptionUsageReadings(
+			{
+				...source,
+				get: () => {
+					throw new Error("private");
+				},
+			},
+			now,
+		),
+		{
+			anthropic: unknown,
+			openai: unknown,
+		},
+	);
+	assert.equal(
+		subscriptionUsageReadings(
+			{ ...source, get: () => ({ fetchedAt: now, windows: [{ label: "Week", usedPercent: 3 }] }) },
+			now,
+		).openai.windows[0]?.resetsAt,
+		null,
+	);
+});
 
 async function writeUsageCache(agentDir: string, provider: SubscriptionProvider, entry: unknown): Promise<void> {
 	const dir = join(agentDir, "cache", "usage-status", provider);
