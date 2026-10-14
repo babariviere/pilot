@@ -1,6 +1,6 @@
 import Foundation
 
-/// GitHub pull request links as pilotd accepts them for binding: `https://github.com/owner/repository/pull/123`.
+/// GitHub PR attachment inputs: a link or a number resolved by pilotd against the project upstream.
 public enum PullRequestURL {
     /// A canonical link or a bare number for pilotd to resolve using the project's upstream.
     public static func attachmentInput(_ raw: String) -> String? {
