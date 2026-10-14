@@ -4,6 +4,19 @@ import Testing
 
 private func eventJSON(_ text: String) -> JSONValue { try! JSONValue.decode(Data(text.utf8)) }
 
+@Test func eventByteAccountingIncludesOptionalTextAndUsesUTF8Bytes() {
+    let event = ChatEvent(id: "event-é", kind: "pr_opened", text: "Agent opened PR #441",
+                          branch: "feat/é", title: "Résumé", detail: "Full details\n✓")
+    var expected: Int = 128 + event.id.utf8.count
+    expected += event.text.utf8.count
+    expected += event.branch!.utf8.count
+    expected += event.title!.utf8.count
+    expected += event.detail!.utf8.count
+    #expect(TranscriptPresentation.byteCount(of: [.event(event)]) == expected)
+    let minimal = ChatEvent(id: "minimal", kind: "stopped", text: "Stopped")
+    #expect(TranscriptPresentation.byteCount(of: [.event(minimal)]) == 128 + minimal.id.utf8.count + minimal.text.utf8.count)
+}
+
 @Test func eventsInterleaveAtExecutionAndSurviveReplacementAndPrefix() {
     let entries = eventJSON(#"[{"id":1,"kind":"pi.user","model":[{"role":"user","content":"Start"}]},{"id":2,"kind":"pi.assistant","model":[{"role":"assistant","content":[{"type":"toolCall","id":"root","name":"codemode","arguments":{}}]}]},{"id":3,"kind":"pi.assistant","model":[{"role":"assistant","content":"Next"}]}]"#)
     let actions = eventJSON(#"{"type":"github_actions_update","actions":[{"id":"nested:0","kind":"push","branch":"feat/events","toolCallId":"root","afterEntryId":2,"at":1000,"exitCode":null},{"id":"nested:1","kind":"pr_opened","prNumber":441,"title":"Chat events","toolCallId":"root","afterEntryId":2,"at":2000,"exitCode":0}]}"#)
