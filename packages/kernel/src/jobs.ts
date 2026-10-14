@@ -8,7 +8,11 @@ export function runningJobs(value: unknown): SessionJob[] {
 	const jobs: SessionJob[] = [];
 	const ids = new Set<string>();
 	for (const job of value) {
-		if (!job || typeof job !== "object" || !["running", "done", "failed", "cancelled"].includes(job.state))
+		if (
+			!job ||
+			typeof job !== "object" ||
+			!["running", "done", "failed", "cancelled", "interrupted"].includes(job.state)
+		)
 			throw new Error("Invalid job state");
 		if (job.state !== "running") continue;
 		if (

@@ -81,6 +81,48 @@ test("reopened activity snapshots detach compactions and nested retries for adva
 	assert.equal(stream.settledVersion, 1);
 });
 
+test("settlement retains a run's cancellation through compaction, but not into later activity", async (t) => {
+	const session = createSession(new MemoryStorage());
+	t.after(() => session.close(context));
+	const conversation = await session.commit(async (tx) => {
+		const conversation = await tx.createConversation({ ownership: { kind: "ownerless" } });
+		await tx.doc(LiveDoc, conversation.id);
+		await tx.doc(InboxDoc, conversation.id);
+		return conversation;
+	}, context);
+	const stream = await watchActivity(session, conversation.id, context);
+	t.after(() => stream.stop());
+	const compaction: CompactionStatus = { taskId: 100 as TaskId, reason: "manual", blocking: false, attempt: 1 };
+	const input = await session.commit(async (tx) => {
+		const input = await tx.createSubmission({ conversationId: conversation.id, type: "input", status: "queued" });
+		(await tx.doc(LiveDoc, conversation.id)).run = { taskId: 1 as TaskId, inputs: [input.id] };
+		return input;
+	}, context);
+	await session.commit(async (tx) => {
+		tx.settleSubmission(input.id, { status: "unanswered", reason: "aborted" });
+		const live = await tx.doc(LiveDoc, conversation.id);
+		delete live.run;
+		live.compactions = [compaction];
+	}, context);
+	assert.equal(stream.settledVersion, 0, "compaction still prevents settlement");
+	await session.commit(async (tx) => {
+		delete (await tx.doc(LiveDoc, conversation.id)).compactions;
+	}, context);
+	assert.equal(stream.settledVersion, 1);
+	assert.equal(stream.settledAborted, true);
+	await session.commit(async (tx) => {
+		(await tx.doc(LiveDoc, conversation.id)).compactions = [compaction];
+	}, context);
+	await session.commit(async (tx) => {
+		// A withdrawn queued input did not belong to a run and cannot mark it aborted.
+		const queued = await tx.createSubmission({ conversationId: conversation.id, type: "input", status: "queued" });
+		tx.settleSubmission(queued.id, { status: "unanswered", reason: "aborted" });
+		delete (await tx.doc(LiveDoc, conversation.id)).compactions;
+	}, context);
+	assert.equal(stream.settledVersion, 2);
+	assert.equal(stream.settledAborted, false);
+});
+
 test("only exact idle MCP PIDs bypass child protection; active requests, unknown children and closed transports do not", async () => {
 	type Transport = ReturnType<McpTransportFactory>;
 	const messages = new Set<Parameters<Transport["onMessage"]>[0]>();

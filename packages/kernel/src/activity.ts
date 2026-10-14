@@ -19,6 +19,8 @@ export type ActivityStream = Pick<AgentEventStream, "snapshot" | "start"> & {
 	readonly idle: boolean;
 	/** Busy-to-idle boundary counter, retained when async frames are coalesced. */
 	readonly settledVersion: number;
+	/** Cancellation outcome of the latest busy-to-idle boundary. */
+	readonly settledAborted: boolean;
 	stop(): Promise<void>;
 };
 
@@ -122,6 +124,8 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 	let initial!: SnapshotEvent;
 	let current!: SnapshotEvent;
 	let settledVersion = 0;
+	let settledAborted = false;
+	let runAborted = false;
 	const isIdle = (frame: SnapshotEvent) => !frame.run && !frame.compactions.length && !frame.inbox.length;
 	let pending: SnapshotEvent | undefined;
 	let last: string;
@@ -174,7 +178,15 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 			detachCommit = session.subscribeCommits((publication) => {
 				if (stopped) return;
 				let touched = false;
+				let aborted = false;
 				for (const change of publication.changes) {
+					if (
+						change.type === "submission" &&
+						change.value.status === "unanswered" &&
+						change.value.reason === "aborted" &&
+						current.run?.inputs.includes(change.value.id)
+					)
+						aborted = true;
 					if (change.type !== "document" || change.conversationId !== id || change.record.key !== undefined)
 						continue;
 					if (change.record.kind === LiveDoc.definition.kind) {
@@ -189,12 +201,17 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 					}
 				}
 				if (!touched) return;
+				if (run || isIdle(current)) runAborted = false;
+				else if (current.run) runAborted = aborted;
 				const frame: SnapshotEvent = { ...initial, ...(run ? { run } : {}), inbox: queued, compactions };
 				if (!run) delete frame.run;
 				const key = JSON.stringify(frame);
 				if (key === last) return;
 				last = key;
-				if (!isIdle(current) && isIdle(frame)) settledVersion++;
+				if (!isIdle(current) && isIdle(frame)) {
+					settledVersion++;
+					settledAborted = runAborted;
+				}
 				current = frame;
 				pending = frame;
 				schedule();
@@ -217,6 +234,9 @@ export async function watchActivity(session: Session, id: ConversationId, contex
 		},
 		get settledVersion() {
 			return settledVersion;
+		},
+		get settledAborted() {
+			return settledAborted;
 		},
 		start(next) {
 			if (listener) throw new Error("Activity stream already started");

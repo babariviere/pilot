@@ -11,8 +11,8 @@
 		"start": "node src/main.ts"
 	},
 	"dependencies": {
-		"@earendil-works/pi-ai": "1.0.4",
-		"@earendil-works/pi-coding-agent": "1.0.4",
+		"@earendil-works/pi-ai": "1.1.0",
+		"@earendil-works/pi-coding-agent": "1.1.0",
 		"@pilot/artifacts": "workspace:*",
 		"@pilot/kernel": "workspace:*",
 		"@pilot/protocol": "workspace:*",
@@ -21,8 +21,8 @@
 		"ws": "^8.22.0"
 	},
 	"devDependencies": {
-		"@earendil-works/chord": "1.0.4",
-		"@earendil-works/pi-durable": "1.0.4",
+		"@earendil-works/chord": "1.1.0",
+		"@earendil-works/pi-durable": "1.1.0",
 		"@types/ws": "^8.18.1"
 	}
 }

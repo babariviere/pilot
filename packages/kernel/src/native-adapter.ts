@@ -210,7 +210,7 @@ export function createTrackedMcpExtension(
 	options: McpExtensionOptions = {},
 ): ExtensionFactory {
 	return async (pi) => {
-		// SDK 1.0.4 exposes transport injection but not its default factory at the package root.
+		// The SDK exposes transport injection but not its default factory at the package root.
 		const runtime = (await import(
 			new URL("./extensions/mcp/runtime.js", import.meta.resolve("@earendil-works/pi-coding-agent")).href
 		)) as { createDefaultTransport: McpTransportFactory };
@@ -569,7 +569,7 @@ export class NativeAdapter {
 			// The cursor tracks notifications, not a separately mutable busy state.
 			if (this.#closed || !this.session.isIdle || notifiedVersion === activity.settledVersion) return;
 			notifiedVersion = activity.settledVersion;
-			await this.session.extensionRunner.emit({ type: "agent_settled" });
+			await this.session.extensionRunner.emit({ type: "agent_settled", aborted: activity.settledAborted });
 		});
 	}
 	get working(): boolean {
