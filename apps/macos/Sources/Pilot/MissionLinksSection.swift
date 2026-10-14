@@ -208,7 +208,7 @@ struct MissionLinksSection: View {
 private enum MissionLinkActions {
     static func open(_ link: MissionLink) {
         guard let url = URL(string: link.url), ["http", "https"].contains(url.scheme?.lowercased()) else { return }
-        NSWorkspace.shared.open(url)
+        BrowserLinkOpener.shared.open(url)
     }
 
     static func copy(_ link: MissionLink) {

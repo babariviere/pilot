@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Pilot checks Helium for an existing GitHub pull request tab so it can focus it instead of opening a duplicate.</string>
 	<key>PilotRepoPath</key>
 	<string>@PILOT_REPO@</string>
 	<key>SUEnableAutomaticChecks</key>

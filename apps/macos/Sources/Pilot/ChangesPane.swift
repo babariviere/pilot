@@ -449,7 +449,7 @@ private struct PullRequestRowActions: View {
 
     var body: some View {
         if let link = URL(string: url), ["http", "https"].contains(link.scheme?.lowercased() ?? "") {
-            Button("Open Pull Request") { NSWorkspace.shared.open(link) }
+            Button("Open Pull Request") { BrowserLinkOpener.shared.open(link) }
         }
         Button("Copy Link") {
             NSPasteboard.general.clearContents()

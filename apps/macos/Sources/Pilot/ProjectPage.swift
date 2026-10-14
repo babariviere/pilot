@@ -871,7 +871,7 @@ private struct ProjectPullRequestRow: View {
     var body: some View {
         let readiness = PullRequestReadinessStyle(pr)
         let url = dashboardBrowserURL(pr.url)
-        Button { if let url { NSWorkspace.shared.open(url) } else { openChat() } } label: {
+        Button { if let url { BrowserLinkOpener.shared.open(url) } else { openChat() } } label: {
             HoverRow { hovered in
                 HStack(spacing: 10) {
                     readiness.icon
