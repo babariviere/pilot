@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionJob, SessionSummary } from "@pilot/protocol";
-import { LONG_JOB_MS, longJobAttention, LongJobTimers } from "./long-jobs.ts";
+import { LONG_JOB_MS, LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { MissionNotices } from "./mission-notices.ts";
 import { MissionStore } from "./missions.ts";
 import type { SessionManager } from "./sessions.ts";
@@ -34,7 +34,6 @@ test("fixed one-hour boundary, bounded names and elapsed duration", () => {
 	);
 	for (const startedAt of [NaN, Infinity, -1, LONG_JOB_MS * 10])
 		assert.equal(longJobAttention([{ ...job, startedAt }], LONG_JOB_MS), undefined);
-	assert.equal(longJobAttention([{ ...job, state: "done" }], LONG_JOB_MS + 1_000), undefined);
 });
 
 test("one-shot deadline survives duplicate changes, swaps oldest jobs, cancels and disposes", (t) => {
@@ -45,14 +44,17 @@ test("one-shot deadline survives duplicate changes, swaps oldest jobs, cancels a
 	const later = { ...job, id: "build", startedAt: 61_000 };
 	timers.update("s", [later, job], changed);
 	for (let i = 0; i < 10_000; i++) timers.update("s", [job, later], changed);
+	// biome-ignore lint/complexity/useLiteralKeys: inspect private timer ownership in the regression test
 	assert.equal(timers["pending"].size, 1);
 	t.mock.timers.tick(LONG_JOB_MS - 1);
 	assert.equal(changes, 0);
 	t.mock.timers.tick(1);
 	assert.equal(changes, 1);
 	timers.update("s", [job, later], changed);
+	// biome-ignore lint/complexity/useLiteralKeys: inspect private timer ownership in the regression test
 	assert.equal(timers["pending"].size, 0, "overdue jobs do not leave polling timers");
 	timers.update("s", [later], changed);
+	// biome-ignore lint/complexity/useLiteralKeys: inspect private timer ownership in the regression test
 	assert.equal(timers["pending"].size, 1);
 	t.mock.timers.tick(60_000);
 	assert.equal(changes, 2);

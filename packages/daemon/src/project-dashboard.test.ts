@@ -658,3 +658,28 @@ test("long jobs move from Working to Needs you, count inside missions, and canno
 	assert.equal(cleared.working.total, 1);
 	assert.equal(cleared.missions.items[0]!.needsYou, 0);
 });
+
+test("live long-job changes refresh uncapped Inbox counts without a review or mission write", () => {
+	const chats = Array.from({ length: 60 }, (_, i) =>
+		session({
+			id: `long-${i}`,
+			working: true,
+			attentionAt: 3_600_000,
+			attentionReason: { kind: "long_job", detail: "Tests has run for 1h" },
+		}),
+	);
+	const f = service(chats);
+	let changes = 0;
+	const dispose = f.service.onChange(() => changes++);
+	f.emit(chats[0]!);
+	assert.equal(changes, 1);
+	assert.equal(f.service.dashboard("p1").needsYou.items.length, 5);
+	assert.equal(f.service.needsYou(undefined, 50).items.length, 50);
+	assert.deepEqual(f.service.counts().projects.p1, { working: 0, needsYou: 60, needsYouReasons: { long_job: 60 } });
+	delete chats[0]!.attentionReason;
+	delete chats[0]!.attentionAt;
+	f.emit(chats[0]!);
+	assert.equal(changes, 2);
+	assert.deepEqual(f.service.counts().projects.p1, { working: 1, needsYou: 59, needsYouReasons: { long_job: 59 } });
+	dispose();
+});

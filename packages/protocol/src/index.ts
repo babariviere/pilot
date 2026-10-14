@@ -817,7 +817,14 @@ export interface DashboardSection<T> {
  */
 export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "long_job" | "unread";
 
-export type NeedsYouReasonKind = "failed" | "asks" | "not_reviewed" | "couldnt_start" | "mission" | "limit" | "long_job";
+export type NeedsYouReasonKind =
+	| "failed"
+	| "asks"
+	| "not_reviewed"
+	| "couldnt_start"
+	| "mission"
+	| "limit"
+	| "long_job";
 
 /**
  * One reason per row. Not-reviewed age is formatted by clients from the row's `at`.
