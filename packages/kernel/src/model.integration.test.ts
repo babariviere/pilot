@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,7 +53,11 @@ test("host jobs inspection reads the callable registry without model work, histo
 					return {
 						content: [],
 						details: undefined,
-						structuredContent: [running, { ...running, id: "finished", state: "done" }],
+						structuredContent: [
+							running,
+							{ ...running, id: "finished", state: "done" },
+							{ ...running, id: "recovered", state: "interrupted", exitCode: null },
+						],
 					};
 				},
 			};
@@ -85,6 +89,99 @@ test("host jobs inspection is empty when no jobs extension is installed", async 
 	const f = await fixture(t);
 	const session = await f.open();
 	assert.deepEqual(await session.jobs(), []);
+});
+
+test("durable jobs recovery keeps its storage anchor and admits one completion across reopen", {
+	timeout: 15_000,
+}, async (t) => {
+	// A file-backed contract fixture, not a second implementation of the extension's SQLite recovery.
+	let directory = "";
+	let outputPath = "";
+	const anchors: string[] = [];
+	const entered = deferred();
+	const content = "Finished background jobs: tests interrupted, exit code unknown. Inspect output before restarting.";
+	const f = await fixture(
+		t,
+		[
+			(pi) => {
+				pi.on("session_start", async (_event, ctx) => {
+					const identity = createHash("sha256")
+						.update(ctx.sessionManager.getSessionId())
+						.digest("hex")
+						.slice(0, 24);
+					const anchor = join(`${ctx.sessionManager.getSessionFile()}.jobs`, identity);
+					anchors.push(anchor);
+					assert.equal(anchor, directory);
+					const file = join(anchor, "fixture.json");
+					const record = JSON.parse(await readFile(file, "utf8"));
+					pi.registerTool({
+						name: "jobs",
+						label: "Jobs",
+						description: "Offline recovered jobs fixture",
+						parameters: Type.Object({ action: Type.Literal("list") }),
+						outputSchema: Type.Unknown(),
+						exposure: "codemode",
+						async execute() {
+							return { content: [], details: undefined, structuredContent: [record.job] };
+						},
+					});
+					if (record.claimed) return;
+					// The extension commits its receipt before sending a turn-starting notification.
+					await writeFile(file, JSON.stringify({ ...record, claimed: true }));
+					pi.sendMessage(
+						{ customType: "jobs.result", content, details: { jobs: [record.job] }, display: true },
+						{ deliverAs: "followUp", triggerTurn: true },
+					);
+				});
+			},
+		],
+		async (root) => {
+			const identity = createHash("sha256").update("offline-model").digest("hex").slice(0, 24);
+			directory = join(root, "durable", "native.session.jobs", identity);
+			await mkdir(directory, { recursive: true });
+			outputPath = join(directory, "tests.log");
+			await writeFile(outputPath, "output retained after crash\n");
+			await writeFile(
+				join(directory, "fixture.json"),
+				JSON.stringify({
+					claimed: false,
+					job: {
+						id: "recovered",
+						name: "Tests",
+						state: "interrupted",
+						startedAt: 1000,
+						endedAt: 2000,
+						exitCode: null,
+						outputPath,
+					},
+				}),
+			);
+			return {};
+		},
+	);
+	f.a.setResponses([
+		() => {
+			entered.resolve();
+			return fauxAssistantMessage("Inspect the retained output, do not automatically rerun.");
+		},
+	]);
+	const session = await f.open();
+	await entered.promise;
+	await session.conversation.waitForIdle(context);
+	assert.deepEqual(await session.jobs(), [], "interrupted handles are not running activity");
+	assert.equal(f.a.state.callCount, 1);
+	await session.close();
+	const reopened = await f.open();
+	assert.deepEqual(await reopened.jobs(), []);
+	await reopened.conversation.waitForIdle(context);
+	assert.deepEqual(anchors, [directory, directory]);
+	assert.equal(await readFile(outputPath, "utf8"), "output retained after crash\n");
+	assert.equal(f.a.state.callCount, 1, "a claimed recovery completion must not wake the model again");
+	const view = await reopened.conversation.context(context);
+	assert.deepEqual(
+		view.messages.filter((message) => message.role === "user").map((message) => message.content),
+		[content],
+	);
 });
 const first = "pilot-model-a/one";
 const second = "pilot-model-a/two";
@@ -565,8 +662,9 @@ test("native settlement skips queued run boundaries and idle snapshots, and stop
 			pi.on("session_start", (_event, context) => {
 				ctx = context;
 			});
-			pi.on("agent_settled", () => {
+			pi.on("agent_settled", (event) => {
 				assert.equal(ctx.isIdle(), true);
+				assert.equal(event.aborted, false);
 				settlements++;
 				settled.resolve();
 			});
@@ -598,6 +696,42 @@ test("native settlement skips queued run boundaries and idle snapshots, and stop
 	assert.equal(ctx.isIdle(), true);
 	assert.equal(settlements, 1, "reopening idle history does not emit a duplicate settlement");
 	await restored.close();
+});
+
+test("native settlement reports cancellation and resets it for the next completed run", {
+	timeout: 15_000,
+}, async (t) => {
+	const aborted = deferred<boolean>();
+	const completed = deferred<boolean>();
+	let count = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.on("agent_settled", (event) => {
+				if (++count === 1) aborted.resolve(event.aborted);
+				else completed.resolve(event.aborted);
+			});
+		},
+	]);
+	const entered = deferred();
+	const response = deferred<ReturnType<typeof fauxAssistantMessage>>();
+	t.after(() => response.resolve(fauxAssistantMessage("", { stopReason: "aborted" })));
+	f.a.setResponses([
+		() => {
+			entered.resolve();
+			return response.promise;
+		},
+		fauxAssistantMessage("Finished normally."),
+	]);
+	const session = await f.open();
+	await session.submit("cancelled", "Start work", "followUp");
+	await entered.promise;
+	const cancellation = session.abort();
+	response.resolve(fauxAssistantMessage("", { stopReason: "aborted" }));
+	await cancellation;
+	assert.equal(await aborted.promise, true);
+	await session.submit("completed", "Continue work", "followUp");
+	assert.equal(await completed.promise, false);
+	await session.conversation.waitForIdle(context);
 });
 
 test("native extensions remain busy through tool execution and multiple model rounds", {

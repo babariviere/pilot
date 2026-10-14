@@ -120,7 +120,9 @@ Coordinator updates wait while member chats are working or have running backgrou
 with jobs is reported as waiting, not finished. Updates settle for 30 seconds after activity stops,
 with a 30-minute safety cap measured from the oldest pending event or a job's start, whichever is
 earlier. A capped update names still-running jobs and their elapsed time. Pending updates are durable;
-jobs belong to their live worker and do not survive shutdown or replacement.
+running job processes belong to their live worker and do not survive orderly shutdown or replacement.
+With the durable jobs extension, handles and logs remain available on resume. Unfinished records after
+a crash are marked `interrupted`, never automatically rerun; subprocesses may remain alive.
 
 Merges and unmerged closures of owned chat PRs also queue updates, even after the chat finishes.
 Merge updates include completed tasks, newly unblocked dependents and known open stacked PRs.

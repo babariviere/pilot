@@ -104,10 +104,36 @@ test("jobs snapshots contain only running jobs and client fields", () => {
 			{ state: "done" },
 			{ state: "failed" },
 			{ state: "cancelled" },
+			{ state: "interrupted" },
 		]),
 		[job],
 	);
 	assert.deepEqual(runningJobs([]), []);
+});
+
+test("crash-recovered jobs do not hide live jobs or keep the monitor probing", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const interrupted = { ...job, id: "recovered", state: "interrupted", endedAt: 2000, exitCode: null };
+	let registry = [interrupted, job];
+	let reads = 0;
+	const changes: unknown[] = [];
+	const monitor = new JobsMonitor(
+		async () => {
+			reads++;
+			return runningJobs(registry);
+		},
+		(jobs) => changes.push(jobs),
+	);
+	t.after(() => monitor.close());
+	await monitor.refresh();
+	assert.deepEqual(changes, [[job]]);
+	registry = [interrupted];
+	t.mock.timers.tick(1000);
+	await monitor.refresh();
+	assert.deepEqual(changes, [[job], []]);
+	const idleReads = reads;
+	t.mock.timers.tick(10_000);
+	assert.equal(reads, idleReads, "retained interrupted handles are not live jobs");
 });
 
 test("jobs snapshots reject malformed, duplicate and oversized results", () => {

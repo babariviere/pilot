@@ -1,4 +1,4 @@
-/** SDK 1.0.4 exports the MCP extension, not standalone config/auth/connection helpers.
+/** The SDK exports the MCP extension, not standalone config/auth/connection helpers.
  * Isolate the pinned internal compatibility boundary here, as the kernel does for transport injection.
  * Reuse pi's validation, env/command expansion, auth file locks and refresh logic, never copy tokens.
  */
