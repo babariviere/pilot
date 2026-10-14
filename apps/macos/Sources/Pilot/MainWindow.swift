@@ -58,6 +58,9 @@ struct MainWindow: View {
         .sheet(item: $model.missionSheet) { sheet in
             MissionSheetView(sheet: sheet).environmentObject(model)
         }
+        .sheet(item: $model.renamingSession) { target in
+            SessionRenameSheet(target: target).environmentObject(model)
+        }
         .onAppear {
             model.openWindowAction = { openWindow(id: MainWindow.id) }
             NSApp.setActivationPolicy(.regular)
@@ -186,6 +189,8 @@ struct SessionMoreActions: View {
 
     var body: some View {
         Menu {
+            SessionRenameAction(session: session)
+            Divider()
             SessionMissionActions(session: session)
             Divider()
             SessionArchiveAction(session: session)

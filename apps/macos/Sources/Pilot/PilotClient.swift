@@ -374,6 +374,15 @@ final class PilotClient: ObservableObject {
     }
 
     @discardableResult
+    func rename(_ sessionId: String, title: String) async throws -> SessionSummary {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/title", body: RenameSessionRequest(title: title)
+        )
+        update(session)
+        return session
+    }
+
+    @discardableResult
     func archive(_ sessionId: String) async throws -> SessionSummary {
         guard session(sessionId)?.isWorking != true else { throw ClientError("Stop this session before archiving it.") }
         let session: SessionSummary = try await call("api/sessions/\(sessionId)/archive", body: [String: String]())

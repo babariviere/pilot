@@ -315,6 +315,8 @@ const ARCHIVE_INTERVAL_MS = 60_000;
 const UNPUBLISHED_CHECK_MS = 30 * 60_000;
 const COLD_SNAPSHOT_TTL_MS = 5_000;
 const KERNEL_BACKOFF_MAX_MS = 10 * 60_000;
+/** User-chosen chat titles are single-line and bounded so lists stay readable. */
+const MAX_TITLE_LENGTH = 200;
 /** Consecutive kernel failures further apart than this start a fresh backoff. */
 const KERNEL_FAILURE_RESET_MS = 30 * 60_000;
 const COLD_SNAPSHOT_MAX_ENTRIES = 16;
@@ -1447,6 +1449,25 @@ export class SessionManager {
 		}
 	}
 
+	/** User rename. Cancels any pending generated title so it cannot overwrite the chosen one. Activity is unchanged. */
+	async rename(id: string, title: string): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			if (this.closing) throw new Error("pilotd is shutting down");
+			const next = title.trim().replace(/\s+/g, " ").slice(0, MAX_TITLE_LENGTH);
+			if (!next) throw new Error("title is required");
+			const meta = this.require(id);
+			if (meta.title === next && !meta.titlePending) return this.summary(meta);
+			meta.title = next;
+			delete meta.titlePending;
+			await this.save(meta);
+			this.emit(meta);
+			return this.summary(meta);
+		} finally {
+			end();
+		}
+	}
+
 	/** Keep history available; archived shared working directories can later be reclaimed and restored. */
 	async archive(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
@@ -1845,7 +1866,8 @@ export class SessionManager {
 					),
 					cancelled,
 				]);
-				if (!signal.aborted && title?.trim() && title.trim() !== meta.title) {
+				// A user rename clears the pending marker; its title wins over a late generated one.
+				if (!signal.aborted && meta.titlePending === pending && title?.trim() && title.trim() !== meta.title) {
 					meta.title = title.trim();
 					changed = true;
 				}
@@ -1855,6 +1877,7 @@ export class SessionManager {
 				signal.removeEventListener("abort", abort);
 			}
 			if (this.closing) return;
+			if (meta.titlePending !== pending) return;
 			delete meta.titlePending;
 			await this.save(meta);
 			if (changed) this.emit(meta);

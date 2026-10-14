@@ -906,6 +906,11 @@ export interface ChangeModelRequest {
 	thinking?: string;
 }
 
+/** POST /api/sessions/:id/title. Renames a chat; the title is trimmed and must not be empty. */
+export interface RenameSessionRequest {
+	title: string;
+}
+
 /** POST /api/sessions/:id/messages */
 /** One file in a session's changes. */
 export interface ChangedFile {

@@ -94,6 +94,8 @@ final class AppModel: ObservableObject {
     @Published var archiveMissionId: String?
     @Published var sessionActionError: String?
     @Published var pendingSessionActions: Set<String> = []
+    /// The chat whose rename sheet is open.
+    @Published var renamingSession: SessionRenameTarget?
     /// Subagent shown in the Agents tab, per session.
     @Published var selectedSubagents: [String: String] = [:]
     /// Subagent answers the user has opened. Persisted, so restarts do not resurface old answers.
@@ -565,6 +567,16 @@ final class AppModel: ObservableObject {
             } catch {
                 sessionActionError = error.localizedDescription
             }
+        }
+    }
+
+    func renameSession(_ sessionId: String, title: String) {
+        guard !pendingSessionActions.contains(sessionId) else { return }
+        pendingSessionActions.insert(sessionId)
+        Task {
+            defer { pendingSessionActions.remove(sessionId) }
+            do { try await client.rename(sessionId, title: title) }
+            catch { sessionActionError = error.localizedDescription }
         }
     }
 

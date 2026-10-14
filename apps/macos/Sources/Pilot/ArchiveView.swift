@@ -125,6 +125,7 @@ struct ArchiveView: View {
             .padding(.vertical, 8)
             .contextMenu {
                 Button("Read Chat") { model.open(session: session.id) }
+                SessionRenameAction(session: session)
                 SessionArchiveAction(session: session)
             }
         }
