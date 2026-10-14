@@ -158,6 +158,7 @@ struct ChatView: View {
     @StateObject private var rewind = TranscriptRewind()
     @State private var showingJobs = false
     @State private var retryingStartup = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let bottomPadding: CGFloat = 8
     /// Offline performance checks report this, so redundant transcript invalidations are countable.
     static var bodyEvaluations = 0
@@ -288,6 +289,11 @@ struct ChatView: View {
                 }
                 if session.isArchived {
                     ArchivedComposer(session: session)
+                } else if let question = pendingQuestion(transcript) {
+                    QuestionComposer(question: question, draft: composer.draftState, onSend: answer)
+                        // Each question starts with nothing highlighted or ticked.
+                        .id(question.entryID)
+                        .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 } else {
                     Composer(
                         state: composer,
@@ -311,8 +317,10 @@ struct ChatView: View {
                         },
                         onSchedule: session.isArchived ? nil : schedule
                     )
+                    .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 }
             }
+            .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: pendingQuestion(transcript)?.entryID)
             // The transcript scrolls behind this inset, including the gaps around its controls.
             .background(Theme.background)
         }
@@ -335,6 +343,16 @@ struct ChatView: View {
     /// while idle, so it shows too. A starting session shows it once the loading spinner is gone.
     private func showsWorkingIndicator(_ transcript: TranscriptPresentation) -> Bool {
         transcript.working || transcript.compacting || (session.state == "starting" && !feed.loading)
+    }
+
+    /// The agent's question replaces the composer once its run has ended.
+    private func pendingQuestion(_ transcript: TranscriptPresentation) -> AgentQuestion? {
+        guard feed.hasSnapshot, !transcript.working, session.state != "starting", !session.isWorking else { return nil }
+        return transcript.pendingQuestion
+    }
+
+    private func answer(_ message: String) async throws {
+        try await AppModel.shared.client.send(session.id, message: message, mode: .steer)
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {
@@ -514,6 +532,8 @@ struct RowView: View, Equatable {
             ToolGroupView(items: items, expansions: toolExpansions)
         case let .artifact(_, reference):
             ArtifactCard(reference: reference)
+        case let .question(_, question):
+            QuestionRow(question: question)
         case let .error(_, text):
             ErrorRow(text: text, entryID: row.entryID)
         case let .notice(_, text):

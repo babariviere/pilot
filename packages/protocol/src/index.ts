@@ -406,6 +406,19 @@ export interface ArtifactReference {
 	revision: number;
 }
 
+/**
+ * Data of a `pilot.question` transcript entry, written by the agent's ask_user tool. The question is pending until a
+ * later user message; that message is the reply.
+ */
+export interface AgentQuestion {
+	question: string;
+	context?: string;
+	/** At most nine answers, in the order shown and numbered from 1. May be empty for an open question. */
+	options: Array<{ label: string; detail?: string; suggested?: boolean }>;
+	/** Several answers can be picked together. */
+	multiSelect?: boolean;
+}
+
 /** POST /api/projects, PATCH /api/projects/:id (partial). An empty model clears it. */
 export interface ProjectRequest {
 	path: string;

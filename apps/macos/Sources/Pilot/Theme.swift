@@ -397,6 +397,17 @@ extension Theme {
                     removal: .scale(scale: 0.97, anchor: .top).combined(with: .opacity)
                 )
         }
+
+        /// A tray replacing another in place, such as an agent question replacing the composer: the new tray grows
+        /// up from the bottom edge while the old one fades.
+        static func replacement(reduceMotion: Bool) -> AnyTransition {
+            reduceMotion
+                ? .opacity
+                : .asymmetric(
+                    insertion: .scale(scale: 0.96, anchor: .bottom).combined(with: .opacity),
+                    removal: .opacity
+                )
+        }
     }
 }
 

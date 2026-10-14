@@ -63,6 +63,7 @@ import type { WorkspaceContext } from "./policy.ts";
 import { type MissionContext, withPilotPolicy } from "./policy.ts";
 import type { KernelSpec, KernelSubagent } from "./protocol.ts";
 import { PullRequestsDoc, pullRequestProvenance } from "./pull-request-provenance.ts";
+import { createQuestionTool, QUESTION_ENTRY } from "./question-tool.ts";
 import {
 	editQueuedMessage,
 	queueUpdateForDisplay,
@@ -205,6 +206,18 @@ export class KernelSession {
 					)
 			: undefined;
 		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
+		// Pending questions are transcript entries, so a restart or a codemode call shows them too.
+		const questionTool = createQuestionTool(async (callId, question) => {
+			if (!artifactConversation) throw new Error("Questions require a bound conversation");
+			await artifactConversation.submit(
+				{
+					type: "write",
+					requestId: `question:${callId}`,
+					entry: { kind: QUESTION_ENTRY, data: { ...question }, model: [] },
+				},
+				context,
+			);
+		});
 		let wakePrompt = "";
 		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask) {
 			try {
@@ -303,7 +316,7 @@ export class KernelSession {
 					...(audit ? [audit.native] : []),
 				],
 				subagents,
-				hostTools: missionTools,
+				hostTools: [...missionTools, questionTool],
 				...(spec.pilot?.ask
 					? { askArtifacts: artifactOptions }
 					: {

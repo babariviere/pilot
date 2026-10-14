@@ -188,6 +188,27 @@ enum Snapshot {
             return
         }
 
+        if CommandLine.arguments.contains("--questions-only") {
+            // An agent question in place of the composer, single and multi-select, then its answered record.
+            let session = Fixtures.sessions.first { $0.id == "s5" }!
+            for (name, transcript) in [
+                ("question-single", Fixtures.questionTranscript(multiSelect: false, answered: false)),
+                ("question-multi", Fixtures.questionTranscript(multiSelect: true, answered: false)),
+                ("question-answered", Fixtures.questionTranscript(multiSelect: false, answered: true)),
+            ] {
+                await render(
+                    Frame(title: session.title, subtitle: "pilot", status: session.status, session: session) {
+                        ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: transcript))
+                    },
+                    size: CGSize(width: 1000, height: 820),
+                    to: directory.appending(path: "\(name).png")
+                )
+            }
+            print("snapshots written to \(directory.path)")
+            NSApp.terminate(nil)
+            return
+        }
+
         // Capture the real SwiftUI window toolbar, including native shared backgrounds.
         let inspectorTogglesOnly = CommandLine.arguments.contains("--inspector-toggles-only")
         if CommandLine.arguments.contains("--session-toolbar-only") || inspectorTogglesOnly {
@@ -1983,6 +2004,52 @@ enum Fixtures {
                 "id": .number(1), "kind": .string("pi.assistant"),
                 "model": .array([.object(["role": .string("assistant"), "content": .string(text)])]),
             ])]),
+            "tools": .array([]), "inbox": .array([]), "run": .null,
+        ]))
+        return transcript
+    }
+
+    static func questionTranscript(multiSelect: Bool, answered: Bool) -> Transcript {
+        let question: JSONValue = multiSelect
+            ? .object([
+                "question": .string("Which checks should run before I open the PR?"),
+                "context": .string("The full suite takes about six minutes."),
+                "multiSelect": .bool(true),
+                "options": .array([
+                    .object(["label": .string("Typecheck"), "detail": .string("pnpm typecheck"), "suggested": .bool(true)]),
+                    .object(["label": .string("Fast tests"), "detail": .string("pnpm test:fast")]),
+                    .object(["label": .string("Full tests"), "detail": .string("pnpm test, including stress groups")]),
+                    .object(["label": .string("Swift build"), "detail": .string("apps/macos/scripts/build.sh")]),
+                ]),
+            ])
+            : .object([
+                "question": .string("Where should the retry logic live?"),
+                "context": .string("Both callers share the HTTP client, but only the sync worker needs backoff today."),
+                "options": .array([
+                    .object(["label": .string("In the shared HTTP client"),
+                             "detail": .string("Every caller gets retries. Touches four files."), "suggested": .bool(true)]),
+                    .object(["label": .string("Only in the sync worker"),
+                             "detail": .string("Smallest change. The client stays unchanged.")]),
+                    .object(["label": .string("Behind a retry policy option"),
+                             "detail": .string("Callers opt in. Adds a config field.")]),
+                ]),
+            ])
+        func message(_ id: Int, _ kind: String, _ role: String, _ content: JSONValue) -> JSONValue {
+            .object(["id": .number(Double(id)), "kind": .string(kind),
+                     "model": .array([.object(["role": .string(role), "content": content])])])
+        }
+        var entries: [JSONValue] = [
+            message(1, "pi.user", "user", .string("Add retries to the sync worker's uploads.")),
+            message(2, "pi.assistant", "assistant", .string("The upload path goes through the shared HTTP client, so there are two reasonable places for retries.")),
+            .object(["id": .number(3), "kind": .string(AgentQuestion.entryKind), "data": question, "model": .array([])]),
+        ]
+        if answered {
+            entries.append(message(4, "pi.user", "user", .string("Only in the sync worker")))
+            entries.append(message(5, "pi.assistant", "assistant", .string("Retries now live in the sync worker, with jittered backoff.")))
+        }
+        var transcript = Transcript()
+        transcript.apply(.object([
+            "type": .string("snapshot"), "entries": .array(entries),
             "tools": .array([]), "inbox": .array([]), "run": .null,
         ]))
         return transcript
