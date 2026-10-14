@@ -1252,6 +1252,16 @@ for (const failure of ["clone", "factory", "ready"] as const) {
 		assert.equal(f.workers.length, count);
 		assert.equal(reopened.get(created.id)?.canRetryStartup, failure === "clone" ? undefined : true);
 		const pending = (await f.stored(created.id)).pending;
+		const diagnostic = reopened.get(created.id)!.error;
+		const archived = await reopened.archive(created.id);
+		assert.ok(archived.archivedAt);
+		assert.equal(archived.canRetryStartup, undefined);
+		assert.equal(archived.error, diagnostic);
+		assert.deepEqual((await f.stored(created.id)).pending, pending);
+		assert.equal(f.workers.length, count, "archiving must not launch a worker");
+		await reopened.restore(created.id);
+		assert.equal(reopened.get(created.id)?.canRetryStartup, failure === "clone" ? undefined : true);
+		assert.equal(f.workers.length, count, "restoring a failed session must not launch a worker");
 		if (failure === "clone") {
 			await assert.rejects(reopened.retryStartup(created.id), /no retryable/);
 		} else {

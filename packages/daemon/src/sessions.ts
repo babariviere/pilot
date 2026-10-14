@@ -1831,9 +1831,10 @@ export class SessionManager {
 				if (
 					archived &&
 					(meta.working ||
-						meta.initializing ||
-						meta.preparing ||
-						meta.pending?.length ||
+						// A terminal startup failure cannot drain its outbox. Keep those messages and
+						// preparation markers for restoration, but do not mistake them for live work.
+						(!meta.failure && (meta.initializing || meta.preparing || meta.pending?.length)) ||
+						this.starting.has(id) ||
 						worker?.state === "starting" ||
 						worker?.state === "working" ||
 						worker?.busy ||

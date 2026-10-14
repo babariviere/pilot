@@ -68,6 +68,7 @@ agents. Chat history is stored locally using [pi-durable](https://www.npmjs.com/
 If a chat's worker fails to start, fix the reported configuration or extension dependency problem and
 choose **Retry Startup** below the error. Pilot reloads the worker with the original queued messages,
 keeping its history and workspace. Workspace preparation failures cannot use this action.
+You can also archive a failed startup without discarding its queued messages. Restore it before retrying.
 
 ## Working with Pilot
 
