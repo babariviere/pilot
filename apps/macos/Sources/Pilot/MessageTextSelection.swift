@@ -387,7 +387,9 @@ final class MessageSelectionTextView: NSTextView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        selectionShortcut(event) || super.performKeyEquivalent(with: event)
+        // AppKit offers key equivalents to every view in the window, so only claim them while focused.
+        // Otherwise a mounted message would take Command-A and Command-C from the composer.
+        (window?.firstResponder === self && selectionShortcut(event)) || super.performKeyEquivalent(with: event)
     }
 
     override func keyDown(with event: NSEvent) {
