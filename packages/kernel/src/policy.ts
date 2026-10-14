@@ -14,6 +14,8 @@ export interface WorkspaceContext {
 }
 
 export interface PilotContext {
+	/** This project chat has the host-owned memory tools. */
+	projectMemory?: boolean;
 	/** Local github/gh-stack extension detected at worker open. Undefined on older workers. */
 	ghStack?: boolean;
 	workspace?: WorkspaceContext;
@@ -166,6 +168,12 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 		lines.push(
 			"- When a diagram would make an explanation of architecture, workflows or relationships clearer, publish one with the artifact tool without being asked: a simple Mermaid diagram in an HTML artifact, with a short explanation. Skip it for simple answers or when the user wants text only.",
 			"- Artifact preview is optional. If it is unavailable or fails, publish without it.",
+		);
+	}
+	if (context.projectMemory && !context.ask) {
+		lines.push(
+			"- Use memory_note for lasting decisions, user preferences/corrections, non-obvious facts and hard-won outcomes; never task status, secrets or what memory already says.",
+			"- Before finishing a turn that ends a task, consider whether you learned anything lasting worth saving.",
 		);
 	}
 	const workspace = context.workspace;

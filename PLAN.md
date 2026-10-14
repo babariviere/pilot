@@ -514,6 +514,14 @@ aligned power-of-two summary tree under `PILOT_HOME/memory/<project-id>`. Notes 
 280 UTF-8 bytes, with a stable UUID, device UUID, timestamp and origin chat. Only explicit agent notes
 write memory. No automatic outcome or handoff notes, and no multi-device sync yet.
 
+Non-Ask project chats receive bounded wake context and `memory_note`, `memory_recall` and
+`memory_zoom`. All three stay directly declared even in codemode-only mode, outside its inline
+listing budget (which otherwise hides direct tools and can omit the longer note schema first).
+Ask chats and chats without a project receive neither memory tools nor memory guidance. The short
+project prompt asks agents to save lasting decisions, user preferences/corrections, non-obvious
+facts and hard-won outcomes, never task status, secrets or existing memory. Before ending a task,
+agents consider whether anything lasting was learned; this is guidance, not automatic writing.
+
 Records are 2048-byte checksummed JSON slots (including padding for worst-case JSON escaping), so log
 entries and summary nodes use direct positional reads without indexes. Appends and truncations fsync.
 Startup repairs partial or checksum-invalid crash tails; cache parents whose children were lost are
