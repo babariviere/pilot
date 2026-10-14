@@ -515,6 +515,22 @@ export function createDaemonServer(
 			const response: SessionJobsResponse = { jobs: await sessions.jobs(parts[2]!) };
 			return json(res, 200, response);
 		}
+		if (
+			parts[1] === "sessions" &&
+			parts.length === 6 &&
+			parts[3] === "jobs" &&
+			parts[5] === "stop" &&
+			req.method === "POST"
+		) {
+			let jobId: string;
+			try {
+				jobId = decodeURIComponent(parts[4]!);
+			} catch {
+				throw new HttpError(400, "Invalid job id");
+			}
+			await sessions.stopJob(parts[2]!, jobId);
+			return json(res, 202, { ok: true });
+		}
 		if (parts[1] === "sessions" && parts.length === 4 && parts[3] === "history" && req.method === "GET") {
 			const before = url.searchParams.get("before");
 			if (before === null || !/^\d+$/.test(before) || !Number.isSafeInteger(Number(before)))

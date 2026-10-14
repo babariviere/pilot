@@ -118,7 +118,7 @@ private struct InboxSections: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 TrackedItemRow(item: item, actions: actions, now: now, context: projectName(item.projectId),
                                changed: reload)
-                    .inboxCorner(linkedSignal(item))
+                    .inboxCorner(linkedSignal(item), background: linkedSession(item)?.isWaitingOnJobs == true)
             }
             capNote(shown: items.count, total: total)
         }
@@ -150,8 +150,12 @@ private struct InboxSections: View {
     /// A ticket's corner follows the latest chat it started (working, failed, unread, ready to merge), like that
     /// chat's sidebar row. Tickets nothing has started yet stay quiet.
     private func linkedSignal(_ item: TrackedItem) -> SessionSignal? {
-        guard let session = item.sessionId.flatMap({ model.client.session($0) }) else { return nil }
+        guard let session = linkedSession(item) else { return nil }
         return session.signal(unread: model.isUnread(session))
+    }
+
+    private func linkedSession(_ item: TrackedItem) -> SessionSummary? {
+        item.sessionId.flatMap { model.client.session($0) }
     }
 
     /// Slack triage is per project: every project in scope that tracks Slack, in sidebar order.
@@ -228,8 +232,8 @@ final class InboxModel: ObservableObject {
 private extension View {
     /// The sidebar's dithered status corner on an Inbox row. The same trailing room on every row keeps actions
     /// aligned and off the corner's densest cells, so they stay readable and a state change never shifts them.
-    func inboxCorner(_ signal: SessionSignal?) -> some View {
-        padding(.trailing, 24).ditherCorner(signal)
+    func inboxCorner(_ signal: SessionSignal?, background: Bool = false) -> some View {
+        padding(.trailing, 24).ditherCorner(signal, background: background)
     }
 }
 

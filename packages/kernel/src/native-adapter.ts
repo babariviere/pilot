@@ -731,14 +731,44 @@ export class NativeAdapter {
 	/** Read the existing jobs registry without history, model work, or completion claims. */
 	async jobs(): Promise<SessionJob[]> {
 		this.assertOpen();
-		if (this.#ask || !this.session.getCallableToolNames().includes("jobs")) return [];
-		const definition = this.session.getToolDefinition("jobs");
-		const info = this.session.getAllTools().find((tool) => tool.name === "jobs");
-		if (!definition || !info) return [];
-		const tool = wrapRegisteredTool({ definition, sourceInfo: info.sourceInfo }, this.session.extensionRunner);
+		const tool = this.#jobsTool();
+		if (!tool) return [];
 		const result = await tool.execute(`pilot:jobs:${randomUUID()}`, { action: "list" });
 		if (result.isError) throw new Error("Could not list running jobs");
 		return runningJobs(result.structuredContent);
+	}
+
+	/**
+	 * Stop one running job at the user's request. Stopping claims the job, so the jobs extension never announces it;
+	 * the agent hears about it from a job result instead, so it does not keep waiting and its follow-up turn ends the wait.
+	 */
+	async stopJob(id: string): Promise<void> {
+		this.assertOpen();
+		const tool = this.#jobsTool();
+		const job = tool && (await this.jobs()).find((candidate) => candidate.id === id);
+		if (!tool || !job) throw new Error(`No running job ${id}`);
+		const result = await tool.execute(`pilot:jobs:${randomUUID()}`, { action: "stop", id });
+		if (result.isError) throw new Error(`Could not stop ${job.name}`);
+		const state = (result.structuredContent as { state?: unknown } | undefined)?.state;
+		// It ended on its own in between, so the extension reports it as usual.
+		if (state !== "cancelled") return;
+		await this.session.sendCustomMessage(
+			{
+				customType: "jobs.result",
+				display: true,
+				details: { jobs: [result.structuredContent] },
+				content: `The user stopped background job ${job.name} (${job.id}). Output so far: ${job.outputPath}. Do not restart it unless the user asks.`,
+			},
+			{ deliverAs: "followUp", triggerTurn: true },
+		);
+	}
+
+	#jobsTool() {
+		if (this.#ask || !this.session.getCallableToolNames().includes("jobs")) return undefined;
+		const definition = this.session.getToolDefinition("jobs");
+		const info = this.session.getAllTools().find((tool) => tool.name === "jobs");
+		if (!definition || !info) return undefined;
+		return wrapRegisteredTool({ definition, sourceInfo: info.sourceInfo }, this.session.extensionRunner);
 	}
 
 	/** Register or replace a host tool through the SDK, refreshing direct and codemode declarations. */

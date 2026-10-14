@@ -69,6 +69,9 @@ growing from the row's bottom-right corner in the state's tint. Working is a sof
 breath, failed a steady dense red, ready to merge a steady light green. Done and other quiet chats draw nothing.
 Density and motion differ per state, so color is never the only signal, and VoiceOver reads the state. Changes
 dissolve cell by cell, the corner leans toward the pointer, and Reduce Motion keeps it still.
+An agent that is idle while its background jobs run is still Working, drawn with a fainter, half-speed ripple so it
+reads as work in the background. Live work inside a view, such as a chat's working line, uses the same ripple as a
+small strip (`DitherRipple`) instead of a spinner or shimmer.
 
 ## Sidebar
 

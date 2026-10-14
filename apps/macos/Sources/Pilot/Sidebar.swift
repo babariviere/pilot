@@ -314,6 +314,7 @@ struct SessionSidebar: View {
             working: members.filter(\.isWorking).count,
             signal: MissionSidebarSummary.signal(mission: mission, members: members,
                                                  isUnread: { model.isUnread($0) }),
+            waitingOnJobs: MissionSidebarSummary.waitingOnJobs(mission: mission, members: members),
             selected: model.selectedMissionId == mission.id && model.selectedSessionId == nil)
             .selectionDisabled(true)
     }
@@ -619,7 +620,7 @@ struct SessionRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
-        .ditherCorner(signal)
+        .ditherCorner(signal, background: session.isWaitingOnJobs)
         .onHover { hovered = $0 }
         .onPreferenceChange(SessionRepositoryHelpKey.self) { repositoryHelp = $0 }
         .animation(Theme.Motion.quick, value: hovered)

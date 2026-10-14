@@ -1136,6 +1136,11 @@ export interface SessionJobsResponse {
 	jobs: SessionJob[];
 }
 
+/*
+ * POST /api/sessions/:id/jobs/:jobId/stop stops one running job and answers 202 { ok: true }, or 404 once it no longer
+ * runs. The agent receives a job result saying the user stopped it, and its follow-up turn ends the wait.
+ */
+
 /**
  * GET /api/sessions/:id/history?before=<entryId>[&limit=<n>]: retained entries older than the active transcript,
  * which compaction or reset hides from the snapshot. Read from storage without waking a parked session. Entries are

@@ -74,6 +74,8 @@ export type KernelCommand =
 	| { type: "activateAttempt"; requestId: string; attemptId: number }
 	| { type: "inspectChildren"; requestId: string }
 	| { type: "inspectJobs"; requestId: string }
+	/** Stop one running job for the user and tell the agent. Answered by `accepted`, or `error` for an unknown job. */
+	| { type: "stopJob"; requestId: string; jobId: string }
 	| {
 			type: "subagent";
 			requestId: string;

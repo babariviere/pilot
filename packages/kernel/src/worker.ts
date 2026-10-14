@@ -395,6 +395,17 @@ export function runKernelWorker(): void {
 			);
 			return;
 		}
+		if (command.type === "stopJob") {
+			void (async () => {
+				await initialization;
+				if (!session) throw new Error("Kernel has not started");
+				await session.stopJob(command.jobId);
+				await send({ type: "accepted", requestId: command.requestId });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
+			return;
+		}
 		if (command.type === "subagent") {
 			const running = (async () => {
 				await initialization;
