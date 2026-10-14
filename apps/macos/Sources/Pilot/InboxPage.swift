@@ -225,23 +225,27 @@ private extension View {
     }
 }
 
-/// An empty Inbox: a short band of the Home sky, dissolving into the page, above one quiet sentence.
+/// An empty Inbox: a wide dithered coast (`DitherScene`) dissolving into the page, with one quiet sentence at
+/// its foot.
 private struct InboxClearState: View {
     let message: String
 
     var body: some View {
         VStack(spacing: 6) {
-            DitherSky(fade: 0.6)
-                .frame(height: 96)
-                .frame(maxWidth: 440)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.radius))
-            Text("Nothing is waiting on you").font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
+            DitherScene()
+                .frame(height: 260)
+                .frame(maxWidth: .infinity)
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: Theme.radius, topTrailingRadius: Theme.radius))
+            Text("Nothing is waiting on you").font(.pilot(.headline, weight: .semibold))
+                .foregroundStyle(Theme.foreground)
+                .padding(.top, -28)
+                .shadow(color: .white, radius: 6)
+                .shadow(color: .white, radius: 14)
             Text(message).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-                .multilineTextAlignment(.center).frame(maxWidth: 320)
+                .multilineTextAlignment(.center).frame(maxWidth: 340)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
         .accessibilityElement(children: .combine)
     }
 }

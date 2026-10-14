@@ -27,7 +27,7 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/Pilot",
-            resources: [.copy("Resources/Octicons-LICENSE.txt")],
+            resources: [.copy("Resources/Octicons-LICENSE.txt"), .copy("Resources/CoastScene.png")],
             linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]
         ),
         .testTarget(name: "PilotCoreTests", dependencies: ["PilotCore"], path: "Tests/PilotCoreTests"),
