@@ -25,18 +25,17 @@ swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configur
 	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
 	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
 bin="$(swift build --package-path "$here" -c "$configuration" --show-bin-path)"
-swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product PilotWiFi \
+swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product PilotSystemEvents \
 	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
 	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$bin/Pilot" "$app/Contents/MacOS/Pilot"
-helper="$app/Contents/Helpers/PilotWiFi.app"
+helper="$app/Contents/Helpers/PilotSystemEvents.app"
 mkdir -p "$helper/Contents/MacOS"
-cp "$bin/PilotWiFi" "$helper/Contents/MacOS/PilotWiFi"
-cp "$here/Resources/WiFi-Info.plist" "$helper/Contents/Info.plist"
-# Use a stable Developer ID identity for persistent Location authorization across updates.
+cp "$bin/PilotSystemEvents" "$helper/Contents/MacOS/PilotSystemEvents"
+cp "$here/Resources/SystemEvents-Info.plist" "$helper/Contents/Info.plist"
 codesign --force --sign "${PILOT_CODESIGN_IDENTITY:--}" "$helper"
 # SwiftPM resource bundles (libghostty runtime resources: terminfo, shell integration).
 for bundle in "$bin"/*.bundle; do

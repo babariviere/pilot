@@ -4,12 +4,12 @@
  */
 import assert from "node:assert/strict";
 import {
-	ScheduleDetection,
 	probeReachability,
+	ScheduleDetection,
 	sampleSystemWake,
 } from "../../packages/daemon/src/schedule-detection.ts";
 import { SubprocessPool } from "../../packages/daemon/src/subprocess.ts";
-import { SystemEventsDetection } from "../../packages/daemon/src/wifi-detection.ts";
+import { SystemEventsDetection } from "../../packages/daemon/src/system-events-detection.ts";
 
 const seconds = Number(process.argv[2] ?? 65);
 const mode = process.argv[3] ?? "all";

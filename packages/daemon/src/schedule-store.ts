@@ -82,7 +82,6 @@ export class ScheduleStore {
 				title: item.title,
 				kind: item.target.kind,
 				trigger: item.trigger,
-				networkNames: item.networkNames ? [...item.networkNames] : undefined,
 				at: item.state === "failed" ? item.updatedAt : item.at,
 				state: item.state as "pending" | "failed",
 				error: item.error,

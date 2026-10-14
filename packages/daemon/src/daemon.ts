@@ -2,23 +2,23 @@
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { pollLinear } from "./linear-source.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
-import { createDaemonServer } from "./server.ts";
-import { SessionManager } from "./sessions.ts";
-import { TerminalManager } from "./terminals.ts";
+import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { ScheduleDetection } from "./schedule-detection.ts";
-import { SystemEventsDetection } from "./wifi-detection.ts";
-import { TrackedItemStore } from "./tracked-items.ts";
-import { SourceRegistry } from "./sources.ts";
-import { PiSourceMcpClient } from "./source-mcp.ts";
-import { pollLinear } from "./linear-source.ts";
+import { createDaemonServer } from "./server.ts";
+import { SessionManager } from "./sessions.ts";
 import { createSlackPoller } from "./slack-source.ts";
+import { PiSourceMcpClient } from "./source-mcp.ts";
+import { SourceRegistry } from "./sources.ts";
+import { SystemEventsDetection } from "./system-events-detection.ts";
+import { TerminalManager } from "./terminals.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 import { untrackedStats } from "./untracked-stats.ts";
 
 const config = loadConfig();
@@ -80,15 +80,14 @@ missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
-const wifiDetection = new SystemEventsDetection();
-const scheduleDetection = new ScheduleDetection({ power: wifiDetection });
+const systemEventsDetection = new SystemEventsDetection();
+const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
 const schedules = new ScheduleService(scheduleStore, {
 	sessions,
 	projects,
 	missions: missionStore,
 	trackedItems,
 	triggers: scheduleDetection,
-	wifi: wifiDetection,
 });
 await schedules.load();
 schedules.start();
@@ -119,7 +118,7 @@ async function stop(): Promise<void> {
 	watchdog.stop();
 	server.close();
 	await schedules.stop();
-	wifiDetection.stop();
+	systemEventsDetection.stop();
 	await scheduleStore.close();
 	stopMemoryProjects();
 	await tracking.stop();

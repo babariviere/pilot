@@ -6,16 +6,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ScheduledItem, ServerMessage, SessionSummary, WiFiStatus } from "@pilot/protocol";
+import type { ScheduledItem, ServerMessage, SessionSummary } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
-import { TrackedItemStore } from "./tracked-items.ts";
 import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
-import type { ModelCatalog } from "./models.ts";
 import type { TerminalManager } from "./terminals.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 
 test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-schedules-api-"));
@@ -55,23 +55,7 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		},
 	]);
 	const ticket = (await trackedItems.list({ projectId: project.id })).items[0]!;
-	let authorizationRequests = 0;
-	const wifiValue: WiFiStatus = {
-		authorization: "not_determined",
-		available: true,
-		currentNetwork: null,
-		knownNetworks: [],
-	};
-	const wifi = {
-		status: async () => wifiValue,
-		requestAuthorization: async () => {
-			authorizationRequests++;
-			return wifiValue;
-		},
-		subscribe: () => () => {},
-		setActive() {},
-	};
-	const schedules = new ScheduleService(store, { sessions, projects, trackedItems, wifi });
+	const schedules = new ScheduleService(store, { sessions, projects, trackedItems });
 	await schedules.load();
 	schedules.start();
 	const server = createDaemonServer(
@@ -119,30 +103,22 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		}
 	};
 	const first = await connect();
-	assert.deepEqual(await (await api("/schedules/wifi")).json(), wifiValue);
-	assert.equal(authorizationRequests, 0);
-	assert.deepEqual(await (await api("/schedules/wifi", "POST", {})).json(), wifiValue);
-	assert.equal(authorizationRequests, 1);
-	assert.equal((await api("/schedules/wifi", "POST", {})).status, 200);
-	assert.equal(
-		(
-			await fetch(`http://127.0.0.1:${port}/api/schedules/wifi`, {
-				method: "POST",
-				headers: { origin: "https://untrusted.example" },
-			})
-		).status,
-		403,
-	);
+	assert.equal((await api("/schedules/wifi")).status, 404);
+	assert.equal((await api("/schedules/wifi", "POST", {})).status, 404);
 	await waitFor(() => first.messages.some((m) => m.type === "schedules" && m.schedules.length === 0));
 	first.ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: project.id }));
 	const request = { trigger: "on_wake", target: { kind: "message", sessionId: "existing", message: "Continue" } };
 	assert.equal((await api("/schedules", "POST", null)).status, 400);
 	assert.equal((await api("/schedules", "POST", { ...request, trigger: "bogus" })).status, 400);
 	assert.equal((await api("/schedules/unknown")).status, 404);
+	for (const trigger of ["on_join_network", "on_leave_network", "removed"])
+		assert.equal((await api("/schedules", "POST", { ...request, trigger })).status, 400);
 	const response = await api("/schedules", "POST", request);
 	assert.equal(response.status, 201);
 	const item = (await response.json()) as ScheduledItem;
 	assert.equal(item.projectId, project.id);
+	for (const trigger of ["on_join_network", "on_leave_network", "removed"])
+		assert.equal((await api(`/schedules/${item.id}`, "PATCH", { trigger })).status, 400);
 	await waitFor(() => first.messages.some((m) => m.type === "schedules" && m.schedules.some((s) => s.id === item.id)));
 	await waitFor(() => first.messages.some((m) => m.type === "dashboard" && m.dashboard.scheduled.total === 1));
 	const list = (await (await api(`/schedules?projectId=${project.id}`)).json()) as ScheduledItem[];

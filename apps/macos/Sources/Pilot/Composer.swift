@@ -309,8 +309,7 @@ struct Composer: View {
             }
             Spacer(minLength: 8)
             if let onSchedule {
-                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker,
-                                  sendNow: { send(.steer) }) { when in
+                ComposerSendLater(state: state, draft: state.draftState, modelPicker: modelPicker) { when in
                     guard state.canSend(changingModel: modelPicker.changing) else { return }
                     onSchedule(state.attachments.message(text: state.trimmed), when)
                 }
@@ -423,12 +422,10 @@ private struct ComposerSendLater: View {
     @ObservedObject var state: ComposerState
     @ObservedObject var draft: ComposerDraftState
     @ObservedObject var modelPicker: ChatModelPickerState
-    /// The Send button's action, offered by the Wi-Fi triggers when their condition already holds.
-    let sendNow: () -> Void
     let schedule: (ScheduleWhen) -> Void
 
     var body: some View {
-        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), sendNow: sendNow, schedule: schedule)
+        SendLaterMenu(disabled: !state.canSend(changingModel: modelPicker.changing), schedule: schedule)
     }
 }
 

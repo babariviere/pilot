@@ -66,26 +66,42 @@ import Testing
     #expect(try JSONDecoder().decode(DashboardScheduledTrigger.self, from: Data(#""on_wake""#.utf8)) == .onWake)
 }
 
-@Test func wifiScheduleModelsMirrorProtocol() throws {
-    for trigger in [ScheduleTrigger.onJoinNetwork, .onLeaveNetwork] {
-        let request = ScheduleRequest(trigger: trigger, networkNames: ["Office", "Home"],
-                                      target: .message(sessionId: "s", message: "Continue"))
-        let data = try JSONEncoder().encode(request)
-        let decoded = try JSONDecoder().decode(ScheduleRequest.self, from: data)
-        #expect(decoded.trigger == trigger)
-        #expect(decoded.networkNames == ["Office", "Home"])
+@Test func legacyNetworkSchedulesDecodeAsCancelledWithoutConversion() throws {
+    #expect(try JSONDecoder().decode(DashboardScheduledTrigger.self, from: Data(#""future_trigger""#.utf8)) == .onBack)
+    for trigger in ["on_join_network", "on_leave_network", "removed"] {
+        for state in ["pending", "dispatching", "failed", "fired", "cancelled"] {
+            let record: [String: Any] = [
+                "id": "legacy", "revision": 1, "title": "Work", "projectId": "p",
+                "trigger": trigger, "networkNames": ["Example"], "state": state,
+                "createdAt": 1000, "updatedAt": 1000,
+                "target": ["kind": "message", "sessionId": "s", "message": "Continue"],
+            ]
+            let data = try JSONSerialization.data(withJSONObject: record)
+            let item = try JSONDecoder().decode(ScheduledItem.self, from: data)
+            #expect(item.trigger == .removed)
+            #expect(item.state == .cancelled)
+            #expect(item.error == "Wi-Fi triggers were removed")
+            guard case let .message(sessionId, message) = item.target else {
+                Issue.record("Expected preserved message target"); return
+            }
+            #expect(sessionId == "s" && message == "Continue")
+            let encoded = try JSONEncoder().encode(item)
+            let roundTrip = try JSONDecoder().decode(ScheduledItem.self, from: encoded)
+            #expect(roundTrip.trigger == .removed && roundTrip.state == .cancelled)
+            let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+            #expect(object?["networkNames"] == nil)
+            let update = try JSONSerialization.data(withJSONObject: ["type": "schedules", "schedules": [record]])
+            guard case let .schedules(items) = try ServerUpdate.decode(update) else {
+                Issue.record("Expected legacy schedules update"); return
+            }
+            #expect(items.count == 1 && items[0].state == .cancelled)
+        }
+        let dashboard = try JSONDecoder().decode(DashboardScheduledItem.self, from: JSONSerialization.data(withJSONObject: [
+            "id": "legacy", "title": "Work", "kind": "chat", "trigger": trigger,
+            "networkNames": ["Example"], "state": "pending",
+        ]))
+        #expect(dashboard.trigger == .removed)
+        #expect(dashboard.state == .cancelled)
+        #expect(dashboard.error == "Wi-Fi triggers were removed")
     }
-    let patch = SchedulePatch(networkNames: ["Other"], expectedRevision: 2)
-    #expect(try JSONDecoder().decode(SchedulePatch.self, from: JSONEncoder().encode(patch)).networkNames == ["Other"])
-    let data = Data(#"""
-    {"authorization":"denied","available":true,"currentNetwork":null,"knownNetworks":[]}
-    """#.utf8)
-    let status = try JSONDecoder().decode(WiFiStatus.self, from: data)
-    #expect(status.authorization == .denied)
-    #expect(status.currentNetwork == nil)
-    let dashboard = try JSONDecoder().decode(DashboardScheduledItem.self, from: Data(#"""
-    {"id":"n","title":"Work","kind":"chat","trigger":"on_join_network","networkNames":["Office"],"state":"pending"}
-    """#.utf8))
-    #expect(dashboard.trigger == .onJoinNetwork)
-    #expect(dashboard.networkNames == ["Office"])
 }

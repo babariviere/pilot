@@ -26,16 +26,27 @@ parentPort!.on("message", ({ id, method, item, expected, now }) => {
 			db.exec("BEGIN IMMEDIATE");
 			try {
 				for (const row of list()) {
-					const interrupted = row.state === "dispatching";
+					// Decode old triggers only at the storage boundary. Never turn them into live work.
+					const removed = ["on_join_network", "on_leave_network"].includes(String(row.trigger));
+					const interrupted = !removed && row.state === "dispatching";
 					const legacyWake = row.state === "pending" && row.wakeObserved && !row.sleepObserved;
 					if (legacyWake) delete row.wakeObserved;
+					if (removed) {
+						row.trigger = "removed";
+						row.state = "cancelled";
+						row.error = "Wi-Fi triggers were removed";
+						row.updatedAt = now;
+						delete (row as ScheduledItem & { networkNames?: unknown }).networkNames;
+						delete row.sleepObserved;
+						delete row.wakeObserved;
+					}
 					if (interrupted) {
 						row.state = "failed";
 						row.error =
 							"Dispatch interrupted by restart; delivery is uncertain. Check the chats before rescheduling.";
 						row.updatedAt = now;
 					}
-					if (legacyWake || interrupted) {
+					if (removed || legacyWake || interrupted) {
 						row.revision++;
 						db.prepare("UPDATE schedules SET revision=?,state=?,item=? WHERE id=?").run(
 							row.revision,

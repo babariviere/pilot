@@ -2,19 +2,17 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
-import type { ScheduleRequest, SpawnRequest } from "@pilot/protocol";
+import { type TestContext, test } from "node:test";
+import type { ScheduledItem, ScheduleRequest, SpawnRequest } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { ScheduleStore } from "./schedule-store.ts";
-import { TrackedItemStore } from "./tracked-items.ts";
-import { SystemEventsDetection } from "./wifi-detection.ts";
-import type { WiFiStatus } from "@pilot/protocol";
 import {
-	ScheduleService,
 	type ScheduleClock,
+	ScheduleService,
 	type ScheduleTriggerEvent,
 	type ScheduleTriggerSource,
 } from "./schedules.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 
 class FakeClock implements ScheduleClock {
 	time = 1000;
@@ -75,11 +73,6 @@ async function fixture(t: TestContext, initialOnline = false) {
 			]);
 	const clock = new FakeClock();
 	const triggers = new FakeTriggers();
-	let reportWiFi!: (value: WiFiStatus) => void;
-	const wifi = new SystemEventsDetection(async (onStatus) => {
-		reportWiFi = onStatus;
-		return { send() {}, close() {} };
-	});
 	triggers.online = initialOnline;
 	const calls: Array<{
 		kind: string;
@@ -104,7 +97,6 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 	const deps = {
-		wifi,
 		trackedItems,
 		clock,
 		triggers,
@@ -123,16 +115,12 @@ async function fixture(t: TestContext, initialOnline = false) {
 	const settle = () => service.signal({ type: "online", online: triggers.online });
 	await settle();
 	t.after(async () => {
-		wifi.stop();
 		await service.stop();
 		await store.close();
 		await trackedItems.close();
 		await rm(home, { recursive: true, force: true });
 	});
 	return {
-		wifi,
-		reportWiFi: (currentNetwork: string | null, authorization: WiFiStatus["authorization"] = "authorized") =>
-			reportWiFi({ authorization, available: true, currentNetwork, knownNetworks: ["Office", "Home"] }),
 		clock,
 		triggers,
 		calls,
@@ -183,71 +171,73 @@ const chat = (extra: Partial<ScheduleRequest> = {}): ScheduleRequest => ({
 	...extra,
 });
 
-test("Wi-Fi schedules fire once on next matching transition, without reachability or GUI", async (t) => {
+test("removed network triggers are rejected on create and edit", async (t) => {
 	const f = await fixture(t);
-	const join = await f.service.create(
-		chat({ trigger: "on_join_network", networkNames: ["Office", "Home", "Office"] }),
-	);
-	const leave = await f.service.create(chat({ trigger: "on_leave_network", networkNames: ["Office"] }));
-	await f.settle();
-	assert.equal(f.triggers.active, false); // Wi-Fi-only work needs no wake sampling / HTTPS probes.
-	f.reportWiFi("Office"); // Initial already-connected observation must not fire.
-	await f.settle();
-	assert.equal(f.calls.length, 0);
-	f.reportWiFi("Office"); // roaming on the same name
-	await f.settle();
-	assert.equal(f.calls.length, 0);
-	f.reportWiFi("Home"); // A→B fires leave A and join B.
-	await f.settle();
-	assert.equal(f.calls.length, 2);
-	assert.equal(f.service.require(join.id).state, "fired");
-	assert.equal(f.service.require(leave.id).state, "fired");
-	f.reportWiFi("Office");
-	await f.settle();
-	assert.equal(f.calls.length, 2);
+	const item = await f.service.create(chat());
+	for (const trigger of ["on_join_network", "on_leave_network", "removed"]) {
+		await assert.rejects(f.service.create(chat({ trigger } as Partial<ScheduleRequest>)), /Invalid schedule trigger/);
+		await assert.rejects(f.service.update(item.id, { trigger } as never), /Invalid schedule trigger/);
+	}
+	await assert.rejects(f.service.create({ ...chat(), networkNames: ["Example"] } as ScheduleRequest), /removed/);
+	await assert.rejects(f.service.update(item.id, { networkNames: ["Example"] } as never), /removed/);
+	assert.equal(f.service.require(item.id).trigger, "on_back");
 });
 
-test("Wi-Fi edit, cancellation, authorization loss and restart preserve one-shot semantics", async (t) => {
+test("legacy network records cancel durably on load, never dispatch, and can be dismissed", async (t) => {
 	const f = await fixture(t, true);
-	const leave = await f.service.create(chat({ trigger: "on_leave_network", networkNames: ["Office"] }));
-	const cancelled = await f.service.create(chat({ trigger: "on_join_network", networkNames: ["Home"] }));
-	await f.settle();
-	f.reportWiFi("Office");
-	await f.settle();
-	await f.service.remove(cancelled.id);
-	f.reportWiFi(null, "denied"); // Not a leave.
-	f.reportWiFi("Home"); // Restored authorization is a baseline.
-	await f.settle();
-	assert.equal(f.calls.length, 0);
-	const edited = await f.service.update(leave.id, { networkNames: ["Home"], expectedRevision: 1 });
-	assert.deepEqual(edited.networkNames, ["Home"]);
-	assert.deepEqual(f.store.dashboard("p").find((item) => item.id === leave.id)?.networkNames, ["Home"]);
+	await f.service.stop();
+	const ids: string[] = [];
+	for (const trigger of ["on_join_network", "on_leave_network"]) {
+		for (const state of ["pending", "dispatching", "failed", "fired", "cancelled"] as const) {
+			const id = `${trigger}-${state}`;
+			ids.push(id);
+			await f.store.create({
+				id,
+				revision: 1,
+				title: "Legacy work",
+				projectId: "p",
+				trigger,
+				networkNames: ["Example"],
+				state,
+				createdAt: 0,
+				updatedAt: 0,
+				sleepObserved: true,
+				wakeObserved: true,
+				target:
+					trigger === "on_join_network"
+						? chat().target
+						: { kind: "message", sessionId: "existing", message: "Continue" },
+			} as unknown as ScheduledItem);
+		}
+	}
 	await f.restart();
-	assert.deepEqual(f.service.require(leave.id).networkNames, ["Home"]);
-	f.reportWiFi("Home"); // No synthetic restart edge.
-	await f.settle();
+	for (const id of ids) {
+		const row = f.service.require(id);
+		assert.equal(row.trigger, "removed"); // A tombstone, never another runnable trigger.
+		assert.equal(row.state, "cancelled");
+		assert.equal(row.error, "Wi-Fi triggers were removed");
+		assert.equal(row.revision, 2);
+		assert.equal(row.updatedAt, f.clock.now());
+		assert.equal("networkNames" in row, false);
+		assert.equal(row.sleepObserved, undefined);
+		assert.equal(row.wakeObserved, undefined);
+	}
+	assert.deepEqual(f.store.dashboard("p"), []);
+	assert.equal(f.triggers.active, false);
+	await f.service.signal({ type: "sleep", at: f.clock.now() + 1 });
+	await f.service.signal({ type: "wake", full: true });
+	await f.service.signal({ type: "online", online: false });
+	await f.service.signal({ type: "online", online: true });
+	await f.restart();
 	assert.equal(f.calls.length, 0);
-	f.reportWiFi(null); // Wi-Fi disabled even if overall reachability stays online.
-	await f.settle();
-	assert.equal(f.calls.length, 1);
-	assert.equal(f.service.require(cancelled.id).state, "cancelled");
-});
-
-test("Wi-Fi names validate UTF-8 length, remain exact and clear when switching triggers", async (t) => {
-	const f = await fixture(t);
-	for (const networkNames of [undefined, [], [""], ["a".repeat(33)], ["é".repeat(17)], Array(33).fill("Home"), [123]])
-		await assert.rejects(
-			f.service.create(chat({ trigger: "on_join_network", networkNames } as Partial<ScheduleRequest>)),
-			/networkNames/,
-		);
-	await assert.rejects(f.service.create(chat({ networkNames: ["Home"] })), /only valid/);
-	const saved = await f.service.create(
-		chat({ trigger: "on_join_network", networkNames: [" Home ", "Home", "home", "Home"] }),
-	);
-	assert.deepEqual(saved.networkNames, [" Home ", "Home", "home"]);
-	const edited = await f.service.update(saved.id, { trigger: "on_online" });
-	assert.equal(edited.networkNames, undefined);
-	await assert.rejects(f.service.update(saved.id, { trigger: "on_leave_network" }), /networkNames/);
+	const snapshot = JSON.parse(await f.service.snapshot()) as ScheduledItem[];
+	assert.ok(snapshot.every((row) => row.state === "cancelled" && row.revision === 2 && row.trigger === "removed"));
+	const ws = JSON.parse(await f.service.snapshot(undefined, true));
+	assert.deepEqual(ws.schedules, snapshot);
+	await assert.rejects(f.service.update(ids[0], { trigger: "on_online" }), /Only pending/);
+	await f.service.remove(ids[0]);
+	await f.restart();
+	assert.throws(() => f.service.require(ids[0]), NotFound);
 });
 
 test("scheduled tickets survive edits and restart, then bind on dispatch exactly once", async (t) => {
