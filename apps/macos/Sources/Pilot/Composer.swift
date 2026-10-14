@@ -101,7 +101,7 @@ final class ComposerState: ObservableObject {
         error = nil
         defer { mutatingHeldMessages = false }
         do { try await perform() }
-        catch { error = error.localizedDescription }
+        catch { self.error = error.localizedDescription }
     }
 
     func discardHeldMessages(_ id: Int?, perform: (Int?) async throws -> Void) async {
