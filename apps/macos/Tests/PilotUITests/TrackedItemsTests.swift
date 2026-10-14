@@ -8,11 +8,15 @@ private let ms = now.timeIntervalSince1970 * 1000
 
 private func linear(_ id: String = "i1", statusType: String = "started", priority: Double = 2,
                     sessionIds: [String]? = nil, missionIds: [String]? = nil,
-                    branch: JSONValue = .string("eng-12-fix-export")) -> TrackedItem {
-    TrackedItem(id: id, projectId: "p", kind: .linear, externalId: "uuid-\(id)", title: "Export crashes on large files",
+                    branch: JSONValue = .string("eng-12-fix-export"), startOutcome: String? = nil) -> TrackedItem {
+    var metadata: [String: JSONValue] = ["identifier": .string("ENG-12"), "statusType": .string(statusType),
+                                         "priority": .number(priority), "gitBranchName": branch]
+    if let startOutcome {
+        metadata["linearStart"] = .object(["outcome": .string(startOutcome), "attemptedAt": .number(ms)])
+    }
+    return TrackedItem(id: id, projectId: "p", kind: .linear, externalId: "uuid-\(id)", title: "Export crashes on large files",
                 url: "https://linear.app/acme/issue/ENG-12", status: "In Progress",
-                metadata: ["identifier": .string("ENG-12"), "statusType": .string(statusType),
-                           "priority": .number(priority), "gitBranchName": branch],
+                metadata: metadata,
                 sessionId: sessionIds?.last, missionId: missionIds?.last, sessionIds: sessionIds, missionIds: missionIds,
                 createdAt: ms - 7_200_000, updatedAt: ms - 7_200_000)
 }
@@ -27,12 +31,36 @@ private let slack = TrackedItem(
 @Test func trackedItemLabelsReadNaturally() {
     #expect(TrackedItemText.identifier(linear()) == "ENG-12")
     #expect(TrackedItemText.identifier(slack) == "#bugs")
-    #expect(TrackedItemText.subtitle(linear(), now: now) == "In Progress · High priority · updated 2h ago")
+    #expect(TrackedItemText.subtitle(linear(), now: now) == "In Progress · High · 2h ago")
     #expect(TrackedItemText.subtitle(slack, now: now) == "#bugs · High severity · 10m ago")
     #expect(TrackedItemText.linearGroup(linear(statusType: "started")) == .inProgress)
     #expect(TrackedItemText.linearGroup(linear(statusType: "backlog")) == .todo)
     #expect(TrackedItemText.linearGroup(linear(statusType: "canceled")) == .done)
     #expect(TrackedItemText.priority(linear(priority: 0)) == nil)
+}
+
+@Test func linearRowsLeaveOutWhatTheirGroupAlreadySays() {
+    // The group header names the status, and Medium or Low priority would repeat on most rows.
+    #expect(TrackedItemText.subtitle(linear(), now: now, group: .inProgress) == "High · 2h ago")
+    #expect(TrackedItemText.subtitle(linear(priority: 3), now: now, group: .inProgress) == "2h ago")
+    #expect(TrackedItemText.subtitle(linear(priority: 1), now: now, group: .todo) == "In Progress · Urgent · 2h ago")
+    #expect(TrackedItemText.priority(linear(priority: 4)) == "Low")
+    #expect(TrackedItemText.notablePriority(linear(priority: 4)) == nil)
+    #expect(TrackedItemText.notablePriority(linear(priority: 1)) == "Urgent")
+}
+
+@Test func linearStartErrorShowsOnlyWhileTheTicketIsUnstarted() {
+    func item(_ statusType: String, outcome: String) -> TrackedItem {
+        linear(statusType: statusType, startOutcome: outcome)
+    }
+    #expect(TrackedItemText.linearStartError(item("unstarted", outcome: "error")) == "Couldn't move to In progress")
+    #expect(TrackedItemText.linearStartError(item("backlog", outcome: "error")) != nil)
+    #expect(TrackedItemText.linearStartError(item("started", outcome: "error")) == nil)
+    #expect(TrackedItemText.linearStartError(item("completed", outcome: "error")) == nil)
+    #expect(TrackedItemText.linearStartError(item("unstarted", outcome: "moved")) == nil)
+    #expect(TrackedItemText.linearStartError(item("unstarted", outcome: "skipped")) == nil)
+    #expect(TrackedItemText.linearStartError(linear(statusType: "unstarted")) == nil)
+    #expect(TrackedItemText.linearStartError(slack) == nil)
 }
 
 @Test func trackedPromptsQuoteTicketsAsUntrustedContent() throws {
