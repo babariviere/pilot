@@ -102,19 +102,23 @@ public struct TrackedItemList: Codable, Equatable, Sendable {
     public init(items: [TrackedItem], total: Int) { self.items = items; self.total = total }
 }
 public struct TrackedItemPatch: Encodable, Sendable {
+    /// Confirmed Start chat/mission only. Ordinary linking remains read-only.
+    public var start: Bool?
     public var dismissed: Bool?
     public var sessionId: String?
     public var missionId: String?
     public var clearSession: Bool
     public var clearMission: Bool
     public init(dismissed: Bool? = nil, sessionId: String? = nil, missionId: String? = nil,
-                clearSession: Bool = false, clearMission: Bool = false) {
+                clearSession: Bool = false, clearMission: Bool = false, start: Bool? = nil) {
+        self.start = start
         self.dismissed = dismissed; self.sessionId = sessionId; self.missionId = missionId
         self.clearSession = clearSession; self.clearMission = clearMission
     }
-    enum CodingKeys: String, CodingKey { case dismissed, sessionId, missionId }
+    enum CodingKeys: String, CodingKey { case dismissed, sessionId, missionId, start }
     public func encode(to encoder: any Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(start, forKey: .start)
         try values.encodeIfPresent(dismissed, forKey: .dismissed)
         if clearSession { try values.encodeNil(forKey: .sessionId) }
         else { try values.encodeIfPresent(sessionId, forKey: .sessionId) }

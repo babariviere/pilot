@@ -36,6 +36,7 @@ type Row = {
 	session_id: string | null;
 	mission_id: string | null;
 	links: string | null;
+	linear_start: string | null;
 	created_at: number;
 	updated_at: number;
 };
@@ -86,6 +87,13 @@ export class TrackedItemDisk {
 				.some((column) => column.name === "links")
 		)
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN links TEXT");
+		if (
+			!this.db
+				.prepare("PRAGMA table_info(tracked_items)")
+				.all()
+				.some((column) => column.name === "linear_start")
+		)
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_start TEXT");
 		this.db.exec(`
 			CREATE INDEX IF NOT EXISTS tracked_active_project_kind ON tracked_items(project_id, kind, dismissed, updated_at DESC, id) WHERE active=1;
 			CREATE INDEX IF NOT EXISTS tracked_active_project ON tracked_items(project_id, dismissed, updated_at DESC, id) WHERE active=1;
@@ -283,6 +291,20 @@ export class TrackedItemDisk {
 		}
 		if (changed) this.emit(projectId);
 	}
+	/** Local start outcome is independent of source-owned metadata and timestamps. */
+	linearStartResult(id: string, outcome: "moved" | "skipped" | "error"): void {
+		if (!["moved", "skipped", "error"].includes(outcome)) throw new Error("Invalid start outcome");
+		const item = this.require(id);
+		if (item.kind !== "linear") return;
+		const result = {
+			outcome,
+			attemptedAt: Date.now(),
+			...(outcome === "error" ? { error: "Couldn't move ticket to In progress." } : {}),
+		};
+		this.db.prepare("UPDATE tracked_items SET linear_start=? WHERE id=?").run(JSON.stringify(result), id);
+		this.emit(item.projectId);
+	}
+
 	patch(id: string, patch: TrackedItemPatch): TrackedItem {
 		validatePatch(patch);
 		const item = this.require(id);
@@ -351,7 +373,10 @@ function decode(row: Row): TrackedItem {
 		title: row.title,
 		url: row.url,
 		status: row.status,
-		metadata: JSON.parse(row.metadata),
+		metadata: {
+			...JSON.parse(row.metadata),
+			...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}),
+		},
 		dismissed: !!row.dismissed,
 		...(row.session_id ? { sessionId: row.session_id } : {}),
 		...(row.mission_id ? { missionId: row.mission_id } : {}),
@@ -409,8 +434,17 @@ function validateInput(item: TrackedInput): void {
 export function validatePatch(value: unknown): asserts value is TrackedItemPatch {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid tracked item patch");
 	const patch = value as TrackedItemPatch;
-	if (Object.keys(value).some((key) => !["dismissed", "sessionId", "missionId"].includes(key)))
+	if (Object.keys(value).some((key) => !["dismissed", "sessionId", "missionId", "start"].includes(key)))
 		throw new Error("Unknown tracked item field");
+	if (patch.start !== undefined && typeof patch.start !== "boolean") throw new Error("start must be a boolean");
+	if (
+		patch.start &&
+		(Number(!!patch.sessionId) + Number(!!patch.missionId) !== 1 ||
+			patch.dismissed !== undefined ||
+			patch.sessionId === null ||
+			patch.missionId === null)
+	)
+		throw new Error("start requires exactly one chat or mission link");
 	if (patch.dismissed !== undefined && typeof patch.dismissed !== "boolean")
 		throw new Error("dismissed must be a boolean");
 	for (const link of [patch.sessionId, patch.missionId])

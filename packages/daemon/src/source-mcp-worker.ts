@@ -8,6 +8,7 @@ import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@eare
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
+	validSourceArguments,
 	sourceRateLimit,
 	SourceRateLimited,
 	SourceToolError,
@@ -70,6 +71,7 @@ let reply: {
 try {
 	const { kind, tool: logicalTool, args } = workerData;
 	const name = dedicatedSourceTool(kind, logicalTool);
+	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear state update");
 	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
 	// Global user config only. A repository cannot execute a new MCP server through tracking settings.
@@ -93,7 +95,11 @@ try {
 	if (controller.signal.aborted) throw controller.signal.reason;
 	await connection.getClient();
 	const tool = connection.tools.find((tool) => tool.name === name);
-	if (!tool || tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true)
+	if (
+		!tool ||
+		(logicalTool !== "startIssue" &&
+			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
+	)
 		throw new SetupError("Tracking tool is missing or advertises writes");
 	const result = await connection.callTool(name, args, { signal: controller.signal, timeoutMs: 30_000 });
 	reply = { value: decodeMcpResult(result) };

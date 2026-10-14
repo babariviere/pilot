@@ -1,4 +1,4 @@
-/** External text is untrusted. Tracking never starts agents or writes to external services. */
+/** External text is untrusted. Tracking never starts agents. Only a confirmed Linear start may update its workflow state. */
 export type TrackedKind = "linear" | "slack";
 export type TrackingJson = null | boolean | number | string | TrackingJson[] | { [key: string]: TrackingJson };
 
@@ -20,6 +20,7 @@ export interface TrackedItem {
 	title: string;
 	url: string;
 	status: string;
+	/** metadata.linearStart: local { outcome: moved|skipped|error, attemptedAt, error? }, preserved by sync. */
 	metadata: Record<string, TrackingJson>;
 	dismissed: boolean;
 	/** Latest chat and mission started from (or linked to) this item. */
@@ -31,9 +32,11 @@ export interface TrackedItem {
 	createdAt: number;
 	updatedAt: number;
 }
-/** Local actions only. A link adds to the item's bound chats or missions; null clears them all.
+/** Local actions, except the explicit Linear start below. A link adds to the item's bound chats or missions; null clears them all.
  * Source refreshes never overwrite these fields. */
 export interface TrackedItemPatch {
+	/** Only on confirmed Start chat/mission, with exactly one new link. Never for ordinary linking. */
+	start?: boolean;
 	dismissed?: boolean;
 	sessionId?: string | null;
 	missionId?: string | null;

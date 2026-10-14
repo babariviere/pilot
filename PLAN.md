@@ -709,7 +709,9 @@ local MCP/OAuth fixture). It connects only the selected server per call and clos
 Repository-local MCP files are not loaded by tracking. Disabled/hidden servers/tools are not called.
 Tracking connects only the dedicated servers named `linear` and `slack`, with fixed tools:
 `list_issues`, `list_cycles`, `get_issue`, `slack_read_channel` and `slack_read_thread`, plus `list_teams`,
-`slack_search_channels` and `slack_list_user_channels` for the settings pickers only. There are no server/tool overrides,
+`slack_search_channels` and `slack_list_user_channels` for the settings pickers only. Confirmed Linear
+starts additionally read `get_user` and `list_issue_statuses`; the sole write capability maps to
+`save_issue` with exactly `{ id, state }`, never create or arbitrary edits. There are no server/tool overrides,
 dispatchers, fallback servers or auto-detection. Project settings accept only Slack channels and
 a Linear team. Legacy project MCP overrides are discarded on load while preserving those settings;
 checkpoint fingerprints change so old cursors are not reused.
@@ -801,7 +803,9 @@ Start mission opens the new-mission sheet prefilled (title “ID: title”, goal
 Nothing starts until the user sends or creates. The started chat or mission is bound through
 `PATCH /api/tracked-items/:id`, which keeps a bounded history (`sessionIds`, `missionIds`, latest
 last); rows then show the latest one’s status with Open chat / Open mission and a count. Rows also
-link to an existing mission, dismiss and restore. Nothing is written to Linear or Slack.
+link to an existing mission, dismiss and restore. Ordinary linking, prefill and source polling never
+write externally. Confirmed Linear starts have the narrow state-change exception in §6.4; Slack
+remains read-only.
 
 **Slack checks.** Parser fixtures, strict malformed-output tests, threshold/negative caching,
 cross-project dedupe, concurrent and interrupted attempts, restart/UTC budget rollover, bounded
@@ -865,6 +869,34 @@ description (at most 32,000 characters). The response carries identifier/title/U
 gitBranchName and a prompt quoting the ticket as untrusted JSON. It is transient, never persisted
 or broadcast, and cannot start work; the normal chat/mission flows must obtain user confirmation.
 Concurrent requests for the same item coalesce; prefill shares the two-call global concurrency bound.
+
+**Confirmed start → In progress (implemented).** After Start chat is sent or Start mission is
+confirmed, the app binds the created chat/mission with `start: true` on the tracked-item PATCH.
+Ordinary links omit it. The daemon finishes the local binding before launching best-effort remote
+work; a failed, missing, busy or signed-out MCP never blocks the chat or mission. Replayed links do
+not start another attempt, simultaneous attempts for one item coalesce, and all start work shares
+the existing two-operation bound (no unbounded queue or automatic write retries). Configuration
+changes and shutdown cancel it.
+
+The dedicated `linear` server exposes `save_issue`, not `update_issue`. This is the only allowed
+write, constrained at both client and worker boundaries to exactly `{ id, state }`. Read paths
+explicitly reject this capability. Before a write, pilotd reads `get_user(query: "me")`, reconciles
+current my-team/sub-team membership, reads `list_issue_statuses` for the issue's actual team, and
+selects its first `started` state (workflow position where supplied, otherwise server order).
+A final `get_issue` immediately before the update rechecks identity, assignee, team and state type.
+Only `unstarted`, `backlog` and `triage` qualify; started/closed, moved or reassigned tickets are
+skipped. Linear has no compare-and-set update, so a remote change in the last read/write interval
+cannot be made atomic.
+
+`metadata.linearStart` exposes `{ outcome: "moved" | "skipped" | "error", attemptedAt, error? }`
+on full and dashboard rows. It is stored separately from source metadata, survives restart and
+sync, and contains only a fixed quiet error, never remote error text. No optimistic ticket-state
+change is made; the next normal sync supplies the actual state and cycle counts. Fake-MCP tests
+cover the guard, actual sub-team workflow, ordered states, confirmed chat/mission starts, no-write
+links/Slack/prefill, failure durability and cancellation. The local MCP transport fixture checks
+that write annotations are accepted only for this capability and arbitrary writes/extra fields
+never execute. Swift tests cover the explicit flag and row-metadata decoding. Rendering the quiet
+error belongs to the row UI, not this daemon change.
 
 **Verification.** Sanitized JSON fixtures cover current-cycle pagination, sub-team ticket metadata,
 personal progress, rollover, no-cycle fallback, delta resets, malformed/oversized responses,

@@ -106,6 +106,9 @@ export class TrackedItemStore {
 	): Promise<void> {
 		return this.rpc("commit", { projectId, kind, items, checkpoint, activeIds });
 	}
+	linearStartResult(id: string, outcome: "moved" | "skipped" | "error"): Promise<void> {
+		return this.rpc("linearStartResult", { id, outcome });
+	}
 	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		return this.rpc("patch", { id, patch });
 	}

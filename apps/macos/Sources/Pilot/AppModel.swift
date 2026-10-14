@@ -341,10 +341,10 @@ final class AppModel: ObservableObject {
                                                         label: TrackedItemText.identifier(item))
     }
 
-    /// Records what a tracked item started. Local only: nothing is written to Linear or Slack.
+    /// Records a confirmed start. The daemon may move an eligible Linear ticket to In progress.
     func bindTrackedItem(_ itemId: String, label: String, sessionId: String? = nil, missionId: String? = nil) async {
         do {
-            _ = try await client.updateTrackedItem(itemId, TrackedItemPatch(sessionId: sessionId, missionId: missionId))
+            _ = try await client.updateTrackedItem(itemId, TrackedItemPatch(sessionId: sessionId, missionId: missionId, start: true))
         } catch {
             sessionActionError = "Started, but Pilot couldn't link it to \(label): \(error.localizedDescription)"
         }

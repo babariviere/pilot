@@ -177,9 +177,23 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	await items.load([project.id]);
 	const recording = JSON.parse(await readFile(new URL("./fixtures/linear-current.json", import.meta.url), "utf8"));
 	let fallback = false;
+	let rejectStart!: () => void;
+	let startAttempted!: () => void;
+	const attempted = new Promise<void>((resolve) => {
+		startAttempted = resolve;
+	});
+	const startGate = new Promise<void>((resolve) => {
+		rejectStart = resolve;
+	});
+	t.after(rejectStart);
 	const tracking = new SourceRegistry(projects, items, {
 		async call(kind, tool, args) {
 			assert.equal(kind, "linear");
+			if (tool === "me") {
+				startAttempted();
+				await startGate;
+				throw new Error("external secret");
+			}
 			if (tool === "cycles") return fallback ? [] : recording.cycles;
 			if (tool === "issue") return recording.issue;
 			assert.equal(tool, "issues");
@@ -198,7 +212,7 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	tracking.register("linear", pollLinear);
 	const sessions = {
 		list: () => [],
-		get: () => undefined,
+		get: (id: string) => (id === "chat" ? { id, projectId: project.id } : undefined),
 		onChange: () => () => {},
 		onArtifactsChanged: () => () => {},
 		setWorkspaceProcessGuard() {},
@@ -241,6 +255,29 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	assert.equal((await prefill.json()).gitBranchName, "eng-1-settings-refresh");
 	assert.equal((await fetch(`${root}/tracked-items/missing/prefill`)).status, 404);
 	assert.ok(!JSON.stringify(await items.require(item.id)).includes("description"));
+	for (const body of [{ start: true }, { start: true, sessionId: "foreign" }, { start: true, missionId: "missing" }]) {
+		const invalid = await fetch(`${root}/tracked-items/${item.id}`, {
+			method: "PATCH",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify(body),
+		});
+		assert.equal(invalid.status, 400);
+	}
+	const confirmed = await fetch(`${root}/tracked-items/${item.id}`, {
+		method: "PATCH",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ sessionId: "chat", start: true }),
+	});
+	assert.equal(confirmed.status, 200, "binding returns while remote start is still gated");
+	assert.equal((await confirmed.json()).sessionId, "chat");
+	await attempted;
+	const pending = tracking.startLinear(await items.require(item.id));
+	rejectStart();
+	await pending;
+	const result = await items.require(item.id);
+	assert.equal((result.metadata.linearStart as { outcome: string }).outcome, "error");
+	assert.ok(!JSON.stringify(result).includes("secret"));
+
 	fallback = true;
 	await tracking.poll(`${project.id}:linear`);
 	const status = tracking.require(`${project.id}:linear`);

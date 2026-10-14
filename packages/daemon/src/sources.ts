@@ -12,13 +12,15 @@ import type {
 	TrackingSource,
 	LinearSourceSummary,
 	TrackedItemPrefill,
+	TrackedItem,
+	TrackedItemPatch,
 } from "@pilot/protocol";
 import { createHash } from "node:crypto";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SourceRateLimited, SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
-import { linearPrefill } from "./linear-source.ts";
+import { linearPrefill, linearStart } from "./linear-source.ts";
 import { slackChannelProgress } from "./slack-source.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
@@ -69,7 +71,12 @@ export class SourceRegistry {
 		string,
 		{ sourceId: string; key: string; controller: AbortController; promise: Promise<TrackedItemPrefill> }
 	>();
-	/** Settings lookups, at most one per kind. They share the two MCP slots with polls and prefills. */
+	/** Confirmed starts, coalesced per item and sharing the two MCP slots. */
+	private readonly starts = new Map<
+		string,
+		{ sourceId: string; key: string; controller: AbortController; promise: Promise<void> }
+	>();
+	/** Settings lookups, at most one per kind, sharing slots with polls and prefills. */
 	private readonly lookups = new Map<TrackedKind, { controller: AbortController; promise: Promise<unknown> }>();
 	/** Configured Slack channels per project, to hide items of removed channels once. */
 	private slackChannels = new Map<string, string>();
@@ -113,7 +120,7 @@ export class SourceRegistry {
 				}
 				for (const [id, run] of this.running)
 					if (this.currentKey(id) !== run.key) run.controller.abort(new Error("Tracking configuration changed"));
-				for (const run of this.details.values())
+				for (const run of [...this.details.values(), ...this.starts.values()])
 					if (this.currentKey(run.sourceId) !== run.key)
 						run.controller.abort(new Conflict("Tracking configuration changed"));
 				for (const id of this.health.keys())
@@ -207,7 +214,7 @@ export class SourceRegistry {
 				config: project.tracking!,
 				signal: controller.signal,
 				...(checkpoint?.configKey === key && checkpoint.cursor !== undefined ? { cursor: checkpoint.cursor } : {}),
-				call: (tool, args) => this.mcp.call(source.kind, tool, args, controller.signal),
+				call: (tool, args) => this.readCall(source.kind, tool, args, controller.signal),
 			}),
 		);
 		run.promise = abortable(work, controller.signal)
@@ -314,7 +321,7 @@ export class SourceRegistry {
 					project,
 					config: project.tracking!,
 					signal: controller.signal,
-					call: (tool, args) => this.mcp.call("linear", tool, args, controller.signal),
+					call: (tool, args) => this.readCall("linear", tool, args, controller.signal),
 				},
 				item,
 			);
@@ -337,6 +344,68 @@ export class SourceRegistry {
 		this.details.set(itemId, run);
 		return run.promise;
 	}
+	/** Binding is local and completes before any remote work. A normal link never writes. */
+	async patch(itemId: string, patch: TrackedItemPatch): Promise<TrackedItem> {
+		const before = await this.items.require(itemId);
+		const item = await this.items.patch(itemId, patch);
+		const newLink =
+			(patch.sessionId && !before.sessionIds?.includes(patch.sessionId)) ||
+			(patch.missionId && !before.missionIds?.includes(patch.missionId));
+		if (patch.start && newLink && item.kind === "linear") void this.startLinear(item).catch(() => {});
+		return item;
+	}
+	/** Best effort, single flight per item, bounded with all other MCP work, no retry queue. */
+	startLinear(item: TrackedItem): Promise<void> {
+		if (item.kind !== "linear") return Promise.resolve();
+		const existing = this.starts.get(item.id);
+		if (existing) return existing.promise;
+		if (this.stopped || this.busy() >= 2) return this.items.linearStartResult(item.id, "error");
+		const sourceId = `${item.projectId}:linear`;
+		const key = this.currentKey(sourceId) ?? "";
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(new Error("Linear start timed out")), 60_000);
+		const work = Promise.resolve().then(async () => {
+			if (!key || this.items.checkpoint(sourceId)?.configKey !== key)
+				throw new Conflict("Sync Linear before starting");
+			const health = this.health.get(sourceId);
+			if (health && health.status !== "ok" && health.nextPollAt > Date.now())
+				throw new Conflict("Source is backing off");
+			const project = structuredClone(this.projects.require(item.projectId));
+			return linearStart(
+				{
+					project,
+					config: project.tracking!,
+					signal: controller.signal,
+					call: (tool, args) => {
+						controller.signal.throwIfAborted();
+						if (this.currentKey(sourceId) !== key) throw new Conflict("Tracking configuration changed");
+						return this.mcp.call("linear", tool, args, controller.signal);
+					},
+				},
+				item,
+			);
+		});
+		const promise = abortable(work, controller.signal)
+			.catch(() => "error" as const)
+			.then((outcome) => this.items.linearStartResult(item.id, outcome))
+			.finally(() => {
+				clearTimeout(timer);
+				this.starts.delete(item.id);
+				this.schedule();
+			});
+		this.starts.set(item.id, { sourceId, key, controller, promise });
+		return promise;
+	}
+	private readCall(
+		kind: TrackedKind,
+		tool: string,
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+	): Promise<TrackingJson> {
+		if (tool === "startIssue") return Promise.reject(new Error("Source reads cannot write"));
+		return this.mcp.call(kind, tool, args, signal);
+	}
+
 	async stop(): Promise<void> {
 		this.stopped = true;
 		clearTimeout(this.timer);
@@ -344,10 +413,12 @@ export class SourceRegistry {
 		const signIns = this.signIns.stop();
 		for (const run of this.running.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.details.values()) run.controller.abort(new Error("Tracking stopped"));
+		for (const run of this.starts.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.lookups.values()) run.controller.abort(new Error("Tracking stopped"));
 		await Promise.allSettled([...this.running.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.details.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.lookups.values()].map((run) => run.promise));
+		await Promise.allSettled([...this.starts.values()].map((run) => run.promise));
 		await signIns;
 		await this.mcp.close?.();
 		this.listeners.clear();
@@ -405,7 +476,7 @@ export class SourceRegistry {
 		const timer = setTimeout(() => controller.abort(new Error("Lookup timed out")), 45_000);
 		const label = kind === "linear" ? "Linear" : "Slack";
 		const promise = abortable(
-			work((tool, args) => this.mcp.call(kind, tool, args, controller.signal)),
+			work((tool, args) => this.readCall(kind, tool, args, controller.signal)),
 			controller.signal,
 		)
 			.then(({ items, more }): TrackingLookup<T> => ({ status: "ok", items, ...(more ? { more } : {}) }))
@@ -437,7 +508,7 @@ export class SourceRegistry {
 		return promise;
 	}
 	private busy(): number {
-		return this.running.size + this.details.size + this.lookups.size;
+		return this.running.size + this.details.size + this.lookups.size + this.starts.size;
 	}
 	private failed(id: string, key: string, error: unknown): void {
 		if (this.currentKey(id) !== key || this.stopped) return;
