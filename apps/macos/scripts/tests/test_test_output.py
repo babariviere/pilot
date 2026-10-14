@@ -31,17 +31,20 @@ class TestOutputTests(unittest.TestCase):
                      '◇ Test named "failed after" started.', 'Build complete!']:
             self.assertFalse(guard.failed_summary(line), line)
 
-    def run_wrapper(self, output, status=0, args=()):
+    def run_wrapper(self, output, status=0, args=(), wrapper="test.sh", prepare_status=0):
         # Exercise the actual shell wrapper without downloading/building the app.
         with tempfile.TemporaryDirectory(prefix="swift wrapper ") as directory:
             root = Path(directory)
-            scripts = root / "scripts"
-            scripts.mkdir()
-            for name in ["test.sh", "check-test-output.py"]:
+            scripts = root / "apps/macos/scripts"
+            scripts.mkdir(parents=True)
+            (root / "scripts").mkdir()
+            shutil.copy2(SCRIPTS.parents[2] / "scripts/verification-slot.py",
+                         root / "scripts/verification-slot.py")
+            for name in [wrapper, "check-test-output.py"]:
                 shutil.copy2(SCRIPTS / name, scripts / name)
             (scripts / "swift-env.sh").write_text("")
             for name in ["vendor-ghostty.sh", "share-artifacts.sh"]:
-                (scripts / name).write_text("#!/bin/sh\nexit 0\n")
+                (scripts / name).write_text(f"#!/bin/sh\nexit {prepare_status}\n")
                 (scripts / name).chmod(0o755)
             (root / "xcrun").write_text('#!/bin/sh\nprintf "%s\\n" "$FAKE_SWIFT"\n')
             (root / "xcrun").chmod(0o755)
@@ -53,12 +56,28 @@ class TestOutputTests(unittest.TestCase):
             arguments = root / "arguments"
             env = {**os.environ, "PATH": f"{root}:{os.environ['PATH']}",
                    "FAKE_SWIFT": str(root / "swift"), "TEST_OUTPUT": output,
-                   "TEST_STATUS": str(status), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2"}
+                   "TEST_STATUS": str(status), "ARGUMENTS": str(arguments), "PILOT_SWIFT_JOBS": "2",
+                   "PILOT_HOME": str(root / "home"), "BUNDLE_RUNTIME": "0"}
             # Use macOS's Bash 3.2, not a newer Homebrew bash picked by env.
             result = subprocess.run(
-                ["/bin/bash", "-c", '/bin/bash "$@" && touch "$CONTINUED"', "test", str(scripts / "test.sh"), *args],
+                ["/bin/bash", "-c", '/bin/bash "$@" && touch "$CONTINUED"', "test", str(scripts / wrapper), *args],
                 env={**env, "CONTINUED": str(marker)}, capture_output=True, text=True)
-            return result, marker.exists(), arguments.read_text().splitlines()
+            return result, marker.exists(), arguments.read_text().splitlines() if arguments.exists() else []
+
+    def test_all_swift_entrypoints_hold_a_slot_before_package_preparation(self):
+        for wrapper in ["build.sh", "test.sh", "bundle.sh"]:
+            with self.subTest(wrapper=wrapper):
+                result, continued, _ = self.run_wrapper("", wrapper=wrapper, prepare_status=42)
+                self.assertEqual(result.returncode, 42, result.stderr)
+                self.assertFalse(continued)
+                self.assertEqual(result.stderr.count("acquired slot 1/1"), 1)
+
+    def test_build_preserves_arguments_and_handles_empty_default_jobs_on_bash_3(self):
+        result, continued, arguments = self.run_wrapper("", wrapper="build.sh", args=("--jobs=1", "--version"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(continued)
+        self.assertNotIn("--jobs", arguments)
+        self.assertEqual(arguments[-2:], ["--jobs=1", "--version"])
 
     def test_failed_target_then_two_successes_stops_chain(self):
         output = '✘ Test offscreenLookup() recorded an issue: Expectation failed\n' + FAILED + PASSED
@@ -162,7 +181,8 @@ import Testing
             plugins = str(Path(swift).parent / "../lib/swift/host/plugins/testing")
             for fail in ["1", "0"]:
                 result = subprocess.run(
-                    ["swift", "test", "--package-path", str(root), "--build-system", "native", "--jobs", "2",
+                    [sys.executable, str(SCRIPTS.parents[2] / "scripts/verification-slot.py"), "swift", "--",
+                     "swift", "test", "--package-path", str(root), "--build-system", "native", "--jobs", "2",
                      "-Xswiftc", "-plugin-path", "-Xswiftc", plugins],
                     env={**os.environ, "FAIL_TARGET": fail}, stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT, timeout=120)

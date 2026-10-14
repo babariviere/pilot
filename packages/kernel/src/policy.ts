@@ -164,6 +164,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 	if (!context.ask)
 		lines.push(
 			"- Take each request as far as it asks. For implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked, and then use ask_user.",
+			"- Run focused tests while iterating, then the relevant full suites once before publishing. Use the project's verification wrappers and shared heavy-check slots; do not bypass a queue or start duplicate full suites while waiting. Run long checks as background jobs so they can finish without blocking other work.",
 		);
 	if (artifactsAvailable) {
 		lines.push(

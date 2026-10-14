@@ -28,8 +28,12 @@ if (list) {
 	console.log(files.join("\n"));
 } else {
 	const child = spawn(
-		process.execPath,
+		"python3",
 		[
+			fileURLToPath(new URL("./verification-slot.py", import.meta.url)),
+			"node",
+			"--",
+			process.execPath,
 			...(tsx ? ["--import", "tsx"] : []),
 			"--test",
 			"--test-force-exit",
@@ -47,6 +51,6 @@ if (list) {
 		process.exitCode = 1;
 	});
 	child.on("exit", (code, signal) => {
-		process.exitCode = code ?? (signal === "SIGINT" ? 130 : 1);
+		process.exitCode = code ?? (signal === "SIGINT" ? 130 : signal === "SIGTERM" ? 143 : 1);
 	});
 }

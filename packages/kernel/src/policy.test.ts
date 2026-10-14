@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { test } from "node:test";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ToolHooks } from "@earendil-works/pi-durable";
 import {
 	githubPosting,
@@ -141,6 +141,15 @@ test("Build prompts define completion; Ask prompts do not", () => {
 	assert.match(build, /without pausing for review after a first pass/);
 	assert.match(build, /Ask only when a decision would materially change scope/);
 	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /finish with a working change/);
+});
+
+test("Build verification guidance prefers focused iteration and shared slots, never Ask", () => {
+	const prompt = pilotPrompt({});
+	assert.match(prompt, /Run focused tests while iterating/);
+	assert.match(prompt, /full suites once before publishing/);
+	assert.match(prompt, /shared heavy-check slots/);
+	assert.match(prompt, /do not bypass a queue or start duplicate full suites/);
+	assert.doesNotMatch(pilotPrompt({ ask: { source: "/source" } }), /focused tests|heavy-check slots/);
 });
 
 test("memory guidance is short and limited to project chats with memory, never Ask", () => {

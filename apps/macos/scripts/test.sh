@@ -2,6 +2,11 @@
 # Command Line Tools ship Swift Testing's macro plugin outside the default plugin path.
 set -euo pipefail
 here="$(cd "$(dirname "$0")/.." && pwd)"
+# Hold the slot through package resolution, compilation and every test runner.
+if [ "${PILOT_VERIFICATION_SWIFT_PID:-}" != "$$" ]; then
+	exec python3 "$here/../../scripts/verification-slot.py" swift -- "$BASH" "$0" "$@"
+fi
+unset PILOT_VERIFICATION_SWIFT_PID
 # shellcheck source=swift-env.sh
 source "$here/scripts/swift-env.sh"
 "$here/scripts/vendor-ghostty.sh"
