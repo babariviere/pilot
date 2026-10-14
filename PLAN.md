@@ -1045,6 +1045,9 @@ reports), producing a morning summary in the app and Slack.
   `now` (the first minute), using its stable completion timestamp rather than generic metadata updates.
   Settled chats use the later of completion and latest user submission; working chats retain live activity
   ordering. Active session lists share this ordering; archives retain their archive-date order.
+  Long sidebar lists fold rows beyond the first five only when all their PRs are merged or closed.
+  Idle chats without a PR and chats with open or draft PRs stay visible, as do pinned, selected,
+  working and unread chats. Search shows every matching row; Show less appears only if rows can fold.
   Closed/merged PR chats have no unread indicators or completion notifications. Suppressed completion
   versions are still observed, so reopening a PR cannot replay old notifications (unreviewed results
   may become unread again on reopening). Last-known terminal PR states obey the same rule.
