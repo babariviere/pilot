@@ -266,7 +266,7 @@ export class MissionService {
 			tasks: detail.tasks
 				.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
 				.map((task) => ({ number: task.number, title: task.title, status: task.status })),
-			decisions: selected.map((decision) => decision.text),
+			decisions: selected.map((decision) => `D${decision.number}: ${decision.text}`),
 			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
 			remainingDecisions: detail.decisions.length - selected.length,
 			decisionVersion:
@@ -489,7 +489,7 @@ export class MissionService {
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
 		if (
-			(["delete", "group", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
+			(["propose", "delete", "group", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
 				(action === "task" && args.order !== undefined)) &&
 			mission.coordinatorSessionId !== sessionId
 		)
@@ -641,6 +641,7 @@ export class MissionService {
 				return {
 					mission: { title: mission.title, goal: mission.goal, status: mission.status },
 					briefRevision: mission.briefRevision,
+					decisions: detail.decisions.map(({ number }) => `D${number}`),
 					tasks: mine.map((task) => view.task(task)),
 					// Tuples avoid repeating keys for the larger, read-only list.
 					openTasks: open
@@ -660,6 +661,7 @@ export class MissionService {
 					},
 					...(mission.coordinatorSessionId === sessionId
 						? {
+								decisionProposals: detail.decisionProposals,
 								members: this.sessions
 									.list({ missionId, archived: "all" })
 									.filter(
@@ -738,7 +740,7 @@ export class MissionService {
 						.filter(
 							(decision) => !prompt.some((entry) => entry.id === decision.id && entry.text === decision.text),
 						)
-						.map(({ id, text, audience }) => ({ id, text, audience })),
+						.map(({ id, number, text, audience }) => ({ id, number, text, audience })),
 				};
 			}
 			case "activity": {
@@ -848,6 +850,16 @@ export class MissionService {
 					? this.store.claimTasks(missionId, refs, sessionId)
 					: this.store.claimTask(missionId, refs[0], sessionId);
 			}
+			case "propose":
+				if (!str("decisionId")) throw new Error("propose requires decisionId");
+				return this.store.proposeDecision(
+					missionId,
+					str("decisionId")!,
+					args.text,
+					args.remove,
+					args.reason,
+					actor,
+				);
 			case "decide":
 				return this.store.addDecision(missionId, args.text, actor, args.audience);
 			case "comment":
@@ -1062,7 +1074,7 @@ class MissionAgentView {
 				? {
 						decisions: this.detail.decisions
 							.filter((d) => task.decisionIds?.includes(d.id))
-							.map(({ id, text, audience }) => ({ id, text, audience })),
+							.map(({ id, number, text, audience }) => ({ id, number, text, audience })),
 					}
 				: {}),
 			resources: this.detail.resources.filter((ref) => ref.taskId === task.id).map((ref) => this.link(ref)),

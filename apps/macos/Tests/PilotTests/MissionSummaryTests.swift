@@ -8,7 +8,7 @@ private func summary(_ id: String, status: MissionStatus = .active, count: Int =
 }
 
 private func detail(_ mission: Mission) -> MissionDetail {
-    MissionDetail(mission: mission, brief: nil, decisions: [], comments: [], tasks: [], artifacts: [],
+    MissionDetail(mission: mission, brief: nil, decisions: [], decisionProposals: [], comments: [], tasks: [], artifacts: [],
                   resources: [], events: [])
 }
 

@@ -73,12 +73,16 @@ struct MissionInspectorPane: View {
                             if decisionsExpanded {
                                 ForEach(detail.decisions) { decision in
                                     HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                        Image(systemName: "checkmark.seal.fill").font(.pilot(.small))
-                                            .foregroundStyle(Theme.success).frame(width: 16)
+                                        Text("D\(decision.number)").font(.pilot(.small))
+                                            .foregroundStyle(Theme.faintForeground).monospacedDigit()
                                         VStack(alignment: .leading, spacing: 4) {
                                             Text(decision.text).font(.pilot(.label)).foregroundStyle(Theme.foreground)
                                                 .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                                             DecisionAudienceTag(audience: decision.audience)
+                                            if let proposal = detail.decisionProposals?.first(where: { $0.decisionId == decision.id && $0.status == "pending" }) {
+                                                DecisionProposalView(proposal: proposal, oldText: decision.text)
+                                                    .id(proposal.id)
+                                            }
                                         }
                                     }
                                 }

@@ -147,6 +147,7 @@ public enum MissionDecisionAudience: String, Codable, CaseIterable, Sendable {
 
 public struct MissionDecision: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
+    public let number: Int
     public let text: String
     public var audience: MissionDecisionAudience
     public let authorSessionId: String?
@@ -154,12 +155,13 @@ public struct MissionDecision: Codable, Identifiable, Equatable, Hashable, Senda
     public let updatedAt: Double
 
     private enum CodingKeys: String, CodingKey {
-        case id, text, audience, authorSessionId, createdAt, updatedAt
+        case id, number, text, audience, authorSessionId, createdAt, updatedAt
     }
 
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         id = try values.decode(String.self, forKey: .id)
+        number = try values.decodeIfPresent(Int.self, forKey: .number) ?? 0
         text = try values.decode(String.self, forKey: .text)
         // Decisions from older daemons predate audiences and are reference material.
         audience = try values.decodeIfPresent(MissionDecisionAudience.self, forKey: .audience) ?? .reference
@@ -170,6 +172,18 @@ public struct MissionDecision: Codable, Identifiable, Equatable, Hashable, Senda
 
     /// Only user decisions are binding over the brief and editable by the user alone.
     public var isUserDecision: Bool { authorSessionId == nil }
+}
+
+public struct MissionDecisionProposal: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let decisionId: String
+    public let kind: String
+    public let text: String?
+    public let reason: String
+    public let authorSessionId: String
+    public let status: String
+    public let createdAt: Double
+    public let resolvedAt: Double?
 }
 
 public struct MissionComment: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -428,6 +442,7 @@ public struct MissionDetail: Codable, Equatable, Sendable {
     public let mission: Mission
     public let brief: MissionBrief?
     public let decisions: [MissionDecision]
+    public let decisionProposals: [MissionDecisionProposal]?
     public let comments: [MissionComment]
     public let tasks: [MissionTask]
     public let artifacts: [MissionArtifactLink]

@@ -161,7 +161,8 @@ struct MissionBriefTab: View {
     private func decisionRow(_ item: MissionDecision) -> some View {
         HoverRow(verticalPadding: 5) { hovered in
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Image(systemName: "checkmark.seal.fill").font(.pilot(.caption)).foregroundStyle(Theme.success).frame(width: 16)
+                Text("D\(item.number)").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                    .monospacedDigit().frame(minWidth: 26, alignment: .leading)
                 if decision.editingId == item.id {
                     VStack(alignment: .leading, spacing: 8) {
                         TextField("Decision", text: $decision.secondary, axis: .vertical)
@@ -182,6 +183,12 @@ struct MissionBriefTab: View {
                         Text(item.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                             .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                         DecisionAudienceTag(audience: item.audience)
+                        if let proposal = detail.decisionProposals?.first(where: { $0.decisionId == item.id && $0.status == "pending" }) {
+                            DecisionProposalView(proposal: proposal, oldText: item.text) { accept, text in
+                                _ = try await client.resolveMissionDecisionProposal(mission.id, proposalId: proposal.id, accept: accept, text: text)
+                            }
+                            .id(proposal.id)
+                        }
                     }
                     Spacer(minLength: 8)
                     ZStack(alignment: .trailing) {

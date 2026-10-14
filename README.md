@@ -136,6 +136,8 @@ yourself or use a coordinator chat, and review linked pull requests and artifact
 
 Decisions have an audience: **All chats**, **Coordinator only**, or **Reference** (the default).
 Choose it when recording or editing a decision, or change it from the row's context menu.
+Decisions have stable numbers (D1, D2, …). The coordinator can propose edits or removals for the user
+to accept, edit and accept, or reject. Until accepted, the original decision stays binding.
 Reference decisions are available on request; pinning a decision to a task includes it in that task's chat.
 
 Only the coordinating chat sees subscription windows in its status and start tool results: percent

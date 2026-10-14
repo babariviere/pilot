@@ -1197,6 +1197,13 @@ async function missionRoute(
 		}
 		return false;
 	}
+	if (section === "decision-proposals") {
+		if (parts.length === 6 && method === "POST" && (parts[5] === "accept" || parts[5] === "reject")) {
+			const write = await readJson<{ text?: string }>(req);
+			return json(res, 200, store.resolveProposal(id, item!, parts[5] === "accept", write?.text)), true;
+		}
+		return false;
+	}
 	if (section === "decisions") {
 		if (parts.length === 4 && method === "POST") {
 			const write = await readJson<MissionDecisionWrite>(req);

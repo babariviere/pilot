@@ -97,7 +97,7 @@ private func chat(_ id: String, project: String? = "p", updatedAt: Double = 1, a
 
 private func missionDetail(tasks: [MissionTask], resources: [MissionResource] = []) -> MissionDetail {
     MissionDetail(mission: Mission(id: "m", projectId: "p", title: "M", goal: "g", createdAt: 1, updatedAt: 1),
-                  brief: nil, decisions: [], comments: [], tasks: tasks, artifacts: [], resources: resources, events: [])
+                  brief: nil, decisions: [], decisionProposals: [], comments: [], tasks: tasks, artifacts: [], resources: resources, events: [])
 }
 
 private func link(_ task: String?, url: String = prURL, addedBy: String? = nil,

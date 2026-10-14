@@ -528,6 +528,7 @@ private struct NeedsYouRow: View {
             else { SessionStatusIcon(status: session.status) }
         case .blockedTask: Image(systemName: MissionTaskStatus.blocked.symbol).foregroundStyle(MissionTaskStatus.blocked.color)
         case .comment: Image(systemName: "text.bubble").foregroundStyle(Theme.info)
+        case .decisionProposal: Image(systemName: "pencil.circle").foregroundStyle(Theme.blocked)
         }
     }
 
@@ -536,6 +537,7 @@ private struct NeedsYouRow: View {
         case let .chat(session): session.title
         case let .blockedTask(task): "#\(task.number) \(task.title)"
         case let .comment(comment): comment.text
+        case let .decisionProposal(_, number): "Decision D\(number): proposed change"
         }
     }
 
@@ -546,6 +548,7 @@ private struct NeedsYouRow: View {
                 session.isActiveMissionCoordinator ? "New result. Review the chat." : "Finished. Review the result."
         case let .blockedTask(task):
             "Blocked" + (task.sessionId.flatMap { client.session($0)?.title }.map { " · \($0)" } ?? "")
+        case let .decisionProposal(proposal, _): proposal.reason
         case let .comment(comment):
             "Comment from \(missionAuthorName(comment.authorSessionId, client: client))"
                 + (comment.anchor.map { " on “\($0)”" } ?? "")
@@ -557,6 +560,7 @@ private struct NeedsYouRow: View {
         case let .chat(session): session.outcome == .failed ? "Open chat" : "Review"
         case .blockedTask: "View task"
         case .comment: "Reply"
+        case .decisionProposal: "Review"
         }
     }
 
@@ -564,7 +568,7 @@ private struct NeedsYouRow: View {
         switch item {
         case let .chat(session): model.selectedSessionId = session.id
         case .blockedTask: model.missionTab = .tasks
-        case .comment: model.missionTab = .brief
+        case .comment, .decisionProposal: model.missionTab = .brief
         }
     }
 }

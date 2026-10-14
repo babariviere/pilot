@@ -13,6 +13,7 @@ import type {
 	MissionComment,
 	MissionCommentWrite,
 	MissionDecision,
+	MissionDecisionProposal,
 	MissionDetail,
 	MissionEvent,
 	MissionEventKind,
@@ -35,6 +36,8 @@ import type { PullRequestBinding } from "./sessions.ts";
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
 export interface MissionActor {
 	sessionId?: string;
+	/** Internal attribution when the user accepts a proposal. */
+	proposedBySessionId?: string;
 }
 
 /** Activity selectors are applied in SQLite before limiting or paging. */
@@ -90,6 +93,21 @@ CREATE TABLE IF NOT EXISTS decisions (
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS decision_proposals (
+	id TEXT PRIMARY KEY,
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	decision_id TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	text TEXT,
+	reason TEXT NOT NULL,
+	author_session_id TEXT NOT NULL,
+	status TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	resolved_at INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS pending_proposal_per_decision
+	ON decision_proposals(mission_id, decision_id) WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS proposals_by_mission ON decision_proposals(mission_id, status, resolved_at);
 CREATE TABLE IF NOT EXISTS comments (
 	id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -258,7 +276,8 @@ const MISSION_SELECT = `SELECT missions.*,
 	CASE WHEN coordinator_session_id IS NULL THEN
 		(SELECT COUNT(*) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
 			AND target_session_id IS NULL AND author_session_id IS NOT NULL)
-	ELSE 0 END AS needs_you_count
+	ELSE 0 END +
+	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') AS needs_you_count
 	FROM missions`;
 
 type Row = Record<string, SQLInputValue>;
@@ -349,6 +368,24 @@ export class MissionStore {
 		);
 		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "audience"))
 			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
+		this.transaction(() => {
+			const migrateNumbers = !this.all("PRAGMA table_info(decisions)").some((row) => row.name === "number");
+			const migrateSequence = !this.all("PRAGMA table_info(missions)").some(
+				(row) => row.name === "decision_sequence",
+			);
+			if (migrateNumbers) {
+				this.db.exec("ALTER TABLE decisions ADD COLUMN number INTEGER NOT NULL DEFAULT 0");
+				this.db.exec(`UPDATE decisions SET number = (SELECT n FROM
+					(SELECT id, ROW_NUMBER() OVER (PARTITION BY mission_id ORDER BY created_at, id) n FROM decisions) ranked
+					WHERE ranked.id = decisions.id)`);
+			}
+			if (migrateSequence)
+				this.db.exec("ALTER TABLE missions ADD COLUMN decision_sequence INTEGER NOT NULL DEFAULT 0");
+			if (migrateNumbers || migrateSequence)
+				this.db.exec(`UPDATE missions SET decision_sequence = MAX(decision_sequence,
+					COALESCE((SELECT MAX(number) FROM decisions WHERE mission_id = missions.id), 0))`);
+			this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS decision_numbers ON decisions(mission_id, number)");
+		});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
 		if (!this.all("PRAGMA table_info(notice_activity)").some((row) => row.name === "job_deadline"))
@@ -978,9 +1015,8 @@ export class MissionStore {
 		return {
 			mission,
 			...(brief ? { brief } : {}),
-			decisions: this.all("SELECT * FROM decisions WHERE mission_id = ? ORDER BY created_at, id", id).map(
-				decisionFrom,
-			),
+			decisions: this.all("SELECT * FROM decisions WHERE mission_id = ? ORDER BY number", id).map(decisionFrom),
+			decisionProposals: this.proposals(id),
 			comments: [
 				...this.all(
 					"SELECT * FROM comments WHERE mission_id = ? AND resolved_at IS NULL ORDER BY created_at, id",
@@ -1539,6 +1575,7 @@ export class MissionStore {
 		const now = Date.now();
 		const decision: MissionDecision = {
 			id: randomUUID(),
+			number: 0,
 			audience: scope,
 			text: decisionText,
 			...optionalAuthor(actor.sessionId),
@@ -1546,8 +1583,10 @@ export class MissionStore {
 			updatedAt: now,
 		};
 		this.transaction(() => {
+			this.run("UPDATE missions SET decision_sequence = decision_sequence + 1 WHERE id = ?", id);
+			decision.number = num(this.one("SELECT decision_sequence FROM missions WHERE id = ?", id)!.decision_sequence!);
 			this.run(
-				"INSERT INTO decisions (id, mission_id, text, author_session_id, created_at, updated_at, audience) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO decisions (id, mission_id, text, author_session_id, created_at, updated_at, audience, number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 				decision.id,
 				id,
 				decision.text,
@@ -1555,8 +1594,9 @@ export class MissionStore {
 				now,
 				now,
 				scope,
+				decision.number,
 			);
-			this.event(id, "decision", `Decision: ${decision.text}`, actor, { at: now });
+			this.event(id, "decision", `Decision D${decision.number}: ${decision.text}`, actor, { at: now });
 		});
 		this.changed(id, this.members(id));
 		return decision;
@@ -1583,7 +1623,14 @@ export class MissionStore {
 				now,
 				before.id,
 			);
-			this.event(id, "decision", `Decision changed: ${decisionText}`, actor, { at: now });
+			this.dropProposal(id, before.id);
+			this.event(
+				id,
+				"decision",
+				`Decision D${before.number} changed${proposalAttribution(actor)}: ${decisionText}`,
+				actor,
+				{ at: now, wake: true },
+			);
 		});
 		this.changed(id, this.members(id));
 		return this.decision(id, decisionId);
@@ -1601,16 +1648,137 @@ export class MissionStore {
 						task.id,
 					);
 			}
+			this.dropProposal(id, before.id);
 			this.run("DELETE FROM decisions WHERE id = ?", before.id);
-			this.event(id, "decision", `Decision removed: ${before.text}`, actor);
+			this.event(
+				id,
+				"decision",
+				`Decision D${before.number} removed${proposalAttribution(actor)}: ${before.text}`,
+				actor,
+				{ wake: true },
+			);
 		});
 		this.changed(id, this.members(id));
 	}
 
 	private decision(id: string, decisionId: string): MissionDecision {
-		const row = this.one("SELECT * FROM decisions WHERE mission_id = ? AND id = ?", id, decisionId);
+		const row = /^D[1-9]\d*$/i.test(decisionId)
+			? this.one("SELECT * FROM decisions WHERE mission_id = ? AND number = ?", id, Number(decisionId.slice(1)))
+			: this.one("SELECT * FROM decisions WHERE mission_id = ? AND id = ?", id, decisionId);
 		if (!row) throw new NotFound(`Unknown decision: ${decisionId}`);
 		return decisionFrom(row);
+	}
+
+	proposals(id: string): MissionDecisionProposal[] {
+		return this.all(
+			`SELECT * FROM decision_proposals WHERE mission_id = ? AND status = 'pending'
+			UNION ALL SELECT * FROM (SELECT * FROM decision_proposals WHERE mission_id = ? AND status != 'pending'
+			ORDER BY resolved_at DESC, id LIMIT 20)`,
+			id,
+			id,
+		).map(proposalFrom);
+	}
+
+	private dropProposal(id: string, decisionId: string): void {
+		this.run(
+			"DELETE FROM decision_proposals WHERE mission_id = ? AND decision_id = ? AND status = 'pending'",
+			id,
+			decisionId,
+		);
+	}
+
+	proposeDecision(
+		id: string,
+		decisionId: string,
+		value: unknown,
+		remove: unknown,
+		reason: unknown,
+		actor: MissionActor,
+	): MissionDecisionProposal {
+		const mission = this.require(id);
+		if (!actor.sessionId || mission.coordinatorSessionId !== actor.sessionId)
+			throw new Conflict("Only the mission coordinator can propose decision changes");
+		this.assertMember(id, actor.sessionId);
+		const decision = this.decision(id, decisionId);
+		if (remove !== undefined && remove !== true) throw new Error("remove must be true");
+		if (remove === true && value !== undefined) throw new Error("Use text or remove, not both");
+		const proposal: MissionDecisionProposal = {
+			id: randomUUID(),
+			decisionId: decision.id,
+			kind: remove === true ? "remove" : "edit",
+			...(remove === true ? {} : { text: text(value, "text", MAX_TEXT)! }),
+			reason: text(reason, "reason", MAX_TEXT)!,
+			authorSessionId: actor.sessionId,
+			status: "pending",
+			createdAt: Date.now(),
+		};
+		this.transaction(() => {
+			this.dropProposal(id, decision.id);
+			this.run(
+				"INSERT INTO decision_proposals (id, mission_id, decision_id, kind, text, reason, author_session_id, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				proposal.id,
+				id,
+				decision.id,
+				proposal.kind,
+				proposal.text ?? null,
+				proposal.reason,
+				proposal.authorSessionId,
+				proposal.status,
+				proposal.createdAt,
+			);
+			this.event(id, "decision", `Change proposed for decision D${decision.number}: ${proposal.reason}`, actor);
+		});
+		this.changed(id);
+		return proposal;
+	}
+
+	resolveProposal(
+		id: string,
+		proposalId: string,
+		accept: boolean,
+		replacement?: unknown,
+		actor: MissionActor = USER,
+	): MissionDecisionProposal {
+		if (actor.sessionId) throw new Error("Only the user can resolve decision proposals");
+		if (!accept && replacement !== undefined) throw new Error("Replacement text requires acceptance");
+		const row = this.one(
+			"SELECT * FROM decision_proposals WHERE mission_id = ? AND id = ? AND status = 'pending'",
+			id,
+			proposalId,
+		);
+		if (!row) throw new NotFound("Unknown pending decision proposal");
+		const proposal = proposalFrom(row);
+		const decision = this.decision(id, proposal.decisionId);
+		if (proposal.kind === "remove" && replacement !== undefined) throw new Error("Removal has no replacement text");
+		// Reuse user-only writers, suppressing their broadcasts until the whole transaction commits.
+		this.referenceBatch = id;
+		try {
+			this.transaction(() => {
+				this.run(
+					"UPDATE decision_proposals SET status = ?, resolved_at = ? WHERE id = ?",
+					accept ? "accepted" : "rejected",
+					Date.now(),
+					proposalId,
+				);
+				if (accept) {
+					const user = { proposedBySessionId: proposal.authorSessionId };
+					if (proposal.kind === "remove") this.removeDecision(id, decision.id, user);
+					else {
+						const applied = this.updateDecision(id, decision.id, replacement ?? proposal.text, user);
+						this.run("UPDATE decision_proposals SET text = ? WHERE id = ?", applied.text, proposalId);
+					}
+				}
+				const notice = `Decision D${decision.number} proposal ${proposalId} ${accept ? "accepted" : "rejected"}`;
+				this.event(id, "decision", notice, USER, {
+					wake: true,
+					noticeSummaries: [{ key: `proposal:${proposalId}`, text: notice }],
+				});
+			});
+		} finally {
+			this.referenceBatch = undefined;
+		}
+		this.changed(id, accept ? this.members(id) : []);
+		return proposalFrom(this.one("SELECT * FROM decision_proposals WHERE id = ?", proposalId)!);
 	}
 
 	// Comments
@@ -2440,6 +2608,7 @@ function decisionAudience(value: unknown): MissionDecision["audience"] {
 function decisionFrom(row: Row): MissionDecision {
 	return {
 		id: str(row.id!),
+		number: num(row.number!),
 		text: str(row.text!),
 		audience: decisionAudience(row.audience),
 		...optionalAuthor(row.author_session_id),
@@ -2518,5 +2687,23 @@ function eventFrom(row: Row): MissionEvent {
 		...(row.task_id ? { taskId: str(row.task_id) } : {}),
 		...(row.health ? { health: str(row.health) as MissionHealth } : {}),
 		at: num(row.at!),
+	};
+}
+
+function proposalAttribution(actor: MissionActor): string {
+	return actor.proposedBySessionId ? ` (proposed by chat ${actor.proposedBySessionId})` : "";
+}
+
+function proposalFrom(row: Row): MissionDecisionProposal {
+	return {
+		id: str(row.id!),
+		decisionId: str(row.decision_id!),
+		kind: str(row.kind!) as MissionDecisionProposal["kind"],
+		...(row.text !== null ? { text: str(row.text!) } : {}),
+		reason: str(row.reason!),
+		authorSessionId: str(row.author_session_id!),
+		status: str(row.status!) as MissionDecisionProposal["status"],
+		createdAt: num(row.created_at!),
+		...(row.resolved_at !== null ? { resolvedAt: num(row.resolved_at!) } : {}),
 	};
 }
