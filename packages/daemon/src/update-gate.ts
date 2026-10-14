@@ -14,8 +14,12 @@ export class UpdateGate {
 		this.now = now;
 	}
 
+	get paused(): boolean {
+		return this.now() < this.pausedUntil;
+	}
+
 	assertOpen(): void {
-		if (this.now() < this.pausedUntil)
+		if (this.paused)
 			throw new ServiceUnavailable(
 				"pilotd is preparing for an update; new work is temporarily paused. Retry shortly.",
 			);
@@ -31,6 +35,16 @@ export class UpdateGate {
 			ended = true;
 			this.pending--;
 		};
+	}
+
+	/** Freeze immediately, including while earlier admissions settle. */
+	pause(): boolean {
+		this.pausedUntil = this.now() + this.leaseMs;
+		return this.pending === 0;
+	}
+
+	release(): void {
+		this.pausedUntil = 0;
 	}
 
 	/** Busy attempts do not pause anything. Successful repeated attempts renew the bounded lease. */

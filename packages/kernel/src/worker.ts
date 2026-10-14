@@ -119,6 +119,7 @@ export function runKernelWorker(): void {
 	let session: KernelSession | undefined;
 	let initialization: Promise<void> | undefined;
 	let commands: Promise<void> = Promise.resolve();
+	let updateRevision = 0;
 	/** Latest context sent while the kernel was still starting. */
 	let pendingMission: { context?: MissionContext } | undefined;
 	const daemonCalls = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
@@ -200,7 +201,10 @@ export function runKernelWorker(): void {
 	}
 
 	async function execute(
-		command: Exclude<KernelCommand, { type: "start" | "shutdown" | "subagent" | "inspectJobs" }>,
+		command: Exclude<
+			KernelCommand,
+			{ type: "start" | "shutdown" | "subagent" | "inspectJobs" | "update.pause" | "update.resume" }
+		>,
 	): Promise<void> {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
@@ -360,6 +364,25 @@ export function runKernelWorker(): void {
 				);
 				await shutdown(1);
 			});
+			return;
+		}
+		if (command.type === "update.resume") {
+			updateRevision++;
+			session?.resumeAfterUpdate();
+			return;
+		}
+		if (command.type === "update.pause") {
+			const revision = ++updateRevision;
+			void (async () => {
+				await initialization;
+				await commands;
+				if (revision !== updateRevision) return;
+				if (!session) throw new Error("Kernel has not started");
+				await session.pauseForUpdate();
+				if (revision === updateRevision) await send({ type: "update.paused", id: command.id });
+			})().catch((error) =>
+				send({ type: "update.paused", id: command.id, error: errorText(error) }).catch(() => undefined),
+			);
 			return;
 		}
 		if (command.type === "inspectJobs") {

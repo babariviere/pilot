@@ -98,39 +98,44 @@ final class DaemonController: ObservableObject {
 
     /// Hold lifecycle ownership from preparation through verified process exit. A menu restart
     /// cannot replace the daemon between granting its lease and shutting down that leased process.
-    func stopIfIdleForUpdate() async throws -> Bool {
+    func pauseAndStopForUpdate() async throws -> Bool {
         guard !lifecycleBusy else { return false }
         lifecycleBusy = true
         defer { lifecycleBusy = false }
-        guard try await isIdleForUpdate() else { return false }
+        guard let pid = try await pauseForUpdate() else { return false }
         try Task.checkCancellation()
-        try await stopForUpdate()
+        try await stopForUpdate(expectedPID: pid)
         return true
     }
 
     /// The daemon grants a short lease that blocks new admissions while launchd shuts it down.
-    private func isIdleForUpdate() async throws -> Bool {
+    private func pauseForUpdate() async throws -> Int32? {
         // Do not pause admissions in an unmanaged foreground daemon that we cannot stop.
         guard (try? await run("/bin/launchctl", ["print", "\(domain)/\(Self.label)"])) != nil else {
             throw DaemonError("Automatic installation requires the app-managed pilotd launch agent.")
         }
-        var request = URLRequest(url: baseURL.appending(path: "api/update/prepare"))
+        var request = URLRequest(url: baseURL.appending(path: "api/update/pause"))
         request.httpMethod = "POST"
         request.timeoutInterval = 5
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data("{}".utf8)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
-            throw DaemonError("pilotd could not prepare for an update. Restart pilotd from the new app once agents are idle.")
+            throw DaemonError("pilotd could not prepare for an update. Retry from Settings without interrupting active tool calls.")
         }
-        return try JSONDecoder().decode(UpdatePreparation.self, from: data).ready
+        let preparation = try JSONDecoder().decode(UpdatePreparation.self, from: data)
+        guard preparation.ready else { return nil }
+        guard let pid = preparation.processId, pid > 0 else {
+            throw DaemonError("pilotd did not identify the paused process; installation has been postponed.")
+        }
+        return pid
     }
 
-    private func stopForUpdate() async throws {
+    private func stopForUpdate(expectedPID: Int32) async throws {
         // Never terminate an unmanaged foreground daemon or ignore a failed bootout.
         let definition = try await run("/bin/launchctl", ["print", "\(domain)/\(Self.label)"])
         guard let line = definition.split(separator: "\n").first(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("pid = ") }),
-              let pid = Int32(line.split(separator: "=").last!.trimmingCharacters(in: .whitespaces)), pid > 0
+              let pid = Int32(line.split(separator: "=").last!.trimmingCharacters(in: .whitespaces)), pid > 0, pid == expectedPID
         else { throw DaemonError("Could not identify the managed pilotd process; installation has been postponed.") }
         try await run("/bin/launchctl", ["bootout", "\(domain)/\(Self.label)"])
         for _ in 0 ..< 40 {

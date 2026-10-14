@@ -1,6 +1,7 @@
 /** One durable pi session: a Harness root conversation driven by the native Pi kernel. */
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
+import { ToolDrain } from "@babariviere/pi-extensions/tool-drain";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
@@ -141,6 +142,8 @@ export class KernelSession {
 	#reportedWorking = false;
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
+	#updateRevision = 0;
+	#toolDrain!: ToolDrain;
 	#changingModel = false;
 	#admissions = 0;
 	/** Retry, edit, restore or an attempt switch is stopping work and moving the session to another conversation. */
@@ -214,6 +217,7 @@ export class KernelSession {
 		);
 		let artifactConversation: Conversation | undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
+		const toolDrain = new ToolDrain();
 		const mission: { current?: MissionContext } = { current: spec.mission };
 		const callMission: MissionCall | undefined = hooks.callMission
 			? (action, args) =>
@@ -372,7 +376,9 @@ export class KernelSession {
 				);
 				const audited = audit ? audit.prepare(prepared) : prepared;
 				const tracked = jobs.prepare(refs ? refs.prepare(audited) : audited);
-				return compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness);
+				return toolDrain.prepare(
+					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
+				);
 			};
 			const registry = createRegistry();
 			registry.install(prepare(adapter.extension));
@@ -438,6 +444,7 @@ export class KernelSession {
 			session.jobsMonitor = jobs;
 			await jobs.refresh();
 			session.#reportedWorking = status.snapshot.run !== undefined;
+			session.#toolDrain = toolDrain;
 			session.#origins = new InputOrigins(
 				owned.storage,
 				await lineage(owned.storage, conversation.id, context),
@@ -526,6 +533,21 @@ export class KernelSession {
 			owned.release();
 			throw error;
 		}
+	}
+
+	/** Freeze before unsafe tool intent, then join committed results and child tool drains. */
+	async pauseForUpdate(): Promise<void> {
+		const revision = ++this.#updateRevision;
+		await this.#toolDrain.pause(this.harness, context);
+		if (revision === this.#updateRevision) await this.subagents.lifecycle("quiesce");
+	}
+
+	resumeAfterUpdate(): void {
+		this.#updateRevision++;
+		this.#toolDrain.resume();
+		void this.subagents
+			.lifecycle("resumeTools")
+			.catch((error) => console.warn("pilot: could not resume subagents", error));
 	}
 
 	get model(): string {

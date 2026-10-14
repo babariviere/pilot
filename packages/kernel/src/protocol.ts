@@ -90,9 +90,12 @@ export type KernelCommand =
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
+	| { type: "update.pause"; id: string }
+	| { type: "update.resume" }
 	| { type: "shutdown" };
 
 export type KernelPacket =
+	| { type: "update.paused"; id: string; error?: string }
 	| { type: "systemMessageState"; event: import("./held-inputs.ts").SystemMessageStateEvent }
 	| {
 			type: "ready";

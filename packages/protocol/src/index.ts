@@ -200,8 +200,10 @@ export type AgentEvent =
 	| SnapshotPrefixEvent
 	| GitHubActionsUpdateEvent;
 
-/** POST /api/update/prepare, no body. Ready holds new worker admissions for a 30-second lease. */
+/** POST /api/update/pause (tool drain) or legacy /prepare (idle only). Both hold a 30-second admission lease. */
 export interface UpdatePreparation {
+	/** Pause endpoints identify the process whose workers were drained. */
+	processId?: number;
 	ready: boolean;
 }
 
