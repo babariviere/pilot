@@ -257,7 +257,7 @@ test("compactor failures and invalid output back off, survive new notes, and rec
 	await service.note("p", "one", "chat");
 	await service.note("p", "two", "chat");
 	await until(() => service.summary("p").compaction.state === "backoff");
-	assert.match(service.summary("p").compaction.error!, /provider offline/);
+	assert.equal(service.summary("p").compaction.error, "provider offline");
 	await service.note("p", "three", "chat");
 	assert.equal((await service.wake("p")).count, 3);
 	assert.equal(calls, 1);
@@ -265,6 +265,42 @@ test("compactor failures and invalid output back off, survive new notes, and rec
 	assert.match(service.summary("p").compaction.error!, /one nonempty line/);
 	await until(() => service.summary("p").compaction.state === "idle");
 	assert.equal(calls, 3);
+});
+
+test("exhausted summary corrections preserve notes and existing summaries across restart", async (t) => {
+	const message = "Memory summary was 282 UTF-8 bytes (limit 280) after 3 attempts; will retry automatically";
+	let calls = 0;
+	const { home, service } = await fixture(t, async () => {
+		if (calls++ === 0) return "saved summary";
+		throw new Error(message);
+	});
+	const entries = [
+		await service.note("p", "first condition", "chat"),
+		await service.note("p", "second condition", "chat"),
+	];
+	await until(() => service.summary("p").compaction.state === "idle");
+	const treePath = join(home, "memory", "p", "tree", "2");
+	const saved = await readFile(treePath);
+	entries.push(
+		await service.note("p", "third condition", "chat"),
+		await service.note("p", "fourth condition", "chat"),
+	);
+	await until(() => service.summary("p").compaction.state === "backoff");
+	assert.equal(service.summary("p").compaction.error, message);
+	assert.deepEqual(await readFile(treePath), saved);
+	assert.deepEqual(
+		(await service.wake("p")).nodes.map((n) => n.entry),
+		entries,
+	);
+	await service.stop();
+	const reopened = new ProjectMemoryService(home);
+	t.after(() => reopened.stop());
+	assert.deepEqual(
+		(await reopened.wake("p")).nodes.map((n) => n.entry),
+		entries,
+	);
+	assert.deepEqual(await readFile(treePath), saved);
+	assert.ok((await reopened.load("p")).compaction.pending > 0);
 });
 
 test("a pathological recall regex is timed out without blocking append or wake", async (t) => {

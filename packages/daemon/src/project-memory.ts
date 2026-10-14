@@ -221,7 +221,7 @@ export class ProjectMemoryService {
 				const retry = {
 					attempt,
 					at: Date.now() + delay,
-					error: String(error).slice(0, 500),
+					error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
 					timer: setTimeout(() => {
 						this.retries.delete(projectId);
 						this.schedule(projectId);

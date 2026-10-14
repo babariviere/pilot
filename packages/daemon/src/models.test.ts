@@ -135,6 +135,108 @@ test("memory compaction uses the explicit luna model, no tools or reasoning, and
 	assert.equal(calls, 2);
 });
 
+for (const scenario of [
+	{
+		name: "normalizes multiline whitespace",
+		outputs: ["  Keep\r\nimportant\t conditions.\u2028 "],
+		expected: "Keep important conditions.",
+	},
+	{ name: "accepts exactly 280 UTF-8 bytes", outputs: ["é".repeat(140)], expected: "é".repeat(140) },
+	{
+		name: "rewrites oversized multibyte text",
+		outputs: ["é".repeat(141), "Only on AC power."],
+		expected: "Only on AC power.",
+		feedback: /282 UTF-8 bytes/,
+	},
+	{
+		name: "rewrites empty output",
+		outputs: [" \n\t ", "Keep the condition."],
+		expected: "Keep the condition.",
+		feedback: /was empty/,
+	},
+	{
+		name: "rewrites NUL output",
+		outputs: ["bad\0summary", "Valid summary."],
+		expected: "Valid summary.",
+		feedback: /NUL character/,
+	},
+	{
+		name: "stops after two corrective attempts",
+		outputs: ["é".repeat(141), "é".repeat(141), "é".repeat(141)],
+		error: /282 UTF-8 bytes \(limit 280\) after 3 attempts/,
+		feedback: /282 UTF-8 bytes/,
+	},
+	{
+		name: "reports persistently empty output",
+		outputs: ["", "", ""],
+		error: /was empty after 3 attempts/,
+		feedback: /was empty/,
+	},
+]) {
+	test(`memory compaction ${scenario.name}`, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
+		const controller = new AbortController();
+		let calls = 0;
+		t.mock.method(
+			ModelRuntime,
+			"create",
+			async () =>
+				({
+					...requiredAuthRegistration,
+					getAvailable: async () => [luna],
+					completeSimple: async (
+						chosen: Model,
+						context: Parameters<ModelRuntime["completeSimple"]>[1],
+						options: Parameters<ModelRuntime["completeSimple"]>[2],
+					) => {
+						assert.equal(chosen, luna);
+						assert.equal(context.tools, undefined);
+						assert.equal(options?.signal, controller.signal);
+						assert.equal(options?.maxRetries, 0);
+						assert.equal(options?.reasoning, undefined);
+						assert.equal(context.messages.length, 1, "rejected output is not replayed or accumulated");
+						assert.equal(context.messages[0]!.content, "original memories");
+						if (calls) {
+							assert.match(context.systemPrompt!, scenario.feedback!);
+							assert.match(context.systemPrompt!, /preserve important conditions/);
+						}
+						assert.ok(calls < scenario.outputs.length, "model attempts stay bounded");
+						return answer(scenario.outputs[calls++]!);
+					},
+				}) as unknown as ModelRuntime,
+		);
+		const result = new ModelCatalog(root).summarizeMemory("original memories", controller.signal);
+		if (scenario.error) await assert.rejects(result, scenario.error);
+		else assert.equal(await result, scenario.expected);
+		assert.equal(calls, scenario.outputs.length);
+	});
+}
+
+test("memory compaction does not start a corrective attempt after cancellation", async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const controller = new AbortController();
+	let calls = 0;
+	t.mock.method(
+		ModelRuntime,
+		"create",
+		async () =>
+			({
+				...requiredAuthRegistration,
+				getAvailable: async () => [{ ...cheap, id: "gpt-6-luna", provider: "openai-codex" }],
+				completeSimple: async () => {
+					calls++;
+					controller.abort();
+					return answer("x".repeat(281));
+				},
+			}) as unknown as ModelRuntime,
+	);
+	await assert.rejects(new ModelCatalog(root).summarizeMemory("memories", controller.signal), { name: "AbortError" });
+	assert.equal(calls, 1);
+});
+
 test("memory compaction never falls back to another model when luna is unavailable", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
