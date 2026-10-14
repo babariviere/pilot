@@ -31,6 +31,7 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { reasonLine } from "./needs-you-reason.ts";
 import type { PullRequestBinding } from "./sessions.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
@@ -108,6 +109,7 @@ CREATE TABLE IF NOT EXISTS decision_proposals (
 CREATE UNIQUE INDEX IF NOT EXISTS pending_proposal_per_decision
 	ON decision_proposals(mission_id, decision_id) WHERE status = 'pending';
 CREATE INDEX IF NOT EXISTS proposals_by_mission ON decision_proposals(mission_id, status, resolved_at);
+CREATE INDEX IF NOT EXISTS proposals_attention_order ON decision_proposals(mission_id, created_at, id) WHERE status = 'pending';
 CREATE TABLE IF NOT EXISTS comments (
 	id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -236,6 +238,7 @@ CREATE TABLE IF NOT EXISTS member_completions (
 	outcome_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS blocked_tasks_by_mission ON tasks (mission_id) WHERE status = 'blocked';
+CREATE INDEX IF NOT EXISTS blocked_tasks_attention_order ON tasks (mission_id, sort, number) WHERE status = 'blocked';
 CREATE TABLE IF NOT EXISTS member_runs (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -255,6 +258,8 @@ CREATE TABLE IF NOT EXISTS member_pull_requests (
 );
 CREATE INDEX IF NOT EXISTS needs_you_comments_by_mission ON comments (mission_id)
 	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS needs_you_comments_attention_order ON comments (mission_id, created_at, id)
+	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
 `;
 
 export interface MissionNotice {
@@ -270,14 +275,24 @@ export const NOTICE_MAX_DELAY_MS = 30 * 60_000;
 export const NOTICE_WINDOW_MS = 3_600_000;
 export const NOTICE_HOURLY_CAP = 20;
 
-/** Summary-only attention counts, without loading task/comment bodies or any other detail. */
+/** Summary-only attention counts and one bounded reason, without loading full task/comment bodies. */
 const MISSION_SELECT = `SELECT missions.*,
 	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'blocked') +
 	CASE WHEN coordinator_session_id IS NULL THEN
 		(SELECT COUNT(*) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
 			AND target_session_id IS NULL AND author_session_id IS NOT NULL)
 	ELSE 0 END +
-	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') AS needs_you_count
+	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') AS needs_you_count,
+	COALESCE(
+		(SELECT substr('Blocked: ' || title, 1, 201) FROM tasks
+			WHERE mission_id = missions.id AND status = 'blocked' ORDER BY sort, number LIMIT 1),
+		CASE WHEN coordinator_session_id IS NULL THEN
+			(SELECT substr(text, 1, 201) FROM comments WHERE mission_id = missions.id AND resolved_at IS NULL
+				AND target_session_id IS NULL AND author_session_id IS NOT NULL ORDER BY created_at, id LIMIT 1)
+		END,
+		(SELECT substr('Decision proposal: ' || reason, 1, 201) FROM decision_proposals
+			WHERE mission_id = missions.id AND status = 'pending' ORDER BY created_at, id LIMIT 1)
+	) AS needs_you_reason
 	FROM missions`;
 
 type Row = Record<string, SQLInputValue>;
@@ -2582,6 +2597,7 @@ function missionFrom(row: Row): Mission {
 		...(row.autopilot ? { autopilot: true } : {}),
 		briefRevision: num(row.brief_revision!),
 		needsYouCount: num(row.needs_you_count!),
+		...(row.needs_you_reason ? { needsYouReason: reasonLine(str(row.needs_you_reason)) } : {}),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),
 		...(row.completed_at !== null && row.completed_at !== undefined ? { completedAt: num(row.completed_at) } : {}),

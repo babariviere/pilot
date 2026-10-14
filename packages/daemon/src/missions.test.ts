@@ -358,14 +358,16 @@ test("summary attention counts track task and comment changes without loading de
 			assert.equal(missions.list().find((item) => item.id === id)?.needsYouCount, summary.needsYouCount);
 			return summary.needsYouCount;
 		};
-		// A summary must not fetch any task/comment bodies, brief, resources or activity.
+		// A summary must not fetch full task/comment bodies, brief, resources or activity.
 		missions.detail = () => {
 			throw new Error("unexpected detail read");
 		};
 		assert.equal(counts(), 0);
+		assert.equal(missions.require(id).needsYouReason, undefined);
 		const task = missions.resolveTask(id, "1");
 		missions.updateTask(id, task.id, { status: "blocked" });
 		assert.equal(counts(), 1);
+		assert.equal(missions.require(id).needsYouReason, "Blocked: A");
 		missions.addComment(id, { text: "User's own comment" });
 		missions.addComment(id, { text: "Addressed", targetSessionId: "agent" }, { sessionId: "agent" });
 		assert.equal(counts(), 1);
@@ -410,6 +412,7 @@ test("summary attention counts survive restart and ignore resolved-comment detai
 		missions = new MissionStore(path);
 		assert.equal(missions.list()[0]?.needsYouCount, 2);
 		assert.equal(missions.detail(id).mission.needsYouCount, 2);
+		assert.equal(missions.list()[0]?.needsYouReason, "Blocked: Blocked");
 	} finally {
 		missions.close();
 		rmSync(home, { recursive: true, force: true });
@@ -1495,8 +1498,10 @@ test("decision proposals are coordinator-only, replace pending suggestions, disc
 		assert.throws(() => store.proposeDecision(id, "D1", "Edit", true, "Reason", { sessionId: "lead" }), /not both/);
 		const first = store.proposeDecision(id, "D1", "New", undefined, "Superseded", { sessionId: "lead" });
 		assert.equal(store.require(id).needsYouCount, 1);
+		assert.equal(store.require(id).needsYouReason, "Decision proposal: Superseded");
 		assert.equal(store.detail(id).decisions[0]!.text, "Original");
 		const second = store.proposeDecision(id, d.id, undefined, true, "Obsolete", { sessionId: "lead" });
+		assert.equal(store.require(id).needsYouReason, "Decision proposal: Obsolete");
 		assert.deepEqual(
 			store.proposals(id).map((p) => p.id),
 			[second.id],
@@ -1505,6 +1510,7 @@ test("decision proposals are coordinator-only, replace pending suggestions, disc
 		store.updateDecision(id, "D1", undefined, {}, "reference");
 		assert.deepEqual(store.proposals(id), []);
 		assert.equal(store.require(id).needsYouCount, 0);
+		assert.equal(store.require(id).needsYouReason, undefined);
 		const third = store.proposeDecision(id, "D1", "Reword", undefined, "Reason", { sessionId: "lead" });
 		store.removeDecision(id, d.id);
 		assert.equal(store.proposals(id).length, 0);
@@ -1590,5 +1596,71 @@ test("pending and resolved proposals survive restart, including an accepted remo
 	} finally {
 		store.close();
 		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("summary reason selects an eligible question and changes when resolved or a task blocks", () => {
+	const missions = store();
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M" });
+		missions.join("agent", id);
+		missions.addComment(id, { text: "User note" });
+		missions.addComment(id, { text: "Addressed", targetSessionId: "agent" }, { sessionId: "agent" });
+		assert.equal(missions.require(id).needsYouReason, undefined);
+		const question = missions.addComment(id, { text: "Ship it?\nDetails" }, { sessionId: "agent" });
+		assert.equal(missions.require(id).needsYouReason, "Ship it?");
+		missions.update(id, { coordinatorSessionId: "agent" });
+		assert.equal(missions.require(id).needsYouReason, undefined);
+		missions.update(id, { coordinatorSessionId: null });
+		const blocked = missions.addTask(id, { title: "x".repeat(200), status: "blocked" });
+		assert.equal(missions.require(id).needsYouReason?.length, 200);
+		missions.removeTask(id, blocked.id);
+		assert.equal(missions.require(id).needsYouReason, "Ship it?");
+		missions.resolveComment(id, question.id);
+		assert.equal(missions.require(id).needsYouReason, undefined);
+	} finally {
+		missions.close();
+	}
+});
+
+test("existing stores gain ordered attention indexes so reason selection does not sort", () => {
+	const home = mkdtempSync(join(tmpdir(), "pilot-reason-indexes-"));
+	const path = join(home, "missions.sqlite");
+	let missions = new MissionStore(path);
+	try {
+		missions.close();
+		const legacy = new DatabaseSync(path);
+		legacy.exec(
+			"DROP INDEX blocked_tasks_attention_order; DROP INDEX needs_you_comments_attention_order; DROP INDEX proposals_attention_order;",
+		);
+		legacy.close();
+		missions = new MissionStore(path);
+		const db = new DatabaseSync(path, { readOnly: true });
+		try {
+			const tasks = db
+				.prepare(
+					"EXPLAIN QUERY PLAN SELECT substr(title, 1, 201) FROM tasks WHERE mission_id = ? AND status = 'blocked' ORDER BY sort, number LIMIT 1",
+				)
+				.all("m");
+			const comments = db
+				.prepare(
+					"EXPLAIN QUERY PLAN SELECT substr(text, 1, 201) FROM comments WHERE mission_id = ? AND resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL ORDER BY created_at, id LIMIT 1",
+				)
+				.all("m");
+			assert.ok(tasks.some((row) => String(row.detail).includes("blocked_tasks_attention_order")));
+			assert.ok(comments.some((row) => String(row.detail).includes("needs_you_comments_attention_order")));
+			const proposals = db
+				.prepare(
+					"EXPLAIN QUERY PLAN SELECT substr(reason, 1, 201) FROM decision_proposals WHERE mission_id = ? AND status = 'pending' ORDER BY created_at, id LIMIT 1",
+				)
+				.all("m");
+			assert.ok(proposals.some((row) => String(row.detail).includes("proposals_attention_order")));
+			assert.ok([...tasks, ...comments, ...proposals].every((row) => !String(row.detail).includes("TEMP B-TREE")));
+		} finally {
+			db.close();
+		}
+	} finally {
+		missions.close();
+		rmSync(home, { recursive: true, force: true });
 	}
 });

@@ -497,7 +497,6 @@ private struct NeedsYouRow: View {
     let item: MissionNeedsYouItem
     let mission: Mission
     @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
         Button(action: open) {
@@ -517,6 +516,7 @@ private struct NeedsYouRow: View {
             }
         }
         .buttonStyle(.plain)
+        .help(subtitle)
         .accessibilityLabel("\(title). \(subtitle)")
         .accessibilityHint(action)
     }
@@ -542,17 +542,7 @@ private struct NeedsYouRow: View {
     }
 
     private var subtitle: String {
-        switch item {
-        case let .chat(session):
-            session.outcome == .failed ? "Failed. Open the chat to see why." :
-                session.isActiveMissionCoordinator ? "New result. Review the chat." : "Finished. Review the result."
-        case let .blockedTask(task):
-            "Blocked" + (task.sessionId.flatMap { client.session($0)?.title }.map { " · \($0)" } ?? "")
-        case let .decisionProposal(proposal, _): proposal.reason
-        case let .comment(comment):
-            "Comment from \(missionAuthorName(comment.authorSessionId, client: client))"
-                + (comment.anchor.map { " on “\($0)”" } ?? "")
-        }
+        item.needsYouLabel()
     }
 
     private var action: String {

@@ -38,6 +38,8 @@ public struct DashboardNeedsYouItem: Codable, Identifiable, Equatable, Sendable 
     public let outcome: SessionOutcome?
     /// Failure or stop reason, one short line.
     public let reason: String?
+    /// Nil for older daemons; presentation derives the same vocabulary from legacy fields.
+    public let attentionReason: NeedsYouReason?
     /// `question`: blocked tasks plus open comments awaiting the user.
     public let count: Int?
     /// Epoch milliseconds.
@@ -46,7 +48,7 @@ public struct DashboardNeedsYouItem: Codable, Identifiable, Equatable, Sendable 
     public init(
         kind: DashboardNeedsYouKind, id: String, title: String, sessionId: String? = nil, missionId: String? = nil,
         scheduledId: String? = nil, outcome: SessionOutcome? = nil, reason: String? = nil, count: Int? = nil,
-        at: Double
+        at: Double, attentionReason: NeedsYouReason? = nil
     ) {
         self.kind = kind
         self.id = id
@@ -56,6 +58,7 @@ public struct DashboardNeedsYouItem: Codable, Identifiable, Equatable, Sendable 
         self.scheduledId = scheduledId
         self.outcome = outcome
         self.reason = reason
+        self.attentionReason = attentionReason
         self.count = count
         self.at = at
     }
@@ -439,14 +442,16 @@ public struct ProjectDashboardCount: Codable, Equatable, Sendable {
     public let needsYou: Int
     /// Open tracked items the Inbox lists (Linear and Slack, without hidden labels).
     public let tracked: Int
+    public let needsYouReasons: [String: Int]?
 
-    public init(working: Int = 0, needsYou: Int = 0, tracked: Int = 0) {
+    public init(working: Int = 0, needsYou: Int = 0, tracked: Int = 0, needsYouReasons: [String: Int]? = nil) {
         self.working = working
         self.needsYou = needsYou
         self.tracked = tracked
+        self.needsYouReasons = needsYouReasons
     }
 
-    private enum CodingKeys: String, CodingKey { case working, needsYou, tracked }
+    private enum CodingKeys: String, CodingKey { case working, needsYou, tracked, needsYouReasons }
 
     /// pilotd omits `tracked` when it is 0.
     public init(from decoder: Decoder) throws {
@@ -454,6 +459,7 @@ public struct ProjectDashboardCount: Codable, Equatable, Sendable {
         working = try container.decode(Int.self, forKey: .working)
         needsYou = try container.decode(Int.self, forKey: .needsYou)
         tracked = try container.decodeIfPresent(Int.self, forKey: .tracked) ?? 0
+        needsYouReasons = try container.decodeIfPresent([String: Int].self, forKey: .needsYouReasons)
     }
 }
 

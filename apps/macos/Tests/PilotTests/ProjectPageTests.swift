@@ -42,15 +42,15 @@ private func pullRequest(_ state: DashboardPullRequestState = .open,
 
 @Test func needsYouRowsExplainWhatHappenedAndOfferOneAction() {
     let failed = need(.failed, "f", session: "f", outcome: .failed, reason: "kernel exited with code 137")
-    #expect(ProjectPageText.needsSubtitle(failed, now: now) == "Failed 12m ago: kernel exited with code 137")
+    #expect(ProjectPageText.needsSubtitle(failed, now: now) == "Failed: kernel exited with code 137")
     #expect(ProjectPageText.needsAction(failed) == "Open chat")
     let unread = need(.unread, "u", session: "u", outcome: .done)
-    #expect(ProjectPageText.needsSubtitle(unread, now: now) == "Finished 12m ago.")
+    #expect(ProjectPageText.needsSubtitle(unread, now: now) == "Not reviewed: finished 12m ago")
     #expect(ProjectPageText.needsAction(unread) == "Review")
     let stopped = need(.unread, "s", session: "s", outcome: .stopped, at: nowMs - 5_000)
-    #expect(ProjectPageText.needsSubtitle(stopped, now: now) == "Stopped just now.")
+    #expect(ProjectPageText.needsSubtitle(stopped, now: now) == "Not reviewed: finished just now")
     let question = need(.question, "q", mission: "m", count: 2)
-    #expect(ProjectPageText.needsSubtitle(question, now: now) == "2 questions or blocked tasks are waiting on you.")
+    #expect(ProjectPageText.needsSubtitle(question, now: now) == "Mission: A question or blocked task is waiting on you")
     #expect(ProjectPageText.needsAction(question) == "Answer")
     // Nothing to open yet: the row is shown without an action.
     #expect(ProjectPageText.needsAction(need(.scheduledFailed, "x")) == nil)

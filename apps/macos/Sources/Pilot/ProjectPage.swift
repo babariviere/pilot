@@ -704,6 +704,7 @@ struct ProjectNeedsYouRow: View {
         }
         .buttonStyle(.plain)
         .disabled(action == nil)
+        .help(item.needsYouLabel(now: now))
         .accessibilityLabel("\(item.title). \(subtitle)")
         .accessibilityHint(action ?? "")
         .modifier(ScheduledFailureActions(item: item))
@@ -1084,25 +1085,7 @@ enum ProjectPageText {
     }
 
     static func needsSubtitle(_ item: DashboardNeedsYouItem, now: Date = Date()) -> String {
-        let when = compactAgo(item.at, now: now)
-        switch item.kind {
-        case .unread:
-            let lead = item.outcome == .stopped ? "Stopped \(when)." : "Finished \(when)."
-            return [lead, item.reason].compactMap { $0 }.joined(separator: " ")
-        case .failed:
-            return item.reason.map { "Failed \(when): \($0)" } ?? "Failed \(when). Open the chat to see why."
-        case .question:
-            // A chat's own question, rather than a mission's blocked tasks.
-            if item.sessionId != nil {
-                return item.reason.map { "Asked \(when): \($0)" } ?? "Asked \(when). Open the chat to answer."
-            }
-            let count = item.count ?? 0
-            if count <= 0 { return "The mission is waiting on you." }
-            return count == 1 ? "1 question or blocked task is waiting on you."
-                : "\(count) questions or blocked tasks are waiting on you."
-        case .scheduledFailed:
-            return item.reason.map { "Couldn't start: \($0)" } ?? "A scheduled item couldn't start."
-        }
+        item.needsYouLabel(now: now)
     }
 
     static func staleDetail(receivedAt: Date?, error: String?, now: Date = Date()) -> String {

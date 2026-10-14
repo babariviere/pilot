@@ -499,6 +499,8 @@ export interface Mission {
 	/** Blocked tasks plus open, unaddressed agent comments when there is no coordinator.
 	 * Excludes unread member-chat results, which clients count locally. */
 	needsYouCount: number;
+	/** First blocked task, unaddressed agent question or pending decision proposal, bounded to one line. */
+	needsYouReason?: string;
 	createdAt: number;
 	updatedAt: number;
 	completedAt?: number;
@@ -786,6 +788,15 @@ export interface DashboardSection<T> {
  */
 export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "unread";
 
+export type NeedsYouReasonKind = "failed" | "asks" | "not_reviewed" | "couldnt_start" | "mission";
+
+/** One reason per row. Not-reviewed age is formatted by clients from the row's `at`. */
+export interface NeedsYouReason {
+	kind: NeedsYouReasonKind;
+	/** First non-empty line, at most 200 characters. Omitted for not_reviewed. */
+	detail?: string;
+}
+
 export interface DashboardNeedsYouItem {
 	kind: DashboardNeedsYouKind;
 	/** Stable row key. */
@@ -801,6 +812,8 @@ export interface DashboardNeedsYouItem {
 	outcome?: SessionOutcome;
 	/** Failure or stop reason, one short line. */
 	reason?: string;
+	/** Shared attention vocabulary for metadata, tooltips and accessibility. */
+	attentionReason: NeedsYouReason;
 	/** `question`: blocked tasks plus open comments awaiting the user. */
 	count?: number;
 	/** Epoch ms: completion time, mission update time, or the item's scheduled time. Newest first within a kind. */
@@ -962,6 +975,8 @@ export interface ProjectDashboard {
 export interface ProjectDashboardCount {
 	working: number;
 	needsYou: number;
+	/** Uncapped row totals by reason. Omitted when no rows need the user. */
+	needsYouReasons?: Partial<Record<NeedsYouReasonKind, number>>;
 	/** Open tracked items the Inbox lists (Linear and Slack, without hidden labels). Omitted when 0. */
 	tracked?: number;
 }
