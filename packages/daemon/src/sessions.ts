@@ -130,6 +130,8 @@ export interface SessionMissionBridge {
 	/** The chat's mission, its status and this member's coordinator role. */
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator?: boolean } | undefined;
 	context(sessionId: string): MissionContext | undefined;
+	/** User title edits also rename the shared planning scope when this chat leads it. */
+	renameCoordinator?(sessionId: string, title: string): void;
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
 	readArtifactReference?(sessionId: string, id: string, revision?: number): Promise<Omit<ArtifactRevision, "html">>;
 	pullRequestCreated?(sessionId: string, url: string): void;
@@ -1634,6 +1636,13 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id)): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
+		// Apply before yielding: promotion must beat an in-flight automatic title result.
+		// Startup uses this same idempotent repair for older metadata and interrupted writes.
+		if (context?.coordinator === "self" && (meta.title !== context.title || meta.titlePending)) {
+			meta.title = context.title;
+			delete meta.titlePending;
+			void this.save(meta).catch((error) => console.warn(`pilotd: could not persist planning chat title: ${error}`));
+		}
 		if (context?.coordinator === "self")
 			void this.unbindCoordinatorPullRequests(meta)
 				.then(() => this.resumeRoleWork(id))
@@ -2213,7 +2222,9 @@ export class SessionManager {
 			const next = title.trim().replace(/\s+/g, " ").slice(0, MAX_TITLE_LENGTH);
 			if (!next) throw new Error("title is required");
 			const meta = this.require(id);
-			if (meta.title === next && !meta.titlePending) return this.summary(meta);
+			const unchanged = meta.title === next && !meta.titlePending;
+			this.missions?.renameCoordinator?.(id, next);
+			if (unchanged) return this.summary(meta);
 			meta.title = next;
 			delete meta.titlePending;
 			await this.save(meta);

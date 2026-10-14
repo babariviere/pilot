@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +45,91 @@ test("session summaries resolve current membership without attention or task-det
 	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, true);
 	f.store.update(mission.id, { status: "done" });
 	assert.equal(f.sessions.get(member.id)?.activeMissionCoordinator, undefined);
+});
+
+test("planning title follows creation, promotion and shared renames; demotion keeps the last title", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const changes: SessionSummary[] = [];
+	f.sessions.onChange((session) => changes.push(session));
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared plan",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	assert.equal(f.sessions.get(lead.id)?.title, "Shared plan");
+	f.service.join(member.id, { missionId: mission.id });
+	f.store.update(mission.id, { coordinatorSessionId: member.id });
+	assert.equal(f.sessions.get(member.id)?.title, "Shared plan");
+	f.store.update(mission.id, { title: "Revised plan" });
+	assert.equal(f.sessions.get(member.id)?.title, "Revised plan");
+	assert.equal(f.sessions.get(lead.id)?.title, "Shared plan");
+	assert.ok(changes.some((session) => session.id === member.id && session.title === "Revised plan"));
+	const renamed = await f.sessions.rename(member.id, "  User\n chosen  ");
+	assert.equal(renamed.title, "User chosen");
+	assert.equal(f.store.require(mission.id).title, "User chosen");
+	await f.sessions.rename(lead.id, "Independent");
+	assert.equal(f.store.require(mission.id).title, "User chosen");
+	f.store.update(mission.id, { coordinatorSessionId: null });
+	f.store.update(mission.id, { title: "No leader" });
+	assert.equal(f.sessions.get(member.id)?.title, "User chosen");
+	await Promise.all(f.sessions["saving"].values());
+	const persisted = JSON.parse(await readFile(join(f.home, "data", "sessions", member.id, "meta.json"), "utf8"));
+	assert.equal(persisted.title, "User chosen");
+});
+
+test("promotion cancels a pending automatic title and does not start another generator", async (t) => {
+	const f = await fixture(t);
+	let resolve!: (title: string) => void;
+	const generated = new Promise<string>((done) => {
+		resolve = done;
+	});
+	const title = t.mock.fn(() => generated);
+	f.sessions["factories"].title = title;
+	const lead = await f.sessions.spawn({ projectId: f.project.id, message: "First message" });
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared plan",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	resolve("Unwanted automatic title");
+	await Promise.all(f.sessions["titleTasks"]);
+	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
+	assert.equal(f.sessions["require"](lead.id).titlePending, undefined);
+	const calls = title.mock.callCount();
+	f.sessions["generateTitle"](f.sessions["require"](lead.id));
+	assert.equal(title.mock.callCount(), calls);
+});
+
+test("startup repairs legacy planning titles durably and idempotently", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared plan",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	await Promise.all(f.sessions["saving"].values());
+	const path = join(f.home, "data", "sessions", lead.id, "meta.json");
+	const legacy = JSON.parse(await readFile(path, "utf8"));
+	legacy.title = "Legacy title";
+	legacy.titlePending = { cwd: f.project.path, message: "Legacy message" };
+	await writeFile(path, JSON.stringify(legacy));
+	const title = t.mock.fn(async () => "Wrong title");
+	f.sessions["factories"].title = title;
+	await f.sessions.load();
+	await Promise.all(f.sessions["saving"].values());
+	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
+	const repaired = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(repaired.title, mission.title);
+	assert.equal(repaired.titlePending, undefined);
+	await f.sessions.load();
+	assert.equal(f.sessions.get(lead.id)?.title, mission.title);
+	assert.equal(title.mock.callCount(), 0);
 });
 
 test("decision audiences and task pins select prompts and avoid duplicate detail reads", async (t) => {
@@ -524,6 +609,7 @@ test("new mission starts a coordinator with the draft request and user context b
 	});
 	assert.ok(mission.coordinatorSessionId);
 	const session = f.sessions.get(mission.coordinatorSessionId)!;
+	assert.equal(session.title, "Plan");
 	assert.equal(session.missionId, mission.id);
 	assert.equal(session.projectId, f.project.id);
 	assert.equal(session.thinking, "high");

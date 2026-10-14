@@ -108,6 +108,11 @@ export class MissionService {
 			membership: (sessionId) => store.membership(sessionId),
 			leaveSpawn: (sessionId) => store.leave(sessionId),
 			context: (sessionId) => this.context(sessionId),
+			renameCoordinator: (sessionId, title) => {
+				const membership = store.membership(sessionId);
+				if (membership?.coordinator && store.require(membership.missionId).title !== title)
+					store.update(membership.missionId, { title });
+			},
 			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
 			readArtifactReference: (sessionId, id, revision) => this.readArtifactReference(sessionId, id, revision),
 			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
