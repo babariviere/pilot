@@ -123,29 +123,226 @@ extension EnvironmentValues {
 
 // MARK: - Settings window
 
+/// A page of the settings window. General pages come first in the sidebar, then one page per project.
 enum SettingsTab: Hashable {
-    case appearance, terminal, projects, updates
+    case appearance, notifications, terminal, updates
+    case project(String)
+
+    static let general: [SettingsTab] = [.appearance, .notifications, .terminal, .updates]
+
+    var title: String {
+        switch self {
+        case .appearance: "Appearance"
+        case .notifications: "Notifications"
+        case .terminal: "Terminal"
+        case .updates: "Updates"
+        case .project: "Project"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .appearance: "textformat"
+        case .notifications: "bell"
+        case .terminal: "terminal"
+        case .updates: "arrow.down.circle"
+        case .project: "folder"
+        }
+    }
 }
 
+/// Sidebar of general pages and projects beside the selected page. Resizable; pages keep a readable column.
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var client = AppModel.shared.client
+    @State private var addError: String?
 
     var body: some View {
-        TabView(selection: $model.settingsTab) {
-            AppearanceSettings()
-                .tabItem { Label("Appearance", systemImage: "textformat") }
-                .tag(SettingsTab.appearance)
-            TerminalSettings()
-                .tabItem { Label("Terminal", systemImage: "terminal") }
-                .tag(SettingsTab.terminal)
-            ProjectSettings()
-                .tabItem { Label("Projects", systemImage: "folder") }
-                .tag(SettingsTab.projects)
-            UpdateSettings()
-                .tabItem { Label("Updates", systemImage: "arrow.down.circle") }
-                .tag(SettingsTab.updates)
+        HStack(spacing: 0) {
+            SettingsSidebar(selection: $model.settingsTab, projects: client.projects) {
+                Task { await addProject() }
+            }
+            .frame(width: 210)
+            Divider()
+            detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 560, height: 420)
+        .frame(minWidth: 640, idealWidth: 780, maxWidth: .infinity, minHeight: 440, idealHeight: 580, maxHeight: .infinity)
+        .navigationTitle(title)
+        .onChange(of: client.projects) { _, projects in
+            // A removed project falls back to the first page.
+            if case let .project(id) = model.settingsTab, !projects.contains(where: { $0.id == id }) {
+                model.settingsTab = .appearance
+            }
+        }
+        .alert("Couldn't add the project", isPresented: Binding(get: { addError != nil }, set: { if !$0 { addError = nil } })) {
+            Button("OK") { addError = nil }
+        } message: {
+            Text(addError ?? "")
+        }
+    }
+
+    @ViewBuilder private var detail: some View {
+        switch model.settingsTab {
+        case .appearance:
+            SettingsPage("Appearance", subtitle: "Fonts for chat, code and tool output.") { AppearanceSettings() }
+        case .notifications:
+            SettingsPage("Notifications", subtitle: "Pilot only interrupts you for things that need you.") { NotificationSettings() }
+        case .terminal:
+            SettingsPage("Terminal", subtitle: "The session terminal runs on Ghostty.") { TerminalSettings() }
+        case .updates:
+            SettingsPage("Updates", subtitle: "Pilot updates itself from private GitHub releases.") { UpdateSettings() }
+        case let .project(id):
+            if let project = client.projects.first(where: { $0.id == id }) {
+                ProjectSettings(project: project).id(project.id)
+            } else {
+                Text("This project was removed.")
+                    .font(.pilot(.body))
+                    .foregroundStyle(Theme.mutedForeground)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+    }
+
+    private var title: String {
+        if case let .project(id) = model.settingsTab {
+            return client.projects.first { $0.id == id }?.name ?? "Project"
+        }
+        return model.settingsTab.title
+    }
+
+    private func addProject() async {
+        guard let path = chooseFolder() else { return }
+        do {
+            model.settingsTab = .project(try await client.createProject(ProjectRequest(path: path)).id)
+        } catch {
+            addError = error.localizedDescription
+        }
+    }
+}
+
+private struct SettingsSidebar: View {
+    @Binding var selection: SettingsTab
+    let projects: [Project]
+    let addProject: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            List(selection: Binding(get: { selection }, set: { if let next = $0 { selection = next } })) {
+                Section {
+                    ForEach(SettingsTab.general, id: \.self) { tab in
+                        Label(tab.title, systemImage: tab.symbol).tag(tab)
+                    }
+                }
+                Section("Projects") {
+                    ForEach(projects) { project in
+                        Label(project.name, systemImage: "folder")
+                            .lineLimit(1)
+                            .help(project.path.abbreviatingHome)
+                            .tag(SettingsTab.project(project.id))
+                    }
+                    if projects.isEmpty {
+                        Text("Add a project to group sessions by repository.")
+                            .font(.pilot(.caption))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .selectionDisabled()
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            Divider()
+            Button(action: addProject) {
+                Label("Add Project…", systemImage: "plus")
+                    .font(.pilot(.label))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(Theme.mutedForeground)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+        }
+    }
+}
+
+/// One settings page: a title and a one-line summary over a grouped form, with an optional trailing
+/// accessory in the header and a pinned footer for actions such as Save. Content stays within
+/// Theme.settingsColumn and centers in wide windows.
+struct SettingsPage<Accessory: View, Content: View, Footer: View>: View {
+    let title: String
+    let subtitle: String
+    let accessory: Accessory
+    let content: Content
+    let footer: Footer
+
+    init(_ title: String, subtitle: String, @ViewBuilder accessory: () -> Accessory,
+         @ViewBuilder content: () -> Content, @ViewBuilder footer: () -> Footer) {
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory()
+        self.content = content()
+        self.footer = footer()
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            let inset = max(0, (proxy.size.width - Theme.settingsColumn) / 2)
+            VStack(spacing: 0) {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(title)
+                            .font(.pilot(.headline, weight: .semibold))
+                            .foregroundStyle(Theme.foreground)
+                            .lineLimit(1)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(subtitle)
+                            .font(.pilot(.label))
+                            .foregroundStyle(Theme.mutedForeground)
+                            .lineLimit(2)
+                            .textSelection(.enabled)
+                    }
+                    Spacer(minLength: 12)
+                    accessory
+                }
+                .padding(.horizontal, 20 + inset)
+                .padding(.top, 20)
+                Form { content }
+                    .formStyle(.grouped)
+                    .scrollContentBackground(.hidden)
+                    .contentMargins(.horizontal, inset, for: .scrollContent)
+                if Footer.self != EmptyView.self {
+                    Divider()
+                    footer
+                        .padding(.horizontal, 20 + inset)
+                        .padding(.vertical, 12)
+                }
+            }
+            .background(Theme.background)
+        }
+    }
+}
+
+extension SettingsPage where Accessory == EmptyView, Footer == EmptyView {
+    init(_ title: String, subtitle: String, @ViewBuilder content: () -> Content) {
+        self.init(title, subtitle: subtitle, accessory: { EmptyView() }, content: content, footer: { EmptyView() })
+    }
+}
+
+/// Explanatory text under a settings section, leading-aligned like the rows above it.
+struct SettingsFooter: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.pilot(.caption))
+            .foregroundStyle(Theme.mutedForeground)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -153,32 +350,42 @@ private struct AppearanceSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        Form {
-            Section("Chat") {
-                FontFamilyPicker(title: "Font", selection: $settings.chatFontFamily, system: AppSettings.systemFont, families: AppSettings.fontFamilies)
-                SizeStepper(title: "Size", value: $settings.chatFontSize, range: 11 ... 22)
+        Section("Preview") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("The flaky test was a race in the session reopen path.").font(settings.fonts.body)
+                Text("npm test -- --grep reopen").font(settings.fonts.mono)
             }
-            Section("Code and tool output") {
-                FontFamilyPicker(title: "Font", selection: $settings.codeFontFamily, system: AppSettings.systemMono, families: AppSettings.monospacedFamilies)
-                SizeStepper(title: "Size", value: $settings.codeFontSize, range: 9 ... 20)
-            }
-            Section("Notifications") {
-                Toggle("Notify when a pull request is ready to merge", isOn: $settings.notifyWhenPRReady)
-                    .accessibilityHint("Sends a notification when an open pull request changes to ready.")
-            }
-            Section("Preview") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("The flaky test was a race in the session reopen path.").font(settings.fonts.body)
-                    Text("npm test -- --grep reopen").font(settings.fonts.mono)
-                }
-                .padding(.vertical, 4)
-            }
+            .padding(.vertical, 4)
+        }
+        Section("Chat") {
+            FontFamilyPicker(title: "Font", selection: $settings.chatFontFamily, system: AppSettings.systemFont, families: AppSettings.fontFamilies)
+            SizeStepper(title: "Size", value: $settings.chatFontSize, range: 11 ... 22)
+        }
+        Section("Code and tool output") {
+            FontFamilyPicker(title: "Font", selection: $settings.codeFontFamily, system: AppSettings.systemMono, families: AppSettings.monospacedFamilies)
+            SizeStepper(title: "Size", value: $settings.codeFontSize, range: 9 ... 20)
+        }
+        Section {
             HStack {
                 Spacer()
                 Button("Restore Defaults") { settings.resetFonts() }
             }
         }
-        .formStyle(.grouped)
+    }
+}
+
+private struct NotificationSettings: View {
+    @ObservedObject private var settings = AppSettings.shared
+
+    var body: some View {
+        Section {
+            Toggle(isOn: $settings.notifyWhenPRReady) {
+                Text("Pull request ready to merge")
+                Text("Notify when an open pull request has no blockers left. Pilot never merges.")
+            }
+        } footer: {
+            SettingsFooter("Failed sessions, unreviewed results and mission questions always show in the sidebar and menu bar.")
+        }
     }
 }
 
@@ -186,32 +393,26 @@ private struct TerminalSettings: View {
     @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
-        Form {
-            Section {
-                Toggle("Use ~/.config/ghostty/config", isOn: $settings.useGhosttyConfig)
-                Text("Theme, keybindings and other Ghostty options come from your Ghostty config. The font settings below override it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section("Font") {
-                Picker("Family", selection: $settings.terminalFontFamily) {
-                    Text("From Ghostty config").tag("")
-                    Divider()
-                    ForEach(AppSettings.monospacedFamilies, id: \.self) { Text($0).tag($0) }
-                }
-                HStack {
-                    Toggle("Custom size", isOn: Binding(
-                        get: { settings.terminalFontSize > 0 },
-                        set: { settings.terminalFontSize = $0 ? 13 : 0 }
-                    ))
-                    if settings.terminalFontSize > 0 {
-                        Spacer()
-                        Stepper("\(Int(settings.terminalFontSize)) pt", value: $settings.terminalFontSize, in: 8 ... 28)
-                    }
-                }
+        Section {
+            Toggle(isOn: $settings.useGhosttyConfig) {
+                Text("Use Ghostty config")
+                Text("Theme, keybindings and other options come from ~/.config/ghostty/config. The font settings below override it.")
             }
         }
-        .formStyle(.grouped)
+        Section("Font") {
+            Picker("Family", selection: $settings.terminalFontFamily) {
+                Text("From Ghostty config").tag("")
+                Divider()
+                ForEach(AppSettings.monospacedFamilies, id: \.self) { Text($0).tag($0) }
+            }
+            Toggle("Custom size", isOn: Binding(
+                get: { settings.terminalFontSize > 0 },
+                set: { settings.terminalFontSize = $0 ? 13 : 0 }
+            ))
+            if settings.terminalFontSize > 0 {
+                SizeStepper(title: "Size", value: $settings.terminalFontSize, range: 8 ... 28, step: 1)
+            }
+        }
     }
 }
 
@@ -234,13 +435,16 @@ private struct SizeStepper: View {
     let title: String
     @Binding var value: Double
     let range: ClosedRange<Double>
+    var step: Double = 0.5
 
     var body: some View {
-        Stepper(value: $value, in: range, step: 0.5) {
+        Stepper(value: $value, in: range, step: step) {
             HStack {
                 Text(title)
                 Spacer()
-                Text("\(value, specifier: value.rounded() == value ? "%.0f" : "%.1f") pt").foregroundStyle(.secondary)
+                Text("\(value, specifier: value.rounded() == value ? "%.0f" : "%.1f") pt")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -248,7 +452,6 @@ private struct SizeStepper: View {
 
 @MainActor
 final class ProjectEditor: ObservableObject {
-    @Published var selection: String?
     @Published var name = ""
     @Published var model = ""
     @Published var privateClones = true
@@ -256,6 +459,24 @@ final class ProjectEditor: ObservableObject {
     @Published var slackChannels: [TrackedChannelRef] = []
     @Published var linearTeam: TrackedTeamRef?
     @Published var error: String?
+    @Published private var loaded: Fields?
+
+    /// The editable values, to tell whether there is anything to save.
+    private struct Fields: Equatable {
+        var name: String
+        var model: String
+        var privateClones: Bool
+        var requirePullRequest: Bool
+        var channels: [String]
+        var team: String?
+    }
+
+    private var fields: Fields {
+        Fields(name: name, model: model, privateClones: privateClones, requirePullRequest: requirePullRequest,
+               channels: slackChannels.map(\.id), team: linearTeam?.id)
+    }
+
+    var hasChanges: Bool { loaded != nil && loaded != fields }
 
     func load(_ project: Project) {
         name = project.name
@@ -266,6 +487,7 @@ final class ProjectEditor: ObservableObject {
         slackChannels = (tracking?.slackChannels ?? []).map { TrackedChannelRef(id: $0, name: tracking?.slackChannelNames?[$0]) }
         linearTeam = tracking?.linearTeam.flatMap { $0.isEmpty ? nil : TrackedTeamRef(id: $0, name: tracking?.linearTeamName) }
         error = nil
+        loaded = fields
     }
 
     func addChannel(_ option: SlackChannelOption) {
@@ -293,103 +515,81 @@ final class ProjectEditor: ObservableObject {
     }
 }
 
+/// One project's settings. Edits stay local until Save; Remove keeps the sessions and the folder.
 private struct ProjectSettings: View {
+    let project: Project
     @ObservedObject private var client = AppModel.shared.client
-    @ObservedObject private var model = AppModel.shared
     @StateObject private var editor = ProjectEditor()
+    @State private var saving = false
+    @State private var confirmingRemoval = false
 
     var body: some View {
-        HSplitView {
-            VStack(spacing: 0) {
-                List(selection: $editor.selection) {
-                    ForEach(client.projects) { project in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(project.name)
-                            Text(project.path.abbreviatingHome).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        }
-                        .tag(project.id)
-                    }
-                }
-                HStack(spacing: 0) {
-                    Button { Task { await addProject() } } label: { Image(systemName: "plus").frame(width: 24, height: 20) }
-                    Button { Task { await removeSelected() } } label: { Image(systemName: "minus").frame(width: 24, height: 20) }
-                        .disabled(editor.selection == nil)
-                    Spacer()
-                }
-                .buttonStyle(.borderless)
-                .padding(6)
+        SettingsPage(project.name, subtitle: project.path.abbreviatingHome) {
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(filePath: project.path)])
             }
-            .frame(minWidth: 200, idealWidth: 220)
-
-            Group {
-                if let project = client.projects.first(where: { $0.id == editor.selection }) {
-                    Form {
-                        TextField("Name", text: $editor.name)
-                        LabeledContent("Folder") { Text(project.path.abbreviatingHome).textSelection(.enabled) }
-                        TextField("Default model", text: $editor.model, prompt: Text("pi default"))
-                        Toggle("Run each session in an isolated workspace", isOn: $editor.privateClones)
-                        Text("Sessions get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Toggle("Require PR", isOn: $editor.requirePullRequest)
-                        Text("Require a pull request when publishing changes. Disabling permits direct pushes to the default branch. Changes take effect when a session worker next starts.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        TrackingSettingsSection(project: project, editor: editor)
-                        if let error = editor.error { Text(error).foregroundStyle(.red) }
-                        HStack {
-                            Spacer()
-                            Button("Save") { Task { await save(project) } }
-                                .keyboardShortcut(.defaultAction)
-                        }
-                    }
-                    .formStyle(.grouped)
-                    .onAppear { editor.load(project) }
-                    .onChange(of: project) { _, updated in editor.load(updated) }
-                } else {
-                    Text(client.projects.isEmpty ? "Add a project to group sessions by repository." : "Select a project")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .controlSize(.small)
+        } content: {
+            Section("General") {
+                TextField("Name", text: $editor.name)
+                TextField("Default model", text: $editor.model, prompt: Text("pi default"))
+            }
+            Section("Workspace") {
+                Toggle(isOn: $editor.privateClones) {
+                    Text("Isolated workspace per session")
+                    Text("Sessions get their own working copy, so they never touch your checkout. Turn off to run in the folder itself.")
+                }
+                Toggle(isOn: $editor.requirePullRequest) {
+                    Text("Require a pull request")
+                    Text("Publish changes through a pull request. Turning this off allows direct pushes to the default branch. Applies when a session worker next starts.")
                 }
             }
-            .frame(minWidth: 280)
+            TrackingSettingsSection(project: project, editor: editor)
+        } footer: {
+            HStack(spacing: 12) {
+                Button("Remove Project…", role: .destructive) { confirmingRemoval = true }
+                if let error = editor.error {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.pilot(.caption))
+                        .foregroundStyle(Theme.destructive)
+                        .lineLimit(2)
+                        .help(error)
+                }
+                Spacer(minLength: 8)
+                if editor.hasChanges {
+                    Button("Revert") { editor.load(project) }
+                }
+                Button("Save") { Task { await save() } }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!editor.hasChanges || saving)
+            }
         }
-        .onAppear(perform: selectRequestedProject)
-        .onChange(of: model.settingsProjectId) { _, _ in selectRequestedProject() }
+        .onAppear { editor.load(project) }
+        .onChange(of: project) { _, updated in editor.load(updated) }
+        .confirmationDialog("Remove \(project.name)?", isPresented: $confirmingRemoval) {
+            Button("Remove Project", role: .destructive) { Task { await remove() } }
+        } message: {
+            Text("Its sessions are kept and the folder on disk is not changed.")
+        }
     }
 
-    /// "Project Settings…" on a project page asks for its project once.
-    private func selectRequestedProject() {
-        guard let id = model.settingsProjectId else { return }
-        editor.selection = id
-        model.settingsProjectId = nil
-    }
-
-    private func save(_ project: Project) async {
+    private func save() async {
+        saving = true
+        defer { saving = false }
         do {
-            _ = try await client.updateProject(
-                project.id,
-                editor.request
-            )
+            _ = try await client.updateProject(project.id, editor.request)
             editor.error = nil
         } catch {
             editor.error = error.localizedDescription
         }
     }
 
-    private func addProject() async {
-        guard let path = chooseFolder() else { return }
+    private func remove() async {
         do {
-            editor.selection = try await client.createProject(ProjectRequest(path: path)).id
+            try await client.deleteProject(project.id)
         } catch {
             editor.error = error.localizedDescription
         }
-    }
-
-    private func removeSelected() async {
-        guard let id = editor.selection else { return }
-        try? await client.deleteProject(id)
-        editor.selection = nil
     }
 }
 

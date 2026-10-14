@@ -384,33 +384,34 @@ struct UpdateSettings: View {
     @StateObject private var editor = UpdateTokenEditor()
 
     var body: some View {
-        Form {
-            Section("Private GitHub releases") {
-                Text(updater.repository?.name ?? "Development build")
-                Text("Pilot first uses gh auth token from your login-shell PATH. If gh is unavailable or cannot access this repository, enter a fine-grained token with Contents: Read-only access. Only manually entered tokens are stored in Keychain.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if updater.accessSource == .githubCLI {
-                    Text("Using local gh authentication.").font(.caption).foregroundStyle(.secondary)
-                }
-                SecureField("GitHub token", text: $editor.token)
-                    .disabled(!updater.configured || !updater.credentialsEditable)
-                HStack {
-                    Button("Save Access") {
-                        Task { if await updater.saveToken(editor.token) { editor.token = "" } }
-                    }.disabled(editor.token.isEmpty || !updater.configured || !updater.credentialsEditable)
-                    Button("Remove Saved Token") { updater.removeToken() }
-                        .disabled(!updater.configured || !updater.credentialsEditable)
-                }
-            }
-            Section("Updates") {
-                Toggle("Check automatically every hour", isOn: $updater.automaticChecks)
-                    .disabled(!updater.configured)
-                Text("Updates install when agents are idle and restart Pilot and pilotd. Terminal shells close. An update waiting to install may delay quitting Pilot until agents finish.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text(updater.status).font(.caption).textSelection(.enabled)
+        Section {
+            LabeledContent {
                 Button("Check for Updates…") { Task { await updater.check() } }.disabled(!updater.canCheck)
+            } label: {
+                Text(updater.repository?.name ?? "Development build")
+                Text(updater.status).textSelection(.enabled)
             }
+            Toggle(isOn: $updater.automaticChecks) {
+                Text("Check automatically every hour")
+                Text("Updates install when agents are idle and restart Pilot and pilotd. Terminal shells close. An update waiting to install may delay quitting Pilot until agents finish.")
+            }
+            .disabled(!updater.configured)
         }
-        .formStyle(.grouped)
+        Section {
+            SecureField("GitHub token", text: $editor.token, prompt: Text(updater.accessSource == .githubCLI ? "Using local gh authentication" : "Fine-grained token"))
+                .disabled(!updater.configured || !updater.credentialsEditable)
+            HStack {
+                Spacer()
+                Button("Remove Saved Token") { updater.removeToken() }
+                    .disabled(!updater.configured || !updater.credentialsEditable)
+                Button("Save Token") {
+                    Task { if await updater.saveToken(editor.token) { editor.token = "" } }
+                }.disabled(editor.token.isEmpty || !updater.configured || !updater.credentialsEditable)
+            }
+        } header: {
+            Text("Access")
+        } footer: {
+            SettingsFooter("Pilot first uses gh auth token from your login-shell PATH. If gh is unavailable or cannot access this repository, enter a fine-grained token with Contents: Read-only access. Only manually entered tokens are stored in Keychain.")
+        }
     }
 }
