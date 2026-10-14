@@ -2,6 +2,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
+test("every PR and main push runs CI, including manifest-only and lockfile-only changes", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const events = workflow.split("\non:\n")[1].split("\npermissions:\n")[0];
+	assert.match(events, /^  push:\n    branches: \[main\]\n  pull_request:\n  workflow_dispatch:/m);
+	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
+	const node = workflow.split("\n  node:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	assert.match(node, /run: pnpm install --frozen-lockfile/);
+	assert.match(node, /run: pnpm typecheck/);
+	assert.match(node, /run: pnpm test/);
+});
+
 test("verification installs checksum-verified jj before pnpm test", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	assert.match(workflow, /JJ_VERSION: 0\.46\.0/);

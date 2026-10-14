@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
+import { Conflict } from "./errors.ts";
 import { ProjectStore } from "./projects.ts";
-import { SourceRegistry } from "./sources.ts";
 import { SourceSignInRequired } from "./source-mcp.ts";
-import { TrackedItemStore } from "./tracked-items.ts";
+import { SourceRegistry } from "./sources.ts";
 import type { TrackedInput } from "./tracked-items.ts";
+import { TrackedItemStore } from "./tracked-items.ts";
 
 const item: TrackedInput = {
 	externalId: "1",
@@ -42,7 +43,17 @@ test("sources are opt-in and call only their dedicated server", async (t) => {
 	const f = await fixture(t);
 	assert.equal(f.registry.dashboard(f.project.id).length, 0);
 	assert.ok(f.registry.list().every((source) => source.status === "not_configured"));
-	assert.throws(() => f.registry.poll(`${f.project.id}:linear`), /Configure/);
+	for (const kind of ["linear", "slack"]) {
+		assert.throws(
+			() => f.registry.poll(`${f.project.id}:${kind}`),
+			(error) => {
+				assert.ok(error instanceof Conflict);
+				assert.equal(error.message, "Attach a Linear team or Slack channels in project settings first");
+				return true;
+			},
+		);
+	}
+	assert.deepEqual(f.calls, [], "unconfigured sources must never call their server");
 	assert.throws(() => f.registry.require("bogus"), /Unknown/);
 	await f.projects.update(f.project.id, {
 		tracking: {
