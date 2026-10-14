@@ -5,13 +5,17 @@ import SwiftUI
 // Prefer these over cards: group with whitespace and section headers, not borders.
 
 /// Header for a section of a status page: 13 pt semibold in the foreground colour, an optional count
-/// and a quiet trailing link (such as "All tasks"). Pane and sidebar groups keep `SectionLabel`.
+/// and a quiet trailing link (such as "All tasks"). A link with several destinations (such as one Slack
+/// triage per project) is the same quiet text opening a menu of them. Pane and sidebar groups keep
+/// `SectionLabel`.
 struct PageSectionHeader: View {
     let title: String
     var count: Int? = nil
     var countStyle: CountBadge.Style = .neutral
     var linkTitle: String? = nil
     var link: (() -> Void)? = nil
+    /// When not empty, the link opens a menu of these instead of calling `link`.
+    var linkChoices: [PageSectionLinkChoice] = []
 
     var body: some View {
         HStack(spacing: 6) {
@@ -19,21 +23,41 @@ struct PageSectionHeader: View {
                 .accessibilityAddTraits(.isHeader)
             if let count, count > 0 { CountBadge(count: count, style: countStyle) }
             Spacer(minLength: 8)
-            if let linkTitle, let link {
+            if let linkTitle, !linkChoices.isEmpty {
+                Menu {
+                    ForEach(linkChoices) { choice in Button(choice.title, action: choice.action) }
+                } label: {
+                    linkLabel(linkTitle, symbol: "chevron.down")
+                }
+                .chipMenuStyle()
+                .fixedSize()
+                .accessibilityLabel(linkTitle)
+            } else if let linkTitle, let link {
                 Button(action: link) {
-                    HStack(spacing: 3) {
-                        Text(linkTitle)
-                        Image(systemName: "chevron.right").font(.pilot(.glyph, weight: .semibold))
-                    }
-                    .font(.pilot(.caption))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .contentShape(Rectangle())
+                    linkLabel(linkTitle, symbol: "chevron.right")
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(linkTitle)
             }
         }
     }
+
+    private func linkLabel(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 3) {
+            Text(title)
+            Image(systemName: symbol).font(.pilot(.glyph, weight: .semibold))
+        }
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.mutedForeground)
+        .contentShape(Rectangle())
+    }
+}
+
+/// One destination of a section header link that leads to several places.
+struct PageSectionLinkChoice: Identifiable {
+    let id: String
+    let title: String
+    let action: () -> Void
 }
 
 /// A list row with a soft fill under the pointer. The content closure receives the hover state so rows
@@ -157,4 +181,3 @@ struct ComposerTray<Editor: View, Controls: View>: View {
         .background(RoundedRectangle(cornerRadius: 12).fill(Theme.tray))
     }
 }
-
