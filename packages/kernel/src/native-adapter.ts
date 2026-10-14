@@ -57,13 +57,14 @@ import {
 	ToolTask,
 	type UserInput,
 } from "@earendil-works/pi-durable";
-import type { DeliveryMode, SessionCommand } from "@pilot/protocol";
+import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
 import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
 import { loadAskExtensionTools } from "./ask-extension-tools.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
+import { runningJobs } from "./jobs.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
@@ -709,6 +710,19 @@ export class NativeAdapter {
 				)
 			: [];
 		return [...templates, ...skills];
+	}
+
+	/** Read the existing jobs registry without history, model work, or completion claims. */
+	async jobs(): Promise<SessionJob[]> {
+		this.assertOpen();
+		if (this.#ask || !this.session.getCallableToolNames().includes("jobs")) return [];
+		const definition = this.session.getToolDefinition("jobs");
+		const info = this.session.getAllTools().find((tool) => tool.name === "jobs");
+		if (!definition || !info) return [];
+		const tool = wrapRegisteredTool({ definition, sourceInfo: info.sourceInfo }, this.session.extensionRunner);
+		const result = await tool.execute(`pilot:jobs:${randomUUID()}`, { action: "list" });
+		if (result.isError) throw new Error("Could not list running jobs");
+		return runningJobs(result.structuredContent);
 	}
 
 	/** Register or replace a host tool through the SDK, refreshing direct and codemode declarations. */

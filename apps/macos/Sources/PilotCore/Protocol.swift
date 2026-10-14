@@ -447,6 +447,37 @@ public struct SessionCommandsResponse: Codable, Sendable {
     public let commands: [SessionCommand]
 }
 
+/// A running shell job in the current worker. Handles and logs are runtime-local.
+public struct SessionJob: Codable, Equatable, Sendable, Identifiable {
+    public enum State: String, Codable, Sendable { case running }
+    public let id: String
+    public let name: String
+    public let state: State
+    public let startedAt: Double
+    public let outputPath: String
+
+    public init(id: String, name: String, startedAt: Double, outputPath: String) {
+        self.id = id
+        self.name = name
+        self.state = .running
+        self.startedAt = startedAt
+        self.outputPath = outputPath
+    }
+
+    /// Snapshot elapsed time, updated only on explicit refresh, never by a transcript timer.
+    public func elapsed(at milliseconds: Double) -> String {
+        let seconds = max(0, (milliseconds - startedAt) / 1000)
+        if seconds < 60 { return "\(Int(seconds))s" }
+        if seconds < 3600 { return "\(Int(seconds / 60))m \(Int(seconds.truncatingRemainder(dividingBy: 60)))s" }
+        return "\(Int(seconds / 3600))h \(Int((seconds / 60).truncatingRemainder(dividingBy: 60)))m"
+    }
+}
+
+/// GET /api/sessions/:id/jobs. Never reopens a parked worker or starts model work.
+public struct SessionJobsResponse: Codable, Sendable {
+    public let jobs: [SessionJob]
+}
+
 /// POST /api/sessions/:id/compact
 public struct CompactRequest: Codable, Sendable {
     public let instructions: String?

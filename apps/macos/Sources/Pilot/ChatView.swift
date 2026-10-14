@@ -156,6 +156,7 @@ struct ChatView: View {
     @StateObject private var messageExpansions = TranscriptExpansions()
     @StateObject private var slashCommands = SlashCommandSource()
     @StateObject private var rewind = TranscriptRewind()
+    @State private var showingJobs = false
     private let bottomPadding: CGFloat = 8
     /// Offline performance checks report this, so redundant transcript invalidations are countable.
     static var bodyEvaluations = 0
@@ -262,6 +263,9 @@ struct ChatView: View {
                 if !session.isAsk {
                     SubagentsStrip(session: session)
                 }
+                if showingJobs, !session.isArchived {
+                    JobsPanel(sessionId: session.id) { showingJobs = false }
+                }
                 if session.isArchived {
                     ArchivedComposer(session: session)
                 } else {
@@ -316,6 +320,19 @@ struct ChatView: View {
     private func send(_ message: String, _ mode: DeliveryMode) {
         guard !session.isArchived else { return }
         composer.error = nil
+        if let arguments = SlashCommands.jobsArguments(composer.trimmed) {
+            guard arguments.isEmpty else {
+                composer.error = "Use /jobs without arguments."
+                return
+            }
+            guard composer.attachments.items.isEmpty else {
+                composer.error = "Remove attached images to run /jobs."
+                return
+            }
+            composer.draft = ""
+            showingJobs = true
+            return
+        }
         if let instructions = SlashCommands.compactInstructions(composer.trimmed) {
             compact(instructions)
             return
@@ -344,6 +361,10 @@ struct ChatView: View {
     private func schedule(_ message: String, _ when: ScheduleWhen) {
         guard !session.isArchived else { return }
         composer.error = nil
+        guard SlashCommands.jobsArguments(composer.trimmed) == nil else {
+            composer.error = "Run /jobs now instead of scheduling it."
+            return
+        }
         let previous = composer.draft
         do { try composer.attachments.retainForHistory() }
         catch {

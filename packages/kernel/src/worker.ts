@@ -198,7 +198,9 @@ export function runKernelWorker(): void {
 		process.exit(code);
 	}
 
-	async function execute(command: Exclude<KernelCommand, { type: "start" | "shutdown" | "subagent" }>): Promise<void> {
+	async function execute(
+		command: Exclude<KernelCommand, { type: "start" | "shutdown" | "subagent" | "inspectJobs" }>,
+	): Promise<void> {
 		await initialization;
 		if (!session) throw new Error("Kernel has not started");
 		switch (command.type) {
@@ -340,6 +342,16 @@ export function runKernelWorker(): void {
 				);
 				await shutdown(1);
 			});
+			return;
+		}
+		if (command.type === "inspectJobs") {
+			void (async () => {
+				await initialization;
+				if (!session) throw new Error("Kernel has not started");
+				await send({ type: "jobs", requestId: command.requestId, jobs: await session.jobs() });
+			})().catch((error) =>
+				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+			);
 			return;
 		}
 		if (command.type === "subagent") {

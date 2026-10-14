@@ -155,6 +155,52 @@ test("inspection deadline protects the worker without killing it or clearing unr
 	assert.equal(worker["pending"].size, 0);
 });
 
+test("jobs reads coalesce, correlate replies and release snapshots without activity updates", async (t) => {
+	const { child, worker, ready, packets } = supervisedWorker(t);
+	ready();
+	await worker.ready;
+	const before = packets.length;
+	const first = worker.jobs();
+	assert.equal(worker.jobs(), first);
+	const command = child.sent.find((item) => item.type === "inspectJobs")!;
+	assert.ok(command.type === "inspectJobs");
+	const jobs = [{ id: "one", name: "Tests", state: "running", startedAt: 1, outputPath: "/tmp/tests.log" }];
+	child.emit("message", { type: "jobs", requestId: "unrelated", jobs: [] });
+	assert.equal(worker["pending"].has(command.requestId), true);
+	child.emit("message", { type: "jobs", requestId: command.requestId, jobs });
+	assert.deepEqual(await first, jobs);
+	assert.equal(worker["jobResults"].size, 0);
+	assert.equal(packets.length, before, "read results never broadcast session updates");
+	const second = worker.jobs();
+	const next = child.sent.filter((item) => item.type === "inspectJobs").at(-1)!;
+	assert.notEqual(next.requestId, command.requestId);
+	child.emit("message", { type: "jobs", requestId: next.requestId, jobs: [] });
+	assert.deepEqual(await second, []);
+});
+
+test("jobs failures and deadlines do not fail or stop the worker, including late errors", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t, 60_000);
+	ready();
+	await worker.ready;
+	const read = worker.jobs();
+	const command = child.sent.find((item) => item.type === "inspectJobs")!;
+	assert.ok(command.type === "inspectJobs");
+	const rejected = assert.rejects(read, /timed out/);
+	t.mock.timers.tick(10_000);
+	await rejected;
+	child.emit("message", { type: "error", requestId: command.requestId, message: "Late read error" });
+	assert.equal(worker.error, undefined);
+	assert.equal(worker.state, "idle");
+	assert.deepEqual(child.killed, []);
+	const retry = worker.jobs();
+	const next = child.sent.filter((item) => item.type === "inspectJobs").at(-1)!;
+	const failed = assert.rejects(retry, /Registry unavailable/);
+	child.emit("message", { type: "error", requestId: next.requestId, message: "Registry unavailable" });
+	await failed;
+	assert.equal(worker.error, undefined);
+	assert.equal(worker["jobResults"].size, 0);
+});
+
 test("transport retirement sends SIGTERM first, escalates once after eight seconds, and waits for confirmed exit", async (t) => {
 	const { child, worker } = supervisedWorker(t);
 	child.kill = (signal) => {
@@ -405,6 +451,10 @@ class FakeWorker implements SessionWorker {
 
 	async hasChildren(): Promise<boolean> {
 		return this.children;
+	}
+
+	async jobs() {
+		return [{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" }];
 	}
 
 	async close(): Promise<void> {
@@ -1471,6 +1521,33 @@ test("execution packets reset the parking deadline and working workers remain pr
 	await sessions["parkIdleWorkers"]();
 	await sessions["unparked"](created.id);
 	assert.equal(worker.closed, true);
+});
+
+test("jobs listing is session-local and never wakes parked, archived or unknown chats", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({}, { idleParkMs: 60_000 });
+	const created = await sessions.spawn({ cwd: f.source, message: "work" });
+	await until(() => sessions.get(created.id)?.state === "working");
+	const worker = f.workers[0]!;
+	const lastUse = sessions["lastUse"].get(created.id);
+	const summary = sessions.get(created.id);
+	const reads = t.mock.method(worker, "jobs", worker.jobs.bind(worker));
+	assert.deepEqual(await sessions.jobs(created.id), await worker.jobs());
+	assert.deepEqual(sessions.get(created.id), summary);
+	assert.equal(sessions["lastUse"].get(created.id), lastUse);
+	await sessions.stop(created.id);
+	const now = sessions["lastUse"].get(created.id)! + 60_001;
+	t.mock.method(Date, "now", () => now);
+	await sessions["parkIdleWorkers"]();
+	await sessions["unparked"](created.id);
+	const count = reads.mock.callCount();
+	assert.deepEqual(await sessions.jobs(created.id), []);
+	assert.equal(reads.mock.callCount(), count);
+	assert.equal(f.workers.length, 1);
+	await sessions.archive(created.id);
+	assert.deepEqual(await sessions.jobs(created.id), []);
+	assert.equal(f.workers.length, 1);
+	await assert.rejects(sessions.jobs("missing"), /Unknown session/);
 });
 
 test("idle unwatched kernels without subprocesses park, and reopen only after releasing storage", async (t) => {

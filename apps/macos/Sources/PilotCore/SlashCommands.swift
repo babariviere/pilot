@@ -35,7 +35,10 @@ public enum SlashCommands {
         name: "compact", kind: .builtin,
         description: "Summarize older messages to free up context", argumentHint: "[instructions]"
     )
-    public static let builtins = [compact]
+    public static let jobs = SlashCommand(
+        name: "jobs", kind: .builtin, description: "Show this chat’s running background jobs"
+    )
+    public static let builtins = [compact, jobs]
 
     /// Built-ins first, then the session's prompt templates and skills. Session commands cannot shadow built-ins.
     public static func all(_ session: [SessionCommand]) -> [SlashCommand] {
@@ -78,12 +81,20 @@ public enum SlashCommands {
 
     /// Instructions for a `/compact [instructions]` message, empty when none; nil for any other message.
     public static func compactInstructions(_ message: String) -> String? {
+        arguments(message, command: compact)
+    }
+
+    /// Empty for `/jobs`, nonempty for unsupported arguments; nil for other commands.
+    public static func jobsArguments(_ message: String) -> String? {
+        arguments(message, command: jobs)
+    }
+
+    private static func arguments(_ message: String, command: SlashCommand) -> String? {
         let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
-        let invocation = compact.invocation
+        let invocation = command.invocation
         guard text.hasPrefix(invocation) else { return nil }
         let rest = text.dropFirst(invocation.count)
         guard rest.isEmpty || rest.first!.isWhitespace else { return nil }
         return rest.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
-

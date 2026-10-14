@@ -621,6 +621,11 @@ export class KernelSession {
 		return this.adapter.commands();
 	}
 
+	/** Read-only snapshot of this worker's running shell jobs. */
+	jobs() {
+		return this.adapter.jobs();
+	}
+
 	/**
 	 * Queue a manual compaction. Returns once its task is committed; the summary is placed when idle or at the next
 	 * turn boundary, and `abort()` cancels it.

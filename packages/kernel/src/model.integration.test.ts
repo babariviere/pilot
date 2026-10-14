@@ -27,6 +27,59 @@ import { readSessionSnapshot } from "./snapshot.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+test("host jobs inspection reads the callable registry without model work, history or completion claims", async (t) => {
+	let action: unknown;
+	let hidden = false;
+	let fail = false;
+	const running = { id: "tests", name: "Test suite", state: "running", startedAt: 1000, outputPath: "/tmp/tests.log" };
+	const f = await fixture(t, [
+		(pi) => {
+			const definition = {
+				name: "jobs",
+				label: "Jobs",
+				description: "Offline jobs fixture",
+				parameters: Type.Object({ action: Type.Literal("list") }),
+				outputSchema: Type.Unknown(),
+				async execute(_id: string, args: unknown) {
+					action = args;
+					if (fail) throw new Error("Registry unavailable");
+					return {
+						content: [],
+						details: undefined,
+						structuredContent: [running, { ...running, id: "finished", state: "done" }],
+					};
+				},
+			};
+			pi.registerTool({ ...definition, exposure: "codemode" });
+			pi.events.on("hide-jobs", () => {
+				hidden = true;
+				pi.registerTool({ ...definition, exposure: "hidden" });
+			});
+		},
+	]);
+	const session = await f.open();
+	assert.deepEqual(await session.jobs(), [running]);
+	assert.deepEqual(action, { action: "list" });
+	assert.equal(session.working, false);
+	fail = true;
+	await assert.rejects(session.jobs(), /Registry unavailable/);
+	f.bus.emit("hide-jobs", undefined);
+	assert.equal(hidden, true);
+	assert.deepEqual(await session.jobs(), []);
+	await session.close();
+	const view = await readSessionSnapshot(f.spec.storageDir, f.spec.cwd);
+	const snapshot = view.events.find((event) => event.type === "snapshot");
+	assert.ok(snapshot && snapshot.type === "snapshot");
+	assert.equal(snapshot.entries.length, 0, "inspection adds no transcript entries");
+	assert.equal(snapshot.run, undefined);
+});
+
+test("host jobs inspection is empty when no jobs extension is installed", async (t) => {
+	const f = await fixture(t);
+	const session = await f.open();
+	assert.deepEqual(await session.jobs(), []);
+});
 const first = "pilot-model-a/one";
 const second = "pilot-model-a/two";
 const third = "pilot-model-b/three";
