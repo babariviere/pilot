@@ -2,10 +2,11 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Sessions by urgency (Needs you, Working, Recent) or by project and optional user-created folders, pinned first,
-/// then PR status and stable activity. The scope switcher at the top lists every project (the default) or focuses on
-/// one, which then shows only that project's missions and chats. Search appears on ⌘F, and the footer only when
-/// the connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
+/// Missions first, then chats by urgency (Needs you, Ready to merge, Working, Recent), pinned first, then PR status
+/// and stable activity. The scope switcher at the top lists every project (the default) or focuses on one, which
+/// then shows only that project's missions and chats, always by urgency and without project names. All projects
+/// can group chats by project and optional user-created folders instead. Search appears on ⌘F, and the footer only
+/// when the connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
 struct SessionSidebar: View {
     @ObservedObject var model: AppModel
     @ObservedObject var client: PilotClient
@@ -23,9 +24,14 @@ struct SessionSidebar: View {
         let showsSearch = model.sidebarSearchVisible || searching
         List(selection: $model.selectedSessionId) {
             if let focused {
-                focusedContent(focused, visible: visible, searching: searching)
+                missionsSection(visible: visible, searching: searching, projectId: focused.id)
+                urgencyGroups(visible.filter { $0.projectId == focused.id }, searching: searching,
+                              recentListId: focused.id)
             } else if model.sidebarGroupsByUrgency {
-                urgencyContent(visible: visible, searching: searching)
+                missionsSection(visible: visible, searching: searching)
+                urgencyGroups(visible, searching: searching, recentListId: Self.recentListId,
+                              projectNames: Dictionary(client.projects.map { ($0.id, $0.name) },
+                                                       uniquingKeysWith: { first, _ in first }))
             } else {
                 allProjectsContent(visible: visible, searching: searching, unassigned: unassigned, counts: counts)
             }
@@ -131,26 +137,15 @@ struct SessionSidebar: View {
             && model.selectedProjectId == nil
     }
 
-    /// Focused on one project: its missions, then its chats, without project headers.
+    /// Chats by urgency. Mission chats are listed like any chat, their mission on the second line. With
+    /// `projectNames` (All projects) each row names its project; a focused project leaves it out. Folders and
+    /// project headers stay out of the way; the scope switcher and project pages reach them. Ready to merge waits
+    /// on the user but never badges.
     @ViewBuilder
-    private func focusedContent(_ project: Project, visible: [SessionSummary], searching: Bool) -> some View {
-        missionsSection(visible: visible, searching: searching, projectId: project.id)
-        let sessions = visible.filter { $0.projectId == project.id }
-        if !searching || !sessions.isEmpty {
-            Section("Chats") {
-                projectSessions(sessions, listId: project.id, searching: searching)
-            }
-        }
-    }
-
-    /// Every project's chats by urgency, each row naming its project. Folders and project headers stay out of the way;
-    /// the scope switcher and project pages reach them.
-    @ViewBuilder
-    private func urgencyContent(visible: [SessionSummary], searching: Bool) -> some View {
-        missionsSection(visible: visible, searching: searching)
-        let groups = SidebarUrgency.groups(visible, unread: { model.isUnread($0) },
+    private func urgencyGroups(_ sessions: [SessionSummary], searching: Bool, recentListId: String,
+                               projectNames names: [String: String]? = nil) -> some View {
+        let groups = SidebarUrgency.groups(sessions, unread: { model.isUnread($0) },
                                            awaitingReply: { model.isAwaitingReply($0) })
-        let names = Dictionary(client.projects.map { ($0.id, $0.name) }, uniquingKeysWith: { first, _ in first })
         if !groups.needsYou.isEmpty {
             Section {
                 ForEach(groups.needsYou) { session in
@@ -158,6 +153,15 @@ struct SessionSidebar: View {
                 }
             } header: {
                 SidebarSectionHeader(title: "Needs you", count: groups.needsYou.count, attention: true)
+            }
+        }
+        if !groups.readyToMerge.isEmpty {
+            Section {
+                ForEach(groups.readyToMerge) { session in
+                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                }
+            } header: {
+                SidebarSectionHeader(title: "Ready to merge")
             }
         }
         if !groups.working.isEmpty {
@@ -171,7 +175,7 @@ struct SessionSidebar: View {
         }
         if !groups.recent.isEmpty {
             Section {
-                projectSessions(groups.recent, listId: Self.recentListId, searching: searching, projectNames: names)
+                projectSessions(groups.recent, listId: recentListId, searching: searching, projectNames: names)
             } header: {
                 SidebarSectionHeader(title: "Recent")
             }
@@ -353,7 +357,7 @@ struct SessionSidebar: View {
     }
 
     static let otherListId = "pilot.sidebar.other"
-    /// The Recent section when All projects groups chats by urgency.
+    /// The Recent section when All projects groups chats by urgency. A focused project's Recent uses its id.
     static let recentListId = "pilot.sidebar.recent"
 
     private func folderExpanded(_ id: String) -> Binding<Bool> {

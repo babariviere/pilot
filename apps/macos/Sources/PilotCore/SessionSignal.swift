@@ -48,26 +48,32 @@ extension SessionSummary {
     }
 }
 
-/// The All projects sidebar grouped by urgency instead of by project.
+/// The sidebar's chat groups by urgency: always for a focused project, and for All projects unless the user groups
+/// by project and folder instead.
 public enum SidebarUrgency {
     public struct Groups: Equatable, Sendable {
         /// Failed chats first, then agent questions, then unread or unanswered results, each in list order.
         public var needsYou: [SessionSummary] = []
+        /// Reviewed chats whose PR is ready to merge, in list order. Waits on the user without badging.
+        public var readyToMerge: [SessionSummary] = []
         public var working: [SessionSummary] = []
         /// Everything else, in list order (pinned first).
         public var recent: [SessionSummary] = []
 
-        public init(needsYou: [SessionSummary] = [], working: [SessionSummary] = [], recent: [SessionSummary] = []) {
+        public init(needsYou: [SessionSummary] = [], readyToMerge: [SessionSummary] = [],
+                    working: [SessionSummary] = [], recent: [SessionSummary] = []) {
             self.needsYou = needsYou
+            self.readyToMerge = readyToMerge
             self.working = working
             self.recent = recent
         }
 
-        public var isEmpty: Bool { needsYou.isEmpty && working.isEmpty && recent.isEmpty }
+        public var isEmpty: Bool { needsYou.isEmpty && readyToMerge.isEmpty && working.isEmpty && recent.isEmpty }
     }
 
     /// One pass over `sessions`, which are already in sidebar list order. `awaitingReply` keeps a viewed result
-    /// under Needs you, so opening a chat does not move it to Recent.
+    /// under Needs you, so opening a chat does not move it to Ready to merge or Recent. Working wins over a ready
+    /// PR, so a chat still pushing to its PR stays under Working.
     public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool,
                               awaitingReply: (SessionSummary) -> Bool = { _ in false }) -> Groups {
         var failed: [SessionSummary] = []
@@ -80,7 +86,9 @@ public enum SidebarUrgency {
             case .failed: failed.append(session)
             case .needsYou where session.status == .question: questions.append(session)
             case .needsYou: waiting.append(session)
-            case .readyToMerge, nil:
+            case .readyToMerge:
+                if awaitingReply(session) { waiting.append(session) } else { groups.readyToMerge.append(session) }
+            case nil:
                 if awaitingReply(session) { waiting.append(session) } else { groups.recent.append(session) }
             }
         }
