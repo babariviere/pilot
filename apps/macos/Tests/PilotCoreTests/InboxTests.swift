@@ -35,6 +35,16 @@ import Testing
     #expect(InboxText.badge(counts.counts(for: "p1")) == 6)
 }
 
+@Test func needsYouRowsUseTheSidebarCornerStates() {
+    func row(_ kind: DashboardNeedsYouKind) -> DashboardNeedsYouItem {
+        DashboardNeedsYouItem(kind: kind, id: kind.rawValue, title: "t", at: 1)
+    }
+    #expect(row(.failed).signal == .failed)
+    #expect(row(.scheduledFailed).signal == .failed)
+    #expect(row(.unread).signal == .needsYou)
+    #expect(row(.question).signal == .needsYou)
+}
+
 @Test func inboxFooterNamesHiddenLabels() {
     #expect(InboxText.hiddenFooter([]) == nil)
     #expect(InboxText.hiddenFooter([InboxHiddenLabel(label: "Product", count: 1)])
