@@ -129,7 +129,7 @@ struct ProjectMemoryBrowser: View {
                     }
                 }
                 Spacer(minLength: 4)
-                if node.text != nil {
+                if node.canForget {
                     Button { state.requestForget(node) } label: { Image(systemName: "trash") }
                         .buttonStyle(.plain).help("Forget this summary")
                         .accessibilityLabel("Forget summary for entries \(node.lo) through \(node.hi)")
@@ -175,6 +175,10 @@ extension MemoryNode {
 
     /// A replaced note, or a summary whose notes were all replaced by later corrections.
     var isReplaced: Bool { replaced == true || entry?.replacedBy != nil }
+
+    /// Only built summaries can be forgotten. Single-note leaves also carry text, but forgetting their
+    /// one-entry range would drop the covering summaries rather than the note.
+    var canForget: Bool { entry == nil && text != nil }
 
     /// Primary line: the note or summary text, otherwise a plain description of the range.
     var title: String {

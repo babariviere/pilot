@@ -76,7 +76,10 @@ final class ProjectMemoryBrowserModel: ObservableObject {
         busy = false
     }
 
-    func requestForget(_ node: MemoryNode) { forgetting = node }
+    func requestForget(_ node: MemoryNode) {
+        guard node.canForget else { return }
+        forgetting = node
+    }
     func cancelForget() { forgetting = nil }
 
     func confirmForget() async {
