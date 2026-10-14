@@ -1,0 +1,30 @@
+name: Renovate configuration
+
+on:
+  pull_request:
+    paths:
+      - renovate.json
+      - .github/workflows/renovate-config.yml
+  push:
+    branches: [main]
+    paths:
+      - renovate.json
+      - .github/workflows/renovate-config.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate Renovate configuration
+        run: >-
+          docker run --rm --network=none
+          --volume "$PWD:/repo:ro" --workdir /repo
+          --entrypoint renovate-config-validator
+          ghcr.io/renovatebot/renovate:44.158.1 --strict --no-global renovate.json
