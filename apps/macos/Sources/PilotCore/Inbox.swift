@@ -40,6 +40,34 @@ public struct InboxHiddenLabel: Codable, Equatable, Sendable {
     }
 }
 
+/// An open pull request GitHub reports ready to merge, with the project it belongs to. pilotd lists it only while
+/// its chat neither works nor needs the user, as in the sidebar's Ready to merge group. Pilot never merges it.
+public struct InboxReadyToMergeItem: Codable, Identifiable, Equatable, Sendable {
+    public let projectId: String
+    public let pullRequest: DashboardPullRequest
+
+    public var id: String { "\(projectId):\(pullRequest.id)" }
+
+    public init(projectId: String, pullRequest: DashboardPullRequest) {
+        self.projectId = projectId
+        self.pullRequest = pullRequest
+    }
+
+    private enum CodingKeys: String, CodingKey { case projectId }
+
+    /// The wire row is a dashboard pull request with one more field.
+    public init(from decoder: Decoder) throws {
+        projectId = try decoder.container(keyedBy: CodingKeys.self).decode(String.self, forKey: .projectId)
+        pullRequest = try DashboardPullRequest(from: decoder)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        try pullRequest.encode(to: encoder)
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(projectId, forKey: .projectId)
+    }
+}
+
 /// Open and in-progress Slack messages, without dismissed ones or hidden labels, most severe first.
 public struct InboxSlackSection: Codable, Equatable, Sendable {
     public let total: Int
@@ -57,21 +85,36 @@ public struct InboxSlackSection: Codable, Equatable, Sendable {
 public struct Inbox: Codable, Equatable, Sendable {
     /// Chats, missions and scheduled items that need the user, most urgent first.
     public let needsYou: DashboardSection<InboxNeedsYouItem>
+    /// Open pull requests ready to merge, newest check first. Never part of the badge. Empty from older daemons.
+    public let readyToMerge: DashboardSection<InboxReadyToMergeItem>
     /// My Linear tickets that are not done. nil when no project in scope has a Linear team.
     public let linear: DashboardSection<TrackedItem>?
     /// nil when no project in scope tracks Slack channels.
     public let slack: InboxSlackSection?
 
     public init(needsYou: DashboardSection<InboxNeedsYouItem> = DashboardSection(total: 0, items: []),
+                readyToMerge: DashboardSection<InboxReadyToMergeItem> = DashboardSection(total: 0, items: []),
                 linear: DashboardSection<TrackedItem>? = nil, slack: InboxSlackSection? = nil) {
         self.needsYou = needsYou
+        self.readyToMerge = readyToMerge
         self.linear = linear
         self.slack = slack
     }
 
+    private enum CodingKeys: String, CodingKey { case needsYou, readyToMerge, linear, slack }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        needsYou = try container.decode(DashboardSection<InboxNeedsYouItem>.self, forKey: .needsYou)
+        readyToMerge = try container.decodeIfPresent(DashboardSection<InboxReadyToMergeItem>.self, forKey: .readyToMerge)
+            ?? DashboardSection(total: 0, items: [])
+        linear = try container.decodeIfPresent(DashboardSection<TrackedItem>.self, forKey: .linear)
+        slack = try container.decodeIfPresent(InboxSlackSection.self, forKey: .slack)
+    }
+
     /// Nothing to list in any section.
     public var isEmpty: Bool {
-        needsYou.total == 0 && (linear?.total ?? 0) == 0 && (slack?.total ?? 0) == 0
+        needsYou.total == 0 && readyToMerge.total == 0 && (linear?.total ?? 0) == 0 && (slack?.total ?? 0) == 0
     }
 }
 
@@ -96,6 +139,32 @@ public enum InboxText {
     /// "Showing the first 50 of 72." nil when every row is shown.
     public static func capNote(shown: Int, total: Int) -> String? {
         total > shown ? "Showing the first \(shown) of \(total)." : nil
+    }
+
+    /// The empty Inbox's sentence, for every project or the one the filter picks.
+    public static func clearMessage(projectName: String?) -> String {
+        if let projectName {
+            return "Chats that need you, pull requests ready to merge, your open tickets and Slack messages in \(projectName) appear here."
+        }
+        return "Chats that need you, pull requests ready to merge, your open tickets and Slack messages from every project appear here."
+    }
+
+    /// The toolbar filter's title: the picked project, or "All projects".
+    public static func filterTitle(_ project: Project?) -> String {
+        project?.name ?? "All projects"
+    }
+
+    /// Open pull requests reported ready to merge, per chat. Ready to merge is not part of the dashboard counts,
+    /// so the Inbox reloads when this changes instead (working and needs-you changes already move the counts).
+    public static func readyToMergeKey(_ sessions: [SessionSummary]) -> Set<String> {
+        var key = Set<String>()
+        for session in sessions where !session.isArchived {
+            for pr in [session.pullRequest].compactMap({ $0 }) + (session.pullRequests ?? [])
+            where pr.state == .open && pr.readiness?.state == .ready {
+                key.insert("\(session.id) \(pr.url)")
+            }
+        }
+        return key
     }
 
     /// Projects the Slack section's "Open triage" link leads to: each project in scope that tracks Slack

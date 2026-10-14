@@ -446,7 +446,7 @@ export function createDaemonServer(
 			const limit = url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 50;
 			if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new HttpError(400, "limit must be 1..100");
 			const inbox: Inbox = {
-				needsYou: dashboards.needsYou(projectId, limit),
+				...dashboards.inbox(projectId, limit),
 				...(tracking ? await tracking.inbox(projectId, limit) : {}),
 			};
 			return json(res, 200, inbox);

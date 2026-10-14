@@ -20,10 +20,50 @@ import Testing
     #expect(inbox.needsYou.items[0].item.kind == .failed)
     #expect(inbox.needsYou.items[0].id == "p1:session:s1")
     #expect(inbox.linear == nil)
+    #expect(inbox.readyToMerge.total == 0, "older daemons send no Ready to merge section")
     #expect(inbox.slack?.items.first?.kind == .slack)
     #expect(!inbox.isEmpty)
     #expect(try JSONDecoder().decode(Inbox.self, from: JSONEncoder().encode(inbox)) == inbox)
     #expect(Inbox().isEmpty)
+}
+
+@Test func inboxDecodesReadyToMergeRowsWithTheirProject() throws {
+    let inbox = try JSONDecoder().decode(Inbox.self, from: Data(#"""
+    {
+      "needsYou": {"total": 0, "items": []},
+      "readyToMerge": {"total": 2, "items": [
+        {"number":441,"url":"https://github.com/o/r/pull/441","title":"Inbox filter","state":"open","branch":"feat/inbox",
+         "sessionId":"s1","sessionTitle":"Inbox","missionId":"m1","checkedAt":5,"readiness":{"state":"ready","reasons":[]},
+         "projectId":"p2"}
+      ]}
+    }
+    """#.utf8))
+    let row = try #require(inbox.readyToMerge.items.first)
+    #expect(row.projectId == "p2" && row.id == "p2:https://github.com/o/r/pull/441")
+    #expect(row.pullRequest.isReady && row.pullRequest.branch == "feat/inbox" && row.pullRequest.missionId == "m1")
+    #expect(inbox.readyToMerge.hiddenCount == 1)
+    #expect(!inbox.isEmpty, "a ready pull request alone keeps the Inbox from reading as clear")
+    #expect(try JSONDecoder().decode(Inbox.self, from: JSONEncoder().encode(inbox)) == inbox)
+}
+
+@Test func readyToMergeKeyFollowsReadyOpenPullRequestsOnly() {
+    func chat(_ id: String, _ state: PullRequestState, _ readiness: PullRequestReadiness.State?, archived: Bool = false) -> SessionSummary {
+        let pr = SessionPullRequest(number: 1, url: "https://github.com/o/r/pull/\(id)", title: "t", state: state, checkedAt: 1,
+                                    readiness: readiness.map { PullRequestReadiness(state: $0, reasons: [], checkedAt: 1) })
+        return SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: 1, state: "idle",
+                              pullRequest: pr, archivedAt: archived ? 1 : nil)
+    }
+    let key = InboxText.readyToMergeKey([chat("a", .open, .ready), chat("b", .open, .pending), chat("c", .draft, .ready),
+                                         chat("d", .merged, .ready), chat("e", .open, .ready, archived: true)])
+    #expect(key == ["a https://github.com/o/r/pull/a"])
+}
+
+@Test func inboxFilterAndClearStateNameTheProject() {
+    let project = Project(id: "p1", name: "pilot", path: "/tmp/pilot", createdAt: 1)
+    #expect(InboxText.filterTitle(nil) == "All projects")
+    #expect(InboxText.filterTitle(project) == "pilot")
+    #expect(InboxText.clearMessage(projectName: "pilot").hasSuffix("in pilot appear here."))
+    #expect(InboxText.clearMessage(projectName: nil).contains("pull requests ready to merge"))
 }
 
 @Test func dashboardCountsReadTrackedItemsWhenPresent() throws {

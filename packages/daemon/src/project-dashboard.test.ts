@@ -513,6 +513,50 @@ test("counts add the Inbox's tracked items, and the Inbox lists needs-you rows a
 	assert.throws(() => f.service.needsYou("missing", 50));
 });
 
+test("the Inbox lists ready PRs across projects, leaving out chats that work or need the user", () => {
+	const ready = { state: "ready" as const, reasons: [], checkedAt: 1 };
+	const f = service([
+		session({ id: "a", projectId: "p1", pullRequest: pr(1, { readiness: ready, checkedAt: 10 }) }),
+		session({ id: "b", projectId: "p2", pullRequest: pr(2, { readiness: ready, checkedAt: 30 }), missionId: "m" }),
+		// Pending, blocked and draft PRs wait on the page, not in the Inbox.
+		session({ projectId: "p1", pullRequest: pr(3, { readiness: { ...ready, state: "pending" } }) }),
+		session({ projectId: "p1", pullRequest: pr(4, { state: "draft", readiness: ready }) }),
+		// Each chat sits in one section: working first, then Needs you.
+		session({ id: "busy", projectId: "p1", state: "working", pullRequest: pr(5, { readiness: ready }) }),
+		session({
+			id: "unread",
+			projectId: "p1",
+			outcome: "done",
+			outcomeAt: 7,
+			pullRequest: pr(6, { readiness: ready }),
+		}),
+	]);
+	const inbox = f.service.inbox(undefined, 50);
+	assert.deepEqual(
+		inbox.readyToMerge.items.map((item) => [item.projectId, item.sessionId, item.number, item.missionId]),
+		[
+			["p2", "b", 2, "m"],
+			["p1", "a", 1, undefined],
+		],
+		"newest check first",
+	);
+	assert.equal(inbox.readyToMerge.items[0]?.readiness?.state, "ready");
+	assert.deepEqual(
+		inbox.needsYou.items.map((item) => item.sessionId),
+		["unread"],
+	);
+	assert.deepEqual(
+		f.service.inbox("p1", 50).readyToMerge.items.map((item) => item.number),
+		[1],
+	);
+	const capped = f.service.inbox(undefined, 1).readyToMerge;
+	assert.equal(capped.total, 2);
+	assert.equal(capped.items.length, 1);
+	// Ready PRs never add to the badge counts.
+	assert.equal(f.service.counts().projects.p2, undefined);
+	assert.throws(() => f.service.inbox("missing", 50));
+});
+
 test("providers feed scheduled and tracked sections and report changes", () => {
 	const changeListeners = new Set<() => void>();
 	const f = service([], {
