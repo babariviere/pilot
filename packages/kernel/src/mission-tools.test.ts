@@ -19,6 +19,113 @@ import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { MissionContext } from "./policy.ts";
 import { KernelSession } from "./session.ts";
 
+for (const busy of [false, true]) {
+	test(`decision changes preserve the prompt and place one passive notice (${busy ? "busy" : "idle"})`, async (t) => {
+		const f = await fixture(t);
+		const open = NativeAdapter.open;
+		let adapter!: NativeAdapter;
+		t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+			adapter = await open.call(NativeAdapter, {
+				...options,
+				...f.options,
+				sessionOptions: { ...options.sessionOptions, ...f.options.sessionOptions },
+			});
+			return adapter;
+		});
+		const mission: MissionContext = {
+			id: "shared",
+			title: "Shared goal",
+			goal: "Ship",
+			status: "active",
+			coordinator: "other",
+			tasks: [],
+			decisions: ["Original binding rule"],
+			decisionEntries: [{ id: "rule", text: "Original binding rule" }],
+			remainingDecisions: 10,
+			decisionVersion: "first",
+		};
+		const calls: unknown[] = [];
+		const session = await KernelSession.open(
+			{
+				sessionId: "member",
+				cwd: f.root,
+				storageDir: join(f.root, "durable"),
+				mission,
+			},
+			{
+				onWorking: () => {},
+				callMission: async (action, args) => {
+					calls.push([action, args]);
+					return {};
+				},
+			},
+		);
+		f.cleanup.push(() => session.close());
+		const writes: Promise<unknown>[] = [];
+		const submit = session.conversation.submit.bind(session.conversation);
+		t.mock.method(session.conversation, "submit", (...args: Parameters<typeof submit>) => {
+			const promise = submit(...args);
+			if (args[0].type === "write") writes.push(promise);
+			return promise;
+		});
+		const prompts: string[] = [];
+		let reached!: () => void;
+		let release!: () => void;
+		const started = new Promise<void>((resolve) => {
+			reached = resolve;
+		});
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		t.after(() => release());
+		f.faux.setResponses([
+			async (context) => {
+				prompts.push(getCurrentSystemPrompt(context.messages));
+				reached();
+				if (busy) await gate;
+				return fauxAssistantMessage("First");
+			},
+			async (context) => {
+				prompts.push(getCurrentSystemPrompt(context.messages));
+				assert.match(JSON.stringify(context.messages), /Mission decisions changed/);
+				return fauxAssistantMessage("Second");
+			},
+		]);
+		await session.submit("first", "Begin", "followUp");
+		await started;
+		if (!busy) await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		const changed = {
+			...mission,
+			decisions: ["Revised binding rule"],
+			decisionEntries: [{ id: "rule", text: "Revised binding rule" }],
+			remainingDecisions: 11,
+			decisionVersion: "second",
+		};
+		session.setMission(changed);
+		session.setMission(changed);
+		await Promise.all(writes);
+		release();
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.equal(prompts.length, 1, "a passive notice never starts generation");
+		await session.submit("second", "Continue", "followUp");
+		await session.conversation.waitForIdle(BACKGROUND_CONTEXT);
+		assert.equal(prompts[0], prompts[1]);
+		assert.match(prompts[1]!, /Original binding rule/);
+		assert.match(prompts[1]!, /10 more decisions: mission decisions/);
+		assert.doesNotMatch(prompts[1]!, /Revised binding rule/);
+		const entries = (await session.conversation.entries({}, 100, undefined, BACKGROUND_CONTEXT)).items;
+		assert.equal(entries.filter((entry) => entry.kind === "pilot.activity").length, 1);
+		const codemode = adapter.session.agent.state.tools.find((tool) => tool.name === "codemode")!;
+		const result = await codemode.execute(
+			"read-decisions",
+			{ code: 'text(await tools.mission({action:"decisions"}));' },
+			undefined,
+		);
+		assert.ok(!result.isError);
+		assert.deepEqual(calls.at(-1), ["decisions", { _promptDecisions: mission.decisionEntries }]);
+	});
+}
+
 test("the mission tool forwards actions with only the supplied arguments", async () => {
 	const calls: unknown[] = [];
 	const tool = createMissionTool(async (action, args) => {
@@ -151,14 +258,14 @@ test("coordinator PR binding actions forward targets and optional owning tasks u
 	assert.equal(schema.properties.targetSessionId.maxLength, 128);
 	assert.equal(schema.properties.taskId.maxLength, 128);
 	assert.match(schema.properties.taskId.description!, /bindPr/);
-	assert.match(tool.description, /Links never bind a PR to a chat/);
-	assert.match(tool.description, /The bound chat owns the PR head for follow-ups and pushes/);
-	assert.match(tool.description, /One owner per PR: binding transfers ownership from the previous chat/);
-	assert.match(tool.description, /moves unfinished ownership links to the selected task/);
-	assert.match(tool.description, /without changing its branches/);
-	assert.match(tool.description, /Use resource links for dependencies or references, not ownership/);
-	assert.match(tool.description, /stop its tracking, follow-ups and pushes for that chat/);
-	assert.match(tool.description, /removes only unfinished ownership links, preserving references/);
+	assert.match(tool.description, /Neither binds a chat/);
+	assert.match(tool.description, /Transfers sole PR-head ownership/);
+	assert.match(tool.description, /Transfers sole PR-head ownership/);
+	assert.match(tool.description, /unfinished ownership links/);
+	assert.match(tool.description, /References\/branches stay/);
+	assert.match(tool.description, /references never grant ownership/);
+	assert.match(tool.description, /stopping tracking\/pushes\/follow-ups/);
+	assert.match(tool.description, /removing unfinished ownership links/);
 	const url = "https://github.com/example/repo/pull/7";
 	for (const params of [
 		{ action: "bindPr", targetSessionId: "member", url },
@@ -208,7 +315,7 @@ test("coordinator declares bounded start references and forwards them unchanged"
 	assert.equal(properties.artifacts?.maxItems, 40);
 	assert.equal(properties.links?.maxItems, 40);
 	assert.match(tool.description, /Durable context belongs in the brief, decisions or task links/);
-	assert.match(tool.description, /4000 characters including the task body/);
+	assert.match(tool.description, /task body and reference list must fit 4000 characters/);
 	const args = {
 		id: "1",
 		artifacts: [{ artifactId: "a", revision: 2 }],

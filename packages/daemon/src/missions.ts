@@ -308,6 +308,10 @@ export class MissionStore {
 		this.db = new DatabaseSync(file);
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 		this.db.exec(SCHEMA);
+		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "audience"))
+			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
+		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
+			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
 		// Upgrade already queued events without losing their stable event IDs.
 		this.db.exec(`INSERT OR IGNORE INTO pending_notice_summaries (event_id, group_key, text, state)
 			SELECT p.event_id, COALESCE('task:' || e.task_id, 'task:' || t.id,
@@ -763,9 +767,9 @@ export class MissionStore {
 		return mission;
 	}
 
-	detail(id: string): MissionDetail {
+	detail(id: string, history = true): MissionDetail {
 		const mission = this.require(id);
-		const brief = mission.briefRevision ? this.brief(id) : undefined;
+		const brief = history && mission.briefRevision ? this.brief(id) : undefined;
 		return {
 			mission,
 			...(brief ? { brief } : {}),
@@ -777,11 +781,13 @@ export class MissionStore {
 					"SELECT * FROM comments WHERE mission_id = ? AND resolved_at IS NULL ORDER BY created_at, id",
 					id,
 				),
-				...this.all(
-					"SELECT * FROM comments WHERE mission_id = ? AND resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT ?",
-					id,
-					DETAIL_RESOLVED_COMMENTS,
-				),
+				...(history
+					? this.all(
+							"SELECT * FROM comments WHERE mission_id = ? AND resolved_at IS NOT NULL ORDER BY resolved_at DESC LIMIT ?",
+							id,
+							DETAIL_RESOLVED_COMMENTS,
+						)
+					: []),
 			].map(commentFrom),
 			tasks: this.tasks(id),
 			artifacts: this.all("SELECT * FROM artifact_links WHERE mission_id = ? ORDER BY linked_at DESC", id).map(
@@ -790,7 +796,7 @@ export class MissionStore {
 			resources: this.all("SELECT * FROM resources WHERE mission_id = ? ORDER BY created_at, id", id).map(
 				resourceFrom,
 			),
-			events: this.events(id, undefined, DETAIL_EVENTS),
+			events: history ? this.events(id, undefined, DETAIL_EVENTS) : [],
 		};
 	}
 
@@ -1022,6 +1028,8 @@ export class MissionStore {
 			wake: status === "blocked",
 			noticeText: `#${number} ${title} blocked${fields.body ? `: ${fields.body}` : ""}`,
 		});
+		if (fields.decisionIds !== undefined)
+			this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), taskId);
 		return this.task(id, taskId);
 	}
 
@@ -1040,7 +1048,13 @@ export class MissionStore {
 			dependsOn = [...new Set(write.dependsOn.map((ref) => this.resolveTask(id, ref).id))];
 			if (self && dependsOn.includes(self)) throw new Error("A task cannot depend on itself");
 		}
-		return { body, status: write.status, order: write.order, milestone, dependsOn };
+		let decisionIds: string[] | undefined;
+		if (write.decisionIds !== undefined) {
+			if (!Array.isArray(write.decisionIds) || write.decisionIds.length > 1000)
+				throw new Error("decisionIds must be an array of at most 1000 decision IDs");
+			decisionIds = [...new Set(write.decisionIds.map((ref) => this.decision(id, ref).id))];
+		}
+		return { body, status: write.status, order: write.order, milestone, dependsOn, decisionIds };
 	}
 
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
@@ -1058,6 +1072,8 @@ export class MissionStore {
 		const status = fields.status ?? before.status;
 		const now = Date.now();
 		this.transaction(() => {
+			if (fields.decisionIds !== undefined)
+				this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), before.id);
 			// A user moving work back opts out permanently, across restarts and new links.
 			const rank = (state: MissionTaskStatus) =>
 				state === "todo" ? 0 : state === "in_review" ? 2 : state === "done" || state === "dropped" ? 3 : 1;
@@ -1306,12 +1322,19 @@ export class MissionStore {
 
 	// Decisions
 
-	addDecision(id: string, value: unknown, actor: MissionActor = USER): MissionDecision {
+	addDecision(
+		id: string,
+		value: unknown,
+		actor: MissionActor = USER,
+		audience: unknown = "reference",
+	): MissionDecision {
 		this.require(id);
 		const decisionText = text(value, "text", MAX_TEXT)!;
+		const scope = decisionAudience(audience);
 		const now = Date.now();
 		const decision: MissionDecision = {
 			id: randomUUID(),
+			audience: scope,
 			text: decisionText,
 			...optionalAuthor(actor.sessionId),
 			createdAt: now,
@@ -1319,13 +1342,14 @@ export class MissionStore {
 		};
 		this.transaction(() => {
 			this.run(
-				"INSERT INTO decisions (id, mission_id, text, author_session_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+				"INSERT INTO decisions (id, mission_id, text, author_session_id, created_at, updated_at, audience) VALUES (?, ?, ?, ?, ?, ?, ?)",
 				decision.id,
 				id,
 				decision.text,
 				actor.sessionId ?? null,
 				now,
 				now,
+				scope,
 			);
 			this.event(id, "decision", `Decision: ${decision.text}`, actor, { at: now });
 		});
@@ -1334,13 +1358,26 @@ export class MissionStore {
 	}
 
 	/** Only the user edits or removes decisions. */
-	updateDecision(id: string, decisionId: string, value: unknown, actor: MissionActor = USER): MissionDecision {
+	updateDecision(
+		id: string,
+		decisionId: string,
+		value: unknown,
+		actor: MissionActor = USER,
+		audience?: unknown,
+	): MissionDecision {
 		if (actor.sessionId) throw new Error("Only the user can change recorded decisions");
 		const before = this.decision(id, decisionId);
-		const decisionText = text(value, "text", MAX_TEXT)!;
+		const decisionText = value === undefined ? before.text : text(value, "text", MAX_TEXT)!;
+		const scope = audience === undefined ? before.audience : decisionAudience(audience);
 		const now = Date.now();
 		this.transaction(() => {
-			this.run("UPDATE decisions SET text = ?, updated_at = ? WHERE id = ?", decisionText, now, before.id);
+			this.run(
+				"UPDATE decisions SET text = ?, audience = ?, updated_at = ? WHERE id = ?",
+				decisionText,
+				scope,
+				now,
+				before.id,
+			);
 			this.event(id, "decision", `Decision changed: ${decisionText}`, actor, { at: now });
 		});
 		this.changed(id, this.members(id));
@@ -1351,6 +1388,14 @@ export class MissionStore {
 		if (actor.sessionId) throw new Error("Only the user can change recorded decisions");
 		const before = this.decision(id, decisionId);
 		this.transaction(() => {
+			for (const task of this.tasks(id)) {
+				if (task.decisionIds?.includes(before.id))
+					this.run(
+						"UPDATE tasks SET decision_ids = ? WHERE id = ?",
+						JSON.stringify(task.decisionIds.filter((ref) => ref !== before.id)),
+						task.id,
+					);
+			}
 			this.run("DELETE FROM decisions WHERE id = ?", before.id);
 			this.event(id, "decision", `Decision removed: ${before.text}`, actor);
 		});
@@ -2055,10 +2100,17 @@ function briefFrom(row: Row): MissionBrief {
 	};
 }
 
+function decisionAudience(value: unknown): MissionDecision["audience"] {
+	if (value !== "all" && value !== "coordinator" && value !== "reference")
+		throw new Error("audience must be all, coordinator or reference");
+	return value;
+}
+
 function decisionFrom(row: Row): MissionDecision {
 	return {
 		id: str(row.id!),
 		text: str(row.text!),
+		audience: decisionAudience(row.audience),
 		...optionalAuthor(row.author_session_id),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),
@@ -2090,6 +2142,7 @@ function taskFrom(row: Row): MissionTask {
 		order: num(row.sort!),
 		...(row.milestone ? { milestone: str(row.milestone) } : {}),
 		...(dependsOn?.length ? { dependsOn } : {}),
+		...(row.decision_ids ? { decisionIds: JSON.parse(str(row.decision_ids)) as string[] } : {}),
 		...(row.session_id ? { sessionId: str(row.session_id) } : {}),
 		createdAt: num(row.created_at!),
 		updatedAt: num(row.updated_at!),

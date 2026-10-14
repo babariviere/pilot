@@ -20,6 +20,169 @@ import { CommandRejected, type SessionWorker, SessionManager } from "./sessions.
 import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 
+test("decision audiences and task pins select prompts and avoid duplicate detail reads", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "Implement" }],
+	});
+	f.service.join(worker.id, { missionId: mission.id, taskId: "1" });
+	const reference = f.store.addDecision(mission.id, "Reference");
+	const all = f.store.addDecision(mission.id, "Everyone", {}, "all");
+	const coordinator = f.store.addDecision(mission.id, "Coordinate", {}, "coordinator");
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["Everyone"]);
+	assert.deepEqual(f.service.context(lead.id)?.decisions, ["Everyone", "Coordinate"]);
+	await f.service.call(worker.id, "task", { id: "1", decisionIds: [reference.id, coordinator.id] });
+	assert.deepEqual(new Set(f.service.context(worker.id)?.decisions), new Set(["Reference", "Everyone", "Coordinate"]));
+	assert.equal(f.service.context(worker.id)?.remainingDecisions, 0);
+	const before = f.service.context(worker.id)!.decisionEntries;
+	assert.deepEqual(
+		((await f.service.call(worker.id, "decisions", { _promptDecisions: before })) as { decisions: unknown[] })
+			.decisions,
+		[],
+	);
+	f.store.updateDecision(mission.id, all.id, "Revised");
+	f.store.removeDecision(mission.id, reference.id);
+	const result = (await f.service.call(worker.id, "decisions", { _promptDecisions: before })) as {
+		decisions: { text: string }[];
+		retired: { text: string }[];
+	};
+	assert.deepEqual(
+		result.decisions.map((d) => d.text),
+		["Revised"],
+	);
+	assert.deepEqual(
+		result.retired.map((d) => d.text),
+		["Reference"],
+	);
+	await f.service.call(worker.id, "task", { id: "1", decisionIds: [] });
+	assert.deepEqual(f.service.context(worker.id)?.decisions, ["Revised"]);
+	const foreign = f.store.create({ projectId: f.project.id, title: "Other" });
+	const foreignDecision = f.store.addDecision(foreign.id, "Elsewhere");
+	await assert.rejects(
+		f.service.call(worker.id, "task", { id: "1", decisionIds: [foreignDecision.id] }),
+		/Unknown decision/,
+	);
+});
+
+test("compact get stays within estimated token budgets on a large fixture, with detail on demand", async (t) => {
+	const f = await fixture(t);
+	// No GitHub fetch or kernel wake-up is needed for agent reads.
+	t.mock.method(f.sessions, "refreshMissionPullRequests", () => {});
+	const lead = await f.spawn();
+	const worker = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Shared delivery",
+		fromSessionId: lead.id,
+		draft: false,
+		goal: "Ship a durable shared workflow with compact agent context and safe ownership.",
+	});
+	f.service.join(worker.id, { missionId: mission.id });
+	const tasks = Array.from({ length: 82 }, (_, i) =>
+		f.store.addTask(mission.id, {
+			title: `Improve workflow validation and reference handling ${i + 1}`,
+			body: "Detailed acceptance criteria. ".repeat(100),
+			status: i < 49 ? "done" : i === 49 ? "in_progress" : i === 50 ? "in_review" : "todo",
+			milestone: i % 2 ? "Delivery" : "Foundation",
+			...(i === 49 ? { sessionId: worker.id } : {}),
+			...(i > 49 ? { dependsOn: ["50"] } : {}),
+		}),
+	);
+	for (let i = 0; i < 43; i++)
+		f.store.addResource(mission.id, {
+			taskId: tasks[i]!.id,
+			url: `https://github.com/octo/repo/pull/${i + 1}`,
+			title: "A long completed pull request title with stored review metadata",
+		});
+	f.store.addResource(mission.id, { taskId: tasks[49]!.id, url: "https://example.com/spec", title: "Specification" });
+	f.store.addResource(mission.id, { taskId: tasks[50]!.id, url: "https://github.com/octo/repo/pull/99" });
+	for (let i = 0; i < 64; i++)
+		f.store.linkArtifact(mission.id, {
+			artifactId: `artifact-${i}`,
+			sessionId: worker.id,
+			title: `Workflow layout ${i}`,
+			kind: "html",
+			taskId: tasks[i < 63 ? i % 49 : 49]!.id,
+		});
+	for (let i = 0; i < 30; i++)
+		f.store.addDecision(mission.id, `Rule ${i}: ${"Detailed binding reference. ".repeat(8)}`);
+	const reviewer = await f.spawn();
+	f.service.join(reviewer.id, { missionId: mission.id, taskId: "52" });
+	f.store.updateTask(mission.id, "52", { status: "blocked" });
+	f.store.addComment(mission.id, { text: "Review the validation requirement.", targetSessionId: lead.id });
+	for (let i = 0; i < 100; i++)
+		f.store.log(mission.id, { text: "Old history that must not be returned. ".repeat(20) });
+	f.store.writeBrief(mission.id, "# Specification\n" + "Details. ".repeat(1000), 0);
+	t.mock.method(f.store, "brief", () => assert.fail("agent summary must not read brief history"));
+	t.mock.method(f.store, "events", () => assert.fail("agent summary must not read events"));
+	t.mock.method(f.store, "userNotes", () => assert.fail("agent summary must not read user notes"));
+	for (const [member, budget] of [
+		[worker, 4000],
+		[lead, 8000],
+	] as const) {
+		const get = await f.service.call(member.id, "get", {});
+		const serialized = JSON.stringify(get);
+		t.diagnostic(
+			`${member.id === worker.id ? "worker" : "coordinator"} get: ${Buffer.byteLength(serialized)} bytes (~${Math.ceil(Buffer.byteLength(serialized) / 4)} tokens)`,
+		);
+		assert.ok(
+			Buffer.byteLength(serialized) < budget,
+			`get is ${Buffer.byteLength(serialized)} bytes, budget ${budget} (~${budget / 4} tokens)`,
+		);
+		assert.doesNotMatch(serialized, /Old history|Detailed acceptance|Detailed binding|completed pull request/);
+		assert.doesNotMatch(serialized, new RegExp(mission.id + "|" + worker.id + "|" + tasks[49]!.id));
+	}
+	const summary = (await f.service.call(worker.id, "get", {})) as {
+		counts: { doneTasks: number; links: number; artifacts: number; decisions: number };
+		tasks: { number: number; resources: unknown[]; artifacts: unknown[] }[];
+		openTasks: unknown[];
+	};
+	assert.deepEqual(summary.counts, { doneTasks: 49, droppedTasks: 0, links: 45, artifacts: 64, decisions: 30 });
+	assert.equal(summary.tasks[0]!.number, 50);
+	assert.equal(summary.tasks[0]!.resources.length, 1);
+	assert.equal(summary.tasks[0]!.artifacts.length, 1);
+	assert.equal(summary.openTasks.length, 32);
+	const coordinator = (await f.service.call(lead.id, "get", {})) as {
+		members: { title: string; state: string; tasks: number[] }[];
+		needsYou: { blockedTasks: number[]; comments: { text: string }[] };
+		prsInReview: { task: number; url: string }[];
+	};
+	assert.equal(coordinator.members.length, 3);
+	assert.ok(coordinator.members.some((member) => member.tasks.includes(52) && member.state === "idle"));
+	assert.deepEqual(coordinator.needsYou.blockedTasks, [52]);
+	assert.equal(coordinator.needsYou.comments[0]?.text, "Review the validation requirement.");
+	assert.equal(coordinator.prsInReview[0]?.task, 51);
+	const full = (await f.service.call(worker.id, "task", { id: "1" })) as { body: string; number: number };
+	assert.equal(full.number, 1);
+	assert.match(full.body, /Detailed acceptance/);
+	const readTasks = async (args: Record<string, unknown>) =>
+		((await f.service.call(worker.id, "tasks", args)) as { tasks: unknown[] }).tasks;
+	assert.equal((await readTasks({})).length, 33);
+	assert.equal((await readTasks({ mine: true })).length, 1);
+	assert.equal((await readTasks({ milestone: "Foundation" })).length, 16);
+	assert.equal((await readTasks({ filter: "done" })).length, 49);
+	assert.equal((await readTasks({ filter: "all" })).length, 82);
+	assert.equal(((await f.service.call(worker.id, "links", {})) as { links: unknown[] }).links.length, 2);
+	assert.equal(
+		((await f.service.call(worker.id, "links", { filter: "done" })) as { links: unknown[] }).links.length,
+		43,
+	);
+	assert.equal(((await f.service.call(worker.id, "artifacts", {})) as { artifacts: unknown[] }).artifacts.length, 1);
+	assert.equal(
+		((await f.service.call(worker.id, "artifacts", { taskId: "1", filter: "all" })) as { artifacts: unknown[] })
+			.artifacts.length,
+		2,
+	);
+	assert.equal(((await f.service.call(worker.id, "decisions", {})) as { decisions: unknown[] }).decisions.length, 30);
+	await assert.rejects(f.service.call(worker.id, "tasks", { filter: "bogus" }), /filter must be/);
+});
+
 class FakeWorker implements SessionWorker {
 	ready = Promise.resolve();
 	state: SessionState = "idle";
@@ -261,8 +424,7 @@ test("PR tools report actual ownership and link changes, and get/status expose c
 		resources: { owner: unknown }[];
 		tasks: { resources: { owner: unknown }[] }[];
 	};
-	for (const r of [...get.resources, ...get.tasks.flatMap((task) => task.resources)])
-		assert.deepEqual(r.owner, { id: first.id, title: first.title });
+	for (const r of get.tasks.flatMap((task) => task.resources)) assert.equal(r.owner, first.title);
 	const status = (await f.service.call(coordinator.id, "status", {})) as {
 		members: { id: string; boundPullRequests: string[] }[];
 	};
@@ -290,8 +452,8 @@ test("PR tools report actual ownership and link changes, and get/status expose c
 	const remaining = f.store.detail(mission.id).resources;
 	assert.equal(remaining.length, 2);
 	assert.ok(remaining.some((r) => r.id === (reference as { id: string }).id));
-	const unbound = (await f.service.call(first.id, "get", {})) as { resources: { owner: unknown }[] };
-	assert.ok(unbound.resources.every((r) => r.owner === null));
+	const unbound = (await f.service.call(first.id, "links", {})) as { links: { owner: unknown }[] };
+	assert.ok(unbound.links.every((r) => r.owner === null));
 	// Relinking the same owner to another task is still a change, even without a metadata change.
 	await bind(first.id, a.id);
 	assert.deepEqual(await bind(first.id, b.id), {
@@ -478,7 +640,7 @@ test("failed promoted admission drains queued metadata before removing the sessi
 	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), []);
 });
 
-test("get keeps recent user notes visible beyond the activity window for every member", async (t) => {
+test("activity keeps recent user notes visible beyond the event window for every member", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
 	const member = await f.spawn();
@@ -492,7 +654,7 @@ test("get keeps recent user notes visible beyond the activity window for every m
 	f.service.join(member.id, { missionId: mission.id });
 	type Note = { kind: string; text: string; by: string; at: string; health?: string };
 	const get = async (id: string) =>
-		(await f.service.call(id, "get", {})) as { recentUserNotes: Note[]; recentActivity: Note[] };
+		(await f.service.call(id, "activity", {})) as { recentUserNotes: Note[]; recentActivity: Note[] };
 	assert.deepEqual((await get(lead.id)).recentUserNotes, []);
 	const update = f.store.log(mission.id, { text: "Keep the composer", health: "on_track" });
 	const handoff = f.store.log(mission.id, { kind: "handoff", text: "Next: verify agent context" });
@@ -1267,15 +1429,15 @@ test("agent calls run against the chat's mission and update its context", async 
 	const decision = await call("decide", { text: "IDs are opaque" });
 	assert.equal((decision.result as { authorSessionId: string }).authorSessionId, chat.id);
 	const got = (await call("get", {})).result as {
-		mission: { coordinator: string };
+		mission: { title: string };
 		tasks: Array<{ owner: string }>;
-		brief: { outline: string[] };
-		decisions: string[];
+		briefRevision: number;
+		counts: { decisions: number };
 	};
-	assert.equal(got.mission.coordinator, "you");
+	assert.equal(got.mission.title, "API v2");
 	assert.equal(got.tasks[0]!.owner, "you");
-	assert.deepEqual(got.brief.outline, ["# Spec"]);
-	assert.deepEqual(got.decisions, ["IDs are opaque"]);
+	assert.equal(got.briefRevision, 1);
+	assert.equal(got.counts.decisions, 1);
 	const denied = await call("get", {}, f.workers.get(outsider.id)!);
 	assert.match(denied.error ?? "", /not part of a mission/);
 	await call("task", { title: "Docs" });
@@ -1315,7 +1477,8 @@ test("spawn joins a mission before the first input, uses its project and leaves 
 		await until(() => worker.requests.find((command) => command.type === "input"));
 		assert.equal(worker.spec.mission?.id, mission.id);
 		assert.equal(worker.spec.mission?.goal, "Redesign");
-		assert.deepEqual(worker.spec.mission?.decisions, ["IDs are opaque"]);
+		assert.deepEqual(worker.spec.mission?.decisions, []);
+		assert.equal(worker.spec.mission?.remainingDecisions, 1);
 		assert.deepEqual(worker.spec.mission?.tasks, []);
 		assert.equal(f.store.tasks(mission.id)[0]?.sessionId, undefined);
 	}
@@ -2440,7 +2603,14 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	await unlinked.arrayBuffer();
 	const decision = await api(`/missions/${id}/decisions`, { method: "POST", body: JSON.stringify({ text: "D" }) });
 	assert.equal(decision.status, 201);
-	await decision.arrayBuffer();
+	const decisionBody = (await decision.json()) as { id: string; audience: string };
+	assert.equal(decisionBody.audience, "reference");
+	const tagged = await api(`/missions/${id}/decisions/${decisionBody.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ audience: "all" }),
+	});
+	assert.equal(tagged.status, 200);
+	assert.equal(((await tagged.json()) as { audience: string; text: string }).audience, "all");
 	const update = await api(`/missions/${id}/events`, {
 		method: "POST",
 		body: JSON.stringify({ text: "Halfway", health: "at_risk" }),
@@ -2554,10 +2724,9 @@ test("release accepts claim selectors, enforces ownership and reads claimant tit
 	f.store.claimTask(mission.id, "3", member.id);
 	for (const action of ["get", "tasks"] as const) {
 		const read = (await f.service.call(member.id, action, {})) as {
-			tasks: Array<{ sessionId?: string; claimingChat?: { id: string; title: string } }>;
+			tasks: Array<{ owner: string }>;
 		};
-		assert.deepEqual(read.tasks[0]!.claimingChat, { id: member.id, title: member.title });
-		if (action === "tasks") assert.equal(read.tasks[0]!.sessionId, member.id);
+		assert.equal(read.tasks[0]!.owner, "you");
 	}
 	await assert.rejects(f.service.call(member.id, "release", { id: "2" }), /only the coordinator/);
 	await assert.rejects(f.service.call(outsider.id, "release", { ids: ["1-3"] }), /not part of a mission/);

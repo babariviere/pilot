@@ -1,4 +1,5 @@
 /** One durable pi session: a Harness root conversation driven by the native Pi kernel. */
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Context } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -180,9 +181,14 @@ export class KernelSession {
 		let artifactConversation: Conversation | undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const mission: { current?: MissionContext } = { current: spec.mission };
-		const missionTools = hooks.callMission
-			? [createMissionTool(hooks.callMission, mission.current?.coordinator === "self")]
-			: [];
+		const callMission: MissionCall | undefined = hooks.callMission
+			? (action, args) =>
+					hooks.callMission!(
+						action,
+						action === "decisions" ? { ...args, _promptDecisions: mission.current?.decisionEntries ?? [] } : args,
+					)
+			: undefined;
+		const missionTools = callMission ? [createMissionTool(callMission, mission.current?.coordinator === "self")] : [];
 		let wakePrompt = "";
 		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask) {
 			try {
@@ -348,7 +354,7 @@ export class KernelSession {
 				subagents,
 				!!spec.pilot?.ask,
 				mission,
-				hooks.callMission,
+				callMission,
 				hooks.callMemory,
 			);
 			session.#reportedWorking = status.snapshot.run !== undefined;
@@ -513,7 +519,33 @@ export class KernelSession {
 	setMission(context: MissionContext | undefined): void {
 		if (this.#closing) return;
 		const coordinatorChanged = (this.#mission.current?.coordinator === "self") !== (context?.coordinator === "self");
-		this.#mission.current = context;
+		const previous = this.#mission.current;
+		if (previous && context && previous.id === context.id && !coordinatorChanged) {
+			if (previous.decisionVersion !== context.decisionVersion) {
+				const text =
+					'Mission decisions changed. Read mission({action: "decisions"}); current decisions supersede earlier prompt text.';
+				void this.conversation
+					.submit(
+						{
+							type: "write",
+							requestId: `mission-decisions:${randomUUID()}`,
+							entry: {
+								kind: "pilot.activity",
+								data: { text },
+								model: [{ role: "user", content: text, timestamp: Date.now() }],
+							},
+						},
+						BACKGROUND_CONTEXT,
+					)
+					.catch((error: unknown) => console.warn("pilot: could not place decision notice", error));
+			}
+			this.#mission.current = {
+				...context,
+				decisions: previous.decisions,
+				decisionEntries: previous.decisionEntries,
+				remainingDecisions: previous.remainingDecisions,
+			};
+		} else this.#mission.current = context;
 		try {
 			if (coordinatorChanged && this.callMission)
 				this.adapter.registerHostTool(createMissionTool(this.callMission, context?.coordinator === "self"));

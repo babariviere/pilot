@@ -14,6 +14,11 @@ const MEMBER_ACTIONS = [
 	"claim",
 	"release",
 	"decide",
+	"decisions",
+	"links",
+	"artifacts",
+	"comments",
+	"activity",
 	"comment",
 	"resolve",
 	"attach",
@@ -44,28 +49,31 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: goal, decisions, your tasks, open tasks, open comments, links, artifacts, recent user updates and handoffs (separate from recent activity), the brief's revision and outline, and each PR's owning chat (title and id, null if unbound). Call it before starting work and before handing off.
-- brief: read the brief (optionally an older revision). With markdown and expectedRevision, replace the whole brief; a stale expectedRevision fails, so re-read and reapply your change.
+- get: compact goal/status/brief revision, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you and PRs in review. No history. Read before work and handoff.
+- links, artifacts: references, filtered by taskId and filter open (default), done or all.
+- decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
+- comments, activity: open comments or recent activity and user notes on demand.
+- brief: read a revision, or replace with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
-- tasks: list every task. task: create one (title, optional body, status, milestone, dependsOn) or, with id, update one. Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
-- claim: take tasks for this chat. Use id for one task or ids for several IDs, numbers or ranges (for example ["1-5", "#8"]). A range or comma-separated list also works in id. Batch results contain claimed tasks and skipped tasks with reasons (owned by another chat or not found); other chats' tasks are never taken.
-- release: clear task claims using id or ids with the same selectors as claim. Members may release their own claims; the coordinator may release any claim. Resets in_progress or blocked to todo, keeps other states and links. Batch results contain released and skipped tasks.
-- decide: record a decision. Decisions override the brief; only the user changes them later.
+- tasks: list tasks, filter open (default), done or all, mine and milestone. task: id alone reads one full task; title creates one, other fields update it (body, status, milestone, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "dropped" to retire work while keeping its history.
+- claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
+- release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
+- decide: record a decision, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
 - comment: comment on the brief (text, optional anchor quote and targetSessionId). resolve: resolve a comment by id.
 - attach: link one of this chat's artifacts (artifactId, optional artifactRevision to pin, optional taskId).
-- link: link an external resource by url (Linear, GitHub, Slack or any URL), with an optional title and taskId (task ID or number). Task PR links default to relationship "ownership" (drive task status); use "reference" for related work. Links never bind a PR to a chat.
-- unlink: remove one link by url and optional taskId (omitted means mission-level). Members can remove their own links; the coordinator can remove any. Prefers a reference when both removable links share that scope. Returns removed:false if absent.
+- link: add url, optional title/taskId. Task PRs default to relationship "ownership" (drives status); "reference" is related work. Neither binds a chat.
+- unlink: remove url at taskId (omitted: mission-level), own links only unless coordinator; prefers reference. Absent returns removed:false.
 - log: post a short status update or, with kind "handoff", a handoff note for whoever continues the work (optional health).${
 			coordinator
 				? `
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
-- start (coordinator only): start a new chat for an unclaimed task (id or number, optional message, model, thinking, artifacts [{artifactId, revision?}], links [{url, title?}]). Model defaults to the project's default. Allowed models are the project's scoped models within the price cap; start validation errors list allowed model IDs, prices and supported thinking levels. Choose cheaper models for small tasks and the strongest allowed model for hard ones. Thinking must be supported by the chosen model. Artifacts must already be linked to the mission or owned by a member chat. References are attached to the task before starting, so later chats see them too. The opening message lists references without pasting content and must fit 4000 characters including the task body. Durable context belongs in the brief, decisions or task links. Start chats only when the user asks.
+- start (coordinator only): start an unclaimed task (id, optional message/model/thinking/artifacts/links). References attach to the task; artifacts must be linked or member-owned. Opening text, task body and reference list must fit 4000 characters. Durable context belongs in the brief, decisions or task links. Model defaults to project; validation errors list allowed model IDs, prices and supported thinking levels. Pick cheaper models for small tasks, strongest allowed model for hard ones. Start only when asked.
 - send (coordinator only): send message to member targetSessionId; wakes idle/paused chats, returns delivery delivered/queued/not_started with reason; restore archived chats first.
 - status (coordinator only): summarize every member chat's state, latest outcome, archive status, boundPullRequests and assigned tasks without starting workers.
-- bindPr (coordinator only): bind an existing GitHub PR by url to targetSessionId, a member chat of this mission, without changing its branches. The bound chat owns the PR head for follow-ups and pushes. One owner per PR: binding transfers ownership from the previous chat and moves unfinished ownership links to the selected task. Returns {changed, previousOwner, taskLinkRemoved}. Use taskId (task ID or number) when the owning task is ambiguous. Use resource links for dependencies or references, not ownership.
-- unbindPr (coordinator only): detach a PR from targetSessionId by url to stop its tracking, follow-ups and pushes for that chat. Suppresses rediscovery and removes only unfinished ownership links, preserving references. Returns {changed, previousOwner, taskLinkRemoved}; already unbound is changed:false. Branches stay unchanged.`
+- bindPr (coordinator only): bind url to targetSessionId, optional taskId to disambiguate. Transfers sole PR-head ownership and unfinished ownership links. Returns {changed, previousOwner, taskLinkRemoved}; references never grant ownership.
+- unbindPr (coordinator only): detach url from targetSessionId, stopping tracking/pushes/follow-ups and removing unfinished ownership links. References/branches stay. Returns {changed, previousOwner, taskLinkRemoved}.`
 				: ""
 		}`,
 		promptSnippet: "Read and update the shared mission: brief, tasks, decisions, comments, links and activity",
@@ -99,6 +107,15 @@ Actions:
 			status: Type.Optional(taskStatus),
 			milestone: Type.Optional(Type.String({ maxLength: 200 })),
 			dependsOn: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { description: "Task IDs or numbers." })),
+			decisionIds: Type.Optional(
+				Type.Array(Type.String({ maxLength: 128 }), {
+					maxItems: 1000,
+					description: "Task decision pins; [] clears.",
+				}),
+			),
+			audience: Type.Optional(StringEnum(["all", "coordinator", "reference"] as const)),
+			filter: Type.Optional(StringEnum(["open", "done", "all"] as const)),
+			mine: Type.Optional(Type.Boolean({ description: "tasks: only your tasks." })),
 			text: Type.Optional(Type.String({ maxLength: 8000, description: "Decision, comment or log text." })),
 			anchor: Type.Optional(
 				Type.String({ maxLength: 8000, description: "Quoted brief excerpt a comment refers to." }),

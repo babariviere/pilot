@@ -22,9 +22,6 @@ import { type MissionActor, type MissionStore, normalizeResourceWrite } from "./
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
 
-const RECENT_ACTIVITY = 15;
-const RECENT_USER_NOTES = 15;
-
 /** Sent to a chat that just became a mission, so it drafts the shared state from its own conversation. */
 export function draftMessage(title: string): string {
 	return [
@@ -73,14 +70,6 @@ function taskMessage(
 			`Opening message is too long (${message.length} characters; max 4000). Shorten the task body, message or references. Put durable context in the brief, decisions or task links.`,
 		);
 	return message;
-}
-
-function outline(markdown: string): string[] {
-	return markdown
-		.split("\n")
-		.filter((line) => /^#{1,3}\s/.test(line))
-		.map((line) => line.trim())
-		.slice(0, 40);
 }
 
 export class MissionService {
@@ -220,7 +209,18 @@ export class MissionService {
 		const missionId = this.store.missionOf(sessionId);
 		const mission = missionId ? this.store.get(missionId) : undefined;
 		if (!mission) return undefined;
-		const detail = this.store.detail(mission.id);
+		const detail = this.store.detail(mission.id, false);
+		const pins = new Set(
+			detail.tasks
+				.filter((task) => task.sessionId === sessionId && isOpen(task))
+				.flatMap((task) => task.decisionIds ?? []),
+		);
+		const selected = detail.decisions.filter(
+			(decision) =>
+				decision.audience === "all" ||
+				(decision.audience === "coordinator" && mission.coordinatorSessionId === sessionId) ||
+				pins.has(decision.id),
+		);
 		return {
 			id: mission.id,
 			title: mission.title,
@@ -234,7 +234,12 @@ export class MissionService {
 			tasks: detail.tasks
 				.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped")
 				.map((task) => ({ number: task.number, title: task.title, status: task.status })),
-			decisions: detail.decisions.map((decision) => decision.text),
+			decisions: selected.map((decision) => decision.text),
+			decisionEntries: selected.map(({ id, text }) => ({ id, text })),
+			remainingDecisions: detail.decisions.length - selected.length,
+			decisionVersion:
+				JSON.stringify(detail.decisions.map(({ id, text, audience }) => [id, text, audience])) +
+				JSON.stringify([...pins]),
 		};
 	}
 
@@ -459,7 +464,6 @@ export class MissionService {
 			throw new Conflict(`Only the mission coordinator can use ${action}`);
 		const actor = { sessionId };
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
-		const claimant = (id: string) => ({ id, title: this.sessions.get(id)?.title ?? "Unknown chat" });
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
 			case "bindPr":
@@ -541,86 +545,118 @@ export class MissionService {
 				};
 			}
 			case "get": {
-				const detail = this.store.detail(missionId);
-				const { mission } = detail;
-				const owners = new Map(
-					detail.resources
-						.filter((r) => r.kind === "github.pr")
-						.map((r) => [r.url, this.sessions.pullRequestOwnerSummary(r.url)]),
-				);
-				const resources = detail.resources.map((r) => ({
-					...r,
-					...(r.kind === "github.pr" ? { owner: owners.get(r.url) ?? null } : {}),
-				}));
-				const number = new Map(detail.tasks.map((task) => [task.id, task.number]));
+				const detail = this.store.detail(missionId, false);
+				const view = new MissionAgentView(detail, sessionId, this.sessions);
+				const open = detail.tasks.filter(isOpen);
+				const mine = open.filter((task) => task.sessionId === sessionId);
 				return {
-					mission: {
-						title: mission.title,
-						goal: mission.goal,
-						status: mission.status,
-						coordinator: who(mission.coordinatorSessionId),
+					mission: { title: mission.title, goal: mission.goal, status: mission.status },
+					briefRevision: mission.briefRevision,
+					tasks: mine.map((task) => view.task(task)),
+					// Tuples avoid repeating keys for the larger, read-only list.
+					openTasks: open
+						.filter((task) => task.sessionId !== sessionId)
+						.map((task) => [
+							task.number,
+							task.title,
+							task.status,
+							...(task.dependsOn?.length ? [view.dependencies(task)] : []),
+						]),
+					counts: {
+						doneTasks: detail.tasks.filter((task) => task.status === "done").length,
+						droppedTasks: detail.tasks.filter((task) => task.status === "dropped").length,
+						links: detail.resources.length,
+						artifacts: detail.artifacts.length,
+						decisions: detail.decisions.length,
 					},
-					you: sessionId,
-					brief: { revision: mission.briefRevision, outline: outline(detail.brief?.markdown ?? "") },
-					decisions: detail.decisions.map((decision) => decision.text),
-					tasks: detail.tasks
-						.filter((task) => task.status !== "done" && task.status !== "dropped")
-						.map((task) => ({
-							id: task.id,
-							number: task.number,
-							title: task.title,
-							status: task.status,
-							resources: resources.filter((resource) => resource.taskId === task.id),
-							artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
-							...(task.sessionId ? { owner: who(task.sessionId), claimingChat: claimant(task.sessionId) } : {}),
-							...(task.milestone ? { milestone: task.milestone } : {}),
-							...(task.dependsOn?.length
-								? { dependsOn: task.dependsOn.map((dep) => number.get(dep) ?? dep) }
-								: {}),
-						})),
-					doneTasks: detail.tasks.filter((task) => task.status === "done").length,
-					openComments: detail.comments
-						.filter((comment) => comment.resolvedAt === undefined)
-						.map((comment) => ({
-							id: comment.id,
-							text: comment.text,
-							...(comment.anchor ? { anchor: comment.anchor } : {}),
-							by: who(comment.authorSessionId),
-							...(comment.targetSessionId ? { to: who(comment.targetSessionId) } : {}),
-						})),
-					resources: resources.map((resource) => ({
-						relationship: resource.relationship,
-						...(resource.kind === "github.pr" ? { owner: resource.owner } : {}),
-						...(resource.taskId ? { taskId: resource.taskId } : {}),
-						url: resource.url,
-						kind: resource.kind,
-						...(resource.title ? { title: resource.title } : {}),
-						...(resource.externalId ? { externalId: resource.externalId } : {}),
-						...(resource.pullRequest ? { pullRequest: resource.pullRequest } : {}),
-					})),
-					artifacts: detail.artifacts.map((artifact) => ({
-						title: artifact.title,
-						kind: artifact.kind,
-						artifactId: artifact.artifactId,
-						...(artifact.taskId ? { taskId: artifact.taskId } : {}),
-						...(artifact.revision !== undefined ? { revision: artifact.revision } : {}),
-						chat: who(artifact.sessionId),
-					})),
-					recentUserNotes: this.store.userNotes(missionId, RECENT_USER_NOTES).map((event) => ({
+					...(mission.coordinatorSessionId === sessionId
+						? {
+								members: this.sessions
+									.list({ missionId, archived: "all" })
+									.filter(
+										(member) =>
+											member.id === sessionId ||
+											open.some((task) => task.sessionId === member.id) ||
+											(member.archivedAt === undefined &&
+												(!detail.tasks.some((task) => task.sessionId === member.id) ||
+													member.state === "working" ||
+													member.state === "starting")),
+									)
+									.map((member) => ({
+										title: member.title,
+										state: member.state,
+										...(member.archivedAt !== undefined ? { archived: true } : {}),
+										tasks: open.filter((task) => task.sessionId === member.id).map((task) => task.number),
+									})),
+								needsYou: {
+									blockedTasks: open.filter((task) => task.status === "blocked").map((task) => task.number),
+									comments: detail.comments
+										.filter((comment) => !comment.targetSessionId || comment.targetSessionId === sessionId)
+										.map((comment) => ({ id: comment.id, text: comment.text })),
+								},
+								prsInReview: detail.resources
+									.filter(
+										(resource) =>
+											resource.kind === "github.pr" &&
+											resource.taskId &&
+											open.some((task) => task.id === resource.taskId && task.status === "in_review") &&
+											(!resource.pullRequest || ["open", "draft"].includes(resource.pullRequest.state)),
+									)
+									.map((resource) => view.link(resource)),
+							}
+						: {}),
+				};
+			}
+			case "links":
+			case "artifacts": {
+				const detail = this.store.detail(missionId, false);
+				const view = new MissionAgentView(detail, sessionId, this.sessions);
+				const filter = readFilter(args.filter);
+				const task = args.taskId === undefined ? undefined : this.store.resolveTask(missionId, args.taskId);
+				const include = (ref: { taskId?: string; pullRequest?: { state: string } }) => {
+					if (task && ref.taskId !== task.id) return false;
+					const linked = detail.tasks.find((item) => item.id === ref.taskId);
+					const done = linked
+						? !isOpen(linked)
+						: ref.pullRequest?.state === "merged" || ref.pullRequest?.state === "closed";
+					return filter === "all" || (filter === "done" ? done : !done);
+				};
+				return action === "links"
+					? { links: detail.resources.filter(include).map((ref) => view.link(ref)) }
+					: { artifacts: detail.artifacts.filter(include).map((ref) => view.artifact(ref)) };
+			}
+			case "decisions": {
+				const detail = this.store.detail(missionId, false);
+				const prompt = Array.isArray(args._promptDecisions)
+					? (args._promptDecisions as Array<{ id: string; text: string }>)
+					: (this.context(sessionId)?.decisionEntries ?? []);
+				return {
+					retired: prompt.filter((entry) => !detail.decisions.some((decision) => decision.id === entry.id)),
+					decisions: detail.decisions
+						.filter(
+							(decision) => !prompt.some((entry) => entry.id === decision.id && entry.text === decision.text),
+						)
+						.map(({ id, text, audience }) => ({ id, text, audience })),
+				};
+			}
+			case "activity":
+				return {
+					recentUserNotes: this.store.userNotes(missionId, 15).map((event) => ({
 						kind: event.kind,
 						text: event.text,
 						by: "user",
 						at: new Date(event.at).toISOString(),
 						...(event.health ? { health: event.health } : {}),
 					})),
-					recentActivity: detail.events.slice(0, RECENT_ACTIVITY).map((event) => ({
+					recentActivity: this.store.events(missionId, undefined, 15).map((event) => ({
 						kind: event.kind,
 						text: event.text,
 						by: who(event.sessionId),
 						at: new Date(event.at).toISOString(),
 					})),
 				};
-			}
+			case "comments":
+				return { comments: this.store.detail(missionId, false).comments };
 			case "brief": {
 				if (args.markdown !== undefined) {
 					const brief = this.store.writeBrief(missionId, args.markdown, args.expectedRevision, actor);
@@ -648,14 +684,21 @@ export class MissionService {
 				return { title: mission.title, goal: mission.goal };
 			}
 			case "tasks": {
-				const detail = this.store.detail(missionId);
+				const detail = this.store.detail(missionId, false);
+				const view = new MissionAgentView(detail, sessionId, this.sessions);
+				const filter = readFilter(args.filter);
+				if (args.mine !== undefined && typeof args.mine !== "boolean") throw new Error("mine must be a boolean");
+				if (args.milestone !== undefined && typeof args.milestone !== "string")
+					throw new Error("milestone must be a string");
 				return {
-					tasks: detail.tasks.map((task) => ({
-						...task,
-						resources: detail.resources.filter((resource) => resource.taskId === task.id),
-						artifacts: detail.artifacts.filter((artifact) => artifact.taskId === task.id),
-						...(task.sessionId ? { owner: who(task.sessionId), claimingChat: claimant(task.sessionId) } : {}),
-					})),
+					tasks: detail.tasks
+						.filter(
+							(task) =>
+								(filter === "all" || (filter === "done" ? !isOpen(task) : isOpen(task))) &&
+								(!args.mine || task.sessionId === sessionId) &&
+								(args.milestone === undefined || args.milestone === task.milestone),
+						)
+						.map((task) => view.task(task, true)),
 				};
 			}
 			case "task": {
@@ -666,7 +709,15 @@ export class MissionService {
 					...(args.order !== undefined ? { order: args.order } : {}),
 					...(args.milestone !== undefined ? { milestone: args.milestone } : {}),
 					...(args.dependsOn !== undefined ? { dependsOn: args.dependsOn } : {}),
+					...(args.decisionIds !== undefined ? { decisionIds: args.decisionIds } : {}),
 				} as Parameters<MissionStore["addTask"]>[1];
+				if (args.id !== undefined && !Object.keys(write).length) {
+					const detail = this.store.detail(missionId, false);
+					return new MissionAgentView(detail, sessionId, this.sessions).task(
+						this.store.resolveTask(missionId, args.id),
+						true,
+					);
+				}
 				return args.id === undefined
 					? this.store.addTask(missionId, write, actor)
 					: this.store.updateTask(missionId, this.store.resolveTask(missionId, args.id).id, write, actor);
@@ -692,7 +743,7 @@ export class MissionService {
 					: this.store.claimTask(missionId, refs[0], sessionId);
 			}
 			case "decide":
-				return this.store.addDecision(missionId, args.text, actor);
+				return this.store.addDecision(missionId, args.text, actor, args.audience);
 			case "comment":
 				return this.store.addComment(
 					missionId,
@@ -749,5 +800,81 @@ export class MissionService {
 			default:
 				throw new Error(`Unknown mission action: ${String(action)}`);
 		}
+	}
+}
+
+function isOpen(task: MissionTask): boolean {
+	return task.status !== "done" && task.status !== "dropped";
+}
+
+function readFilter(value: unknown): "open" | "done" | "all" {
+	if (value === undefined) return "open";
+	if (value !== "open" && value !== "done" && value !== "all") throw new Error("filter must be open, done or all");
+	return value;
+}
+
+/** Agent projections omit storage IDs, timestamps and cached PR history. */
+class MissionAgentView {
+	private readonly numbers: Map<string, number>;
+	private readonly detail: MissionDetail;
+	private readonly sessionId: string;
+	private readonly sessions: SessionManager;
+	constructor(detail: MissionDetail, sessionId: string, sessions: SessionManager) {
+		this.detail = detail;
+		this.sessionId = sessionId;
+		this.sessions = sessions;
+		this.numbers = new Map(detail.tasks.map((task) => [task.id, task.number]));
+	}
+	dependencies(task: MissionTask) {
+		return task.dependsOn?.map((id) => this.numbers.get(id)) ?? [];
+	}
+	link(ref: MissionResource) {
+		const pr = ref.pullRequest;
+		const owner = ref.kind === "github.pr" ? this.sessions.pullRequestOwnerSummary(ref.url) : undefined;
+		return {
+			url: ref.url,
+			...(ref.title || pr?.title ? { title: ref.title ?? pr?.title } : {}),
+			...(ref.taskId ? { task: this.numbers.get(ref.taskId) } : {}),
+			relationship: ref.relationship,
+			...(ref.kind === "github.pr" ? { owner: owner?.title ?? null } : {}),
+			...(pr ? { state: pr.state, ...(pr.readiness ? { readiness: pr.readiness.state } : {}) } : {}),
+		};
+	}
+	artifact(ref: MissionArtifactLink) {
+		return {
+			artifactId: ref.artifactId,
+			title: ref.title,
+			kind: ref.kind,
+			...(ref.taskId ? { task: this.numbers.get(ref.taskId) } : {}),
+			...(ref.revision !== undefined ? { revision: ref.revision } : {}),
+		};
+	}
+	task(task: MissionTask, full = false) {
+		return {
+			number: task.number,
+			title: task.title,
+			status: task.status,
+			...(full && task.body ? { body: task.body } : {}),
+			...(full ? { order: task.order } : {}),
+			...(task.sessionId
+				? {
+						owner:
+							task.sessionId === this.sessionId
+								? "you"
+								: (this.sessions.get(task.sessionId)?.title ?? "Unknown chat"),
+					}
+				: {}),
+			...(task.milestone ? { milestone: task.milestone } : {}),
+			...(task.dependsOn?.length ? { dependsOn: this.dependencies(task) } : {}),
+			...(full && task.decisionIds?.length
+				? {
+						decisions: this.detail.decisions
+							.filter((d) => task.decisionIds?.includes(d.id))
+							.map(({ id, text, audience }) => ({ id, text, audience })),
+					}
+				: {}),
+			resources: this.detail.resources.filter((ref) => ref.taskId === task.id).map((ref) => this.link(ref)),
+			artifacts: this.detail.artifacts.filter((ref) => ref.taskId === task.id).map((ref) => this.artifact(ref)),
+		};
 	}
 }

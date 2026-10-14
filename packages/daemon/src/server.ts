@@ -1144,12 +1144,14 @@ async function missionRoute(
 		return false;
 	}
 	if (section === "decisions") {
-		if (parts.length === 4 && method === "POST")
-			return json(res, 201, store.addDecision(id, (await readJson<MissionDecisionWrite>(req))?.text)), true;
-		if (parts.length === 5 && method === "PATCH")
-			return (
-				json(res, 200, store.updateDecision(id, item!, (await readJson<MissionDecisionWrite>(req))?.text)), true
-			);
+		if (parts.length === 4 && method === "POST") {
+			const write = await readJson<MissionDecisionWrite>(req);
+			return json(res, 201, store.addDecision(id, write?.text, undefined, write?.audience)), true;
+		}
+		if (parts.length === 5 && method === "PATCH") {
+			const write = await readJson<MissionDecisionWrite>(req);
+			return json(res, 200, store.updateDecision(id, item!, write?.text, undefined, write?.audience)), true;
+		}
 		if (parts.length === 5 && method === "DELETE") {
 			store.removeDecision(id, item!);
 			return json(res, 200, { ok: true }), true;

@@ -141,9 +141,14 @@ public struct MissionBriefWrite: Codable, Sendable {
     }
 }
 
+public enum MissionDecisionAudience: String, Codable, Sendable {
+    case all, coordinator, reference
+}
+
 public struct MissionDecision: Codable, Identifiable, Equatable, Hashable, Sendable {
     public let id: String
     public let text: String
+    public var audience: MissionDecisionAudience?
     public let authorSessionId: String?
     public let createdAt: Double
     public let updatedAt: Double
@@ -175,6 +180,7 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public let order: Double
     public let milestone: String?
     public let dependsOn: [String]?
+    public let decisionIds: [String]?
     /// Owning chat; at most one.
     public let sessionId: String?
     public let createdAt: Double
@@ -183,7 +189,7 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
 
     public init(
         id: String, number: Int, title: String, body: String? = nil, status: MissionTaskStatus = .todo,
-        order: Double = 0, milestone: String? = nil, dependsOn: [String]? = nil, sessionId: String? = nil,
+        order: Double = 0, milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: String? = nil,
         createdAt: Double = 0, updatedAt: Double = 0, completedAt: Double? = nil
     ) {
         self.id = id
@@ -194,6 +200,7 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
         self.order = order
         self.milestone = milestone
         self.dependsOn = dependsOn
+        self.decisionIds = decisionIds
         self.sessionId = sessionId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
@@ -225,11 +232,12 @@ public struct MissionTaskWrite: Encodable, Sendable {
     public var order: Double?
     public var milestone: String?
     public var dependsOn: [String]?
+    public var decisionIds: [String]?
     public var sessionId: NullableUpdate<String>?
 
     public init(
         title: String? = nil, body: String? = nil, status: MissionTaskStatus? = nil, order: Double? = nil,
-        milestone: String? = nil, dependsOn: [String]? = nil, sessionId: NullableUpdate<String>? = nil
+        milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: NullableUpdate<String>? = nil
     ) {
         self.title = title
         self.body = body
@@ -237,10 +245,11 @@ public struct MissionTaskWrite: Encodable, Sendable {
         self.order = order
         self.milestone = milestone
         self.dependsOn = dependsOn
+        self.decisionIds = decisionIds
         self.sessionId = sessionId
     }
 
-    private enum CodingKeys: String, CodingKey { case title, body, status, order, milestone, dependsOn, sessionId }
+    private enum CodingKeys: String, CodingKey { case title, body, status, order, milestone, dependsOn, decisionIds, sessionId }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -250,6 +259,7 @@ public struct MissionTaskWrite: Encodable, Sendable {
         try container.encodeIfPresent(order, forKey: .order)
         try container.encodeIfPresent(milestone, forKey: .milestone)
         try container.encodeIfPresent(dependsOn, forKey: .dependsOn)
+        try container.encodeIfPresent(decisionIds, forKey: .decisionIds)
         try container.encodeUpdate(sessionId, forKey: .sessionId)
     }
 }
@@ -333,9 +343,13 @@ public struct MissionResourceWrite: Codable, Sendable {
 
 /// POST /api/missions/:id/decisions; PATCH /api/missions/:id/decisions/:decisionId.
 public struct MissionDecisionWrite: Codable, Sendable {
-    public let text: String
+    public let text: String?
+    public let audience: MissionDecisionAudience?
 
-    public init(text: String) { self.text = text }
+    public init(text: String? = nil, audience: MissionDecisionAudience? = nil) {
+        self.text = text
+        self.audience = audience
+    }
 }
 
 /// POST /api/missions/:id/comments.
