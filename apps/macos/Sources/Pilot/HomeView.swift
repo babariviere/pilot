@@ -324,7 +324,7 @@ struct TaskComposer: View {
                 }
                 Spacer()
                 if form.busy { ProgressView().controlSize(.small) }
-                SendLaterMenu(disabled: !canStart, schedule: scheduleNewChat)
+                SendLaterMenu(disabled: !canStart, sendNow: start, schedule: scheduleNewChat)
                 Button(action: start) { Image(systemName: "arrow.up") }
                     .buttonStyle(CircleIconButtonStyle())
                     .disabled(!canStart)
@@ -417,7 +417,7 @@ struct TaskComposer: View {
     }
 
     /// Send later: the same request as Start, kept by pilotd until its trigger fires.
-    private func scheduleNewChat(_ trigger: ScheduleTrigger, _ at: Double?) {
+    private func scheduleNewChat(_ when: ScheduleWhen) {
         guard canStart else { return }
         form.busy = true
         form.error = nil
@@ -436,7 +436,7 @@ struct TaskComposer: View {
             defer { form.busy = false }
             do {
                 _ = try await client.createSchedule(ScheduleRequest(
-                    title: title, trigger: trigger, at: at, target: target
+                    title: title, trigger: when.trigger, at: when.at, networkNames: when.networkNames, target: target
                 ))
                 if let id = request.projectId { lastProjectId = id }
                 _ = form.completeSubmission(revision: revision)

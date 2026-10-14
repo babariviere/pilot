@@ -351,7 +351,7 @@ struct ChatView: View {
     }
 
     /// Send later: clears the draft at once like send, and restores it if pilotd rejects the schedule.
-    private func schedule(_ message: String, _ trigger: ScheduleTrigger, _ at: Double?) {
+    private func schedule(_ message: String, _ when: ScheduleWhen) {
         guard !session.isArchived else { return }
         composer.error = nil
         let previous = composer.draft
@@ -364,7 +364,8 @@ struct ChatView: View {
         composer.draft = ""
         composer.attachments = ImageAttachments()
         let request = ScheduleRequest(
-            title: ScheduleText.title(previous, fallback: "Follow-up message"), trigger: trigger, at: at,
+            title: ScheduleText.title(previous, fallback: "Follow-up message"), trigger: when.trigger, at: when.at,
+            networkNames: when.networkNames,
             target: .message(sessionId: session.id, message: message)
         )
         Task {

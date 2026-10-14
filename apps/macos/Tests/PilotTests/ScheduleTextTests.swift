@@ -7,10 +7,11 @@ private let now = Date(timeIntervalSince1970: 1_800_000_000)
 private let nowMs = now.timeIntervalSince1970 * 1000
 
 private func item(_ id: String, state: ScheduleState = .pending, trigger: ScheduleTrigger = .onBack, at: Double? = nil,
+                  networks: [String]? = nil,
                   project: String? = "p", target: ScheduleTarget = .chat(SpawnRequest(projectId: "p", message: "Fix it")),
                   sessionId: String? = nil, error: String? = nil, createdAt: Double = 1, updatedAt: Double = 1) -> ScheduledItem {
-    ScheduledItem(id: id, revision: 1, title: id, projectId: project, trigger: trigger, at: at, target: target,
-                  state: state, createdAt: createdAt, updatedAt: updatedAt, sessionId: sessionId, error: error)
+    ScheduledItem(id: id, revision: 1, title: id, projectId: project, trigger: trigger, at: at, networkNames: networks,
+                  target: target, state: state, createdAt: createdAt, updatedAt: updatedAt, sessionId: sessionId, error: error)
 }
 
 @Test func scheduleRowsSayWhenAndWhatWillStart() {
@@ -82,4 +83,40 @@ private func item(_ id: String, state: ScheduleState = .pending, trigger: Schedu
     let base = calendar.date(from: DateComponents(year: 2026, month: 10, day: 13, hour: 21, minute: 40))!
     let suggested = ScheduleSheet.suggestedTime(now: base, calendar: calendar)
     #expect(calendar.dateComponents([.hour, .minute], from: suggested) == DateComponents(hour: 23, minute: 0))
+}
+
+@Test func wifiRowsNameTheirNetworks() {
+    #expect(ScheduleText.choices.contains(.onJoinNetwork) && ScheduleText.choices.contains(.onLeaveNetwork))
+    #expect(ScheduleText.when(item("a", trigger: .onJoinNetwork, networks: ["Office"])) == "When I join Office")
+    #expect(ScheduleText.when(item("b", trigger: .onLeaveNetwork, networks: ["Office", "Home"])) == "When I leave Office or Home")
+    let many = item("c", trigger: .onJoinNetwork, networks: ["Office", "Home", "Café"])
+    #expect(ScheduleText.when(many) == "When I join Office or 2 others")
+    #expect(ScheduleText.when(many, full: true) == "When I join Office, Home or Café")
+    let long = item("d", trigger: .onLeaveNetwork, networks: ["Corporate Guest Network 5G"])
+    #expect(ScheduleText.when(long) == "When I leave Corporate Guest Net…")
+    #expect(ScheduleText.when(long, full: true) == "When I leave Corporate Guest Network 5G")
+    #expect(ScheduleText.when(item("e", trigger: .onJoinNetwork)) == "When I join a network")
+}
+
+@Test func wifiPickerPutsTheConnectedNetworkFirst() {
+    let status = WiFiStatus(authorization: .authorized, available: true, currentNetwork: "Office",
+                            knownNetworks: ["home", "Office", "Café", "Airport"])
+    #expect(ScheduleText.networkChoices(status, selected: ["Gone", "home"]) == ["Office", "Airport", "Café", "home", "Gone"])
+    let off = WiFiStatus(authorization: .authorized, available: false, currentNetwork: "Office", knownNetworks: ["Home"])
+    #expect(ScheduleText.networkChoices(off) == ["Home"])
+}
+
+@Test func wifiHintsSayWhenTheConditionAlreadyHolds() {
+    let onOffice = WiFiStatus(authorization: .authorized, available: true, currentNetwork: "Office", knownNetworks: ["Office", "Home"])
+    #expect(ScheduleText.networkHint(.onJoinNetwork, selected: ["Office"], status: onOffice)?.contains("on Office now") == true)
+    #expect(ScheduleText.networkHint(.onJoinNetwork, selected: ["Home"], status: onOffice) == nil)
+    #expect(ScheduleText.networkHint(.onLeaveNetwork, selected: ["Office"], status: onOffice) == nil)
+    #expect(ScheduleText.networkHint(.onLeaveNetwork, selected: ["Home"], status: onOffice)?.contains("isn’t on Home now") == true)
+    #expect(ScheduleText.networkHint(.onLeaveNetwork, selected: ["Home", "Café"], status: onOffice)?.contains("these networks") == true)
+    // Without access the current network is unknown, so nothing is claimed.
+    let denied = WiFiStatus(authorization: .denied, available: true)
+    #expect(ScheduleText.networkHint(.onLeaveNetwork, selected: ["Home"], status: denied) == nil)
+    #expect(ScheduleText.networkHint(.onJoinNetwork, selected: [], status: onOffice) == nil)
+    #expect(ScheduleText.wifiAccessMessage(onOffice) == nil)
+    #expect(ScheduleText.wifiAccessMessage(denied)?.contains("Pilot Wi-Fi") == true)
 }

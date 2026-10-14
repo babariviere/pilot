@@ -1208,7 +1208,7 @@ reports), producing a morning summary in the app and Slack.
   permission once active (CoreLocation ignores requests from an app not currently in use).
   Scheduling CRUD and both schedule/dashboard snapshots carry `networkNames`.
   Switching to a non-network trigger clears names; omitted names on PATCH retain the existing list.
-  Picker controls are separate app work; these APIs do not reject saves while access is unavailable.
+  These APIs do not reject saves while access is unavailable; the app's picker requires access.
 - Signing: `PILOT_CODESIGN_IDENTITY` signs the helper and enclosing bundle with a stable identity
   when supplied; local builds keep the existing ad-hoc default. A Developer ID signature is needed
   for reliable TCC identity across rebuilds/updates. This host has no valid signing identity, so
@@ -1261,13 +1261,25 @@ reports), producing a morning summary in the app and Slack.
   `ScheduleClock` provide fake-clock tests for drift, debounce, offline wake, cancellation and
   deadline catch-up. No app fast path or HTTP trigger endpoint is needed for correctness.
 - App UI: Send later is a quiet clock menu beside each composer's Send button (When I'm back,
-  When online, At a time… which opens a sheet with the trigger and time). A new chat schedules
+  When online, When I join…, When I leave… and At a time…, the last three opening a sheet with
+  the trigger and its time or networks). A new chat schedules
   the full spawn request; a chat's composer schedules a follow-up, listed as one-line rows at
   the top of its tray like queued messages. Home's Scheduled card lists pending items with those
   that could not start first; the project page lists pending items under Scheduled (5 rows plus
   "Show all") and failures under Needs you. Pending rows edit or cancel; failures open their chat
   or are dismissed. The app notifies when an item it saw pending starts or fails; the first list
   after launch is a baseline, so restarts never replay notifications.
+- Wi-Fi picker: the sheet reads `GET /api/schedules/wifi` only while a Wi-Fi trigger is shown, and
+  again when Pilot becomes active (after System Settings or the macOS prompt) while access is
+  missing. Known networks are checkboxes, the connected one first, then alphabetical; long lists
+  scroll in a bounded frame. Not asked yet shows "Allow Location Access", the only path to
+  `POST`, followed by at most about a minute of 1.5-second reads while macOS still asks. Denied
+  or Location Services off disables saving and links to System Settings > Location Services
+  (entry "Pilot Wi-Fi"); restricted only explains. When the condition already holds (join: on a
+  chosen network; leave: on none of them), a hint says it waits for the next change and offers
+  Send now, which runs the composer's normal send. "When I leave…" preselects the connected
+  network for a new item. Rows read "When I join Office", "… or Home", "… or 2 others"; tooltips
+  and VoiceOver list every name.
 - Incremental detector measurement: `node scripts/bench/schedule-detection.ts 65 all` on Apple
   Silicon, Node 24.21.0/macOS 27, with other builds/tests running. Idle: 3.8 ms process CPU
   (0.006%), zero samples/probes/timer callbacks. Online: 313.8 ms (0.475%), 3 samples, 3 probes,
