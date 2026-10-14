@@ -170,3 +170,14 @@ private func mission(_ id: String, project: String) throws -> MissionDetail {
     #expect(SidebarScopeCounts.needsYouReasons(total: 2, reasons: NeedsYouReasons(failed: 1, limited: 1))
         == "2 need you: 1 failed, 1 limit reached")
 }
+
+@Test func longJobsKeepTheirOwnSidebarBadgeReason() {
+    let session = SessionSummary(id: "long", title: "Tests", cwd: "/tmp", createdAt: 1, updatedAt: 1,
+                                state: "idle", working: true,
+                                attentionReason: NeedsYouReason(kind: .longJob, detail: "Tests has run for 1h"))
+    let reasons = NeedsYouReasons([session], unread: { _ in false })
+    #expect(reasons.total == 1)
+    #expect(reasons.longJobs == 1)
+    #expect(reasons.notReviewed == 0)
+    #expect(SidebarScopeCounts.needsYouReasons(total: 1, reasons: reasons) == "1 needs you: 1 long job")
+}

@@ -9,7 +9,7 @@ public enum NeedsYouReasonKind: String, LenientStringEnum {
     public static let fallback = NeedsYouReasonKind.notReviewed
 }
 
-public struct NeedsYouReason: Codable, Equatable, Sendable {
+public struct NeedsYouReason: Codable, Hashable, Sendable {
     public let kind: NeedsYouReasonKind
     public let detail: String?
     /// `limit`: epoch milliseconds when the used-up subscription window resets, when known.
