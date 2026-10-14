@@ -98,3 +98,14 @@ public enum InboxText {
         total > shown ? "Showing the first \(shown) of \(total)." : nil
     }
 }
+
+extension DashboardNeedsYouItem {
+    /// The row's dithered corner, as in the sidebar: failures (including scheduled items that could not
+    /// start) are steady red, unread results and mission questions breathe amber.
+    public var signal: SessionSignal {
+        switch kind {
+        case .failed, .scheduledFailed: .failed
+        case .unread, .question: .needsYou
+        }
+    }
+}

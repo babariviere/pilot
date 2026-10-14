@@ -61,9 +61,8 @@ private struct InboxSections: View {
                 ProjectRefreshBanner(receivedAt: nil, error: error, retrying: false, retry: reload)
             }
             if inbox.isEmpty {
-                EmptyStateView(icon: "tray", title: "Nothing is waiting on you",
-                               message: scope.map { "Chats that need you, your open tickets and Slack messages in \($0.name) appear here." }
-                                   ?? "Chats that need you, your open tickets and Slack messages from every project appear here.")
+                InboxClearState(message: scope.map { "Chats that need you, your open tickets and Slack messages in \($0.name) appear here." }
+                    ?? "Chats that need you, your open tickets and Slack messages from every project appear here.")
             } else {
                 needsYou
                 if let linear = inbox.linear {
@@ -98,6 +97,7 @@ private struct InboxSections: View {
             ForEach(Array(section.items.enumerated()), id: \.element.id) { index, row in
                 if index > 0 { HairlineDivider(leading: 34) }
                 ProjectNeedsYouRow(item: row.item, now: now, context: projectName(row.projectId))
+                    .inboxCorner(row.item.signal)
             }
             capNote(shown: section.items.count, total: section.total)
         }
@@ -119,6 +119,7 @@ private struct InboxSections: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 TrackedItemRow(item: item, actions: actions, now: now, context: projectName(item.projectId),
                                changed: reload)
+                    .inboxCorner(linkedSignal(item))
             }
             capNote(shown: items.count, total: total)
         }
@@ -133,6 +134,13 @@ private struct InboxSections: View {
     /// Rows name their project only when the Inbox lists every project.
     private func projectName(_ id: String) -> String? {
         scope == nil ? model.client.project(id)?.name : nil
+    }
+
+    /// A ticket's corner follows the latest chat it started (working, failed, unread, ready to merge), like that
+    /// chat's sidebar row. Tickets nothing has started yet stay quiet.
+    private func linkedSignal(_ item: TrackedItem) -> SessionSignal? {
+        guard let session = item.sessionId.flatMap({ model.client.session($0) }) else { return nil }
+        return session.signal(unread: model.isUnread(session))
     }
 
     /// Slack triage is per project: offered when the scope has exactly one project tracking Slack.
@@ -206,5 +214,34 @@ final class InboxModel: ObservableObject {
                 self.error = error.localizedDescription
             }
         }
+    }
+}
+
+private extension View {
+    /// The sidebar's dithered status corner on an Inbox row. The same trailing room on every row keeps actions
+    /// aligned and off the corner's densest cells, so they stay readable and a state change never shifts them.
+    func inboxCorner(_ signal: SessionSignal?) -> some View {
+        padding(.trailing, 24).ditherCorner(signal)
+    }
+}
+
+/// An empty Inbox: a short band of the Home sky, dissolving into the page, above one quiet sentence.
+private struct InboxClearState: View {
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            DitherSky(fade: 0.6)
+                .frame(height: 96)
+                .frame(maxWidth: 440)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.radius))
+            Text("Nothing is waiting on you").font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground)
+            Text(message).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+                .multilineTextAlignment(.center).frame(maxWidth: 320)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .accessibilityElement(children: .combine)
     }
 }
