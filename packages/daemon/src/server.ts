@@ -576,6 +576,7 @@ export function createDaemonServer(
 			if (parts[3] === "stop") {
 				return json(res, 202, await sessions.stop(id));
 			}
+			if (parts[3] === "retry-startup") return json(res, 200, await sessions.retryStartup(id));
 			if (parts[3] === "compact") {
 				const body = (await readJson<CompactRequest | null>(req)) ?? {};
 				if (body.instructions !== undefined && typeof body.instructions !== "string")

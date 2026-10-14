@@ -203,6 +203,14 @@ final class PilotClient: ObservableObject {
         return response.draft
     }
 
+    /// Reloads a failed startup using its original queued messages, without creating a new attempt.
+    func retryStartup(_ sessionId: String) async throws {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/retry-startup", body: [String: String]()
+        )
+        update(session)
+    }
+
     /// Prompt templates and skills the session's kernel expands. Reopens a parked chat only when pilotd has no list yet.
     func commands(_ sessionId: String) async throws -> [SessionCommand] {
         let response: SessionCommandsResponse = try await call("api/sessions/\(sessionId)/commands", method: "GET")

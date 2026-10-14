@@ -157,6 +157,7 @@ struct ChatView: View {
     @StateObject private var slashCommands = SlashCommandSource()
     @StateObject private var rewind = TranscriptRewind()
     @State private var showingJobs = false
+    @State private var retryingStartup = false
     private let bottomPadding: CGFloat = 8
     /// Offline performance checks report this, so redundant transcript invalidations are countable.
     static var bodyEvaluations = 0
@@ -205,9 +206,28 @@ struct ChatView: View {
                             .frame(maxWidth: .infinity)
                     }
                     if let error = transcript.failureBannerText(for: session) {
-                        ErrorRow(text: error)
-                            .frame(maxWidth: Theme.column, alignment: .leading)
-                            .frame(maxWidth: .infinity)
+                        VStack(alignment: .leading, spacing: 8) {
+                            ErrorRow(text: error)
+                            if session.canRetryStartup == true, !session.isArchived {
+                                Button {
+                                    retryingStartup = true
+                                    composer.error = nil
+                                    Task {
+                                        defer { retryingStartup = false }
+                                        do { try await model.client.retryStartup(session.id) }
+                                        catch { composer.error = error.localizedDescription }
+                                    }
+                                } label: {
+                                    Label("Retry Startup", systemImage: "arrow.clockwise")
+                                }
+                                .controlSize(.small)
+                                .accessibilityIdentifier("retry-startup")
+                                .disabled(retryingStartup)
+                                .help("Reload extensions and continue with the original queued messages. History and workspace files stay as they are.")
+                            }
+                        }
+                        .frame(maxWidth: Theme.column, alignment: .leading)
+                        .frame(maxWidth: .infinity)
                     }
                     Color.clear.frame(height: 1).id("bottom")
                         .background(ChatReviewVisibility {

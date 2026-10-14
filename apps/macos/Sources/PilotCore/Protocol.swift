@@ -71,6 +71,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Sorts first and prevents automatic archiving. Omitted by older daemons, meaning unpinned.
     public let pinned: Bool?
     public let state: String
+    /// Worker startup failed. Retry reloads it without replacing queued messages or history.
+    public let canRetryStartup: Bool?
     /// Live jobs owned by this worker. Nil when none.
     public let runningJobs: [SessionJob]?
     public let model: String?
@@ -167,7 +169,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
         branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
-        workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil
+        workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil, canRetryStartup: Bool? = nil
     ) {
         self.id = id
         self.title = title
@@ -191,6 +193,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.archivedAt = archivedAt
         self.pinned = pinned
         self.state = state
+        self.canRetryStartup = canRetryStartup
         self.runningJobs = runningJobs
         self.model = model
         self.thinking = thinking

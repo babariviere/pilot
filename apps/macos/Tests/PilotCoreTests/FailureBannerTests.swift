@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import PilotCore
 
@@ -25,4 +26,22 @@ import Testing
     #expect(presentation.failureBannerText(for: working) == nil)
     #expect(presentation.failureBannerText(for: done) == nil)
     #expect(presentation.failureBannerText(for: failed) == "startup failed")
+}
+
+
+@Test func startupRetryDecodesForEmptyFailedChatsAndDefaultsOffForOlderDaemons() throws {
+    let data = Data("""
+    {"id":"failed","title":"Startup failed","cwd":"/tmp","createdAt":0,"updatedAt":1,
+     "state":"failed","error":"Session startup: extension dependency missing","canRetryStartup":true}
+    """.utf8)
+    let session = try JSONDecoder().decode(SessionSummary.self, from: data)
+    #expect(session.canRetryStartup == true)
+    #expect(TranscriptPresentation().failureBannerText(for: session) == session.error)
+    let roundTrip = try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(session))
+    #expect(roundTrip == session)
+
+    let legacy = Data("""
+    {"id":"legacy","title":"Chat","cwd":"/tmp","createdAt":0,"updatedAt":1,"state":"failed"}
+    """.utf8)
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: legacy).canRetryStartup == nil)
 }
