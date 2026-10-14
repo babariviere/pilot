@@ -96,7 +96,7 @@ struct SessionDetail: View {
             ChatView(session: session, feed: feed, composer: model.composer(for: session.id))
                 .frame(minWidth: 420, maxWidth: .infinity)
             if model.inspectorVisible && model.inspectorTab.isAvailable(for: session) {
-                Inspector(session: session)
+                Inspector(session: session, feed: feed)
                     .frame(minWidth: 340, idealWidth: 520, maxWidth: .infinity)
             }
         }
@@ -190,6 +190,7 @@ struct SessionInspectorControls: View {
             }
         }
         InspectorToggle(tab: .artifacts, icon: ArtifactSymbol.name, help: "Artifacts")
+        InspectorToggle(tab: .links, icon: "link", help: "Links")
     }
 }
 
@@ -255,6 +256,8 @@ struct InspectorToggle: View {
 /// Right-hand pane with tabs. The terminal stays mounted once opened to keep its surface.
 struct Inspector: View {
     let session: SessionSummary
+    /// The chat's feed for the Links tab. Nil uses the cached feed the transcript shares.
+    var feed: SessionFeed? = nil
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
@@ -269,6 +272,7 @@ struct Inspector: View {
                     tab("Agents", .agents, badge: model.unreadSubagents(in: session))
                 }
                 tab("Artifacts", .artifacts)
+                tab("Links", .links)
                 Spacer()
                 Button { model.inspectorVisible = false } label: {
                     Image(systemName: "sidebar.right").font(.system(size: 12))
@@ -305,6 +309,10 @@ struct Inspector: View {
                 }
                 if model.inspectorTab == .mission, session.missionId != nil {
                     MissionInspectorPane(session: session)
+                        .id(session.id)
+                }
+                if model.inspectorTab == .links {
+                    SessionLinksPane(feed: feed ?? model.feeds.feed(sessionId: session.id, client: model.client))
                         .id(session.id)
                 }
             }

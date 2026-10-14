@@ -130,6 +130,7 @@ private let askProject = Project(id: "ask-project", name: "Code", path: "/tmp/co
     #expect(!InspectorTab.changes.isAvailable(for: ask))
     #expect(!InspectorTab.terminal.isAvailable(for: ask))
     #expect(InspectorTab.artifacts.isAvailable(for: ask))
+    #expect(InspectorTab.links.isAvailable(for: ask))
     app.toggleInspector(.artifacts)
     #expect(app.inspectorVisible && app.inspectorTab == .artifacts)
     app.toggleInspector(.terminal)
