@@ -372,6 +372,7 @@ final class AppModel: ObservableObject {
     /// An explicit new Build draft. The original Ask session and its history are never changed.
     func buildWithContext(from session: SessionSummary, rows: [ChatRow]) {
         guard session.isAsk else { return }
+        let rows = rows.flatMap(\.unfolded)
         let discussion = rows.compactMap { row -> String? in
             switch row {
             case let .user(_, text, _): return "User:\n\(text)"

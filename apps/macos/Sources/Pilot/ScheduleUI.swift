@@ -343,22 +343,24 @@ struct ScheduledItemRow: View {
     }
 }
 
-/// Pending follow-ups for this chat, as one-line rows at the top of the composer tray like queued messages.
-/// Reads schedules through a publisher, so schedule and session updates never re-render the composer.
-struct ScheduledFollowUpsStrip: View {
+/// Pending follow-ups for this chat, waiting at the end of the transcript as dashed outline bubbles with when they
+/// send ("Scheduled · Tomorrow 9:00 AM"). Hover offers Edit and Cancel. Reads schedules through a publisher, so
+/// schedule and session updates never re-render the transcript.
+struct ScheduledMessages: View {
     let sessionId: String
+    var topPadding: CGFloat = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var items: [ScheduledItem] = []
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .trailing, spacing: 12) {
             ForEach(items) { item in
-                ScheduledFollowUpRow(item: item)
+                ScheduledMessageBubble(item: item)
                     .transition(Theme.Motion.insertion(reduceMotion: reduceMotion))
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.top, items.isEmpty ? 0 : 4)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.top, items.isEmpty ? 0 : topPadding)
         .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: items.map(\.id))
         .onReceive(AppModel.shared.client.$schedules) { all in
             let next = ScheduleText.followUps(all, sessionId: sessionId)
@@ -367,7 +369,8 @@ struct ScheduledFollowUpsStrip: View {
     }
 }
 
-private struct ScheduledFollowUpRow: View {
+/// One scheduled message: the user's bubble, outlined rather than filled because it has not been sent yet.
+private struct ScheduledMessageBubble: View {
     let item: ScheduledItem
     @Environment(\.pilotFonts) private var fonts
     @State private var hovered = false
@@ -375,46 +378,62 @@ private struct ScheduledFollowUpRow: View {
     @State private var error: String?
 
     private var text: String {
-        if case let .message(_, message) = item.target { return message.replacingOccurrences(of: "\n", with: " ") }
+        if case let .message(_, message) = item.target { return message }
         return item.title
     }
 
     var body: some View {
         let when = ScheduleText.when(item)
-        HStack(spacing: 8) {
-            ScheduleStateIcon(state: item.state).font(.pilot(.caption, weight: .semibold)).frame(width: 14)
-            Text(text).font(fonts.body)
-                .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
-                .lineLimit(1).truncationMode(.tail)
-            Spacer(minLength: 4)
-            if hovered {
-                HStack(spacing: 0) {
-                    Button { editing = true } label: { Image(systemName: "pencil") }
-                        .buttonStyle(QuietIconButtonStyle())
-                        .help("Edit when this message is sent")
-                        .accessibilityLabel("Edit schedule")
-                    Button(action: cancel) { Image(systemName: "xmark") }
-                        .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
-                        .help("Cancel this scheduled message")
-                        .accessibilityLabel("Cancel schedule")
-                }
-                .transition(.opacity)
-            } else {
-                Text(when).font(.pilot(.caption)).foregroundStyle(Theme.faintForeground).lineLimit(1).fixedSize()
+        VStack(alignment: .trailing, spacing: 4) {
+            HStack {
+                Spacer(minLength: 72)
+                Text(text)
+                    .font(fonts.body)
+                    .lineSpacing(3)
+                    .foregroundStyle(Theme.mutedForeground)
+                    .lineLimit(8)
+                    .truncationMode(.tail)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .overlay(RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                    .contentShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture { editing = true }
             }
+            HStack(spacing: 2) {
+                Button { editing = true } label: { Image(systemName: "pencil") }
+                    .buttonStyle(QuietIconButtonStyle())
+                    .help("Edit when this message is sent")
+                    .accessibilityLabel("Edit schedule")
+                    .revealed(hovered)
+                Button(action: cancel) { Image(systemName: "xmark") }
+                    .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                    .help("Cancel this scheduled message")
+                    .accessibilityLabel("Cancel schedule")
+                    .revealed(hovered)
+                HStack(spacing: 4) {
+                    ScheduleStateIcon(state: item.state)
+                    Text("Scheduled · \(when)").lineLimit(1)
+                }
+                .font(.pilot(.caption))
+                .foregroundStyle(Theme.faintForeground)
+                .padding(.leading, 6)
+                .help("Sends \(when)")
+            }
+            .frame(height: 20)
         }
-        .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, minHeight: QueuedMessagesStrip.rowHeight, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? Theme.selected : .clear))
-        .contentShape(RoundedRectangle(cornerRadius: 6))
-        .onTapGesture { editing = true }
+        .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
-        .help("Scheduled · \(when)")
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Scheduled, \(when): \(text)")
         .accessibilityAction(named: "Edit schedule") { editing = true }
         .accessibilityAction(named: "Cancel schedule", cancel)
+        .contextMenu {
+            Button("Edit Schedule…") { editing = true }
+            Divider()
+            Button("Cancel Schedule", role: .destructive, action: cancel)
+        }
         .sheet(isPresented: $editing) { EditScheduleSheet(item: item) }
         .alert("Couldn’t cancel this schedule", isPresented: Binding(
             get: { error != nil }, set: { if !$0 { error = nil } }

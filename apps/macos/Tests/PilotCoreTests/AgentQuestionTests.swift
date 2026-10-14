@@ -43,7 +43,7 @@ private func transcript(_ entries: [String], working: Bool = false) throws -> Tr
     // A failed call keeps its tool card, since no question was recorded.
     let failed = #"{"id":3,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"q","content":[{"type":"text","text":"bad"}],"isError":true}]}"#
     let failedRows = try transcript([userInput, askCall, failed]).rows
-    guard case let .tools(_, items) = failedRows.last else { Issue.record("expected the tool card"); return }
+    guard case let .tools(_, items) = failedRows.last?.unfolded.last else { Issue.record("expected the tool card"); return }
     #expect(items.map(\.status) == [.error])
 }
 

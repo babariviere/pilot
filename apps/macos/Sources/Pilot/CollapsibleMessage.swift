@@ -156,7 +156,6 @@ struct CollapsibleMessage<Content: View>: View {
                             }
                         }
                 }
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.border))
         } else {
             body()
                 .background(alignment: .bottom) {

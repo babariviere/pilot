@@ -206,9 +206,6 @@ struct Composer: View {
         VStack(spacing: 8) {
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
-                if let session, onSchedule != nil {
-                    ScheduledFollowUpsStrip(sessionId: session.id)
-                }
                 if !systemMessages.isEmpty {
                     VStack(spacing: 2) {
                         SystemMessagesStrip(inputs: systemMessages,

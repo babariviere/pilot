@@ -267,7 +267,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
           {"id":2,"kind":"pi.tool-result","model":[\(json.prettyPrinted)]}
         ]}
         """.utf8)))
-        guard case let .tools(_, items) = transcript.rows.first else { Issue.record("Expected tool card"); continue }
+        guard case let .tools(_, items) = transcript.rows.first?.unfolded.first else { Issue.record("Expected tool card"); continue }
         #expect(items.first?.artifact?.revision == 2)
         #expect(items.first?.status == .done)
     }
@@ -340,11 +340,11 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
     """
     var live = Transcript()
     live.apply(try JSONValue.decode(Data("{\"type\":\"snapshot\",\"entries\":[\(toolEntries)]}".utf8)))
-    guard case let .tools(_, oldItems) = live.rows.first else { Issue.record("Missing fallback"); return }
+    guard case let .tools(_, oldItems) = live.rows.first?.unfolded.first else { Issue.record("Missing fallback"); return }
     #expect(oldItems.first?.artifact?.revision == 2)
     live.apply(try JSONValue.decode(Data("{\"type\":\"entry_appended\",\"entry\":\(publication)}".utf8)))
     #expect(live.rows.count == 2)
-    guard case let .tools(_, items) = live.rows.first else { Issue.record("Missing tools"); return }
+    guard case let .tools(_, items) = live.rows.first?.unfolded.first else { Issue.record("Missing tools"); return }
     #expect(items.first?.artifact == nil)
     #expect(live.rows.last == .artifact(id: "3-artifact", reference: ArtifactReference(id: "a", sessionId: "s", title: "Chart", revision: 2)))
     var snapshot = Transcript()
@@ -374,7 +374,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
           {"id":2,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"c","details":{"artifact":\(artifactJSON)}}]}
         ]}
         """.utf8)))
-        guard case let .tools(_, items) = transcript.rows.first else { Issue.record("Missing tools"); continue }
+        guard case let .tools(_, items) = transcript.rows.first?.unfolded.first else { Issue.record("Missing tools"); continue }
         #expect(items.first?.artifact == nil)
     }
 }
@@ -388,7 +388,7 @@ private let artifactJSON = #"{"id":"a","sessionId":"s","title":"Chart","revision
           {"id":2,"kind":"pi.tool-result","model":[{"role":"toolResult","toolCallId":"c","details":{"artifact":\(artifactJSON)}}]}
         ]}
         """.utf8)))
-        guard case let .tools(_, items) = transcript.rows.first else { Issue.record("Missing tools"); continue }
+        guard case let .tools(_, items) = transcript.rows.first?.unfolded.first else { Issue.record("Missing tools"); continue }
         #expect(items.first?.artifact?.revision == 2)
     }
 }

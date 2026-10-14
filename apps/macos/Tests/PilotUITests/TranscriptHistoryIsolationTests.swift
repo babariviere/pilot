@@ -64,11 +64,13 @@ import Testing
     #expect(committed.historyRowCount == 2 && committed.liveRows.isEmpty)
     #expect(owner.state(for: "c") === expansion && expansion.expanded)
 
-    // Exercise the actual historical RowView -> ToolGroupView -> ToolRowView ownership chain.
-    // A fresh owner renders the same tool collapsed, while the moved group stays expanded.
+    // Exercise the actual historical RowView -> WorkGroupView -> ToolStepRow ownership chain, with the folded
+    // work row opened. A fresh owner renders the same tool collapsed, while the moved step stays expanded.
+    let work = TranscriptExpansions()
+    work.state(for: "1-0-0").choice = true
     func height(owner: TranscriptExpansions) -> CGFloat {
         let view = NSHostingView(rootView: TranscriptHistoryRows(revision: committed.historyRevision,
-            rows: committed.historyRows[...], toolExpansions: owner)
+            rows: committed.historyRows[...], toolExpansions: owner, messageExpansions: work)
             .fixedSize(horizontal: false, vertical: true).frame(width: 500))
         view.frame = NSRect(x: 0, y: 0, width: 500, height: 600)
         view.layoutSubtreeIfNeeded()

@@ -1,26 +1,245 @@
 import PilotCore
 import SwiftUI
 
-/// Consecutive tool calls, as one compact card with a row per call.
-struct ToolGroupView: View {
-    let items: [ToolItem]
-    var expansions: TranscriptExpansions? = nil
+/// A turn's thinking, notes and tool calls as one quiet line ("Worked for 3 min · read 3 files, ran 2 commands").
+/// Open while the turn runs, with its latest steps visible; folded once it ends, unless its last step failed.
+/// Steps read as sentences on a thin guide line; done steps draw no mark, running ones ripple and failed ones are red.
+/// Artifacts a step published stay visible while the line is folded.
+struct WorkGroupView: View {
+    @Environment(\.pilotFonts) private var fonts
+    @Environment(\.transcriptMessageToggled) private var messageToggled
+    let group: TurnWork
+    var active = false
+    var toolExpansions: TranscriptExpansions?
+    @StateObject private var expansion: ExpansionState
+    @State private var hovered = false
+
+    /// Steps shown while the turn runs, before "Show earlier steps".
+    static let liveStepLimit = 4
+
+    init(id: String, group: TurnWork, active: Bool = false, toolExpansions: TranscriptExpansions? = nil,
+         expansions: TranscriptExpansions? = nil) {
+        self.group = group
+        self.active = active
+        self.toolExpansions = toolExpansions
+        _expansion = StateObject(wrappedValue: expansions?.state(for: id) ?? ExpansionState())
+    }
+
+    private var open: Bool { expansion.choice ?? (active || group.endedOnFailure) }
 
     var body: some View {
-        LazyVStack(spacing: 0) {
-            ForEach(items) { item in
-                if item.id != items.first?.id { Divider().opacity(0.5) }
-                ToolRowView(item: item, expansion: expansions?.state(for: item.id))
+        let open = open
+        let summary = group.summary(active: active)
+        let failures = group.failureCount
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) {
+                HStack(spacing: 6) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.faintForeground)
+                        .rotationEffect(.degrees(open ? 90 : 0))
+                        .frame(width: 10)
+                    Text(summary.lead)
+                        .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
+                    if let detail = summary.detail {
+                        Text("· \(detail)").foregroundStyle(Theme.faintForeground).lineLimit(1)
+                    }
+                    if failures > 0 {
+                        Text("· \(failures) failed").foregroundStyle(Theme.destructive).fixedSize()
+                    }
+                }
+                .font(fonts.chat(fonts.chatSize - 1))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .accessibilityLabel([summary.lead, summary.detail, failures > 0 ? "\(failures) failed" : nil]
+                .compactMap { $0 }.joined(separator: ", "))
+            .accessibilityValue(open ? "Expanded" : "Collapsed")
+            .accessibilityHint(open ? "Hides the steps" : "Shows the steps")
+
+            if open { steps.padding(.top, 8) }
+
+            ForEach(group.tools.compactMap(\.artifact), id: \.id) { artifact in
+                ArtifactCard(reference: artifact).padding(.top, 8)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.subtleFill))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder private var steps: some View {
+        let all = group.steps
+        let limited = active && expansion.choice == nil && !expansion.showAllSteps && all.count > Self.liveStepLimit
+        let shown = limited ? Array(all.suffix(Self.liveStepLimit)) : all
+        VStack(alignment: .leading, spacing: 6) {
+            if limited {
+                Button("Show \(all.count - shown.count) earlier steps") {
+                    messageToggled?()
+                    expansion.showAllSteps = true
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(Theme.mutedForeground)
+                .font(fonts.chat(fonts.chatSize - 1.5))
+            }
+            ForEach(shown) { step in
+                WorkStepView(step: step, active: active, expansions: toolExpansions)
+            }
+        }
+        .padding(.leading, 14)
+        .overlay(alignment: .leading) {
+            Rectangle().fill(Theme.border).frame(width: 1).padding(.leading, 4)
+        }
+    }
+
+    private func toggle() {
+        // Opening finished work must not trigger Markdown's bottom-follow.
+        messageToggled?()
+        withAnimation(Theme.Motion.quick) { expansion.choice = !open }
+    }
+}
+
+/// One step of an open work row.
+private struct WorkStepView: View {
+    @Environment(\.pilotFonts) private var fonts
+    let step: WorkStep
+    let active: Bool
+    let expansions: TranscriptExpansions?
+
+    var body: some View {
+        switch step {
+        case let .thinking(_, text, streaming):
+            ThinkingStep(text: text, streaming: streaming)
+        case let .note(_, text):
+            MarkdownView(text: text, textColor: .secondaryLabelColor)
+                .foregroundStyle(.secondary)
+        case let .tool(item):
+            ToolStepRow(item: item, active: active, expansion: expansions?.state(for: item.id))
+        case let .reads(_, items):
+            ReadsStep(step: step, items: items, active: active, expansions: expansions)
+        }
+    }
+}
+
+/// The leading mark of a step: its tool icon, a small ripple while it runs, a red cross when it failed.
+private struct StepMark: View {
+    let icon: String
+    var status: ToolStatus = .done
+    var active = false
+
+    var body: some View {
+        Group {
+            switch status {
+            case .running where active, .pending where active:
+                DitherRipple().frame(width: 12, height: 12).clipped()
+            case .error:
+                Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.destructive)
+            default:
+                Image(systemName: icon).font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+            }
+        }
+        .frame(width: 14)
+    }
+}
+
+/// A step's sentence: the verb, then what it acted on in code type.
+private struct StepSentence: View {
+    @Environment(\.pilotFonts) private var fonts
+    let verb: String
+    let subject: String?
+    var failed = false
+    var highlighted = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(verb)
+                .foregroundStyle(failed ? Theme.destructive : highlighted ? Theme.foreground : Theme.mutedForeground)
+                .layoutPriority(1)
+            if let subject, !subject.isEmpty {
+                Text(subject)
+                    .font(fonts.monoSmall)
+                    .foregroundStyle(highlighted ? Theme.foreground : Theme.mutedForeground)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .font(fonts.chat(fonts.chatSize - 1))
+        .lineLimit(1)
+    }
+}
+
+private struct ThinkingStep: View {
+    let text: String
+    let streaming: Bool
+    @StateObject private var expansion = ExpansionState()
+    @State private var hovered = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    StepMark(icon: "brain")
+                    StepSentence(verb: streaming ? "Thinking…" : "Thought", subject: nil, highlighted: hovered)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .accessibilityValue(expansion.expanded ? "Expanded" : "Collapsed")
+            if expansion.expanded {
+                MarkdownView(text: text, textColor: .secondaryLabelColor)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 21)
+            }
+        }
+    }
+}
+
+/// Consecutive reads as one sentence; opening it lists each read, which opens to its output.
+private struct ReadsStep: View {
+    let step: WorkStep
+    let items: [ToolItem]
+    let active: Bool
+    let expansions: TranscriptExpansions?
+    @StateObject private var expansion = ExpansionState()
+    @State private var hovered = false
+
+    var body: some View {
+        let sentence = step.sentence
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    StepMark(icon: "doc.text")
+                    StepSentence(verb: sentence.verb, subject: sentence.subject, highlighted: hovered)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hovered = $0 }
+            .help(items.compactMap(\.summary.detail).joined(separator: "\n"))
+            .accessibilityValue(expansion.expanded ? "Expanded" : "Collapsed")
+            if expansion.expanded {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(items) { item in
+                        ToolStepRow(item: item, active: active, expansion: expansions?.state(for: item.id))
+                    }
+                }
+                .padding(.leading, 21)
+            }
+        }
     }
 }
 
 @MainActor
 final class ExpansionState: ObservableObject {
     @Published var expanded = false
+    /// A work row's open state chosen by the user. Nil follows the turn: open while it runs or after a failure.
+    @Published var choice: Bool?
+    /// A running work row shows only its latest steps until the user asks for the rest.
+    @Published var showAllSteps = false
 }
 
 /// Chat-scoped ownership keeps expansion alive when a group moves between the live tail and
@@ -93,56 +312,45 @@ final class TranscriptExpansions: ObservableObject {
     }
 }
 
-struct ToolRowView: View {
+/// One tool call as a sentence ("Ran pnpm test"). Clicking it shows the command or diff and the output.
+struct ToolStepRow: View {
     @Environment(\.pilotFonts) private var fonts
     let item: ToolItem
-    @StateObject private var expansion = ExpansionState()
+    var active = false
+    @StateObject private var expansion: ExpansionState
+    @State private var hovered = false
 
-    init(item: ToolItem, expansion: ExpansionState? = nil) {
+    init(item: ToolItem, active: Bool = false, expansion: ExpansionState? = nil) {
         self.item = item
+        self.active = active
         _expansion = StateObject(wrappedValue: expansion ?? ExpansionState())
     }
 
     var body: some View {
         let summary = item.summary
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 6) {
             Button {
-                withAnimation(.easeOut(duration: 0.15)) { expansion.expanded.toggle() }
+                withAnimation(Theme.Motion.quick) { expansion.expanded.toggle() }
             } label: {
-                HStack(spacing: 8) {
-                    statusIcon.frame(width: 14)
-                    Image(systemName: summary.icon)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 14)
-                    Text(summary.title).font(fonts.chat(fonts.chatSize - 1, weight: .medium))
-                    if let detail = summary.detail, !detail.isEmpty {
-                        Text(detail)
-                            .font(fonts.monoSmall)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    Spacer(minLength: 8)
+                HStack(spacing: 7) {
+                    StepMark(icon: summary.icon, status: item.status, active: active)
+                    StepSentence(verb: summary.verb, subject: summary.subject, failed: item.status == .error,
+                                 highlighted: hovered)
                     if summary.additions + summary.deletions > 0 {
-                        DiffStat(additions: summary.additions, deletions: summary.deletions)
+                        Text(summary.deletions > 0 ? "+\(summary.additions) −\(summary.deletions)" : "+\(summary.additions)")
+                            .font(.pilot(.caption).monospacedDigit())
+                            .foregroundStyle(Theme.faintForeground)
+                            .fixedSize()
                     }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.tertiary)
-                        .rotationEffect(.degrees(expansion.expanded ? 90 : 0))
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-
-            if let artifact = item.artifact {
-                ArtifactCard(reference: artifact)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
+            .onHover { hovered = $0 }
+            .help(summary.detail ?? summary.title)
+            .accessibilityLabel([summary.verb, summary.subject, item.status == .error ? "failed" : nil]
+                .compactMap { $0 }.joined(separator: " "))
+            .accessibilityValue(expansion.expanded ? "Expanded" : "Collapsed")
 
             if expansion.expanded {
                 VStack(alignment: .leading, spacing: 8) {
@@ -172,22 +380,8 @@ struct ToolRowView: View {
                         OutputBlock(text: item.output, isError: item.status == .error)
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 10)
+                .padding(.leading, 21)
             }
-        }
-    }
-
-    @ViewBuilder private var statusIcon: some View {
-        switch item.status {
-        case .running:
-            ProgressView().controlSize(.mini)
-        case .pending:
-            Image(systemName: "circle.dotted").font(.system(size: 11)).foregroundStyle(.tertiary)
-        case .done:
-            Image(systemName: "checkmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.green)
-        case .error:
-            Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.red)
         }
     }
 }

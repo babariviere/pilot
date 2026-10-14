@@ -102,7 +102,7 @@ final class SubagentFeed: ObservableObject {
 
     /// The latest tool calls and text, for compact previews.
     var recentActivity: [ChatRow] {
-        Array(presentation.rows.filter {
+        Array(presentation.rows.flatMap(\.unfolded).filter {
             switch $0 {
             case .tools, .text, .error: true
             default: false
@@ -508,8 +508,9 @@ private struct SubagentDetail: View {
                         Text(subagent.isWorking ? "Starting…" : "No messages yet.")
                             .font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
                     }
+                    let activeWork = subagent.isWorking ? feed.presentation.rows.last(where: \.isWork)?.id : nil
                     ForEach(feed.presentation.rows) { row in
-                        RowView(row: row).equatable()
+                        RowView(row: row, active: row.id == activeWork).equatable()
                     }
                     if subagent.isWorking && !feed.loading {
                         WorkingIndicator(retry: nil)

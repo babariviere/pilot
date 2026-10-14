@@ -198,9 +198,10 @@ struct ChatView: View {
                             rows: transcript.historyRows[...], toolExpansions: toolExpansions,
                             messageExpansions: messageExpansions).equatable()
                     }
+                    let activeWork = transcript.working ? transcript.liveRows.last(where: \.isWork)?.id : nil
                     ForEach(transcript.liveRows) { row in
                         RowView(row: row, toolExpansions: toolExpansions,
-                            messageExpansions: messageExpansions).equatable()
+                            messageExpansions: messageExpansions, active: row.id == activeWork).equatable()
                     }
                     if showsWorkingIndicator(transcript) {
                         WorkingIndicator(retry: transcript.retry, compacting: transcript.compacting,
@@ -233,13 +234,21 @@ struct ChatView: View {
                         .frame(maxWidth: Theme.column, alignment: .leading)
                         .frame(maxWidth: .infinity)
                     }
-                    Color.clear.frame(height: 1).id("bottom")
-                        .background(ChatReviewVisibility {
-                            guard !session.isWorking, session.outcome != nil,
-                                  feed.hasSnapshot, !transcript.working, !transcript.streaming,
-                                  model.selectedSessionId == session.id else { return }
-                            model.review(session, chatVisible: true)
-                        })
+                    VStack(spacing: 0) {
+                        if !session.isArchived {
+                            // Pads itself only when it lists something, so an empty list adds no gap.
+                            ScheduledMessages(sessionId: session.id, topPadding: 16)
+                                .frame(maxWidth: Theme.column)
+                                .frame(maxWidth: .infinity)
+                        }
+                        Color.clear.frame(height: 1).id("bottom")
+                            .background(ChatReviewVisibility {
+                                guard !session.isWorking, session.outcome != nil,
+                                      feed.hasSnapshot, !transcript.working, !transcript.streaming,
+                                      model.selectedSessionId == session.id else { return }
+                                model.review(session, chatVisible: true)
+                            })
+                    }
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 24)
@@ -493,17 +502,21 @@ struct RowView: View, Equatable {
     let row: ChatRow
     let toolExpansions: TranscriptExpansions?
     let messageExpansions: TranscriptExpansions?
+    /// A work row of the running turn: open, with its latest steps.
+    let active: Bool
     private let streamingGeneration: UUID?
 
-    init(row: ChatRow, toolExpansions: TranscriptExpansions? = nil, messageExpansions: TranscriptExpansions? = nil) {
+    init(row: ChatRow, toolExpansions: TranscriptExpansions? = nil, messageExpansions: TranscriptExpansions? = nil,
+         active: Bool = false) {
         self.row = row
         self.toolExpansions = toolExpansions
         self.messageExpansions = messageExpansions
-        streamingGeneration = row.id.hasPrefix("streaming-") ? messageExpansions?.streamingGeneration : nil
+        self.active = active
+        streamingGeneration = row.id.hasPrefix("streaming-") || row.isWork ? messageExpansions?.streamingGeneration : nil
     }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.row == rhs.row && lhs.toolExpansions === rhs.toolExpansions
+        lhs.row == rhs.row && lhs.active == rhs.active && lhs.toolExpansions === rhs.toolExpansions
             && lhs.messageExpansions === rhs.messageExpansions
             && lhs.streamingGeneration == rhs.streamingGeneration
     }
@@ -536,10 +549,13 @@ struct RowView: View, Equatable {
             // Agent replies are always shown in full. Only user bubbles fold.
             MessageWithActions(text: text, milliseconds: timestamp) { MarkdownView(text: text) }
                 .rewindMenu(for: row)
-        case let .thinking(_, text, streaming):
-            ThinkingRow(text: text, streaming: streaming)
-        case let .tools(_, items):
-            ToolGroupView(items: items, expansions: toolExpansions)
+        case let .work(id, group):
+            WorkGroupView(id: id, group: group, active: active, toolExpansions: toolExpansions,
+                          expansions: messageExpansions)
+        case .thinking, .tools:
+            // Transcripts fold these into work rows; a lone one still reads as a work line.
+            WorkGroupView(id: row.id, group: TurnWork(rows: [row]), active: active, toolExpansions: toolExpansions,
+                          expansions: messageExpansions)
         case let .artifact(_, reference):
             ArtifactCard(reference: reference)
         case let .question(_, question):
@@ -574,39 +590,6 @@ struct UserMessage: View {
             }
         }
         .padding(.top, 6)
-    }
-}
-
-private struct ThinkingRow: View {
-    let text: String
-    let streaming: Bool
-    @StateObject private var expansion = ExpansionState()
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Button {
-                withAnimation(.easeOut(duration: 0.15)) { expansion.expanded.toggle() }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "brain").font(.system(size: 11))
-                    Text(streaming ? "Thinking…" : "Thought").font(.callout)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .rotationEffect(.degrees(expansion.expanded ? 90 : 0))
-                }
-                .foregroundStyle(.secondary)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            if expansion.expanded {
-                MarkdownView(text: text, textColor: .secondaryLabelColor)
-                    .foregroundStyle(.secondary)
-                    .padding(.leading, 12)
-                    .overlay(alignment: .leading) {
-                        RoundedRectangle(cornerRadius: 1).fill(.quaternary).frame(width: 2)
-                    }
-            }
-        }
     }
 }
 
