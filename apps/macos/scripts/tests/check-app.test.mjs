@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -15,6 +15,10 @@ function fixture(t, { layout = "flat", exitCode = 0, sign = true, missing } = {}
 	const app = join(dir, "Original Pilot.app");
 	const contents = join(app, "Contents");
 	const executable = join(contents, "MacOS/Pilot");
+	const powerHelper = join(contents, "Helpers/PilotPower");
+	mkdirSync(dirname(powerHelper), { recursive: true });
+	// Presence/signing fixture only. Accidentally launching this helper must fail, never touch power settings.
+	writeFileSync(powerHelper, "#!/bin/sh\nexit 99\n", { mode: 0o755 });
 	mkdirSync(dirname(executable), { recursive: true });
 	writeFileSync(
 		executable,
@@ -23,6 +27,7 @@ set -eu
 [ "$#" -eq 1 ] && [ "$1" = --terminal-resource-test ]
 [ "\${PACKAGE_RESOURCE_BUNDLE_PATH+x}" != x ]
 [ "\${PACKAGE_RESOURCE_BUNDLE_URL+x}" != x ]
+[ -x "$(dirname "$0")/../Helpers/PilotPower" ]
 printf '%s\\n' "$PWD" "$0" > "$SMOKE_LOG"
 echo fixture-stdout
 echo fixture-stderr >&2
@@ -48,7 +53,10 @@ exit ${exitCode}
 		writeFileSync(join(resources, resource, "fixture"), "bundled resource\n");
 	}
 	if (missing) {
-		const path = missing === "Pilot" ? executable : missing === "bundle" ? bundle : join(resources, missing);
+		const path =
+			missing === "Pilot" ? executable :
+			missing === "PilotPower" ? powerHelper :
+			missing === "bundle" ? bundle : join(resources, missing);
 		rmSync(path, { recursive: true });
 	}
 	if (sign && missing !== "Pilot") {
@@ -70,7 +78,7 @@ exit ${exitCode}
 				PACKAGE_RESOURCE_BUNDLE_URL: "file:///invalid/override",
 			},
 		});
-	return { app, executable, log, scratch, run };
+	return { app, executable, powerHelper, log, scratch, run };
 }
 
 test("requires exactly one app path", () => {
@@ -95,7 +103,7 @@ for (const layout of ["flat", "macOS"]) {
 	});
 }
 
-for (const missing of ["Pilot", "bundle", "Ghostty", "terminfo"]) {
+for (const missing of ["Pilot", "PilotPower", "bundle", "Ghostty", "terminfo"]) {
 	test(`rejects missing ${missing}`, macOS, (t) => {
 		const { log, scratch, run } = fixture(t, { missing });
 		const result = run();
@@ -105,6 +113,16 @@ for (const missing of ["Pilot", "bundle", "Ghostty", "terminfo"]) {
 		assert.deepEqual(readdirSync(scratch), []);
 	});
 }
+
+test("rejects a non-executable power helper before running the app", macOS, (t) => {
+	const { powerHelper, log, scratch, run } = fixture(t);
+	chmodSync(powerHelper, 0o644);
+	const result = run();
+	assert.notEqual(result.status, 0);
+	assert.match(result.stderr, /Missing executable: Contents\/Helpers\/PilotPower/);
+	assert.equal(existsSync(log), false);
+	assert.deepEqual(readdirSync(scratch), []);
+});
 
 test("reports a failing smoke test and cleans up", macOS, (t) => {
 	const { log, scratch, run } = fixture(t, { exitCode: 7 });
