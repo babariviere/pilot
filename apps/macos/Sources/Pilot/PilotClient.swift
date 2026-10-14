@@ -174,6 +174,14 @@ final class PilotClient: ObservableObject {
         try await call("api/schedules", body: request)
     }
 
+    func wifiStatus() async throws -> WiFiStatus {
+        try await call("api/schedules/wifi", method: "GET")
+    }
+
+    func requestWiFiAuthorization() async throws -> WiFiStatus {
+        try await call("api/schedules/wifi", body: [String: String]())
+    }
+
     func updateSchedule(_ id: String, _ request: SchedulePatch) async throws -> ScheduledItem {
         try await call("api/schedules/\(id)", method: "PATCH", body: request)
     }

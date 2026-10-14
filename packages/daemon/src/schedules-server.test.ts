@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import type { ScheduledItem, ServerMessage, SessionSummary } from "@pilot/protocol";
+import type { ScheduledItem, ServerMessage, SessionSummary, WiFiStatus } from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleStore } from "./schedule-store.ts";
@@ -55,7 +55,23 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		},
 	]);
 	const ticket = (await trackedItems.list({ projectId: project.id })).items[0]!;
-	const schedules = new ScheduleService(store, { sessions, projects, trackedItems });
+	let authorizationRequests = 0;
+	const wifiValue: WiFiStatus = {
+		authorization: "not_determined",
+		available: true,
+		currentNetwork: null,
+		knownNetworks: [],
+	};
+	const wifi = {
+		status: async () => wifiValue,
+		requestAuthorization: async () => {
+			authorizationRequests++;
+			return wifiValue;
+		},
+		subscribe: () => () => {},
+		setActive() {},
+	};
+	const schedules = new ScheduleService(store, { sessions, projects, trackedItems, wifi });
 	await schedules.load();
 	schedules.start();
 	const server = createDaemonServer(
@@ -103,6 +119,20 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		}
 	};
 	const first = await connect();
+	assert.deepEqual(await (await api("/schedules/wifi")).json(), wifiValue);
+	assert.equal(authorizationRequests, 0);
+	assert.deepEqual(await (await api("/schedules/wifi", "POST", {})).json(), wifiValue);
+	assert.equal(authorizationRequests, 1);
+	assert.equal((await api("/schedules/wifi", "POST", {})).status, 200);
+	assert.equal(
+		(
+			await fetch(`http://127.0.0.1:${port}/api/schedules/wifi`, {
+				method: "POST",
+				headers: { origin: "https://untrusted.example" },
+			})
+		).status,
+		403,
+	);
 	await waitFor(() => first.messages.some((m) => m.type === "schedules" && m.schedules.length === 0));
 	first.ws.send(JSON.stringify({ type: "dashboard.subscribe", projectId: project.id }));
 	const request = { trigger: "on_wake", target: { kind: "message", sessionId: "existing", message: "Continue" } };

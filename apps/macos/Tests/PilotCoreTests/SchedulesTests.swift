@@ -62,3 +62,27 @@ import Testing
     #expect(try JSONDecoder().decode(ScheduleTrigger.self, from: Data(#""on_online""#.utf8)) == .onOnline)
     #expect(try JSONDecoder().decode(DashboardScheduledTrigger.self, from: Data(#""on_wake""#.utf8)) == .onWake)
 }
+
+@Test func wifiScheduleModelsMirrorProtocol() throws {
+    for trigger in [ScheduleTrigger.onJoinNetwork, .onLeaveNetwork] {
+        let request = ScheduleRequest(trigger: trigger, networkNames: ["Office", "Home"],
+                                      target: .message(sessionId: "s", message: "Continue"))
+        let data = try JSONEncoder().encode(request)
+        let decoded = try JSONDecoder().decode(ScheduleRequest.self, from: data)
+        #expect(decoded.trigger == trigger)
+        #expect(decoded.networkNames == ["Office", "Home"])
+    }
+    let patch = SchedulePatch(networkNames: ["Other"], expectedRevision: 2)
+    #expect(try JSONDecoder().decode(SchedulePatch.self, from: JSONEncoder().encode(patch)).networkNames == ["Other"])
+    let data = Data(#"""
+    {"authorization":"denied","available":true,"currentNetwork":null,"knownNetworks":[]}
+    """#.utf8)
+    let status = try JSONDecoder().decode(WiFiStatus.self, from: data)
+    #expect(status.authorization == .denied)
+    #expect(status.currentNetwork == nil)
+    let dashboard = try JSONDecoder().decode(DashboardScheduledItem.self, from: Data(#"""
+    {"id":"n","title":"Work","kind":"chat","trigger":"on_join_network","networkNames":["Office"],"state":"pending"}
+    """#.utf8))
+    #expect(dashboard.trigger == .onJoinNetwork)
+    #expect(dashboard.networkNames == ["Office"])
+}

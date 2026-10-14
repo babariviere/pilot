@@ -1169,6 +1169,57 @@ reports), producing a morning summary in the app and Slack.
   a message target retains its chat ID and follow-up text. Triggers are `at` (epoch milliseconds),
   `on_wake`, `on_online` (next offline-to-online edge), and default `on_back` ("When I'm back":
   next wake, then network reachable). `at` defers while offline and catches up when online.
+- Wi-Fi triggers: `on_join_network` and `on_leave_network`, with `networkNames` (1–32 exact,
+  case-sensitive names, each 1–32 UTF-8 bytes, deduplicated without trimming). One-shot, like the
+  other triggers. Already being connected when saved does not fire. A→B leaves A and joins B;
+  disassociation/power-off leaves A even if Ethernet stays online. Dispatch is independent of the
+  HTTPS reachability gate, so leaving a network can admit a durable follow-up while offline.
+  Names persist only on scheduled items, never in prompts, telemetry or remote requests.
+- Wi-Fi investigation (macOS 27.0.1): `networksetup -getairportnetwork en0` returned no association,
+  and `wdutil info` requires elevated privileges. Neither is a reliable SSID source. The installed
+  CoreWLAN SDK explicitly requires Location Services authorization for `CWInterface.ssid()`;
+  `interfaceMode()` returns none when not participating, allowing redaction to be distinguished
+  from disassociation. Node has neither a native CoreLocation authorization flow nor a stable app
+  TCC identity. Use an independent accessory app at
+  `Pilot.app/Contents/Helpers/PilotWiFi.app`, launched by pilotd via LaunchServices (`open`), not
+  by directly executing a Node child. This isolates its Location authorization from Node and from
+  the main app's lifetime. No root access, CLI scraping, location-coordinate collection or scans.
+- `Pilot Wi-Fi` owns CoreLocation authorization and CoreWLAN SSID/power/link delegates. Reads
+  and profile enumeration run on a serial background queue, coalesced for 150 ms; there is no
+  Wi-Fi sampling timer. Wake also requests one sample. Known networks come from
+  `CWConfiguration.networkProfiles`, plus the current network, bounded to 256. An authenticated
+  random-token loopback stream reports state only to pilotd; JSON frames and connection count
+  are bounded. Closing the stream terminates the helper. pilotd keeps it alive only for pending
+  Wi-Fi items or a short picker/authorization lease (30/120 seconds). Crashes reconnect with
+  bounded backoff (1–60 seconds); shutdown closes sockets and cancels timers. No durable SSID cache.
+- Startup, reconnect, reactivation and authorization recovery establish a baseline, never an edge.
+  Denied/disabled/restricted authorization or an associated interface with a redacted SSID invalidates
+  that baseline rather than firing leave. Transitions while the daemon/helper is down or access is
+  denied cannot be reconstructed, so pending items wait for the next observed transition.
+- Wi-Fi API for the picker: `GET /api/schedules/wifi` reads
+  `WiFiStatus { authorization, available, currentNetwork, knownNetworks, error? }`; GET never prompts.
+  `POST /api/schedules/wifi` explicitly asks the helper for authorization and returns its current
+  state, without waiting for the user's answer. The app can refresh GET while the picker is open
+  or after returning from Settings. Authorization is `not_determined | authorized | denied |
+  restricted | disabled | unavailable`; a null network is a real disconnect only when authorized
+  and available. The Location entry is named **Pilot Wi-Fi**, not Pilot. Denial is changed in System
+  Settings, not re-prompted. `PilotClient.wifiStatus()` / `requestWiFiAuthorization()` and PilotCore
+  mirror these APIs. Scheduling CRUD and both schedule/dashboard snapshots carry `networkNames`.
+  Switching to a non-network trigger clears names; omitted names on PATCH retain the existing list.
+  Picker controls are separate app work; these APIs do not reject saves while access is unavailable.
+- Signing: `PILOT_CODESIGN_IDENTITY` signs the helper and enclosing bundle with a stable identity
+  when supplied; local builds keep the existing ad-hoc default. A Developer ID signature is needed
+  for reliable TCC identity across rebuilds/updates. This host has no valid signing identity, so
+  persistent authorization across updates and an authorized, real join/leave with the main app
+  quit still require manual verification on a signed install. Never reset TCC or switch the shared
+  host's network as an automated test. `node scripts/bench/wifi-helper.ts 30` is a privacy-safe
+  native smoke check (state/counts only, never requests authorization or prints names).
+- Verification here: the bundled helper launched independently of the main app through LaunchServices,
+  authenticated to Node and returned `not_determined`, `available: true`, no current name and zero
+  known names (correctly hidden without authorization), without displaying a permission prompt.
+  Closing the stream left no helper process. TypeScript fake tests cover state transitions, auth
+  loss/recovery, crashes/stale frames, durable dispatch/restart/edit/cancel, name validation and the
+  local HTTP picker/request path. Wi-Fi-only schedules do not activate the wake/HTTPS sampler.
 - New-chat targets can retain a `trackedItemId`, validated against the destination project on save
   and dispatch. The ticket is linked only after the chat starts, without writing to its source.
   Binding failure surfaces as a failed schedule retaining the created chat ID, never a replay.

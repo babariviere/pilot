@@ -1,7 +1,7 @@
 import type { SpawnRequest } from "./index.ts";
 
 /** on_back is wake followed by reachability ("When I'm back"). All triggers are one-shot. */
-export type ScheduleTrigger = "at" | "on_wake" | "on_online" | "on_back";
+export type ScheduleTrigger = "at" | "on_wake" | "on_online" | "on_back" | "on_join_network" | "on_leave_network";
 export type ScheduleTarget =
 	| {
 			kind: "chat";
@@ -18,6 +18,8 @@ export interface ScheduleRequest {
 	trigger?: ScheduleTrigger;
 	/** Epoch milliseconds. Required only for at; overdue times fire when online. */
 	at?: number;
+	/** Exact, case-sensitive Wi-Fi names (1–32 entries). Only for network triggers. */
+	networkNames?: string[];
 	target: ScheduleTarget;
 }
 /** PATCH /api/schedules/:id. Only pending items are editable. Target replacement is complete. */
@@ -25,6 +27,7 @@ export interface SchedulePatch {
 	title?: string;
 	trigger?: ScheduleTrigger;
 	at?: number;
+	networkNames?: string[];
 	target?: ScheduleTarget;
 	/** Optional optimistic concurrency guard against a stale editor. */
 	expectedRevision?: number;
@@ -36,6 +39,7 @@ export interface ScheduledItem {
 	projectId?: string;
 	trigger: ScheduleTrigger;
 	at?: number;
+	networkNames?: string[];
 	target: ScheduleTarget;
 	state: ScheduleState;
 	createdAt: number;
@@ -52,4 +56,14 @@ export interface ScheduledItem {
 export interface SchedulesMessage {
 	type: "schedules";
 	schedules: ScheduledItem[];
+}
+
+/** Local Wi-Fi picker state. null means disconnected only when authorized and available. */
+export interface WiFiStatus {
+	authorization: "not_determined" | "authorized" | "denied" | "restricted" | "disabled" | "unavailable";
+	available: boolean;
+	currentNetwork: string | null;
+	knownNetworks: string[];
+	/** Static diagnostic, never includes a network name. */
+	error?: string;
 }
