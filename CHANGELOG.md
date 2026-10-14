@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.28.0](https://github.com/babariviere/pilot/compare/v1.27.0...v1.28.0) (2026-10-14)
+
+
+### Features
+
+* **daemon:** support explicit pull request ownership ([b1117fe](https://github.com/babariviere/pilot/commit/b1117fe994fdc54276ea1eae8cf6bf0529c58cd8))
+* **macos:** list attention agents and missions on Home ([3637252](https://github.com/babariviere/pilot/commit/3637252bc42e67ef6d10fbbdd83e5679cdefe2d7))
+* rename chats from the context menu ([fe7c8a3](https://github.com/babariviere/pilot/commit/fe7c8a3322f7dd28c6d9181055d2749ba6a689bd))
+* **schedules:** add Wi-Fi join and leave options to Send later ([5451ccc](https://github.com/babariviere/pilot/commit/5451ccc6af46a5bfe5f1692290b105256c8a9cb6))
+* **tracking:** sign in to Linear and Slack from the app ([cdbd4b2](https://github.com/babariviere/pilot/commit/cdbd4b21fff2682bc27880254399736a91a8a7e2))
+
+
+### Bug Fixes
+
+* **daemon:** reclaim generated Ghostty workspaces safely ([d0e619e](https://github.com/babariviere/pilot/commit/d0e619e7ea4be3fd1852ce7105fdc4e13f88e18a))
+* **macos:** keep Command-A in the focused composer ([4748f3b](https://github.com/babariviere/pilot/commit/4748f3be638e3fb33ad409d97253049ddfb67618))
+* **macos:** keep the working indicator visible for the whole run ([bac8a0e](https://github.com/babariviere/pilot/commit/bac8a0ecdf10d8859bd9f0069f82630d02029c98))
+* **macos:** make settings resizable and move it to a sidebar layout ([68b05a4](https://github.com/babariviere/pilot/commit/68b05a483cd1908dd63f25413f995de3ba255fee))
+* preserve session activity and back off cleanup retries ([1cb9e1e](https://github.com/babariviere/pilot/commit/1cb9e1eba94355570d333ad49051ba87d37a6029))
+* **tracking:** parse Linear estimate objects and Slack message metadata ([19164ca](https://github.com/babariviere/pilot/commit/19164ca64c6cc23b004048f2ba2e32d3863fdc06))
+
 ## [1.27.0](https://github.com/babariviere/pilot/compare/v1.26.0...v1.27.0) (2026-10-14)
 
 
