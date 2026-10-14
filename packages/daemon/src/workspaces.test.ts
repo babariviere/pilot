@@ -566,11 +566,49 @@ esac
 	}
 });
 
+test("prune keeps tracked, unignored and symlinked Ghostty vendor checkouts", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-prune-vendor-"));
+	const vendor = "apps/macos/Vendor/libghostty-spm";
+	try {
+		for (const mode of ["tracked", "unignored", "symlink", "parent-symlink"] as const) {
+			const cwd = join(root, mode);
+			mkdirSync(cwd);
+			git(cwd, "init", "--quiet");
+			writeFileSync(join(cwd, ".gitignore"), mode === "unignored" ? "" : "apps/macos/Vendor/\n");
+			const outside = join(root, `outside-${mode}`);
+			mkdirSync(outside);
+			writeFileSync(join(outside, "input"), "keep outside\n");
+			mkdirSync(join(cwd, "apps/macos"), { recursive: true });
+			if (mode === "parent-symlink") {
+				mkdirSync(join(outside, "libghostty-spm"));
+				writeFileSync(join(outside, "libghostty-spm/input"), "keep parent target\n");
+				symlinkSync(outside, join(cwd, "apps/macos/Vendor"));
+			} else {
+				mkdirSync(join(cwd, "apps/macos/Vendor"));
+				if (mode === "symlink") symlinkSync(outside, join(cwd, vendor));
+				else {
+					mkdirSync(join(cwd, vendor));
+					writeFileSync(join(cwd, vendor, "input"), "keep input\n");
+					if (mode === "tracked") git(cwd, "add", "-f", `${vendor}/input`);
+				}
+			}
+			assert.deepEqual(await pruneRegenerable(cwd), [], mode);
+			assert.ok(existsSync(join(cwd, vendor, "input")), mode);
+			assert.equal(readFileSync(join(outside, "input"), "utf8"), "keep outside\n");
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("prune deletes only ignored regenerable directories without tracked files or symlinks", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-prune-"));
 	try {
 		git(root, "init", "--quiet");
-		writeFileSync(join(root, ".gitignore"), "node_modules/\napps/*/.build/\ndist/\nsecret/\nvendor/\n");
+		writeFileSync(
+			join(root, ".gitignore"),
+			"node_modules/\napps/*/.build/\ndist/\nsecret/\nvendor/\napps/macos/Vendor/\n",
+		);
 		mkdirSync(join(root, "dist"));
 		writeFileSync(join(root, "dist", "keep.js"), "tracked output\n");
 		git(root, "add", ".");
@@ -581,6 +619,10 @@ test("prune deletes only ignored regenerable directories without tracked files o
 		mkdirSync(join(root, "apps", "mac", ".build"), { recursive: true });
 		writeFileSync(join(root, "apps", "mac", ".build", "out"), "binary\n");
 		writeFileSync(join(root, "dist", "extra.js"), "ignored next to tracked\n");
+		mkdirSync(join(root, "apps/macos/Vendor/libghostty-spm"), { recursive: true });
+		writeFileSync(join(root, "apps/macos/Vendor/libghostty-spm/.gitattributes"), "generated\n");
+		mkdirSync(join(root, "apps/macos/Vendor/other-dependency"));
+		writeFileSync(join(root, "apps/macos/Vendor/other-dependency/input"), "keep\n");
 		mkdirSync(join(root, "secret"));
 		writeFileSync(join(root, "secret", "token"), "keep\n");
 		mkdirSync(join(root, "build"));
@@ -591,7 +633,12 @@ test("prune deletes only ignored regenerable directories without tracked files o
 		mkdirSync(join(root, "vendor"));
 		symlinkSync(join(outside, "node_modules"), join(root, "vendor", "node_modules"));
 		try {
-			assert.deepEqual((await pruneRegenerable(root)).sort(), ["apps/mac/.build", "node_modules"]);
+			assert.deepEqual((await pruneRegenerable(root)).sort(), [
+				"apps/mac/.build",
+				"apps/macos/Vendor/libghostty-spm",
+				"node_modules",
+			]);
+			assert.ok(existsSync(join(root, "apps/macos/Vendor/other-dependency/input")));
 			assert.equal(existsSync(join(root, "node_modules")), false);
 			assert.equal(existsSync(join(root, "apps", "mac", ".build")), false);
 			assert.ok(existsSync(join(root, "apps", "mac")));

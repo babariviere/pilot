@@ -125,6 +125,11 @@ export const regenerableDirectories: ReadonlySet<string> = new Set([
 	".svelte-kit",
 ]);
 
+/** Exact generated vendor checkout, not arbitrary Vendor directories or similarly named user inputs. */
+const regenerablePaths: ReadonlySet<string> = new Set(["apps/macos/Vendor/libghostty-spm"]);
+export const isRegenerableDirectory = (path: string): boolean =>
+	regenerableDirectories.has(basename(path)) || regenerablePaths.has(path);
+
 /**
  * Free disk space without losing work: delete only ignored regenerable directories that contain no tracked files.
  * History, tracked and untracked files and other ignored inputs stay. Returns the removed paths, relative to cwd.
@@ -137,12 +142,20 @@ export async function pruneRegenerable(cwd: string, runner: Runner = run): Promi
 	)
 		.split("\0")
 		.filter((entry) => entry.endsWith("/"));
+	// Git can collapse this checkout to its ignored Vendor parent. Probe only exact known generated paths.
+	for (const path of regenerablePaths) {
+		if (
+			!ignored.includes(`${path}/`) &&
+			(await statIfExists(join(root, path)))?.isDirectory() &&
+			(await attempt(runner, "git", ["check-ignore", "--", `${path}/`], root))
+		)
+			ignored.push(`${path}/`);
+	}
 	const removed: string[] = [];
 	for (const entry of ignored) {
 		const path = entry.slice(0, -1);
 		const parts = path.split("/");
-		if (!regenerableDirectories.has(basename(path)) || parts.some((part) => !part || part === "." || part === ".."))
-			continue;
+		if (!isRegenerableDirectory(path) || parts.some((part) => !part || part === "." || part === "..")) continue;
 		if (parts[0] === ".git" || parts[0] === ".jj") continue;
 		const target = join(root, path);
 		// Never follow a symlinked directory or parent out of the workspace.

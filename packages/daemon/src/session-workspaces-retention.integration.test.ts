@@ -8,6 +8,47 @@ import { Conflict } from "./errors.ts";
 
 import { DAY, fixture } from "./testing/session-workspace.ts";
 
+test("failed automatic cleanup backs off, caps retries, and leaves explicit cleanup available", async (t) => {
+	const f = await fixture(t);
+	const created = await f.spawn();
+	await f.sessions.archive(created.id);
+	let now = Date.now();
+	t.mock.method(Date, "now", () => now);
+	const meta = f.sessions["metas"].get(created.id)!;
+	meta.archivedAt = now - DAY;
+	const archivedAt = meta.archivedAt;
+	const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "snapshot", async () => {
+		throw new Error("Unsafe ignored path prevents cleanup: unknown/input");
+	});
+	const warnings = t.mock.method(console, "warn", () => {});
+	for (const minutes of [5, 10, 20, 40, 60, 60]) {
+		const attempts = snapshot.mock.callCount();
+		await f.sessions["reclaimArchivedWorkspaces"]();
+		assert.equal(snapshot.mock.callCount(), attempts + 1);
+		assert.match((await f.stored(created.id)).workspaceCleanupError!, /Unsafe ignored path/);
+		now += minutes * 60_000 - 1;
+		await f.sessions["reclaimArchivedWorkspaces"]();
+		assert.equal(snapshot.mock.callCount(), attempts + 1, "no scan just before retry deadline");
+		now += 1;
+	}
+	assert.equal(warnings.mock.callCount(), 6, "warnings occur only for actual attempts");
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	const attempts = snapshot.mock.callCount();
+	await assert.rejects(f.sessions.reclaimWorkspace(created.id), /Unsafe ignored path/);
+	assert.equal(snapshot.mock.callCount(), attempts + 1, "manual retry bypasses backoff");
+	await f.sessions.restore(created.id);
+	assert.equal(f.sessions["workspaceCleanupBackoff"].has(created.id), false);
+	await f.sessions.archive(created.id);
+	meta.archivedAt = archivedAt;
+	await f.sessions["reclaimArchivedWorkspaces"]();
+	assert.equal(snapshot.mock.callCount(), attempts + 2, "a new archival resets backoff");
+	snapshot.mock.restore();
+	await f.sessions.reclaimWorkspace(created.id);
+	assert.equal(meta.workspaceCleanupError, undefined);
+	assert.equal(f.sessions["workspaceCleanupBackoff"].has(created.id), false);
+	assert.equal(existsSync(created.cwd), false);
+});
+
 test("private retention sweep includes exactly 1 day, skips recent, active, legacy and direct workspaces", async (t) => {
 	const f = await fixture(t);
 	const boundary = await f.spawn();
