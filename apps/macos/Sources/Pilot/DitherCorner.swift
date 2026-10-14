@@ -11,6 +11,8 @@ import SwiftUI
 /// corner leans gently toward the pointer while it is over the row.
 ///
 /// Use `.ditherCorner(_:)` on a row's content. Reduce Motion keeps the corner still and drops the lean.
+/// Controls drawn over the corner, such as a row's hover actions, mark themselves with `.ditherCornerClearance(_:)`
+/// so the corner leaves their cells empty and they stay legible on every state.
 /// Larger surfaces that carry one state, such as the agent question tray, pass their own outset and corner
 /// radius so the dither stays inside their shape, and an `extent` above 1 to grow the corner with the surface.
 /// Extent adds cells rather than enlarging them, so the pixels stay the sidebar's size.
@@ -20,6 +22,31 @@ extension View {
                       outset: EdgeInsets = EdgeInsets(top: -3, leading: 0, bottom: -3, trailing: -6),
                       cornerRadius: CGFloat = 5, extent: Double = 1) -> some View {
         modifier(DitherCornerModifier(signal: signal, outset: outset, cornerRadius: cornerRadius, extent: extent))
+    }
+
+    /// Keeps the enclosing `ditherCorner` empty behind this view while `active`, with a small margin of cells.
+    /// Use it for small controls over the corner, and only while they are shown.
+    func ditherCornerClearance(_ active: Bool = true) -> some View {
+        anchorPreference(key: DitherCornerClearanceKey.self, value: .bounds) { active ? $0 : nil }
+    }
+}
+
+struct DitherCornerClearanceKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>? { nil }
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
+    }
+}
+
+/// A rectangle of corner cells, in image cells from the top left. `maxX` and `maxY` are exclusive.
+struct DitherCornerCells: Hashable {
+    var minX: Int
+    var minY: Int
+    var maxX: Int
+    var maxY: Int
+
+    func contains(x: Int, y: Int) -> Bool {
+        x >= minX && x < maxX && y >= minY && y < maxY
     }
 }
 
@@ -40,6 +67,8 @@ enum DitherCorner {
     static let frameInterval: TimeInterval = 1.0 / 12
     /// How far the corner reaches toward the pointer, as a fraction of the pointer's distance, in cells.
     static let maximumLean = CGPoint(x: 30, y: 12)
+    /// Empty cells kept around a clearance, so its edge reads as a clean gap rather than touching pixels.
+    static let clearanceMargin = (columns: 2, rows: 1)
 
     static func animates(_ signal: SessionSignal?) -> Bool {
         signal == .working || signal == .needsYou
@@ -55,6 +84,20 @@ enum DitherCorner {
         let x = (pointer.x - size.width) * 0.35 / cell
         let y = (pointer.y - size.height) * 0.5 / cell
         return CGPoint(x: min(0, max(-maximumLean.x, x)), y: min(0, max(-maximumLean.y, y)))
+    }
+
+    /// The cells under `rect`, plus the margin, for a corner drawn bottom-trailing in `region`. Both are in the
+    /// region's coordinates. Nil when `rect` misses the corner.
+    static func clearedCells(_ rect: CGRect, in region: CGSize, extent: Double = 1) -> DitherCornerCells? {
+        let grid = grid(extent: extent)
+        let originX = region.width - CGFloat(grid.columns) * cell
+        let originY = region.height - CGFloat(grid.rows) * cell
+        let cells = DitherCornerCells(
+            minX: max(0, Int(((rect.minX - originX) / cell).rounded(.down)) - clearanceMargin.columns),
+            minY: max(0, Int(((rect.minY - originY) / cell).rounded(.down)) - clearanceMargin.rows),
+            maxX: min(grid.columns, Int(((rect.maxX - originX) / cell).rounded(.up)) + clearanceMargin.columns),
+            maxY: min(grid.rows, Int(((rect.maxY - originY) / cell).rounded(.up)) + clearanceMargin.rows))
+        return cells.minX < cells.maxX && cells.minY < cells.maxY ? cells : nil
     }
 }
 
@@ -92,12 +135,16 @@ private struct DitherCornerModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background {
+            .backgroundPreferenceValue(DitherCornerClearanceKey.self) { clearance in
                 if shown != nil || (previous != nil && mix < 1) {
                     GeometryReader { proxy in
                         let lean = reduceMotion ? .zero : pointer.map { DitherCorner.lean(pointer: $0, in: proxy.size) } ?? .zero
+                        let clear = clearance.flatMap {
+                            DitherCorner.clearedCells(proxy[$0], in: proxy.size, extent: extent)
+                        }
                         DitherCornerClocked(signal: shown, previous: previous, mix: mix, lean: lean,
-                                            hover: pointer == nil ? 0 : 1, still: reduceMotion, extent: extent)
+                                            hover: pointer == nil ? 0 : 1, still: reduceMotion, extent: extent,
+                                            clear: clear)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     }
                     .padding(outset)
@@ -145,6 +192,7 @@ private struct DitherCornerClocked: View {
     let hover: Double
     let still: Bool
     let extent: Double
+    let clear: DitherCornerCells?
 
     var body: some View {
         let moving = !still && (DitherCorner.animates(signal) || (mix < 1 && DitherCorner.animates(previous)))
@@ -157,7 +205,7 @@ private struct DitherCornerClocked: View {
 
     private func layer(frame: Int) -> some View {
         DitherCornerLayer(signal: signal, previous: previous, frame: frame, mix: mix,
-                          leanX: lean.x, leanY: lean.y, hover: hover, extent: extent)
+                          leanX: lean.x, leanY: lean.y, hover: hover, extent: extent, clear: clear)
             .animation(still ? nil : .spring(response: 0.5, dampingFraction: 0.78), value: lean)
             .animation(still ? nil : .easeOut(duration: 0.25), value: hover)
     }
@@ -185,6 +233,7 @@ private struct DitherCornerLayer: View, Animatable {
     var leanY: CGFloat
     var hover: Double
     let extent: Double
+    let clear: DitherCornerCells?
 
     var animatableData: AnimatablePair<Double, AnimatablePair<CGFloat, AnimatablePair<CGFloat, Double>>> {
         get { AnimatablePair(mix, AnimatablePair(leanX, AnimatablePair(leanY, hover))) }
@@ -199,7 +248,7 @@ private struct DitherCornerLayer: View, Animatable {
     var body: some View {
         let request = DitherCornerRequest(signal: signal, previous: mix < 1 ? previous : nil, frame: frame,
                                           mix: min(1, max(0, mix)), leanX: leanX, leanY: leanY,
-                                          hover: min(1, max(0, hover)), extent: extent)
+                                          hover: min(1, max(0, hover)), extent: extent, clear: clear)
         if let image = DitherCornerRenderer.image(for: request) {
             let grid = DitherCorner.grid(extent: extent)
             Image(decorative: image, scale: 1)
@@ -223,9 +272,11 @@ struct DitherCornerRequest: Hashable {
     var hover: Double = 0
     /// See `ditherCorner(_:outset:cornerRadius:extent:)`. Few distinct values, so the cache stays bounded.
     var extent: Double = 1
+    /// Cells left empty under controls drawn over the corner. See `ditherCornerClearance(_:)`.
+    var clear: DitherCornerCells?
 
-    /// Resting corners repeat across rows and frames. Pointer-driven and dissolving ones are one-offs.
-    var isCacheable: Bool { previous == nil && mix >= 1 && leanX == 0 && leanY == 0 && hover == 0 }
+    /// Resting corners repeat across rows and frames. Pointer-driven, dissolving and cleared ones are one-offs.
+    var isCacheable: Bool { previous == nil && mix >= 1 && leanX == 0 && leanY == 0 && hover == 0 && clear == nil }
 }
 
 /// Renders on the main actor: a corner is about 1,250 cells, a few microseconds of arithmetic, and only the
@@ -296,6 +347,7 @@ enum DitherCornerRenderer {
         for y in 0 ..< height {
             let v = Double(height - y) - 0.5
             for x in 0 ..< width {
+                if let clear = request.clear, clear.contains(x: x, y: y) { continue }
                 let u = Double(width - x) - 0.5
                 let threshold = bayer[(y & 7) * 8 + (x & 7)]
                 // Each cell flips to the new state at its own threshold, so the change dissolves.

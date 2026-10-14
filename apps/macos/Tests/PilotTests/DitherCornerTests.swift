@@ -72,3 +72,41 @@ import Testing
     let large = DitherCornerRenderer.coverage(.needsYou, u: 25, v: 12.5, frame: 0, lean: (0, 0), hover: 0, extent: 2.5)
     #expect(abs(small - large) < 0.000_001)
 }
+
+@Test func clearanceCoversItsBoundsPlusAMarginOfCells() {
+    // A 260 × 44 region holds the 104 × 48 corner bottom-trailing: its top left sits at (156, -4).
+    let region = CGSize(width: 260, height: 44)
+    let cells = DitherCorner.clearedCells(CGRect(x: 216, y: 4, width: 30, height: 14), in: region)
+    #expect(cells == DitherCornerCells(minX: 28, minY: 3, maxX: 47, maxY: 12))
+    // Clamped to the grid, and nil when the rect misses the corner.
+    let edge = DitherCorner.clearedCells(CGRect(x: 250, y: -10, width: 20, height: 70), in: region)
+    #expect(edge?.maxX == DitherCorner.columns && edge?.minY == 0 && edge?.maxY == DitherCorner.rows)
+    #expect(DitherCorner.clearedCells(CGRect(x: 0, y: 0, width: 40, height: 20), in: region) == nil)
+}
+
+@Test @MainActor func clearedCellsStayEmptyAndAreNeverCached() throws {
+    let clear = DitherCornerCells(minX: 30, minY: 10, maxX: 52, maxY: 24)
+    let request = DitherCornerRequest(signal: .failed, previous: nil, frame: 0, clear: clear)
+    #expect(!request.isCacheable)
+    let before = DitherCornerRenderer.cachedCount
+    let image = try #require(DitherCornerRenderer.image(for: request))
+    #expect(DitherCornerRenderer.cachedCount == before)
+    let full = try #require(DitherCornerRenderer.image(for: DitherCornerRequest(signal: .failed, previous: nil, frame: 0)))
+    let cleared = try #require(image.dataProvider?.data as Data?)
+    let resting = try #require(full.dataProvider?.data as Data?)
+    var drawnInside = 0
+    for y in 0 ..< image.height {
+        for x in 0 ..< image.width {
+            let alpha = (y * image.width + x) * 4 + 3
+            if clear.contains(x: x, y: y) {
+                // Every cell under the clearance is empty, though the resting corner draws there.
+                #expect(cleared[alpha] == 0)
+                if resting[alpha] > 0 { drawnInside += 1 }
+            } else {
+                // The rest of the corner is unchanged.
+                #expect(cleared[alpha] == resting[alpha])
+            }
+        }
+    }
+    #expect(drawnInside > 0)
+}
