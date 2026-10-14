@@ -5164,7 +5164,8 @@ export class SessionManager {
 		const summary = this.summary(meta, worker ?? this.workers.get(meta.id));
 		if (!this.closing)
 			this.longJobTimers.update(meta.id, meta.archivedAt === undefined ? (summary.runningJobs ?? []) : [], () => {
-				if (!this.closing && this.metas.get(meta.id) === meta) this.emit(meta);
+				const current = this.metas.get(meta.id);
+				if (!this.closing && current) this.emit(current);
 			});
 		for (const listener of this.changeListeners) listener(summary);
 	}
