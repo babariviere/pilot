@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.31.0](https://github.com/babariviere/pilot/compare/v1.30.0...v1.31.0) (2026-10-14)
+
+
+### Features
+
+* **chat:** attribute GitHub writes to chat activity ([636253d](https://github.com/babariviere/pilot/commit/636253de5bca0c5ca7730695e376d4e4f7d92124))
+* **kernel:** record bounded local request timings ([286160b](https://github.com/babariviere/pilot/commit/286160b41cc066de74ef2f16901ee24c7fe2dfcf))
+* **macos:** add hover-only sidebar chat shortcut ([e969966](https://github.com/babariviere/pilot/commit/e9699666d18e82e874032d6df52c5c34ff6de898))
+* **macos:** add Slack triage view and project labels ([dbdc7c2](https://github.com/babariviere/pilot/commit/dbdc7c272f1385a1d84b168b21353ac93d5c528b))
+* **macos:** declutter sidebar with dithered status corners ([30e97a6](https://github.com/babariviere/pilot/commit/30e97a6870c19dfa64ee62b4d9686d9f521c2dfe))
+* **macos:** list links mentioned in a chat in the inspector ([ffaa0f7](https://github.com/babariviere/pilot/commit/ffaa0f76a851f02aa721e3a7e0d97c9ead80bb3d))
+* **macos:** polish Linear rows and show failed In progress moves ([498cbb2](https://github.com/babariviere/pilot/commit/498cbb2aa255f2436648156074b694ad38cb50a8))
+
+
+### Bug Fixes
+
+* **daemon:** queue durable PR transition notices ([727cecb](https://github.com/babariviere/pilot/commit/727cecbf0e58642ba307cef5656f7184f397b8f2))
+* **jobs:** keep background work active until completion ([e68bba5](https://github.com/babariviere/pilot/commit/e68bba503e05ed260bcb522cb81b980fb93bdcec))
+* **macos:** use shared compass mark on all role labels ([b986693](https://github.com/babariviere/pilot/commit/b986693b57236d6a6a9e5a4ccaed3732288b7f6c))
+* **memory:** keep tools visible and guide lasting notes ([3e4fb88](https://github.com/babariviere/pilot/commit/3e4fb88702497563c708b8716b0bde504eed9ba7))
+
 ## [1.30.0](https://github.com/babariviere/pilot/compare/v1.29.0...v1.30.0) (2026-10-14)
 
 
