@@ -44,6 +44,25 @@ export interface TrackedItemList {
 	total: number;
 }
 export type SourceStatus = "not_configured" | "idle" | "ok" | "syncing" | "sign_in_required" | "error";
+/** Browser sign-in to the dedicated MCP server of a kind, run by pilotd through pi's MCP OAuth flow.
+ * One at a time per server. Tokens stay in pi's mcp-auth.json and never reach clients. */
+export interface SourceSignIn {
+	kind: TrackedKind;
+	/** waiting: the browser was opened (or is about to be) and pilotd waits for approval. */
+	state: "waiting" | "done" | "failed" | "cancelled";
+	/** Sign in again while signed in (another account or new scope). */
+	again?: boolean;
+	startedAt: number;
+	/** When a waiting sign-in gives up. */
+	expiresAt: number;
+	finishedAt?: number;
+	/** Short, sanitized reason for a failed sign-in. */
+	error?: string;
+}
+/** POST /api/tracking/:kind/sign-in starts (or returns the running) sign-in; DELETE cancels it. */
+export interface SourceSignInRequest {
+	again?: boolean;
+}
 /** Progress covers only my issues, never the team's overall workload. */
 export interface LinearCycleSummary {
 	id: string;
@@ -93,11 +112,14 @@ export interface TrackingSource {
 	status: SourceStatus;
 	lastPolledAt?: number;
 	error?: string;
+	/** Terminal fallback. Clients offer Sign in (POST /api/tracking/:kind/sign-in) instead. */
 	signInCommand?: string;
 	nextPollAt?: number;
 	linear?: LinearSourceSummary;
 	/** Slack only: one entry per configured channel, in configuration order. */
 	channels?: SlackChannelStatus[];
+	/** Latest browser sign-in for this kind's server, shared by every project. */
+	signIn?: SourceSignIn;
 }
 /** A team from the dedicated linear server's list_teams, for the project settings picker. */
 export interface LinearTeamOption {

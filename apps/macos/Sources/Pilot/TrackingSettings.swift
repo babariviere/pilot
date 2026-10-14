@@ -65,6 +65,7 @@ struct LinearTeamPicker: View {
     let source: TrackingSource?
     let saved: String?
     @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
     @State private var lookup: TrackingLookup<LinearTeamOption>?
     @State private var loading = false
 
@@ -92,9 +93,16 @@ struct LinearTeamPicker: View {
             Text(detail).font(.caption).foregroundStyle(.secondary)
         }
         .task { await load(force: false) }
-        if let lookup, lookup.status != .ok {
+        .onChange(of: signIns[.linear]?.state) { _, state in
+            if state == .done { Task { await load(force: true) } }
+        }
+        if let lookup, lookup.status == .error {
             TrackingLookupProblem(service: "Linear", lookup: lookup) { Task { await load(force: true) } }
         }
+        SourceAccountRow(kind: .linear, label: "Linear",
+                         needsSignIn: lookup?.status == .signInRequired || source?.status == .signInRequired,
+                         connected: lookup?.status == .ok || source?.status == .ok || source?.status == .syncing,
+                         purpose: "Sign in to pick a team and read your issues.")
     }
 
     private var binding: Binding<String> {
@@ -107,7 +115,9 @@ struct LinearTeamPicker: View {
     private var detail: String {
         guard let selection else { return "Attach a team to track your issues in it, including its sub-teams." }
         guard selection.id == saved, let source, source.configured else { return "Save to start tracking." }
-        let line = TrackedItemText.sourceLine(source)
+        // The account row below says what to do.
+        if source.status == .signInRequired { return "Your issues and its current cycle." }
+        let line = TrackedItemText.sourceLine(source, signIn: signIns[.linear])
         return line.tone == .attention ? line.text : "Your issues and its current cycle · \(line.text)"
     }
 
@@ -145,6 +155,7 @@ struct SlackChannelsEditor: View {
     let source: TrackingSource?
     let saved: Set<String>
     @ObservedObject private var client = AppModel.shared.client
+    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
     @State private var query = ""
     @State private var mine: TrackingLookup<SlackChannelOption>?
     @State private var results: TrackingLookup<SlackChannelOption>?
@@ -184,6 +195,19 @@ struct SlackChannelsEditor: View {
         if focused || !query.isEmpty {
             suggestions
         }
+        SourceAccountRow(kind: .slack, label: "Slack",
+                         needsSignIn: mine?.status == .signInRequired || results?.status == .signInRequired
+                             || source?.status == .signInRequired,
+                         connected: mine?.status == .ok || results?.status == .ok || source?.status == .ok
+                             || source?.status == .syncing,
+                         purpose: "Sign in to find channels and read bug reports.")
+            .onChange(of: signIns[.slack]?.state) { _, state in
+                guard state == .done else { return }
+                Task {
+                    await loadMine(force: true)
+                    await search()
+                }
+            }
     }
 
     private var suggestions: some View {
@@ -201,7 +225,9 @@ struct SlackChannelsEditor: View {
                 }
                 .padding(.vertical, 2)
             }
-            if let lookup, lookup.status != .ok {
+            if let lookup, lookup.status == .signInRequired {
+                Text("Sign in to Slack below to search channels.").font(.caption).foregroundStyle(.secondary)
+            } else if let lookup, lookup.status != .ok {
                 TrackingLookupProblem(service: "Slack", lookup: lookup) { retry() }
             } else if candidates.isEmpty, !searching, lookup != nil {
                 Text(query.isEmpty ? "No more channels to suggest. Search to find others." : "No channels match.")
@@ -290,7 +316,7 @@ private struct SlackChannelRow: View {
             }
             .font(.caption)
             .foregroundStyle(line.tone == .attention ? Theme.blocked : Color.secondary)
-            .help(status?.error ?? (status?.status == .signInRequired ? "Run pi mcp login slack in Terminal." : line.text))
+            .help(status?.error ?? (status?.status == .signInRequired ? "Sign in to Slack below." : line.text))
             Button(action: remove) { Image(systemName: "minus.circle") }
                 .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                 .help("Stop tracking \(channel.display)")
@@ -302,7 +328,7 @@ private struct SlackChannelRow: View {
     }
 }
 
-/// Sign-in required or a failed lookup, with the login command and a retry.
+/// A failed lookup with a retry. Sign-in required is handled by the source's account row.
 private struct TrackingLookupProblem<Item: Codable & Equatable & Sendable>: View {
     let service: String
     let lookup: TrackingLookup<Item>
@@ -310,28 +336,70 @@ private struct TrackingLookupProblem<Item: Codable & Equatable & Sendable>: View
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Image(systemName: lookup.status == .signInRequired ? "person.crop.circle.badge.exclamationmark"
-                : "exclamationmark.triangle")
+            Image(systemName: "exclamationmark.triangle")
                 .foregroundStyle(Theme.blocked)
                 .accessibilityHidden(true)
-            Text(message).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(lookup.error ?? "Couldn't reach \(service).").foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 8)
-            if lookup.status == .signInRequired, let command = lookup.signInCommand {
-                Button("Copy Command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(command, forType: .string)
-                }
-                .controlSize(.small)
-            }
             Button("Retry", action: retry).controlSize(.small)
         }
         .font(.caption)
     }
+}
 
-    private var message: String {
-        if lookup.status == .signInRequired {
-            return "Sign in to \(service) first: run \(lookup.signInCommand ?? "pi mcp login") in Terminal."
+/// The account a source reads with: Sign in when pilotd needs one, then "Waiting for sign-in in your
+/// browser…" with Cancel, and Sign in again once connected (another account or new access).
+private struct SourceAccountRow: View {
+    let kind: TrackedKind
+    let label: String
+    let needsSignIn: Bool
+    let connected: Bool
+    /// Why to sign in, shown when sign-in is required.
+    let purpose: String
+    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+
+    var body: some View {
+        let state = TrackingAccountText.state(signIns[kind], needsSignIn: needsSignIn, connected: connected,
+                                              purpose: purpose)
+        LabeledContent {
+            HStack(spacing: 6) {
+                if state.waiting { ProgressView().controlSize(.small) }
+                SourceSignInButton(kind: kind, label: label, again: !needsSignIn)
+            }
+        } label: {
+            Text("\(label) account")
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                if state.attention {
+                    Image(systemName: "person.crop.circle.badge.exclamationmark").accessibilityHidden(true)
+                }
+                Text(state.text).fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
+            .foregroundStyle(state.attention ? Theme.blocked : Color.secondary)
         }
-        return lookup.error ?? "Couldn't reach \(service)."
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Wording of a source's account row, kept apart from the view for tests.
+enum TrackingAccountText {
+    struct State: Equatable {
+        let text: String
+        let attention: Bool
+        let waiting: Bool
+    }
+
+    static func state(_ signIn: SourceSignIn?, needsSignIn: Bool, connected: Bool, purpose: String) -> State {
+        if signIn?.state == .waiting {
+            return State(text: TrackedItemText.signInWaiting, attention: false, waiting: true)
+        }
+        // A failed attempt matters while sign-in is still needed, or when signing in again failed.
+        if let problem = TrackedItemText.signInProblem(signIn), needsSignIn || signIn?.again == true {
+            return State(text: problem, attention: true, waiting: false)
+        }
+        if needsSignIn { return State(text: purpose, attention: true, waiting: false) }
+        return State(text: connected ? "Signed in through pi" : "Uses your pi sign-in", attention: false,
+                     waiting: false)
     }
 }

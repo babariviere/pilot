@@ -5,6 +5,7 @@ import type {
 	ProjectTrackingConfig,
 	SlackChannelOption,
 	SlackChannelStatus,
+	SourceSignIn,
 	TrackedKind,
 	TrackingJson,
 	TrackingLookup,
@@ -16,6 +17,7 @@ import { createHash } from "node:crypto";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SourceRateLimited, SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
+import { SourceSignIns } from "./source-sign-in.ts";
 import { linearPrefill } from "./linear-source.ts";
 import { slackChannelProgress } from "./slack-source.ts";
 import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
@@ -60,6 +62,8 @@ export class SourceRegistry {
 	private knownProjects: Set<string>;
 	private stopped = false;
 	private readonly automatic = new Set<TrackedKind>();
+	/** Sources to poll at the next timer tick, for example after a sign-in. */
+	private readonly due = new Set<string>();
 	private timer?: ReturnType<typeof setTimeout>;
 	private readonly details = new Map<
 		string,
@@ -72,14 +76,24 @@ export class SourceRegistry {
 	private readonly projects: Pick<ProjectStore, "list" | "require" | "onChange">;
 	readonly items: TrackedItemStore;
 	private readonly mcp: SourceMcpClient;
+	private readonly signIns: SourceSignIns;
 	constructor(
 		projects: Pick<ProjectStore, "list" | "require" | "onChange">,
 		items: TrackedItemStore,
 		mcp: SourceMcpClient,
+		signInTimeoutMs?: number,
 	) {
 		this.projects = projects;
 		this.items = items;
 		this.mcp = mcp;
+		this.signIns = new SourceSignIns(
+			(kind, options) => mcp.signIn!(kind, options),
+			(state) => {
+				for (const project of projects.list()) this.emit({ type: "sources", projectId: project.id });
+				if (state.state === "done") this.resync(state.kind);
+			},
+			signInTimeoutMs,
+		);
 		this.knownProjects = new Set(projects.list().map((project) => project.id));
 		this.slackChannels = new Map(
 			projects.list().map((project) => [project.id, JSON.stringify(project.tracking?.slackChannels ?? [])]),
@@ -127,7 +141,9 @@ export class SourceRegistry {
 			(source) => source.configured && this.automatic.has(source.kind) && !this.running.has(source.id),
 		);
 		if (!sources.length) return;
-		const next = Math.min(...sources.map((source) => source.nextPollAt ?? (source.lastPolledAt ?? 0) + 300_000));
+		const dueAt = (source: TrackingSource) =>
+			this.due.has(source.id) ? 0 : (source.nextPollAt ?? (source.lastPolledAt ?? 0) + 300_000);
+		const next = Math.min(...sources.map(dueAt));
 		this.timer = setTimeout(
 			() => {
 				this.timer = undefined;
@@ -136,7 +152,7 @@ export class SourceRegistry {
 						source.configured &&
 						this.automatic.has(source.kind) &&
 						!this.running.has(source.id) &&
-						(source.nextPollAt ?? (source.lastPolledAt ?? 0) + 300_000) <= Date.now(),
+						dueAt(source) <= Date.now(),
 				);
 				if (source && this.busy() < 2)
 					void this.poll(source.id)
@@ -178,6 +194,7 @@ export class SourceRegistry {
 		const poller = this.pollers.get(source.kind);
 		if (!poller) throw new ServiceUnavailable("Source adapter is not installed");
 		if (this.busy() >= 2) throw new ServiceUnavailable("Tracking is busy, retry shortly");
+		this.due.delete(id);
 		const project = structuredClone(this.projects.require(source.projectId));
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(new Error("Poll timed out")), 90_000);
@@ -324,14 +341,41 @@ export class SourceRegistry {
 		this.stopped = true;
 		clearTimeout(this.timer);
 		for (const dispose of this.disposers) dispose();
+		const signIns = this.signIns.stop();
 		for (const run of this.running.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.details.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.lookups.values()) run.controller.abort(new Error("Tracking stopped"));
 		await Promise.allSettled([...this.running.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.details.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.lookups.values()].map((run) => run.promise));
+		await signIns;
 		await this.mcp.close?.();
 		this.listeners.clear();
+	}
+	/** Browser sign-in to the kind's dedicated server (pi's MCP OAuth flow). One per server; repeated starts
+	 * return the waiting one. Once done, that source resyncs in every project. */
+	signIn(kind: TrackedKind, again = false): SourceSignIn {
+		if (this.stopped) throw new ServiceUnavailable("Tracking is stopped");
+		if (!this.mcp.signIn) throw new ServiceUnavailable("Sign-in is unavailable");
+		return this.signIns.start(kind, again);
+	}
+	cancelSignIn(kind: TrackedKind): SourceSignIn {
+		const state = this.signIns.cancel(kind);
+		if (!state) throw new NotFound("No sign-in to cancel");
+		return state;
+	}
+	private resync(kind: TrackedKind): void {
+		if (this.stopped) return;
+		const now = Date.now();
+		for (const source of this.list()) {
+			if (source.kind !== kind || !source.configured) continue;
+			const health = this.health.get(source.id);
+			// Keep rate-limit and error backoff; sign-in only answers "sign-in required".
+			if (health?.status === "error" && health.nextPollAt > now) continue;
+			if (health?.status === "sign_in_required") this.health.delete(source.id);
+			this.due.add(source.id);
+		}
+		this.schedule();
 	}
 	/** Linear teams for the project settings picker. Read-only, never stored. */
 	linearTeams(query?: string): Promise<TrackingLookup<LinearTeamOption>> {
@@ -428,7 +472,8 @@ export class SourceRegistry {
 		const configured = kind === "linear" ? !!project.tracking?.linearTeam : !!project.tracking?.slackChannels.length;
 		const key = configKey(project, kind),
 			health = this.health.get(id),
-			checkpoint = this.items.checkpoint(id);
+			checkpoint = this.items.checkpoint(id),
+			signIn = this.signIns.get(kind);
 		const status = !configured
 			? "not_configured"
 			: this.running.get(id)?.key === key
@@ -459,6 +504,7 @@ export class SourceRegistry {
 						),
 					}
 				: {}),
+			...(signIn ? { signIn } : {}),
 		};
 	}
 	private channelStatus(

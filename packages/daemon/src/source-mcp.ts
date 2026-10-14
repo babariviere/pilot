@@ -1,5 +1,6 @@
 import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
+import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 
 /** Fixed read-only tools on the dedicated server named by kind. No overrides or fallback. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
@@ -68,14 +69,75 @@ export function sourceRateLimit(value: unknown): SourceRateLimited | undefined {
 export interface SourceMcpClient {
 	close?(): Promise<void>;
 	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson>;
+	/** Browser sign-in to the dedicated server, as `pi mcp login` does. Rejects with SourceSignInCancelled or
+	 * SourceSignInFailed. With again, signs in even when the stored credentials still work. */
+	signIn?(kind: TrackedKind, options: { again: boolean; signal: AbortSignal }): Promise<void>;
 }
+export type OpenUrl = (url: string) => void | Promise<void>;
+/** pi's own launcher: no shell, best effort. */
+const openBrowser: OpenUrl = async (url) => {
+	const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
+	const { openBrowser } = (await import(new URL("./utils/open-browser.js", sdk).href)) as {
+		openBrowser(target: string): void;
+	};
+	openBrowser(url);
+};
 /** No session, model, or separate tokens. Only the selected server connects, off the daemon event loop. */
 export class PiSourceMcpClient implements SourceMcpClient {
 	private readonly running = new Set<Worker>();
+	/** Sign-ins wait for the user, so they do not take the two MCP call slots. At most one per kind. */
+	private readonly signIns = new Set<Worker>();
 	private stopped = false;
 	private readonly agentDir?: string;
-	constructor(agentDir?: string) {
+	private readonly openUrl: OpenUrl;
+	constructor(agentDir?: string, options: { openUrl?: OpenUrl } = {}) {
 		this.agentDir = agentDir;
+		this.openUrl = options.openUrl ?? openBrowser;
+	}
+	signIn(kind: TrackedKind, options: { again: boolean; signal: AbortSignal }): Promise<void> {
+		const { signal } = options;
+		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
+		if (signal.aborted) return Promise.reject(signal.reason);
+		if (kind !== "linear" && kind !== "slack") return Promise.reject(new SourceSignInFailed("Unknown source."));
+		const worker = new Worker(new URL("./source-sign-in-worker.ts", import.meta.url), {
+			workerData: { agentDir: this.agentDir, kind, again: options.again },
+		});
+		this.signIns.add(worker);
+		return new Promise((resolve, reject) => {
+			let reply: { ok?: true; cancelled?: true; error?: string } | undefined;
+			let kill: ReturnType<typeof setTimeout> | undefined;
+			const abort = () => {
+				worker.postMessage("abort");
+				// The flow stops at its next step; do not let a stuck discovery request hold the callback port.
+				kill ??= setTimeout(() => void worker.terminate(), 10_000);
+			};
+			signal.addEventListener("abort", abort, { once: true });
+			worker.on("message", (message: { open?: string; ok?: true; cancelled?: true; error?: string }) => {
+				if (typeof message.open === "string") {
+					let url: URL | undefined;
+					try {
+						url = new URL(message.open);
+					} catch {}
+					if (url && (url.protocol === "https:" || url.protocol === "http:") && !signal.aborted)
+						void Promise.resolve()
+							.then(() => this.openUrl(url.href))
+							.catch(() => {});
+					return;
+				}
+				reply = message;
+			});
+			worker.once("error", () => {});
+			// Settle after exit, so the callback port and credential writes are released before a retry.
+			worker.once("exit", () => {
+				clearTimeout(kill);
+				signal.removeEventListener("abort", abort);
+				this.signIns.delete(worker);
+				if (reply?.ok && !signal.aborted) resolve();
+				else if (signal.aborted) reject(signal.reason);
+				else if (reply?.cancelled) reject(new SourceSignInCancelled("Sign-in cancelled"));
+				else reject(new SourceSignInFailed(reply?.error ?? "Sign-in didn't finish. Try again."));
+			});
+		});
 	}
 	call(kind: TrackedKind, tool: string, args: Record<string, unknown>, signal: AbortSignal): Promise<TrackingJson> {
 		if (this.stopped) return Promise.reject(new Error("MCP client stopped"));
@@ -132,7 +194,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 	async close(): Promise<void> {
 		this.stopped = true;
 		await Promise.all(
-			[...this.running].map(
+			[...this.running, ...this.signIns].map(
 				(worker) =>
 					new Promise<void>((resolve) => {
 						worker.once("exit", () => resolve());

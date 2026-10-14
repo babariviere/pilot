@@ -10,6 +10,8 @@ final class PilotClient: ObservableObject {
     @Published private(set) var projects: [Project] = []
     @Published private(set) var schedules: [ScheduledItem] = []
     @Published private(set) var trackingSources: [TrackingSource] = []
+    /// Browser sign-ins per tracking server. A separate object, so only sign-in controls observe it.
+    let sourceSignIns = SourceSignInStore()
     /// Invalidation only, per project. Inbox views refresh a bounded page; project pages already get
     /// dashboard updates. Observers register with observeTrackedItems.
     private var trackedObservers: [UUID: (String) -> Void] = [:]
@@ -426,6 +428,41 @@ final class PilotClient: ObservableObject {
         trackingSources.first { $0.projectId == projectId && $0.kind == kind }
     }
 
+    /// pilotd runs pi's MCP OAuth login for the kind's server and opens the browser. Progress arrives with
+    /// the sources list; a source resyncs once sign-in is done. A failed request shows as a failed sign-in.
+    func startSourceSignIn(_ kind: TrackedKind, again: Bool = false) async {
+        do {
+            let state: SourceSignIn
+            if fixtureTracking != nil {
+                let now = Date().timeIntervalSince1970 * 1000
+                state = SourceSignIn(kind: kind, state: .waiting, again: again, startedAt: now,
+                                     expiresAt: now + 300_000)
+            } else {
+                state = try await missionRequest(["tracking", kind.rawValue, "sign-in"],
+                                                 body: SourceSignInRequest(again: again))
+            }
+            sourceSignIns.record(state)
+        } catch {
+            let now = Date().timeIntervalSince1970 * 1000
+            sourceSignIns.record(SourceSignIn(kind: kind, state: .failed, again: again, startedAt: now,
+                                              expiresAt: now, finishedAt: now,
+                                              error: "Couldn't start sign-in. \(error.localizedDescription)"))
+        }
+    }
+
+    func cancelSourceSignIn(_ kind: TrackedKind) async {
+        guard let current = sourceSignIns[kind], current.state == .waiting else { return }
+        let cancelled = SourceSignIn(kind: kind, state: .cancelled, again: current.again,
+                                     startedAt: current.startedAt, expiresAt: current.expiresAt,
+                                     finishedAt: Date().timeIntervalSince1970 * 1000)
+        if fixtureTracking != nil { return sourceSignIns.record(cancelled) }
+        do {
+            sourceSignIns.record(try await missionRequest(["tracking", kind.rawValue, "sign-in"], method: "DELETE"))
+        } catch {
+            // Already finished or pilotd restarted: either way nothing waits anymore.
+            sourceSignIns.record(cancelled)
+        }
+    }
     /// Linear teams for the project settings picker. Sign-in and errors come back as states.
     func linearTeams(query: String? = nil) async throws -> TrackingLookup<LinearTeamOption> {
         if let fixture = fixtureTracking { return fixture.teams }
@@ -458,6 +495,8 @@ final class PilotClient: ObservableObject {
     func loadTrackingFixture(_ fixture: TrackingFixture) {
         fixtureTracking = fixture
         trackingSources = fixture.sources
+        sourceSignIns.reset()
+        for source in fixture.sources { if let state = source.signIn { sourceSignIns.record(state) } }
     }
 
     func trackedItems(projectId: String, kind: TrackedKind? = nil, dismissed: Bool = false,
@@ -1172,6 +1211,11 @@ final class PilotClient: ObservableObject {
             onSchedulesChanged?(list)
         case let .sources(list):
             if trackingSources != list { trackingSources = list }
+            for kind in [TrackedKind.linear, .slack] {
+                if let state = list.first(where: { $0.kind == kind && $0.signIn != nil })?.signIn {
+                    sourceSignIns.record(state)
+                }
+            }
         case let .trackedChanged(projectId):
             for observer in trackedObservers.values { observer(projectId) }
         case let .projects(list):
@@ -1277,4 +1321,20 @@ final class RepositoryRequestLimiter {
         guard let index = waiting.firstIndex(where: { $0.id == id }) else { return }
         waiting.remove(at: index).continuation.resume(throwing: CancellationError())
     }
+}
+
+/// The latest browser sign-in per tracking server, from request replies and the sources list.
+@MainActor
+final class SourceSignInStore: ObservableObject {
+    @Published private(set) var states: [TrackedKind: SourceSignIn] = [:]
+
+    subscript(kind: TrackedKind) -> SourceSignIn? { states[kind] }
+
+    /// Newest wins, so a list sent before a request never reverts its reply.
+    func record(_ state: SourceSignIn) {
+        if let current = states[state.kind], current.startedAt > state.startedAt { return }
+        if states[state.kind] != state { states[state.kind] = state }
+    }
+
+    func reset() { if !states.isEmpty { states = [:] } }
 }

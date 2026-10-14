@@ -152,15 +152,43 @@ public struct TrackingSource: Codable, Identifiable, Equatable, Sendable {
     public let linear: LinearSourceSummary?
     /// Slack only, in configuration order.
     public let channels: [SlackChannelStatus]?
+    /// Latest browser sign-in to this kind's MCP server, shared by every project.
+    public let signIn: SourceSignIn?
     public init(id: String, projectId: String, kind: TrackedKind, label: String, configured: Bool,
                 status: DashboardSourceStatus, lastPolledAt: Double? = nil,
                 error: String? = nil, signInCommand: String? = nil,
-                nextPollAt: Double? = nil, linear: LinearSourceSummary? = nil, channels: [SlackChannelStatus]? = nil) {
+                nextPollAt: Double? = nil, linear: LinearSourceSummary? = nil, channels: [SlackChannelStatus]? = nil,
+                signIn: SourceSignIn? = nil) {
         self.id = id; self.projectId = projectId; self.kind = kind; self.label = label; self.configured = configured
         self.status = status; self.lastPolledAt = lastPolledAt; self.error = error
         self.signInCommand = signInCommand
-        self.nextPollAt = nextPollAt; self.linear = linear; self.channels = channels
+        self.nextPollAt = nextPollAt; self.linear = linear; self.channels = channels; self.signIn = signIn
     }
+}
+/// Browser sign-in to a tracking source's MCP server, run by pilotd through pi's OAuth flow.
+/// Tokens stay in pi's credential file; the app only sees the state.
+public struct SourceSignIn: Codable, Equatable, Sendable {
+    public enum State: String, LenientStringEnum {
+        case waiting, done, failed, cancelled
+        public static let fallback = State.failed
+    }
+    public let kind: TrackedKind
+    public let state: State
+    /// Signing in again while signed in (another account or new scope).
+    public let again: Bool?
+    public let startedAt: Double
+    public let expiresAt: Double
+    public let finishedAt: Double?
+    public let error: String?
+    public init(kind: TrackedKind, state: State, again: Bool? = nil, startedAt: Double, expiresAt: Double,
+                finishedAt: Double? = nil, error: String? = nil) {
+        self.kind = kind; self.state = state; self.again = again; self.startedAt = startedAt
+        self.expiresAt = expiresAt; self.finishedAt = finishedAt; self.error = error
+    }
+}
+public struct SourceSignInRequest: Codable, Equatable, Sendable {
+    public let again: Bool
+    public init(again: Bool) { self.again = again }
 }
 /// A Linear team for the project settings picker.
 public struct LinearTeamOption: Codable, Identifiable, Equatable, Hashable, Sendable {

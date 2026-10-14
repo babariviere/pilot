@@ -99,7 +99,16 @@ enum TrackedItemText {
         let tone: Tone
     }
 
-    static func sourceLine(_ source: TrackingSource, now: Date = Date()) -> SourceLine {
+    static let signInWaiting = "Waiting for sign-in in your browser…"
+
+    /// A sign-in that did not finish, while the source still needs one. Cancelled ones say nothing.
+    static func signInProblem(_ signIn: SourceSignIn?) -> String? {
+        guard let signIn, signIn.state == .failed else { return nil }
+        return signIn.error ?? "Sign-in didn't finish. Try again."
+    }
+
+    static func sourceLine(_ source: TrackingSource, signIn: SourceSignIn? = nil, now: Date = Date()) -> SourceLine {
+        if signIn?.state == .waiting { return SourceLine(text: signInWaiting, tone: .progress) }
         switch source.status {
         case .syncing:
             return SourceLine(text: "Syncing…", tone: .progress)
@@ -109,8 +118,7 @@ enum TrackedItemText {
         case .idle:
             return SourceLine(text: "Waiting for the first sync.", tone: .quiet)
         case .signInRequired:
-            let command = source.signInCommand ?? "pi mcp login \(source.kind.rawValue)"
-            return SourceLine(text: "Sign in required. Run \(command) in Terminal, then sync.", tone: .attention)
+            return SourceLine(text: "Sign in to \(source.label) to sync.", tone: .attention)
         case .error:
             var text = source.error ?? "Couldn't read \(source.label)."
             if let next = source.nextPollAt, next > now.timeIntervalSince1970 * 1000 {
@@ -603,17 +611,23 @@ struct TrackedItemIcon: View {
     }
 }
 
-/// Sync state of a source: synced, syncing, sign-in required (with the login command) or an error with retry.
+/// Sync state of a source: synced, syncing, sign-in required (with Sign in, then waiting with Cancel) or an
+/// error with retry.
 struct TrackedSourceStatusLine: View {
     let source: TrackingSource
     @ObservedObject var actions: TrackedItemActions
     var now = Date()
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
 
     var body: some View {
-        let syncing = source.status == .syncing || actions.syncing.contains(source.id)
+        let signIn = signIns[source.kind]
+        let waiting = signIn?.state == .waiting
+        let syncing = !waiting && (source.status == .syncing || actions.syncing.contains(source.id))
+        let needsSignIn = !waiting && source.status == .signInRequired
         let line = syncing ? TrackedItemText.SourceLine(text: "Syncing…", tone: .progress)
-            : TrackedItemText.sourceLine(source, now: now)
+            : TrackedItemText.sourceLine(source, signIn: signIn, now: now)
+        let problem = needsSignIn ? TrackedItemText.signInProblem(signIn) : actions.sourceErrors[source.id]
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             switch line.tone {
             case .progress: ProgressView().controlSize(.mini)
@@ -626,20 +640,14 @@ struct TrackedSourceStatusLine: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(line.text).foregroundStyle(line.tone == .attention ? Theme.foreground : Theme.faintForeground)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                if let error = actions.sourceErrors[source.id] {
+                if let error = problem {
                     Text(error).foregroundStyle(Theme.blocked).lineLimit(2)
                 }
             }
             Spacer(minLength: 8)
-            if source.status == .signInRequired {
-                Button("Copy Command") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(source.signInCommand ?? "pi mcp login \(source.kind.rawValue)",
-                                                   forType: .string)
-                }
-                .controlSize(.small)
-            }
-            if !syncing {
+            if waiting || needsSignIn {
+                SourceSignInButton(kind: source.kind, label: source.label)
+            } else if !syncing {
                 Button { actions.sync(source, client: model.client) } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(QuietIconButtonStyle())
                     .help("Sync now")
@@ -649,6 +657,36 @@ struct TrackedSourceStatusLine: View {
         .font(.pilot(.caption))
         .padding(.horizontal, 8)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// Sign in to a tracking source's MCP server. pilotd runs pi's OAuth login and opens the browser; while it
+/// waits, the button is Cancel. Tokens stay in pi's credential file. Shared by status lines and settings.
+struct SourceSignInButton: View {
+    let kind: TrackedKind
+    let label: String
+    /// Re-authenticate while signed in, for example with another account.
+    var again = false
+    @ObservedObject private var signIns = AppModel.shared.client.sourceSignIns
+    @State private var busy = false
+
+    var body: some View {
+        let waiting = signIns[kind]?.state == .waiting
+        Button(waiting ? "Cancel" : again ? "Sign in again" : "Sign in") {
+            busy = true
+            Task {
+                defer { busy = false }
+                let client = AppModel.shared.client
+                if waiting { await client.cancelSourceSignIn(kind) } else {
+                    await client.startSourceSignIn(kind, again: again)
+                }
+            }
+        }
+        .controlSize(.small)
+        .disabled(busy)
+        .help(waiting ? "Stop waiting for the browser" : "Opens your browser to sign in to \(label)")
+        .accessibilityLabel(waiting ? "Cancel \(label) sign-in" : again ? "Sign in to \(label) again"
+            : "Sign in to \(label)")
     }
 }
 

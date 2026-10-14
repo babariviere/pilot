@@ -30,6 +30,7 @@ import type {
 	SessionCommandsResponse,
 	SessionHistoryPage,
 	SessionSummary,
+	SourceSignInRequest,
 	SpawnRequest,
 	StartMissionTaskRequest,
 	StartMissionCoordinatorRequest,
@@ -276,6 +277,18 @@ export function createDaemonServer(
 					return json(res, 200, await tracking.linearTeams(query));
 				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "channels" && req.method === "GET")
 					return json(res, 200, await tracking.slackChannelOptions(query));
+				// Browser sign-in through pi's MCP OAuth flow. Progress arrives with the sources list.
+				if (parts.length === 4 && (parts[2] === "linear" || parts[2] === "slack") && parts[3] === "sign-in") {
+					if (req.method === "POST") {
+						const body = await readJson<SourceSignInRequest | null>(req);
+						if (body !== null && (typeof body !== "object" || Array.isArray(body)))
+							throw new HttpError(400, "Expected an object");
+						if (body?.again !== undefined && typeof body.again !== "boolean")
+							throw new HttpError(400, "again must be a boolean");
+						return json(res, 200, tracking.signIn(parts[2], body?.again === true));
+					}
+					if (req.method === "DELETE") return json(res, 200, tracking.cancelSignIn(parts[2]));
+				}
 			} else if (parts[1] === "sources") {
 				if (parts.length === 2 && req.method === "GET")
 					return json(res, 200, tracking.list(url.searchParams.get("projectId") ?? undefined));

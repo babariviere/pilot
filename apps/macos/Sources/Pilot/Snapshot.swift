@@ -1011,6 +1011,22 @@ enum Snapshot {
             .formStyle(.grouped),
                      size: CGSize(width: 560, height: 640), to: directory.appending(path: "tracking-settings-search.png"))
 
+        // Settings while signed out of Linear, and while Slack waits for the browser.
+        let slackWaiting = SourceSignIn(kind: .slack, state: .waiting, again: true, startedAt: now - 20_000,
+                                        expiresAt: now + 280_000)
+        model.client.loadTrackingFixture(TrackingFixture(
+            sources: [
+                TrackingSource(id: "p1:linear", projectId: "p1", kind: .linear, label: "Linear", configured: true,
+                               status: .signInRequired, error: "Sign in required", signInCommand: "pi mcp login linear"),
+                TrackingSource(id: "p1:slack", projectId: "p1", kind: .slack, label: "Slack", configured: true,
+                               status: .ok, lastPolledAt: now - minute, channels: slackSource.channels,
+                               signIn: slackWaiting),
+            ], items: [],
+            teams: TrackingLookup(status: .signInRequired, error: "Sign in required", signInCommand: "pi mcp login linear"),
+            myChannels: channels, searchChannels: channels))
+        await render(Form { TrackingSettingsSection(project: projects[0], editor: editor) }.formStyle(.grouped),
+                     size: CGSize(width: 560, height: 560), to: directory.appending(path: "tracking-settings-signin.png"))
+
         // The project page's Current cycle and Tracked sections: live rows, no cycle, sign-in and nothing attached.
         func row(_ item: TrackedItem) -> DashboardTrackedItem {
             DashboardTrackedItem(id: item.id, title: item.title, url: item.url, status: item.status,

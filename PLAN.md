@@ -665,8 +665,8 @@ Socket changes are coalesced and retain last data on error. Registered sources c
 Failures back off exponentially from 30 seconds to 30 minutes, respecting sanitized rate-limit
 retry-after timing (bounded to one day). Manual polls respect error cooldowns too.
 
-**Access.** Reuse pi's user `mcp.json` and locked `mcp-auth.json`, including OAuth refreshes and
-`pi mcp login <server>`; no new API tokens or browser sign-in from the daemon. SDK 1.0.4 exports
+**Access.** Reuse pi's user `mcp.json` and locked `mcp-auth.json`, including OAuth refreshes; no new API
+tokens. Browser sign-in runs pi's own MCP login (see Sign-in below). SDK 1.0.4 exports
 `createMcpExtension`, but not standalone config/auth/connection helpers, so the small daemon client
 isolates the pinned internal compatibility boundary in `source-mcp-worker.ts` (covered by a real
 local MCP/OAuth fixture). It connects only the selected server per call and closes it afterward.
@@ -677,6 +677,25 @@ Tracking connects only the dedicated servers named `linear` and `slack`, with fi
 dispatchers, fallback servers or auto-detection. Project settings accept only Slack channels and
 a Linear team. Legacy project MCP overrides are discarded on load while preserving those settings;
 checkpoint fingerprints change so old cursors are not reused.
+
+**Sign-in (implemented).** Sources needing sign-in show a **Sign in** button, and Tracking settings show
+an account row per source with **Sign in again** once connected (another account or new scope).
+`POST /api/tracking/:kind/sign-in` (`{ again? }`) makes pilotd run pi's own MCP OAuth login for the
+dedicated server, as `pi mcp login` does: `source-sign-in-worker.ts` uses the pinned SDK
+`signInMcpServer` with the same credential store, file lock and refresh locks, connects first to read the
+server's challenge, and verifies the connection afterward. The worker sends only the authorization URL to
+the daemon, which opens it with pi's browser launcher (http/https only). Tokens never leave
+`mcp-auth.json` or reach the app. One sign-in runs per server: repeated starts return the waiting one,
+which every project's `TrackingSource.signIn` reports (`waiting`, `done`, `failed` with a sanitized
+reason, `cancelled`) through the sources list and WebSocket. `DELETE` cancels; the waiting state ends
+after five minutes as failed, and a new attempt starts only after the previous worker exits (its loopback
+callback port is released). Sign in again hides the stored tokens from the flow, so it always asks the
+browser instead of refreshing, but keeps them on disk until new tokens arrive, so cancelling leaves the
+current sign-in working. Once done, that source's "sign-in required" backoff clears and it resyncs in every
+project (rate-limit and error backoff stay); the settings pickers reload. The app shows "Waiting for
+sign-in in your browser…" with Cancel. `signInCommand` (`pi mcp login <server>`) remains in the API as a
+terminal fallback. Tests use a fake login for the registry and HTTP states, and a local MCP/OAuth fixture
+(discovery, registration, PKCE code flow) for the pinned worker boundary.
 
 **Payload verification (2026-10-13, read-only).** Dedicated `linear/list_issues` returns JSON
 `issues`, `hasNextPage`, `cursor` and requested fields. Dedicated
@@ -739,7 +758,7 @@ Config stores channel IDs with display names (`slackChannelNames`) and the team 
 `linearTeamName`; names never change the poll scope. `TrackingSource.channels` reports per-channel
 status. Lookups are read-only, latest-wins per source and share the two MCP slots with polls.
 The project page’s “Tracked Items…” sheet lists each configured source with its own status (sync now,
-sign-in command, errors), my current cycle with progress, my issues grouped In progress / To do /
+Sign in, errors), my current cycle with progress, my issues grouped In progress / To do /
 Done, and Slack bug reports. Rows open the ticket; Start chat opens the new-chat composer in Build
 mode, prefilled with the ticket quoted as untrusted JSON and its branch name, with the project locked;
 Start mission opens the new-mission sheet prefilled (title “ID: title”, goal and coordinator message).
@@ -1362,6 +1381,7 @@ reports), producing a morning summary in the app and Slack.
 | `GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...`, `PATCH /api/tracked-items/:id` | Bounded tracked inbox (100 maximum, default non-dismissed); patch dismissal or bind a chat/mission (each link joins a bounded history, latest shown; null clears that kind). Links must belong to the same project. WS `tracked.changed` invalidates the list without broadcasting external bodies |
 | `GET /api/tracked-items/:id/prefill` | Transient Linear ticket prefill after fresh mine/team membership verification; bounded description and quoted external JSON prompt, gitBranchName, no storage or automatic start |
 | `GET /api/tracking/linear/teams?query=...`, `GET /api/tracking/slack/channels?query=...` | Read-only settings lookups through the dedicated servers (`list_teams`; `slack_search_channels` with a query, else `slack_list_user_channels`). Returns `{status: ok/sign_in_required/error, items, more?, error?, signInCommand?}`; latest wins per source |
+| `POST /api/tracking/:kind/sign-in` (`{again?}`), `DELETE /api/tracking/:kind/sign-in` | Start (or return the waiting) browser sign-in to the dedicated `linear`/`slack` server through pi's MCP OAuth login, or cancel it. Returns `SourceSignIn` (`waiting/done/failed/cancelled`); progress also arrives as `TrackingSource.signIn` in the sources list and WS. Tokens stay in `mcp-auth.json` |
 | `GET /api/projects/:id/dashboard`, WS `dashboard.subscribe` / `dashboard`, `ProjectDashboard` | Project page aggregate: Needs you (failed or unreviewed chats, mission questions, failed scheduled items), Working now, open PRs (Ready to merge first, with cached blocker labels), active missions with done/total, working and needs-you counts, Scheduled, Tracked (one group per source with status; Linear lists open issues by status and priority, done ones apart in `done`) and Recent finished chats. Each section carries at most 5 rows plus its full `total`, and `summary` feeds the headline sentence. Read from sessions, missions and the PR tracker already in memory; no polling. Scheduled and tracked data come from optional `DashboardProviders` (empty until the scheduler and tracking sources register) |
 | `GET /api/dashboard/counts`, WS `dashboard.counts` | Working and needs-you counts per project for the sidebar scope switcher, sent on connect and when they change |
 | `GET /api/projects/:id/memory`, `POST .../memory/note` (`{ text, sessionId }`) | Memory summary; append one explicit note from a chat belonging to the project, returns the durable entry |

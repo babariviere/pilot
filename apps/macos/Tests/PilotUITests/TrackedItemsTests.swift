@@ -107,7 +107,11 @@ private let slack = TrackedItem(
     }
     #expect(TrackedItemText.sourceLine(source(.ok), now: now) == .init(text: "Synced 3m ago", tone: .quiet))
     #expect(TrackedItemText.sourceLine(source(.signInRequired), now: now).text
-        == "Sign in required. Run pi mcp login linear in Terminal, then sync.")
+        == "Sign in to Linear to sync.")
+    let waiting = SourceSignIn(kind: .linear, state: .waiting, startedAt: ms, expiresAt: ms + 300_000)
+    #expect(TrackedItemText.sourceLine(source(.signInRequired), signIn: waiting, now: now)
+        == .init(text: "Waiting for sign-in in your browser…", tone: .progress))
+    #expect(!TrackedItemText.sourceLine(source(.signInRequired), now: now).text.contains("Terminal"))
     #expect(TrackedItemText.sourceLine(source(.error, error: "Rate limited."), now: now).tone == .attention)
     let retry = Date(timeIntervalSince1970: (ms + 600_000) / 1000).formatted(date: .omitted, time: .shortened)
     #expect(TrackedItemText.sourceLine(source(.error, error: "Couldn't read Linear.", next: ms + 600_000), now: now).text
@@ -124,6 +128,46 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.cycleLine(cycle, now: now).hasPrefix("Cycle 12 · "))
     #expect(TrackedItemText.cycleLine(cycle, now: now).hasSuffix("days left"))
     #expect(TrackedItemText.cycleProgress(cycle) == "4 of 8 done · 2 in progress")
+}
+
+@Test func sourceSignInStatesReadNaturally() {
+    func signIn(_ state: SourceSignIn.State, again: Bool? = nil, error: String? = nil) -> SourceSignIn {
+        SourceSignIn(kind: .slack, state: state, again: again, startedAt: ms, expiresAt: ms + 300_000,
+                     finishedAt: state == .waiting ? nil : ms + 1_000, error: error)
+    }
+    let purpose = "Sign in to find channels and read bug reports."
+    func account(_ value: SourceSignIn?, needs: Bool = false, connected: Bool = false) -> TrackingAccountText.State {
+        TrackingAccountText.state(value, needsSignIn: needs, connected: connected, purpose: purpose)
+    }
+    #expect(account(signIn(.waiting), needs: true)
+        == .init(text: "Waiting for sign-in in your browser…", attention: false, waiting: true))
+    #expect(account(nil, needs: true) == .init(text: purpose, attention: true, waiting: false))
+    #expect(account(signIn(.failed, error: "Sign-in timed out. Try again."), needs: true).text
+        == "Sign-in timed out. Try again.")
+    #expect(account(signIn(.failed), needs: true).text == "Sign-in didn't finish. Try again.")
+    // A cancelled attempt says nothing new; a failed one stops mattering once connected, unless it was a re-auth.
+    #expect(account(signIn(.cancelled), needs: true).text == purpose)
+    #expect(account(signIn(.failed), connected: true).text == "Signed in through pi")
+    #expect(account(signIn(.failed, again: true), connected: true).attention)
+    #expect(account(signIn(.done), connected: true) == .init(text: "Signed in through pi", attention: false, waiting: false))
+    #expect(account(nil).text == "Uses your pi sign-in")
+    #expect(TrackedItemText.signInProblem(signIn(.cancelled)) == nil)
+}
+
+@MainActor @Test func sourceSignInStoreKeepsTheNewestAttempt() {
+    let store = SourceSignInStore()
+    let first = SourceSignIn(kind: .linear, state: .waiting, startedAt: 10, expiresAt: 20)
+    let cancelled = SourceSignIn(kind: .linear, state: .cancelled, startedAt: 10, expiresAt: 20, finishedAt: 12)
+    let next = SourceSignIn(kind: .linear, state: .waiting, startedAt: 30, expiresAt: 40)
+    store.record(first)
+    store.record(cancelled)
+    #expect(store[.linear]?.state == .cancelled)
+    store.record(next)
+    store.record(cancelled)
+    #expect(store[.linear] == next, "an older list never reverts a newer attempt")
+    #expect(store[.slack] == nil)
+    store.reset()
+    #expect(store[.linear] == nil)
 }
 
 @Test func projectPageTrackingLinesReadNaturally() {
