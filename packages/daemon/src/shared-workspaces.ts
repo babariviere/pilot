@@ -17,6 +17,8 @@ import {
 } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { SessionPullRequest } from "@pilot/protocol";
+import { mergedPullRequestHead } from "./pr-auto-rebase.ts";
 import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
 import {
 	copyLocalConfigs,
@@ -466,10 +468,17 @@ export class SharedWorkspaceStore {
 		}
 	}
 
-	private async base(source: string, repository: string, baseBranch: string | undefined, runner: Runner) {
+	private async base(
+		source: string,
+		repository: string,
+		baseBranch: string | undefined,
+		runner: Runner,
+		requireFetch = false,
+	) {
 		const sourceUpstream = await this.optional("git", ["remote", "get-url", "origin"], source, runner);
 		const upstream = sourceUpstream ? await remoteUrl(source, sourceUpstream) : undefined;
-		if (baseBranch !== undefined && !upstream)
+		if (requireFetch && baseBranch === undefined) baseBranch = "main";
+		if (baseBranch !== undefined && !upstream && !requireFetch)
 			throw new Error("Cannot select baseBranch: project has no origin remote");
 		await runner("git", ["remote", "set-url", "origin", upstream ?? source], repository);
 		let branch: string | undefined;
@@ -735,8 +744,60 @@ export class SharedWorkspaceStore {
 		return { commitId, changeId };
 	}
 
-	/** Refresh only this working copy. Trial rebases stay unintegrated until safety and conflicts are checked. */
-	async refreshBase(cwd: string, shared: SharedWorkspace, source: string, previousBase: string, branch?: string) {
+	/** Fetch/index main once for a project pass, without snapshotting any agent working copy. */
+	async fetchMain(shared: SharedWorkspace, source: string): Promise<string> {
+		return this.queue(shared.repository, async () => {
+			await this.repositoryOwned(shared.repository);
+			const control = await this.control(shared.repository);
+			const base = await this.base(source, shared.repository, undefined, this.runner, true);
+			await this.importBase(shared.repository, control, base.commitId);
+			return base.commitId;
+		});
+	}
+
+	/** Same squash-merge fingerprint check used by the turn-boundary base refresh. */
+	private async integratedChanges(repository: string, previousBase: string, base: string, revisions: string[]) {
+		const upstream = await this.runner(
+			"git",
+			[
+				"log",
+				"--no-merges",
+				"--format=commit %H",
+				"--raw",
+				"--no-abbrev",
+				"--no-renames",
+				`${previousBase}..${base}`,
+			],
+			repository,
+		);
+		const fingerprints = new Set(
+			upstream
+				.split(/^commit [0-9a-f]{40}$/m)
+				.map(changeFingerprint)
+				.filter(Boolean),
+		);
+		const completed = new Set<string>();
+		for (const commit of revisions) {
+			const raw = await this.runner(
+				"git",
+				["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", commit],
+				repository,
+			);
+			const fingerprint = changeFingerprint(raw);
+			if (fingerprint && fingerprints.has(fingerprint)) completed.add(commit);
+		}
+		return completed;
+	}
+
+	/** Reuse the isolated refresh transaction for either a safe fresh change or a trial rebase. */
+	async refreshBase(
+		cwd: string,
+		shared: SharedWorkspace,
+		source: string,
+		previousBase: string,
+		branch?: string,
+		merged?: { target: string; mergedPrs: SessionPullRequest[]; allowed?: () => string | undefined },
+	) {
 		return this.queue(shared.repository, async () => {
 			await this.owned(shared, cwd);
 			await this.jjChild(cwd, shared);
@@ -746,7 +807,10 @@ export class SharedWorkspaceStore {
 			await this.unparkGit(cwd);
 			await this.child(cwd, shared);
 			const control = await this.control(shared.repository);
-			const base = await this.base(source, shared.repository, branch, this.runner);
+			if (merged && !fullCommit.test(merged.target)) throw new Error("Invalid fetched main head");
+			const base = merged
+				? { commitId: merged.target }
+				: await this.base(source, shared.repository, branch, this.runner);
 			await this.importBase(shared.repository, control, base.commitId);
 			// jj snapshots/update-stale in a colocated child also import Git refs. Hide only this child's
 			// gitdir file for the transaction, so stale agent refs cannot resurrect or move bookmarks.
@@ -754,6 +818,99 @@ export class SharedWorkspaceStore {
 			try {
 				await this.jj(["workspace", "update-stale"], cwd);
 				await this.jj(["status"], cwd); // snapshot this workspace's filesystem, never a sibling's
+				if (merged) {
+					const behind = (reason: string) => ({ base: previousBase, behind: reason, target: base.commitId });
+					const workingCopy = await this.ids(cwd);
+					await this.inspect(cwd, true, false, parkedMarker);
+					const log = (rev: string, template = "commit_id") =>
+						this.jj(
+							["--ignore-working-copy", "log", "--no-graph", "--limit", "257", "-r", rev, "-T", template],
+							cwd,
+						);
+					const heads: string[] = [base.commitId];
+					const range = `${previousBase}..@`;
+					if (await log(`(${range} ~ ::${base.commitId}) ~ empty()`)) {
+						if (merged.mergedPrs.length > 16) return behind("Too many merged PR heads to verify safely.");
+						for (const pr of merged.mergedPrs) {
+							const { head, merge } = await mergedPullRequestHead(pr, cwd, this.runner);
+							if (!(await log(`${merge} & ::${base.commitId}`)))
+								return behind("A completed PR is not merged into current main.");
+							if (
+								(await this.optional("git", ["cat-file", "-e", `${head}^{commit}`], shared.repository)) ===
+								undefined
+							)
+								return behind("A completed PR head is not available locally to verify safely.");
+							await this.importBase(shared.repository, control, head);
+							heads.push(head);
+						}
+					}
+					const unpublished = `(${range} ~ ::(${heads.join(" | ")})) ~ empty()`;
+					const revisions = (await log(unpublished, 'commit_id ++ "\\n"')).split("\n").filter(Boolean);
+					if (revisions.length > 256) return behind("The change stack exceeds the automatic update safety limit.");
+					if (revisions.length) {
+						const integrated = await this.integratedChanges(
+							shared.repository,
+							previousBase,
+							base.commitId,
+							revisions,
+						);
+						if (revisions.some((commit) => !integrated.has(commit)))
+							return behind("The working copy has unpublished changes not already merged into main.");
+					}
+					const old = `(${range} ~ ::${base.commitId})`;
+					const machine: Runner = (file, args, ...rest) =>
+						this.runner(file, file === "jj" ? ["--no-pager", "--color=never", ...args] : args, ...rest);
+					const ownBookmarks = await workspaceBookmarks(cwd, shared.name, machine);
+					if (ownBookmarks.length > 256) return behind("Too many chat bookmarks to verify safely.");
+					const ownRefs = ownBookmarks.map((name) => `bookmarks(exact:${JSON.stringify(name)})`);
+					const candidates = `(descendants(${old})${ownRefs.length ? ` | ${ownRefs.join(" | ")}` : ""}) ~ ::${base.commitId}`;
+					const bookmarks = (
+						await this.jj(
+							[
+								"--ignore-working-copy",
+								"bookmark",
+								"list",
+								"--all-remotes",
+								"--revision",
+								candidates,
+								"-T",
+								'name ++ "\\t" ++ if(remote, remote, "local") ++ "\\t" ++ if(normal_target, normal_target.commit_id(), "conflict") ++ "\\n"',
+							],
+							cwd,
+						)
+					)
+						.split("\n")
+						.filter(Boolean)
+						.map((row) => row.split("\t"));
+					if (bookmarks.length > 256) return behind("Too many dependent bookmarks to verify safely.");
+					const completed = new Set(merged.mergedPrs.map((pr) => pr.branch).filter(Boolean));
+					const pushed = new Map(
+						bookmarks.filter(([, remote]) => remote === "origin").map(([name, , target]) => [name, target]),
+					);
+					if (
+						bookmarks.some(
+							([name, remote, target]) =>
+								remote === "local" &&
+								!(completed.has(name) && heads.includes(target!)) &&
+								(target === "conflict" || pushed.get(name) !== target),
+						)
+					)
+						return behind("An unpushed bookmark depends on this work.");
+					await this.jj(["status"], cwd);
+					if ((await this.ids(cwd)).commitId !== workingCopy.commitId)
+						return behind("The working copy changed during the update.");
+					const blocked = merged.allowed?.();
+					if (blocked) return behind(blocked);
+					// New, not rebase: completed bookmarks and sibling workspaces stay untouched.
+					await this.jj(["--ignore-working-copy", "new", base.commitId], cwd);
+					await this.jj(["workspace", "update-stale"], cwd);
+					await this.runner(
+						"git",
+						["update-ref", `refs/pilot/base/${shared.name}`, base.commitId],
+						shared.repository,
+					);
+					return { base: base.commitId };
+				}
 				if (base.commitId === previousBase) return { base: previousBase };
 				const binding = JSON.parse(await readFile(this.bindingPath(shared), "utf8")) as Binding;
 				const machineRunner: Runner = (file, args, ...rest) =>
@@ -798,35 +955,14 @@ export class SharedWorkspaceStore {
 				if (revisions.length > 1 || !emptyWorkingCopy) {
 					// Squash/rebase merges change commit IDs. Do not replay old completed work onto newer
 					// implementations: recognize only identical blob transitions already in upstream history.
-					const upstream = await this.runner(
-						"git",
-						[
-							"log",
-							"--no-merges",
-							"--format=commit %H",
-							"--raw",
-							"--no-abbrev",
-							"--no-renames",
-							`${previousBase}..${base.commitId}`,
-						],
-						shared.repository,
-					);
-					const integrated = new Set(
-						upstream
-							.split(/^commit [0-9a-f]{40}$/m)
-							.map(changeFingerprint)
-							.filter(Boolean),
-					);
-					const completed: string[] = [];
-					for (const [, commit] of revisions) {
-						const raw = await this.runner(
-							"git",
-							["diff-tree", "--no-commit-id", "--raw", "--no-renames", "-r", commit!],
+					const completed = [
+						...(await this.integratedChanges(
 							shared.repository,
-						);
-						const fingerprint = changeFingerprint(raw);
-						if (fingerprint && integrated.has(fingerprint)) completed.push(commit!);
-					}
+							previousBase,
+							base.commitId,
+							revisions.map(([, commit]) => commit!),
+						)),
+					];
 					if (completed.length) {
 						selected = `(${selected}) ~ (${completed.join(" | ")})`;
 						revisions = revisions.filter(([, commit]) => !completed.includes(commit!));
@@ -913,11 +1049,19 @@ export class SharedWorkspaceStore {
 	}
 
 	/** Compare the actual filesystem with jj's tree, including omitted large/auto-track-disabled files. */
-	private async inspect(cwd: string, jj = true, recoverIgnored = true): Promise<Record<string, string>> {
+	private async inspect(
+		cwd: string,
+		jj = true,
+		recoverIgnored = true,
+		gitMarker?: string,
+	): Promise<Record<string, string>> {
 		if (jj && (await this.jj(["--ignore-working-copy", "sparse", "list"], cwd)) !== ".")
 			throw new Error("Automatic cleanup requires a full (non-sparse) jj workspace");
 		// Child snapshots avoid importing Git refs, so newly added gitlinks may not be in jj's tree yet.
-		const gitFields = (await this.runner("git", ["ls-files", "--stage", "-z"], cwd))
+		const gitArgs = gitMarker
+			? [`--git-dir=${(await readFile(gitMarker, "utf8")).trim().replace(/^gitdir: /, "")}`]
+			: [];
+		const gitFields = (await this.runner("git", [...gitArgs, "ls-files", "--stage", "-z"], cwd))
 			.split("\0")
 			.filter(Boolean)
 			.flatMap((line) => [
@@ -952,7 +1096,7 @@ export class SharedWorkspaceStore {
 			(
 				await this.runner(
 					"git",
-					["ls-files", "--others", "--ignored", "--directory", "--exclude-standard", "-z"],
+					[...gitArgs, "ls-files", "--others", "--ignored", "--directory", "--exclude-standard", "-z"],
 					cwd,
 				)
 			)

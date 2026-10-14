@@ -17,6 +17,26 @@ export interface AutoRebaseHost {
 
 export type AutoRebaseResult = { rebased: true } | { unchanged: true } | { skipped: string; divergedFrom?: string };
 const oid = /^[0-9a-f]{40}$/;
+/** The immutable pre-merge head, including squash merges and remotely deleted branches. */
+export async function mergedPullRequestHead(pr: SessionPullRequest, cwd: string, runner: Runner = run) {
+	const view = JSON.parse(
+		await runner(
+			"gh",
+			["pr", "view", pr.url, "--json", "state,headRefOid,isCrossRepository,baseRefName,mergeCommit"],
+			cwd,
+			30_000,
+		),
+	);
+	if (
+		view.state !== "MERGED" ||
+		view.isCrossRepository !== false ||
+		view.baseRefName !== "main" ||
+		!oid.test(view.headRefOid) ||
+		!oid.test(view.mergeCommit?.oid)
+	)
+		throw new Error("Merged PR head could not be verified");
+	return { head: view.headRefOid as string, merge: view.mergeCommit.oid as string };
+}
 const query = `query($owner: String!, $name: String!, $number: Int!) {
 	repository(owner: $owner, name: $name) {
 		defaultBranchRef { name }

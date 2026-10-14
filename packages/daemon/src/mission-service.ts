@@ -163,9 +163,8 @@ export class MissionService {
 				if (id) store.addComment(id, { text }, { sessionId });
 			},
 			pullRequestUpdated: (pr) => {
-				const merged = store.newlyMergedCoordinators(pr);
 				const owner = sessions.pullRequestOwner(pr.url);
-				const members = [...new Set([...store.pullRequestMembers(pr.url), ...(owner ? [owner] : [])])].flatMap(
+				const members = [...new Set([...(owner ? [owner] : []), ...store.pullRequestMembers(pr.url)])].flatMap(
 					(id) => {
 						const chat = sessions.get(id);
 						return chat ? [chat] : [];
@@ -174,7 +173,8 @@ export class MissionService {
 				store.updatePullRequest(pr, members, (id) =>
 					store.members(id).flatMap((memberId) => sessions.ownedPullRequests(memberId)),
 				);
-				for (const sessionId of merged) sessions.coordinatorBaseMerged(sessionId);
+				const projectId = owner ? sessions.get(owner)?.projectId : undefined;
+				if (projectId) sessions.requestMainRefresh(projectId);
 			},
 		});
 		store.onMembershipChange((sessionId) => {
@@ -185,6 +185,7 @@ export class MissionService {
 		store.onChange((missionId) => {
 			if (!store.get(missionId)) return;
 			sessions.refreshMissionPullRequests();
+			sessions.requestMainRefresh(store.require(missionId).projectId);
 			for (const sessionId of store.members(missionId)) {
 				const context = this.context(sessionId);
 				const key = JSON.stringify(context ?? null);
