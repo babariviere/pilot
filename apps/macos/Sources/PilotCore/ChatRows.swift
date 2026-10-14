@@ -45,13 +45,15 @@ public enum ChatRow: Identifiable, Equatable, Sendable {
     case thinking(id: String, text: String, streaming: Bool)
     case tools(id: String, items: [ToolItem])
     case artifact(id: String, reference: ArtifactReference)
+    /// A question the agent asked with ask_user. The reply follows as a user message.
+    case question(id: String, question: AgentQuestion)
     case error(id: String, text: String)
     case notice(id: String, text: String)
 
     public var id: String {
         switch self {
         case let .user(id, _, _), let .text(id, _, _), let .thinking(id, _, _), let .tools(id, _), let .error(id, _),
-             let .notice(id, _), let .artifact(id, _), let .automatic(id, _, _, _):
+             let .notice(id, _), let .artifact(id, _), let .automatic(id, _, _, _), let .question(id, _):
             id
         }
     }
@@ -108,6 +110,8 @@ extension Transcript {
                 case let .thinking(text) where !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                     append(.thinking(id: blockId, text: text, streaming: streaming && isLast))
                 case let .toolCall(callId, name, arguments):
+                    // A recorded question renders as its own row; keep the card only for a failed call.
+                    if name == AgentQuestion.toolName, let result = context.results[callId], !result.isError { break }
                     let item = tool(callId, name: name, arguments: arguments, context: context)
                     append(.tools(id: blockId, items: [item]))
                 default:
@@ -127,6 +131,8 @@ extension Transcript {
                 if let text = entry.activity { append(.notice(id: "\(entry.id)", text: text)) }
             case "pilot.artifact":
                 if let artifact = entry.artifact { append(.artifact(id: "\(entry.id)-artifact", reference: artifact)) }
+            case AgentQuestion.entryKind:
+                if let question = entry.question { append(.question(id: "\(entry.id)-question", question: question)) }
             case "pi.compaction": append(.notice(id: "\(entry.id)", text: "Context compacted"))
             case "pi.reset": append(.notice(id: "\(entry.id)", text: "Context reset"))
             default:

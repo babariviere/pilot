@@ -20,6 +20,8 @@ use a stand-in window header. See [screenshot notes](docs/screenshots/README.md)
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
+- **Answer questions quickly.** When an agent needs a decision, its question replaces the message box with
+  suggested answers. Pick one with the number keys and Return, or reply in your own words.
 - **Explore before implementing.** Ask chats can read code and produce artifacts without repository write
   access. Move the discussion into a separate Build chat when you're ready to make changes.
 - **Review work in context.** Build chats include a diff inspector, a [libghostty](https://github.com/Lakr233/libghostty-spm)

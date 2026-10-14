@@ -410,7 +410,7 @@ text(await tools.artifact({action:'list'}));
 			.getAllTools()
 			.map((tool) => tool.name)
 			.sort(),
-		["artifact", "codemode", "find", "grep", "ls", "read"],
+		["artifact", "ask_user", "codemode", "find", "grep", "ls", "read"],
 	);
 	assert.match(output, /registered.*artifact.*find.*grep.*ls.*read/);
 	await native.session.reload();

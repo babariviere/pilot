@@ -28,6 +28,7 @@ export const ASK_TOOL_NAMES = [
 	"codemode",
 	"artifact",
 	"mission",
+	"ask_user",
 	...ASK_EXTENSION_TOOL_NAMES,
 ];
 const readOnlyAnnotations = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };

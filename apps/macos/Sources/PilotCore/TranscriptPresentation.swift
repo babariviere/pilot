@@ -44,6 +44,8 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public var compacting = false
     /// The `before` cursor of the next older page hidden by compaction, or nil when there is none.
     public var earlierCursor: Int?
+    /// The agent's unanswered question, shown in place of the composer while idle.
+    public var pendingQuestion: AgentQuestion?
     public var error: String? {
         didSet { updateMetadataByteCount() }
     }
@@ -71,14 +73,16 @@ public struct TranscriptPresentation: Equatable, Sendable {
             entries: transcript.entries, streaming: nil, error: nil, context: transcript.rowContext)
         let count = Self.historyPrefixCount(committed)
         self.init(transcript: transcript, historyRows: Array(rows.prefix(count)), liveRows: Array(rows.dropFirst(count)),
-            rowByteCount: Self.byteCount(of: rows), historyRevision: UUID())
+            rowByteCount: Self.byteCount(of: rows), historyRevision: UUID(), pendingQuestion: transcript.pendingQuestion)
     }
 
-    init(transcript: Transcript, historyRows: [ChatRow], liveRows: [ChatRow], rowByteCount: Int, historyRevision: UUID) {
+    init(transcript: Transcript, historyRows: [ChatRow], liveRows: [ChatRow], rowByteCount: Int, historyRevision: UUID,
+         pendingQuestion: AgentQuestion?) {
         storedHistoryRows = historyRows
         storedLiveRows = liveRows
         self.rowByteCount = rowByteCount
         self.historyRevision = historyRevision
+        self.pendingQuestion = pendingQuestion
         working = transcript.working
         streaming = transcript.streaming != nil
         queuedMessages = transcript.queuedMessages
@@ -96,6 +100,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
             && lhs.queuedMessages == rhs.queuedMessages && lhs.todos == rhs.todos
             && lhs.retry == rhs.retry && lhs.compacting == rhs.compacting && lhs.error == rhs.error
             && lhs.earlierCursor == rhs.earlierCursor && lhs.revision == rhs.revision
+            && lhs.pendingQuestion == rhs.pendingQuestion
     }
 
     func hasSameRows(as other: Self) -> Bool {
@@ -136,6 +141,9 @@ public struct TranscriptPresentation: Equatable, Sendable {
             case let .tools(_, items):
                 return base + items.reduce(0) { $0 + byteCount(of: $1) }
             case let .artifact(_, reference): return base + artifactByteCount(reference)
+            case let .question(_, question):
+                return base + question.question.utf8.count + (question.context?.utf8.count ?? 0)
+                    + question.options.reduce(0) { $0 + 64 + $1.label.utf8.count + ($1.detail?.utf8.count ?? 0) }
             }
         }
     }
@@ -199,6 +207,8 @@ public actor TranscriptProcessor {
     }
     private var toolLocations: [String: [ToolLocation]] = [:]
     private var context: Transcript.RowContext?
+    /// Recomputed only when committed entries change, never per streamed delta.
+    private var pendingQuestion: AgentQuestion?
     // Operation counts support deterministic scaling regressions, not wall-clock limits.
     private(set) var rowBuildCount = 0
     private(set) var committedRowBuildCount = 0
@@ -233,6 +243,7 @@ public actor TranscriptProcessor {
                 historyRevision = UUID()
                 indexTools()
                 context = nextContext
+                pendingQuestion = transcript.pendingQuestion
                 builtCommittedRevision = transcript.committedRowRevision
                 committedRowBuildCount += 1
             } else {
@@ -262,7 +273,7 @@ public actor TranscriptProcessor {
             rowBuildCount += 1
         }
         var result = TranscriptPresentation(transcript: transcript, historyRows: cachedHistoryRows, liveRows: cachedLiveRows,
-            rowByteCount: cachedRowsByteCount, historyRevision: historyRevision)
+            rowByteCount: cachedRowsByteCount, historyRevision: historyRevision, pendingQuestion: pendingQuestion)
         if rebuiltHistory, let last {
             // Replacement snapshots/entry changes may still have identical visible rows.
             historyRowComparisonCount += cachedHistoryRows.count + cachedLiveRows.count
@@ -274,7 +285,8 @@ public actor TranscriptProcessor {
            result.working == last.working, result.streaming == last.streaming,
            result.queuedMessages == last.queuedMessages, result.todos == last.todos,
            result.retry == last.retry, result.compacting == last.compacting, result.error == last.error,
-           result.earlierCursor == last.earlierCursor, !rowsDiffer { return last }
+           result.earlierCursor == last.earlierCursor, result.pendingQuestion == last.pendingQuestion,
+           !rowsDiffer { return last }
         revision += 1
         result.revision = revision
         last = result

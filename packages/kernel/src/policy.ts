@@ -163,7 +163,7 @@ export function pilotPrompt(context: PilotContext, artifactsAvailable = false): 
 	];
 	if (!context.ask)
 		lines.push(
-			"- Take each request as far as it asks. For implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked.",
+			"- Take each request as far as it asks. For implementation, finish with a working change: implement it, run the checks that cover it, fix failures it causes, and deliver it as described below when delivery applies, without pausing for review after a first pass. Ask only when a decision would materially change scope, user-visible behavior or risk, or when you are blocked, and then use ask_user.",
 		);
 	if (artifactsAvailable) {
 		lines.push(

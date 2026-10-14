@@ -70,6 +70,8 @@ public struct Entry: Identifiable, Equatable, Sendable {
     public let messages: [ChatMessage]
     public let artifact: ArtifactReference?
     public let activity: String?
+    /// A question from ask_user, on `pilot.question` entries.
+    public let question: AgentQuestion?
     /// Set on user entries that were automatic input. Unknown future origins read as extension input.
     public let origin: InputOrigin?
 
@@ -81,6 +83,7 @@ public struct Entry: Identifiable, Equatable, Sendable {
         messages = (json["model"]?.array ?? []).map(ChatMessage.init(json:))
         artifact = kind == "pilot.artifact" ? ArtifactReference.fromToolResult(.object(["details": json["data"] ?? .null])) : nil
         activity = kind == "pilot.activity" ? json["data"]?["text"]?.string : nil
+        question = kind == AgentQuestion.entryKind ? AgentQuestion(entryID: id, data: json["data"]) : nil
         origin = json["origin"]?.string.map { InputOrigin(rawValue: $0) ?? .extension }
     }
 }

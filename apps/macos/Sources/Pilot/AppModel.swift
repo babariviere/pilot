@@ -373,6 +373,7 @@ final class AppModel: ObservableObject {
             switch row {
             case let .user(_, text, _): return "User:\n\(text)"
             case let .text(_, text, _): return "Assistant:\n\(text)"
+            case let .question(_, question): return "Assistant asked:\n\(question.question)"
             default: return nil
             }
         }.joined(separator: "\n\n")
