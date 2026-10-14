@@ -17,18 +17,28 @@ export function createMemoryTools(call: MemoryCall, sessionId: string): ToolDefi
 			name: "memory_note",
 			label: "Note project memory",
 			description:
-				"Save one lasting project fact, decision, user preference/correction or hard-won outcome. Never store secrets, task status/instructions, speculation or what memory already says.",
+				"Save one lasting project fact, decision, user preference/correction or hard-won outcome. Never store secrets, task status/instructions, speculation or what memory already says. To correct an outdated note, pass its index in replaces.",
 			parameters: Type.Object({
 				text: Type.String({
 					minLength: 1,
 					maxLength: 280,
 					description: "One concise line, at most 280 UTF-8 bytes.",
 				}),
+				replaces: Type.Optional(
+					Type.Array(Type.Integer({ minimum: 0 }), {
+						maxItems: 16,
+						description: "Indices (#n) of notes this one corrects.",
+					}),
+				),
 			}),
 			executionMode: "sequential",
 			annotations: { openWorldHint: false },
 			async execute(_id, params) {
-				const data = await call("note", { text: params.text, sessionId });
+				const data = await call("note", {
+					text: params.text,
+					sessionId,
+					...(params.replaces?.length ? { replaces: params.replaces } : {}),
+				});
 				return { content: [{ type: "text", text: JSON.stringify(data) }], details: data };
 			},
 		}),

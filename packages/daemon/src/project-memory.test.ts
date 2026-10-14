@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { cover } from "./memory-cover.ts";
+import { Conflict } from "./errors.ts";
 import { MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
 import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 
@@ -342,4 +343,135 @@ test("restart resumes pending blocks, while unload cancels a non-cooperative mod
 	const owner = new ProjectMemoryService(home);
 	t.after(() => owner.stop());
 	assert.equal((await owner.load("p")).count, 4);
+});
+
+test("corrections hide replaced notes from wake, keep them in recall and rebuild covering summaries", async (t) => {
+	const { home } = await fixture(t);
+	const dir = join(home, "direct");
+	let disk = new MemoryDisk(dir, "device");
+	try {
+		for (let i = 0; i < 32; i++) disk.note(`fact ${i}`, "chat");
+		build(disk);
+		assert.equal(disk.pending(), 0);
+		const log = await readFile(join(dir, "log"));
+		const old = disk.entry(3);
+		const fix = disk.note("fact 3, corrected", "chat", [3]);
+		// Appended as a new entry with a stable reference; the log prefix is untouched.
+		assert.deepEqual(fix.replaces, [old.id]);
+		assert.deepEqual((await readFile(join(dir, "log"))).subarray(0, log.length), log);
+		assert.equal(disk.entry(3).replacedBy, 32);
+		assert.equal(disk.entry(3).id, old.id);
+		// The summaries over #3 (2, 4, 8, 16 and 32 wide) are stale; others are kept.
+		assert.equal(disk.pending(), 5);
+		const lines = disk.wake(64).text.split("\n");
+		assert.ok(!lines.some((l) => /^#3 /.test(l)));
+		assert.ok(lines.some((l) => /^#32 .*fact 3, corrected$/.test(l)));
+		assert.equal(disk.wake(64).omittedBefore, 0);
+		const prompts: string[] = [];
+		for (;;) {
+			const next = disk.next();
+			if (!next) break;
+			prompts.push(next.prompt);
+			assert.ok(disk.put(next.lo, next.hi, next.epoch, `rebuilt ${next.lo}-${next.hi}`));
+		}
+		assert.deepEqual(
+			prompts.map((p) => p.match(/memories (#\d+-\d+)/)![1]),
+			["#2-3", "#0-3", "#0-7", "#0-15", "#0-31"],
+		);
+		assert.ok(!prompts[0]!.includes("fact 3"));
+		assert.match(prompts[0]!, /fact 2/);
+		assert.equal(disk.pending(), 0);
+		assert.equal(disk.zoom(0, 3)[1]!.text, "rebuilt 2-3");
+		assert.equal(disk.zoom(4, 7)[0]!.text, "summary 4-5");
+		disk.close();
+		disk = new MemoryDisk(dir, "device");
+		assert.equal(disk.pending(), 0, "rebuilt summaries stay fresh after reopening");
+		assert.equal(disk.entry(3).replacedBy, 32);
+		// Replacing both notes of a pair empties its summary without a model call.
+		disk.note("fact 0 and 1, merged", "chat", [0, 1]);
+		const rebuilt: string[] = [];
+		for (let next = disk.next(); next; next = disk.next()) {
+			rebuilt.push(next.prompt);
+			assert.ok(disk.put(next.lo, next.hi, next.epoch, `again ${next.lo}-${next.hi}`));
+		}
+		assert.deepEqual(
+			rebuilt.map((p) => p.match(/memories (#\d+-\d+)/)![1]),
+			["#32-33", "#0-3", "#0-7", "#0-15", "#0-31"],
+		);
+		assert.equal(disk.zoom(0, 3)[0]!.replaced, true);
+		for (const prompt of rebuilt) assert.doesNotMatch(prompt, /^#[013] /m);
+		assert.ok(
+			!disk
+				.wake(64)
+				.text.split("\n")
+				.some((l) => /^#[013] /.test(l)),
+		);
+	} finally {
+		disk.close();
+	}
+});
+
+test("summaries over a note corrected while closed, or torn while rewriting, are rebuilt after reopening", async (t) => {
+	const { home } = await fixture(t);
+	const dir = join(home, "direct");
+	let disk = new MemoryDisk(dir, "device");
+	for (let i = 0; i < 4; i++) disk.note(`fact ${i}`, "chat");
+	build(disk);
+	disk.note("fact 1 was wrong", "chat", [1]);
+	disk.close();
+	disk = new MemoryDisk(dir, "device");
+	assert.equal(disk.pending(), 2);
+	disk.close();
+	// A crash mid-rewrite leaves a corrupt record in place, which reopening treats as stale.
+	const tree = join(dir, "tree", "2");
+	const data = await readFile(tree);
+	data.fill(88, 10, 40);
+	await writeFile(tree, data);
+	disk = new MemoryDisk(dir, "device");
+	try {
+		assert.equal(disk.pending(), 2);
+		build(disk);
+		assert.equal(disk.pending(), 0);
+		assert.doesNotMatch(disk.wake(8).text, /^#1 /m);
+	} finally {
+		disk.close();
+	}
+});
+
+test("notes reject normalized duplicates of live notes and invalid corrections", async (t) => {
+	const { service } = await fixture(t);
+	const first = await service.note("p", "Use  pnpm for installs", "chat");
+	await assert.rejects(service.note("p", "use pnpm\tFOR installs ", "chat"), (error: Error) => {
+		assert.ok(error instanceof Conflict);
+		assert.equal(error.message, "Already in memory as #0");
+		return true;
+	});
+	await assert.rejects(service.note("p", "other", "chat", [5]), /existing note indices/);
+	await assert.rejects(service.note("p", "other", "chat", [0, 0]), /existing note indices/);
+	assert.equal((await service.wake("p")).count, 1);
+	const fix = await service.note("p", "Use pnpm for installs and scripts", "chat", [first.index]);
+	assert.equal(fix.index, 1);
+	// A replaced note no longer blocks its text, so a fact can be restated after a wrong correction.
+	const back = await service.note("p", "use pnpm for installs", "chat", [fix.index]);
+	assert.equal(back.index, 2);
+	assert.deepEqual(back.replaces, [fix.id]);
+	const wake = await service.wake("p");
+	assert.deepEqual(
+		wake.nodes.map((n) => n.lo),
+		[2],
+	);
+	const recall = await service.recall("p", "pnpm");
+	assert.deepEqual(
+		recall.entries.map((e) => [e.index, e.replacedBy]),
+		[
+			[2, undefined],
+			[1, 2],
+			[0, 1],
+		],
+	);
+	assert.deepEqual(
+		recall.entries.map((e) => e.id),
+		[back.id, fix.id, first.id],
+	);
+	assert.equal(service.summary("p").recent[1]?.replacedBy, 2);
 });

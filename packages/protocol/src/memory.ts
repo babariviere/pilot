@@ -10,12 +10,18 @@ export interface MemoryEntry {
 	at: number;
 	sessionId: string;
 	text: string;
+	/** Stable ids of earlier notes this one corrects. */
+	replaces?: string[];
+	/** Derived on read: index of the latest note that corrects this one. */
+	replacedBy?: number;
 }
 export interface MemoryNode extends MemoryRange {
 	text?: string;
 	entry?: MemoryEntry;
 	/** The summary is not built yet. Zoom can still open its children. */
 	pending?: boolean;
+	/** A replaced note, or a summary whose notes were all replaced. Hidden from wake. */
+	replaced?: boolean;
 }
 export interface MemoryView {
 	count: number;
@@ -46,4 +52,6 @@ export interface ProjectMemorySummary {
 export interface MemoryNoteRequest {
 	text: string;
 	sessionId: string;
+	/** Indices of notes this one corrects. */
+	replaces?: number[];
 }

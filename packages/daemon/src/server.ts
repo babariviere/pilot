@@ -362,7 +362,7 @@ export function createDaemonServer(
 				const session = typeof body?.sessionId === "string" ? sessions.get(body.sessionId) : undefined;
 				if (!session || session.projectId !== id)
 					throw new HttpError(400, "Origin chat must belong to this project");
-				return json(res, 201, await memory.note(id, body.text, body.sessionId));
+				return json(res, 201, await memory.note(id, body.text, body.sessionId, body.replaces));
 			}
 			if (action === "wake" && req.method === "GET") return json(res, 200, await memory.wake(id, lines));
 			if (action === "recall" && req.method === "GET")

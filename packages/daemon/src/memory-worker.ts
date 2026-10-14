@@ -2,7 +2,7 @@ import { closeSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { MemoryEntry, MemoryRecall } from "@pilot/protocol";
-import { decode, deviceIdentity, MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
+import { DuplicateNote, decode, deviceIdentity, MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
 
 if (workerData.recall) {
 	// Dedicated, terminable worker: even a pathological regex cannot stall writes, wake or pilotd.
@@ -11,6 +11,8 @@ if (workerData.recall) {
 		const pattern = new RegExp(regex, "i");
 		const fd = openSync(join(dir, "log"), "r");
 		const entries: MemoryEntry[] = [];
+		// Latest correction per stable id; replaced notes stay searchable with a marker.
+		const replacedBy = new Map<string, number>();
 		let matches = 0,
 			bytes = 0;
 		try {
@@ -21,6 +23,7 @@ if (workerData.recall) {
 				if (readSync(fd, buf, 0, size, index * RECORD_BYTES) !== size) throw new Error("Incomplete memory scan");
 				for (let i = 0; i < n; i++, index++) {
 					const entry = decode<MemoryEntry>(buf.subarray(i * RECORD_BYTES, (i + 1) * RECORD_BYTES));
+					for (const id of entry.replaces ?? []) replacedBy.set(id, entry.index);
 					if (!pattern.test(`#${entry.index} ${new Date(entry.at).toISOString().slice(0, 10)} ${entry.text}`))
 						continue;
 					matches++;
@@ -37,7 +40,10 @@ if (workerData.recall) {
 			value: {
 				count,
 				matches,
-				entries: entries.reverse(),
+				entries: entries.reverse().map((entry) => {
+					const by = replacedBy.get(entry.id);
+					return by === undefined ? entry : { ...entry, replacedBy: by };
+				}),
 				truncated: matches > entries.length,
 			} satisfies MemoryRecall,
 		});
@@ -68,7 +74,7 @@ if (workerData.recall) {
 					value = store.summary();
 					break;
 				case "note":
-					value = store.note(args.text, args.sessionId);
+					value = store.note(args.text, args.sessionId, args.replaces ?? []);
 					break;
 				case "wake":
 					value = store.wake(args.lines);
@@ -92,10 +98,14 @@ if (workerData.recall) {
 			parentPort!.postMessage({
 				id,
 				value,
-				...(["load", "note", "forget", "put"].includes(method) ? { summary: store.summary() } : {}),
+				...(["load", "note", "forget", "next", "put"].includes(method) ? { summary: store.summary() } : {}),
 			});
 		} catch (error) {
-			parentPort!.postMessage({ id, error: String(error) });
+			parentPort!.postMessage({
+				id,
+				error: error instanceof Error ? error.message : String(error),
+				...(error instanceof DuplicateNote ? { conflict: true } : {}),
+			});
 		}
 	});
 }
