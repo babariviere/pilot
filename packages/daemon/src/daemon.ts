@@ -13,7 +13,7 @@ import { TerminalManager } from "./terminals.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
-import { WiFiDetection } from "./wifi-detection.ts";
+import { SystemEventsDetection } from "./wifi-detection.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { SourceRegistry } from "./sources.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
@@ -80,8 +80,8 @@ missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
 const scheduleStore = new ScheduleStore(join(config.home, "schedules.sqlite"));
-const scheduleDetection = new ScheduleDetection();
-const wifiDetection = new WiFiDetection();
+const wifiDetection = new SystemEventsDetection();
+const scheduleDetection = new ScheduleDetection({ power: wifiDetection });
 const schedules = new ScheduleService(scheduleStore, {
 	sessions,
 	projects,

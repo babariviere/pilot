@@ -1,5 +1,6 @@
 import type { WiFiStatus } from "@pilot/protocol";
-import { openWiFiHelper } from "./wifi-helper.ts";
+import { openSystemEventsHelper } from "./system-events-helper.ts";
+import type { SystemPowerSource, SystemPowerState } from "./system-power.ts";
 import { ServiceUnavailable } from "./errors.ts";
 
 export interface WiFiDetector {
@@ -9,10 +10,14 @@ export interface WiFiDetector {
 	setActive(active: boolean): void;
 }
 export interface WiFiHelper {
-	send(command: { authorize?: boolean; refresh?: boolean }): void;
+	send(command: { authorize?: boolean; refresh?: boolean; power?: boolean }): void;
 	close(): void;
 }
-export type WiFiHelperFactory = (onStatus: (status: WiFiStatus) => void, onClose: () => void) => Promise<WiFiHelper>;
+export type WiFiHelperFactory = (
+	onStatus: (status: WiFiStatus) => void,
+	onClose: () => void,
+	onPower?: (state: SystemPowerState) => void,
+) => Promise<WiFiHelper>;
 const unavailable = (): WiFiStatus => ({
 	authorization: "unavailable",
 	available: false,
@@ -22,10 +27,12 @@ const unavailable = (): WiFiStatus => ({
 });
 
 /** No SSID polling. First sample, reconnect and restored authorization establish a baseline, never an edge. */
-export class WiFiDetection implements WiFiDetector {
+export class SystemEventsDetection implements WiFiDetector, SystemPowerSource {
 	private value = unavailable();
 	private baseline: string | null | undefined;
 	private active = false;
+	private powerActive = false;
+	private powerListeners = new Set<(state: SystemPowerState) => void>();
 	private stopped = false;
 	private generation = 0;
 	private helper?: WiFiHelper;
@@ -37,8 +44,22 @@ export class WiFiDetection implements WiFiDetector {
 	private listeners = new Set<(event: { previous: string | null; current: string | null }) => void>();
 	private waiters = new Set<() => void>();
 	private readonly factory: WiFiHelperFactory;
-	constructor(factory: WiFiHelperFactory = openWiFiHelper) {
+	constructor(factory: WiFiHelperFactory = openSystemEventsHelper) {
 		this.factory = factory;
+	}
+	subscribePower(listener: (state: SystemPowerState) => void): () => void {
+		this.powerListeners.add(listener);
+		return () => {
+			this.powerListeners.delete(listener);
+		};
+	}
+	setPowerActive(active: boolean): void {
+		if (active === this.powerActive) return;
+		this.powerActive = active;
+		if (active) {
+			if (!this.retry) void this.ensure();
+			this.helper?.send({ power: true });
+		} else if (!this.active && !this.idle) this.release();
 	}
 	subscribe(listener: (event: { previous: string | null; current: string | null }) => void): () => void {
 		this.listeners.add(listener);
@@ -68,7 +89,8 @@ export class WiFiDetection implements WiFiDetector {
 			lost = true;
 			this.helper = undefined;
 			this.accept(unavailable());
-			if (this.active) {
+			for (const listener of this.powerListeners) listener({ available: false, fullWake: false });
+			if (this.active || this.powerActive) {
 				this.retry = setTimeout(
 					() => void this.ensure(),
 					Math.min(60_000, 1000 * 2 ** Math.min(this.failures++, 6)),
@@ -76,12 +98,19 @@ export class WiFiDetection implements WiFiDetector {
 				this.retry.unref();
 			}
 		};
-		this.opening = this.factory((status) => {
-			if (generation === this.generation && !this.stopped && !lost) {
-				this.failures = 0;
-				this.accept(status);
-			}
-		}, failed)
+		this.opening = this.factory(
+			(status) => {
+				if (generation === this.generation && !this.stopped && !lost) {
+					this.failures = 0;
+					this.accept(status);
+				}
+			},
+			failed,
+			(state) => {
+				if (generation === this.generation && !this.stopped && !lost)
+					for (const listener of this.powerListeners) listener(state);
+			},
+		)
 			.then((helper) => {
 				if (generation !== this.generation || this.stopped || lost) helper.close();
 				else this.helper = helper;
@@ -89,7 +118,8 @@ export class WiFiDetection implements WiFiDetector {
 			.catch(failed)
 			.finally(() => {
 				this.opening = undefined;
-				if (!this.stopped && this.active && generation !== this.generation) void this.ensure();
+				if (!this.stopped && (this.active || this.powerActive) && generation !== this.generation)
+					void this.ensure();
 			});
 		return this.opening;
 	}
@@ -107,7 +137,7 @@ export class WiFiDetection implements WiFiDetector {
 		this.active = active;
 		if (active) {
 			if (!this.retry) void this.ensure();
-		} else if (!this.idle) this.release();
+		} else if (!this.powerActive && !this.idle) this.release();
 	}
 	private async read(authorize: boolean): Promise<WiFiStatus> {
 		if (this.stopped) return unavailable();
@@ -116,7 +146,7 @@ export class WiFiDetection implements WiFiDetector {
 		clearTimeout(this.idle);
 		this.idle = setTimeout(() => {
 			this.idle = undefined;
-			if (!this.active) this.release();
+			if (!this.active && !this.powerActive) this.release();
 		}, this.leaseUntil - Date.now());
 		this.idle.unref();
 		await this.ensure();
@@ -147,5 +177,6 @@ export class WiFiDetection implements WiFiDetector {
 		for (const resolve of this.waiters) resolve();
 		this.waiters.clear();
 		this.listeners.clear();
+		this.powerListeners.clear();
 	}
 }

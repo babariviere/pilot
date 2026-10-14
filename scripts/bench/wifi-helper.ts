@@ -1,8 +1,8 @@
 // Privacy-safe native smoke check. Build/bundle the app first; never requests authorization.
 import { setTimeout } from "node:timers/promises";
-import { WiFiDetection } from "../../packages/daemon/src/wifi-detection.ts";
+import { SystemEventsDetection } from "../../packages/daemon/src/wifi-detection.ts";
 
-const detector = new WiFiDetection();
+const detector = new SystemEventsDetection();
 try {
 	const state = await detector.status();
 	console.log({

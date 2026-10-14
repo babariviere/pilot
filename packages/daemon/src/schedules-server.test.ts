@@ -158,7 +158,8 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 		second.messages.some((m) => m.type === "schedules" && m.schedules.some((s) => s.title === "New title")),
 	);
 	targetExists = false;
-	await schedules.signal({ type: "wake" });
+	await schedules.signal({ type: "sleep", at: Date.now() + 1 });
+	await schedules.signal({ type: "wake", full: true });
 	await waitFor(() =>
 		first.messages.some(
 			(m) => m.type === "schedules" && m.schedules.some((s) => s.id === item.id && s.state === "failed"),
@@ -175,7 +176,8 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 	targetExists = true;
 	const cancelled = (await (await api("/schedules", "POST", request)).json()) as ScheduledItem;
 	assert.equal((await api(`/schedules/${cancelled.id}`, "DELETE")).status, 200);
-	await schedules.signal({ type: "wake" });
+	await schedules.signal({ type: "sleep", at: Date.now() + 1 });
+	await schedules.signal({ type: "wake", full: true });
 	assert.equal(((await (await api(`/schedules/${cancelled.id}`)).json()) as ScheduledItem).state, "cancelled");
 
 	const chatTarget = {
@@ -202,7 +204,8 @@ test("schedule CRUD API, reconnect snapshot, WS updates, and dashboard provider"
 				),
 		),
 	);
-	await schedules.signal({ type: "wake" });
+	await schedules.signal({ type: "sleep", at: Date.now() + 1 });
+	await schedules.signal({ type: "wake", full: true });
 	assert.equal((await trackedItems.require(ticket.id)).sessionId, "spawned");
 	const dispatched = (await (await api(`/schedules/${scheduledChat.id}`)).json()) as ScheduledItem;
 	assert.equal(dispatched.state, "fired");

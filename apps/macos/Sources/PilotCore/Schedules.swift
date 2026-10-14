@@ -1,6 +1,6 @@
 import Foundation
 
-/// One-shot triggers. onBack means the next wake followed by network reachability.
+/// One-shot triggers. onBack means sleep after save/edit, then a full wake and network reachability.
 public enum ScheduleTrigger: String, Codable, Sendable {
     case at
     case onWake = "on_wake"
@@ -102,6 +102,7 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
     public let createdAt: Double
     public let updatedAt: Double
     public let wakeObserved: Bool?
+    public let sleepObserved: Bool?
     public let claimedAt: Double?
     public let firedAt: Double?
     public let sessionId: String?
@@ -111,7 +112,7 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
         id: String, revision: Int, title: String, projectId: String? = nil,
         trigger: ScheduleTrigger, at: Double? = nil, networkNames: [String]? = nil, target: ScheduleTarget,
         state: ScheduleState, createdAt: Double, updatedAt: Double,
-        wakeObserved: Bool? = nil, claimedAt: Double? = nil, firedAt: Double? = nil,
+        wakeObserved: Bool? = nil, sleepObserved: Bool? = nil, claimedAt: Double? = nil, firedAt: Double? = nil,
         sessionId: String? = nil, error: String? = nil
     ) {
         self.id = id
@@ -126,6 +127,7 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.wakeObserved = wakeObserved
+        self.sleepObserved = sleepObserved
         self.claimedAt = claimedAt
         self.firedAt = firedAt
         self.sessionId = sessionId

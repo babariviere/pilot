@@ -6,9 +6,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WiFiStatus } from "@pilot/protocol";
 import type { WiFiHelperFactory } from "./wifi-detection.ts";
+import { parseSystemPowerState } from "./system-power.ts";
 
 /** LaunchServices gives the helper its own TCC identity, independent of Node and the main app's lifetime. */
-export const openWiFiHelper: WiFiHelperFactory = async (onStatus, onClose) => {
+export const openSystemEventsHelper: WiFiHelperFactory = async (onStatus, onClose, onPower) => {
 	if (process.platform !== "darwin") throw new Error("macOS required");
 	const source = dirname(fileURLToPath(import.meta.url));
 	const app =
@@ -79,7 +80,13 @@ export const openWiFiHelper: WiFiHelperFactory = async (onStatus, onClose) => {
 						clearTimeout(startup);
 						for (const other of candidates) if (other !== candidate) other.destroy();
 					} else {
-						const status = parseWiFiStatus(JSON.parse(line));
+						const value = JSON.parse(line);
+						const power = parseSystemPowerState(value);
+						if (power) {
+							onPower?.(power);
+							continue;
+						}
+						const status = parseWiFiStatus(value);
 						if (!status) {
 							candidate.destroy();
 							return;

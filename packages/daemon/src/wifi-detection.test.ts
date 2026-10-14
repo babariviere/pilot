@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { WiFiStatus } from "@pilot/protocol";
-import { WiFiDetection, type WiFiHelperFactory } from "./wifi-detection.ts";
-import { parseWiFiStatus } from "./wifi-helper.ts";
+import { SystemEventsDetection, type WiFiHelperFactory } from "./wifi-detection.ts";
+import { parseWiFiStatus } from "./system-events-helper.ts";
+import type { SystemPowerState } from "./system-power.ts";
 
 const wifiState = (currentNetwork: string | null, extra: Partial<WiFiStatus> = {}): WiFiStatus => ({
 	authorization: "authorized",
@@ -10,6 +11,40 @@ const wifiState = (currentNetwork: string | null, extra: Partial<WiFiStatus> = {
 	currentNetwork,
 	knownNetworks: ["Office", "Home"],
 	...extra,
+});
+
+test("power and Wi-Fi share one helper; either demand retains it, and stale power frames cannot publish", async () => {
+	let opens = 0,
+		closes = 0;
+	let reportPower!: (state: SystemPowerState) => void;
+	let crash!: () => void;
+	const detector = new SystemEventsDetection(async (_wifi, onClose, power) => {
+		opens++;
+		reportPower = power!;
+		crash = onClose;
+		return {
+			send() {},
+			close() {
+				closes++;
+			},
+		};
+	});
+	const events: SystemPowerState[] = [];
+	detector.subscribePower((state) => events.push(state));
+	detector.setPowerActive(true);
+	await new Promise((resolve) => setImmediate(resolve));
+	detector.setActive(true);
+	detector.setActive(false);
+	assert.equal(opens, 1);
+	assert.equal(closes, 0);
+	reportPower({ available: true, sleepAt: 1, fullWake: false });
+	assert.equal(events.length, 1);
+	crash();
+	assert.deepEqual(events.at(-1), { available: false, fullWake: false });
+	reportPower({ available: true, sleepAt: 1, fullWake: true });
+	assert.equal(events.length, 2);
+	detector.setPowerActive(false);
+	detector.stop();
 });
 
 test("fake helper: baselines, roaming, disconnect, auth loss, recovery and stop are not invented edges", async () => {
@@ -32,7 +67,7 @@ test("fake helper: baselines, roaming, disconnect, auth loss, recovery and stop 
 			},
 		};
 	};
-	const detector = new WiFiDetection(factory);
+	const detector = new SystemEventsDetection(factory);
 	const events: unknown[] = [];
 	detector.subscribe((event) => events.push(event));
 	detector.setActive(true);
@@ -71,7 +106,7 @@ test("fake helper suspends immediately without an API lease; stale launch is clo
 	let finish!: (helper: { send(): void; close(): void }) => void;
 	let stale!: (value: WiFiStatus) => void;
 	let closed = 0;
-	const detector = new WiFiDetection((onStatus) => {
+	const detector = new SystemEventsDetection((onStatus) => {
 		stale = onStatus;
 		return new Promise((resolve) => {
 			finish = resolve;
@@ -110,7 +145,7 @@ test("helper messages are bounded, redact unauthorized names and sanitize diagno
 test("fake helper crash reconnects without synthesizing a leave or join and ignores stale frames", async () => {
 	const reports: Array<(value: WiFiStatus) => void> = [];
 	const crashes: Array<() => void> = [];
-	const detector = new WiFiDetection(async (report, crash) => {
+	const detector = new SystemEventsDetection(async (report, crash) => {
 		reports.push(report);
 		crashes.push(crash);
 		return {

@@ -1,6 +1,6 @@
 import type { SpawnRequest } from "./index.ts";
 
-/** on_back is wake followed by reachability ("When I'm back"). All triggers are one-shot. */
+/** on_back is sleep after save/edit, then a full wake followed by reachability ("When I'm back"). All triggers are one-shot. */
 export type ScheduleTrigger = "at" | "on_wake" | "on_online" | "on_back" | "on_join_network" | "on_leave_network";
 export type ScheduleTarget =
 	| {
@@ -44,8 +44,10 @@ export interface ScheduledItem {
 	state: ScheduleState;
 	createdAt: number;
 	updatedAt: number;
-	/** Persisted so a wake while offline survives a restart. */
+	/** Persisted so a full wake while offline survives a restart. Requires sleepObserved. */
 	wakeObserved?: boolean;
+	/** A sleep after the last save/edit. Dark wakes do not consume this latch. */
+	sleepObserved?: boolean;
 	claimedAt?: number;
 	firedAt?: number;
 	/** Created chat, or target of a follow-up. */
