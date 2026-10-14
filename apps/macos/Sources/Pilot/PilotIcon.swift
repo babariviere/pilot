@@ -63,7 +63,7 @@ extension PilotIcon {
         case .overview: "square.grid.2x2"
         case .allProjects: "square.stack"
         case .project: "folder"
-        case .chatFolder: "text.below.folder"
+        case .chatFolder: "folder"
         case .mission: "map"
         case .coordinator: "safari"
         case .artifact: "rectangle.on.rectangle.angled"
@@ -200,6 +200,8 @@ extension PilotIcon {
     /// The only concepts that intentionally share a symbol.
     static let sharedSymbols: [String: [PilotIcon]] = [
         "circle": [.todo, .memoryEntry],
+        // Both are folder containers; use the baseline mark rather than a newer-OS-only variant.
+        "folder": [.project, .chatFolder],
     ]
 
     /// The symbol name for the current state. `filled` only applies to icons with a `stateFillName`.
@@ -215,7 +217,7 @@ extension PilotIcon {
         case .overview: "A project's Overview. Fills while selected."
         case .allProjects: "The All projects scope, and Show All Projects."
         case .project: "A project, a working directory or a direct checkout."
-        case .chatFolder: "A user folder that groups chats in the sidebar, and New Folder. Distinct from a project."
+        case .chatFolder: "A user folder that groups chats in the sidebar, and New Folder. Shares the project folder mark for OS compatibility."
         case .mission: "A mission, everywhere one appears."
         case .coordinator: "A mission's coordinator chat."
         case .artifact: "An artifact; image artifacts use image."

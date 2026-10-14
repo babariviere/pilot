@@ -33,6 +33,12 @@ import Testing
     }
 }
 
+@Test func chatFolderUsesTheBaselineFolderSymbol() {
+    // text.below.folder resolves on macOS 27 but not on the older CI runtime.
+    #expect(PilotIcon.chatFolder.systemName == "folder")
+    #expect(PilotIcon.sharedSymbols["folder"] == [.project, .chatFolder])
+}
+
 @Test func vocabularyFillExceptionsAreExplicitAndBounded() {
     let stateful: Set<PilotIcon> = [.home, .inbox, .overview, .pin, .complete, .warning, .question, .memoryEntry]
     #expect(Set(PilotIcon.allCases.filter { $0.stateFillName != nil }) == stateful)
