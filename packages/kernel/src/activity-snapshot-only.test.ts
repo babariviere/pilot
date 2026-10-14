@@ -92,7 +92,12 @@ test("settlement retains a run's cancellation through compaction, but not into l
 	}, context);
 	const stream = await watchActivity(session, conversation.id, context);
 	t.after(() => stream.stop());
-	const compaction: CompactionStatus = { taskId: 100 as TaskId, reason: "manual", blocking: false, attempt: 1 };
+	const compaction: CompactionStatus = {
+		taskId: 100 as CompactionStatus["taskId"],
+		reason: "manual",
+		blocking: false,
+		attempt: 1,
+	};
 	const input = await session.commit(async (tx) => {
 		const input = await tx.createSubmission({ conversationId: conversation.id, type: "input", status: "queued" });
 		(await tx.doc(LiveDoc, conversation.id)).run = { taskId: 1 as TaskId, inputs: [input.id] };
