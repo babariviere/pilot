@@ -54,6 +54,28 @@ struct MessageTextSelectionTests {
         #expect(board.string(forType: .string) == owner.source)
     }
 
+    @Test func selectionShortcutsLeaveAnotherFocusedEditorAlone() throws {
+        let owner = MessageTextSelection()
+        owner.source = "Agent reply"
+        let message = region("Agent reply", block: 0, owner: owner)
+        let editor = NSTextView(frame: NSRect(x: 0, y: 80, width: 400, height: 40))
+        editor.string = "Composer draft"
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 140),
+                              styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView?.addSubview(message)
+        window.contentView?.addSubview(editor)
+        window.makeFirstResponder(editor)
+        let event = try #require(NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command,
+                                                  timestamp: 0, windowNumber: window.windowNumber, context: nil,
+                                                  characters: "a", charactersIgnoringModifiers: "a",
+                                                  isARepeat: false, keyCode: 0))
+        #expect(!message.performKeyEquivalent(with: event))
+        #expect(owner.selectedText.isEmpty)
+        window.makeFirstResponder(message)
+        #expect(message.performKeyEquivalent(with: event))
+        #expect(owner.selectedText == "Agent reply")
+    }
+
     @Test func regionReplacementAndStreamingClampExistingSelection() {
         let owner = MessageTextSelection()
         let first = region("Long first paragraph", block: 0, owner: owner)
