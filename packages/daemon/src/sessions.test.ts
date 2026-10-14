@@ -1175,6 +1175,36 @@ for (const phase of ["clone", "ready", "ack"] as const) {
 	});
 }
 
+test("startup retains a redacted nested network cause in summary and persisted failure after restart", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({
+		worker: () => {
+			throw new TypeError("fetch failed", {
+				cause: Object.assign(new Error("connect password=hidden"), {
+					code: "ECONNREFUSED",
+					host: "api.example.com",
+					syscall: "connect",
+				}),
+			});
+		},
+	});
+	const failed = deferred();
+	sessions.onChange((summary) => {
+		if (summary.state === "failed") failed.resolve();
+	});
+	const created = await sessions.spawn({ cwd: f.root, message: "fail visibly" });
+	await failed.promise;
+	const reason = sessions.get(created.id)!.error!;
+	assert.match(reason, /Session startup: Retryable network error.*ECONNREFUSED.*api.example.com.*connect/);
+	assert.doesNotMatch(reason, /hidden/);
+	assert.equal(sessions.get(created.id)!.outcomeReason, reason);
+	assert.equal((await f.stored(created.id)).failure, reason);
+	await sessions.shutdown();
+	const reopened = await f.manager();
+	assert.equal(reopened.get(created.id)!.error, reason);
+	assert.equal(reopened.get(created.id)!.outcomeReason, reason);
+});
+
 for (const failure of ["clone", "factory", "ready"] as const) {
 	test(`${failure} startup errors remain visible failed sessions across restart`, async (t) => {
 		const f = await fixture(t);

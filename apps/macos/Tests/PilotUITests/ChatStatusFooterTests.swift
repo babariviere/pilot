@@ -10,7 +10,7 @@ private func reviewMarker(in view: NSView) -> ChatReviewVisibility.ReviewView? {
     return view.subviews.compactMap { reviewMarker(in: $0) }.first
 }
 
-@Test @MainActor func settledChatOutcomesDoNotAddAVisibleFooter() throws {
+@Test @MainActor func settledChatOnlyAddsAFailureBanner() throws {
     _ = NSApplication.shared
     let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                           styleMask: .borderless, backing: .buffered, defer: false)
@@ -33,7 +33,11 @@ private func reviewMarker(in view: NSView) -> ChatReviewVisibility.ReviewView? {
         #expect(abs(marker.bounds.height - 1) < 0.01)
         let frame = marker.convert(marker.bounds, to: hosting)
         if let baseline {
-            #expect(frame == baseline)
+            if outcome == .failed {
+                #expect(frame.minY > baseline.minY)
+            } else {
+                #expect(frame == baseline)
+            }
         } else {
             baseline = frame
         }

@@ -85,6 +85,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let outcome: SessionOutcome?
     /// Stable completion version, in milliseconds. Unlike updatedAt, survives parking.
     public let outcomeAt: Double?
+    /// Bounded, redacted failure diagnostic, including the failing step and available causes.
     public let outcomeReason: String?
     public let pullRequest: SessionPullRequest?
     /// Every discovered or explicitly bound PR associated with the session, primary first. Omitted when none, or by older daemons.

@@ -21,6 +21,7 @@ export interface SessionCompletion {
 	outcome: SessionOutcome;
 	/** Stable completion version, in milliseconds. Reopening a session does not change it. */
 	outcomeAt: number;
+	/** Bounded, redacted failure diagnostic, including the failing step and available causes. */
 	outcomeReason?: string;
 }
 

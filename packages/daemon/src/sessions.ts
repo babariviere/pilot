@@ -9,6 +9,7 @@ import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
 import {
 	type AskContext,
 	type EarlierEntriesRead,
+	formatFailure,
 	inputOrigin,
 	type KernelCommand,
 	type KernelPacket,
@@ -16,6 +17,7 @@ import {
 	type KernelUsage,
 	type MissionContext,
 	type PersistedSessionView,
+	safeFailureText,
 	type SubagentTranscriptRead,
 	subagentStorageSignature,
 	type WorkspaceContext,
@@ -2835,7 +2837,7 @@ export class SessionManager {
 		try {
 			this.validateMode(meta);
 		} catch (error) {
-			meta.failure = error instanceof Error ? error.message : String(error);
+			meta.failure = formatFailure(error, "Session validation");
 			this.fail(meta, meta.failure);
 			this.emit(meta);
 		}
@@ -3195,7 +3197,7 @@ export class SessionManager {
 					this.emit(meta);
 					return;
 				}
-				meta.failure = error instanceof Error ? error.message : String(error);
+				meta.failure = formatFailure(error, "Session startup");
 				const now = Date.now();
 				applyFailure(meta, meta.failure, now);
 				meta.updatedAt = now;
@@ -3359,7 +3361,7 @@ export class SessionManager {
 			});
 			void call.then(
 				(result) => reply({ result }),
-				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool artifact") }),
 			);
 			return;
 		}
@@ -3373,7 +3375,7 @@ export class SessionManager {
 				: Promise.reject(new Error("Missions are unavailable"));
 			void call.then(
 				(result) => reply({ result: result ?? null }),
-				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool mission") }),
 			);
 			return;
 		}
@@ -3402,7 +3404,7 @@ export class SessionManager {
 			});
 			void call.then(
 				(result) => reply({ result }),
-				(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+				(error: unknown) => reply({ error: formatFailure(error, "Tool memory") }),
 			);
 			return;
 		}
@@ -3568,7 +3570,7 @@ export class SessionManager {
 			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
 			...(meta.outcome ? { outcome: meta.outcome } : {}),
 			...(meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
-			...(meta.outcomeReason !== undefined ? { outcomeReason: meta.outcomeReason } : {}),
+			...(meta.outcomeReason !== undefined ? { outcomeReason: safeFailureText(meta.outcomeReason) } : {}),
 			...(meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
 			...(sessionPullRequests(meta).length ? { pullRequests: sessionPullRequests(meta) } : {}),
 			...(meta.boundPullRequests?.some((url) => !this.excludedPullRequest(meta, url))
@@ -3579,7 +3581,11 @@ export class SessionManager {
 			...(meta.attempts?.length ? { attempts: meta.attempts } : {}),
 			...(meta.unpublishedWork ? { unpublishedWork: true } : {}),
 			...(meta.failure || meta.inputError || worker?.error || this.kernelErrors.has(meta.id)
-				? { error: meta.failure || meta.inputError || worker?.error || this.kernelErrors.get(meta.id) }
+				? {
+						error: safeFailureText(
+							(meta.failure || meta.inputError || worker?.error || this.kernelErrors.get(meta.id))!,
+						),
+					}
 				: {}),
 		};
 	}

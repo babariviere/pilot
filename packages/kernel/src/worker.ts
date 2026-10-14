@@ -5,12 +5,13 @@ import { serialize } from "node:v8";
 import type { JsonValue } from "@earendil-works/chord";
 import { ConversationBusy } from "@earendil-works/pi-durable";
 import { closePreviewBrowser } from "@pilot/artifacts";
+import { formatFailure } from "./failure.ts";
 import type { MissionCall } from "./mission-tools.ts";
 import type { MissionContext, WorkspaceContext } from "./policy.ts";
 import type { KernelCommand, KernelPacket } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
 
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const errorText = formatFailure;
 
 export interface IpcChannel {
 	readonly connected: boolean;
@@ -371,7 +372,11 @@ export function runKernelWorker(): void {
 				);
 				await send({ type: "accepted", requestId: command.requestId });
 			})().catch((error) =>
-				send({ type: "error", requestId: command.requestId, message: errorText(error) }).catch(() => undefined),
+				send({
+					type: "error",
+					requestId: command.requestId,
+					message: formatFailure(error, "Command subagent"),
+				}).catch(() => undefined),
 			);
 			subagentCommands.add(running);
 			void running.finally(() => subagentCommands.delete(running));
@@ -383,7 +388,7 @@ export function runKernelWorker(): void {
 				send({
 					type: "error",
 					requestId: "requestId" in command ? command.requestId : undefined,
-					message: errorText(error),
+					message: formatFailure(error, `Command ${command.type}`),
 					...(error instanceof ConversationBusy ? { code: "busy" as const } : {}),
 				}).catch(() => undefined),
 			);

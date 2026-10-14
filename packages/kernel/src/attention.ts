@@ -10,6 +10,7 @@ import {
 	type SubmissionRecord,
 } from "@earendil-works/pi-durable";
 import type { SessionCompletion } from "@pilot/protocol";
+import { safeFailureText } from "./failure.ts";
 
 type StoredCompletion = Omit<SessionCompletion, "outcome"> & {
 	// Read older sessions without exposing the retired human-attention outcome.
@@ -42,7 +43,7 @@ export function classifyCompletion(record: SubmissionRecord): Omit<SessionComple
 		if (record.reason === "aborted" || record.reason === "reset") return { outcome: "stopped" };
 		return {
 			outcome: "failed",
-			outcomeReason: typeof record.detail === "string" ? record.detail : record.reason,
+			outcomeReason: safeFailureText(typeof record.detail === "string" ? record.detail : record.reason),
 		};
 	}
 	if (record.status !== "done" || record.type !== "input") throw new Error("Input has not settled");

@@ -57,6 +57,14 @@ public struct TranscriptPresentation: Equatable, Sendable {
 
     public init() {}
 
+    /// Reuse the persisted diagnostic after reconnect, without duplicating the transcript's last error row.
+    public func failureBannerText(for session: SessionSummary) -> String? {
+        guard error == nil, !session.isWorking,
+              let reason = session.error ?? (session.outcome == .failed ? session.outcomeReason : nil) else { return nil }
+        if case let .error(_, text) = liveRows.last ?? historyRows.last, text == reason { return nil }
+        return reason
+    }
+
     public init(transcript: Transcript) {
         let rows = transcript.rows
         let committed = transcript.streaming == nil && transcript.error == nil ? rows : transcript.renderRows(
