@@ -41,7 +41,8 @@ private func timeEvent(_ source: String) throws -> JSONValue {
     ])
     #expect(first.rows == [
         .user(id: "1-0", text: "Hello", timestamp: 1_781_015_528_123),
-        .thinking(id: "streaming-0", text: "Plan", streaming: false),
+        .work(id: "streaming-0", group: TurnWork(rows: [.thinking(id: "streaming-0", text: "Plan", streaming: false)],
+                                                  startedAt: 1_781_015_588_123, endedAt: 1_781_015_588_123)),
         .text(id: "streaming-1", text: "Hi", timestamp: 1_781_015_588_123),
     ])
     let delta = try await processor.apply([

@@ -21,7 +21,7 @@ private func event(_ text: String) -> JSONValue { try! JSONValue.decode(Data(tex
     transcript.apply(.object(["type": .string("snapshot"), "entries": .array(entries)]))
     let rows = transcript.rows
     #expect(rows.count == 1)
-    guard case let .tools(id, items)? = rows.first else { Issue.record("expected tool group"); return }
+    guard case let .tools(id, items)? = rows.first?.unfolded.first else { Issue.record("expected tool group"); return }
     #expect(id == "1-0-0")
     #expect(items.map(\.id) == (0..<count).map { "call-\($0)" })
     transcript.apply(event(#"{"type":"entry_appended","entry":{"id":3001,"kind":"pi.user","model":[{"role":"user","content":"next"}]}}"#))
@@ -78,14 +78,14 @@ private func event(_ text: String) -> JSONValue { try! JSONValue.decode(Data(tex
     let processor = TranscriptProcessor()
     let start = event(#"{"type":"message_start","message":{"role":"assistant","content":[{"type":"toolCall","id":"c","name":"bash","arguments":{"command":"ls"}}]}}"#)
     let first = try await processor.apply([start])
-    guard case let .tools(_, firstItems)? = first.rows.first else { Issue.record("expected tools"); return }
+    guard case let .tools(_, firstItems)? = first.rows.first?.unfolded.first else { Issue.record("expected tools"); return }
     #expect(firstItems[0].summary.detail == "ls")
     let second = try await processor.apply([
         event(#"{"type":"tool_execution_start","toolCallId":"c","toolName":"bash"}"#),
         event(#"{"type":"tool_execution_update","toolCallId":"c","output":{"append":"out"}}"#),
         event(#"{"type":"message_update","changes":[{"type":"block","contentIndex":0,"block":{"type":"toolCall","id":"c","name":"bash","arguments":{"command":"pwd"}}}]}"#),
     ])
-    guard case let .tools(_, secondItems)? = second.rows.first else { Issue.record("expected tools"); return }
+    guard case let .tools(_, secondItems)? = second.rows.first?.unfolded.first else { Issue.record("expected tools"); return }
     #expect(secondItems[0].summary.detail == "pwd")
     #expect(secondItems[0].output == "out" && secondItems[0].status == .running)
     #expect(firstItems[0].summary.detail == "ls")

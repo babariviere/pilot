@@ -118,8 +118,11 @@ public struct TranscriptPresentation: Equatable, Sendable {
     }
 
     static func historyPrefixCount(_ rows: [ChatRow]) -> Int {
-        if case .tools? = rows.last { return rows.count - 1 }
-        return rows.count
+        // The turn's latest work row grows while it runs; keep it out of the stable history subtree.
+        switch rows.last {
+        case .tools?, .work?: return rows.count - 1
+        default: return rows.count
+        }
     }
 
     private mutating func updateMetadataByteCount() {
@@ -150,11 +153,20 @@ public struct TranscriptPresentation: Equatable, Sendable {
                 return base + eventByteCount(event)
             case let .tools(_, items):
                 return base + items.reduce(0) { $0 + byteCount(of: $1) }
+            case let .work(_, group):
+                return base + workByteCount(group)
             case let .artifact(_, reference): return base + artifactByteCount(reference)
             case let .question(_, question):
                 return base + questionByteCount(question)
             }
         }
+    }
+
+    /// Keep optional additions outside the row reduce: Swift 6.2's type checker otherwise times out.
+    static func workByteCount(_ group: TurnWork) -> Int {
+        let rows: [ChatRow] = group.rows
+        let bytes: Int = byteCount(of: rows)
+        return 32 + bytes
     }
 
     /// Keep optional additions outside the row reduce: Swift 6.2's type checker otherwise times out.
@@ -232,6 +244,8 @@ public actor TranscriptProcessor {
     private var historyRowCount = 0
     private struct ToolLocation {
         let row: Int
+        /// The tool group inside a work row, or nil for a top-level tool group.
+        let child: Int?
         let item: Int
     }
     private var toolLocations: [String: [ToolLocation]] = [:]
@@ -292,6 +306,16 @@ public actor TranscriptProcessor {
                     // The suffix group's tools survive, but its row storage and identity do not.
                     cachedRowsByteCount -= 128 + suffix[0].id.utf8.count
                     cachedLiveRows.append(contentsOf: suffix.dropFirst())
+                } else if case let .work(id, previous)? = cachedLiveRows.last,
+                          case let .work(_, next)? = suffix.first {
+                    // Streamed steps continue the turn's committed work row, under its identity.
+                    cachedLiveRows[cachedLiveRows.count - 1] = .work(id: id, group: previous.appending(next))
+                    // The suffix row's own storage goes, and so does its first tool group when it joins ours.
+                    cachedRowsByteCount -= 128 + suffix[0].id.utf8.count + 32
+                    if case .tools? = previous.rows.last, case let .tools(childID, _)? = next.rows.first {
+                        cachedRowsByteCount -= 128 + childID.utf8.count
+                    }
+                    cachedLiveRows.append(contentsOf: suffix.dropFirst())
                 } else {
                     cachedLiveRows.append(contentsOf: suffix)
                 }
@@ -326,11 +350,48 @@ public actor TranscriptProcessor {
     private func indexTools() {
         toolLocations = [:]
         for (rowIndex, row) in committedRows.enumerated() {
-            guard case let .tools(_, items) = row else { continue }
-            for (itemIndex, item) in items.enumerated() {
-                toolLocations[item.id, default: []].append(ToolLocation(row: rowIndex, item: itemIndex))
+            switch row {
+            case let .tools(_, items):
+                for (itemIndex, item) in items.enumerated() {
+                    toolLocations[item.id, default: []].append(ToolLocation(row: rowIndex, child: nil, item: itemIndex))
+                }
+            case let .work(_, group):
+                for (childIndex, child) in group.rows.enumerated() {
+                    guard case let .tools(_, items) = child else { continue }
+                    for (itemIndex, item) in items.enumerated() {
+                        toolLocations[item.id, default: []].append(
+                            ToolLocation(row: rowIndex, child: childIndex, item: itemIndex))
+                    }
+                }
+            default: continue
             }
         }
+    }
+
+    /// The tool group a location points into, as a top-level row or a work row's child.
+    private func toolGroup(at location: ToolLocation) -> (id: String, items: [ToolItem])? {
+        let row = committedRows[location.row]
+        let group: ChatRow
+        if let child = location.child {
+            guard case let .work(_, work) = row, child < work.rows.count else { return nil }
+            group = work.rows[child]
+        } else {
+            group = row
+        }
+        guard case let .tools(id, items) = group, location.item < items.count else { return nil }
+        return (id, items)
+    }
+
+    private func replaceToolGroup(at location: ToolLocation, with items: [ToolItem], id: String) {
+        let updated = ChatRow.tools(id: id, items: items)
+        guard let child = location.child else {
+            committedRows[location.row] = updated
+            return
+        }
+        guard case let .work(workID, work) = committedRows[location.row] else { return }
+        var group = work
+        group.rows[child] = updated
+        committedRows[location.row] = .work(id: workID, group: group)
     }
 
     private func updateTools(_ ids: Set<String>) throws -> Bool {
@@ -339,7 +400,7 @@ public actor TranscriptProcessor {
         for id in ids {
             for location in toolLocations[id] ?? [] {
                 try Task.checkCancellation()
-                guard case let .tools(rowID, original) = committedRows[location.row] else { continue }
+                guard let (rowID, original) = toolGroup(at: location) else { continue }
                 let previous = original[location.item]
                 var next = transcript.tool(previous.id, name: previous.name, arguments: previous.arguments, context: context!)
                 committedToolUpdateCount += 1
@@ -350,7 +411,7 @@ public actor TranscriptProcessor {
                 committedRowsByteCount += next.output.utf8.count - previous.output.utf8.count
                 var items = original
                 items[location.item] = next
-                committedRows[location.row] = .tools(id: rowID, items: items)
+                replaceToolGroup(at: location, with: items, id: rowID)
                 if location.row < historyRowCount {
                     // Only a real historical change needs a new immutable history array.
                     if !copiedHistory { historyRowCopyCount += historyRowCount; copiedHistory = true }
@@ -372,22 +433,36 @@ public actor TranscriptProcessor {
         var rows = originalRows
         for index in rows.indices {
             try Task.checkCancellation()
-            guard case let .tools(id, original) = rows[index] else { continue }
-            var items = original
-            for toolIndex in items.indices {
-                try Task.checkCancellation()
-                let item = items[toolIndex]
-                let summary: ToolSummary
-                if let cached = summaries[item.id], cached.name == item.name, cached.arguments == item.arguments {
-                    summary = cached.summary
-                } else {
-                    summary = item.summary
-                    summaries[item.id] = CachedSummary(name: item.name, arguments: item.arguments, summary: summary)
+            switch rows[index] {
+            case let .tools(id, original):
+                rows[index] = .tools(id: id, items: try prepare(original))
+            case let .work(id, original):
+                var group = original
+                for child in group.rows.indices {
+                    guard case let .tools(toolsID, items) = group.rows[child] else { continue }
+                    group.rows[child] = .tools(id: toolsID, items: try prepare(items))
                 }
-                items[toolIndex].prepare(summary: summary)
+                rows[index] = .work(id: id, group: group)
+            default: continue
             }
-            rows[index] = .tools(id: id, items: items)
         }
         return rows
+    }
+
+    private func prepare(_ original: [ToolItem]) throws -> [ToolItem] {
+        var items = original
+        for toolIndex in items.indices {
+            try Task.checkCancellation()
+            let item = items[toolIndex]
+            let summary: ToolSummary
+            if let cached = summaries[item.id], cached.name == item.name, cached.arguments == item.arguments {
+                summary = cached.summary
+            } else {
+                summary = item.summary
+                summaries[item.id] = CachedSummary(name: item.name, arguments: item.arguments, summary: summary)
+            }
+            items[toolIndex].prepare(summary: summary)
+        }
+        return items
     }
 }

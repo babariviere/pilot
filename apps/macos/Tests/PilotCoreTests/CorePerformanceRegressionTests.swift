@@ -186,7 +186,7 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
         "type": .string("snapshot"), "entries": .array([corePerformanceEntry(1, role: "assistant", content: tool)]),
     ])])
     let second = try await processor.apply([try corePerformanceEvent(#"{"type":"message_start","message":{"role":"assistant","content":[{"type":"toolCall","id":"b","name":"bash","arguments":{"command":"pwd"}}]}}"#)])
-    guard case let .tools(id, items)? = second.rows.first else { Issue.record("Expected a tool group"); return }
+    guard case let .tools(id, items)? = second.rows.first?.unfolded.first else { Issue.record("Expected a tool group"); return }
     #expect(id == first.rows.first?.id)
     #expect(items.map(\.id) == ["a", "b"])
     #expect(items.map { $0.summary.detail } == ["ls", "pwd"])
@@ -199,7 +199,7 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
         try corePerformanceEvent(#"{"type":"tool_execution_start","toolCallId":"a","toolName":"bash"}"#),
         try corePerformanceEvent(#"{"type":"tool_execution_update","toolCallId":"a","output":{"append":"out"}}"#),
     ])
-    guard case let .tools(_, updatedItems)? = updated.rows.first else { Issue.record("Expected tools"); return }
+    guard case let .tools(_, updatedItems)? = updated.rows.first?.unfolded.first else { Issue.record("Expected tools"); return }
     #expect(updatedItems[0].output == "out" && updatedItems[0].status == .running)
     #expect(items[0].output.isEmpty && items[0].status == .pending)
 }
@@ -340,7 +340,7 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
         #expect(await processor.committedToolUpdateCount == 65)
         #expect(await processor.rowByteCountCalculationCount == 1) // One historical tool group.
         #expect(await processor.historyRowComparisonCount == 0)
-        guard case let .tools(_, items)? = original.rows.first else { Issue.record("Expected tools"); return }
+        guard case let .tools(_, items)? = original.rows.first?.unfolded.first else { Issue.record("Expected tools"); return }
         #expect(items.allSatisfy { $0.output.isEmpty && $0.status == .pending })
         let duplicate = try await processor.apply([])
         #expect(try await processor.apply([.object([
@@ -379,7 +379,7 @@ private func corePerformanceEntry(_ id: Int, role: String = "user", content: JSO
     let revision = transcript.committedRowRevision
     transcript.tools["c"] = LiveTool(callId: "c", name: "bash", output: "external", status: "running")
     #expect(transcript.committedRowRevision > revision)
-    guard case let .tools(_, items)? = transcript.rows.first else { Issue.record("Expected tools"); return }
+    guard case let .tools(_, items)? = transcript.rows.first?.unfolded.first else { Issue.record("Expected tools"); return }
     #expect(items[0].output == "external" && items[0].status == .running)
 }
 

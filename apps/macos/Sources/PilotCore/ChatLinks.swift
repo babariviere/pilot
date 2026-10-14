@@ -32,7 +32,7 @@ public struct ChatLinkIndex: Sendable {
     public mutating func links(in rows: [ChatRow]) -> [ChatLink] {
         var next: [String: Scan] = [:]
         var mentions: [ChatLinkMention] = []
-        for row in rows {
+        for row in rows.lazy.flatMap(\.unfolded) {
             let id: String
             let text: String
             switch row {
