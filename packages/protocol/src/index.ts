@@ -462,8 +462,11 @@ export interface MissionBriefWrite {
 }
 
 /** Binding statement. Agents may add decisions; only the user edits or removes them. */
+export type MissionDecisionAudience = "all" | "coordinator" | "reference";
+
 export interface MissionDecision {
 	id: string;
+	audience: MissionDecisionAudience;
 	text: string;
 	authorSessionId?: string;
 	createdAt: number;
@@ -498,6 +501,8 @@ export interface MissionTask {
 	milestone?: string;
 	/** Task IDs that must be done before this one can start. */
 	dependsOn?: string[];
+	/** Decisions pinned to this task, sent in full to its chat. */
+	decisionIds?: string[];
 	/** Owning chat. At most one; claiming another chat's task is rejected with 409. */
 	sessionId?: string;
 	createdAt: number;
@@ -513,6 +518,8 @@ export interface MissionTaskWrite {
 	order?: number;
 	milestone?: string;
 	dependsOn?: string[];
+	/** Decisions pinned to this task, sent in full to its chat. */
+	decisionIds?: string[];
 	/** User assignment: a member chat ID, or null to release. Agents claim through the mission tool instead. */
 	sessionId?: string | null;
 }
@@ -568,7 +575,8 @@ export interface PullRequestBindingResult {
 
 /** POST /api/missions/:id/decisions; PATCH /api/missions/:id/decisions/:decisionId. */
 export interface MissionDecisionWrite {
-	text: string;
+	text?: string;
+	audience?: MissionDecisionAudience;
 }
 
 /** POST /api/missions/:id/comments. */

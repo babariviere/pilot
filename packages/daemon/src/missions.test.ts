@@ -7,6 +7,41 @@ import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
+test("legacy decisions migrate to reference; audiences and task pins persist and validate", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-decision-migration-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "Shared", tasks: [{ title: "Implement" }] });
+		const decision = missions.addDecision(id, "Legacy");
+		assert.equal(decision.audience, "reference");
+		missions.close();
+		const legacy = new DatabaseSync(file);
+		legacy.exec("ALTER TABLE decisions DROP COLUMN audience; ALTER TABLE tasks DROP COLUMN decision_ids;");
+		legacy.close();
+		missions = new MissionStore(file);
+		assert.equal(missions.detail(id).decisions[0]!.audience, "reference");
+		assert.equal(missions.updateDecision(id, decision.id, undefined, {}, "coordinator").text, "Legacy");
+		missions.updateTask(id, "1", { decisionIds: [decision.id, decision.id] });
+		assert.deepEqual(missions.resolveTask(id, "1").decisionIds, [decision.id]);
+		assert.throws(() => missions.addDecision(id, "Bad", {}, "invalid"), /audience must be/);
+		assert.throws(
+			() => missions.updateDecision(id, decision.id, "Agent", { sessionId: "chat" }, "all"),
+			/Only the user/,
+		);
+		assert.throws(() => missions.updateTask(id, "1", { decisionIds: ["unknown"] }), /Unknown decision/);
+		missions.close();
+		missions = new MissionStore(file);
+		assert.equal(missions.detail(id).decisions[0]!.audience, "coordinator");
+		assert.deepEqual(missions.resolveTask(id, "1").decisionIds, [decision.id]);
+		missions.removeDecision(id, decision.id);
+		assert.deepEqual(missions.resolveTask(id, "1").decisionIds, []);
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("task links are scoped, validated and preserved when a task is deleted", () => {
 	const missions = new MissionStore(":memory:");
 	try {

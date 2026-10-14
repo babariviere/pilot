@@ -262,7 +262,15 @@ the brief into the repository is an explicit user action.
   directly; each save is an immutable revision with its author, diffable and revertible. Writes carry
   the expected revision and stale writes are rejected (HTTP 409), so concurrent edits never overwrite.
 - **Decisions**: short binding statements shown above the brief. Agents may record decisions; only the
-  user edits or removes them, and user decisions override the brief.
+  user edits or removes them, and user decisions override the brief. Each has an audience: `all`,
+  `coordinator` or `reference` (the default, including migrated decisions). The user can re-tag via
+  PATCH; the app picker is separate. Tasks can pin decisions with `decisionIds`, including reference
+  decisions. Initial prompts include all-audience decisions, coordinator ones for the coordinator,
+  and the chat's open-task pins, plus a count pointing to `mission decisions`.
+  Decision changes in a running kernel place one short passive in-conversation notice, without
+  changing its decision prompt block or starting a turn. On-demand reads omit unchanged decisions
+  already in that kernel's prompt and identify retired prompt decisions. Membership/role changes
+  and kernel reopen select a fresh block.
 - **Comments**: user or agent annotations anchored to a brief excerpt, optionally addressed to one chat.
   Open comments are part of the context agents read; any mission chat can resolve them. Unaddressed
   comments go to the coordinator, or to Needs you when there is none.
@@ -304,8 +312,8 @@ the brief into the repository is an explicit user action.
   follow-ups and pushes for that chat, suppresses rediscovery and clears only unfinished ownership links.
   References and repository branches stay unchanged. Coordinator `bindPr`/`unbindPr` return
   `{changed, previousOwner, taskLinkRemoved}`; already unbound returns `changed:false`. `previousOwner`
-  is the prior chat's title and ID, or null. Agent `get` includes that owner on every PR resource
-  (null when unbound), and `status` includes each chat's `SessionSummary.boundPullRequests` list.
+  is the prior chat's title and ID, or null. Agent reference reads include the owner's title on each
+  PR link (null when unbound), and `status` includes each chat's `SessionSummary.boundPullRequests` list.
   An optional task ID or number disambiguates the owning mission task; multiple unfinished claims
   without it are rejected (HTTP 409).
   Explicit bindings use the existing PR tracker and lifecycle rules, including after a restart.
@@ -331,11 +339,11 @@ the brief into the repository is an explicit user action.
   without the preview schema retry without stack fields and remember that capability until restart.
 - **Activity**: append-only events: handoffs, status updates (optional health), claims, task changes,
   brief revisions, decisions, links and membership changes.
-  The Activity composer lets the user post updates and handoffs for agents to read. Agent `get`
-  results include the latest 15 user-authored updates and handoffs in `recentUserNotes` (newest first,
+  The Activity composer lets the user post updates and handoffs for agents to read. Agent
+  `activity` results include the latest 15 user-authored updates and handoffs in `recentUserNotes` (newest first,
   with health when present), independently of the latest 15 events in `recentActivity`. Automatic
   events and agent logs cannot push user notes out of this separate window. Posting does not send
-  a chat message; agents read these notes on their next `get`.
+  a chat message; agents read these notes on demand with `activity`.
 
 Coordinator `send` uses the same follow-up admission as user messages, waking idle or paused member
 chats. It returns `delivery: delivered` after kernel placement, `queued` while busy, or
@@ -417,10 +425,12 @@ chats and codemode), following the `artifact`/`todo`/`subagent` pattern:
 
 | Action | Purpose |
 | --- | --- |
-| `get` | Goal, decisions, own tasks, open tasks, open comments, recent user updates and handoffs, recent activity and the brief's revision and outline |
+| `get` | Goal/status/brief revision, own open tasks with links/artifacts, other open tasks as number/title/status/dependencies tuples, counts of finished tasks and references. Coordinator adds current member states, needs-you and PRs in review; no history |
 | `brief` | Read the brief (optionally a revision), or replace it with `markdown` and `expectedRevision` |
-| `tasks`, `task`, `claim` | List tasks; create or update one; claim one (`id`) or several (`ids`, including ranges) for this chat |
-| `release` | Clear claims with the same `id`/`ids` selectors as claim. Members release their own, the current coordinator or user any claim. Resets in_progress/blocked to todo, preserves other states and links, and logs activity. `get`/`tasks` include the claiming chat title and ID. The task row offers Release Claim in its menu. |
+| `tasks`, `task`, `claim` | List tasks (filter open by default, done or all; mine; milestone); id alone reads one full task, other fields create/update; claim one (`id`) or several (`ids`, including ranges) |
+| `links`, `artifacts`, `decisions` | Read references by taskId and filter open (default), done or all; read decisions not already in the prompt |
+| `comments`, `activity` | Open comments; recent activity and user notes on demand |
+| `release` | Clear claims with the same `id`/`ids` selectors as claim. Members release their own, the current coordinator or user any claim. Resets in_progress/blocked to todo, preserves other states and links, and logs activity. Agent task reads use chat titles instead of storage IDs. The task row offers Release Claim in its menu. |
 | `decide`, `comment`, `resolve` | Record a decision; add or resolve a comment |
 | `attach`, `link` | Link an artifact; link an external resource |
 | `log` | Post a handoff or status update |
@@ -457,9 +467,11 @@ The daemon validates current membership, project and persisted links on every re
 I/O. Omitted revision uses a link's pin, or latest for unpinned links; conflicting links require an explicit
 revision. Pinned-only links cannot read unlinked revisions. Ownership, update and list stay session-local,
 and opening messages never copy source content. Mission chats receive a compact mission header in Pilot's prompt section (goal, coordinator,
-own open tasks, decisions and working rules), not the whole brief. Per-action details, including the
+own open tasks, audience-selected/pinned decisions and working rules), not the whole brief. Per-action details, including the
 coordinator's actions, live in the mission tool description rather than the header. The header only
-changes when those fields change, preserving prompt caching.
+changes when non-decision fields change, preserving prompt caching across decision updates. Agent
+`get` targets roughly 1k worker / 2k coordinator tokens on an 80-task fixture; storage IDs, history,
+finished-task detail and duplicate decisions are left out. Full app detail remains unchanged.
 
 **New chat.** The Chats tab and sidebar mission group open the new-chat composer with the mission
 preselected and its project locked, without attaching a task. `SpawnRequest.missionId` validates an

@@ -45,6 +45,11 @@ export interface MissionContext {
 	/** Tasks this chat owns. */
 	tasks: Array<{ number: number; title: string; status: string }>;
 	decisions: string[];
+	/** Selected prompt content, used to avoid duplicate decision reads. */
+	decisionEntries?: Array<{ id: string; text: string }>;
+	remainingDecisions?: number;
+	/** All decision content/audiences and task pins, for live notices only. */
+	decisionVersion?: string;
 }
 
 /** Ask reads either the original checkout or a pinned tree in a daemon-owned bare object store. */
@@ -96,7 +101,7 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 			? "- You coordinate this mission: keep the brief and tasks accurate, split work into tasks other chats can pick up, and summarize progress for the user. The mission tool describes the coordinator actions (delete, group, task order, start, send, status, bindPr, unbindPr). Start chats only when the user asks; Autopilot is not enabled. When you do, pick cheaper models for small tasks and the strongest allowed model for hard ones."
 			: `- ${mission.coordinator === "other" ? "Another chat coordinates this mission" : "The user coordinates this mission"}. Work on your tasks, and add tasks for follow-up work you find instead of widening your scope.`,
 		'- Claim tasks before working on them and keep their status current: in_progress while working, blocked with a comment saying why, in_review once a pull request is open, done when finished, dropped when no longer needed. For several requested tasks, claim them together (ids such as ["1-5"]), then work through them one at a time in dependency order; report skipped claims and unfinished dependencies instead of working past them.',
-		"- Record agreed decisions with decide, edit the brief (with expectedRevision) when the design changes, and post a handoff with log before stopping with unfinished work.",
+		'- Read extra decisions with `mission({action: "decisions"})`; live decision changes arrive as notices, not prompt edits. Record agreed decisions with decide, edit the brief (with expectedRevision) when the design changes, and post a handoff with log before stopping with unfinished work.',
 		"- Open one pull request per task and link it to the task with the link action and taskId. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
 		ghStack === true
 			? `- github/gh-stack is installed: ${stackLink}`
@@ -115,6 +120,7 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 		lines.push(
 			`- Decisions (binding, they override the brief): ${mission.decisions.map((d) => d.replace(/\s+/g, " ")).join(" | ")}`,
 		);
+	if (mission.remainingDecisions) lines.push(`- ${mission.remainingDecisions} more decisions: mission decisions.`);
 	return lines.join("\n");
 }
 

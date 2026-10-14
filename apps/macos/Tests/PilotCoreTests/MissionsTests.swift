@@ -134,6 +134,19 @@ import Testing
     #expect(!MissionTaskStatus.blocked.isClosed)
 }
 
+@Test func decisionAudiencesAndTaskPinsRoundTrip() throws {
+    let decision = try JSONDecoder().decode(MissionDecision.self, from: Data(
+        #"{"id":"d1","text":"Rule","audience":"coordinator","createdAt":1,"updatedAt":2}"#.utf8
+    ))
+    #expect(decision.audience == .coordinator)
+    #expect(try json(MissionDecisionWrite(audience: .all))["audience"] as? String == "all")
+    #expect(try json(MissionDecisionWrite(audience: .reference))["text"] == nil)
+    let task = MissionTask(id: "t1", number: 1, title: "Implement", decisionIds: ["d1"])
+    #expect(try JSONDecoder().decode(MissionTask.self, from: JSONEncoder().encode(task)) == task)
+    #expect(try json(MissionTaskWrite(decisionIds: ["d1"]))["decisionIds"] as? [String] == ["d1"])
+    #expect(try json(MissionTaskWrite(decisionIds: []))["decisionIds"] as? [String] == [])
+}
+
 @Test func sessionSummaryCarriesOptionalMission() throws {
     let plain = try JSONDecoder().decode(SessionSummary.self, from: Data("""
     {"id":"s1","title":"Chat","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"idle"}
