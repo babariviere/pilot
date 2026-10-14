@@ -156,12 +156,12 @@ private struct MissionToolbar: ToolbarContent {
         let members = model.members(of: mission).filter { !$0.isArchived }
         if let coordinator = mission.coordinatorSessionId {
             Button { model.selectedSessionId = coordinator } label: {
-                Label("Open Coordinator", systemImage: "star")
+                Label("Open Coordinator", systemImage: MissionCoordinatorIndicator.symbol)
             }
             Button("Coordinate It Yourself") { model.setCoordinator(nil, missionId: mission.id) }
         } else {
             Button { model.missionSheet = .startCoordinator(missionId: mission.id) } label: {
-                Label("Start a Coordinator…", systemImage: "star")
+                Label("Start a Coordinator…", systemImage: MissionCoordinatorIndicator.symbol)
             }
             .disabled(mission.status != .active)
         }

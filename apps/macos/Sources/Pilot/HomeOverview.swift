@@ -137,7 +137,7 @@ struct HomeOverview: View {
                     }
                     if let id = HomeOverviewLists.coordinator(mission, sessionIds: sessionIds) {
                         Button { app.reveal(session: id) } label: {
-                            Label("Coordinator", systemImage: "star")
+                            Label("Coordinator", systemImage: MissionCoordinatorIndicator.symbol)
                                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize()
                         }
                         .buttonStyle(.plain)
