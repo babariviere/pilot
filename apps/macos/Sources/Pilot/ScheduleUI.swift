@@ -15,6 +15,8 @@ enum ScheduleText {
         case .onBack: "When I’m back"
         case .onOnline: "When online"
         case .onWake: "After wake"
+        case .onJoinNetwork: "When I join a network"
+        case .onLeaveNetwork: "When I leave a network"
         case .at: "At a time"
         }
     }
@@ -25,6 +27,8 @@ enum ScheduleText {
         case .onBack: "Starts after this Mac next wakes from sleep and is online."
         case .onOnline: "Starts the next time this Mac reconnects after being offline."
         case .onWake: "Starts after this Mac next wakes from sleep."
+        case .onJoinNetwork: "Starts the next time this Mac joins a chosen Wi-Fi network."
+        case .onLeaveNetwork: "Starts the next time this Mac leaves a chosen Wi-Fi network."
         case .at: "If this Mac is asleep or offline then, it starts when you’re back."
         }
     }

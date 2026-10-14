@@ -232,6 +232,8 @@ public enum DashboardScheduledTrigger: String, LenientStringEnum {
     case onWake = "on_wake"
     case onBack = "on_back"
     case onOnline = "on_online"
+    case onJoinNetwork = "on_join_network"
+    case onLeaveNetwork = "on_leave_network"
     case at
     public static let fallback = DashboardScheduledTrigger.onBack
 }
@@ -248,6 +250,7 @@ public struct DashboardScheduledItem: Codable, Identifiable, Equatable, Sendable
     public let title: String
     public let kind: DashboardScheduledKind
     public let trigger: DashboardScheduledTrigger
+    public let networkNames: [String]?
     /// Epoch milliseconds, for `at` triggers.
     public let at: Double?
     public let state: DashboardScheduledState
@@ -256,13 +259,14 @@ public struct DashboardScheduledItem: Codable, Identifiable, Equatable, Sendable
 
     public init(
         id: String, title: String, kind: DashboardScheduledKind = .chat,
-        trigger: DashboardScheduledTrigger = .onBack, at: Double? = nil, state: DashboardScheduledState = .pending,
+        trigger: DashboardScheduledTrigger = .onBack, at: Double? = nil, networkNames: [String]? = nil, state: DashboardScheduledState = .pending,
         error: String? = nil, sessionId: String? = nil
     ) {
         self.id = id
         self.title = title
         self.kind = kind
         self.trigger = trigger
+        self.networkNames = networkNames
         self.at = at
         self.state = state
         self.error = error

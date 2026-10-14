@@ -6,6 +6,8 @@ public enum ScheduleTrigger: String, Codable, Sendable {
     case onWake = "on_wake"
     case onOnline = "on_online"
     case onBack = "on_back"
+    case onJoinNetwork = "on_join_network"
+    case onLeaveNetwork = "on_leave_network"
 }
 public enum ScheduleState: String, Codable, Sendable {
     case pending, dispatching, fired, failed, cancelled
@@ -51,12 +53,14 @@ public struct ScheduleRequest: Codable, Sendable {
     public var title: String?
     public var trigger: ScheduleTrigger?
     public var at: Double?
+    public var networkNames: [String]?
     public var target: ScheduleTarget
 
-    public init(title: String? = nil, trigger: ScheduleTrigger? = nil, at: Double? = nil, target: ScheduleTarget) {
+    public init(title: String? = nil, trigger: ScheduleTrigger? = nil, at: Double? = nil, networkNames: [String]? = nil, target: ScheduleTarget) {
         self.title = title
         self.trigger = trigger
         self.at = at
+        self.networkNames = networkNames
         self.target = target
     }
 }
@@ -66,16 +70,18 @@ public struct SchedulePatch: Codable, Sendable {
     public var title: String?
     public var trigger: ScheduleTrigger?
     public var at: Double?
+    public var networkNames: [String]?
     public var target: ScheduleTarget?
     public var expectedRevision: Int?
 
     public init(
         title: String? = nil, trigger: ScheduleTrigger? = nil, at: Double? = nil,
-        target: ScheduleTarget? = nil, expectedRevision: Int? = nil
+        networkNames: [String]? = nil, target: ScheduleTarget? = nil, expectedRevision: Int? = nil
     ) {
         self.title = title
         self.trigger = trigger
         self.at = at
+        self.networkNames = networkNames
         self.target = target
         self.expectedRevision = expectedRevision
     }
@@ -90,6 +96,7 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
     public let projectId: String?
     public let trigger: ScheduleTrigger
     public let at: Double?
+    public let networkNames: [String]?
     public let target: ScheduleTarget
     public let state: ScheduleState
     public let createdAt: Double
@@ -102,7 +109,7 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
 
     public init(
         id: String, revision: Int, title: String, projectId: String? = nil,
-        trigger: ScheduleTrigger, at: Double? = nil, target: ScheduleTarget,
+        trigger: ScheduleTrigger, at: Double? = nil, networkNames: [String]? = nil, target: ScheduleTarget,
         state: ScheduleState, createdAt: Double, updatedAt: Double,
         wakeObserved: Bool? = nil, claimedAt: Double? = nil, firedAt: Double? = nil,
         sessionId: String? = nil, error: String? = nil
@@ -113,6 +120,7 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
         self.projectId = projectId
         self.trigger = trigger
         self.at = at
+        self.networkNames = networkNames
         self.target = target
         self.state = state
         self.createdAt = createdAt
@@ -121,6 +129,28 @@ public struct ScheduledItem: Codable, Identifiable, Sendable {
         self.claimedAt = claimedAt
         self.firedAt = firedAt
         self.sessionId = sessionId
+        self.error = error
+    }
+}
+
+/// GET /api/schedules/wifi; POST to explicitly request authorization. Never prompts on GET.
+public struct WiFiStatus: Codable, Equatable, Sendable {
+    public enum Authorization: String, Codable, Sendable {
+        case notDetermined = "not_determined"
+        case authorized, denied, restricted, disabled, unavailable
+    }
+    public let authorization: Authorization
+    public let available: Bool
+    public let currentNetwork: String?
+    public let knownNetworks: [String]
+    public let error: String?
+
+    public init(authorization: Authorization, available: Bool, currentNetwork: String? = nil,
+                knownNetworks: [String] = [], error: String? = nil) {
+        self.authorization = authorization
+        self.available = available
+        self.currentNetwork = currentNetwork
+        self.knownNetworks = knownNetworks
         self.error = error
     }
 }

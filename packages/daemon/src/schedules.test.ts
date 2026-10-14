@@ -7,6 +7,8 @@ import type { ScheduleRequest, SpawnRequest } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
+import { WiFiDetection } from "./wifi-detection.ts";
+import type { WiFiStatus } from "@pilot/protocol";
 import {
 	ScheduleService,
 	type ScheduleClock,
@@ -73,6 +75,11 @@ async function fixture(t: TestContext, initialOnline = false) {
 			]);
 	const clock = new FakeClock();
 	const triggers = new FakeTriggers();
+	let reportWiFi!: (value: WiFiStatus) => void;
+	const wifi = new WiFiDetection(async (onStatus) => {
+		reportWiFi = onStatus;
+		return { send() {}, close() {} };
+	});
 	triggers.online = initialOnline;
 	const calls: Array<{
 		kind: string;
@@ -97,6 +104,7 @@ async function fixture(t: TestContext, initialOnline = false) {
 		},
 	};
 	const deps = {
+		wifi,
 		trackedItems,
 		clock,
 		triggers,
@@ -115,12 +123,16 @@ async function fixture(t: TestContext, initialOnline = false) {
 	const settle = () => service.signal({ type: "online", online: triggers.online });
 	await settle();
 	t.after(async () => {
+		wifi.stop();
 		await service.stop();
 		await store.close();
 		await trackedItems.close();
 		await rm(home, { recursive: true, force: true });
 	});
 	return {
+		wifi,
+		reportWiFi: (currentNetwork: string | null, authorization: WiFiStatus["authorization"] = "authorized") =>
+			reportWiFi({ authorization, available: true, currentNetwork, knownNetworks: ["Office", "Home"] }),
 		clock,
 		triggers,
 		calls,
@@ -169,6 +181,73 @@ const chat = (extra: Partial<ScheduleRequest> = {}): ScheduleRequest => ({
 		},
 	},
 	...extra,
+});
+
+test("Wi-Fi schedules fire once on next matching transition, without reachability or GUI", async (t) => {
+	const f = await fixture(t);
+	const join = await f.service.create(
+		chat({ trigger: "on_join_network", networkNames: ["Office", "Home", "Office"] }),
+	);
+	const leave = await f.service.create(chat({ trigger: "on_leave_network", networkNames: ["Office"] }));
+	await f.settle();
+	assert.equal(f.triggers.active, false); // Wi-Fi-only work needs no wake sampling / HTTPS probes.
+	f.reportWiFi("Office"); // Initial already-connected observation must not fire.
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	f.reportWiFi("Office"); // roaming on the same name
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	f.reportWiFi("Home"); // A→B fires leave A and join B.
+	await f.settle();
+	assert.equal(f.calls.length, 2);
+	assert.equal(f.service.require(join.id).state, "fired");
+	assert.equal(f.service.require(leave.id).state, "fired");
+	f.reportWiFi("Office");
+	await f.settle();
+	assert.equal(f.calls.length, 2);
+});
+
+test("Wi-Fi edit, cancellation, authorization loss and restart preserve one-shot semantics", async (t) => {
+	const f = await fixture(t, true);
+	const leave = await f.service.create(chat({ trigger: "on_leave_network", networkNames: ["Office"] }));
+	const cancelled = await f.service.create(chat({ trigger: "on_join_network", networkNames: ["Home"] }));
+	await f.settle();
+	f.reportWiFi("Office");
+	await f.settle();
+	await f.service.remove(cancelled.id);
+	f.reportWiFi(null, "denied"); // Not a leave.
+	f.reportWiFi("Home"); // Restored authorization is a baseline.
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	const edited = await f.service.update(leave.id, { networkNames: ["Home"], expectedRevision: 1 });
+	assert.deepEqual(edited.networkNames, ["Home"]);
+	assert.deepEqual(f.store.dashboard("p").find((item) => item.id === leave.id)?.networkNames, ["Home"]);
+	await f.restart();
+	assert.deepEqual(f.service.require(leave.id).networkNames, ["Home"]);
+	f.reportWiFi("Home"); // No synthetic restart edge.
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	f.reportWiFi(null); // Wi-Fi disabled even if overall reachability stays online.
+	await f.settle();
+	assert.equal(f.calls.length, 1);
+	assert.equal(f.service.require(cancelled.id).state, "cancelled");
+});
+
+test("Wi-Fi names validate UTF-8 length, remain exact and clear when switching triggers", async (t) => {
+	const f = await fixture(t);
+	for (const networkNames of [undefined, [], [""], ["a".repeat(33)], ["é".repeat(17)], Array(33).fill("Home"), [123]])
+		await assert.rejects(
+			f.service.create(chat({ trigger: "on_join_network", networkNames } as Partial<ScheduleRequest>)),
+			/networkNames/,
+		);
+	await assert.rejects(f.service.create(chat({ networkNames: ["Home"] })), /only valid/);
+	const saved = await f.service.create(
+		chat({ trigger: "on_join_network", networkNames: [" Home ", "Home", "home", "Home"] }),
+	);
+	assert.deepEqual(saved.networkNames, [" Home ", "Home", "home"]);
+	const edited = await f.service.update(saved.id, { trigger: "on_online" });
+	assert.equal(edited.networkNames, undefined);
+	await assert.rejects(f.service.update(saved.id, { trigger: "on_leave_network" }), /networkNames/);
 });
 
 test("scheduled tickets survive edits and restart, then bind on dispatch exactly once", async (t) => {

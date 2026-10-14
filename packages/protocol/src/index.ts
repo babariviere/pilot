@@ -763,6 +763,7 @@ export interface DashboardScheduledItem {
 	/** What it will do. */
 	kind: "chat" | "message";
 	trigger: import("./schedules.ts").ScheduleTrigger;
+	networkNames?: string[];
 	/** Epoch ms, for `at` triggers. */
 	at?: number;
 	/** `pending` rows list under Scheduled, `failed` ones under Needs you. */
