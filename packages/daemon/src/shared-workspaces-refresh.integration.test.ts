@@ -6,6 +6,129 @@ import { fixture, git, jj } from "./testing/shared-workspace.ts";
 import { run } from "./workspaces.ts";
 
 for (const scenario of [
+	"squash",
+	"dirty",
+	"late-dirty",
+	"omitted",
+	"unpushed",
+	"unpublished-other",
+	"source-branch",
+	"missing-head",
+	"empty",
+	"fetch-failure",
+] as const) {
+	test(`merged workspace refresh: ${scenario}`, async () => {
+		let head = "";
+		let main = "";
+		let failFetch = false;
+		const f = fixture(async (file, args, ...rest) => {
+			if (file === "gh") {
+				if (scenario === "late-dirty") writeFileSync(join(rest[0], "late.txt"), "new work during lookup\n");
+				return JSON.stringify({
+					state: "MERGED",
+					headRefOid: scenario === "missing-head" ? "f".repeat(40) : head,
+					isCrossRepository: false,
+					baseRefName: "main",
+					mergeCommit: { oid: main },
+				});
+			}
+			if (failFetch && file === "git" && args.includes("fetch")) throw new Error("offline");
+			return run(file, args, ...rest);
+		});
+		try {
+			const owner = await f.store.create(f.source, f.path());
+			const coordinator = await f.store.create(f.source, f.path("lead"));
+			writeFileSync(join(owner.path, "first.txt"), "first commit\n");
+			jj(owner.path, "commit", "-m", "first part");
+			writeFileSync(join(owner.path, "second.txt"), "second commit\n");
+			jj(owner.path, "commit", "-m", "second part");
+			jj(owner.path, "bookmark", "create", "fix/completed", "-r", "@-");
+			head = jj(owner.path, "log", "--no-graph", "-r", "fix/completed", "-T", "commit_id");
+			const target = scenario === "empty" ? coordinator : owner;
+			if (scenario === "dirty") writeFileSync(join(target.path, "dirty.txt"), "next work\n");
+			if (scenario === "omitted") {
+				jj(target.path, "config", "set", "--repo", "snapshot.auto-track", "none()");
+				writeFileSync(join(target.path, "omitted.txt"), "must preserve\n");
+			}
+			if (scenario === "unpushed") jj(target.path, "bookmark", "create", "fix/next", "-r", "@");
+			if (scenario === "unpublished-other") {
+				jj(target.path, "new", target.base);
+				writeFileSync(join(target.path, "later.txt"), "unpublished other branch\n");
+				jj(target.path, "commit", "-m", "later work");
+				jj(target.path, "bookmark", "create", "fix/later", "-r", "@-");
+				jj(target.path, "new", head);
+			}
+			const pr = {
+				number: 1,
+				url: "https://github.com/o/r/pull/1",
+				title: "Combined",
+				state: "merged" as const,
+				branch: "fix/completed",
+				checkedAt: Date.now(),
+			};
+			const siblingBefore = jj(coordinator.path, "log", "--no-graph", "-r", "@", "-T", "commit_id");
+			writeFileSync(join(f.source, "first.txt"), "first commit\n");
+			writeFileSync(join(f.source, "second.txt"), "second commit\n");
+			jj(f.source, "commit", "-m", "squash merge");
+			jj(f.source, "bookmark", "set", "main", "-r", "@-");
+			main = git(f.source, "rev-parse", "refs/heads/main");
+			if (scenario === "source-branch") git(f.source, "checkout", "-b", "other", owner.base);
+			if (scenario === "fetch-failure") {
+				git(f.source, "remote", "add", "origin", f.source);
+				failFetch = true;
+			}
+			if (scenario === "fetch-failure") {
+				await assert.rejects(f.store.fetchMain(target.shared!, f.source), /offline|fetch/);
+			} else {
+				const fetched = await f.store.fetchMain(target.shared!, f.source);
+				const refresh = () =>
+					f.store.refreshBase(target.path, target.shared!, f.source, target.base, undefined, {
+						target: fetched,
+						mergedPrs: scenario === "empty" ? [] : [pr],
+					});
+				if (scenario === "omitted") {
+					await assert.rejects(refresh(), /omitted/);
+				} else {
+					const result = await refresh();
+					if (["dirty", "late-dirty", "unpushed", "unpublished-other", "missing-head"].includes(scenario)) {
+						assert.ok("behind" in result, JSON.stringify(result));
+						assert.match(result.behind!, /unpublished|changed during|unpushed|not available locally/);
+						assert.equal(jj(target.path, "log", "--no-graph", "-r", "@-", "-T", "commit_id"), head);
+					} else {
+						assert.equal(result.base, main);
+						assert.equal(
+							jj(
+								target.path,
+								"log",
+								"--no-graph",
+								"-r",
+								"@ & empty()",
+								"-T",
+								'parents.map(|p| p.commit_id()).join("")',
+							),
+							main,
+						);
+					}
+				}
+			}
+			assert.equal(
+				jj(owner.path, "--ignore-working-copy", "log", "--no-graph", "-r", "fix/completed", "-T", "commit_id"),
+				head,
+				"merged bookmark never moves",
+			);
+			if (scenario !== "empty")
+				assert.equal(
+					jj(coordinator.path, "--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", "commit_id"),
+					siblingBefore,
+				);
+			assert.ok(existsSync(join(target.path, ".git")));
+		} finally {
+			f.close();
+		}
+	});
+}
+
+for (const scenario of [
 	"clean",
 	"long-idle",
 	"squash-merged",

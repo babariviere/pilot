@@ -137,6 +137,61 @@ function session(id: string, repo: string, extra: Partial<PullRequestSession> = 
 	};
 }
 
+test("repository refresh events fire without a merge or a discovered PR", async () => {
+	const github = new FakeGitHub();
+	const chat = session("idle", "repo");
+	const refreshed: string[][] = [];
+	const sync = new PullRequestSync(
+		host([chat], {
+			repositoryRefreshed: (sessions) => refreshed.push(sessions.map((session) => session.id)),
+		}),
+		{ runner: github.runner },
+	);
+	try {
+		sync.start();
+		await sync.settled();
+		assert.deepEqual(refreshed, [[chat.id]]);
+		await sync.refresh(chat);
+		assert.deepEqual(refreshed, [[chat.id], [chat.id]]);
+	} finally {
+		await sync.stop();
+	}
+});
+
+test("one project watcher survives settled PRs and stops with the last active chat", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1000 });
+	const github = new FakeGitHub();
+	let active = true;
+	let refreshes = 0;
+	const sync = new PullRequestSync(
+		host([], {
+			projects: () => (active ? [{ id: "project", group: "github.com/octo/repo" }] : []),
+			projectRefreshed: () => {
+				refreshes++;
+			},
+		}),
+		{ runner: github.runner, intervalMs: 100 },
+	);
+	try {
+		sync.start();
+		await sync.settled();
+		assert.equal(refreshes, 1);
+		assert.equal(github.calls.length, 0, "no redundant PR discovery for a project-only main fetch");
+		t.mock.timers.tick(201);
+		sync["pump"]();
+		await sync.settled();
+		assert.equal(refreshes, 2);
+		active = false;
+		t.mock.timers.tick(201);
+		sync["pump"]();
+		await sync.settled();
+		assert.equal(sync["entries"].size, 0);
+		assert.equal(refreshes, 2);
+	} finally {
+		await sync.stop();
+	}
+});
+
 function host(
 	sessions: PullRequestSession[],
 	extra: Partial<PullRequestSyncHost<PullRequestSession, string>> = {},

@@ -85,6 +85,11 @@ export interface PullRequestSyncHost<Session extends PullRequestSession, Context
 	/** PRs to check for problems, or undefined when no follow-up is possible now. */
 	health?(session: Session, result: PullRequestResult): HealthPlan<Context> | undefined;
 	linked?: LinkedPullRequestTracking;
+	/** One repository-refresh event per batch, including refreshes with no newly discovered PR. */
+	repositoryRefreshed?(sessions: Session[], linked: LinkedPullRequest[]): void;
+	/** Project subscribers reuse this scheduler, even after every known PR has settled. */
+	projects?(): Iterable<{ id: string; group?: string }>;
+	projectRefreshed?(projectId: string): void;
 }
 
 interface Entry {
@@ -309,11 +314,18 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 			if (entry.checkedAt === undefined && !entry.running && entry.dueAt === Number.POSITIVE_INFINITY)
 				entry.dueAt = now;
 		}
+		for (const project of this.host.projects?.() ?? []) {
+			const key = `project:${project.id}`;
+			live.add(key);
+			const entry = this.entry(key, project.group);
+			if (entry.checkedAt === undefined && !entry.running && entry.dueAt === Number.POSITIVE_INFINITY)
+				entry.dueAt = now;
+		}
 		for (const [key, entry] of this.entries)
 			if (!live.has(key) && !entry.running && !entry.next && !entry.urgent) {
 				this.entries.delete(key);
 				if (key.startsWith("linked:")) this.linkedTargets.delete(key.slice("linked:".length));
-				else this.inspections.delete(key.slice("session:".length));
+				else if (key.startsWith("session:")) this.inspections.delete(key.slice("session:".length));
 			}
 	}
 
@@ -355,7 +367,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				}
 			}
 			const host = entry.group?.split("/")[0];
-			const blocked = host ? this.limits.blockedUntil(host, now) : 0;
+			const blocked = host && !entry.key.startsWith("project:") ? this.limits.blockedUntil(host, now) : 0;
 			if (blocked > now) {
 				entry.dueAt = blocked;
 				continue;
@@ -396,6 +408,11 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 		try {
 			const work = this.resolve(batch);
 			await this.execute(work, outcomes);
+			for (const entry of batch)
+				if (entry.key.startsWith("project:")) {
+					if (!this.stopped) this.host.projectRefreshed?.(entry.key.slice("project:".length));
+					outcomes.set(entry, { failed: false });
+				}
 		} finally {
 			const now = Date.now();
 			for (const entry of batch) {
@@ -424,7 +441,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 				const session = this.host.session(entry.key.slice("session:".length));
 				if (session && !session.workspaceRecovery && (session.workspace || session.boundPullRequests?.length))
 					work.push({ entry, kind: "session", session });
-			} else {
+			} else if (entry.key.startsWith("linked:")) {
 				const url = entry.key.slice("linked:".length);
 				const target = linked.get(url) ?? this.linkedTargets.get(url);
 				if (!target) continue;
@@ -541,6 +558,11 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 					: [],
 			),
 		);
+		if (!this.stopped)
+			this.host.repositoryRefreshed?.(
+				work.flatMap((item) => (item.kind === "session" ? [item.session] : [])),
+				work.flatMap((item) => (item.kind === "linked" ? [item.target] : [])),
+			);
 	}
 
 	/**
@@ -708,6 +730,7 @@ export class PullRequestSync<Session extends PullRequestSession, Context = unkno
 	/** Milliseconds until an entry's next scheduled check. Infinity means only events check it. */
 	private delay(entry: Entry, checks: string | undefined, now: number): number {
 		if (entry.failures) return Math.min(this.base * 2 ** (entry.failures - 1), maxDelay);
+		if (entry.key.startsWith("project:")) return this.base * 2;
 		if (entry.key.startsWith("linked:")) {
 			const url = entry.key.slice("linked:".length);
 			for (const target of this.host.linked?.targets() ?? [])
