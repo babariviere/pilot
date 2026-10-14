@@ -12,7 +12,7 @@ enum SidebarSelection: Equatable {
     /// A project's Overview.
     case project(String)
     case archive(projectId: String?, missionId: String?)
-    /// The Inbox, scoped like the sidebar.
+    /// The Inbox, its project filter preset from the sidebar's scope.
     case inbox
 
     /// Key for `AppModel.scopeSelections`: the project id, or "" for every project.

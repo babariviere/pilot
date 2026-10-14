@@ -2,9 +2,10 @@ import Combine
 import PilotCore
 import SwiftUI
 
-/// The Inbox: what waits on the user in the sidebar's scope (every project, or the focused one). Chats and
-/// missions that need the user, my open Linear tickets and open Slack messages outside hidden labels. Rows
-/// are the project page's rows with their usual actions, plus the project name when listing every project.
+/// The Inbox, the one place to act: what waits on the user across every project, most urgent first. Chats and
+/// missions that need the user, pull requests ready to merge, my open Linear tickets and open Slack messages
+/// outside hidden labels. A toolbar menu filters it to one project; it is preset to the focused project when the
+/// Inbox opens and never saved. Rows keep their usual actions and name their project when listing every project.
 struct InboxPage: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
@@ -12,10 +13,15 @@ struct InboxPage: View {
     @StateObject private var actions = TrackedItemActions()
 
     var body: some View {
-        let scope = model.focusedProject
+        let scope = client.project(model.inboxProjectId)
         content(scope: scope)
             .navigationTitle("Inbox")
-            .navigationSubtitle(scope?.name ?? "All projects")
+            .navigationSubtitle(InboxText.filterTitle(scope))
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    InboxProjectFilter(selection: $model.inboxProjectId, projects: model.orderedProjects, scope: scope)
+                }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Theme.background)
             .onAppear { inbox.start(client: client, projectId: scope?.id) }
@@ -45,7 +51,35 @@ struct InboxPage: View {
     }
 }
 
-/// The populated page: Needs you, then Linear and Slack when a project in scope tracks them.
+/// "All projects" or one project, in sidebar order. Picking one reloads the Inbox for it.
+private struct InboxProjectFilter: View {
+    @Binding var selection: String?
+    let projects: [Project]
+    let scope: Project?
+
+    var body: some View {
+        Menu {
+            Picker("Project", selection: $selection) {
+                Text("All projects").tag(String?.none)
+                if !projects.isEmpty { Divider() }
+                ForEach(projects) { project in
+                    Text(project.name).tag(Optional(project.id))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Label(InboxText.filterTitle(scope), systemImage: "line.3.horizontal.decrease.circle")
+                .labelStyle(.titleAndIcon)
+        }
+        .menuIndicator(.visible)
+        .fixedSize()
+        .help("Show what waits on you in every project or in one")
+        .accessibilityLabel("Project filter, \(InboxText.filterTitle(scope))")
+    }
+}
+
+/// The populated page: Needs you and Ready to merge, then Linear and Slack when a project in scope tracks them.
 private struct InboxSections: View {
     let inbox: Inbox
     let scope: Project?
@@ -61,10 +95,10 @@ private struct InboxSections: View {
                 ProjectRefreshBanner(receivedAt: nil, error: error, retrying: false, retry: reload)
             }
             if inbox.isEmpty {
-                InboxClearState(message: scope.map { "Chats that need you, your open tickets and Slack messages in \($0.name) appear here." }
-                    ?? "Chats that need you, your open tickets and Slack messages from every project appear here.")
+                InboxClearState(message: InboxText.clearMessage(projectName: scope?.name))
             } else {
                 needsYou
+                if inbox.readyToMerge.total > 0 { readyToMerge }
                 if let linear = inbox.linear {
                     trackedSection(title: "Linear", kind: .linear, items: linear.items, total: linear.total,
                                    empty: "No open tickets are assigned to you.")
@@ -98,6 +132,20 @@ private struct InboxSections: View {
                 if index > 0 { HairlineDivider(leading: 34) }
                 ProjectNeedsYouRow(item: row.item, now: now, context: projectName(row.projectId))
                     .inboxCorner(row.item.signal)
+            }
+            capNote(shown: section.items.count, total: section.total)
+        }
+    }
+
+    /// Pull requests whose chats are done and that GitHub reports ready. Counted in the header, never badged.
+    private var readyToMerge: some View {
+        let section = inbox.readyToMerge
+        return VStack(alignment: .leading, spacing: 6) {
+            PageSectionHeader(title: "Ready to merge", count: section.total)
+            ForEach(Array(section.items.enumerated()), id: \.element.id) { index, row in
+                if index > 0 { HairlineDivider(leading: 34) }
+                InboxReadyToMergeRow(pr: row.pullRequest, context: projectName(row.projectId))
+                    .inboxCorner(.readyToMerge)
             }
             capNote(shown: section.items.count, total: section.total)
         }
@@ -180,6 +228,7 @@ final class InboxModel: ObservableObject {
     private weak var client: PilotClient?
     private var observer: UUID?
     private var counts: AnyCancellable?
+    private var readyPullRequests: AnyCancellable?
     private var pending: Task<Void, Never>?
 
     /// Starts watching, or switches scope. Rows already shown stay until the new scope arrives.
@@ -199,6 +248,11 @@ final class InboxModel: ObservableObject {
                 self?.reload(after: .milliseconds(300))
             }
         }
+        if readyPullRequests == nil {
+            // Ready to merge is never counted, so watch the chats' ready PRs themselves.
+            readyPullRequests = client.$sessions.map(InboxText.readyToMergeKey).removeDuplicates().dropFirst()
+                .sink { [weak self] _ in self?.reload(after: .milliseconds(300)) }
+        }
         if changed || inbox == nil { reload() }
     }
 
@@ -206,6 +260,7 @@ final class InboxModel: ObservableObject {
         if let observer { client?.stopObservingTrackedItems(observer) }
         observer = nil
         counts = nil
+        readyPullRequests = nil
         pending?.cancel()
     }
 
@@ -226,14 +281,6 @@ final class InboxModel: ObservableObject {
                 self.error = error.localizedDescription
             }
         }
-    }
-}
-
-private extension View {
-    /// The sidebar's dithered status corner on an Inbox row. The same trailing room on every row keeps actions
-    /// aligned and off the corner's densest cells, so they stay readable and a state change never shifts them.
-    func inboxCorner(_ signal: SessionSignal?, background: Bool = false) -> some View {
-        padding(.trailing, 24).ditherCorner(signal, background: background)
     }
 }
 

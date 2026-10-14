@@ -19,14 +19,22 @@ private let dotfiles = Project(id: "p2", name: "dotfiles", path: "/tmp/dotfiles"
     app.selectedSessionId = "a"
     app.showInbox()
     #expect(app.showingInbox && app.selectedSessionId == nil && app.currentSelection == .inbox)
-    // Switching scope keeps the Inbox open, now scoped to the focused project.
+    #expect(app.inboxProjectId == nil, "every project by default")
+    // Switching scope keeps the Inbox open, its filter now preset to the focused project.
     app.focus(on: "p1")
     #expect(app.sidebarScope == "p1" && app.currentSelection == .inbox && app.selectedProjectId == nil)
+    #expect(app.inboxProjectId == "p1")
+    // The filter can widen without changing the sidebar, and is not remembered: reopening presets it again.
+    app.inboxProjectId = nil
+    #expect(app.sidebarScope == "p1")
+    app.showInbox()
+    #expect(app.inboxProjectId == "p1")
     app.openOverview()
     #expect(app.selectedProjectId == "p1" && !app.showingInbox)
     app.focus(on: nil)
     // Back in every project, the selection left there (the Inbox) is restored.
     #expect(app.currentSelection == .inbox && app.selectedProjectId == nil)
+    #expect(app.inboxProjectId == nil)
     app.showArchive()
     #expect(!app.showingInbox && app.currentSelection == .archive(projectId: nil, missionId: nil))
     app.showInbox()

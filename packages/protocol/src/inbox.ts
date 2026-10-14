@@ -1,8 +1,16 @@
-import type { DashboardNeedsYouItem, DashboardSection } from "./index.ts";
+import type { DashboardNeedsYouItem, DashboardPullRequest, DashboardSection } from "./index.ts";
 import type { TrackedItem } from "./tracking.ts";
 
 /** A needs-you row of the Inbox, with the project it belongs to. */
 export interface InboxNeedsYouItem extends DashboardNeedsYouItem {
+	projectId: string;
+}
+
+/**
+ * An open pull request GitHub reports ready to merge, with the project it belongs to. Listed only while its chat
+ * neither works nor needs the user, as in the sidebar's Ready to merge group. Pilot never merges it.
+ */
+export interface InboxReadyToMergeItem extends DashboardPullRequest {
 	projectId: string;
 }
 
@@ -19,6 +27,8 @@ export interface InboxHiddenLabel {
 export interface Inbox {
 	/** Chats, missions and scheduled items that need the user, most urgent first, as on the project page. */
 	needsYou: DashboardSection<InboxNeedsYouItem>;
+	/** Open pull requests ready to merge, newest check first. Never counted in the Inbox badge. */
+	readyToMerge: DashboardSection<InboxReadyToMergeItem>;
 	/** My Linear tickets that are not done or canceled: in progress first, then by priority.
 	 * Absent when no project in scope has a Linear team. */
 	linear?: DashboardSection<TrackedItem>;

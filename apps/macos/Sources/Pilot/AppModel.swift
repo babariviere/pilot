@@ -111,8 +111,11 @@ final class AppModel: ObservableObject {
         didSet { projectFolders.save(defaults: projectFolderDefaults) }
     }
     @Published var showingArchive = false
-    /// The Inbox page: what waits on the user in the sidebar's scope. Below chats, missions and project pages.
+    /// The Inbox page: what waits on the user across every project. Below chats, missions and project pages.
     @Published var showingInbox = false
+    /// The Inbox's project filter (nil lists every project). Preset to the focused project each time the Inbox
+    /// opens, and never saved.
+    @Published var inboxProjectId: String?
     /// nil browses every project's archived chats.
     @Published var archiveProjectId: String?
     /// nil includes chats from every mission, as well as chats without one.
@@ -486,12 +489,13 @@ final class AppModel: ObservableObject {
         selectedProjectId = nil
     }
 
-    /// Shows the Inbox for the sidebar's scope.
+    /// Shows the Inbox, its project filter preset to the focused project (every project when none is focused).
     func showInbox() {
         showingArchive = false
         selectedSessionId = nil
         selectedMissionId = nil
         selectedProjectId = nil
+        inboxProjectId = focusedProject?.id
         showingInbox = true
     }
 

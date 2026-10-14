@@ -677,19 +677,20 @@ private func projectTrackingSource(_ group: DashboardTrackedSource, projectId: S
 struct ProjectNeedsYouRow: View {
     let item: DashboardNeedsYouItem
     let now: Date
+    /// The project name, when the list mixes projects.
     var context: String? = nil
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let action = ProjectPageText.needsAction(item)
-        let subtitle = [context, ProjectPageText.needsSubtitle(item, now: now)].compactMap { $0 }.joined(separator: " · ")
+        let detail = detail
         Button(action: open) {
             HoverRow(verticalPadding: 7) { hovered in
                 HStack(spacing: 10) {
                     icon.frame(width: 16)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        Text(subtitle).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2)
+                        detail
                     }
                     Spacer(minLength: 8)
                     if let action {
@@ -705,9 +706,23 @@ struct ProjectNeedsYouRow: View {
         .buttonStyle(.plain)
         .disabled(action == nil)
         .help(item.needsYouLabel(now: now))
-        .accessibilityLabel("\(item.title). \(subtitle)")
+        .accessibilityLabel("\(item.title). \(detail.accessibilityText)")
         .accessibilityHint(action ?? "")
-        .modifier(ScheduledFailureActions(item: item))
+        .modifier(NeedsYouRowActions(item: item, chatId: chatId))
+    }
+
+    /// The chat the row stands for. A failed schedule only names the chat it targets.
+    private var chatId: String? {
+        item.kind == .scheduledFailed ? nil : item.sessionId
+    }
+
+    /// Reads like the chat's sidebar row: mission or coordinator, PR badge, branch, then the reason.
+    private var detail: InboxRowDetail {
+        let session = chatId.flatMap { model.client.session($0) }
+        // A mission's own row (a question or blocked task) is titled with the mission already.
+        let missionTitle = chatId == nil ? nil : item.missionId.flatMap { model.client.mission($0)?.title }
+        return InboxRowDetail(projectName: context, session: session, missionTitle: missionTitle,
+                              reason: ProjectPageText.needsSubtitle(item, now: now))
     }
 
     @ViewBuilder private var icon: some View {
@@ -731,9 +746,11 @@ struct ProjectNeedsYouRow: View {
     }
 }
 
-/// A scheduled item that could not start stays under Needs you until dismissed, which deletes it in pilotd.
-private struct ScheduledFailureActions: ViewModifier {
+/// A chat row opens its chat or its mission from the context menu. A scheduled item that could not start stays
+/// under Needs you until dismissed, which deletes it in pilotd.
+private struct NeedsYouRowActions: ViewModifier {
     let item: DashboardNeedsYouItem
+    let chatId: String?
     @EnvironmentObject private var model: AppModel
 
     func body(content: Content) -> some View {
@@ -744,6 +761,11 @@ private struct ScheduledFailureActions: ViewModifier {
                     Button("Dismiss") { dismiss(id) }
                 }
                 .accessibilityAction(named: "Dismiss") { dismiss(id) }
+        } else if let chatId {
+            content.contextMenu {
+                Button("Open Chat") { model.selectedSessionId = chatId }
+                if let missionId = item.missionId { Button("Open Mission") { model.openMission(missionId) } }
+            }
         } else {
             content
         }

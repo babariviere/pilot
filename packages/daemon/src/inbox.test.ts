@@ -148,7 +148,10 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 	});
 	const get = async <T>(path: string) => (await (await fetch(root + path)).json()) as T;
 
-	assert.deepEqual(await get<Inbox>(`/inbox?projectId=${other.id}`), { needsYou: { total: 0, items: [] } });
+	assert.deepEqual(await get<Inbox>(`/inbox?projectId=${other.id}`), {
+		needsYou: { total: 0, items: [] },
+		readyToMerge: { total: 0, items: [] },
+	});
 	await items.commit(project.id, "linear", [linear("A-1", "started", 2, 1), linear("A-2", "completed", 2, 2)]);
 	await items.commit(project.id, "slack", [
 		slack("C1/1.000001", "high", null, 1),

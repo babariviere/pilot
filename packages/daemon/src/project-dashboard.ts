@@ -11,7 +11,9 @@ import {
 	type DashboardSection,
 	type DashboardTrackedSource,
 	type DashboardWorkingItem,
+	type Inbox,
 	type InboxNeedsYouItem,
+	type InboxReadyToMergeItem,
 	type Mission,
 	type ProjectDashboard,
 	type ProjectDashboardCounts,
@@ -318,15 +320,35 @@ export class ProjectDashboardService {
 
 	/** Needs-you rows of one project or every project, most urgent first, for the Inbox. Throws NotFound. */
 	needsYou(projectId: string | undefined, limit: number): DashboardSection<InboxNeedsYouItem> {
+		return this.inbox(projectId, limit).needsYou;
+	}
+
+	/**
+	 * The Inbox's Needs you and Ready to merge sections, for one project or every project, in one pass over the
+	 * chats. A ready PR is listed only while its chat neither works nor needs the user, so each chat sits in one
+	 * section, as in the sidebar. Throws NotFound.
+	 */
+	inbox(projectId: string | undefined, limit: number): Pick<Inbox, "needsYou" | "readyToMerge"> {
 		if (projectId) this.deps.projects.require(projectId);
 		const ids = projectId ? [projectId] : this.deps.projects.list().map((project) => project.id);
 		const all = this.everyProject();
 		const items: InboxNeedsYouItem[] = [];
-		for (const id of ids)
-			for (const item of all.build(id, Number.MAX_SAFE_INTEGER).needsYou.items)
+		const ready: InboxReadyToMergeItem[] = [];
+		for (const id of ids) {
+			const dashboard = all.build(id, Number.MAX_SAFE_INTEGER);
+			const busy = new Set(dashboard.working.items.map((item) => item.sessionId));
+			for (const item of dashboard.needsYou.items) {
 				items.push({ ...item, projectId: id });
+				// A failed schedule names the chat it targets; that chat is not waiting on the user.
+				if (item.sessionId && item.kind !== "scheduled_failed") busy.add(item.sessionId);
+			}
+			for (const pr of dashboard.pullRequests.items)
+				if (pr.state === "open" && pr.readiness?.state === "ready" && !busy.has(pr.sessionId))
+					ready.push({ ...pr, projectId: id });
+		}
 		items.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.at - a.at || a.id.localeCompare(b.id));
-		return section(items, limit);
+		ready.sort((a, b) => b.checkedAt - a.checkedAt || a.url.localeCompare(b.url));
+		return { needsYou: section(items, limit), readyToMerge: section(ready, limit) };
 	}
 
 	/** Fires after any change that can alter a dashboard. Callers coalesce and compare results. */
