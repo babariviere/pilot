@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import PilotCore
 
+@Test func daemonActivityUsesExistingNoticeRow() throws {
+    var transcript = Transcript()
+    let snapshot = #"{"type":"snapshot","entries":[{"id":1,"kind":"pilot.activity","data":{"text":"Rebased PR #1 onto main"},"model":[]}],"tools":[],"inbox":[]}"#
+    transcript.apply(try JSONValue.decode(Data(snapshot.utf8)))
+    #expect(transcript.rows == [.notice(id: "1", text: "Rebased PR #1 onto main")])
+}
+
 @Test func parsesMarkdownBlocks() {
     let blocks = Markdown.parse("""
     ## Root cause

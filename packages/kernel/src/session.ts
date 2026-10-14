@@ -442,6 +442,13 @@ export class KernelSession {
 		return this.adapter.thinkingLevel;
 	}
 
+	async recordActivity(requestId: string, text: string): Promise<void> {
+		await this.conversation.submit(
+			{ type: "write", requestId, entry: { kind: "pilot.activity", data: { text }, model: [] } },
+			context,
+		);
+	}
+
 	/** Configure on the durable mutation line, with the same busy/inbox barrier as input admission. */
 	async changeModel(model: string, thinking?: string): Promise<void> {
 		if (this.#closing || this.#changingModel || this.#admissions || this.#moving)

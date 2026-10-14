@@ -123,6 +123,8 @@ extension Transcript {
 
         for entry in entries {
             switch entry.kind {
+            case "pilot.activity":
+                if let text = entry.activity { append(.notice(id: "\(entry.id)", text: text)) }
             case "pilot.artifact":
                 if let artifact = entry.artifact { append(.artifact(id: "\(entry.id)-artifact", reference: artifact)) }
             case "pi.compaction": append(.notice(id: "\(entry.id)", text: "Context compacted"))

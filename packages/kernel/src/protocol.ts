@@ -48,6 +48,8 @@ export interface KernelSpec {
 export type KernelCommand =
 	| { type: "start"; spec: KernelSpec }
 	| { type: "input"; requestId: string; content: string; mode: DeliveryMode; onlyIfIdle?: boolean }
+	/** Passive, display-only daemon activity. Never schedules a model turn. */
+	| { type: "activity"; requestId: string; text: string }
 	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string; mode?: DeliveryMode }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
