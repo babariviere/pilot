@@ -14,6 +14,7 @@ import {
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
 import { activeConversation, lineage } from "./attempts.ts";
 import { AttentionDoc, normalizeCompletion } from "./attention.ts";
+import { chatEventEntries } from "./chat-events.ts";
 import { GitHubActionsDoc } from "./github-actions.ts";
 import { HeldInputsDoc } from "./held-inputs.ts";
 import { InputOrigins } from "./input-origin.ts";
@@ -61,8 +62,12 @@ async function conversationView(
 		]);
 		const snapshot: AgentEvent = {
 			type: "snapshot",
-			entries: await new InputOrigins(storage, await lineage(storage, id, context), context).entries(
-				head ? [head, ...range.filter((entry) => entry.head === undefined)] : range,
+			entries: await chatEventEntries(
+				session,
+				await new InputOrigins(storage, await lineage(storage, id, context), context).entries(
+					head ? [head, ...range.filter((entry) => entry.head === undefined)] : range,
+				),
+				context,
 			),
 			...(live?.run ? { run: { inputs: live.run.inputs } } : {}),
 			...(live?.generation ? { generation: live.generation } : {}),
@@ -214,8 +219,10 @@ export async function readEarlierEntries(
 		entries.splice(
 			0,
 			entries.length,
-			...(await new InputOrigins(storage, await lineage(storage, conversationId, context), context).entries(
-				entries,
+			...(await chatEventEntries(
+				createSession(storage),
+				await new InputOrigins(storage, await lineage(storage, conversationId, context), context).entries(entries),
+				context,
 			)),
 		);
 	} finally {

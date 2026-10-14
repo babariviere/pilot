@@ -168,7 +168,7 @@ export class MissionNotices {
 			const notice = this.store.prepareNotice(missionId, id, now, jobNotes);
 			if (!notice) continue;
 			try {
-				if (await this.sessions.sendNotice(id, notice.content, notice.requestId))
+				if (await this.sessions.sendNotice(id, notice.content, notice.requestId, notice.event))
 					this.store.acknowledgeNotice(notice, now);
 			} catch (error) {
 				console.warn(`pilotd: could not deliver ${notice.requestId}: ${error}`);

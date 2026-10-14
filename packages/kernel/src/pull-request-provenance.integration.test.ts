@@ -49,6 +49,21 @@ test("GitHub audit records direct and discarded nested results, cold reads and r
 	});
 	assert.equal(observed.length, 4);
 	assert.deepEqual(
+		observed.map((action) => action.kind),
+		["pr_ready", "pr_edited", "pr_ready", "github_updated"],
+	);
+	for (const action of observed) {
+		assert.ok(action.afterEntryId);
+		assert.equal(action.conversationId, String(session.conversation.id));
+		assert.ok(action.toolCallId);
+		assert.ok(
+			(await session.conversation.context(context)).entries.some(
+				(entry) => Number(entry.id) === action.afterEntryId,
+			),
+		);
+	}
+	assert.equal(observed[2]?.toolCallId, observed[3]?.toolCallId, "nested writes share the originating top-level call");
+	assert.deepEqual(
 		observed.map((a) => a.exitCode),
 		[0, 1, 0, 0],
 	);
@@ -58,11 +73,13 @@ test("GitHub audit records direct and discarded nested results, cold reads and r
 	);
 	assert.equal(JSON.stringify(observed).includes("private"), false);
 	await f.run(session, "implicit-ready", "bash", { command: "gh pr ready --id 14" });
-	await f.run(session, "implicit-create", "bash", { command: "gh pr create --id 15" });
+	await f.run(session, "implicit-create", "bash", { command: "gh pr create --id 15 --title 'Quiet chat events'" });
 	assert.deepEqual(
 		observed.slice(-2).map((action) => action.target),
 		["PR #14", "PR #15"],
 	);
+	assert.equal(observed.at(-1)?.prNumber, 15);
+	assert.equal(observed.at(-1)?.title, "Quiet chat events");
 	await session.unwatch("audit");
 	const frames = updates.filter((event) => event.type === "github_actions_update");
 	assert.equal(frames[0]?.type === "github_actions_update" && frames[0].actions.length, 0);
@@ -211,6 +228,16 @@ test("agent PR provenance uses matching successful results, survives compaction 
 	assert.equal(outcome.state.status, "terminal");
 	await session.conversation.waitForIdle(context);
 	assert.ok((await session.conversation.context(context)).entries.some((entry) => entry.kind === "pi.compaction"));
+	const compacted = await readSessionSnapshot(join(f.root, "durable"), f.root, false);
+	const compactedSnapshot = compacted.events.find((event) => event.type === "snapshot");
+	const marker =
+		compactedSnapshot?.type === "snapshot"
+			? compactedSnapshot.entries.find((entry) => entry.kind === "pi.compaction")
+			: undefined;
+	assert.ok(marker);
+	assert.ok(
+		(marker.data as { tokensBefore: number }).tokensBefore > (marker.data as { tokensAfter: number }).tokensAfter,
+	);
 	assert.deepEqual((await session.harness.snapshot(PullRequestsDoc, session.conversation.id, context))?.urls, [
 		url(1),
 	]);

@@ -2221,7 +2221,12 @@ export class SessionManager {
 		);
 	}
 
-	async sendNotice(id: string, content: string, requestId: string): Promise<boolean> {
+	async sendNotice(
+		id: string,
+		content: string,
+		requestId: string,
+		event?: import("@pilot/protocol").ChatEventSummary,
+	): Promise<boolean> {
 		if (!this.canSendNotice(id, requestId) || !this.missions?.noticeAllowed?.(id, requestId)) return false;
 		const end = this.updateGate.begin();
 		const meta = this.require(id);
@@ -2233,6 +2238,7 @@ export class SessionManager {
 				type: "input",
 				requestId,
 				content,
+				event,
 				mode: "followUp",
 				onlyIfIdle: true,
 			};

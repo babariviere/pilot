@@ -16,6 +16,7 @@ export async function submitIdleInput(
 	requestId: string,
 	content: string,
 	context: Context,
+	event?: import("@pilot/protocol").ChatEventSummary,
 ): Promise<void> {
 	await conversation.commit(async (tx) => {
 		const existing = await tx.submissionByRequest(conversation.id, requestId);
@@ -29,7 +30,9 @@ export async function submitIdleInput(
 		if (live.run || live.compactions?.length || inbox.items.length) throw new ConversationBusy(conversation.id);
 		// These are pi-durable's idle input placement and startRun operations in the SAME commit as the guard.
 		// The Harness still owns scheduling, generation, settlement and recovery; no native model loop is started.
-		const entry = await tx.appendEntry(UserEntry, conversation.id, {
+		const entry = await tx.appendEntry(conversation.id, {
+			kind: UserEntry.kind,
+			...(event ? { data: { event: { ...event } } } : {}),
 			model: [{ role: "user", content, timestamp: Date.now() }],
 		});
 		const submission = await tx.createSubmission({

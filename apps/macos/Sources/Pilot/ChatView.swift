@@ -539,12 +539,10 @@ struct RowView: View, Equatable {
             QuestionRow(question: question)
         case let .error(_, text):
             ErrorRow(text: text, entryID: row.entryID)
-        case let .notice(_, text):
-            HStack {
-                VStack { Divider() }
-                Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                VStack { Divider() }
-            }
+        case let .notice(id, text):
+            ChatEventRow(event: ChatEvent(id: id, kind: "activity", text: text))
+        case let .event(event):
+            ChatEventRow(event: event, expansion: messageExpansions?.state(for: event.id))
         }
     }
 }

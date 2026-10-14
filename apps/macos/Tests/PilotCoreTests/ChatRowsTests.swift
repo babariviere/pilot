@@ -6,7 +6,7 @@ import Testing
     var transcript = Transcript()
     let snapshot = #"{"type":"snapshot","entries":[{"id":1,"kind":"pilot.activity","data":{"text":"Rebased PR #1 onto main"},"model":[]}],"tools":[],"inbox":[]}"#
     transcript.apply(try JSONValue.decode(Data(snapshot.utf8)))
-    #expect(transcript.rows == [.notice(id: "1", text: "Rebased PR #1 onto main")])
+    #expect(transcript.rows == [.event(ChatEvent(id: "1", kind: "activity", text: "Rebased PR #1 onto main"))])
 }
 
 @Test func parsesMarkdownBlocks() {

@@ -55,6 +55,7 @@ export type KernelCommand =
 			mode: DeliveryMode;
 			onlyIfIdle?: boolean;
 			reportDelivery?: boolean;
+			event?: import("@pilot/protocol").ChatEventSummary;
 	  }
 	/** Passive, display-only daemon activity. Never schedules a model turn. */
 	| { type: "activity"; requestId: string; text: string }

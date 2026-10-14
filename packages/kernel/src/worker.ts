@@ -227,6 +227,7 @@ export function runKernelWorker(): void {
 					command.mode,
 					command.onlyIfIdle,
 					command.reportDelivery,
+					command.event,
 				);
 				await send({ type: "accepted", requestId: command.requestId, ...delivery });
 				break;

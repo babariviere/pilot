@@ -70,6 +70,9 @@ public struct Entry: Identifiable, Equatable, Sendable {
     public let messages: [ChatMessage]
     public let artifact: ArtifactReference?
     public let activity: String?
+    public let eventSummary: ChatEventSummary?
+    public let githubAction: GitHubAction?
+    public let data: JSONValue?
     /// A question from ask_user, on `pilot.question` entries.
     public let question: AgentQuestion?
     /// Set on user entries that were automatic input. Unknown future origins read as extension input.
@@ -82,6 +85,9 @@ public struct Entry: Identifiable, Equatable, Sendable {
         head = json["head"]?.int
         messages = (json["model"]?.array ?? []).map(ChatMessage.init(json:))
         artifact = kind == "pilot.artifact" ? ArtifactReference.fromToolResult(.object(["details": json["data"] ?? .null])) : nil
+        data = json["data"]
+        eventSummary = ChatEventSummary(json: json["data"]?["event"])
+        githubAction = kind == "pilot.github-event" ? json["data"].flatMap(GitHubAction.init(json:)) : nil
         activity = kind == "pilot.activity" ? json["data"]?["text"]?.string : nil
         question = kind == AgentQuestion.entryKind ? AgentQuestion(entryID: id, data: json["data"]) : nil
         origin = json["origin"]?.string.map { InputOrigin(rawValue: $0) ?? .extension }
@@ -164,7 +170,7 @@ public struct Transcript: Equatable, Sendable {
         set {
             guard storedEntries != newValue else { return }
             storedEntries = newValue
-            if !githubEntries.isEmpty { displayedEntries = storedEntries + githubEntries }
+            if !githubEntries.isEmpty { rebuildDisplayedEntries() }
             entryIDs = Set(newValue.map(\.id))
             invalidateCommittedRows()
         }
@@ -297,7 +303,7 @@ public struct Transcript: Equatable, Sendable {
             automaticInputs = automatic
             todos = savedTodos
             githubEntries = savedGitHubEntries
-            displayedEntries = savedGitHubEntries
+            displayedEntries = []
             let active = (event["entries"]?.array ?? []).compactMap(Entry.init(json:))
             if event["prefixPending"]?.bool == true {
                 // The newest entries paint first. No earlier page is offered until the prefix completes the snapshot.
@@ -382,24 +388,15 @@ public struct Transcript: Equatable, Sendable {
             queuedMessages = (event["items"]?.array ?? []).compactMap(QueuedMessage.init(json:))
             automaticInputs = (event["automatic"]?.array ?? []).compactMap(PendingAutomaticInput.init(json:))
         case "github_actions_update":
-            let actions = Array((event["actions"]?.array ?? []).suffix(200))
-            let formatter = ISO8601DateFormatter()
-            let projected = actions.enumerated().compactMap { index, action -> Entry? in
-                let description = action["description"]?.string ?? "GitHub action"
-                let code = action["exitCode"]?.int
-                let outcome = code == 0 ? "" : code.map { " (failed, exit \($0))" } ?? " (exit status unknown)"
-                let summary = action["summary"]?.string ?? ""
-                let time = action["at"]?.number.map { formatter.string(from: Date(timeIntervalSince1970: $0 / 1000)) } ?? ""
-                let text = "\(code == 0 ? "" : "attempted: ")\(description)\(outcome) · \(summary) · \(time)"
-                return Entry(json: .object([
-                    "id": .number(Double(-index - 1)), "kind": .string("pilot.activity"),
-                    "data": .object(["text": .string(text)]), "model": .array([]),
+            let projected = Array((event["actions"]?.array ?? []).suffix(200)).enumerated().compactMap { index, action in
+                Entry(json: .object([
+                    "id": .number(Double(-index - 1)), "kind": .string("pilot.github-event"),
+                    "data": action, "model": .array([]),
                 ]))
             }
-            // Replace this bounded projection, not durable transcript history.
             if githubEntries != projected {
                 githubEntries = projected
-                displayedEntries = githubEntries.isEmpty ? [] : storedEntries + githubEntries
+                rebuildDisplayedEntries()
                 invalidateCommittedRows()
             }
         case "todos_update":
@@ -438,8 +435,64 @@ public struct Transcript: Equatable, Sendable {
         let outOfOrder = storedEntries.last.map { $0.id > entry.id } ?? false
         storedEntries.append(entry)
         if outOfOrder { storedEntries.sort { $0.id < $1.id } }
-        if !githubEntries.isEmpty { displayedEntries = storedEntries + githubEntries }
+        if !githubEntries.isEmpty { rebuildDisplayedEntries() }
         invalidateCommittedRows()
+    }
+
+    /// O(history + bounded audit), only on committed changes. Never touched by streaming deltas.
+    private mutating func rebuildDisplayedEntries() {
+        guard !githubEntries.isEmpty else { displayedEntries = []; return }
+        let wantedCalls = Set(githubEntries.compactMap { $0.githubAction?.toolCallId })
+        let wantedIDs = Set(githubEntries.compactMap { $0.githubAction?.afterEntryId })
+        let legacy = githubEntries.compactMap(\.githubAction)
+            .filter { $0.afterEntryId == nil && $0.toolCallId == nil }.sorted { $0.at < $1.at }
+        var legacyAnchors = Array(repeating: -1, count: legacy.count)
+        var calls: [String: Int] = [:]
+        var indexes: [Int: Int] = [:]
+        for (index, entry) in storedEntries.enumerated() {
+            if wantedIDs.contains(entry.id) { indexes[entry.id] = index }
+            if let time = entry.messages.compactMap(\.timestamp).min(), !legacy.isEmpty {
+                var lo = 0, hi = legacy.count
+                while lo < hi {
+                    let mid = (lo + hi) / 2
+                    if legacy[mid].at < time { lo = mid + 1 } else { hi = mid }
+                }
+                if lo < legacy.count { legacyAnchors[lo] = index }
+            }
+            for message in entry.messages {
+                for block in message.blocks {
+                    if case let .toolCall(id, _, _) = block, wantedCalls.contains(id) { calls[id] = index }
+                }
+            }
+        }
+        var legacyByID: [String: Int] = [:]
+        var latest = -1
+        for (index, action) in legacy.enumerated() {
+            latest = max(latest, legacyAnchors[index])
+            legacyByID[action.id] = latest < 0 ? storedEntries.count - 1 : latest
+        }
+        var after: [Int: [Entry]] = [:]
+        for entry in githubEntries {
+            guard let action = entry.githubAction else { continue }
+            let anchor = action.afterEntryId.flatMap { indexes[$0] }
+                ?? action.toolCallId.flatMap { calls[$0] }
+            if let anchor {
+                after[anchor, default: []].append(entry)
+            } else if action.afterEntryId == nil && action.toolCallId == nil {
+                // Old kernels supplied no position. Use their execution time without parsing the audit text.
+                let anchor = legacyByID[action.id] ?? (storedEntries.count - 1)
+                after[anchor, default: []].append(entry)
+            }
+            // Hidden by compaction, a split prefix, or another attempt: wait until its anchor is loaded.
+        }
+        var result: [Entry] = []
+        result.reserveCapacity(storedEntries.count + githubEntries.count)
+        result.append(contentsOf: after[-1] ?? [])
+        for (index, entry) in storedEntries.enumerated() {
+            result.append(entry)
+            result.append(contentsOf: after[index] ?? [])
+        }
+        displayedEntries = result
     }
 
     private static func apply(_ change: JSONValue, to message: inout ChatMessage) {
