@@ -188,6 +188,13 @@ CREATE TABLE IF NOT EXISTS members (
 	joined_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS members_by_mission ON members (mission_id);
+-- A first automatic observation is consumed even when task attribution is ambiguous.
+-- Keep it after unlinking so creation/discovery replay cannot recreate deleted links.
+CREATE TABLE IF NOT EXISTS automatic_pull_request_observations (
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	url TEXT NOT NULL COLLATE NOCASE,
+	PRIMARY KEY (mission_id, url)
+);
 CREATE TABLE IF NOT EXISTS pull_request_binding_operations (
 	id TEXT PRIMARY KEY,
 	applied_at INTEGER NOT NULL
@@ -1931,6 +1938,48 @@ export class MissionStore {
 		this.changed(id);
 	}
 
+	/** Multi-task chats must use link + taskId, never infer a task from status or claim order. */
+	linkAutomaticPullRequests(sessionId: string, urls: string[]): void {
+		const id = this.missionOf(sessionId);
+		if (!id || !urls.length) return;
+		// Include completed tasks: a delayed PR from an earlier task is not the next task's PR.
+		const tasks = this.all(
+			"SELECT id, status FROM tasks WHERE mission_id = ? AND session_id = ? LIMIT 2",
+			id,
+			sessionId,
+		);
+		if (this.referenceBatch) throw new Error("A reference batch is already active");
+		let linked = false;
+		this.referenceBatch = id;
+		try {
+			this.transaction(() => {
+				for (const url of urls) {
+					const parsed = normalizeResourceWrite({ url });
+					if (parsed.kind !== "github.pr") continue;
+					const observed = this.db
+						.prepare("INSERT OR IGNORE INTO automatic_pull_request_observations (mission_id, url) VALUES (?, ?)")
+						.run(id, parsed.url);
+					if (!observed.changes) continue;
+					// Also respect explicit/legacy attribution before the observation ledger existed.
+					if (
+						this.one(
+							"SELECT 1 FROM resources WHERE mission_id = ? AND url = ? COLLATE NOCASE AND relationship = 'ownership' LIMIT 1",
+							id,
+							parsed.url,
+						)
+					)
+						continue;
+					if (tasks.length !== 1 || tasks[0]!.status === "done" || tasks[0]!.status === "dropped") continue;
+					this.addResource(id, { url: parsed.url, taskId: str(tasks[0]!.id!) }, { sessionId });
+					linked = true;
+				}
+			});
+		} finally {
+			this.referenceBatch = undefined;
+		}
+		if (linked) this.changed(id);
+	}
+
 	addResource(id: string, write: MissionResourceWrite, actor: MissionActor = USER): MissionResource {
 		this.require(id);
 		const { title, ...parsed } = normalizeResourceWrite(write);
@@ -2000,6 +2049,12 @@ export class MissionStore {
 		)
 			throw new Conflict("Members may only remove links they added");
 		this.transaction(() => {
+			if (resource.kind === "github.pr" && resource.relationship === "ownership")
+				this.run(
+					"INSERT OR IGNORE INTO automatic_pull_request_observations (mission_id, url) VALUES (?, ?)",
+					id,
+					resource.url,
+				);
 			this.run("DELETE FROM resources WHERE id = ?", resourceId);
 			this.event(id, "resource", `Unlinked ${resource.title ?? resource.externalId ?? resource.url}`, actor, {
 				taskId: resource.taskId,

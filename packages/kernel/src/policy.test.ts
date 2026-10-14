@@ -70,6 +70,7 @@ test("multi-task guidance claims requested tasks, orders work, maintains statuse
 		}
 		assert.match(prompt, /Open one pull request per task/);
 		assert.match(prompt, /link it to the task with the link action and taskId/);
+		assert.match(prompt, /In multi-task chats, this explicit link is required/);
 		assert.match(prompt, /Resource links are references, not PR ownership/);
 		assert.match(prompt, /Only the user or coordinator binds PRs/);
 		assert.match(prompt, /Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you/);

@@ -272,13 +272,7 @@ export class MissionService {
 	}
 
 	private linkPullRequests(sessionId: string, urls: string[]): void {
-		const id = this.store.missionOf(sessionId);
-		if (!id) return;
-		const tasks = this.store
-			.tasks(id)
-			.filter((task) => task.sessionId === sessionId && task.status !== "done" && task.status !== "dropped");
-		for (const task of tasks)
-			for (const url of urls) this.store.addResource(id, { url, taskId: task.id }, { sessionId });
+		this.store.linkAutomaticPullRequests(sessionId, urls);
 	}
 
 	private session(id: string): SessionSummary {
