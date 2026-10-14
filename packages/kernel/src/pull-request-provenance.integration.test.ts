@@ -14,12 +14,73 @@ import {
 } from "@earendil-works/pi-ai";
 import { createCodemodeExtension, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-durable";
+import type { AgentEvent, GitHubAction } from "@pilot/protocol";
+import { GitHubActionsDoc } from "./github-actions.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { PullRequestsDoc } from "./pull-request-provenance.ts";
 import { KernelSession, type KernelSessionHooks } from "./session.ts";
+import { readSessionSnapshot } from "./snapshot.ts";
 
 const context = BACKGROUND_CONTEXT;
 const url = (id: number) => `https://github.com/owner/repo/pull/${id}`;
+
+test("GitHub audit records direct and discarded nested results, cold reads and replay without duplicates", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	const observed: GitHubAction[] = [];
+	let session = await f.open({ onGitHubAction: (action) => observed.push(action) });
+	const updates: AgentEvent[] = [];
+	await session.watch(
+		"audit",
+		(events) => {
+			updates.push(...events);
+		},
+		false,
+	);
+	await f.run(session, "ready", "bash", { command: "gh pr ready 12" });
+	await f.run(session, "failed", "bash", { command: "gh pr edit 12 --fail --body 'private body'" });
+	await f.run(session, "nested", "codemode", {
+		code: `
+		// gh pr ready 99 is not an execution.
+		await tools.bash({ command: "gh pr ready 13" });
+		await tools.bash({ command: "gh api repos/owner/repo/pulls/13 -X PATCH -f body=private" });
+		throw new Error("outer failed after writes");`,
+	});
+	assert.equal(observed.length, 4);
+	assert.deepEqual(
+		observed.map((a) => a.exitCode),
+		[0, 1, 0, 0],
+	);
+	assert.deepEqual(
+		observed.map((a) => a.target),
+		["PR #12", "PR #12", "PR #13", "PR #13"],
+	);
+	assert.equal(JSON.stringify(observed).includes("private"), false);
+	await f.run(session, "implicit-ready", "bash", { command: "gh pr ready --id 14" });
+	await f.run(session, "implicit-create", "bash", { command: "gh pr create --id 15" });
+	assert.deepEqual(
+		observed.slice(-2).map((action) => action.target),
+		["PR #14", "PR #15"],
+	);
+	await session.unwatch("audit");
+	const frames = updates.filter((event) => event.type === "github_actions_update");
+	assert.equal(frames[0]?.type === "github_actions_update" && frames[0].actions.length, 0);
+	assert.equal(frames.at(-1)?.type === "github_actions_update" && frames.at(-1)!.actions.length, 6);
+	const state = await session.harness.snapshot(GitHubActionsDoc, context);
+	assert.deepEqual(
+		state?.actions.map((a) => a.id),
+		observed.map((a) => a.id),
+	);
+	await session.close();
+	const cold = await readSessionSnapshot(join(f.root, "durable"), f.root, false);
+	const audit = cold.events.find((event) => event.type === "github_actions_update");
+	assert.equal(audit?.type === "github_actions_update" && audit.actions.length, 6);
+	const replay: GitHubAction[] = [];
+	session = await f.open({ onGitHubAction: (action) => replay.push(action) });
+	assert.deepEqual(replay, observed);
+	assert.equal(f.calls.length, 6, "reopen must not execute external mutations again");
+});
 
 async function fixture(t: TestContext) {
 	const root = await mkdtemp(join(tmpdir(), "pilot-pr-provenance-"));
@@ -114,7 +175,7 @@ async function fixture(t: TestContext) {
 		await session.submit(name, "Execute the offline test", "followUp");
 		await session.conversation.waitForIdle(context);
 	};
-	return { open, run, calls, adapters, faux };
+	return { open, run, calls, adapters, faux, root };
 }
 
 test("agent PR provenance uses matching successful results, survives compaction and replays on open", {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,9 +8,9 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import {
+	type CompactionResult,
 	createRegistry,
 	createSession,
-	type CompactionResult,
 	Harness,
 	InboxDoc,
 	LiveDoc,
@@ -19,16 +19,16 @@ import {
 	UsageDoc,
 	watchEvents,
 } from "@earendil-works/pi-durable";
-import { AttentionDoc } from "./attention.ts";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
+import { AttentionDoc } from "./attention.ts";
 import {
 	EARLIER_ENTRIES_MAX_BYTES,
 	readEarlierEntries,
 	readSessionSnapshot,
 	readSubagentTranscript,
 } from "./snapshot.ts";
-import { subagentStorageSignature } from "./subagent-watch.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
+import { subagentStorageSignature } from "./subagent-watch.ts";
 import { TodosWatch } from "./todos.ts";
 
 test("cold snapshot matches durable active view under a writer lease, without running pending tools", async (t) => {
@@ -184,10 +184,17 @@ test("cold snapshot of an unopened session creates no storage and reads TODO fil
 		);
 		const view = await readSessionSnapshot(join(dir, "durable"), dir);
 		assert.equal(view.events[0]?.type, "snapshot");
-		assert.deepEqual(view.events[2], {
-			type: "todos_update",
-			items: [{ id: "TODO-aabbccdd", title: "Check", status: "open", createdAt: "today" }],
-		});
+		assert.deepEqual(
+			view.events.find((event) => event.type === "github_actions_update"),
+			{ type: "github_actions_update", actions: [] },
+		);
+		assert.deepEqual(
+			view.events.find((event) => event.type === "todos_update"),
+			{
+				type: "todos_update",
+				items: [{ id: "TODO-aabbccdd", title: "Check", status: "open", createdAt: "today" }],
+			},
+		);
 		assert.deepEqual(await readdir(dir), [".pi"]);
 	} finally {
 		await rm(dir, { recursive: true, force: true });
@@ -202,14 +209,20 @@ test("Ask cold snapshots return empty TODOs without reading live checkout extens
 	t.mock.method(TodosWatch.prototype, "refresh", () => assert.fail("Ask cold readers must not read checkout TODOs"));
 	const durable = join(dir, "durable");
 	const unopened = await readSessionSnapshot(durable, dir, false);
-	assert.deepEqual(unopened.events[2], { type: "todos_update", items: [] });
+	assert.deepEqual(
+		unopened.events.find((event) => event.type === "todos_update"),
+		{ type: "todos_update", items: [] },
+	);
 	assert.deepEqual(await readdir(dir), [".pi"]);
 	const owned = await openSessionStorage(durable);
 	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
 	try {
 		await harness.root(context, { agent: { model: { provider: "missing", modelId: "offline" } } });
 		const persisted = await readSessionSnapshot(durable, dir, false);
-		assert.deepEqual(persisted.events[2], { type: "todos_update", items: [] });
+		assert.deepEqual(
+			persisted.events.find((event) => event.type === "todos_update"),
+			{ type: "todos_update", items: [] },
+		);
 	} finally {
 		await harness.close(context);
 		owned.release();

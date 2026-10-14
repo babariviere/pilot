@@ -112,12 +112,17 @@ public struct QueuedMessage: Identifiable, Codable, Equatable, Sendable {
 /// Folds pi-durable agent events into a renderable transcript.
 public struct Transcript: Equatable, Sendable {
     private var storedEntries: [Entry] = []
+    /// Bounded activity projection, never part of transcript pagination or compaction ancestry.
+    private var githubEntries: [Entry] = []
+    /// Rebuilt only on committed/audit changes, never copied for streaming deltas.
+    private var displayedEntries: [Entry] = []
     private var entryIDs: Set<Int> = []
     public var entries: [Entry] {
-        get { storedEntries }
+        get { githubEntries.isEmpty ? storedEntries : displayedEntries }
         set {
             guard storedEntries != newValue else { return }
             storedEntries = newValue
+            if !githubEntries.isEmpty { displayedEntries = storedEntries + githubEntries }
             entryIDs = Set(newValue.map(\.id))
             invalidateCommittedRows()
         }
@@ -233,6 +238,7 @@ public struct Transcript: Equatable, Sendable {
             // must not erase them; reconnects deliver a fresh queue_update after the snapshot.
             let queue = queuedMessages
             let savedTodos = todos
+            let savedGitHubEntries = githubEntries
             let savedRowRevision = rowRevision
             let savedCommittedRevision = committedRowRevision
             // A split snapshot replacing another split snapshot still keeps the history of the last complete one.
@@ -243,6 +249,8 @@ public struct Transcript: Equatable, Sendable {
             self = Transcript()
             queuedMessages = queue
             todos = savedTodos
+            githubEntries = savedGitHubEntries
+            displayedEntries = savedGitHubEntries
             let active = (event["entries"]?.array ?? []).compactMap(Entry.init(json:))
             if event["prefixPending"]?.bool == true {
                 // The newest entries paint first. No earlier page is offered until the prefix completes the snapshot.
@@ -325,6 +333,27 @@ public struct Transcript: Equatable, Sendable {
             if let entry = event["entry"].flatMap(Entry.init(json:)) { add(entry) }
         case "queue_update":
             queuedMessages = (event["items"]?.array ?? []).compactMap(QueuedMessage.init(json:))
+        case "github_actions_update":
+            let actions = Array((event["actions"]?.array ?? []).suffix(200))
+            let formatter = ISO8601DateFormatter()
+            let projected = actions.enumerated().compactMap { index, action -> Entry? in
+                let description = action["description"]?.string ?? "GitHub action"
+                let code = action["exitCode"]?.int
+                let outcome = code == 0 ? "" : code.map { " (failed, exit \($0))" } ?? " (exit status unknown)"
+                let summary = action["summary"]?.string ?? ""
+                let time = action["at"]?.number.map { formatter.string(from: Date(timeIntervalSince1970: $0 / 1000)) } ?? ""
+                let text = "\(code == 0 ? "" : "attempted: ")\(description)\(outcome) · \(summary) · \(time)"
+                return Entry(json: .object([
+                    "id": .number(Double(-index - 1)), "kind": .string("pilot.activity"),
+                    "data": .object(["text": .string(text)]), "model": .array([]),
+                ]))
+            }
+            // Replace this bounded projection, not durable transcript history.
+            if githubEntries != projected {
+                githubEntries = projected
+                displayedEntries = githubEntries.isEmpty ? [] : storedEntries + githubEntries
+                invalidateCommittedRows()
+            }
         case "todos_update":
             todos = (event["items"]?.array ?? []).compactMap(SessionTodo.init(json:))
         case "auto_retry_start":
@@ -361,6 +390,7 @@ public struct Transcript: Equatable, Sendable {
         let outOfOrder = storedEntries.last.map { $0.id > entry.id } ?? false
         storedEntries.append(entry)
         if outOfOrder { storedEntries.sort { $0.id < $1.id } }
+        if !githubEntries.isEmpty { displayedEntries = storedEntries + githubEntries }
         invalidateCommittedRows()
     }
 

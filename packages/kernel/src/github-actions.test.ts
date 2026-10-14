@@ -1,0 +1,95 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createSession, MemoryStorage } from "@earendil-works/pi-durable";
+import { actionText, appendGitHubAction, GitHubActionsDoc, githubCommandSummaries } from "./github-actions.ts";
+
+const summaries = (command: string) => githubCommandSummaries("bash", { command }).summaries;
+test("write summaries retain operations and validated targets, never bodies or credentials", () => {
+	assert.deepEqual(summaries("gh pr ready 12"), [
+		{ summary: "gh pr ready", target: "PR #12", description: "marked PR #12 ready" },
+	]);
+	assert.equal(
+		summaries("gh pr ready https://github.com/example/repo/pull/12 --undo")[0]?.description,
+		"marked PR #12 draft",
+	);
+	assert.equal(summaries("git -C /tmp push -u origin feat/a")[0]?.target, "feat/a");
+	assert.equal(summaries("jj git push --bookmark feat/a")[0]?.target, "feat/a");
+	assert.equal(
+		summaries(
+			"GH_TOKEN=ghp_secret gh -R owner/repo pr edit 12 --body 'gh pr ready 99; secret body' --title 'Secret'",
+		)[0]?.target,
+		"PR #12",
+	);
+	assert.equal(summaries("gh pr create --head feat/a --body-file /tmp/private")[0]?.target, "branch feat/a");
+	assert.equal(summaries("gh api repos/owner/repo/pulls/12 --method PATCH --input /tmp/private")[0]?.target, "PR #12");
+	const audit = JSON.stringify(
+		summaries("GH_TOKEN=ghp_secret gh api graphql -f 'query=mutation { secret }' -H 'Authorization: bearer private'"),
+	);
+	assert.equal(audit.includes("secret"), false);
+	assert.equal(audit.includes("private"), false);
+	assert.equal(summaries("gh pr create --head ghp_secret")[0]?.target, undefined);
+	assert.equal(summaries("git push https://user:private@github.com/owner/repo feat/a")[0]?.target, "feat/a");
+});
+test("reads, literal source and dry runs are not GitHub actions", () => {
+	for (const command of [
+		"gh pr view 12",
+		"git status",
+		"git push --dry-run",
+		"gh pr ready --help",
+		"gh api repos/owner/repo/pulls/12",
+		"gh api graphql -f query='query { viewer { login } }' --method GET",
+		"echo 'gh pr ready 12'",
+		"printf '%s' 'git push origin secret'",
+		"# gh pr ready 12",
+		"echo done # comment; gh pr ready 12",
+	]) {
+		assert.deepEqual(summaries(command), [], command);
+	}
+	assert.deepEqual(
+		githubCommandSummaries("codemode", { code: 'await tools.bash({command:"gh pr ready 12"})' }).summaries,
+		[],
+	);
+	assert.deepEqual(githubCommandSummaries("write", { content: "git push origin private" }).summaries, []);
+	assert.equal(githubCommandSummaries("bash", { command: "gh pr ready 12; echo done" }).single, false);
+	assert.equal(summaries("git push origin feat/a && gh pr ready 12").length, 2);
+	assert.deepEqual(summaries("gh api graphql -f query='query { viewer { login } }' -f owner=example"), []);
+	assert.equal(
+		summaries("gh api graphql -f query='mutation { updatePullRequest }' -f owner=example")[0]?.summary,
+		"gh api mutation",
+	);
+	assert.equal(summaries("gh api -XPATCH repos/owner/repo/pulls/12")[0]?.target, "PR #12");
+	assert.equal(summaries("gh pr ready --repo owner/repo 12")[0]?.target, "PR #12");
+	assert.equal(summaries("gh pr create --body '--head' private")[0]?.target, undefined);
+	assert.equal(summaries("gh pr create --body '--help'").length, 1);
+});
+test("failure and unknown status never claim success", () => {
+	const action = { id: "a", summary: "gh pr ready", description: "marked PR #12 ready", at: 1, exitCode: 1 };
+	assert.match(actionText(action), /attempted:.*failed, exit 1/);
+	assert.match(actionText({ ...action, exitCode: null }), /attempted:.*unknown/);
+	assert.doesNotMatch(actionText({ ...action, exitCode: 0 }), /attempted|failed|unknown/);
+});
+test("session audit is bounded, deduplicated and independent of conversation forks", async () => {
+	const session = createSession(new MemoryStorage());
+	try {
+		await session.commit(async (tx) => {
+			const state = await tx.doc(GitHubActionsDoc);
+			for (let i = 0; i < 250; i++)
+				appendGitHubAction(state, {
+					id: String(i),
+					summary: "git push",
+					description: "pushed branches",
+					at: i,
+					exitCode: 0,
+				});
+			assert.equal(appendGitHubAction(state, state.actions.at(-1)!), false);
+			await tx.createConversation({ ownership: { kind: "ownerless" } });
+		}, context);
+		const state = await session.snapshot(GitHubActionsDoc, context);
+		assert.equal(state?.actions.length, 200);
+		assert.equal(state?.actions[0]?.id, "50");
+		assert.equal(state?.actions.at(-1)?.id, "249");
+	} finally {
+		await session.close(context);
+	}
+});

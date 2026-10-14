@@ -17,8 +17,8 @@ import {
 	type KernelUsage,
 	type MissionContext,
 	type PersistedSessionView,
-	safeFailureText,
 	type SubagentTranscriptRead,
+	safeFailureText,
 	subagentStorageSignature,
 	type WorkspaceContext,
 	type WorkspaceReset,
@@ -41,9 +41,9 @@ import type {
 	SessionState,
 	SessionSubagent,
 	SessionSummary,
-	StopResponse,
 	SessionUsage,
 	SpawnRequest,
+	StopResponse,
 	SubagentTranscript,
 	UpdatePreparation,
 } from "@pilot/protocol";
@@ -53,10 +53,10 @@ import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { ModelCatalog } from "./models.ts";
+import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
 import { type HealthCheck, PullRequestSync } from "./pull-request-sync.ts";
-import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import {
 	isTerminalPullRequest,
 	type LinkedPullRequest,
@@ -131,6 +131,7 @@ export interface SessionMissionBridge {
 	call(sessionId: string, call: MissionCallPacket): Promise<unknown>;
 	readArtifactReference?(sessionId: string, id: string, revision?: number): Promise<Omit<ArtifactRevision, "html">>;
 	pullRequestCreated?(sessionId: string, url: string): void;
+	githubAction?(sessionId: string, action: import("@pilot/protocol").GitHubAction): void;
 	pullRequestsDiscovered?(sessionId: string, urls: string[]): void;
 	linkedPullRequests?(): Iterable<LinkedPullRequest>;
 	pullRequestUpdated?(pr: SessionPullRequest): void;
@@ -3459,6 +3460,11 @@ export class SessionManager {
 			// A branch may have been created or pushed. Repeated hints coalesce in the sync.
 			if (this.workers.get(meta.id) === worker && meta.workspace && meta.mode !== "ask")
 				void this.pullRequests.refresh(meta);
+			return;
+		}
+		if (packet.type === "github.action") {
+			if (this.workers.get(meta.id) === worker && meta.mode !== "ask")
+				this.missions?.githubAction?.(meta.id, packet.action);
 			return;
 		}
 		if (packet.type === "events") {

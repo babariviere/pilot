@@ -317,6 +317,7 @@ export function runKernelWorker(): void {
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
 					onRefsChanged: () => notify({ type: "refs.changed" }),
+					onGitHubAction: (action) => notify({ type: "github.action", action }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 					callMemory,

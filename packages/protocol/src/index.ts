@@ -139,7 +139,27 @@ export interface SnapshotPrefixEvent {
 	entries: EntryRecord[];
 }
 
-export type AgentEvent = DurableAgentEvent | QueueUpdateEvent | TodosUpdateEvent | SnapshotPrefixEvent;
+/** Sanitized execution audit. Null means no authoritative command exit was exposed. */
+export type GitHubAction = {
+	id: string;
+	/** Membership at execution time, not at replay time. */
+	missionId?: string;
+	summary: string;
+	description: string;
+	target?: string;
+	at: number;
+	exitCode: number | null;
+};
+export interface GitHubActionsUpdateEvent {
+	type: "github_actions_update";
+	actions: GitHubAction[];
+}
+export type AgentEvent =
+	| DurableAgentEvent
+	| QueueUpdateEvent
+	| TodosUpdateEvent
+	| SnapshotPrefixEvent
+	| GitHubActionsUpdateEvent;
 
 /** POST /api/update/prepare, no body. Ready holds new worker admissions for a 30-second lease. */
 export interface UpdatePreparation {
@@ -416,7 +436,8 @@ export type MissionEventKind =
 	| "artifact"
 	| "resource"
 	| "member"
-	| "coordinator";
+	| "coordinator"
+	| "github";
 
 export interface Mission {
 	id: string;

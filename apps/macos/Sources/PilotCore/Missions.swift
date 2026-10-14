@@ -69,7 +69,7 @@ public enum MissionResourceRelationship: String, LenientStringEnum {
 }
 
 public enum MissionEventKind: String, LenientStringEnum {
-    case created, status, handoff, update, brief, decision, comment, task, claim, artifact, resource, member, coordinator
+    case created, status, handoff, update, brief, decision, comment, task, claim, artifact, resource, member, coordinator, github
     public static let fallback = MissionEventKind.update
 }
 

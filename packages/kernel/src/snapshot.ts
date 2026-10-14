@@ -3,8 +3,8 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	AgentDoc,
 	type ConversationId,
-	createSession,
 	type Cursor,
+	createSession,
 	type EntryRecord,
 	InboxDoc,
 	LiveDoc,
@@ -12,8 +12,9 @@ import {
 	UsageDoc,
 } from "@earendil-works/pi-durable";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
-import { AttentionDoc, normalizeCompletion } from "./attention.ts";
 import { activeConversation, lineage } from "./attempts.ts";
+import { AttentionDoc, normalizeCompletion } from "./attention.ts";
+import { GitHubActionsDoc } from "./github-actions.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
@@ -70,7 +71,12 @@ async function conversationView(
 			agent: agent ?? {},
 			usage: usage ?? { models: {}, tools: {} },
 		};
-		const events = [snapshot, await queueUpdateForDisplay(inbox ?? null, (id) => storage.submission(id, context))];
+		const audit = await session.snapshot(GitHubActionsDoc, context);
+		const events: AgentEvent[] = [
+			snapshot,
+			await queueUpdateForDisplay(inbox ?? null, (id) => storage.submission(id, context)),
+			{ type: "github_actions_update", actions: [...(audit?.actions ?? [])] },
+		];
 		if (!live?.run && attention?.completion) {
 			const { outcome, outcomeAt, outcomeReason } = normalizeCompletion(attention.completion);
 			return {
@@ -232,6 +238,7 @@ export async function readSessionSnapshot(
 				usage: { models: {}, tools: {} },
 			},
 			queueUpdate(null),
+			{ type: "github_actions_update", actions: [] },
 		];
 	} else {
 		const view = await conversationView(storage, await activeConversation(storage, context));

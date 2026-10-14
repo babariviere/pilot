@@ -499,7 +499,7 @@ struct RowView: View, Equatable {
         case let .notice(_, text):
             HStack {
                 VStack { Divider() }
-                Text(text).font(.caption).foregroundStyle(.secondary).fixedSize()
+                Text(text).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 VStack { Divider() }
             }
         }
