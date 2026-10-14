@@ -11,9 +11,14 @@ import SwiftUI
 /// corner leans gently toward the pointer while it is over the row.
 ///
 /// Use `.ditherCorner(_:)` on a row's content. Reduce Motion keeps the corner still and drops the lean.
+/// Larger surfaces that carry one state, such as the agent question tray, pass their own outset and corner
+/// radius so the dither stays inside their shape.
 extension View {
-    func ditherCorner(_ signal: SessionSignal?) -> some View {
-        modifier(DitherCornerModifier(signal: signal))
+    /// The defaults fit sidebar rows: they reach the edges of the native selection highlight.
+    func ditherCorner(_ signal: SessionSignal?,
+                      outset: EdgeInsets = EdgeInsets(top: -3, leading: 0, bottom: -3, trailing: -6),
+                      cornerRadius: CGFloat = 5) -> some View {
+        modifier(DitherCornerModifier(signal: signal, outset: outset, cornerRadius: cornerRadius))
     }
 }
 
@@ -61,6 +66,8 @@ extension SessionSignal {
 
 private struct DitherCornerModifier: ViewModifier {
     let signal: SessionSignal?
+    let outset: EdgeInsets
+    let cornerRadius: CGFloat
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The drawn state lags `signal` by one update, so a change starts its dissolve from the old state.
     @State private var shown: SessionSignal?
@@ -68,8 +75,10 @@ private struct DitherCornerModifier: ViewModifier {
     @State private var mix = 1.0
     @State private var pointer: CGPoint?
 
-    init(signal: SessionSignal?) {
+    init(signal: SessionSignal?, outset: EdgeInsets, cornerRadius: CGFloat) {
         self.signal = signal
+        self.outset = outset
+        self.cornerRadius = cornerRadius
         _shown = State(initialValue: signal)
     }
 
@@ -83,9 +92,8 @@ private struct DitherCornerModifier: ViewModifier {
                                             hover: pointer == nil ? 0 : 1, still: reduceMotion)
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     }
-                    // Reach the edges of the native selection highlight, a little outside the content.
-                    .padding(EdgeInsets(top: -3, leading: 0, bottom: -3, trailing: -6))
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .padding(outset)
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
                     .allowsHitTesting(false)
                     .accessibilityElement()
                     .accessibilityLabel(shown.map { "Status: \($0.label)" } ?? "")

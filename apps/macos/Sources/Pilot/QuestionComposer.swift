@@ -30,6 +30,9 @@ struct QuestionComposer: View {
                 reply
                 hints
             }
+            // The tray's state, in the same amber breath as the sidebar's needs-you corner. It sits behind the
+            // opaque reply card, so it shows in the margin and beside the hints.
+            .ditherCorner(.needsYou, outset: EdgeInsets(), cornerRadius: 14)
             .background(
                 RoundedRectangle(cornerRadius: 14)
                     .fill(Theme.tray)
@@ -53,10 +56,6 @@ struct QuestionComposer: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: "questionmark.bubble.fill")
-                .font(.pilot(.label))
-                .foregroundStyle(Theme.warning)
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(question.question)
                     .font(.pilot(.headline, weight: .semibold))

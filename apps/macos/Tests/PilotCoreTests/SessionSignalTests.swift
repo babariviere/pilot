@@ -44,6 +44,18 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     #expect(SidebarUrgency.groups([]) { _ in false }.isEmpty)
 }
 
+@Test func urgencyGroupsPutQuestionsBetweenFailuresAndUnreadResults() {
+    let sessions = [
+        session("unread", outcome: .done),
+        session("question", outcome: .question),
+        session("failed", outcome: .failed),
+        session("question-2", outcome: .question),
+    ]
+    // Questions need the user even when already viewed, so unread is false for them here.
+    let groups = SidebarUrgency.groups(sessions) { $0.id == "unread" }
+    #expect(groups.needsYou.map(\.id) == ["failed", "question", "question-2", "unread"])
+}
+
 @Test func quietChatsAreFinishedWithoutOpenWork() {
     #expect(session("done", outcome: .done).isQuiet)
     #expect(session("merged", outcome: .done, pr: .merged).isQuiet)
