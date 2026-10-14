@@ -78,6 +78,15 @@ final class AppModel: ObservableObject {
     @Published var inspectorVisible = false
     @Published var inspectorTab: InspectorTab = .changes
     @Published var sidebarQuery = ""
+    /// The sidebar search field shows only after ⌘F, or while it holds a query.
+    @Published var sidebarSearchVisible = false
+    /// Bumped to move focus into the sidebar search field.
+    @Published private(set) var sidebarSearchFocusRequest = 0
+    /// All projects lists chats by urgency (Needs you, Working, Recent) instead of by project and folder.
+    /// A focused project always lists its own chats.
+    @Published var sidebarGroupsByUrgency: Bool {
+        didSet { projectFolderDefaults.set(sidebarGroupsByUrgency, forKey: Self.sidebarGroupingKey) }
+    }
     /// Project preselected in the new-session screen.
     @Published var draftProjectId: String? { didSet { saveDrafts() } }
     /// One-shot prefill consumed by the new-session composer, never submitted automatically.
@@ -129,6 +138,7 @@ final class AppModel: ObservableObject {
     /// A nil store keeps fixtures and previews isolated from the user's persisted drafts.
     init(projectFolderDefaults: UserDefaults = .standard, draftStore: DraftStore? = nil) {
         self.projectFolderDefaults = projectFolderDefaults
+        sidebarGroupsByUrgency = projectFolderDefaults.object(forKey: Self.sidebarGroupingKey) as? Bool ?? true
         attention = SessionAttention(defaults: projectFolderDefaults)
         self.draftStore = draftStore
         projectFolders = ProjectFolders.load(defaults: projectFolderDefaults)
@@ -470,6 +480,19 @@ final class AppModel: ObservableObject {
     // MARK: Sidebar scope
 
     private static let sidebarScopeKey = "pilot.sidebarScope"
+    private static let sidebarGroupingKey = "pilot.sidebarGroupsByUrgency"
+
+    /// Shows the sidebar search field and focuses it.
+    func showSidebarSearch() {
+        sidebarSearchVisible = true
+        sidebarSearchFocusRequest += 1
+    }
+
+    /// Clears the query and hides the field again.
+    func hideSidebarSearch() {
+        sidebarQuery = ""
+        sidebarSearchVisible = false
+    }
 
     /// The focused project, once it is known to exist. nil while listing every project.
     var focusedProject: Project? { client.project(sidebarScope) }

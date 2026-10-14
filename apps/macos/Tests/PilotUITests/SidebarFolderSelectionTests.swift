@@ -71,6 +71,8 @@ func sidebarProjectNamesToggleWithoutSelectingProjects(grouped: Bool) throws {
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
     let model = AppModel(projectFolderDefaults: defaults)
+    // Project headers and folders show when All projects is grouped by project.
+    model.sidebarGroupsByUrgency = false
     let project = Project(id: "project", name: "Repository", path: "/repository", createdAt: 1)
     let first = SessionSummary(id: "first", title: "First session", cwd: project.path, projectId: project.id,
                                createdAt: 1, updatedAt: 3, state: "idle")
