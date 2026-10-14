@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { SharedWorkspaceStore } from "./shared-workspaces.ts";
@@ -28,7 +37,7 @@ test("large tracked-directory indexing yields to daemon work before finishing th
 	}
 });
 
-test("generated Ghostty vendor checkout is discarded and rebuilt, without allowlisting arbitrary vendor inputs", async () => {
+test("cleanup discards arbitrary ignored trees and links without following them, including mixed tracked trees", async () => {
 	const f = fixture();
 	try {
 		const w = await f.store.create(f.source, f.path());
@@ -50,21 +59,24 @@ test("generated Ghostty vendor checkout is discarded and rebuilt, without allowl
 			writeFileSync(join(w.path, ".gitignore"), `${readFileSync(join(w.path, ".gitignore"), "utf8")}\n${path}/\n`);
 			mkdirSync(join(w.path, path), { recursive: true });
 			writeFileSync(join(w.path, path, "input"), "do not lose\n");
-			await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
-			rmSync(join(w.path, path), { recursive: true });
+			mkdirSync(join(w.path, path, ".git"));
 		}
 
-		// A symlink at the allowlisted path must not be mistaken for a generated directory.
+		// Ignored links are removed without traversing their external targets.
 		const outside = join(f.root, "outside");
 		mkdirSync(outside);
 		writeFileSync(join(outside, "input"), "keep\n");
 		symlinkSync(outside, join(w.path, vendor));
-		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+		const withIgnored = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, withIgnored);
+		assert.equal(existsSync(w.path), false);
+		await f.store.restore(w.path, w.shared!, withIgnored, f.recovery);
+		for (const path of [vendor, "apps/macos/Vendor/precious", "elsewhere/libghostty-spm"])
+			assert.equal(existsSync(join(w.path, path)), false);
 		assert.equal(readFileSync(join(outside, "input"), "utf8"), "keep\n");
-		rmSync(join(w.path, vendor));
 
-		// Do not skip ignored files adjacent to a tracked vendor source.
-		mkdirSync(join(w.path, vendor));
+		// Inspect non-ignored omitted inputs, even next to ignored content.
+		mkdirSync(join(w.path, vendor), { recursive: true });
 		writeFileSync(join(w.path, ".gitignore"), "");
 		jj(w.path, "config", "set", "--repo", "snapshot.auto-track", "none()");
 		writeFileSync(join(w.path, vendor, "tracked.swift"), "source\n");
@@ -73,7 +85,10 @@ test("generated Ghostty vendor checkout is discarded and rebuilt, without allowl
 		jj(w.path, "status");
 		writeFileSync(join(w.path, ".gitignore"), "apps/macos/Vendor/\n");
 		writeFileSync(join(w.path, vendor, ".gitattributes"), "ignored next to tracked source\n");
-		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+		const mixed = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, mixed);
+		await f.store.restore(w.path, w.shared!, mixed, f.recovery);
+		assert.equal(existsSync(join(w.path, vendor, ".gitattributes")), false);
 		assert.equal(readFileSync(join(w.path, vendor, "tracked.swift"), "utf8"), "source\n");
 	} finally {
 		f.close();
@@ -101,17 +116,16 @@ test("cleanup discards ignored build files beside tracked placeholders and resto
 		assert.equal(git(w.path, "check-ignore", "--", `${dist}/assets/icon-128.png`), `${dist}/assets/icon-128.png`);
 		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
 		assert.deepEqual(recovery.localConfigs, {});
-		// Revalidation must still protect inputs introduced after the recovery snapshot.
+		// Ignored inputs introduced after the snapshot must not block removal either.
 		symlinkSync(join(w.path, "a.txt"), join(w.path, dist, "unsafe-link"));
-		await assert.rejects(f.store.remove(w.path, w.shared!, recovery), /Unsafe ignored path.*unsafe-link/);
-		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "base\n");
-		rmSync(join(w.path, dist, "unsafe-link"));
 		await f.store.remove(w.path, w.shared!, recovery);
 		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
 		assert.equal(readFileSync(join(w.path, dist, "tracked.txt"), "utf8"), "edited\n");
 		assert.equal(existsSync(join(w.path, dist, ".gitkeep")), true);
 		assert.equal(existsSync(join(w.path, dist, "assets/icon-128.png")), false);
 		assert.equal(existsSync(join(w.path, dist, "bundle.js")), false);
+		assert.equal(existsSync(join(w.path, dist, "unsafe-link")), false);
+		assert.equal(readFileSync(join(w.path, "a.txt"), "utf8"), "base\n");
 		assert.equal(
 			jj(w.path, "--ignore-working-copy", "log", "--no-graph", "-r", "@", "-T", "commit_id"),
 			recovery.commitId,
@@ -121,7 +135,7 @@ test("cleanup discards ignored build files beside tracked placeholders and resto
 	}
 });
 
-test("mixed build directories still block unknown inputs, symlinks and nested repositories", async () => {
+test("mixed directories block non-ignored omitted inputs and nested repositories, not ignored paths", async () => {
 	const f = fixture();
 	try {
 		const w = await f.store.create(f.source, f.path());
@@ -145,20 +159,30 @@ test("mixed build directories still block unknown inputs, symlinks and nested re
 		writeFileSync(join(outside, "input.txt"), "keep external\n");
 		for (const target of [join(outside, "input.txt"), outside]) {
 			symlinkSync(target, join(w.path, "build/link"));
-			await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path.*build\/link/);
+			assert.deepEqual((await f.store.snapshot(w.path, w.shared!, f.recovery)).localConfigs, {});
 			rmSync(join(w.path, "build/link"));
 		}
+		writeFileSync(join(w.path, ".gitignore"), `${readFileSync(join(w.path, ".gitignore"), "utf8")}\n!build/link\n`);
+		symlinkSync(outside, join(w.path, "build/link"));
+		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe untracked or jj-omitted path/);
+		rmSync(join(w.path, "build/link"));
 		assert.equal(readFileSync(join(outside, "input.txt"), "utf8"), "keep external\n");
 
 		mkdirSync(join(w.path, "build/nested/.git"), { recursive: true });
+		assert.deepEqual((await f.store.snapshot(w.path, w.shared!, f.recovery)).localConfigs, {});
+		writeFileSync(
+			join(w.path, ".gitignore"),
+			`${readFileSync(join(w.path, ".gitignore"), "utf8")}\n!build/nested/\n!build/nested/**\n`,
+		);
 		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Submodule or nested git repository/);
 		rmSync(join(w.path, "build/nested"), { recursive: true });
 		mkdirSync(join(w.path, ".pi"), { recursive: true });
 		writeFileSync(join(w.path, ".pi/archive-final-source.log"), "keep unknown log\n");
-		await assert.rejects(
-			f.store.snapshot(w.path, w.shared!, f.recovery),
-			/Unsafe ignored path.*\.pi\/archive-final-source.log/,
-		);
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, recovery);
+		assert.equal(readFileSync(join(outside, "input.txt"), "utf8"), "keep external\n");
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(existsSync(join(w.path, ".pi/archive-final-source.log")), false);
 	} finally {
 		f.close();
 	}
@@ -261,7 +285,57 @@ test("repeat reclamation stores changed ignored inputs content-addressed, preser
 		assert.equal(readFileSync(join(w.path, ".pi/todos/TODO-abcd.md"), "utf8"), "todo second\n");
 		assert.equal(existsSync(join(w.path, ".build")), false);
 		writeFileSync(join(w.path, ".pi/secret"), "block\n");
-		await assert.rejects(f.store.snapshot(w.path, w.shared!, f.recovery), /Unsafe ignored path/);
+		const third = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		await f.store.remove(w.path, w.shared!, third);
+		await f.store.restore(w.path, w.shared!, third, f.recovery);
+		assert.equal(existsSync(join(w.path, ".pi/secret")), false);
+		assert.equal(readFileSync(join(w.path, ".pi/todos/TODO-abcd.md"), "utf8"), "todo second\n");
+	} finally {
+		f.close();
+	}
+});
+
+test("oversized and excess ignored recovery inputs are skipped, and later ignored changes do not block removal", async () => {
+	const f = fixture();
+	try {
+		const w = await f.store.create(f.source, f.path());
+		writeFileSync(join(w.path, "mise.local.toml"), Buffer.alloc(1024 * 1024 + 1));
+		mkdirSync(join(w.path, ".pi/todos"), { recursive: true });
+		for (let index = 0; index < 257; index++)
+			writeFileSync(join(w.path, `.pi/todos/TODO-${index}.md`), "bounded todo\n");
+		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		assert.equal(Object.keys(recovery.localConfigs).length, 256);
+		assert.equal(recovery.localConfigs["mise.local.toml"], undefined);
+		const saved = Object.keys(recovery.localConfigs)[0]!;
+		writeFileSync(join(w.path, saved), "changed after snapshot\n");
+		await f.store.remove(w.path, w.shared!, recovery);
+		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
+		assert.equal(readFileSync(join(w.path, saved), "utf8"), "bounded todo\n");
+		assert.equal(existsSync(join(w.path, "mise.local.toml")), false);
+		assert.equal(readdirSync(join(w.path, ".pi/todos")).length, 256);
+		rmSync(join(w.path, ".pi/todos"), { recursive: true });
+		mkdirSync(join(w.path, ".pi/todos"));
+		for (let index = 0; index < 5; index++)
+			writeFileSync(join(w.path, `.pi/todos/TODO-${index}.md`), Buffer.alloc(1024 * 1024));
+		const bounded = await f.store.snapshot(w.path, w.shared!, f.recovery);
+		assert.equal(Object.keys(bounded.localConfigs).length, 4, "recover at most 4 MiB, discard the excess");
+		await f.store.remove(w.path, w.shared!, bounded);
+		assert.equal(existsSync(w.path), false);
+	} finally {
+		f.close();
+	}
+});
+
+test("ignored config edits do not block partial workspace cleanup", async () => {
+	const f = fixture();
+	try {
+		writeFileSync(join(f.source, "mise.local.toml"), "initial\n");
+		const w = await f.store.create(f.source, f.path());
+		writeFileSync(join(w.path, "mise.local.toml"), "changed ignored config\n");
+		writeFileSync(join(w.path, ".env"), "ignored\n");
+		await f.store.discardPartial(w.path, f.source);
+		assert.equal(existsSync(w.path), false);
+		assert.equal(readFileSync(join(f.source, "mise.local.toml"), "utf8"), "initial\n");
 	} finally {
 		f.close();
 	}

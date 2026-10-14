@@ -18,14 +18,14 @@ test("failed automatic cleanup backs off, caps retries, and leaves explicit clea
 	meta.archivedAt = now - DAY;
 	const archivedAt = meta.archivedAt;
 	const snapshot = t.mock.method(f.sessions["sharedWorkspaces"], "snapshot", async () => {
-		throw new Error("Unsafe ignored path prevents cleanup: unknown/input");
+		throw new Error("Unsafe untracked or jj-omitted path prevents cleanup: unknown/input");
 	});
 	const warnings = t.mock.method(console, "warn", () => {});
 	for (const minutes of [5, 10, 20, 40, 60]) {
 		const attempts = snapshot.mock.callCount();
 		await f.sessions["reclaimArchivedWorkspaces"]();
 		assert.equal(snapshot.mock.callCount(), attempts + 1);
-		assert.match((await f.stored(created.id)).workspaceCleanupError!, /Unsafe ignored path/);
+		assert.match((await f.stored(created.id)).workspaceCleanupError!, /Unsafe untracked or jj-omitted path/);
 		now += minutes * 60_000 - 1;
 		await f.sessions["reclaimArchivedWorkspaces"]();
 		assert.equal(snapshot.mock.callCount(), attempts + 1, "no scan just before retry deadline");
@@ -34,7 +34,7 @@ test("failed automatic cleanup backs off, caps retries, and leaves explicit clea
 	assert.equal(warnings.mock.callCount(), 5, "warnings occur only for actual attempts");
 	await f.sessions["reclaimArchivedWorkspaces"]();
 	const attempts = snapshot.mock.callCount();
-	await assert.rejects(f.sessions.reclaimWorkspace(created.id), /Unsafe ignored path/);
+	await assert.rejects(f.sessions.reclaimWorkspace(created.id), /Unsafe untracked or jj-omitted path/);
 	assert.equal(snapshot.mock.callCount(), attempts + 1, "manual retry bypasses backoff");
 	await f.sessions.restore(created.id);
 	assert.equal(f.sessions["workspaceCleanupBackoff"].has(created.id), false);
@@ -52,6 +52,7 @@ test("failed automatic cleanup backs off, caps retries, and leaves explicit clea
 test("private retention sweep includes exactly 1 day, skips recent, active, legacy and direct workspaces", async (t) => {
 	const f = await fixture(t);
 	const boundary = await f.spawn();
+	await writeFile(join(boundary.cwd, "ignored-secret"), "ignored input must not block automatic cleanup\n");
 	const recent = await f.spawn();
 	const active = await f.spawn();
 	const legacy = await f.spawn();
@@ -69,6 +70,7 @@ test("private retention sweep includes exactly 1 day, skips recent, active, lega
 	assert.equal(existsSync(boundary.cwd), false, "exact retention boundary is eligible");
 	for (const created of [recent, active, legacy, direct]) assert.ok(existsSync(created.cwd), created.id);
 	assert.equal((await f.stored(boundary.id)).workspaceRecovery?.phase, "reclaimed");
+	assert.equal((await f.stored(boundary.id)).workspaceCleanupError, undefined);
 	await assert.rejects(f.sessions.reclaimWorkspace(legacy.id), /shared/);
 	await assert.rejects(f.sessions.reclaimWorkspace(direct.id), /shared/);
 });

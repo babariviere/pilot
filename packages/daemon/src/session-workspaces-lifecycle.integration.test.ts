@@ -13,7 +13,7 @@ import { ModelCatalog } from "./models.ts";
 import { createDaemonServer } from "./server.ts";
 import { TerminalManager } from "./terminals.ts";
 
-import { DAY, assertHistory, fixture, jj, seedHistory } from "./testing/session-workspace.ts";
+import { assertHistory, DAY, fixture, jj, seedHistory } from "./testing/session-workspace.ts";
 
 test("default creation shares a daemon-owned jj repository between sessions without touching the source", async (t) => {
 	const f = await fixture(t);
@@ -86,21 +86,22 @@ test("manual reclaim is immediate, retains history/artifacts, and restart restor
 	await f.assertSourceUnchanged();
 });
 
-test("an ignored file blocks reclamation, records the error and preserves every file", async (t) => {
+test("ignored files do not block reclamation, while tracked edits survive restore", async (t) => {
 	const f = await fixture(t);
 	const created = await f.spawn();
 	await writeFile(join(created.cwd, "tracked.txt"), "dirty and valuable\n");
 	await writeFile(join(created.cwd, "ignored-secret"), "irreplaceable ignored credentials\n");
 	await f.sessions.archive(created.id);
-	await assert.rejects(f.sessions.reclaimWorkspace(created.id), /ignored|unsafe|untracked|preserv/i);
-	assert.equal(await readFile(join(created.cwd, "ignored-secret"), "utf8"), "irreplaceable ignored credentials\n");
-	assert.equal(await readFile(join(created.cwd, "tracked.txt"), "utf8"), "dirty and valuable\n");
-	assert.ok(existsSync(join(created.cwd, ".jj")));
+	await f.sessions.reclaimWorkspace(created.id);
+	assert.equal(existsSync(created.cwd), false);
 	const stored = await f.stored(created.id);
 	assert.ok(stored.archivedAt);
-	assert.ok(stored.workspaceCleanupError);
-	assert.equal(stored.workspaceReclaimedAt, undefined);
-	assert.notEqual(stored.workspaceRecovery?.phase, "reclaimed");
+	assert.equal(stored.workspaceCleanupError, undefined);
+	assert.ok(stored.workspaceReclaimedAt);
+	assert.equal(stored.workspaceRecovery?.phase, "reclaimed");
+	await f.sessions.restore(created.id);
+	assert.equal(existsSync(join(created.cwd, "ignored-secret")), false);
+	assert.equal(await readFile(join(created.cwd, "tracked.txt"), "utf8"), "dirty and valuable\n");
 	await f.assertSourceUnchanged();
 });
 

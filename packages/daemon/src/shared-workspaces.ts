@@ -8,8 +8,8 @@ import {
 	lstat,
 	mkdir,
 	open,
-	readFile,
 	readdir,
+	readFile,
 	realpath,
 	rename,
 	rm,
@@ -21,13 +21,11 @@ import { workspaceBookmarks, workspaceChangeIds } from "./pull-requests.ts";
 import {
 	copyLocalConfigs,
 	dissociateWorkspace,
-	isRegenerableDirectory,
 	localConfigs,
-	regenerableDirectories,
-	run,
 	type Runner,
-	type Workspace,
+	run,
 	validateBaseBranch,
+	type Workspace,
 } from "./workspaces.ts";
 
 export interface SharedWorkspace {
@@ -51,7 +49,6 @@ interface Binding {
 	path: string;
 	state: "creating" | "ready" | "removing" | "removed" | "restoring";
 	initialCommitId?: string;
-	initialConfigs?: Record<string, string>;
 	restoreCommitId?: string;
 	creationBaseId?: string;
 }
@@ -60,6 +57,8 @@ const queues = new Map<string, Promise<unknown>>();
 const hash = (input: string | Buffer) => createHash("sha256").update(input).digest("hex");
 const recoverableInput = (path: string) =>
 	localConfigs.includes(path) || /^\.pi\/todos\/[a-zA-Z0-9_-]+\.(md|json)$/.test(path);
+const recoveryInputDirectory = (path: string) =>
+	localConfigs.some((config) => config.startsWith(`${path}/`)) || path === ".pi" || path === ".pi/todos";
 const fullCommit = /^[0-9a-f]{40}$/;
 /** Where a child's gitdir file is hidden while jj updates or snapshots it without importing Git refs. */
 const PARKED_GIT = ".jj/pilot-refresh-git";
@@ -709,7 +708,7 @@ export class SharedWorkspaceStore {
 			await atomicJson(this.bindingPath(shared), binding);
 			// Only the bounded local inputs come from the source, never its dirty tracked files.
 			await copyLocalConfigs(source, destination, runner);
-			binding.initialConfigs = await this.inspect(destination);
+			await this.inspect(destination, true, false);
 			binding.state = "ready";
 			await atomicJson(this.bindingPath(shared), binding);
 			signal?.throwIfAborted();
@@ -914,7 +913,7 @@ export class SharedWorkspaceStore {
 	}
 
 	/** Compare the actual filesystem with jj's tree, including omitted large/auto-track-disabled files. */
-	private async inspect(cwd: string, jj = true): Promise<Record<string, string>> {
+	private async inspect(cwd: string, jj = true, recoverIgnored = true): Promise<Record<string, string>> {
 		if (jj && (await this.jj(["--ignore-working-copy", "sparse", "list"], cwd)) !== ".")
 			throw new Error("Automatic cleanup requires a full (non-sparse) jj workspace");
 		// Child snapshots avoid importing Git refs, so newly added gitlinks may not be in jj's tree yet.
@@ -970,40 +969,47 @@ export class SharedWorkspaceStore {
 		const configs: Record<string, string> = {};
 		let inputBytes = 0;
 		let entries = 0;
-		const walk = async (directory: string, prefix = "", buildOutput = false) => {
-			for (const entry of await readdir(directory, { withFileTypes: true })) {
+		const walk = async (directory: string, prefix = "") => {
+			const contents = await readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
+				const path = prefix.slice(0, -1);
+				if (prefix && isIgnored(path) && !trackedDirectories.has(path)) return [];
+				throw error;
+			});
+			for (const entry of contents) {
 				if (++entries % 2048 === 0) await yieldToEventLoop();
 				const path = prefix + entry.name;
 				if (!prefix && (path === ".git" || path === ".jj")) continue;
+				const disposable = isIgnored(path) && !tracked.has(path) && !trackedDirectories.has(path);
+				// Ignored content is disposable, including links and nested checkouts. Never follow links.
+				// Only descend into ignored trees to recover bounded, known local inputs.
+				if (
+					disposable &&
+					(!recoverIgnored || !(entry.isDirectory() ? recoveryInputDirectory(path) : recoverableInput(path)))
+				)
+					continue;
 				// jj does not list submodules, so a nested .git is the only sign of one. Report it specifically.
 				if (prefix && entry.name === ".git")
 					throw new Error(`Submodule or nested git repository prevents automatic cleanup: ${prefix.slice(0, -1)}`);
 				if (entry.isDirectory()) {
-					if (isRegenerableDirectory(path) && !trackedDirectories.has(path)) {
-						// Only ignored outputs may be discarded. Unignored directories can contain inputs.
-						if (await this.optional("git", ["check-ignore", "--", `${path}/`], cwd)) continue;
-					}
-					// Build trees may have tracked placeholders or sources: inspect rather than skip them.
-					// The exact vendor exception remains whole-directory-only, never mixed vendor inputs.
-					await walk(
-						join(directory, entry.name),
-						`${path}/`,
-						buildOutput || regenerableDirectories.has(entry.name),
-					);
+					await walk(join(directory, entry.name), `${path}/`);
 				} else if (!tracked.has(path)) {
-					if (buildOutput && entry.isFile() && isIgnored(path)) continue;
-					if (recoverableInput(path) && isIgnored(path) && (await safeFile(cwd, path))) {
-						const size = (await lstat(join(cwd, path))).size;
-						inputBytes += size;
-						if (size > 1024 * 1024 || inputBytes > 4 * 1024 * 1024 || Object.keys(configs).length >= 256)
-							throw new Error(
-								"Ignored recovery inputs exceed safety limits (256 files, 1 MiB each, 4 MiB total)",
-							);
-						configs[path] = hash(await readFile(join(cwd, path)));
-					} else
-						throw new Error(
-							`Unsafe ${isIgnored(path) ? "ignored" : "untracked or jj-omitted"} path prevents cleanup: ${path}`,
-						);
+					if (disposable) {
+						// Recovery is best-effort for ignored inputs, never a prerequisite for cleanup.
+						try {
+							if (!(await safeFile(cwd, path))) continue;
+							const size = (await lstat(join(cwd, path))).size;
+							if (
+								size > 1024 * 1024 ||
+								inputBytes + size > 4 * 1024 * 1024 ||
+								Object.keys(configs).length >= 256
+							)
+								continue;
+							configs[path] = hash(await readFile(join(cwd, path)));
+							inputBytes += size;
+						} catch {
+							// Unreadable or concurrently removed ignored inputs can be discarded.
+						}
+					} else throw new Error(`Unsafe untracked or jj-omitted path prevents cleanup: ${path}`);
 				} else if (!entry.isFile() && !entry.isSymbolicLink()) {
 					throw new Error(`Unsupported filesystem entry prevents cleanup: ${path}`);
 				}
@@ -1108,8 +1114,8 @@ export class SharedWorkspaceStore {
 			await this.snapshotChild(cwd, shared);
 			if ((await this.ids(cwd)).commitId !== recovery.commitId)
 				throw new Error("Workspace changed since recovery snapshot");
-			if (JSON.stringify(await this.inspect(cwd)) !== JSON.stringify(recovery.localConfigs))
-				throw new Error("Local inputs changed since recovery snapshot");
+			// Ignored changes after the snapshot are disposable too; only revalidate non-ignored data.
+			await this.inspect(cwd, true, false);
 			binding.state = "removing";
 			await atomicJson(this.bindingPath(shared), binding);
 			await this.jj(["workspace", "remove", shared.name], await this.control(shared.repository));
@@ -1258,11 +1264,7 @@ export class SharedWorkspaceStore {
 			)
 				throw new Error("Private partial jj workspace contains edits or bookmarks");
 		}
-		const configs = await this.inspect(cwd, hasJj);
-		for (const [path, digest] of Object.entries(configs)) {
-			if (!(await safeFile(source, path)) || hash(await readFile(join(source, path))) !== digest)
-				throw new Error("Private partial local inputs contain edits");
-		}
+		await this.inspect(cwd, hasJj, false);
 		await rm(cwd, { recursive: true });
 	}
 
@@ -1304,13 +1306,9 @@ export class SharedWorkspaceStore {
 			} finally {
 				await this.colocate(cwd, shared);
 			}
-			const configs = await this.inspect(cwd);
+			await this.inspect(cwd, true, false);
 			if (binding.state === "ready") {
-				if (
-					!binding.initialCommitId ||
-					(await this.ids(cwd)).commitId !== binding.initialCommitId ||
-					JSON.stringify(configs) !== JSON.stringify(binding.initialConfigs ?? {})
-				)
+				if (!binding.initialCommitId || (await this.ids(cwd)).commitId !== binding.initialCommitId)
 					throw new Error("Partial workspace may contain edits; refusing cleanup");
 			} else {
 				if (
@@ -1323,10 +1321,6 @@ export class SharedWorkspaceStore {
 					))
 				)
 					throw new Error("Partial workspace may contain edits; refusing cleanup");
-				for (const [path, digest] of Object.entries(configs)) {
-					if (!(await safeFile(source, path)) || hash(await readFile(join(source, path))) !== digest)
-						throw new Error("Partial local inputs may contain edits; refusing cleanup");
-				}
 			}
 			await this.jj(["--ignore-working-copy", "git", "colocation", "disable"], cwd);
 			try {

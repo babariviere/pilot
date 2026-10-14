@@ -118,6 +118,8 @@ Archiving keeps the conversation, but not necessarily its working directory. Aft
 Pilot can reclaim safe archived jj workspaces and restore them from a saved snapshot on resume. It can
 also prune generated build and dependency output from legacy clones. Dependencies may need reinstalling
 after recovery.
+Ignored content does not block jj workspace reclamation and is discarded, except for bounded regular
+mise local configs and `.pi/todos` files saved for recovery. Track any other files you need to retain.
 
 ### Missions
 
