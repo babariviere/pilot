@@ -55,6 +55,13 @@ enum MissionSheet: Identifiable, Hashable {
 }
 
 extension AppModel {
+    func briefEditor(for missionId: String) -> BriefEditorState {
+        if let editor = missionBriefEditors[missionId] { return editor }
+        let editor = BriefEditorState()
+        missionBriefEditors[missionId] = editor
+        return editor
+    }
+
     var selectedMission: Mission? { client.mission(selectedMissionId) }
 
     func openMission(_ id: String, tab: MissionTab? = nil) {
@@ -89,6 +96,7 @@ extension AppModel {
     /// Clear only the deleted mission's selection, and only after the daemon succeeds.
     func deleteMission(_ id: String, using client: PilotClient? = nil) async throws {
         try await (client ?? self.client).deleteMission(id)
+        missionBriefEditors.removeValue(forKey: id)
         if selectedMissionId == id { selectedMissionId = nil }
     }
 
