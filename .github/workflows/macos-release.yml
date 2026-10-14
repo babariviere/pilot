@@ -20,6 +20,12 @@ on:
 permissions:
   contents: read
 
+# A PR run is cancelled by a newer push to the same PR, or by ci-pr-closed.yml when the PR closes.
+# Other runs get a unique group here. Main pushes are cancelled per job below to protect releases.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pilot-ci-pr-{0}', github.event.pull_request.number) || format('pilot-ci-run-{0}', github.run_id) }}
+  cancel-in-progress: true
+
 env:
   # macos-15 is the standard arm64 runner, not macos-15-intel / macos-15-large.
   # Its default Xcode 16.4 is too old for our Swift 6.2 package manifest.
@@ -35,6 +41,11 @@ jobs:
   node:
     runs-on: macos-15
     timeout-minutes: 15
+    # A newer main push cancels this job, which skips the superseded run's release jobs. Release
+    # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
+    concurrency:
+      group: "pilot-ci-main-node-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -73,6 +84,11 @@ jobs:
     runs-on: macos-15
     # A normal run takes about 3 minutes. Fail a hung test process quickly instead of after 30.
     timeout-minutes: 12
+    # A newer main push cancels this job, which skips the superseded run's release jobs. Release
+    # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
+    concurrency:
+      group: "pilot-ci-main-swift-test-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      cancel-in-progress: true
     env:
       # The scripts default to 2 jobs for agents sharing a machine. CI owns the whole runner.
       PILOT_SWIFT_JOBS: 3
@@ -101,6 +117,11 @@ jobs:
   app-bundle:
     runs-on: macos-15
     timeout-minutes: 15
+    # A newer main push cancels this job, which skips the superseded run's release jobs. Release
+    # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
+    concurrency:
+      group: "pilot-ci-main-app-bundle-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      cancel-in-progress: true
     env:
       PILOT_SWIFT_JOBS: 3
     steps:
