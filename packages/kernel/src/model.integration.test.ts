@@ -23,7 +23,7 @@ import {
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { ConversationBusy, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
-import type { SessionCompletion } from "@pilot/protocol";
+import type { SessionCompletion, SessionJob } from "@pilot/protocol";
 import { userText } from "./attempts.ts";
 import { MAX_FAILURE_CHARS } from "./failure.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
@@ -175,6 +175,7 @@ async function fixture(
 		model: first,
 	};
 	const changes: KernelUsage[] = [];
+	const jobChanges: SessionJob[][] = [];
 	const completed = deferred<SessionCompletion>();
 	const open = async (model = first) => {
 		const session = await KernelSession.open(
@@ -184,12 +185,81 @@ async function fixture(
 					if (completion) completed.resolve(completion);
 				},
 				onUsageChanged: (usage) => changes.push(usage),
+				onJobsChanged: (jobs) => {
+					jobChanges.push(jobs);
+					bus.emit("fixture:jobs", jobs);
+				},
 			},
 		);
 		sessions.push(session);
 		return session;
 	};
-	return { open, a, b, bus, changes, adapters, spec, completed: completed.promise };
+	return { open, a, b, bus, changes, jobChanges, adapters, spec, completed: completed.promise };
+}
+
+for (const nested of [false, true]) {
+	test(`jobs lifecycle reporting covers ${nested ? "nested" : "direct"} starts, cancellation, exit and reopen`, async (t) => {
+		let registry: SessionJob[] = [];
+		const job: SessionJob = {
+			id: "tests",
+			name: "Tests",
+			state: "running",
+			startedAt: 1000,
+			outputPath: "/tmp/tests.log",
+		};
+		const f = await fixture(t, [
+			createCodemodeExtension({ mode: "on" }),
+			(pi) => {
+				pi.registerTool({
+					name: "jobs",
+					label: "Jobs",
+					description: "Offline jobs",
+					parameters: Type.Object({
+						action: Type.Union([Type.Literal("start"), Type.Literal("stop"), Type.Literal("list")]),
+					}),
+					outputSchema: Type.Unknown(),
+					execute: async (_id, args) => {
+						if (args.action === "start") registry = [job];
+						if (args.action === "stop") registry = [];
+						return { content: [], details: undefined, structuredContent: registry.map((job) => ({ ...job })) };
+					},
+				});
+				pi.on("session_shutdown", () => {
+					registry = [];
+				});
+			},
+		]);
+		const session = await f.open();
+		f.adapters[0]!.setToolActive("codemode", nested);
+		const tool = (action: string) =>
+			fauxAssistantMessage(
+				nested
+					? fauxToolCall("codemode", { code: `await tools.jobs({action: "${action}"})` })
+					: fauxToolCall("jobs", { action }),
+				{ stopReason: "toolUse" },
+			);
+		for (const action of ["start", "stop", "start"]) {
+			f.a.setResponses([tool(action), fauxAssistantMessage("Turn finished")]);
+			await session.submit(`job-${action}-${f.a.state.callCount}`, action, "followUp");
+			await session.conversation.waitForIdle(context);
+		}
+		assert.deepEqual(f.jobChanges, [[job], [], [job]]);
+		// A shell can exit without another tool call. Only the active-job probe notices that.
+		const exited = deferred();
+		const off = f.bus.on("fixture:jobs", (value) => {
+			if (!(value as SessionJob[]).length) exited.resolve();
+		});
+		t.after(off);
+		registry = [];
+		await exited.promise;
+		assert.deepEqual(f.jobChanges, [[job], [], [job], []]);
+		registry = [job];
+		await session["jobsMonitor"]!.refresh();
+		await session.close();
+		assert.deepEqual(f.jobChanges.at(-1), []);
+		await f.open();
+		assert.deepEqual(registry, [], "worker shutdown kills runtime-owned jobs instead of restoring stale activity");
+	});
 }
 
 test("fetch causes survive provider flattening, completion persistence and cold reopen", async (t) => {

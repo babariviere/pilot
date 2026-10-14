@@ -201,6 +201,8 @@ export interface SessionSummary {
 	archivedAt?: number;
 	/** Pinned chats sort first and are exempt from automatic archiving. Omitted means unpinned. */
 	pinned?: boolean;
+	/** Live worker-owned jobs. Omitted when none; never restored from stale metadata. */
+	runningJobs?: SessionJob[];
 	state: SessionState;
 	outcome?: SessionOutcome;
 	outcomeAt?: number;

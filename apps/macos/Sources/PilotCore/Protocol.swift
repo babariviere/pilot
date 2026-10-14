@@ -71,6 +71,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// Sorts first and prevents automatic archiving. Omitted by older daemons, meaning unpinned.
     public let pinned: Bool?
     public let state: String
+    /// Live jobs owned by this worker. Nil when none.
+    public let runningJobs: [SessionJob]?
     public let model: String?
     /// Effective thinking level pinned for this chat. Omitted by older daemons.
     public let thinking: String?
@@ -165,7 +167,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         subagents: [SessionSubagent]? = nil, pinned: Bool? = nil, missionId: String? = nil,
         branches: [String]? = nil, activeMissionCoordinator: Bool? = nil, attempts: [SessionAttempt]? = nil,
         unpublishedWork: Bool? = nil, workspaceBase: String? = nil, workspaceUpdatedAt: Double? = nil,
-        workspaceBehind: String? = nil
+        workspaceBehind: String? = nil, runningJobs: [SessionJob]? = nil
     ) {
         self.id = id
         self.title = title
@@ -189,6 +191,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
         self.archivedAt = archivedAt
         self.pinned = pinned
         self.state = state
+        self.runningJobs = runningJobs
         self.model = model
         self.thinking = thinking
         self.usage = usage
@@ -449,7 +452,7 @@ public struct SessionCommandsResponse: Codable, Sendable {
 }
 
 /// A running shell job in the current worker. Handles and logs are runtime-local.
-public struct SessionJob: Codable, Equatable, Sendable, Identifiable {
+public struct SessionJob: Codable, Equatable, Hashable, Sendable, Identifiable {
     public enum State: String, Codable, Sendable { case running }
     public let id: String
     public let name: String

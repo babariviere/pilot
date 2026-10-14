@@ -115,6 +115,12 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+Coordinator updates wait while member chats are working or have running background jobs. An idle chat
+with jobs is reported as waiting, not finished. Updates settle for 30 seconds after activity stops,
+with a 30-minute safety cap measured from the oldest pending event or a job's start, whichever is
+earlier. A capped update names still-running jobs and their elapsed time. Pending updates are durable;
+jobs belong to their live worker and do not survive shutdown or replacement.
+
 ![A mission task list grouped by status, with linked chats, pull requests and progress](docs/screenshots/readme-mission.png)
 
 ### Artifacts and integrations

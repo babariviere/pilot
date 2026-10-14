@@ -35,6 +35,7 @@ import type {
 	SessionAttempt,
 	SessionCommand,
 	SessionCompletion,
+	SessionJob,
 } from "@pilot/protocol";
 import { watchActivity } from "./activity.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
@@ -52,6 +53,7 @@ import { reconcileCompletion } from "./attention.ts";
 import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { submitIdleInput } from "./idle-input.ts";
+import { JobsMonitor } from "./jobs.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
@@ -104,6 +106,7 @@ async function pinnedAgent(
 
 export interface KernelSessionHooks {
 	onWorking(working: boolean, completion?: SessionCompletion): void;
+	onJobsChanged?(jobs: SessionJob[]): void;
 	onUsageChanged?(usage: KernelUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
 	onArtifactsChanged?(): void;
@@ -147,6 +150,7 @@ export class KernelSession {
 	private readonly adapter: NativeAdapter;
 	private readonly release: () => void;
 	private readonly status: AgentEventStream;
+	private jobsMonitor?: JobsMonitor;
 	private readonly todos: TodosWatch;
 	private readonly subagents: SubagentBridge;
 	private readonly callMission?: MissionCall;
@@ -186,6 +190,10 @@ export class KernelSession {
 				: new PerformanceLog(join(spec.storageDir, "performance.jsonl"));
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
+		const jobs = new JobsMonitor(
+			() => adapter?.jobs() ?? Promise.resolve([]),
+			(value) => hooks.onJobsChanged?.(value),
+		);
 		let artifactConversation: Conversation | undefined;
 		const subagents = new SubagentBridge(hooks.onSubagentsChanged);
 		const mission: { current?: MissionContext } = { current: spec.mission };
@@ -289,6 +297,7 @@ export class KernelSession {
 				onUsageChanged: hooks.onUsageChanged,
 				performance: performanceLog,
 				hostExtensions: [
+					jobs.native,
 					...(provenance ? [provenance.native] : []),
 					...(refs ? [refs.native] : []),
 					...(audit ? [audit.native] : []),
@@ -326,7 +335,7 @@ export class KernelSession {
 					),
 				);
 				const audited = audit ? audit.prepare(prepared) : prepared;
-				const tracked = refs ? refs.prepare(audited) : audited;
+				const tracked = jobs.prepare(refs ? refs.prepare(audited) : audited);
 				return provenance ? provenance.prepare(tracked) : tracked;
 			};
 			const registry = createRegistry();
@@ -390,6 +399,8 @@ export class KernelSession {
 				callMission,
 				hooks.callMemory,
 			);
+			session.jobsMonitor = jobs;
+			await jobs.refresh();
 			session.#reportedWorking = status.snapshot.run !== undefined;
 			session.#origins = new InputOrigins(
 				owned.storage,
@@ -424,6 +435,7 @@ export class KernelSession {
 						);
 					}
 				}
+				if (!working) await jobs.refresh();
 				// A queued follow-up may start in the same commit as the preceding run ends.
 				// Only publish attention when the session actually becomes idle.
 				if (
@@ -460,6 +472,7 @@ export class KernelSession {
 			};
 			return session;
 		} catch (error) {
+			await jobs.close();
 			if (harness) await harness.close(context).catch(() => undefined);
 			else await owned.storage.close(context).catch(() => undefined);
 			await adapter?.close().catch(() => undefined);
@@ -877,6 +890,7 @@ export class KernelSession {
 	/** Pause: pending work stays durable and resumes on the next open. */
 	close(): Promise<void> {
 		this.#closing ??= (async () => {
+			await this.jobsMonitor?.close();
 			for (const id of [...this.#watches.keys()]) await this.unwatch(id).catch(() => undefined);
 			await this.status.stop().catch(() => undefined);
 			try {

@@ -34,6 +34,154 @@ function completion(outcome: SessionSummary["outcome"], outcomeAt: number): Sess
 	};
 }
 
+const backgroundJob = {
+	id: "tests",
+	name: "Test suite",
+	state: "running" as const,
+	startedAt: 1_000,
+	outputPath: "/tmp/tests.log",
+};
+
+function jobDelivery(store: MissionStore, id: string) {
+	let member: SessionSummary = { ...completion(undefined, 0), pullRequest: undefined, missionId: id };
+	const lead = { ...member, id: "lead" };
+	let observe!: (summary: SessionSummary) => void;
+	const sent: string[] = [];
+	const sessions = {
+		list: () => [lead, member],
+		get: (id: string) => (id === "lead" ? lead : member),
+		onChange: (listener: typeof observe) => {
+			observe = listener;
+			return () => {};
+		},
+		canSendNotice: () => lead.state === "idle",
+		sendNotice: async (_id: string, content: string, requestId: string) => {
+			assert.equal(delivery.allowed("lead", requestId), true);
+			sent.push(content);
+			return true;
+		},
+	} as unknown as SessionManager;
+	const delivery = new MissionNotices(store, sessions);
+	delivery.start();
+	return {
+		delivery,
+		sent,
+		lead,
+		change: (patch: Partial<SessionSummary>) => {
+			member = { ...member, ...patch };
+			observe(member);
+		},
+	};
+}
+
+test("turn end with a job holds completion, then one final notice includes the follow-up PR", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const { store, id } = setup();
+	const f = jobDelivery(store, id);
+	try {
+		f.change({ state: "working", runningJobs: [backgroundJob] });
+		f.change({ state: "idle", outcome: "done", outcomeAt: Date.now() });
+		assert.match(store.events(id)[0]!.text, /waiting on background job/);
+		assert.doesNotMatch(store.events(id)[0]!.text, /chat finished/);
+		t.mock.timers.tick(60_000);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0);
+		// The registry empties before the extension's completion follow-up is admitted.
+		f.change({ runningJobs: [] });
+		t.mock.timers.tick(2_000);
+		f.change({ state: "working", outcome: undefined });
+		t.mock.timers.tick(60_000);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0);
+		f.change({
+			state: "idle",
+			outcome: "done",
+			outcomeAt: Date.now(),
+			pullRequest: completion("done", 0).pullRequest,
+		});
+		t.mock.timers.tick(29_999);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 0);
+		t.mock.timers.tick(1);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 1);
+		assert.match(f.sent[0]!, /#1 Pagination: chat finished, PR #12 open/);
+		assert.doesNotMatch(f.sent[0]!, /waiting on background job/);
+		await f.delivery.flush();
+		assert.equal(f.sent.length, 1);
+	} finally {
+		await f.delivery.stop();
+		store.close();
+	}
+});
+
+for (const olderJob of [false, true]) {
+	test(`job cap reports a still-running job (${olderJob ? "job" : "event"} deadline wins)`, async (t) => {
+		t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+		const { store, id } = setup();
+		const f = jobDelivery(store, id);
+		try {
+			if (olderJob) t.mock.timers.tick(10 * 60_000);
+			const job = { ...backgroundJob, startedAt: olderJob ? 1_000 : Date.now() + 10_000 };
+			f.change({ state: "working", runningJobs: [job] });
+			f.change({ state: "idle", outcome: "done", outcomeAt: Date.now() });
+			const deadline = Math.min(Date.now(), job.startedAt) + NOTICE_MAX_DELAY_MS;
+			assert.equal(store.noticeDeadlines(Date.now())[0]!.at, deadline);
+			t.mock.timers.tick(deadline - Date.now() - 1);
+			await f.delivery.flush();
+			assert.equal(f.sent.length, 0);
+			f.lead.state = "working";
+			t.mock.timers.tick(1);
+			await f.delivery.flush();
+			assert.equal(f.sent.length, 0, "the cap cannot interrupt the lead");
+			f.lead.state = "idle";
+			await f.delivery.flush();
+			assert.equal(f.sent.length, 1);
+			assert.match(f.sent[0]!, /waiting on background job/);
+			assert.match(
+				f.sent[0]!,
+				olderJob
+					? /still has a running job "Test suite" \(running for 30m 0s\)/
+					: /still has a running job "Test suite" \(running for 29m 50s\)/,
+			);
+			assert.doesNotMatch(f.sent[0]!, /chat finished/);
+		} finally {
+			await f.delivery.stop();
+			store.close();
+		}
+	});
+}
+
+test("pending job holds recover across daemon restart; dead jobs cannot leave activity stuck", async (t) => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1_000 });
+	const home = await mkdtemp(join(tmpdir(), "pilot-job-notice-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const file = join(home, "missions.sqlite");
+	const original = setup(new MissionStore(file));
+	const f = jobDelivery(original.store, original.id);
+	f.change({ state: "working", runningJobs: [backgroundJob] });
+	f.change({ state: "idle", outcome: "done", outcomeAt: Date.now() });
+	await f.delivery.stop();
+	original.store.close();
+	t.mock.timers.tick(10_000);
+	const store = new MissionStore(file);
+	// Jobs belong to the old worker and die on shutdown. Its persisted outcome can be unchanged.
+	const next = jobDelivery(store, original.id);
+	try {
+		next.change({ state: "parked", outcome: "done", outcomeAt: 1_000, runningJobs: undefined });
+		assert.equal(store.noticeDeadlines(Date.now())[0]!.at, Date.now() + 30_000);
+		t.mock.timers.tick(30_000);
+		await next.delivery.flush();
+		assert.equal(next.sent.length, 1);
+		assert.match(next.sent[0]!, /chat finished/);
+		assert.doesNotMatch(next.sent[0]!, /waiting on background job|still has a running job/);
+		assert.deepEqual(store.noticeDeadlines(Date.now()), []);
+	} finally {
+		await next.delivery.stop();
+		store.close();
+	}
+});
+
 test("lead settlements never create activity or pending notices", () => {
 	const { store, id } = setup();
 	try {

@@ -1,6 +1,6 @@
 /** One event-driven delivery timer for durable batches. Busy chats never get an inbox item. */
 import type { SessionSummary } from "@pilot/protocol";
-import type { MissionStore } from "./missions.ts";
+import { NOTICE_MAX_DELAY_MS, type MissionStore } from "./missions.ts";
 import type { SessionManager } from "./sessions.ts";
 
 export class MissionNotices {
@@ -37,7 +37,13 @@ export class MissionNotices {
 			this.seen.delete(session.id);
 			return;
 		}
-		const key = `${session.state}:${session.outcomeAt}:${session.archivedAt}:${session.missionId}`;
+		const key = JSON.stringify([
+			session.state,
+			session.outcomeAt,
+			session.archivedAt,
+			session.missionId,
+			session.runningJobs,
+		]);
 		if (this.seen.get(session.id) === key) return;
 		this.seen.set(session.id, key);
 		if (session.state === "working" || session.state === "starting") this.store.recordMemberRun(session);
@@ -49,12 +55,17 @@ export class MissionNotices {
 	private refreshActivity(missionId: string): void {
 		const mission = this.store.get(missionId);
 		if (!mission) return;
-		const busy = this.store.members(missionId).some((id) => {
-			if (id === mission.coordinatorSessionId) return false;
+		let busy = false;
+		let jobDeadline = Infinity;
+		for (const id of this.store.members(missionId)) {
+			if (id === mission.coordinatorSessionId) continue;
 			const chat = this.sessions.get(id);
-			return chat?.archivedAt === undefined && (chat?.state === "working" || chat?.state === "starting");
-		});
-		this.store.setNoticeActivity(missionId, busy, Date.now());
+			if (!chat || chat.archivedAt !== undefined) continue;
+			if (chat.state === "working" || chat.state === "starting" || chat.runningJobs?.length) busy = true;
+			for (const job of chat.runningJobs ?? [])
+				jobDeadline = Math.min(jobDeadline, job.startedAt + NOTICE_MAX_DELAY_MS);
+		}
+		this.store.setNoticeActivity(missionId, busy, Date.now(), Number.isFinite(jobDeadline) ? jobDeadline : undefined);
 	}
 
 	private deadlines(now: number) {
@@ -120,7 +131,15 @@ export class MissionNotices {
 			// prepareNotice returns a frozen retry; canSendNotice allows that same pending ID only.
 			const retry = this.store.pendingNotice(missionId);
 			if (!this.sessions.canSendNotice(id, retry?.requestId)) continue;
-			const notice = this.store.prepareNotice(missionId, id, now);
+			const jobNotes = this.store.members(missionId).flatMap((memberId) => {
+				const chat = this.sessions.get(memberId);
+				if (!chat || memberId === id || chat.archivedAt !== undefined) return [];
+				return (chat.runningJobs ?? []).map(
+					(job) =>
+						`${chat.title}: still has a running job ${JSON.stringify(job.name)} (running for ${Math.max(0, Math.floor((now - job.startedAt) / 60_000))}m ${Math.max(0, Math.floor((now - job.startedAt) / 1_000) % 60)}s).`,
+				);
+			});
+			const notice = this.store.prepareNotice(missionId, id, now, jobNotes);
 			if (!notice) continue;
 			try {
 				if (await this.sessions.sendNotice(id, notice.content, notice.requestId))

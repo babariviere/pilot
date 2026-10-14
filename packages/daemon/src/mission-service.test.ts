@@ -2387,6 +2387,36 @@ for (const outcome of ["failed", "archived", "stopped", "parked"] as const) {
 	});
 }
 
+test("status and get report idle chats with live jobs as waiting, not done", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	await f.sessions.rename(member.id, "Background tests");
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	await until(() => f.workers.get(member.id)!.requests.find((command) => command.type === "input"));
+	const worker = f.workers.get(member.id)!;
+	const jobs = [{ id: "tests", name: "Tests", state: "running" as const, startedAt: 1, outputPath: "/tmp/tests.log" }];
+	worker.state = "idle";
+	worker.onPacket({ type: "jobs.changed", jobs });
+	worker.onPacket({ type: "working", working: false, completion: { outcome: "done", outcomeAt: Date.now() } });
+	const status = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	const reported = status.members.find((chat) => chat.id === member.id)!;
+	assert.equal(reported.state, "waiting on background job");
+	assert.equal(reported.outcome, undefined);
+	assert.deepEqual(reported.runningJobs, [{ id: "tests", name: "Tests", startedAt: 1 }]);
+	const get = (await f.service.call(lead.id, "get", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(get.members.find((chat) => chat.title === "Background tests")?.state, "waiting on background job");
+	worker.onPacket({ type: "jobs.changed", jobs: [] });
+	const done = (await f.service.call(lead.id, "status", {})) as { members: Array<Record<string, unknown>> };
+	assert.equal(done.members.find((chat) => chat.id === member.id)?.outcome, "done");
+});
+
 test("coordinator status includes archived and parked members, outcomes and tasks without waking workers", async (t) => {
 	const f = await fixture(t);
 	const coordinator = await f.spawn();
