@@ -8,6 +8,7 @@ import PilotCore
 final class PilotClient: ObservableObject {
     @Published private(set) var sessions: [SessionSummary] = []
     @Published private(set) var projects: [Project] = []
+    @Published private(set) var powerStatus: PowerStatus?
     @Published private(set) var schedules: [ScheduledItem] = []
     @Published private(set) var trackingSources: [TrackingSource] = []
     /// Browser sign-ins per tracking server. A separate object, so only sign-in controls observe it.
@@ -778,6 +779,14 @@ final class PilotClient: ObservableObject {
         return try JSONDecoder().decode(Response.self, from: data)
     }
 
+    func loadPowerStatus() async throws {
+        powerStatus = try await call("api/power", method: "GET")
+    }
+
+    func updatePowerSettings(_ settings: PowerSettings) async throws {
+        powerStatus = try await call("api/power", method: "PATCH", body: settings)
+    }
+
     // MARK: Missions
 
     /// Keeps a project's dashboard live while a view shows it. Balance with `releaseDashboard`.
@@ -1272,6 +1281,8 @@ final class PilotClient: ObservableObject {
     /// Internal, not private, so tests can deliver decoded updates without a socket.
     func handle(_ message: ServerUpdate) {
         switch message {
+        case let .power(status):
+            if powerStatus != status { powerStatus = status }
         case let .schedules(list):
             schedules = list
             onSchedulesChanged?(list)

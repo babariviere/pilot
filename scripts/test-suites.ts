@@ -51,6 +51,7 @@ const fast = new Set([
 	"daemon/mission-notices",
 	"daemon/mission-task-refs",
 	"daemon/origin",
+	"daemon/power",
 	"daemon/project-dashboard",
 	"daemon/pull-request-health",
 	"daemon/pull-request-readiness",

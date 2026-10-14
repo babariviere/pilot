@@ -5,6 +5,7 @@ set -euo pipefail
 [ "$#" -eq 1 ] || { echo "Usage: check-app.sh Pilot.app" >&2; exit 1; }
 app="$(cd "$1" && pwd)"
 [ -x "$app/Contents/MacOS/Pilot" ] || { echo "Missing executable: Contents/MacOS/Pilot" >&2; exit 1; }
+[ -x "$app/Contents/Helpers/PilotPower" ] || { echo "Missing executable: Contents/Helpers/PilotPower" >&2; exit 1; }
 bundle="$app/Contents/Resources/GhosttyKit_GhosttyTerminal.bundle"
 [ -d "$bundle" ] || { echo "Missing resource bundle: $bundle" >&2; exit 1; }
 # SwiftPM supports both flat bundles and macOS Contents/Resources bundles.

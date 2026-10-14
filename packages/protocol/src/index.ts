@@ -206,6 +206,8 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
+	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
+	sleepPaused?: boolean;
 	/** Omitted by older daemons, meaning Build. */
 	mode?: ChatMode;
 	/** Actual Build workspace policy, including isolated workspaces without a task branch. */
@@ -1216,6 +1218,7 @@ export type ClientMessage =
 
 /** Daemon to client, over /api/ws and the dedicated sockets below (see their message types). */
 export type ServerMessage =
+	| { type: "power"; power: import("./power.ts").PowerStatus }
 	| import("./schedules.ts").SchedulesMessage
 	/** Includes both active and archived sessions, so clients can switch views locally. */
 	| { type: "sessions"; sessions: SessionSummary[] }
@@ -1280,3 +1283,5 @@ export type * from "./inbox.ts";
 export type * from "./memory.ts";
 export type * from "./schedules.ts";
 export type * from "./tracking.ts";
+
+export type { PowerSettings, PowerStatus } from "./power.ts";

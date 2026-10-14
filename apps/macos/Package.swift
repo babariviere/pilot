@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "Pilot", targets: ["Pilot"]),
+        .executable(name: "PilotPower", targets: ["PilotPower"]),
         .executable(name: "PilotSystemEvents", targets: ["PilotSystemEvents"]),
     ],
     dependencies: [
@@ -18,6 +19,9 @@ let package = Package(
     targets: [
         /// Protocol models and the transcript reducer. No UI, so it is unit-testable.
         .target(name: "PilotCore", path: "Sources/PilotCore"),
+        .target(name: "PilotPowerSupport", path: "Sources/PilotPowerSupport"),
+        .executableTarget(name: "PilotPower", dependencies: ["PilotPowerSupport"], path: "Sources/PilotPower"),
+        .testTarget(name: "PilotPowerTests", dependencies: ["PilotPowerSupport"], path: "Tests/PilotPowerTests"),
         .executableTarget(name: "PilotSystemEvents", path: "Sources/PilotSystemEvents"),
         .executableTarget(
             name: "Pilot",

@@ -34,11 +34,13 @@ public enum SessionStatus: String, Sendable {
     case failed = "Failed"
     case stopped = "Stopped"
     case idle = "Idle"
+    case paused = "Paused until wake"
 }
 
 extension SessionSummary {
     /// Outcomes survive lifecycle changes. A completed turn does not finish active coordination.
     public var status: SessionStatus {
+        if sleepPaused == true { return .paused }
         if isWorking { return .working }
         switch outcome {
         case .done: return isActiveMissionCoordinator ? .idle : .done
@@ -50,7 +52,7 @@ extension SessionSummary {
     }
 
     public var visibleOutcomeAt: Double? {
-        guard !isWorking, outcome != nil, let outcomeAt, outcomeAt.isFinite else { return nil }
+        guard sleepPaused != true, !isWorking, outcome != nil, let outcomeAt, outcomeAt.isFinite else { return nil }
         return outcomeAt
     }
 }

@@ -29,9 +29,16 @@ swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configur
 	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
 	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
 
+swift build --package-path "$here" --jobs "${PILOT_SWIFT_JOBS:-2}" -c "$configuration" --product PilotPower \
+	-Xswiftc -file-prefix-map -Xswiftc "$repo=/pilot" \
+	-Xswiftc -debug-prefix-map -Xswiftc "$repo=/pilot"
+
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$app/Contents/Frameworks"
 cp "$bin/Pilot" "$app/Contents/MacOS/Pilot"
+mkdir -p "$app/Contents/Helpers"
+cp "$bin/PilotPower" "$app/Contents/Helpers/PilotPower"
+codesign --force --sign "${PILOT_CODESIGN_IDENTITY:--}" "$app/Contents/Helpers/PilotPower"
 helper="$app/Contents/Helpers/PilotSystemEvents.app"
 mkdir -p "$helper/Contents/MacOS"
 cp "$bin/PilotSystemEvents" "$helper/Contents/MacOS/PilotSystemEvents"

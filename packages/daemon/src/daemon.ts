@@ -12,6 +12,7 @@ import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
+import { PowerService } from "./power.ts";
 import { SessionManager } from "./sessions.ts";
 import { createSlackPoller } from "./slack-source.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
@@ -75,7 +76,11 @@ sessions.setProjectMemory(memory);
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
 const missionService = new MissionService(missionStore, sessions, projects);
+const power = new PowerService(config.home, sessions);
+// Recover global sleep overrides before any interrupted agent can reopen.
+await power.start();
 await sessions.load();
+power.refresh();
 missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
@@ -105,6 +110,7 @@ const server = createDaemonServer(
 	memory,
 	schedules,
 	tracking,
+	power,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -127,6 +133,7 @@ async function stop(): Promise<void> {
 	await missionService.notices.stop();
 	await missionService.compaction.stop();
 	await Promise.all([terminals.shutdown(), sessions.shutdown()]);
+	await power.stop();
 	await untrackedStats.close();
 	missionStore.close();
 	process.exit(0);
