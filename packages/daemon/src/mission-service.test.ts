@@ -1845,7 +1845,7 @@ test("discovery of several heads links every PR before completing a task", async
 	assert.equal(f.store.detail(id).resources.filter((resource) => resource.taskId).length, 2);
 });
 
-test("tool task links resolve numbers, appear with tasks, and auto-link each owning task", async (t) => {
+test("tool task links resolve numbers and never fan out to other owned tasks", async (t) => {
 	const f = await fixture(t);
 	const chat = await f.spawn();
 	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
@@ -1859,9 +1859,46 @@ test("tool task links resolve numbers, appear with tasks, and auto-link each own
 	const get = (await f.service.call(chat.id, "get", {})) as { tasks: { resources: unknown[] }[] };
 	assert.equal(get.tasks[0]!.resources.length, 1);
 	f.sessions["missions"]?.pullRequestCreated?.(chat.id, url);
-	assert.equal(f.store.detail(id).resources.length, 2);
-	assert.ok(f.store.detail(id).resources.every((resource) => resource.taskId));
+	assert.equal(f.store.detail(id).resources.length, 1);
+	assert.equal(f.store.detail(id).resources[0]!.taskId, linked.taskId);
 	await assert.rejects(f.service.call(chat.id, "link", { url, taskId: "missing" }), /Unknown task/);
+});
+
+test("multi-task creation and discovery require explicit attribution across service reopen", async (t) => {
+	const f = await fixture(t);
+	const chat = await f.spawn();
+	const { id } = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+	f.service.join(chat.id, { missionId: id });
+	await f.service.call(chat.id, "claim", { ids: ["1-2"] });
+	const first = "https://github.com/octo/repo/pull/109";
+	const second = "https://github.com/octo/repo/pull/110";
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, first);
+	assert.equal(f.store.detail(id).resources.length, 0, "multiple claims are ambiguous");
+	await f.service.call(chat.id, "link", { url: first, taskId: "1" });
+	await f.service.call(chat.id, "task", { id: "1", status: "done" });
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, second);
+	assert.equal(f.store.detail(id).resources.length, 1, "a completed claim does not imply the next PR's task");
+	await f.service.call(chat.id, "link", { url: second, taskId: "2" });
+	// Reproduce legacy cross-links, then the user's resource-API cleanup.
+	const wrongFirst = f.store.addResource(id, { url: first, taskId: "2" });
+	const wrongSecond = f.store.addResource(id, { url: second, taskId: "1" });
+	f.store.removeResource(id, wrongFirst.id);
+	f.store.removeResource(id, wrongSecond.id);
+	const expected = f.store.detail(id).resources;
+	await f.service.notices.stop();
+	const reopened = new MissionService(f.store, f.sessions, f.projects);
+	t.after(() => reopened.notices.stop());
+	f.sessions["missions"]!.pullRequestsDiscovered!(chat.id, [first, second]);
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, first);
+	f.sessions["missions"]!.pullRequestCreated!(chat.id, second);
+	assert.deepEqual(f.store.detail(id).resources, expected);
+	assert.deepEqual(
+		expected.map((resource) => [resource.url, resource.taskId]).sort(),
+		[
+			[first, f.store.resolveTask(id, "1").id],
+			[second, f.store.resolveTask(id, "2").id],
+		].sort(),
+	);
 });
 
 test("multi-task claims handle ranges, partial success and context updates while preserving single claims", async (t) => {

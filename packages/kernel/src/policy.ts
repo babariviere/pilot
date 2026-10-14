@@ -112,7 +112,7 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 					"- Delegate all code changes to member chats. You have no branch or pull request and must not commit, create bookmarks or branches, push, or open pull requests. Durable output belongs in the brief, tasks and artifacts.",
 				]
 			: [
-					"- Open one pull request per task and link it to the task with the link action and taskId. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
+					"- Open one pull request per task and link it to the task with the link action and taskId. In multi-task chats, this explicit link is required; PR creation and discovery never infer the task. Resource links are references, not PR ownership. Only the user or coordinator binds PRs: a PR bound to you is yours, including its head branch, CI/review follow-ups and pushes. Never rewrite or push branches of PRs owned by other chats, or PRs unbound from you. For a dependent task, base your own bookmark on the dependency's head and open with gh pr create --base <dependency-head> --head <own-head>.",
 					ghStack === true
 						? `- github/gh-stack is installed: ${stackLink}`
 						: ghStack === false

@@ -64,6 +64,45 @@ test("legacy decisions migrate to reference; audiences and task pins persist and
 	}
 });
 
+test("automatic PR attribution persists observations and deletions across database reopen", (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "pilot-pr-attribution-"));
+	const file = join(dir, "missions.sqlite");
+	let missions = new MissionStore(file);
+	try {
+		const { id } = missions.create({ projectId: "p", title: "M", tasks: [{ title: "A" }, { title: "B" }] });
+		missions.join("chat", id);
+		missions.claimTask(id, "1", "chat");
+		const first = "https://github.com/octo/repo/pull/1";
+		const second = "https://github.com/octo/repo/pull/2";
+		const ambiguous = "https://github.com/octo/repo/pull/3";
+		missions.linkAutomaticPullRequests("chat", [first]);
+		const automatic = missions.detail(id).resources[0]!;
+		assert.equal(automatic.taskId, missions.resolveTask(id, "1").id);
+		missions.removeResource(id, automatic.id);
+		// Explicit links removed before automatic observation must also stay deleted.
+		const explicit = missions.addResource(id, { url: second, taskId: "1" });
+		missions.removeResource(id, explicit.id);
+		missions.claimTask(id, "2", "chat");
+		missions.linkAutomaticPullRequests("chat", [ambiguous]);
+		missions.releaseTask(id, "1");
+		missions.close();
+		missions = new MissionStore(file);
+		const tasks = t.mock.method(missions, "tasks", () =>
+			assert.fail("automatic attribution must not read task bodies"),
+		);
+		missions.linkAutomaticPullRequests("chat", [first.replace("octo/repo", "OCTO/REPO"), second, ambiguous]);
+		tasks.mock.restore();
+		assert.equal(missions.detail(id).resources.length, 0, "replay never assigns old PRs to the remaining task");
+		// Explicit attribution remains possible after a deliberately skipped automatic observation.
+		missions.addResource(id, { url: ambiguous, taskId: "2" }, { sessionId: "chat" });
+		missions.linkAutomaticPullRequests("chat", [ambiguous]);
+		assert.equal(missions.detail(id).resources.length, 1);
+	} finally {
+		missions.close();
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("task links are scoped, validated and preserved when a task is deleted", () => {
 	const missions = new MissionStore(":memory:");
 	try {
