@@ -2259,3 +2259,48 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	await removed.arrayBuffer();
 	assert.equal(f.sessions.get(chat.id)?.missionId, undefined);
 });
+test("release accepts claim selectors, enforces ownership and reads claimant titles and IDs", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const outsider = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+	});
+	f.service.join(member.id, { missionId: mission.id, taskId: "1" });
+	f.store.claimTask(mission.id, "2", lead.id);
+	f.store.claimTask(mission.id, "3", member.id);
+	for (const action of ["get", "tasks"] as const) {
+		const read = (await f.service.call(member.id, action, {})) as {
+			tasks: Array<{ sessionId?: string; claimingChat?: { id: string; title: string } }>;
+		};
+		assert.deepEqual(read.tasks[0]!.claimingChat, { id: member.id, title: member.title });
+		if (action === "tasks") assert.equal(read.tasks[0]!.sessionId, member.id);
+	}
+	await assert.rejects(f.service.call(member.id, "release", { id: "2" }), /only the coordinator/);
+	await assert.rejects(f.service.call(outsider.id, "release", { ids: ["1-3"] }), /not part of a mission/);
+	for (const args of [{}, { id: "1", ids: ["2"] }, { ids: "1" }, { ids: ["3-1"] }, { ids: ["1-1001"] }]) {
+		await assert.rejects(f.service.call(lead.id, "release", args));
+	}
+	const batch = (await f.service.call(member.id, "release", { id: "1-2, #1,99" })) as {
+		released: Array<{ number: number }>;
+		skipped: unknown[];
+	};
+	assert.deepEqual(
+		batch.released.map((task) => task.number),
+		[1],
+	);
+	assert.equal(batch.skipped.length, 2);
+	const single = (await f.service.call(lead.id, "release", { id: "2" })) as { status: string; sessionId?: string };
+	assert.equal(single.status, "todo");
+	assert.equal(single.sessionId, undefined);
+	const remaining = (await f.service.call(lead.id, "release", { ids: ["3"] })) as typeof batch;
+	assert.deepEqual(
+		remaining.released.map((task) => task.number),
+		[3],
+	);
+});
