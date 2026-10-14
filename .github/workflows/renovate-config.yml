@@ -5,11 +5,13 @@ on:
     paths:
       - renovate.json
       - .github/workflows/renovate-config.yml
+      - scripts/renovate-contract.mjs
   push:
     branches: [main]
     paths:
       - renovate.json
       - .github/workflows/renovate-config.yml
+      - scripts/renovate-contract.mjs
 
 permissions:
   contents: read
@@ -28,3 +30,9 @@ jobs:
           --volume "$PWD:/repo:ro" --workdir /repo
           --entrypoint renovate-config-validator
           ghcr.io/renovatebot/renovate:44.158.1 --strict --no-global renovate.json
+      - name: Verify native Git updates retain pnpm lockfile handling
+        run: >-
+          docker run --rm --network=none
+          --volume "$PWD:/repo:ro" --workdir /repo
+          --entrypoint node
+          ghcr.io/renovatebot/renovate:44.158.1 /repo/scripts/renovate-contract.mjs

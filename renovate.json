@@ -1,29 +1,20 @@
 {
 	"$schema": "https://docs.renovatebot.com/renovate-schema.json",
 	"extends": ["config:recommended"],
-	"enabledManagers": ["npm", "custom.regex"],
+	"enabledManagers": ["npm"],
 	"dependencyDashboard": false,
 	"automerge": false,
 	"prConcurrentLimit": 3,
-	"customManagers": [
-		{
-			"customType": "regex",
-			"description": "Keep pi-extensions pinned to an immutable commit from upstream main",
-			"managerFilePatterns": ["/^packages/kernel/package\\.json$/"],
-			"matchStrings": [
-				"\"@babariviere/pi-extensions\"\\s*:\\s*\"git\\+https://github\\.com/babariviere/pi-extensions\\.git#(?<currentDigest>[a-f0-9]{40})\""
-			],
-			"currentValueTemplate": "main",
-			"depNameTemplate": "@babariviere/pi-extensions",
-			"packageNameTemplate": "https://github.com/babariviere/pi-extensions.git",
-			"datasourceTemplate": "git-refs"
-		}
-	],
 	"packageRules": [
 		{
-			"description": "The custom manager owns the commit pin, not npm's GitHub tag lookup",
+			"description": "Use npm Git digest updates and pnpm artifacts; enable after upstream main includes embedding exports",
 			"matchManagers": ["npm"],
-			"matchDepNames": ["@babariviere/pi-extensions"],
+			"matchPackageNames": ["babariviere/pi-extensions"],
+			"overrideDatasource": "git-refs",
+			"overridePackageName": "https://github.com/babariviere/pi-extensions.git",
+			"versioning": "git",
+			"followTag": "main",
+			"pinDigests": true,
 			"enabled": false
 		},
 		{
@@ -39,5 +30,9 @@
 			"matchPackageNames": ["@gotgenes/pi-anthropic-auth"],
 			"rangeStrategy": "pin"
 		}
-	]
+	],
+	"skipArtifactsUpdate": false,
+	"statusCheckWhen": {
+		"artifactError": "always"
+	}
 }

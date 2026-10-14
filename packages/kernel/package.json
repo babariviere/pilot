@@ -8,7 +8,7 @@
 		"./worker": "./src/worker.ts"
 	},
 	"dependencies": {
-		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#9dac4f724d5685368a7e89b19f8ccb5736ae2c21",
+		"@babariviere/pi-extensions": "git+https://github.com/babariviere/pi-extensions.git#e13644d24d2918f9894fd2af383d440ca8c92deb",
 		"@earendil-works/chord": "1.1.0",
 		"@earendil-works/pi-agent-core": "1.1.0",
 		"@earendil-works/pi-ai": "1.1.0",
