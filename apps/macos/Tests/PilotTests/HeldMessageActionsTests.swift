@@ -6,7 +6,13 @@ import Testing
 @Test @MainActor func heldMessageActionsPreserveUserDraftsAndReleaseBusyState() async {
     let state = ComposerState()
     state.draft = "Unsent user draft"
+    let queued = QueuedMessage(json: .object([
+        "id": .number(7), "mode": .string("followUp"), "content": .string("Original queued message"),
+    ]))!
+    state.selectQueuedMessage(queued)
     state.queueEditing.draft = "Queued edit"
+    #expect(state.queueEditing.draft == "Queued edit")
+    let editing = state.queueEditing
     var calls: [String] = []
     await state.performHeldAction { calls.append("send") }
     var ids: [Int?] = []
@@ -15,6 +21,7 @@ import Testing
     #expect(ids.count == 2 && ids[0] == nil && ids[1] == 42)
     #expect(calls == ["send", "discard-all", "discard-row-42"])
     #expect(state.draft == "Unsent user draft")
+    #expect(state.queueEditing == editing)
     #expect(state.queueEditing.draft == "Queued edit")
     #expect(!state.mutatingHeldMessages)
 }
