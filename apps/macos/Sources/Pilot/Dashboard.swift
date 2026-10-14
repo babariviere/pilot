@@ -11,7 +11,7 @@ struct Dashboard: View {
                 .frame(maxWidth: Theme.column)
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 14, alignment: .top)], spacing: 14) {
                 WorkingNowCard(sessions: client.activeSessions.filter(\.isWorking))
-                ActivityCard(sessions: client.activeSessions)
+                ActivityCard(days: client.activityDays())
                 ReadyToMergeCard(sessions: client.activeSessions)
                 IdleCard(sessions: client.activeSessions.filter(\.isIdleAwaitingReview))
                 ScheduledCard(items: ScheduleText.listed(client.schedules, includeFailed: true))
@@ -152,10 +152,10 @@ private struct WorkingNowCard: View {
 
 /// Sessions started per day, last 14 days.
 private struct ActivityCard: View {
-    let sessions: [SessionSummary]
+    let days: [(label: String, count: Int)]
 
     var body: some View {
-        let counts = days()
+        let counts = days
         let total = counts.reduce(0) { $0 + $1.count }
         let peak = max(1, counts.map(\.count).max() ?? 1)
         DashboardCard(title: "Activity", icon: "chart.bar") {
@@ -175,21 +175,6 @@ private struct ActivityCard: View {
                 }
             }
             .frame(height: 74, alignment: .bottom)
-        }
-    }
-
-    private func days() -> [(label: String, count: Int)] {
-        let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let symbols = calendar.veryShortWeekdaySymbols
-        return (0 ..< 14).reversed().map { offset in
-            let day = calendar.date(byAdding: .day, value: -offset, to: today)!
-            let next = calendar.date(byAdding: .day, value: 1, to: day)!
-            let count = sessions.filter {
-                let created = Date(timeIntervalSince1970: $0.createdAt / 1000)
-                return created >= day && created < next
-            }.count
-            return (symbols[calendar.component(.weekday, from: day) - 1], count)
         }
     }
 }
