@@ -4,6 +4,7 @@
  * more. Sidebar change summaries alone run several Git commands per session, which delayed message
  * admission and kernel IPC for seconds. A small pool of worker threads owns all daemon Git/gh/jj processes.
  */
+import { basename } from "node:path";
 import { Worker } from "node:worker_threads";
 
 export interface ProcessRequest {
@@ -193,12 +194,14 @@ export class ProcessFailed extends Error {
 	readonly stdout: string;
 	readonly stderr: string;
 	readonly killed: boolean;
+	readonly timedOut: boolean;
 	constructor(message: string, result: ProcessResult) {
 		super(message);
 		this.code = result.code;
 		this.stdout = result.stdout.toString("utf8");
 		this.stderr = result.stderr;
 		this.killed = result.signal !== null;
+		this.timedOut = result.timedOut;
 	}
 }
 
@@ -219,12 +222,16 @@ export async function execFileOffThread(
 		overflow: "fail",
 	});
 	if (result.aborted && options.signal) throw abortError(options.signal);
-	const command = [file, ...args].join(" ");
+	// Never echo argv: it can contain multi-line GraphQL, source text or credentials. Callers retain stderr.
+	const command = basename(file);
 	if (result.overflowed) throw new ProcessFailed("stdout maxBuffer length exceeded", result);
-	if (result.timedOut) throw new ProcessFailed(`Command timed out: ${command}`, result);
+	if (result.timedOut)
+		throw new ProcessFailed(`Command timed out: ${command} (${options.timeoutMs}ms timeout)`, result);
 	if (result.code !== 0)
 		throw new ProcessFailed(
-			`Command failed: ${command}${result.stderr ? `\n${result.stderr}` : ``}`.trimEnd(),
+			`Command failed: ${command} (exit ${result.code ?? result.signal ?? "unknown"})${
+				result.stderr ? `: ${result.stderr.replace(/\s+/g, " ").trim().slice(0, 512)}` : ""
+			}`,
 			result,
 		);
 	return result.stdout.toString("utf8");

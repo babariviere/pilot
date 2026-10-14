@@ -68,7 +68,7 @@ export interface WatchdogOptions {
 	describe?: (blockedMs: number) => string[];
 }
 
-/** Detects stalls by timer drift. A late tick means nothing else could run for that long either. */
+/** Timer drift includes system sleep and scheduling delays, not just synchronous work on this thread. */
 export class EventLoopWatchdog {
 	private timer?: ReturnType<typeof setInterval>;
 	private last = 0;
@@ -106,7 +106,7 @@ export class EventLoopWatchdog {
 		if (blocked < this.thresholdMs) return 0;
 		const context = this.describe(blocked);
 		this.log(
-			`pilotd: event loop blocked for ${Math.round(blocked)}ms${context.length ? `; ${context.join("; ")}` : ""}`,
+			`pilotd: event loop delayed for ${Math.round(blocked)}ms (may include system sleep)${context.length ? `; ${context.join("; ")}` : ""}`,
 		);
 		return blocked;
 	}

@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { githubRepository, lookupHealth, lookupPullRequests, RateLimits, toSessionPullRequest } from "./github.ts";
+import {
+	githubRepository,
+	lookupHealth,
+	lookupPullRequests,
+	RateLimits,
+	toSessionPullRequest,
+	unsupportedReadinessField,
+} from "./github.ts";
+import { ProcessFailed } from "./subprocess.ts";
 import type { Runner } from "./workspaces.ts";
 
 const repo = githubRepository("git@github.com:octo/repo.git");
@@ -193,6 +201,35 @@ test("servers without stack schema retry normal PR metadata and remember the hos
 		}
 		assert.equal(calls, 3);
 	}
+});
+
+test("schema fallback uses structured stderr even when the public failure message is compact", async () => {
+	const failure = (stderr: string) =>
+		new ProcessFailed("Command failed: gh (exit 1): diagnostic clipped", {
+			code: 1,
+			signal: null,
+			stdout: Buffer.alloc(0),
+			stderr,
+			truncated: false,
+			overflowed: false,
+			timedOut: false,
+			aborted: false,
+		});
+	let calls = 0;
+	const runner: Runner = async (_file, args) => {
+		calls++;
+		if (variables(args).get("query")!.includes("stackEntry"))
+			throw failure(`${"diagnostic ".repeat(100)}Field 'stack' doesn't exist on type 'PullRequest'`);
+		return respond({ n0: pr(42, "feat/top") });
+	};
+	const result = await lookupPullRequests(repo, { numbers: [42] }, "/workspace", runner, new RateLimits());
+	assert.equal(result.numbers.get(42)?.number, 42);
+	assert.equal(calls, 2);
+	assert.equal(
+		unsupportedReadinessField(failure(`Cannot query field "reviewDecision" on type "PullRequest"`)),
+		"reviewDecision",
+	);
+	assert.equal(unsupportedReadinessField(failure("Permission denied")), undefined);
 });
 
 test("malformed optional stack data never creates a misleading position", async () => {

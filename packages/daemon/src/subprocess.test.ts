@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ProcessFailed, SubprocessPool, execFileOffThread } from "./subprocess.ts";
+import { execFileOffThread, ProcessFailed, SubprocessPool } from "./subprocess.ts";
 
 test("runs off-thread and returns stdout, stderr and exit status", async (t) => {
 	const pool = new SubprocessPool();
@@ -45,6 +45,48 @@ test("streams bounded NUL-delimited stdin and tolerates an early reader exit", a
 	await assert.rejects(
 		pool.run("cat", [], { stdin: "x".repeat(32 * 1024 * 1024 + 1), maxBytes: 1, overflow: "fail" }),
 		/exceeds 32 MiB/,
+	);
+});
+
+test("exec failures omit argv payloads, bound log text and retain structured diagnostics", async (t) => {
+	const pool = new SubprocessPool();
+	t.after(() => pool.close());
+	const secret = "fixture-private-argument";
+	await assert.rejects(
+		execFileOffThread("sh", ["-c", 'printf "diagnostic\\n" >&2; exit 7', secret], { maxBytes: 1024 }, pool),
+		(error) => {
+			assert.ok(error instanceof ProcessFailed);
+			assert.equal(error.message, "Command failed: sh (exit 7): diagnostic");
+			assert.equal(error.stderr, "diagnostic\n");
+			assert.equal(error.timedOut, false);
+			assert.doesNotMatch(String(error), new RegExp(secret));
+			return true;
+		},
+	);
+	await assert.rejects(
+		execFileOffThread(
+			"sh",
+			["-c", "exec sleep 30", `query=multi\nline ${secret}`],
+			{ maxBytes: 1024, timeoutMs: 50, killSignal: "SIGKILL" },
+			pool,
+		),
+		(error) => {
+			assert.ok(error instanceof ProcessFailed);
+			assert.equal(error.message, "Command timed out: sh (50ms timeout)");
+			assert.equal(error.timedOut, true);
+			assert.equal(error.killed, true);
+			return true;
+		},
+	);
+	await assert.rejects(
+		execFileOffThread("sh", ["-c", "yes diagnostic | head -c 4096 >&2; exit 1"], { maxBytes: 1024 }, pool),
+		(error) => {
+			assert.ok(error instanceof ProcessFailed);
+			assert.ok(error.message.length < 600);
+			assert.equal(error.stderr.length, 4096);
+			assert.ok(!error.message.includes("\n"));
+			return true;
+		},
 	);
 });
 

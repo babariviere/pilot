@@ -239,6 +239,7 @@ CREATE TABLE IF NOT EXISTS member_completions (
 );
 CREATE INDEX IF NOT EXISTS blocked_tasks_by_mission ON tasks (mission_id) WHERE status = 'blocked';
 CREATE INDEX IF NOT EXISTS blocked_tasks_attention_order ON tasks (mission_id, sort, number) WHERE status = 'blocked';
+CREATE INDEX IF NOT EXISTS tasks_by_member ON tasks (mission_id, session_id, status);
 CREATE TABLE IF NOT EXISTS member_runs (
 	session_id TEXT PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
@@ -736,16 +737,20 @@ export class MissionStore {
 
 	/** Snapshot completed work once per run, before a new turn can change task state. */
 	recordMemberRun(session: SessionSummary): void {
-		const id = this.missionOf(session.id);
-		if (!id || this.require(id).coordinatorSessionId === session.id) return;
+		const membership = this.membership(session.id);
+		if (!membership || membership.coordinator) return;
+		const id = membership.missionId;
+		if (this.one("SELECT 1 FROM member_runs WHERE session_id = ?", session.id)) return;
 		this.run(
 			"INSERT INTO member_runs (session_id, mission_id, done_tasks) VALUES (?, ?, ?) ON CONFLICT(session_id) DO NOTHING",
 			session.id,
 			id,
 			JSON.stringify(
-				this.tasks(id)
-					.filter((task) => task.sessionId === session.id && task.status === "done")
-					.map((task) => task.id),
+				this.all(
+					"SELECT id FROM tasks WHERE mission_id = ? AND session_id = ? AND status = 'done' ORDER BY sort, number",
+					id,
+					session.id,
+				).map((row) => str(row.id!)),
 			),
 		);
 	}
@@ -753,15 +758,20 @@ export class MissionStore {
 	/** Durable high-water mark prevents ready snapshots/restarts from announcing a completion twice. */
 	recordMemberCompletion(session: SessionSummary, recovering = false): void {
 		if (!session.outcome || session.outcomeAt === undefined) return;
-		const id = this.missionOf(session.id);
-		if (!id || this.require(id).coordinatorSessionId === session.id) return;
+		const membership = this.membership(session.id);
+		if (!membership || membership.coordinator) return;
+		const id = membership.missionId;
 		const previous = this.one("SELECT * FROM member_completions WHERE session_id = ?", session.id);
 		if (previous && num(previous.outcome_at!) > session.outcomeAt) return;
 		const jobs = session.runningJobs ?? [];
 		const waiting = jobs.length > 0;
 		const previousWaiting = previous?.signature && JSON.parse(str(previous.signature))[0] === "waiting";
 		if (previous && num(previous.outcome_at!) === session.outcomeAt && !waiting && !previousWaiting) return;
-		const ownedTasks = this.tasks(id).filter((task) => task.sessionId === session.id);
+		const ownedTasks = this.all(
+			"SELECT * FROM tasks WHERE mission_id = ? AND session_id = ? ORDER BY sort, number",
+			id,
+			session.id,
+		).map(taskFrom);
 		const run = this.one(
 			"SELECT done_tasks FROM member_runs WHERE session_id = ? AND mission_id = ?",
 			session.id,
@@ -2544,6 +2554,22 @@ export class MissionStore {
 	}
 
 	// Membership
+
+	/** Hot session-summary path: no attention counts, task bodies or mission detail. Always read current roles. */
+	membership(sessionId: string): { missionId: string; active: boolean; coordinator: boolean } | undefined {
+		const row = this.one(
+			`SELECT m.mission_id, mission.status, mission.coordinator_session_id
+			FROM members m JOIN missions mission ON mission.id = m.mission_id WHERE m.session_id = ?`,
+			sessionId,
+		);
+		return row
+			? {
+					missionId: str(row.mission_id!),
+					active: row.status === "active",
+					coordinator: row.coordinator_session_id === sessionId,
+				}
+			: undefined;
+	}
 
 	missionOf(sessionId: string): string | undefined {
 		const row = this.one("SELECT mission_id FROM members WHERE session_id = ?", sessionId);

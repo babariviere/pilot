@@ -22,7 +22,7 @@ import { TrackedItemStore } from "./tracked-items.ts";
 import { untrackedStats } from "./untracked-stats.ts";
 
 const config = loadConfig();
-// Log long event-loop stalls with their likely cause. They delay IPC, HTTP and lock refreshes alike.
+// Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
 const watchdog = new EventLoopWatchdog();
 watchdog.start();
 const projects = new ProjectStore(config.home);

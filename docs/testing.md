@@ -94,6 +94,20 @@ usage polling, daemon first-request latency or live GUI responsiveness. No GUI/s
 Repository-wide lint still reports pre-existing assignment-expression errors in `jobs.ts` and
 `system-events-helper.ts`; the new bundled-profile implementation, integration tests and benchmark lint cleanly.
 
+## Daemon activity hot path
+
+```sh
+node scripts/bench/daemon-activity.ts 55f111dc46c6670a959f147c5451b7b39550de27
+```
+
+This offline fixture compares the baseline's session-membership and member-run/completion reads with the
+current implementation. It seeds 1,000 tasks with 8,000-character bodies, ten owned by the observed member,
+then processes 100 summary reads, one run snapshot and 20 completion observations per sample. It alternates variants,
+discards a warmup pair and reports median wall/process CPU time from five samples. Stores are independent
+temporary copies; no real chats, providers, credentials or network services are opened. Database setup and
+index migration are outside the measurement. This isolates synchronous store work, not whole-daemon latency,
+Git diff performance, IPC throughput or live GUI responsiveness. Run without a competing local test/build.
+
 ## Workspace fixtures and clocks
 
 Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real

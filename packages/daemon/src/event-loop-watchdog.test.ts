@@ -18,7 +18,18 @@ test("watchdog reports stalls above the threshold with context", () => {
 	assert.equal(watchdog.tick(), 0, "normal timer jitter is not a stall");
 	now = 600 + 500 + 2_500;
 	assert.equal(watchdog.tick(), 2_500);
-	assert.deepEqual(logs, ["pilotd: event loop blocked for 2500ms; context 2500"]);
+	assert.deepEqual(logs, ["pilotd: event loop delayed for 2500ms (may include system sleep); context 2500"]);
+});
+
+test("a sleep-sized timer gap is not reported as proven event-loop blocking", () => {
+	let now = 0;
+	const logs: string[] = [];
+	const watchdog = new EventLoopWatchdog({ now: () => now, log: (message) => logs.push(message), describe: () => [] });
+	watchdog.start();
+	watchdog.stop();
+	now = 600_500;
+	assert.equal(watchdog.tick(), 600_000);
+	assert.equal(logs[0], "pilotd: event loop delayed for 600000ms (may include system sleep)");
 });
 
 test("operations describe slow sections and the oldest in-flight work", () => {

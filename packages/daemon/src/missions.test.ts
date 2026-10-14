@@ -7,6 +7,28 @@ import { test } from "node:test";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { MissionStore, parseResourceUrl } from "./missions.ts";
 
+test("hot membership reads reflect role and lifecycle changes without full summaries", (t) => {
+	const missions = new MissionStore(":memory:");
+	t.after(() => missions.close());
+	const { id } = missions.create({ projectId: "p", title: "M" });
+	assert.equal(missions.membership("chat"), undefined);
+	missions.join("chat", id);
+	const get = t.mock.method(missions, "get");
+	assert.deepEqual(missions.membership("chat"), { missionId: id, active: true, coordinator: false });
+	assert.equal(get.mock.callCount(), 0);
+	missions.update(id, { coordinatorSessionId: "chat" });
+	assert.deepEqual(missions.membership("chat"), { missionId: id, active: true, coordinator: true });
+	missions.update(id, { status: "done" });
+	assert.deepEqual(missions.membership("chat"), { missionId: id, active: false, coordinator: true });
+	missions.update(id, { status: "active" });
+	assert.deepEqual(missions.membership("chat"), { missionId: id, active: true, coordinator: true });
+	missions.leave("chat");
+	assert.equal(missions.membership("chat"), undefined);
+	const other = missions.create({ projectId: "p", title: "Other" });
+	missions.join("chat", other.id);
+	assert.deepEqual(missions.membership("chat"), { missionId: other.id, active: true, coordinator: false });
+});
+
 test("legacy decisions migrate to reference; audiences and task pins persist and validate", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pilot-decision-migration-"));
 	const file = join(dir, "missions.sqlite");
