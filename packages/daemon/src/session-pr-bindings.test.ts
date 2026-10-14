@@ -65,6 +65,7 @@ async function setup() {
 		await writeFile(join(home, "sessions", id, "meta.json"), JSON.stringify(meta));
 	}
 	const controls = {
+		upstream: "git@github.com:Octo/Repo.git",
 		state: "OPEN",
 		failing: false,
 		mergedAt: Date.now(),
@@ -84,7 +85,7 @@ async function setup() {
 				["remote", "get-url", "origin"],
 				"direct chats never infer ownership from local branches",
 			);
-			return "git@github.com:Octo/Repo.git";
+			return controls.upstream;
 		}
 		assert.equal(file, "gh");
 		if (args[0] === "pr" && args[1] === "view") {
@@ -211,6 +212,93 @@ function missionBridge(apply: (operation: PullRequestBinding) => void): SessionM
 		applyPullRequestBinding: apply,
 	};
 }
+
+test("binding accepts PR numbers against the project origin and moves canonical ownership", async () => {
+	await fixture(async (f) => {
+		await f.manager.bindPullRequest(f.ids[0], "42");
+		await f.settle();
+		assert.deepEqual(f.meta().boundPullRequests, [url]);
+		const moved = await f.manager.bindPullRequest(f.ids[1], " #42\n");
+		await f.settle();
+		assert.equal(moved.previousOwner?.id, f.ids[0]);
+		assert.deepEqual(f.meta().boundPullRequests, []);
+		assert.deepEqual(f.meta(f.ids[1]).boundPullRequests, [url]);
+		assert.deepEqual((await f.saved(f.ids[1])).boundPullRequests, [url]);
+	});
+});
+
+test("binding numbers uses the workspace upstream rather than the origin", async () => {
+	await fixture(async (f) => {
+		f.meta().workspace = {
+			source: f.home,
+			branch: head,
+			upstream: "https://github.com/Octo/Repo.git",
+			base: "origin/main",
+			jj: false,
+		};
+		f.controls.upstream = "git@gitlab.com:other/repo.git";
+		await f.manager.bindPullRequest(f.ids[0], "#42");
+		await f.settle();
+		assert.deepEqual(f.meta().boundPullRequests, [url]);
+	});
+});
+
+test("binding rejects malformed numbers and retains strict link validation", async () => {
+	await fixture(async (f) => {
+		for (const input of [
+			"0",
+			"#0",
+			"042",
+			"#042",
+			"-42",
+			"+42",
+			"# 42",
+			"##42",
+			"4 2",
+			"42.0",
+			"4e2",
+			"42x",
+			"４２",
+			"٤٢",
+			"2147483648",
+			"#99999999999999999999999999999",
+			`${url}/files`,
+			`${url}?x=1`,
+			`${url}#top`,
+			"http://github.com/octo/repo/pull/42",
+			"https://github.com:8443/octo/repo/pull/42",
+			"https://user@github.com/octo/repo/pull/42",
+		]) {
+			await assert.rejects(f.manager.bindPullRequest(f.ids[0], input), /GitHub pull request URL/, input);
+		}
+		await assert.rejects(
+			f.manager.bindPullRequest(f.ids[0], "https://github.com/other/repo/pull/42"),
+			/project repository/,
+		);
+		assert.equal(f.meta().boundPullRequests, undefined);
+	});
+});
+
+test("binding by number clearly rejects non-GitHub project and workspace upstreams", async () => {
+	await fixture(async (f) => {
+		for (const upstream of ["git@gitlab.com:octo/repo.git", "https://example.com/octo/repo.git", "/local/repo"]) {
+			f.controls.upstream = upstream;
+			for (const input of ["42", "#42"]) {
+				await assert.rejects(f.manager.bindPullRequest(f.ids[0], input), /GitHub.*(upstream|repository URL)/);
+			}
+		}
+		f.meta().workspace = {
+			source: f.home,
+			branch: head,
+			upstream: "git@gitlab.com:octo/repo.git",
+			base: "origin/main",
+			jj: false,
+		};
+		f.controls.upstream = "git@github.com:octo/repo.git";
+		await assert.rejects(f.manager.bindPullRequest(f.ids[0], "42"), /GitHub.*upstream/);
+		assert.equal(f.meta().boundPullRequests, undefined);
+	});
+});
 
 test("direct-project bindings receive durable idle-only follow-ups without changing user activity", async () => {
 	await fixture(async (f) => {

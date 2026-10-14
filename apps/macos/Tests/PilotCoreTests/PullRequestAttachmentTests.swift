@@ -148,7 +148,7 @@ private func link(_ task: String?, url: String = prURL, addedBy: String? = nil,
     #expect(draft.hint(for: session) == nil && !draft.canSubmit(for: session))
     draft.text = "octo/repo#42"
     #expect(draft.url == nil)
-    #expect(draft.hint(for: session)?.hasPrefix("Paste a GitHub pull request link") == true)
+    #expect(draft.hint(for: session) == "Enter a PR number, like #123, or paste a GitHub pull request link.")
     draft.text = "https://github.com/octo/repo/pull/7/files"
     #expect(draft.hint(for: session) == "Already attached to this chat.")
     draft.text = "https://github.com/octo/repo/pull/9"
@@ -157,4 +157,48 @@ private func link(_ task: String?, url: String = prURL, addedBy: String? = nil,
     #expect(draft.url == prURL && draft.hint(for: session) == nil && draft.canSubmit(for: session))
     draft.busy = true
     #expect(!draft.canSubmit(for: session))
+}
+
+@Test func attachDraftAcceptsNumbersAndKeepsAlreadyAttachedHints() {
+    let session = chat("s", prs: [pr(7)], bound: ["https://github.com/octo/repo/pull/9"])
+    for input in ["42", "#42", " #42\n"] {
+        let draft = PullRequestAttachDraft(text: input)
+        #expect(draft.url == "42")
+        #expect(PullRequestURL.number(of: input) == 42)
+        #expect(draft.canSubmit(for: session))
+        #expect(draft.hint(for: session) == nil)
+    }
+    for input in ["7", "#7", "9", "#9"] {
+        let draft = PullRequestAttachDraft(text: input)
+        #expect(draft.hint(for: session) == "Already attached to this chat.")
+        #expect(!draft.canSubmit(for: session))
+    }
+    #expect(PullRequestAttachDraft(text: "#2147483647").url == "2147483647")
+    for input in ["0", "#0", "042", "#042", "-42", "+42", "# 42", "##42", "4 2", "42.0", "4e2", "42x",
+                  "４２", "٤٢", "2147483648", "#99999999999999999999999999999"] {
+        let draft = PullRequestAttachDraft(text: input)
+        #expect(draft.url == nil, "\(input)")
+        #expect(!draft.canSubmit(for: session), "\(input)")
+        #expect(draft.hint(for: session)?.contains("number") == true)
+        #expect(draft.hint(for: session)?.contains("link") == true)
+    }
+}
+
+@Test func attachingByNumberFindsOwnershipOnlyInTheProjectsRepository() {
+    let here = chat("here")
+    let sessions = [
+        here,
+        chat("elsewhere", project: "q", updatedAt: 99, bound: [pr(42, repo: "other/repo").url]),
+        chat("discovered", updatedAt: 3, prs: [pr(42)]),
+        chat("bound", updatedAt: 2, bound: [prURL]),
+    ]
+    for input in ["42", "#42"] {
+        let draft = PullRequestAttachDraft(text: input)
+        #expect(draft.owner(for: here, in: sessions)?.id == "bound")
+        #expect(draft.owner(for: here, in: Array(sessions.prefix(3)))?.id == "discovered")
+        #expect(draft.owner(for: here, in: Array(sessions.prefix(2))) == nil)
+        #expect(draft.owner(for: chat("loose", project: nil), in: sessions) == nil)
+    }
+    let link = PullRequestAttachDraft(text: pr(42, repo: "other/repo").url)
+    #expect(link.owner(for: here, in: sessions)?.id == "elsewhere", "full links keep their explicit repository")
 }

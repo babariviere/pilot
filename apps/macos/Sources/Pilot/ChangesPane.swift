@@ -505,7 +505,7 @@ struct AttachPullRequestForm: View {
 
     var body: some View {
         let current = current
-        let owner = draft.url.flatMap { PullRequestAttachment.owner(of: $0, excluding: current.id, in: client.sessions) }
+        let owner = draft.owner(for: current, in: client.sessions)
         let suggestions = draft.text.isEmpty ? PullRequestAttachment.suggestions(for: current, in: client.sessions) : []
         VStack(alignment: .leading, spacing: 8) {
             Text("Attach a pull request").font(.pilot(.body, weight: .semibold))
@@ -513,7 +513,7 @@ struct AttachPullRequestForm: View {
                 .font(.pilot(.caption))
                 .foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
-            TextField("https://github.com/owner/repository/pull/123", text: $draft.text)
+            TextField("#123 or a pull request link", text: $draft.text)
                 .textFieldStyle(.roundedBorder)
                 .focused($focused)
                 .onSubmit(attach)

@@ -2,6 +2,18 @@ import Foundation
 
 /// GitHub pull request links as pilotd accepts them for binding: `https://github.com/owner/repository/pull/123`.
 public enum PullRequestURL {
+    /// A canonical link or a bare number for pilotd to resolve using the project's upstream.
+    public static func attachmentInput(_ raw: String) -> String? {
+        if let url = canonical(raw) { return url }
+        return bareNumber(raw).map { String($0) }
+    }
+
+    /// A positive ASCII number with an optional #, without a leading zero.
+    public static func bareNumber(_ raw: String) -> Int? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return number(trimmed.hasPrefix("#") ? String(trimmed.dropFirst()) : trimmed)
+    }
+
     /// The canonical form of a pasted PR link, or nil when it is not a github.com pull request. Accepts a missing
     /// scheme, `http`, a `www.` host, PR tabs such as `/files`, queries and fragments, which pilotd rejects.
     public static func canonical(_ raw: String) -> String? {
@@ -30,13 +42,13 @@ public enum PullRequestURL {
         (canonical(lhs) ?? lhs).lowercased() == (canonical(rhs) ?? rhs).lowercased()
     }
 
-    /// The PR number of a canonical or pasted link.
+    /// The PR number of a canonical or pasted link, or a bare number.
     public static func number(of url: String) -> Int? {
-        canonical(url).flatMap { $0.split(separator: "/").last.flatMap { number(String($0)) } }
+        bareNumber(url) ?? canonical(url).flatMap { $0.split(separator: "/").last.flatMap { number(String($0)) } }
     }
 
     private static func number(_ text: String) -> Int? {
-        guard let first = text.first, first != "0", text.allSatisfy(\.isASCII), let value = Int(text),
+        guard let first = text.first, first != "0", text.utf8.allSatisfy({ (48...57).contains($0) }), let value = Int(text),
               value > 0, value <= Int(Int32.max) else { return nil }
         return value
     }
@@ -166,15 +178,35 @@ public struct PullRequestAttachDraft: Equatable, Sendable {
         self.taskId = taskId
     }
 
-    /// The URL sent to pilotd, or nil until the text is a GitHub PR link.
-    public var url: String? { PullRequestURL.canonical(text) }
+    /// The link or number sent to pilotd, or nil until the text is valid.
+    public var url: String? { PullRequestURL.attachmentInput(text) }
+
+    /// Numbers are repository-local. The daemon enforces one upstream repository per project, so only
+    /// resolve cached ownership among chats of this project. Full links retain their explicit repository.
+    public func owner(for session: SessionSummary, in sessions: [SessionSummary]) -> SessionSummary? {
+        guard let url else { return nil }
+        if PullRequestURL.bareNumber(url) != nil {
+            guard let projectId = session.projectId else { return nil }
+            let scoped = sessions.filter { $0.projectId == projectId }
+            guard let match = scoped.lazy.compactMap({ matchingURL(in: $0) }).first else { return nil }
+            return PullRequestAttachment.owner(of: match, excluding: session.id, in: scoped)
+        }
+        return PullRequestAttachment.owner(of: url, excluding: session.id, in: sessions)
+    }
+
+    private func matchingURL(in session: SessionSummary) -> String? {
+        guard let number = PullRequestURL.bareNumber(text) else { return nil }
+        return ((session.boundPullRequests ?? []) + session.linkedPullRequests.map(\.url))
+            .first { PullRequestURL.canonical($0) != nil && PullRequestURL.number(of: $0) == number }
+    }
 
     /// Inline guidance while typing. pilotd still validates the repository and ownership.
     public func hint(for session: SessionSummary) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard let url else { return "Paste a GitHub pull request link, like https://github.com/owner/repository/pull/123." }
-        return session.tracksPullRequest(url) ? "Already attached to this chat." : nil
+        guard let url else { return "Enter a PR number, like #123, or paste a GitHub pull request link." }
+        let attached = PullRequestURL.bareNumber(url) != nil ? matchingURL(in: session) != nil : session.tracksPullRequest(url)
+        return attached ? "Already attached to this chat." : nil
     }
 
     public func canSubmit(for session: SessionSummary) -> Bool {

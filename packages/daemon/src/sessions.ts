@@ -1473,18 +1473,27 @@ export class SessionManager {
 					throw new Error("url must be a non-empty string of at most 2048 characters");
 				if (taskId !== undefined && (typeof taskId !== "string" || !taskId.trim() || taskId.length > 128))
 					throw new Error("taskId must be a non-empty task ID or number");
-				let parsed: ReturnType<typeof linkedPullRequest>;
-				try {
-					if (new URL(raw.trim()).port) throw new Error("Invalid port");
-					parsed = linkedPullRequest(raw.trim());
-				} catch {
-					throw new Error("Expected a GitHub pull request URL (https://github.com/owner/repository/pull/number)");
-				}
 				if (!meta.projectId) throw new Error("The chat must belong to a project repository");
 				const project = this.projects.require(meta.projectId);
 				const upstream =
 					meta.workspace?.upstream ?? (await this.runner("git", ["remote", "get-url", "origin"], project.path));
-				if (githubRepository(upstream.trim()).identity.toLowerCase() !== parsed.repo.identity.toLowerCase())
+				const repository = githubRepository(upstream.trim());
+				const number = bound ? /^#?([1-9]\d*)$/.exec(raw.trim())?.[1] : undefined;
+				if (number && repository.host.toLowerCase() !== "github.com")
+					throw new Error("Attaching by number requires a GitHub (github.com) project upstream");
+				const input = number
+					? `https://github.com/${repository.owner}/${repository.name}/pull/${number}`
+					: raw.trim();
+				let parsed: ReturnType<typeof linkedPullRequest>;
+				try {
+					if (new URL(input).port) throw new Error("Invalid port");
+					parsed = linkedPullRequest(input);
+				} catch {
+					throw new Error(
+						"Expected a GitHub pull request URL (https://github.com/owner/repository/pull/number) or a positive PR number like 123 or #123 (no leading zero)",
+					);
+				}
+				if (repository.identity.toLowerCase() !== parsed.repo.identity.toLowerCase())
 					throw new Error("The pull request must belong to the chat's project repository");
 				const url = `https://${parsed.repo.identity.toLowerCase()}/pull/${parsed.number}`;
 				const previousOwner = this.pullRequestOwnerSummary(url) ?? null;
