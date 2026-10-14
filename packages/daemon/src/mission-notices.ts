@@ -27,7 +27,21 @@ export class MissionNotices {
 			this.observe(session, true);
 			if (session.missionId) missions.add(session.missionId);
 		}
-		for (const id of missions) this.refreshActivity(id);
+		for (const id of missions) {
+			// Hand-linked own PRs need recovery too, even if they are not in the chat's cache.
+			const detail = this.store.detail(id);
+			const owners = new Map(detail.tasks.map((task) => [task.id, task.sessionId]));
+			for (const resource of detail.resources) {
+				if (resource.relationship !== "ownership" || !resource.pullRequest || !resource.taskId) continue;
+				const owner = owners.get(resource.taskId);
+				const chat = owner ? this.sessions.get(owner) : undefined;
+				if (chat)
+					this.store.updatePullRequest(this.store.memberPullRequest(id, resource.pullRequest), [chat], (id) =>
+						this.ownedPrs(id),
+					);
+			}
+			this.refreshActivity(id);
+		}
 		this.schedule();
 	}
 
@@ -36,6 +50,14 @@ export class MissionNotices {
 		if (!session.missionId) {
 			this.seen.delete(session.id);
 			return;
+		}
+		if (recovering) {
+			const prs = this.sessions.ownedPullRequests?.(session.id) ?? [];
+			// Open heads first so a later merge cannot finish a task while another head is unknown.
+			for (const pr of prs.toSorted((a, b) => Number(a.state === "merged") - Number(b.state === "merged")))
+				this.store.updatePullRequest(this.store.memberPullRequest(session.missionId, pr), [session], (id) =>
+					this.ownedPrs(id),
+				);
 		}
 		const key = JSON.stringify([
 			session.state,
@@ -50,6 +72,10 @@ export class MissionNotices {
 		else if (session.outcome) this.store.recordMemberCompletion(session, recovering);
 		if (!recovering) this.refreshActivity(session.missionId);
 		this.schedule();
+	}
+
+	private ownedPrs(missionId: string) {
+		return this.store.members(missionId).flatMap((id) => this.sessions.ownedPullRequests?.(id) ?? []);
 	}
 
 	private refreshActivity(missionId: string): void {

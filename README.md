@@ -121,6 +121,10 @@ with a 30-minute safety cap measured from the oldest pending event or a job's st
 earlier. A capped update names still-running jobs and their elapsed time. Pending updates are durable;
 jobs belong to their live worker and do not survive shutdown or replacement.
 
+Merges and unmerged closures of owned chat PRs also queue updates, even after the chat finishes.
+Merge updates include completed tasks, newly unblocked dependents and known open stacked PRs.
+Reference-only PR links do not trigger these updates, and refreshes or restarts do not repeat them.
+
 ![A mission task list grouped by status, with linked chats, pull requests and progress](docs/screenshots/readme-mission.png)
 
 ### Artifacts and integrations

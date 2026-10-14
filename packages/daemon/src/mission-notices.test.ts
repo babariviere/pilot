@@ -206,15 +206,16 @@ test("PR transitions are recorded once, without repeating unchanged PR states", 
 			outcomeAt: now + 3,
 			pullRequest: { ...open.pullRequest!, state: "merged" as const, mergedAt: now + 2 },
 		};
+		store.recordMemberPullRequests(merged, [merged.pullRequest]);
 		store.recordMemberCompletion(merged);
-		assert.match(store.events(id)[0]!.text, /PR #12 merged/);
+		assert.match(store.events(id)[0]!.text, /PR #12 PR merged/);
 		const before = store.events(id);
 		store.recordMemberCompletion({ ...merged, outcomeAt: now + 4 });
 		assert.deepEqual(store.events(id), before);
 		store.recordMemberCompletion({ ...merged, outcomeAt: now + 5, outcomeReason: "New information" });
 		assert.match(store.events(id)[0]!.text, /New information/);
 		assert.doesNotMatch(store.events(id)[0]!.text, /PR #12/);
-		assert.equal(store.events(id).filter((event) => event.text.includes("PR #12 merged")).length, 1);
+		assert.equal(store.events(id).filter((event) => event.text.includes("PR #12 PR merged")).length, 1);
 	} finally {
 		store.close();
 	}
@@ -255,7 +256,8 @@ test("settles omit old completed work while retaining work completed during this
 			],
 		});
 		const event = store.events(id)[0]!;
-		assert.match(event.text, /#2 Next: chat finished, PR #13 merged/);
+		assert.match(event.text, /#2 Next: chat finished/);
+		assert.doesNotMatch(event.text, /PR #13 merged/);
 		assert.doesNotMatch(event.text, /Pagination|PR #12/);
 	} finally {
 		store.close();

@@ -212,6 +212,18 @@ CREATE TABLE IF NOT EXISTS member_runs (
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
 	done_tasks TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pull_request_transitions (
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	url TEXT NOT NULL COLLATE NOCASE,
+	state TEXT NOT NULL,
+	PRIMARY KEY (mission_id, url, state)
+);
+CREATE TABLE IF NOT EXISTS member_pull_requests (
+	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+	url TEXT NOT NULL COLLATE NOCASE,
+	pull_request TEXT NOT NULL,
+	PRIMARY KEY (mission_id, url)
+);
 CREATE INDEX IF NOT EXISTS needs_you_comments_by_mission ON comments (mission_id)
 	WHERE resolved_at IS NULL AND target_session_id IS NULL AND author_session_id IS NOT NULL;
 `;
@@ -319,6 +331,7 @@ export class MissionStore {
 		if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		this.db = new DatabaseSync(file);
 		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
 		if (!this.all("PRAGMA table_info(decisions)").some((row) => row.name === "audience"))
 			this.db.exec("ALTER TABLE decisions ADD COLUMN audience TEXT NOT NULL DEFAULT 'reference'");
@@ -338,6 +351,11 @@ export class MissionStore {
 			WHERE NOT EXISTS (SELECT 1 FROM pending_notice_summaries s WHERE s.event_id = p.event_id)`);
 		if (!this.all("PRAGMA table_info(member_completions)").some((row) => row.name === "signature"))
 			this.db.exec("ALTER TABLE member_completions ADD COLUMN signature TEXT");
+		if (migratePrTransitions)
+			this.db.exec(`INSERT OR IGNORE INTO pull_request_transitions (mission_id, url, state)
+				SELECT c.mission_id, json_extract(p.value, '$[0]'), json_extract(p.value, '$[1]')
+				FROM member_completions c, json_each(c.signature, '$[3]') p
+				WHERE json_extract(p.value, '$[1]') IN ('merged', 'closed')`);
 		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "task_id")) {
 			this.db.exec(`BEGIN;
 				ALTER TABLE artifact_links RENAME TO artifact_links_legacy;
@@ -498,6 +516,141 @@ export class MissionStore {
 	}
 
 	// Missions
+	/** Ownership links are independent of PR references and of the chat's outcome snapshot. */
+	pullRequestMembers(url: string): string[] {
+		return this.all(
+			`SELECT DISTINCT t.session_id FROM resources r JOIN tasks t ON t.id = r.task_id
+			JOIN members m ON m.session_id = t.session_id AND m.mission_id = r.mission_id
+			WHERE r.url = ? COLLATE NOCASE AND r.kind = 'github.pr' AND r.relationship = 'ownership'`,
+			url,
+		).map((row) => str(row.session_id!));
+	}
+
+	/** Latest owned cache also keeps archived chat-only PRs on the linked polling path. */
+	memberPullRequest(id: string, pr: SessionPullRequest): SessionPullRequest {
+		const row = this.one(
+			"SELECT pull_request FROM member_pull_requests WHERE mission_id = ? AND url = ?",
+			id,
+			pr.url,
+		);
+		const cached = row ? (JSON.parse(str(row.pull_request!)) as SessionPullRequest) : undefined;
+		return cached && cached.checkedAt >= pr.checkedAt ? cached : pr;
+	}
+
+	/** The transition ledger and pending event commit atomically, including chat-only PR caches. */
+	recordMemberPullRequests(
+		session: SessionSummary,
+		prs: SessionPullRequest[],
+		notify = true,
+		contextPrs: SessionPullRequest[] = [],
+	): boolean {
+		const id = this.missionOf(session.id);
+		if (!id) return false;
+		const mission = this.require(id);
+		if (mission.status !== "active" || mission.coordinatorSessionId === session.id) return false;
+		const joinedAt = num(this.one("SELECT joined_at FROM members WHERE session_id = ?", session.id)!.joined_at!);
+		let changed = false;
+		this.transaction(() => {
+			for (const pr of prs) {
+				const cached = this.memberPullRequest(id, pr);
+				if (
+					cached.checkedAt > pr.checkedAt ||
+					(cached.checkedAt === pr.checkedAt &&
+						(cached.state === "merged" || cached.state === "closed") &&
+						(pr.state === "open" || pr.state === "draft"))
+				)
+					continue;
+				this.run(
+					`INSERT INTO member_pull_requests (mission_id, url, pull_request) VALUES (?, ?, ?)
+					ON CONFLICT (mission_id, url) DO UPDATE SET pull_request = excluded.pull_request`,
+					id,
+					pr.url,
+					JSON.stringify(pr),
+				);
+				if (pr.state !== "merged" && pr.state !== "closed") continue;
+				if (pr.state === "merged" && pr.mergedAt === undefined) continue;
+				if (
+					this.one(
+						"SELECT 1 FROM pull_request_transitions WHERE mission_id = ? AND url = ? AND state = ?",
+						id,
+						pr.url,
+						pr.state,
+					)
+				)
+					continue;
+				this.run(
+					"INSERT INTO pull_request_transitions (mission_id, url, state) VALUES (?, ?, ?)",
+					id,
+					pr.url,
+					pr.state,
+				);
+				// Closed PRs have no close timestamp in the cache. Their successful lookup is the best
+				// available boundary; merged PRs must have a real merge time, not a refresh timestamp.
+				if ((pr.state === "merged" ? (pr.mergedAt ?? 0) : pr.checkedAt) < joinedAt) continue;
+				const tasks = this.all(
+					`SELECT DISTINCT t.* FROM tasks t JOIN resources r ON r.task_id = t.id
+					WHERE r.mission_id = ? AND r.url = ? COLLATE NOCASE AND r.relationship = 'ownership'`,
+					id,
+					pr.url,
+				).map(taskFrom);
+				const taskText = tasks.map(
+					(task) => `task #${task.number}${pr.state === "merged" && task.status === "done" ? " marked done" : ""}`,
+				);
+				const note = `PR #${pr.number}${pr.state === "merged" ? ` ${pr.title} merged` : " closed without merging"} (chat ${session.title}${taskText.length ? `, ${taskText.join(", ")}` : ""})`;
+				const doneIds = new Set(tasks.filter((task) => task.status === "done").map((task) => task.id));
+				const allTasks = this.tasks(id);
+				const allDoneIds = new Set(allTasks.filter((task) => task.status === "done").map((task) => task.id));
+				const unblocked =
+					pr.state === "merged"
+						? allTasks.filter(
+								(task) =>
+									task.status !== "done" &&
+									task.status !== "dropped" &&
+									task.dependsOn?.some((dep) => doneIds.has(dep)) &&
+									task.dependsOn.every((dep) => allDoneIds.has(dep)),
+							)
+						: [];
+				const stacked =
+					pr.state === "merged" && pr.stack
+						? this.all(
+								`SELECT pull_request FROM resources
+					WHERE mission_id = ? AND relationship = 'ownership' AND pull_request IS NOT NULL`,
+								id,
+							)
+								.map((row) => JSON.parse(str(row.pull_request!)) as SessionPullRequest)
+								.concat(contextPrs)
+								.map((other) => this.memberPullRequest(id, other))
+								.filter(
+									(other) =>
+										(other.state === "open" || other.state === "draft") &&
+										other.stack?.number === pr.stack!.number &&
+										other.stack.position > pr.stack!.position &&
+										other.url.slice(0, other.url.lastIndexOf("/")).toLowerCase() ===
+											pr.url.slice(0, pr.url.lastIndexOf("/")).toLowerCase(),
+								)
+								.filter(
+									(other, index, all) =>
+										all.findIndex((candidate) => candidate.url.toLowerCase() === other.url.toLowerCase()) ===
+										index,
+								)
+						: [];
+				const context = `${unblocked.length ? `; unblocks ${unblocked.map((task) => `task #${task.number} ${task.title}`).join(", ")}` : ""}${stacked.length ? `; open stacked PRs: ${stacked.map((other) => `#${other.number} ${other.title}`).join(", ")}` : ""}`;
+				this.event(
+					id,
+					"update",
+					note + context,
+					{ sessionId: session.id },
+					{
+						wake: true,
+						noticeSummaries: [{ key: `pr:${pr.url.toLowerCase()}`, text: note + context, state: pr.state }],
+					},
+				);
+				changed = true;
+			}
+		});
+		if (changed && notify) this.changed(id);
+		return changed;
+	}
 
 	/** Snapshot completed work once per run, before a new turn can change task state. */
 	recordMemberRun(session: SessionSummary): void {
@@ -588,13 +741,10 @@ export class MissionStore {
 			// snapshots must not produce another notice just because their outcome version advanced.
 			if ((previous?.signature === signature || unchangedLegacy) && (waiting || session.outcome !== "failed"))
 				return;
-			// A new outcome may follow work on a different PR. Do not re-report old merges with it.
+			// Terminal PRs have their own durable PR-keyed events, never repeat them in outcomes.
 			const previousPrs = new Map<string, string>(previous?.signature ? JSON.parse(str(previous.signature))[3] : []);
 			const relevantPrs = prs.filter(
-				(pr) =>
-					previousPrs.get(pr.url) !== pr.state &&
-					(pr.state !== "merged" ||
-						(pr.mergedAt !== undefined && pr.mergedAt > (previous ? num(previous.outcome_at!) : joinedAt))),
+				(pr) => pr.state !== "merged" && pr.state !== "closed" && previousPrs.get(pr.url) !== pr.state,
 			);
 			const prior = previous?.signature ? JSON.parse(str(previous.signature)) : undefined;
 			if (
@@ -1833,14 +1983,18 @@ export class MissionStore {
 		).map((row) => str(row.coordinator_session_id!));
 	}
 
-	updatePullRequest(pr: SessionPullRequest): void {
+	updatePullRequest(
+		pr: SessionPullRequest,
+		members: SessionSummary[] = [],
+		contextPrs?: (missionId: string) => SessionPullRequest[],
+	): void {
 		const rows = this.all(
 			"SELECT DISTINCT mission_id FROM resources WHERE kind = 'github.pr' AND url = ? COLLATE NOCASE",
 			pr.url,
 		);
-		for (const row of rows) {
-			const id = str(row.mission_id!);
-			this.transaction(() => {
+		const affected = new Set(rows.map((row) => str(row.mission_id!)));
+		this.transaction(() => {
+			for (const id of affected) {
 				this.run(
 					"UPDATE resources SET pull_request = ? WHERE mission_id = ? AND url = ? COLLATE NOCASE",
 					JSON.stringify(pr),
@@ -1853,9 +2007,13 @@ export class MissionStore {
 					pr.url,
 				))
 					this.reconcileTaskPullRequests(id, str(task.task_id!));
-			});
-			this.changed(id);
-		}
+			}
+			for (const member of members) {
+				const id = this.missionOf(member.id);
+				if (id && this.recordMemberPullRequests(member, [pr], false, contextPrs?.(id))) affected.add(id);
+			}
+		});
+		for (const id of affected) this.changed(id);
 	}
 
 	private reconcileTaskPullRequests(id: string, taskId: string, handoffActor?: MissionActor): boolean {

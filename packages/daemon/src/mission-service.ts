@@ -132,10 +132,28 @@ export class MissionService {
 					.flatMap((mission) => {
 						const project = projects.get(mission.projectId);
 						if (!project) return [];
-						return store
+						const linked = store
 							.detail(mission.id)
-							.resources.filter((resource) => resource.taskId && resource.kind === "github.pr")
+							.resources.filter(
+								(resource) => resource.kind === "github.pr" && resource.relationship === "ownership",
+							)
 							.map((resource) => ({ url: resource.url, cwd: project.path, pullRequest: resource.pullRequest }));
+						const owned = store.members(mission.id).flatMap((id) => {
+							const prs = sessions.ownedPullRequests(id);
+							return [
+								...new Set([...prs.map((pr) => pr.url), ...(sessions.get(id)?.boundPullRequests ?? [])]),
+							].map((url) => {
+								const pr = prs.find((pr) => pr.url.toLowerCase() === url.toLowerCase());
+								return {
+									url,
+									cwd: project.path,
+									pullRequest: pr ? store.memberPullRequest(mission.id, pr) : undefined,
+								};
+							});
+						});
+						return [
+							...new Map([...owned, ...linked].map((target) => [target.url.toLowerCase(), target])).values(),
+						];
 					}),
 			workspaceBehind: (sessionId, text) => {
 				const id = store.missionOf(sessionId);
@@ -143,7 +161,16 @@ export class MissionService {
 			},
 			pullRequestUpdated: (pr) => {
 				const merged = store.newlyMergedCoordinators(pr);
-				store.updatePullRequest(pr);
+				const owner = sessions.pullRequestOwner(pr.url);
+				const members = [...new Set([...store.pullRequestMembers(pr.url), ...(owner ? [owner] : [])])].flatMap(
+					(id) => {
+						const chat = sessions.get(id);
+						return chat ? [chat] : [];
+					},
+				);
+				store.updatePullRequest(pr, members, (id) =>
+					store.members(id).flatMap((memberId) => sessions.ownedPullRequests(memberId)),
+				);
 				for (const sessionId of merged) sessions.coordinatorBaseMerged(sessionId);
 			},
 		});
