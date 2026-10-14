@@ -7,7 +7,7 @@ import {
 	type Session,
 	type SubmissionId,
 } from "@earendil-works/pi-durable";
-import type { QueueUpdateEvent } from "@pilot/protocol";
+import type { PendingAutomaticInput, QueueUpdateEvent } from "@pilot/protocol";
 import { inputOrigin } from "./input-origin.ts";
 
 export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEvent {
@@ -21,20 +21,51 @@ export function queueUpdate(inbox: Readonly<InboxState> | null): QueueUpdateEven
 
 /**
  * Automatic input (job and extension notifications, mission messages and notices, PR follow-ups) still reaches the
- * agent, but the queue only shows the user's own editable messages.
+ * agent, but the queue only shows the user's own editable messages. Automatic input is listed separately in
+ * `automatic`, read-only. `pendingSince` keeps each automatic item's first-seen time across updates; pass one map per
+ * session so every watch reports the same `queuedAt`. Without it (cold reads) `queuedAt` is omitted.
  */
 export async function queueUpdateForDisplay(
 	inbox: Readonly<InboxState> | null,
 	readSubmission: (id: SubmissionId) => Promise<{ requestId?: string } | undefined>,
+	pendingSince?: Map<number, number>,
+	now = Date.now(),
 ): Promise<QueueUpdateEvent> {
 	const event = queueUpdate(inbox);
-	const visible = await Promise.all(
-		event.items.map(async (item) => {
-			const submission = await readSubmission(item.id as SubmissionId);
-			return inputOrigin(submission?.requestId) === undefined;
-		}),
+	const origins = await Promise.all(
+		event.items.map(async (item) => inputOrigin((await readSubmission(item.id as SubmissionId))?.requestId)),
 	);
-	return { ...event, items: event.items.filter((_, index) => visible[index]) };
+	const automatic: PendingAutomaticInput[] = [];
+	event.items.forEach((item, index) => {
+		const origin = origins[index];
+		if (origin === undefined) return;
+		const input: PendingAutomaticInput = { id: item.id, origin, mode: item.mode, preview: previewText(item.content) };
+		if (pendingSince) {
+			input.queuedAt = pendingSince.get(item.id) ?? now;
+			pendingSince.set(item.id, input.queuedAt);
+		}
+		automatic.push(input);
+	});
+	if (pendingSince) {
+		// Bounded by the inbox: forget items that joined a run or were withdrawn.
+		const pending = new Set(automatic.map((item) => item.id));
+		for (const id of pendingSince.keys()) if (!pending.has(id)) pendingSince.delete(id);
+	}
+	return { ...event, items: event.items.filter((_, index) => origins[index] === undefined), automatic };
+}
+
+const PREVIEW_LIMIT = 200;
+
+/** First non-empty line, clamped, for the read-only waiting list. */
+export function previewText(content: unknown): string {
+	const text = messageText(content);
+	let line = "";
+	for (const candidate of text.split("\n")) {
+		line = candidate.trim();
+		if (line) break;
+	}
+	const characters = Array.from(line);
+	return characters.length > PREVIEW_LIMIT ? `${characters.slice(0, PREVIEW_LIMIT - 1).join("")}…` : line;
 }
 
 /** Withdraw one pending input atomically with consumption, without aborting the active run. */

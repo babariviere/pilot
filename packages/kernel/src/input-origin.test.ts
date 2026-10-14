@@ -11,7 +11,8 @@ test("request IDs map to automatic origins, and user input has none", () => {
 	assert.equal(inputOrigin("native:jobs.result:abc"), "job");
 	assert.equal(inputOrigin("native:subagent.result:abc"), "subagent");
 	assert.equal(inputOrigin("native:custom:abc"), "extension");
-	assert.equal(inputOrigin("mission:send:abc"), "mission");
+	assert.equal(inputOrigin("mission:send:abc"), "coordinator");
+	assert.equal(inputOrigin("mission:draft:abc"), "mission");
 	assert.equal(inputOrigin("mission-notice:4"), "mission");
 	assert.equal(inputOrigin("pr-follow-up:abc"), "pullRequest");
 });
@@ -47,7 +48,7 @@ test("only automatic user entries are annotated, and later entries trigger one r
 		const origins = new InputOrigins(storage, conversation.id, context);
 		const annotated = await origins.entries([user, mission]);
 		assert.equal("origin" in annotated[0]!, false);
-		assert.equal((annotated[1] as { origin?: string }).origin, "mission");
+		assert.equal((annotated[1] as { origin?: string }).origin, "coordinator");
 		await origins.entries([user, mission]);
 		assert.equal(scan.mock.callCount(), 1, "known entries do not rescan");
 

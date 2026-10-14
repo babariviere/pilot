@@ -664,6 +664,29 @@ enum Snapshot {
             size: CGSize(width: 1000, height: 700),
             to: directory.appending(path: "session-long-queue.png")
         )
+        await render(
+            Frame(title: session.title, subtitle: "pilot") {
+                ChatView(session: session, feed: SessionFeed(sessionId: session.id, transcript: Fixtures.systemMessagesTranscript))
+            },
+            size: size,
+            to: directory.appending(path: "session-system-messages.png")
+        )
+        await render(
+            SystemMessagesStrip(inputs: PendingAutomaticInput.inDeliveryOrder(
+                Fixtures.systemMessagesTranscript.automaticInputs), expanded: true)
+                .padding(4).frame(width: 640).background(Theme.tray),
+            size: CGSize(width: 640, height: 150),
+            to: directory.appending(path: "system-messages-expanded.png")
+        )
+        await render(
+            SystemMessagesStrip(inputs: Fixtures.systemMessagesTranscript.automaticInputs.prefix(2).map {
+                PendingAutomaticInput(id: $0.id, origin: $0.origin, mode: $0.mode, preview: $0.preview,
+                                      queuedAt: $0.queuedAt, held: true)
+            }, expanded: true, onSendHeld: {}, onDiscardHeld: {})
+                .padding(4).frame(width: 640).background(Theme.tray),
+            size: CGSize(width: 640, height: 110),
+            to: directory.appending(path: "system-messages-held.png")
+        )
         model.inspectorVisible = true
         let editingComposer = ComposerState()
         editingComposer.selectQueuedMessage(Fixtures.queuedTranscript.queuedMessages[0])
@@ -2023,6 +2046,30 @@ enum Fixtures {
         var transcript = transcript
         let event = #"{"type":"queue_update","items":[{"id":20,"mode":"followUp","content":"Also check that queued messages reappear after reconnecting.\nInclude the results in your summary."},{"id":21,"mode":"steer","content":"Keep the change focused on the queue UI."}]}"#
         transcript.apply(try! JSONValue.decode(Data(event.utf8)))
+        return transcript
+    }
+
+    static var systemMessagesTranscript: Transcript {
+        var transcript = queuedTranscript
+        transcript.working = true
+        let now = Date().timeIntervalSince1970 * 1_000
+        transcript.apply(.object([
+            "type": .string("queue_update"),
+            "items": .array([.object([
+                "id": .number(20), "mode": .string("followUp"),
+                "content": .string("Also check the narrow window layout when you are done."),
+            ])]),
+            "automatic": .array([
+                ("coordinator", "steer", "Use the hairline divider from PageComponents instead of adding a new one.", 0.0),
+                ("job", "followUp", "pnpm test finished: 412 passed, 0 failed (3m 12s).", 60_000),
+                ("pullRequest", "followUp", "CI failed on #318: swift-test (QueueEditingTest.testRemoval).", 240_000),
+            ].enumerated().map { index, item in
+                .object([
+                    "id": .number(Double(30 + index)), "origin": .string(item.0), "mode": .string(item.1),
+                    "preview": .string(item.2), "queuedAt": .number(now - item.3),
+                ])
+            }),
+        ]))
         return transcript
     }
 

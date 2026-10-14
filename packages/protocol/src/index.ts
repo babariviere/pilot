@@ -96,9 +96,10 @@ export type DeliveryMode = "steer" | "followUp";
 
 /**
  * Source of automatic input, which is not typed by the user. Such `pi.user` entries carry `origin` in transcript
- * events and history, and are left out of `queue_update`. Entries the user typed omit it.
+ * events and history, and wait in `queue_update.automatic` instead of its editable `items`. Entries the user typed
+ * omit it. `coordinator` is a message from the mission coordinator; `mission` covers other mission input.
  */
-export type InputOrigin = "job" | "subagent" | "extension" | "mission" | "pullRequest";
+export type InputOrigin = "job" | "subagent" | "extension" | "coordinator" | "mission" | "pullRequest";
 
 /** Durable user input waiting to join a run, in submission order. Passive writes are not messages. */
 export interface QueuedMessage {
@@ -107,10 +108,31 @@ export interface QueuedMessage {
 	content: UserMessage["content"];
 }
 
+/**
+ * Automatic input waiting to join a run, in submission order. Read-only: clients show it as a count with a short
+ * preview, never as an editable queued message.
+ */
+export interface PendingAutomaticInput {
+	id: number;
+	origin: InputOrigin;
+	mode: DeliveryMode;
+	/** First non-empty line of the text, at most 200 characters. */
+	preview: string;
+	/**
+	 * Epoch milliseconds when the session worker first saw it waiting. A worker restart resets it. Absent from cold
+	 * snapshots read without a running worker.
+	 */
+	queuedAt?: number;
+	/** Kept after the user stopped the chat, until they send or discard it. Absent while it simply waits. */
+	held?: boolean;
+}
+
 /** Queue contents are sent after the initial snapshot and whenever the durable inbox changes. */
 export interface QueueUpdateEvent {
 	type: "queue_update";
 	items: QueuedMessage[];
+	/** Absent from older workers; treat as empty. */
+	automatic?: PendingAutomaticInput[];
 }
 
 /** Read-only projection of the pi-extensions file-backed TODO store. */

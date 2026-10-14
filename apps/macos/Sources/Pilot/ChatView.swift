@@ -48,6 +48,7 @@ final class SessionFeed: ObservableObject {
         hasSnapshot = false
         var cached = presentation
         cached.queuedMessages = []
+        cached.automaticInputs = []
         cached.todos = []
         cached.working = false
         cached.streaming = false
@@ -273,6 +274,7 @@ struct ChatView: View {
                         state: composer,
                         working: transcript.working || session.state == "starting",
                         queuedMessages: transcript.queuedMessagesInDeliveryOrder,
+                        automaticInputs: transcript.automaticInputs,
                         completionDirectory: session.isAsk ? nil : session.cwd,
                         onSend: send,
                         onStop: { model.stopSession(session.id) },

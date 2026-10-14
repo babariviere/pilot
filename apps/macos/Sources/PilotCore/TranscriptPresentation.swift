@@ -31,6 +31,9 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public var queuedMessages: [QueuedMessage] = [] {
         didSet { updateMetadataByteCount() }
     }
+    public var automaticInputs: [PendingAutomaticInput] = [] {
+        didSet { updateMetadataByteCount() }
+    }
     public var todos: [SessionTodo] = [] {
         didSet { updateMetadataByteCount() }
     }
@@ -82,6 +85,7 @@ public struct TranscriptPresentation: Equatable, Sendable {
         working = transcript.working
         streaming = transcript.streaming != nil
         queuedMessages = transcript.queuedMessages
+        automaticInputs = transcript.automaticInputs
         todos = transcript.todos
         retry = transcript.retry
         compacting = transcript.compacting
@@ -93,7 +97,8 @@ public struct TranscriptPresentation: Equatable, Sendable {
     public static func == (lhs: Self, rhs: Self) -> Bool {
         // Accounting and subtree invalidation keys are rendering caches, not transcript value.
         lhs.hasSameRows(as: rhs) && lhs.working == rhs.working && lhs.streaming == rhs.streaming
-            && lhs.queuedMessages == rhs.queuedMessages && lhs.todos == rhs.todos
+            && lhs.queuedMessages == rhs.queuedMessages && lhs.automaticInputs == rhs.automaticInputs
+            && lhs.todos == rhs.todos
             && lhs.retry == rhs.retry && lhs.compacting == rhs.compacting && lhs.error == rhs.error
             && lhs.earlierCursor == rhs.earlierCursor && lhs.revision == rhs.revision
     }
@@ -117,6 +122,9 @@ public struct TranscriptPresentation: Equatable, Sendable {
         bytes += error?.utf8.count ?? 0
         for message in queuedMessages {
             bytes += 128 + message.text.utf8.count
+        }
+        for input in automaticInputs {
+            bytes += 128 + input.preview.utf8.count
         }
         for todo in todos {
             bytes += 128 + todo.id.utf8.count + todo.title.utf8.count
@@ -272,7 +280,8 @@ public actor TranscriptProcessor {
         result.revision = revision
         if let last,
            result.working == last.working, result.streaming == last.streaming,
-           result.queuedMessages == last.queuedMessages, result.todos == last.todos,
+           result.queuedMessages == last.queuedMessages, result.automaticInputs == last.automaticInputs,
+           result.todos == last.todos,
            result.retry == last.retry, result.compacting == last.compacting, result.error == last.error,
            result.earlierCursor == last.earlierCursor, !rowsDiffer { return last }
         revision += 1

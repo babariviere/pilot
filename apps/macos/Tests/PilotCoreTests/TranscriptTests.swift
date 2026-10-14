@@ -286,3 +286,31 @@ private func split(_ snapshot: JSONValue, tail: Int) -> [JSONValue] {
     #expect(transcript.entries.map(\.id) == [4, 5, 6, 9, 10, 11, 12])
     #expect(transcript.earlierCursor == 4)
 }
+
+@Test func automaticInputsAreReadSeparatelyFromTheQueueAndSurviveSnapshots() async throws {
+    var transcript = Transcript()
+    transcript.apply(json(#"{"type":"queue_update","items":[{"id":10,"mode":"followUp","content":"Mine"}],"automatic":[{"id":11,"origin":"coordinator","mode":"steer","preview":"Use the shared divider","queuedAt":1000},{"id":12,"origin":"job","mode":"followUp","preview":"Tests passed","queuedAt":2000,"held":true},{"id":13,"origin":"future-kind","mode":"followUp","preview":"Unknown","queuedAt":3000},{"id":14,"mode":"later"}]}"#))
+    #expect(transcript.queuedMessages.map(\.id) == [10])
+    #expect(transcript.automaticInputs == [
+        PendingAutomaticInput(id: 11, origin: .coordinator, mode: .steer, preview: "Use the shared divider", queuedAt: 1000),
+        PendingAutomaticInput(id: 12, origin: .job, mode: .followUp, preview: "Tests passed", queuedAt: 2000, held: true),
+        PendingAutomaticInput(id: 13, origin: .extension, mode: .followUp, preview: "Unknown", queuedAt: 3000),
+    ])
+    #expect(PendingAutomaticInput.inDeliveryOrder(
+        transcript.automaticInputs.reversed()).map(\.id) == [11, 13, 12])
+
+    // The agent stream's snapshot must not erase the separate inbox projection.
+    transcript.apply(json(#"{"type":"snapshot","entries":[],"tools":[],"inbox":[]}"#))
+    #expect(transcript.automaticInputs.count == 3)
+    #expect(TranscriptPresentation(transcript: transcript).automaticInputs == transcript.automaticInputs)
+
+    // Older workers omit the field; each one leaves as it joins the run.
+    transcript.apply(json(#"{"type":"queue_update","items":[]}"#))
+    #expect(transcript.automaticInputs.isEmpty)
+
+    let processor = TranscriptProcessor()
+    let first = try await processor.apply([json(#"{"type":"queue_update","items":[],"automatic":[{"id":1,"origin":"job","mode":"followUp","preview":"Done","queuedAt":1}]}"#)])
+    let cleared = try await processor.apply([json(#"{"type":"queue_update","items":[],"automatic":[]}"#)])
+    #expect(first.automaticInputs.map(\.id) == [1])
+    #expect(cleared.automaticInputs.isEmpty && cleared.revision > first.revision)
+}
