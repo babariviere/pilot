@@ -26,7 +26,7 @@ import { untrackedStats } from "./untracked-stats.ts";
 
 const config = loadConfig();
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
-const watchdog = new EventLoopWatchdog();
+const watchdog = new EventLoopWatchdog({ histogram: true });
 watchdog.start();
 const projects = new ProjectStore(config.home);
 await projects.load();

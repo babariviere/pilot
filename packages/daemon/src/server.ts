@@ -50,7 +50,7 @@ import { RepositoryChanges } from "./changes.ts";
 import { ChatStreams } from "./chat-streams.ts";
 import type { DaemonConfig } from "./config.ts";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
-import { operations } from "./event-loop-watchdog.ts";
+import { daemonPerformance, operations } from "./event-loop-watchdog.ts";
 import { type McpStatusService, SignInUnavailable } from "./mcp-status.ts";
 import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
@@ -438,6 +438,11 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "update" && parts[2] === "pause" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.pauseForUpdate());
+		if (parts[1] === "diagnostics" && parts[2] === "performance" && parts.length === 3 && req.method === "GET") {
+			const performance = daemonPerformance();
+			if (!performance) throw new ServiceUnavailable("Performance diagnostics are not running");
+			return json(res, 200, performance);
+		}
 		if (parts[1] === "update" && parts[2] === "prepare" && parts.length === 3 && req.method === "POST")
 			return json(res, 200, sessions.prepareUpdate());
 		if (parts[1] === "artifact-libraries" && parts.length === 3 && req.method === "GET") {

@@ -31,6 +31,7 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
+import { operations } from "./event-loop-watchdog.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import type { PullRequestBinding } from "./sessions.ts";
 
@@ -540,33 +541,44 @@ export class MissionStore {
 		for (const sessionId of sessions) for (const listener of this.memberListeners) listener(sessionId);
 	}
 
+	/**
+	 * SQLite runs synchronously on pilotd's event loop, and a commit waits for the disk. Attribute slow
+	 * statements outside transactions, and whole transactions, in event-loop stall reports.
+	 */
+	private timed<T>(sql: string, work: () => T): T {
+		if (this.writing) return work();
+		return operations.time(() => `missions.sqlite ${sql.replace(/\s+/g, " ").trim().slice(0, 48)}`, work);
+	}
+
 	private all(sql: string, ...params: SQLInputValue[]): Row[] {
-		return this.db.prepare(sql).all(...params) as Row[];
+		return this.timed(sql, () => this.db.prepare(sql).all(...params) as Row[]);
 	}
 
 	private one(sql: string, ...params: SQLInputValue[]): Row | undefined {
-		return this.db.prepare(sql).get(...params) as Row | undefined;
+		return this.timed(sql, () => this.db.prepare(sql).get(...params) as Row | undefined);
 	}
 
 	private run(sql: string, ...params: SQLInputValue[]): void {
-		this.db.prepare(sql).run(...params);
+		this.timed(sql, () => this.db.prepare(sql).run(...params));
 	}
 
 	private transaction<T>(work: () => T): T {
 		// Reference batches reuse the ordinary validators/writers inside one outer transaction.
 		if (this.writing) return work();
-		this.db.exec("BEGIN IMMEDIATE");
-		this.writing = true;
-		try {
-			const result = work();
-			this.db.exec("COMMIT");
-			return result;
-		} catch (error) {
-			this.db.exec("ROLLBACK");
-			throw error;
-		} finally {
-			this.writing = false;
-		}
+		return operations.time("missions.sqlite transaction", () => {
+			this.db.exec("BEGIN IMMEDIATE");
+			this.writing = true;
+			try {
+				const result = work();
+				this.db.exec("COMMIT");
+				return result;
+			} catch (error) {
+				this.db.exec("ROLLBACK");
+				throw error;
+			} finally {
+				this.writing = false;
+			}
+		});
 	}
 
 	private event(
