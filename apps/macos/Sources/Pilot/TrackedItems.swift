@@ -117,7 +117,7 @@ enum TrackedItemText {
 
     /// "In Review · High · 3h ago". Under a status group the status is left out when the group already names it.
     static func subtitle(_ item: TrackedItem, now: Date = Date(), group: LinearGroup? = nil) -> String {
-        let when = ProjectPageText.compactAgo(item.updatedAt, now: now)
+        let when = RelativeDate.ago(item.updatedAt, now: now)
         switch item.kind {
         case .linear:
             let key = { (text: String) in text.lowercased().filter { !$0.isWhitespace } }
@@ -152,7 +152,7 @@ enum TrackedItemText {
         case .syncing:
             return SourceLine(text: "Syncing…", tone: .progress)
         case .ok:
-            let synced = source.lastPolledAt.map { "Synced \(ProjectPageText.compactAgo($0, now: now))" } ?? "Synced"
+            let synced = source.lastPolledAt.map { "Synced \(RelativeDate.ago($0, now: now))" } ?? "Synced"
             return SourceLine(text: synced, tone: .quiet)
         case .idle:
             return SourceLine(text: "Waiting for the first sync.", tone: .quiet)
@@ -175,7 +175,7 @@ enum TrackedItemText {
         switch channel.status {
         case .pending: return SourceLine(text: "Waiting for the first sync", tone: .quiet)
         case .ok:
-            return SourceLine(text: channel.lastPulledAt.map { "Pulled \(ProjectPageText.compactAgo($0, now: now))" }
+            return SourceLine(text: channel.lastPulledAt.map { "Pulled \(RelativeDate.ago($0, now: now))" }
                 ?? "Pulled", tone: .quiet)
         case .error: return SourceLine(text: "Couldn't read", tone: .attention)
         case .signInRequired: return SourceLine(text: "Sign in required", tone: .attention)

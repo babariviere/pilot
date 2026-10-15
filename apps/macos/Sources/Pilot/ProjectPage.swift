@@ -1085,7 +1085,7 @@ enum ProjectPageText {
         case (false, false):
             first = "Nothing is running."
             if let lastFinishedAt {
-                first += " The last chat finished \(sentenceAgo(lastFinishedAt, now: now))."
+                first += " The last chat finished \(RelativeDate.sentence(lastFinishedAt, now: now))."
             }
         }
         let ready = summary.readyPullRequests
@@ -1143,7 +1143,7 @@ enum ProjectPageText {
     }
 
     static func staleDetail(receivedAt: Date?, error: String?, now: Date = Date()) -> String {
-        let shown = receivedAt.map { "Showing what Pilot knew \(sentenceAgo($0.timeIntervalSince1970 * 1000, now: now))." }
+        let shown = receivedAt.map { "Showing what Pilot knew \(RelativeDate.sentence($0.timeIntervalSince1970 * 1000, now: now))." }
             ?? "Showing the last data Pilot received."
         guard let error, !error.isEmpty else { return "Waiting for pilotd to reconnect. \(shown)" }
         let sentence = error.hasSuffix(".") ? error : "\(error)."
@@ -1153,22 +1153,6 @@ enum ProjectPageText {
     /// "anthropic/claude-opus-5-5" reads as "claude-opus-5-5".
     static func shortModel(_ id: String) -> String {
         id.split(separator: "/").last.map(String.init) ?? id
-    }
-
-    /// "12m ago" in row subtitles.
-    static func compactAgo(_ milliseconds: Double, now: Date) -> String {
-        let relative = SessionTimeFormatting.relative(milliseconds, now: now)
-        return relative == "now" ? "just now" : "\(relative) ago"
-    }
-
-    /// "3 minutes ago" or "yesterday" in sentences.
-    static func sentenceAgo(_ milliseconds: Double, now: Date) -> String {
-        let date = Date(timeIntervalSince1970: milliseconds / 1000)
-        guard now.timeIntervalSince(date) >= 60 else { return "just now" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        formatter.dateTimeStyle = .named
-        return formatter.localizedString(for: date, relativeTo: now)
     }
 }
 

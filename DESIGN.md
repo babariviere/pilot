@@ -30,7 +30,8 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 - **Polish in the details.** Consistent corner radii, optical alignment, crisp icons from one family, smooth
   hover and focus states. Small imperfections add up to a restless app.
 - **Native first.** Use system materials, SF Symbols, system fonts and platform conventions. The app should look
-  at home on macOS, in its light appearance, and at any window size. Dark mode is out of scope.
+  at home on macOS and at any window size. Pilot is light only for now: design and check every change in the light
+  appearance, with no dark-mode variants or checks.
 - **Typography carries the page.** Weight and size separate headline, section and row. Use secondary and
   tertiary text colors for meta information, and keep line lengths comfortable.
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).
@@ -94,6 +95,9 @@ Home, Inbox and Overview rows use the same line and may wrap it once.
 An unsent composer draft replaces the segments after the project with a pencil and the draft's first line, in
 muted text. It is the user's own work, so it never colours, badges or regroups the row.
 
+The menu bar follows the same urgency order (Needs you, Ready to merge, Working, Recent) under a one-line heading such
+as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
+
 ## Consistency
 
 - Reuse shared components and `Theme` tokens (color, type, spacing, radius, motion). Add missing tokens or
@@ -115,6 +119,9 @@ muted text. It is the user's own work, so it never colours, badges or regroups t
   instead of capsule tags.
 - Errors use `InlineProblem` (a `Theme.error` triangle, muted text and "Retry") beside what failed. Amber stays
   for things the user can act on, so errors never use `warning`, `blocked` or orange.
+- Times use `RelativeDate`: "3d ago" in rows, "3 minutes ago" in sentences, "Today 9:00 AM" for upcoming times,
+  with the exact date in the tooltip.
+- The UI says "chat", never "session", and "Needs you" for anything waiting on the user.
 
 ## Sheets
 

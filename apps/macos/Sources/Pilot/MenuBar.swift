@@ -2,6 +2,8 @@ import AppKit
 import PilotCore
 import SwiftUI
 
+/// The menu bar extra: what needs the user at a glance ("1 needs you · 2 working"), chats in the sidebar's urgency
+/// order, then Open Pilot, pilotd's controls in their own submenu, and Quit.
 struct MenuBarContent: View {
     private let model: AppModel
     @StateObject private var menu: MenuBarModel
@@ -14,35 +16,39 @@ struct MenuBarContent: View {
 
     var body: some View {
         Text(menu.snapshot.statusText)
-        Divider()
-        ForEach(menu.snapshot.rows) { row in
-            let session = row.session
-            Button {
-                model.openWindowAction = { openWindow(id: MainWindow.id) }
-                model.open(session: session.id)
-            } label: {
-                Label {
-                    Text("\(session.title)\(row.isUnread ? " •" : "")")
-                } icon: {
-                    SessionStatusIcon(status: session.status)
+        ForEach(menu.snapshot.sections) { section in
+            Section(section.title) {
+                ForEach(section.rows) { row in
+                    Button {
+                        model.openWindowAction = { openWindow(id: MainWindow.id) }
+                        model.open(session: row.session.id)
+                    } label: {
+                        Label {
+                            Text(row.session.title)
+                        } icon: {
+                            SessionStatusIcon(status: row.session.status)
+                        }
+                    }
+                    .help(row.signal?.label ?? row.session.status.rawValue)
+                    .accessibilityLabel(row.accessibilityLabel)
                 }
             }
-            .help(session.status.rawValue)
-            .accessibilityLabel("\(session.title), \(session.status.rawValue)\(row.isUnread ? ", unread" : "")")
-            PullRequestBadge(session: session)
         }
-        if !menu.snapshot.rows.isEmpty { Divider() }
+        Divider()
         Button("Open Pilot") {
             openWindow(id: MainWindow.id)
             model.showMainWindow()
         }
         .keyboardShortcut("o")
-        Divider()
-        Button("Restart pilotd") { Task { await model.daemon.restart() } }
-            .disabled(menu.snapshot.lifecycleBusy)
-        Button("Stop pilotd") { Task { await model.daemon.stop() } }
-            .disabled(menu.snapshot.lifecycleBusy)
-        Button("Open pilotd Log") { NSWorkspace.shared.open(model.daemon.logURL) }
+        Menu("pilotd") {
+            Text(menu.snapshot.daemonText)
+            Divider()
+            Button("Restart pilotd") { Task { await model.daemon.restart() } }
+                .disabled(menu.snapshot.lifecycleBusy)
+            Button("Stop pilotd") { Task { await model.daemon.stop() } }
+                .disabled(menu.snapshot.lifecycleBusy)
+            Button("Open pilotd Log") { NSWorkspace.shared.open(model.daemon.logURL) }
+        }
         Divider()
         Button(menu.snapshot.waitingToInstall ? "Quit Pilot (pause agents and update)" : "Quit Pilot (agents keep running)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")

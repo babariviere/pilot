@@ -377,6 +377,8 @@ final class AppUpdater: NSObject, ObservableObject, @preconcurrency SPUUpdaterDe
 @MainActor
 private final class UpdateTokenEditor: ObservableObject {
     @Published var token = ""
+    /// gh authentication works: the token field waits behind "Use a Token Instead…".
+    @Published var showingTokenField = false
 }
 
 struct UpdateSettings: View {
@@ -398,20 +400,44 @@ struct UpdateSettings: View {
             .disabled(!updater.configured)
         }
         Section {
-            SecureField("GitHub token", text: $editor.token, prompt: Text(updater.accessSource == .githubCLI ? "Using local gh authentication" : "Fine-grained token"))
-                .disabled(!updater.configured || !updater.credentialsEditable)
-            HStack {
-                Spacer()
-                Button("Remove Saved Token") { updater.removeToken() }
+            if updater.accessSource == .githubCLI && !editor.showingTokenField {
+                LabeledContent {
+                    Button("Use a Token Instead…") { editor.showingTokenField = true }
+                        .disabled(!updater.configured || !updater.credentialsEditable)
+                } label: {
+                    Text("Using gh authentication")
+                    Text("Pilot reads gh auth token from your login shell.")
+                }
+            } else {
+                if updater.accessSource == .savedToken {
+                    LabeledContent("Using a saved token") {
+                        Button("Remove Saved Token") { updater.removeToken() }
+                            .disabled(!updater.configured || !updater.credentialsEditable)
+                    }
+                }
+                SecureField("GitHub token", text: $editor.token, prompt: Text("Fine-grained token"))
                     .disabled(!updater.configured || !updater.credentialsEditable)
-                Button("Save Token") {
-                    Task { if await updater.saveToken(editor.token) { editor.token = "" } }
-                }.disabled(editor.token.isEmpty || !updater.configured || !updater.credentialsEditable)
+                HStack {
+                    if updater.accessSource == .githubCLI {
+                        Button("Use gh Authentication") {
+                            editor.token = ""
+                            editor.showingTokenField = false
+                        }
+                    }
+                    Spacer()
+                    if updater.accessSource != .savedToken {
+                        Button("Remove Saved Token") { updater.removeToken() }
+                            .disabled(!updater.configured || !updater.credentialsEditable)
+                    }
+                    Button("Save Token") {
+                        Task { if await updater.saveToken(editor.token) { editor.token = "" } }
+                    }.disabled(editor.token.isEmpty || !updater.configured || !updater.credentialsEditable)
+                }
             }
         } header: {
             Text("Access")
         } footer: {
-            SettingsFooter("Pilot first uses gh auth token from your login-shell PATH. If gh is unavailable or cannot access this repository, enter a fine-grained token with Contents: Read-only access. Only manually entered tokens are stored in Keychain.")
+            SettingsFooter("Pilot first uses gh auth token from your login-shell PATH. If gh is unavailable or cannot access this repository, enter a fine-grained token with Contents: Read-only access. Only tokens you enter are stored in Keychain.")
         }
     }
 }

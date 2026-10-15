@@ -236,7 +236,7 @@ enum SlackTriageText {
 
     /// "#bugs · 2h ago · 7 replies".
     static func meta(_ item: TrackedItem, now: Date) -> String {
-        var parts = [TrackedItemText.identifier(item), ProjectPageText.compactAgo(item.updatedAt, now: now)]
+        var parts = [TrackedItemText.identifier(item), RelativeDate.ago(item.updatedAt, now: now)]
         if let replies = replies(item), replies > 0 { parts.append(replies == 1 ? "1 reply" : "\(replies) replies") }
         return parts.joined(separator: " · ")
     }

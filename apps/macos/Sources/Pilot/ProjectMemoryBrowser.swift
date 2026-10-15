@@ -93,32 +93,42 @@ struct ProjectMemoryBrowser: View {
     private func treeNode(_ node: MemoryNode, depth: Int) -> AnyView {
         let canExpand = node.hi - node.lo + 1 >= 2
         return AnyView(VStack(alignment: .leading, spacing: 0) {
-            HStack(alignment: .top, spacing: 8) {
-                Button { Task { await state.expand(node) } } label: {
-                    PilotSymbol(canExpand ? (state.expanded.contains(node.key) ? PilotIcon.disclosureOpen : PilotIcon.disclosure) :
-                          PilotIcon.memoryEntry, filled: !canExpand && !node.isReplaced, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 14)
-                }
-                .buttonStyle(.plain).disabled(!canExpand || state.busy)
-                .accessibilityLabel(state.expanded.contains(node.key) ? "Collapse entries \(node.lo) through \(node.hi)" :
-                                    "Expand entries \(node.lo) through \(node.hi)")
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(node.title)
-                        .font(.pilot(.body)).foregroundStyle(node.isReplaced ? Theme.mutedForeground : Theme.foreground)
-                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    if let entry = node.entry {
-                        MemoryEntryMeta(entry: entry)
-                    } else {
-                        Text("Entries \(node.lo)–\(node.hi)").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+            HoverRow(horizontalPadding: 4, verticalPadding: 7) { hovered in
+                HStack(alignment: .top, spacing: 8) {
+                    Button { Task { await state.expand(node) } } label: {
+                        PilotSymbol(canExpand ? (state.expanded.contains(node.key) ? PilotIcon.disclosureOpen : PilotIcon.disclosure) :
+                              PilotIcon.memoryEntry, filled: !canExpand && !node.isReplaced, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 14)
+                    }
+                    .buttonStyle(.plain).disabled(!canExpand || state.busy)
+                    .accessibilityLabel(state.expanded.contains(node.key) ? "Collapse entries \(node.lo) through \(node.hi)" :
+                                        "Expand entries \(node.lo) through \(node.hi)")
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(node.title)
+                            .font(.pilot(.body)).foregroundStyle(node.isReplaced ? Theme.mutedForeground : Theme.foreground)
+                            .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                        if let entry = node.entry {
+                            MemoryEntryMeta(entry: entry)
+                        } else {
+                            Text("Entries \(node.lo)–\(node.hi)").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
+                        }
+                    }
+                    Spacer(minLength: 4)
+                    if node.canForget {
+                        // The trash waits under the pointer (or keyboard focus) and in the context menu.
+                        Button { state.requestForget(node) } label: { PilotSymbol(PilotIcon.delete, context: .toolbar) }
+                            .rowIconButtonStyle(hoverTint: Theme.destructive)
+                            .help("Forget this summary")
+                            .accessibilityLabel("Forget summary for entries \(node.lo) through \(node.hi)")
+                            .revealed(hovered)
                     }
                 }
-                Spacer(minLength: 4)
+            }
+            .contextMenu {
                 if node.canForget {
-                    Button { state.requestForget(node) } label: { PilotSymbol(PilotIcon.delete, context: .toolbar) }
-                        .buttonStyle(.plain).help("Forget this summary")
-                        .accessibilityLabel("Forget summary for entries \(node.lo) through \(node.hi)")
+                    Button("Forget Summary…", role: .destructive) { state.requestForget(node) }
                 }
             }
-            .padding(.leading, CGFloat(depth) * 18 + 4).padding(.vertical, 7)
+            .padding(.leading, CGFloat(depth) * 18)
             if state.expanded.contains(node.key) {
                 ForEach(state.children[node.key] ?? [], id: \.key) { child in treeNode(child, depth: depth + 1) }
             }
@@ -136,19 +146,21 @@ struct ProjectMemoryBrowser: View {
     }
 }
 
-/// "#7 · date", followed by a quiet "Replaced by #n" when a later note corrects this one.
+/// "#7 · 3d ago", followed by a quiet "Replaced by #n" when a later note corrects this one. The exact date is in the
+/// tooltip.
 private struct MemoryEntryMeta: View {
     let entry: MemoryEntry
 
     var body: some View {
         HStack(spacing: 0) {
-            Text("#\(entry.index) · \(Date(timeIntervalSince1970: entry.at / 1000).formatted(date: .abbreviated, time: .shortened))")
+            Text("#\(entry.index) · \(RelativeDate.ago(entry.at))")
                 .foregroundStyle(Theme.faintForeground)
             if let label = entry.replacedLabel {
                 Text(" · \(label)").foregroundStyle(Theme.mutedForeground)
             }
         }
         .font(.pilot(.caption)).lineLimit(1)
+        .help(RelativeDate.exact(entry.at))
         .accessibilityElement(children: .combine)
     }
 }

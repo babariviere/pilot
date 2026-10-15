@@ -41,17 +41,7 @@ enum ScheduleText {
     /// Trailing row label: the trigger, or the time of an "at" item.
     static func when(_ item: ScheduledItem, now: Date = Date(), calendar: Calendar = .current) -> String {
         guard item.trigger == .at, let at = item.at else { return label(item.trigger) }
-        return time(Date(timeIntervalSince1970: at / 1000), now: now, calendar: calendar)
-    }
-
-    /// "Today 9:00 AM", "Tomorrow 9:00 AM", then "Fri, Oct 16, 9:00 AM".
-    static func time(_ date: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
-        let clock = date.formatted(date: .omitted, time: .shortened)
-        if calendar.isDate(date, inSameDayAs: now) { return "Today \(clock)" }
-        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now), calendar.isDate(date, inSameDayAs: tomorrow) {
-            return "Tomorrow \(clock)"
-        }
-        return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
+        return RelativeDate.upcoming(Date(timeIntervalSince1970: at / 1000), now: now, calendar: calendar)
     }
 
     /// Secondary row line: what will happen, or why it could not.

@@ -5,14 +5,15 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 - **Background daemon.** The app installs pilotd as a launchd agent
   (`~/Library/LaunchAgents/com.babariviere.pilot.daemon.plist`, `RunAtLoad` + `KeepAlive`).
   Closing the window keeps Pilot in the menu bar; quitting Pilot leaves pilotd and its agents running.
-  "Stop pilotd" in the menu unloads the agent (sessions pause durably) until the next app launch or login.
+  The menu bar lists chats by urgency under a heading such as "1 needs you · 2 working". "Stop pilotd" in its
+  pilotd submenu unloads the agent (chats pause durably) until the next app launch or login.
 - **Design.** Light theme after [Berth](https://github.com/sean-brydon/berthd)'s palette: white surfaces, a
   neutral-50 sidebar, hairline borders, dark primary buttons. Home has a procedural dithered sky band, the
   task composer and a dashboard (working now, activity, recent sessions, projects).
 - **Projects.** Named folders stored by pilotd (`/api/projects`). The sidebar groups sessions by project;
   new sessions pick a project (or another folder) and inherit its default model. Manage them in Settings.
   **Require PR** defaults to on, including for older projects. Disabling it permits direct pushes to the
-  default branch. Saved PR policy changes apply when a session worker next starts.
+  default branch. Saved PR policy changes apply when a chat next starts working.
 - **Sidebar folders.** Use the sidebar **+** menu to create a folder, then right-click a project and
   choose **Move to Folder**. Folder headers expand/collapse and offer Rename/Delete via their context
   menu. Deleting a folder ungroups its projects. Grouping and folder collapse state persist locally
