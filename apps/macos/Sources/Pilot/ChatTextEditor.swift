@@ -23,6 +23,8 @@ struct ChatTextEditor: NSViewRepresentable {
     var slashCommands: [SlashCommand]?
     /// Called when the menu opens, so the owner can load the session's commands lazily.
     var onSlashCommandsNeeded: (() -> Void)?
+    /// Called when the text view gains or loses keyboard focus, including when it leaves its window.
+    var onFocusChange: ((Bool) -> Void)?
     var onSubmit: (NSEvent.ModifierFlags) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -70,6 +72,9 @@ struct ChatTextEditor: NSViewRepresentable {
         }
         textView.onLayoutWidthChange = { [weak coordinator = context.coordinator] textView in
             coordinator?.recalculate(textView, contentChanged: false)
+        }
+        textView.onFocusChange = { [weak coordinator = context.coordinator] focused in
+            coordinator?.parent.onFocusChange?(focused)
         }
         scroll.documentView = textView
 
@@ -186,6 +191,8 @@ struct ChatTextEditor: NSViewRepresentable {
 
 final class SubmitTextView: NSTextView {
     var onLayoutWidthChange: ((NSTextView) -> Void)?
+    var onFocusChange: ((Bool) -> Void)?
+    private var hasFocus = false
 
     override func setFrameSize(_ newSize: NSSize) {
         let widthChanged = frame.width != newSize.width
@@ -321,11 +328,27 @@ final class SubmitTextView: NSTextView {
 
     override func resignFirstResponder() -> Bool {
         dismissCompletionPicker()
-        return super.resignFirstResponder()
+        let resigned = super.resignFirstResponder()
+        if resigned { setFocus(false) }
+        return resigned
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let accepted = super.becomeFirstResponder()
+        if accepted { setFocus(true) }
+        return accepted
+    }
+
+    private func setFocus(_ focused: Bool) {
+        guard hasFocus != focused else { return }
+        hasFocus = focused
+        onFocusChange?(focused)
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         dismissCompletionPicker()
+        // A removed first responder is not always asked to resign, as when the user switches chats.
+        if newWindow == nil { setFocus(false) }
         super.viewWillMove(toWindow: newWindow)
     }
 

@@ -28,6 +28,7 @@ private func kinds(_ segments: [RowLineSegment]) -> [String] {
         case .mission: "mission"
         case .branch: "branch"
         case .text: "text"
+        case .draft: "draft"
         }
     }
 }
@@ -79,6 +80,67 @@ private func kinds(_ segments: [RowLineSegment]) -> [String] {
     #expect(RowLineSegments.pullRequestSummary(chat(prs: [pr(6555), pr(6554)])) == "Pull requests: #6555, #6554")
     #expect(RowLineSegments.pullRequestSummary(chat(prs: [pr(7)])) == "Pull request #7")
     #expect(RowLineSegments.pullRequestSummary(chat()) == nil)
+}
+
+// MARK: - Drafts
+
+@Test func aDraftReplacesTheDetailsAfterTheProject() throws {
+    let session = chat(prs: [pr(6555)], missionId: "m")
+    let details = RowLineSegments.session(session, projectName: "pilot", missionId: "m", missionTitle: "Redesign",
+                                          reason: "New result", branch: "feat/rows")
+    let draft = try #require(RowDraft(text: "  Can you also   check\tthe sidebar?\nSecond line  "))
+    let shown = RowLineSegments.shown(details, draft: draft)
+    #expect(kinds(shown) == ["project", "draft"])
+    #expect(draft.preview == "\u{201C}Can you also check the sidebar?\u{201D}")
+    // Focused lists have no project: the draft is the whole line.
+    #expect(kinds(RowLineSegments.shown(RowLineSegments.session(session, branch: "feat/rows"), draft: draft)) == ["draft"])
+    // No draft leaves the line as it was.
+    #expect(RowLineSegments.shown(details, draft: nil) == details)
+}
+
+@Test func whitespaceOnlyDraftsAreEmpty() {
+    #expect(RowDraft(text: "") == nil)
+    #expect(RowDraft(text: "  \n\t ") == nil)
+    #expect(RowDraft(text: " \n ", imageCount: 0) == nil)
+}
+
+@Test func imageOnlyDraftsNameTheirImages() throws {
+    let one = try #require(RowDraft(text: "  ", imageCount: 1))
+    #expect(one.preview == "Image draft")
+    #expect(one.accessibilityText == "Unsent draft: 1 image")
+    let three = try #require(RowDraft(text: "", imageCount: 3))
+    #expect(three.preview == "3 images")
+    #expect(three.accessibilityText == "Unsent draft: 3 images")
+    let mixed = try #require(RowDraft(text: "Look at this", imageCount: 2))
+    #expect(mixed.preview == "\u{201C}Look at this\u{201D}")
+    #expect(mixed.accessibilityText == "Unsent draft: Look at this (with 2 images)")
+}
+
+@Test func draftsReadInFullForVoiceOverAndClampedInTooltips() throws {
+    let text = (1...6).map { "Line \($0)" }.joined(separator: "\n")
+    let draft = try #require(RowDraft(text: text))
+    let details = RowLineSegments.session(chat(), projectName: "pilot", reason: "New result", branch: "fix/rows")
+    let described = RowLineSegments.described(details, draft: draft)
+    #expect(kinds(described) == ["project", "draft", "reason", "branch"])
+    #expect(described.accessibilityText ==
+        "pilot, Unsent draft: \(text), New result, Branch fix/rows")
+    #expect(draft.help == "Unsent draft: Line 1\nLine 2\nLine 3\nLine 4…")
+    let long = try #require(RowDraft(text: String(repeating: "a", count: 400)))
+    #expect(long.help == "Unsent draft: " + String(repeating: "a", count: RowDraft.helpCharacterLimit) + "…")
+    #expect(RowLineSegments.described(details, draft: nil) == details)
+}
+
+@Test func longDraftsAreBoundedAndFadeAtTheTrailingEdge() throws {
+    let draft = try #require(RowDraft(text: String(repeating: "word ", count: 100)))
+    // The row keeps a bounded preview; the fade, not an ellipsis, ends it in any list.
+    #expect(draft.preview.count <= RowDraft.previewLimit + 3)
+    #expect(draft.preview.hasSuffix("word…\u{201D}"))
+    #expect(draft.preview.hasPrefix("\u{201C}word word"))
+    // After the project, a draft wider than the row still shows, fading out, on the same line.
+    let placements = arrange([50, 600], available: 200)
+    #expect(placements == [.init(line: 0, x: 0), .init(line: 0, x: 61, separatorX: 54)])
+    // Alone (a focused list), it starts the line and fades the same way.
+    #expect(arrange([600], available: 200) == [.init(line: 0, x: 0)])
 }
 
 // MARK: - Arrangement

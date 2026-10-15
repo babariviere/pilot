@@ -40,8 +40,8 @@ enum PilotIcon: String, CaseIterable {
 
     // MARK: Conversation and mission
 
-    case chats, message, update, resolvedComment, quote, recipient, handoff, proposal, steer, queued, tasks, status,
-        decision, claim, addMember, skill
+    case chats, message, update, resolvedComment, quote, recipient, handoff, proposal, steer, queued, unsentDraft,
+        tasks, status, decision, claim, addMember, skill
 
     // MARK: Agents, tools and workspaces
 
@@ -129,6 +129,7 @@ extension PilotIcon {
         case .proposal: "arrow.right"
         case .steer: "arrow.turn.down.right"
         case .queued: "clock.arrow.circlepath"
+        case .unsentDraft: "pencil.line"
         case .tasks: "checklist"
         case .status: "flag"
         case .decision: "checkmark.seal"
@@ -283,6 +284,7 @@ extension PilotIcon {
         case .proposal: "A proposed change in a decision."
         case .steer: "A steering message, or an item that moves to another place."
         case .queued: "A queued follow-up."
+        case .unsentDraft: "A chat's unsent composer text, leading its list rows' second line. Never a badge or a colour."
         case .tasks: "Mission tasks or the agent's todo list."
         case .status: "A mission status change."
         case .decision: "A recorded decision."

@@ -195,6 +195,13 @@ private struct RowLineSegmentView: View {
             Text(name).fontWeight(.medium).accessibilityLabel(segment.accessibilityText)
         case let .text(text):
             Text(text)
+        case let .draft(draft):
+            HStack(spacing: 3) {
+                PilotSymbol(PilotIcon.unsentDraft)
+                Text(draft.preview)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(segment.accessibilityText)
         }
     }
 

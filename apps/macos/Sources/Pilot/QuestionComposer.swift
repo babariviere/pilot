@@ -120,7 +120,8 @@ struct QuestionComposer: View {
                     text: $draft.draft, height: $draft.height, font: fonts.nsBody, maxLines: 6,
                     focusOnAppear: false, focusToken: replyFocus,
                     onCancel: options.isEmpty ? nil : { choicesFocused = true },
-                    completionDirectory: nil
+                    completionDirectory: nil,
+                    onFocusChange: { [draft] in draft.onEditingChanged?($0) }
                 ) { _ in send(fromChoices: false) }
                     .frame(height: draft.height)
             }
