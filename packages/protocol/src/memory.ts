@@ -30,6 +30,21 @@ export interface MemoryView {
 	omittedBefore: number;
 	text: string;
 }
+/**
+ * One node of the memory tree as people browse it. A summary of more than 16 notes splits into its two halves; a
+ * summary of 16 or fewer lists its notes, since compaction writes it from them directly. Newest first.
+ */
+export interface MemoryTreeNode extends MemoryNode {
+	/** Absent when not loaded (past the requested depth or the node limit). With reveal, only paths to those notes. */
+	children?: MemoryTreeNode[];
+}
+export interface MemoryTree {
+	count: number;
+	/** The top-level blocks, or the children of the requested range, newest first. */
+	nodes: MemoryTreeNode[];
+	/** The node limit stopped expansion early; nodes without children load on request. */
+	truncated: boolean;
+}
 export interface MemoryRecall {
 	count: number;
 	matches: number;

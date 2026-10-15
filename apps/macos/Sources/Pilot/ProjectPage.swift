@@ -13,7 +13,6 @@ struct ProjectPage: View {
     @ObservedObject private var client = AppModel.shared.client
     @Environment(\.openSettings) private var openSettings
     @State private var showingArtifacts = false
-    @State private var showingMemory = false
     /// The tracked items sheet: every source from the … menu, or one source from its page section.
     @State private var trackedSheet: TrackedSheetScope?
     /// Navigation requested from the tracked items sheet, run once it has closed.
@@ -39,9 +38,6 @@ struct ProjectPage: View {
                     }
                     .sheet(isPresented: $showingArtifacts) {
                         ProjectArtifactsBrowser(project: project, client: client)
-                    }
-                    .sheet(isPresented: $showingMemory) {
-                        ProjectMemoryBrowser(project: project, client: client)
                     }
                     .sheet(item: $trackedSheet, onDismiss: {
                         let next = afterTracked
@@ -101,7 +97,7 @@ struct ProjectPage: View {
                 ProjectDashboardBody(project: project, dashboard: dashboard,
                                      scheduled: scheduled,
                                      banner: banner, showFullList: showFullList,
-                                     browseMemory: { showingMemory = true },
+                                     browseMemory: { model.openMemory(project.id) },
                                      trackedActions: trackedActions,
                                      showTracked: { trackedSheet = $0 },
                                      openSettings: { openProjectSettings(project) })
@@ -194,6 +190,7 @@ private struct ProjectToolbar: ToolbarContent {
                     Label("Browse Archived Chats", icon: PilotIcon.archive)
                 }
                 Button(action: showArtifacts) { Label("Artifacts…", icon: PilotIcon.artifact) }
+                Button { model.openMemory(project.id) } label: { Label("Memory", icon: PilotIcon.memory) }
                 Divider()
                 if model.sidebarScope == project.id {
                     Button { model.focus(on: nil) } label: {

@@ -1,8 +1,16 @@
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import type { MemoryEntry, MemoryNode, MemoryRecall, MemoryView, ProjectMemorySummary } from "@pilot/protocol";
+import type {
+	MemoryEntry,
+	MemoryNode,
+	MemoryRecall,
+	MemoryTree,
+	MemoryView,
+	ProjectMemorySummary,
+} from "@pilot/protocol";
 import { Conflict, ServiceUnavailable } from "./errors.ts";
 import { captureMemory, type MemoryCompactionObserver, type MemoryCompactionTrace } from "./memory-compaction.ts";
+import type { MemoryTreeOptions } from "./memory-disk.ts";
 
 type Nap = { lo: number; hi: number; epoch: number; prompt: string };
 export type MemorySummarizer = (
@@ -138,6 +146,10 @@ export class ProjectMemoryService {
 	}
 	zoom(projectId: string, lo: number, hi: number): Promise<MemoryNode[]> {
 		return this.rpc(projectId, "zoom", { lo, hi });
+	}
+	/** A bounded slice of the browsing tree: top-level blocks or one range's children, to a depth or along reveal paths. */
+	tree(projectId: string, options: MemoryTreeOptions = {}): Promise<MemoryTree> {
+		return this.rpc(projectId, "tree", { ...options });
 	}
 	async forget(projectId: string, lo: number, hi: number): Promise<{ ok: true }> {
 		const result = await this.rpc<{ ok: true }>(projectId, "forget", { lo, hi });

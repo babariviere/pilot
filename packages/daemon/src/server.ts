@@ -438,6 +438,21 @@ export function createDaemonServer(
 						Number(url.searchParams.get("hi") ?? NaN),
 					),
 				);
+			if (action === "tree" && req.method === "GET") {
+				const number = (name: string) =>
+					url.searchParams.has(name) ? Number(url.searchParams.get(name)) : undefined;
+				const reveal = url.searchParams.get("reveal");
+				return json(
+					res,
+					200,
+					await memory.tree(id, {
+						lo: number("lo"),
+						hi: number("hi"),
+						depth: number("depth"),
+						reveal: reveal ? reveal.split(",").map(Number) : [],
+					}),
+				);
+			}
 			if (action === "forget" && req.method === "POST") {
 				const body = await readJson<MemoryRange>(req);
 				return json(res, 200, await memory.forget(id, body?.lo, body?.hi));

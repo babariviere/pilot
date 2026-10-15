@@ -17,10 +17,32 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { MemoryEntry, MemoryNode, MemoryView, ProjectMemorySummary } from "@pilot/protocol";
+import type {
+	MemoryEntry,
+	MemoryNode,
+	MemoryTree,
+	MemoryTreeNode,
+	MemoryView,
+	ProjectMemorySummary,
+} from "@pilot/protocol";
 import type { MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cover } from "./memory-cover.ts";
 export const RECORD_BYTES = 2048;
+/** Summaries this size or smaller are written from their notes, so the browsing tree lists the notes under them. */
+export const TREE_LEAF_GROUP = 16;
+/** Most nodes one tree request returns. */
+export const TREE_NODE_LIMIT = 1024;
+/** Most notes one tree request reveals. */
+export const TREE_REVEAL_LIMIT = 64;
+export interface MemoryTreeOptions {
+	/** Inclusive range whose children to return; omitted for the top-level blocks. */
+	lo?: number;
+	hi?: number;
+	/** Levels to return, counting the first. Ignored with reveal, which follows each path to its note. */
+	depth?: number;
+	/** Note indices: return only the paths to them. */
+	reveal?: number[];
+}
 /** Summary records carry the log count they were built at, so later corrections can mark them stale. */
 type Summary = { text: string; seen: number };
 export class DuplicateNote extends Error {}
@@ -320,6 +342,72 @@ export class MemoryDisk {
 		const size = checkRange(lo, hi, this.count),
 			mid = lo + size / 2;
 		return [this.node(lo, mid), this.node(mid, hi + 1)];
+	}
+	/** Half-open top-level blocks, newest first: the aligned power-of-two tiling of the log. */
+	private treeRoots(): [number, number][] {
+		const out: [number, number][] = [];
+		let lo = 0;
+		for (let size = 2 ** Math.floor(Math.log2(Math.max(1, this.count))); size >= 1; size /= 2)
+			if (this.count - lo >= size) {
+				out.push([lo, lo + size]);
+				lo += size;
+			}
+		return out.reverse();
+	}
+	/** Half-open children, newest first: two halves above TREE_LEAF_GROUP notes, otherwise the notes. */
+	private treeChildren(lo: number, hi: number): [number, number][] {
+		const size = hi - lo;
+		if (size > TREE_LEAF_GROUP) {
+			const mid = lo + size / 2;
+			return [
+				[mid, hi],
+				[lo, mid],
+			];
+		}
+		return Array.from({ length: size }, (_, i): [number, number] => [hi - 1 - i, hi - i]);
+	}
+	/** A bounded slice of the browsing tree in one request. Shallow levels fill first; a node's children are all or none. */
+	tree(options: MemoryTreeOptions = {}): MemoryTree {
+		const { lo, hi, depth = 1, reveal = [] } = options;
+		if (!Number.isInteger(depth) || depth < 1 || depth > 64) throw new Error("depth must be between 1 and 64");
+		if (
+			!Array.isArray(reveal) ||
+			reveal.length > TREE_REVEAL_LIMIT ||
+			reveal.some((i) => !Number.isSafeInteger(i) || i < 0 || i >= this.count)
+		)
+			throw new Error(`reveal must list at most ${TREE_REVEAL_LIMIT} existing note indices`);
+		let base: [number, number][];
+		if (lo === undefined && hi === undefined) base = this.treeRoots();
+		else {
+			checkRange(lo as number, hi as number, this.count);
+			base = this.treeChildren(lo as number, (hi as number) + 1);
+		}
+		const wanted = ([a, b]: [number, number]) => !reveal.length || reveal.some((i) => i >= a && i < b);
+		const levels = reveal.length ? Number.POSITIVE_INFINITY : depth;
+		const nodes: MemoryTreeNode[] = [],
+			queue: [MemoryTreeNode, number, number, number][] = [];
+		let used = 0,
+			truncated = false;
+		const add = (ranges: [number, number][], level: number): MemoryTreeNode[] | undefined => {
+			const kept = ranges.filter(wanted);
+			if (used + kept.length > TREE_NODE_LIMIT) {
+				truncated = true;
+				return undefined;
+			}
+			used += kept.length;
+			return kept.map(([a, b]) => {
+				const node: MemoryTreeNode = this.node(a, b);
+				if (b - a > 1 && level + 1 < levels) queue.push([node, a, b, level]);
+				return node;
+			});
+		};
+		nodes.push(...(add(base, 0) ?? []));
+		for (let i = 0; i < queue.length; i++) {
+			const [node, a, b, level] = queue[i]!;
+			const children = add(this.treeChildren(a, b), level + 1);
+			if (children) node.children = children;
+		}
+		return { count: this.count, nodes, truncated };
 	}
 	forget(lo: number, hi: number): void {
 		const size = checkRange(lo, hi, this.count);

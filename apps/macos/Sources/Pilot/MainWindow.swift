@@ -28,6 +28,9 @@ struct MainWindow: View {
                     if model.slackTriageProjectId == projectId {
                         SlackTriagePage(projectId: projectId)
                             .id("slack-triage-\(projectId)")
+                    } else if model.memoryProjectId == projectId {
+                        MemoryPage(projectId: projectId)
+                            .id("memory-\(projectId)")
                     } else {
                         ProjectPage(projectId: projectId)
                             .id(projectId)
