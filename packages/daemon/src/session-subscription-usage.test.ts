@@ -208,14 +208,10 @@ test("a different-provider child cannot escape limits, and its parent exposes th
 });
 
 test("the reset timer releases work and expires force without a new provider reading", async (t) => {
+	t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: Date.now() });
 	const f = await fixture(t, { chat: "openai-codex/gpt-5" });
 	const id = f.ids.chat!;
-	const reset = Date.now() + 150;
-	const resumed = new Promise<void>((resolve) =>
-		f.sessions.onChange((summary) => {
-			if (summary.id === id && !summary.subscriptionPause && Date.now() >= reset) resolve();
-		}),
-	);
+	const reset = Date.now() + 60_000;
 	await writeUsageCache(f.agentDir, "openai", {
 		fetchedAt: Date.now(),
 		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(reset).toISOString() }] },
@@ -223,9 +219,24 @@ test("the reset timer releases work and expires force without a new provider rea
 	await f.cache().refresh();
 	assert.ok(f.sessions.get(id)?.subscriptionPause);
 	await f.sessions.forceSubscription(id, true);
+	assert.equal(f.sessions.get(id)?.subscriptionPause?.forced, true);
+	const policyFile = join(f.home, "sessions", id, "subscription-policy.json");
+	const forcedPolicy = JSON.parse(await readFile(policyFile, "utf8"));
+	assert.equal(forcedPolicy.windows.length, 1);
+	assert.equal(forcedPolicy.forced.length, 1);
+	// Only the reset timer's post-persistence event may release this wait. A force notification
+	// after a real-time deadline can show an expired pause while the old policy is still on disk.
+	const resumed = new Promise<void>((resolve) =>
+		f.sessions.onChange((summary) => {
+			if (summary.id === id && !summary.subscriptionPause) resolve();
+		}),
+	);
+	t.mock.timers.tick(59_999);
+	assert.equal(f.sessions.get(id)?.subscriptionPause?.forced, true, "force lasts until the reset boundary");
+	t.mock.timers.tick(1);
 	await resumed;
 	assert.equal(f.sessions.get(id)?.subscriptionPause, undefined);
-	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
+	const policy = JSON.parse(await readFile(policyFile, "utf8"));
 	assert.deepEqual(policy.windows, []);
 	assert.deepEqual(policy.forced, []);
 });
