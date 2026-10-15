@@ -12,8 +12,8 @@ import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
 import { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
-import { TrackedItemDisk, type TrackedInput } from "./tracked-items-disk.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
+import { type TrackedInput, TrackedItemDisk } from "./tracked-items-disk.ts";
 
 function linear(externalId: string, statusType: string, priority: number, updatedAt: number): TrackedInput {
 	return {
@@ -103,7 +103,7 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 	const home = await mkdtemp(join(tmpdir(), "pilot-inbox-"));
 	const projects = new ProjectStore(home);
 	await projects.load();
-	const labels = [{ name: "Product", description: "Handled by product", hideFromInbox: true }];
+	const labels = [{ name: "Product", description: "Handled by product", effect: "hide" as const }];
 	const project = await projects.create({
 		path: home,
 		tracking: { slackChannels: ["C1"], slackLabels: labels, linearTeam: "team" },
@@ -174,11 +174,27 @@ test("GET /api/inbox and the sidebar counts follow sources, scope and hidden lab
 
 	// Showing the label again counts its messages; removing the team drops Linear from the Inbox.
 	await projects.update(project.id, {
-		tracking: { slackChannels: ["C1"], slackLabels: [{ ...labels[0]!, hideFromInbox: false }] },
+		tracking: { slackChannels: ["C1"], slackLabels: [{ ...labels[0]!, effect: "none" }] },
 	});
 	const shown = await get<Inbox>(`/inbox?projectId=${project.id}`);
 	assert.equal(shown.linear, undefined);
 	assert.equal(shown.slack?.total, 2);
 	assert.deepEqual(shown.slack?.hidden, []);
 	assert.equal((await get<ProjectDashboardCounts>("/dashboard/counts")).projects[project.id]?.tracked, 2);
+
+	// A close label dismisses its messages: listed with closedByLabel=true and counted in the footer.
+	await projects.update(project.id, {
+		tracking: { slackChannels: ["C1"], slackLabels: [{ ...labels[0]!, effect: "close" }] },
+	});
+	const closed = await get<Inbox>(`/inbox?projectId=${project.id}`);
+	assert.equal(closed.slack?.total, 1);
+	assert.deepEqual(closed.slack?.hidden, [{ label: "Product", count: 1, closed: true }]);
+	const list = await get<{ items: Array<{ slack?: { closedByLabel?: string } }> }>(
+		`/tracked-items?projectId=${project.id}&kind=slack&closedByLabel=true`,
+	);
+	assert.deepEqual(
+		list.items.map((item) => item.slack?.closedByLabel),
+		["Product"],
+	);
+	assert.equal((await fetch(`${root}/tracked-items?projectId=${project.id}&closedByLabel=yes`)).status, 400);
 });

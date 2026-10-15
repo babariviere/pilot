@@ -12,7 +12,7 @@ extension Snapshot {
         let day = 24 * hour
         let labels = [
             SlackProjectLabel(name: "Product-owned", description: "Feature requests, copy and pricing questions.",
-                              hideFromInbox: true),
+                              effect: .close),
             SlackProjectLabel(name: "Billing team", description: "Invoices, VAT and payment provider issues."),
         ]
         let tracking = ProjectTrackingConfig(
@@ -30,7 +30,7 @@ extension Snapshot {
         func item(_ id: String, _ title: String, _ type: SlackMessageType, _ severity: SlackSeverity,
                   channel: String = "bugs", ago: Double, replies: Int, label: String? = nil,
                   status: SlackLocalStatus = .open, overrides: SlackOverrides = .init(),
-                  sessions: [String]? = nil) -> TrackedItem {
+                  sessions: [String]? = nil, closedByLabel: String? = nil) -> TrackedItem {
             let channelId = channel == "bugs" ? "C0BUGS0002" : "C0SUPPORT1"
             return TrackedItem(
                 id: id, projectId: "p1", kind: .slack, externalId: "\(channelId)/\(id)", title: title,
@@ -38,7 +38,8 @@ extension Snapshot {
                 metadata: ["channel": .string(channelId), "channelName": .string(channel),
                            "replies": .number(Double(replies))],
                 dismissed: status == .dismissed, sessionId: sessions?.last, sessionIds: sessions,
-                slack: SlackTriage(type: type, label: label, severity: severity, status: status, overrides: overrides),
+                slack: SlackTriage(type: type, label: label, severity: severity, status: status, overrides: overrides,
+                                   closedByLabel: closedByLabel),
                 createdAt: now - ago, updatedAt: now - ago)
         }
         let items = [
@@ -47,12 +48,13 @@ extension Snapshot {
             item("m2", "Export to CSV drops the last row", .bug, .high, ago: 5 * hour, replies: 3, status: .inProgress,
                  sessions: ["w1"]),
             item("m3", "Can we get the onboarding email in Spanish?", .request, .medium, ago: day, replies: 2,
-                 label: "Product-owned"),
+                 label: "Product-owned", status: .dismissed, closedByLabel: "Product-owned"),
             item("m4", "Is the API rate limit per key or per account?", .question, .medium,
                  channel: "support-escalations", ago: day + 2 * hour, replies: 0),
             item("m5", "Invoice PDF shows the wrong VAT number for companies in Belgium", .bug, .medium, ago: 2 * day,
                  replies: 4, label: "Billing team", overrides: SlackOverrides(label: "Billing team")),
-            item("m6", "Typo on the pricing page footer", .bug, .low, ago: 3 * day, replies: 1, label: "Product-owned"),
+            item("m6", "Typo on the pricing page footer", .bug, .low, ago: 3 * day, replies: 1, label: "Product-owned",
+                 status: .dismissed, closedByLabel: "Product-owned"),
             item("m7", "Dashboard feels slow on Mondays?", .unknown, .low, channel: "support-escalations",
                  ago: 3 * day + hour, replies: 5, overrides: SlackOverrides(type: .unknown)),
             item("m8", "Password reset link expires before the email arrives for some customers", .bug, .high,

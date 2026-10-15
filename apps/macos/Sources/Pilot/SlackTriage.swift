@@ -78,7 +78,7 @@ enum SlackTriageText {
         /// A configured channel ID.
         var channel: String?
         var query = ""
-        /// Messages whose label is marked "Hide from Inbox".
+        /// Messages whose label is set to Hide from Inbox, and the ones a Close label dismissed.
         var showHidden = false
 
         var isNarrowed: Bool { type != nil || label != .all || channel != nil || !trimmedQuery.isEmpty }
@@ -103,7 +103,13 @@ enum SlackTriageText {
     }
 
     static func hiddenLabels(_ labels: [SlackProjectLabel]) -> Set<String> {
-        Set(labels.filter { $0.hideFromInbox == true }.map(\.name))
+        Set(labels.filter { $0.effect == .hide }.map(\.name))
+    }
+
+    /// "Closed · Product" while a close label keeps the message dismissed, else the status.
+    static func statusTitle(_ triage: SlackTriage) -> String {
+        if triage.status == .dismissed, let label = triage.closedByLabel { return "Closed · \(label)" }
+        return triage.status.title
     }
 
     /// What the view lists: filters applied, then severity (most urgent first), then newest first.
@@ -112,7 +118,10 @@ enum SlackTriageText {
         let query = filter.trimmedQuery
         return items.filter { item in
             let triage = triage(item)
-            if triage.status == .dismissed, !showDismissed { return false }
+            // Label-closed messages are dismissed and hidden: either toggle shows them.
+            if triage.status == .dismissed, !showDismissed, !(filter.showHidden && triage.closedByLabel != nil) {
+                return false
+            }
             if !filter.showHidden, triage.label.map(hidden.contains) == true { return false }
             if let type = filter.type, triage.type != type { return false }
             switch filter.label {
@@ -135,13 +144,18 @@ enum SlackTriageText {
         return lhs.id < rhs.id
     }
 
-    /// Messages with a hidden label, for "Show hidden (N)".
+    /// Messages with a hidden label or closed by a label, for "Show hidden (N)".
     static func hiddenCount(_ items: [TrackedItem], hidden: Set<String>, showDismissed: Bool) -> Int {
-        guard !hidden.isEmpty else { return 0 }
-        return items.filter { item in
+        items.filter { item in
             let triage = triage(item)
+            if triage.status == .dismissed, triage.closedByLabel != nil { return true }
             return (showDismissed || triage.status != .dismissed) && triage.label.map(hidden.contains) == true
         }.count
+    }
+
+    /// The board shows its Dismissed column with Show dismissed, or while it lists label-closed messages.
+    static func showsDismissed(_ visible: [TrackedItem], showDismissed: Bool) -> Bool {
+        showDismissed || visible.contains { triage($0).status == .dismissed }
     }
 
     static func boardColumns(showDismissed: Bool) -> [SlackLocalStatus] {
@@ -212,8 +226,10 @@ enum SlackTriageText {
         }
         if let severity = change.severity { overrides.severity = severity }
         if let status = change.status { overrides.status = status }
+        // A status the user sets replaces a close label's; pilotd confirms any label effect.
         return SlackTriage(type: change.type ?? triage.type, label: label, severity: change.severity ?? triage.severity,
-                           status: change.status ?? triage.status, overrides: overrides)
+                           status: change.status ?? triage.status, overrides: overrides,
+                           closedByLabel: change.status == nil ? triage.closedByLabel : nil)
     }
 
     /// "#bugs · 2h ago · 7 replies".
@@ -264,7 +280,7 @@ enum SlackTriageText {
         let triage = triage(item)
         var parts = [item.title, triage.type.title, "\(triage.severity.title) severity"]
         if let label = triage.label { parts.append("label \(label)") }
-        parts.append(triage.status.title)
+        parts.append(statusTitle(triage))
         parts.append(meta(item, now: now))
         return parts.joined(separator: ", ")
     }
@@ -346,10 +362,16 @@ final class SlackTriageModel: ObservableObject {
                     if page.items.isEmpty { break }
                 } while active.count < min(total, Self.maxItems) && !Task.isCancelled
                 var next = active
-                if showDismissed {
-                    next += try await client.trackedItems(projectId: self.projectId, kind: .slack, dismissed: true,
-                                                          limit: Self.pageSize).items
-                }
+                // Load label-closed rows even with Show dismissed off, for Show hidden and its count.
+                var dismissedItems: [TrackedItem] = []
+                repeat {
+                    let page = try await client.trackedItems(projectId: self.projectId, kind: .slack, dismissed: true,
+                                                            limit: Self.pageSize, offset: dismissedItems.count,
+                                                            closedByLabel: !showDismissed)
+                    dismissedItems += page.items
+                    if page.items.isEmpty || dismissedItems.count >= min(page.total, Self.maxItems) { break }
+                } while !Task.isCancelled
+                next += dismissedItems
                 guard !Task.isCancelled, showDismissed == self.showDismissed else { return }
                 next = next.map { item in self.pending[item.id].map(item.withTriage) ?? item }
                 if self.items != next { self.items = next }
@@ -556,7 +578,8 @@ struct SlackTriagePage: View {
                                               showDismissed: triage.showDismissed)
         let unfiltered = SlackTriageText.visible(triage.items, filter: .init(showHidden: filter.showHidden),
                                                  hidden: hidden, showDismissed: triage.showDismissed).count
-        let columns = SlackTriageText.keyColumns(visible, layout: layout, showDismissed: triage.showDismissed)
+        let columns = SlackTriageText.keyColumns(visible, layout: layout,
+                                               showDismissed: SlackTriageText.showsDismissed(visible, showDismissed: triage.showDismissed))
         let selected = selection.flatMap { id in triage.items.first { $0.id == id } }
         return VStack(spacing: 0) {
             SlackTriageFilterBar(project: project, filter: $filter, showDismissed: $triage.showDismissed,
@@ -637,7 +660,7 @@ struct SlackTriagePage: View {
                 case .table:
                     SlackTriageTable(items: visible, hidden: hidden, selection: selection, now: now, actions: rows)
                 case .board:
-                    SlackTriageBoard(columns: SlackTriageText.board(visible, showDismissed: triage.showDismissed),
+                    SlackTriageBoard(columns: SlackTriageText.board(visible, showDismissed: SlackTriageText.showsDismissed(visible, showDismissed: triage.showDismissed)),
                                      hidden: hidden, selection: selection, now: now, actions: rows)
                 }
                 if triage.total > SlackTriageModel.maxItems {
@@ -918,7 +941,7 @@ private struct SlackTriageTableRow: View {
             Text(SessionTimeFormatting.relative(item.updatedAt, now: now)).monospacedDigit().lineLimit(1)
                 .frame(width: SlackTriageColumns.age, alignment: .trailing)
             if columns.status {
-                SlackStatusText(status: triage.status, chat: actions.chatStatus(item))
+                SlackStatusText(triage: triage, chat: actions.chatStatus(item))
                     .frame(width: SlackTriageColumns.status, alignment: .leading)
             }
         }
@@ -1010,6 +1033,10 @@ private struct SlackTriageCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             Text(SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .lineLimit(1)
+            if triage.closedByLabel != nil {
+                Text(SlackTriageText.statusTitle(triage)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .lineLimit(1).help(SlackTriageText.statusTitle(triage))
+            }
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1100,15 +1127,16 @@ struct SlackLabelTag: View {
 
 /// Local status, with the status icon of the chat started from the message, if any.
 private struct SlackStatusText: View {
-    let status: SlackLocalStatus
+    let triage: SlackTriage
     let chat: SessionStatus?
 
     var body: some View {
         HStack(spacing: 4) {
             if let chat { SessionStatusIcon(status: chat) }
-            Text(status.title).lineLimit(1)
+            Text(SlackTriageText.statusTitle(triage)).lineLimit(1)
+                .help(SlackTriageText.statusTitle(triage))
         }
-        .foregroundStyle(status == .open ? Theme.foreground : Theme.mutedForeground)
+        .foregroundStyle(triage.status == .open ? Theme.foreground : Theme.mutedForeground)
     }
 }
 
@@ -1182,7 +1210,9 @@ struct SlackTriageInspector: View {
                 pickerRow("Status") {
                     Picker("Status", selection: Binding(get: { triage.status },
                                                         set: { update(SlackOverrides(status: $0)) })) {
-                        ForEach(SlackLocalStatus.ordered, id: \.self) { Text($0.title).tag($0) }
+                        ForEach(SlackLocalStatus.ordered, id: \.self) { status in
+                            Text(status == triage.status ? SlackTriageText.statusTitle(triage) : status.title).tag(status)
+                        }
                     }
                 }
             }

@@ -14,10 +14,12 @@ export interface InboxReadyToMergeItem extends DashboardPullRequest {
 	projectId: string;
 }
 
-/** Open Slack messages left out of the Inbox by a project label marked "Hide from Inbox". */
+/** Slack messages left out of the Inbox by a project label: open ones of a "Hide from Inbox" label, or, with
+ * closed, the ones a "Close" label dismissed. */
 export interface InboxHiddenLabel {
 	label: string;
 	count: number;
+	closed?: true;
 }
 
 /**

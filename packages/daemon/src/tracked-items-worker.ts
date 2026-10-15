@@ -9,7 +9,7 @@ disk.onChange(() => {
 parentPort!.on("message", ({ id, method, args }) => {
 	try {
 		changed = false;
-		let value: unknown, projectId: string | undefined;
+		let value: unknown, projectId: string | undefined, projectIds: string[] | undefined;
 		switch (method) {
 			case "load": {
 				value = args.projectIds.flatMap((projectId: string) =>
@@ -60,6 +60,21 @@ parentPort!.on("message", ({ id, method, args }) => {
 				disk.retainSlack(args.projectId, args.channels);
 				projectId = args.projectId;
 				break;
+			case "slackLabelEffects": {
+				// Every project's effects in one message, so startup never exceeds the store's request bound.
+				const changedIds: string[] = [];
+				let failure: unknown;
+				for (const entry of args.entries as Array<{ projectId: string; close: string[] }>)
+					try {
+						if (disk.slackLabelEffects(entry.projectId, entry.close)) changedIds.push(entry.projectId);
+					} catch (error) {
+						failure ??= error;
+					}
+				projectIds = changedIds;
+				// Other projects' changes are still reported; the caller retries the failed ones on the next change.
+				value = failure ? { error: failure instanceof Error ? failure.message : String(failure) } : undefined;
+				break;
+			}
 			case "close":
 				disk.close();
 				parentPort!.postMessage({ id });
@@ -71,16 +86,11 @@ parentPort!.on("message", ({ id, method, args }) => {
 		parentPort!.postMessage({
 			id,
 			value,
+			...(projectIds?.length ? { projectIds, snapshots: projectIds.flatMap(snapshots) } : {}),
 			...(projectId
 				? {
 						...(changed ? { projectId } : {}),
-						snapshots: (["linear", "slack"] as const).map((kind) => ({
-							projectId,
-							kind,
-							preview: disk.preview(projectId!, kind),
-							checkpoint: disk.checkpoint(`${projectId}:${kind}`),
-							inbox: disk.inboxCounts(projectId!, kind),
-						})),
+						snapshots: snapshots(projectId),
 					}
 				: {}),
 		});
@@ -92,3 +102,13 @@ parentPort!.on("message", ({ id, method, args }) => {
 		});
 	}
 });
+
+function snapshots(projectId: string) {
+	return (["linear", "slack"] as const).map((kind) => ({
+		projectId,
+		kind,
+		preview: disk.preview(projectId, kind),
+		checkpoint: disk.checkpoint(`${projectId}:${kind}`),
+		inbox: disk.inboxCounts(projectId, kind),
+	}));
+}

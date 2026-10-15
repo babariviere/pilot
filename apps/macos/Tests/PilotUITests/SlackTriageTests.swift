@@ -60,6 +60,31 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     #expect(SlackTriageText.keyColumns(items, layout: .table, showDismissed: false) == [["a", "b", "c", "d"]])
 }
 
+@Test func labelClosedMessagesShowBehindHiddenWithoutShowingOtherDismissals() {
+    let closed = message("closed", .request, label: "Product", status: .dismissed).withTriage(
+        SlackTriage(type: .request, label: "Product", severity: .medium, status: .dismissed, closedByLabel: "Product"))
+    let items = [closed, message("manual", status: .dismissed), message("open")]
+    #expect(SlackTriageText.visible(items, filter: .init(), hidden: [], showDismissed: false).map(\.id) == ["open"])
+    let shown = SlackTriageText.visible(items, filter: .init(showHidden: true), hidden: [], showDismissed: false)
+    #expect(Set(shown.map(\.id)) == ["closed", "open"])
+    #expect(SlackTriageText.hiddenCount(items, hidden: [], showDismissed: false) == 1)
+    #expect(SlackTriageText.showsDismissed(shown, showDismissed: false))
+    #expect(SlackTriageText.statusTitle(closed.slack!) == "Closed · Product")
+    let reopened = SlackTriageText.applying(.init(status: .open), to: closed.slack!)
+    #expect(reopened.closedByLabel == nil && reopened.overrides.status == .open)
+    #expect(SlackTriageText.applying(.init(severity: .high), to: closed.slack!).closedByLabel == "Product")
+}
+
+@Test @MainActor func triageLoadsLabelClosedRowsWithoutShowDismissed() async throws {
+    let client = PilotClient()
+    let closed = message("closed", status: .dismissed).withTriage(
+        SlackTriage(type: .request, label: "Product", severity: .low, status: .dismissed, closedByLabel: "Product"))
+    client.loadFixture(projects: [], sessions: [])
+    client.loadTrackingFixture(TrackingFixture(items: [closed, message("manual", status: .dismissed), message("open")]))
+    let page = try await client.trackedItems(projectId: "p", kind: .slack, closedByLabel: true)
+    #expect(page.items.map(\.id) == ["closed"])
+}
+
 @Test func triageKeyboardMovesWithinAndAcrossColumns() {
     let table = [["a", "b", "c"]]
     #expect(SlackTriageText.move(from: nil, in: table, dy: 1) == "a")
@@ -145,7 +170,7 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     let editor = ProjectEditor()
     editor.load(Project(id: "p", name: "Example", path: "/example", tracking: .init(
         slackChannels: ["C1"], slackLabels: [SlackProjectLabel(name: "Billing", description: "Invoices",
-                                                               hideFromInbox: false)]), createdAt: 0))
+                                                               effect: .none)]), createdAt: 0))
     #expect(!editor.hasChanges)
     editor.addLabel()
     // An unnamed draft is neither saved nor a change to save.
@@ -153,10 +178,10 @@ private func message(_ id: String, _ type: SlackMessageType = .bug, _ severity: 
     #expect(editor.request.tracking?.slackLabels == [SlackProjectLabel(name: "Billing", description: "Invoices")])
     editor.slackLabels[1].name = "  Product-owned "
     editor.slackLabels[1].description = "Feature requests\nand copy"
-    editor.slackLabels[1].hideFromInbox = true
+    editor.slackLabels[1].effect = .close
     #expect(editor.hasChanges)
     #expect(editor.request.tracking?.slackLabels?.last
-        == SlackProjectLabel(name: "Product-owned", description: "Feature requests and copy", hideFromInbox: true))
+        == SlackProjectLabel(name: "Product-owned", description: "Feature requests and copy", effect: .close))
     editor.removeLabel(editor.slackLabels[0].id)
     editor.removeLabel(editor.slackLabels[0].id)
     #expect(editor.request.tracking?.slackLabels == nil)

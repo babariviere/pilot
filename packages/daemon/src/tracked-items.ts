@@ -9,11 +9,20 @@ import type {
 	TrackedKind,
 } from "@pilot/protocol";
 import { NotFound, ServiceUnavailable } from "./errors.ts";
-import type { InboxQuery, InboxTracked, SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
-import type { SlackCache, SlackReservation } from "./tracked-items-disk.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
-export { validatePatch } from "./tracked-items-disk.ts";
+import type {
+	InboxQuery,
+	InboxTracked,
+	SlackCache,
+	SlackReservation,
+	SourceCheckpoint,
+	TrackedInput,
+	TrackedQuery,
+} from "./tracked-items-disk.ts";
+
 export type { InboxQuery, InboxTracked, SourceCheckpoint, TrackedInput, TrackedQuery } from "./tracked-items-disk.ts";
+export { validatePatch } from "./tracked-items-disk.ts";
+
 type Snapshot = {
 	projectId: string;
 	kind: TrackedKind;
@@ -40,6 +49,8 @@ export class TrackedItemStore {
 				error?: string;
 				notFound?: boolean;
 				projectId?: string;
+				/** Several projects changed by one request. */
+				projectIds?: string[];
 				snapshots?: Snapshot[];
 			}) => {
 				const pending = this.pending.get(reply.id);
@@ -51,6 +62,7 @@ export class TrackedItemStore {
 				else pending.resolve(reply.value);
 				if (!this.pending.size) this.worker.unref();
 				if (reply.projectId) for (const listener of this.listeners) listener(reply.projectId);
+				for (const projectId of reply.projectIds ?? []) for (const listener of this.listeners) listener(projectId);
 			},
 		);
 		const fail = (error: Error) => {
@@ -106,6 +118,12 @@ export class TrackedItemStore {
 	}
 	corrections(projectId: string): Promise<SlackCorrection[]> {
 		return this.rpc("corrections", { projectId });
+	}
+	/** Sets each project's close labels and applies them to its stored Slack messages: label-closed ones reopen when
+	 * their label no longer closes, open ones without a user status close. Snapshots and listeners follow. */
+	async slackLabelEffects(entries: Array<{ projectId: string; close: string[] }>): Promise<void> {
+		const result = await this.rpc<{ error: string } | undefined>("slackLabelEffects", { entries });
+		if (result?.error) throw new Error(result.error);
 	}
 	require(id: string): Promise<TrackedItem> {
 		return this.rpc("require", { id });

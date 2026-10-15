@@ -549,17 +549,19 @@ final class PilotClient: ObservableObject {
     }
 
     func trackedItems(projectId: String, kind: TrackedKind? = nil, dismissed: Bool = false,
-                      limit: Int = 100, offset: Int = 0) async throws -> TrackedItemList {
+                      limit: Int = 100, offset: Int = 0, closedByLabel: Bool = false) async throws -> TrackedItemList {
         if let fixture = fixtureTracking {
             let items = fixture.items.filter {
-                $0.projectId == projectId && $0.dismissed == dismissed && (kind == nil || $0.kind == kind)
+                $0.projectId == projectId && $0.dismissed == (dismissed || closedByLabel)
+                    && (kind == nil || $0.kind == kind) && (!closedByLabel || $0.slack?.closedByLabel != nil)
             }
-            return TrackedItemList(items: Array(items.prefix(limit)), total: items.count)
+            return TrackedItemList(items: Array(items.dropFirst(offset).prefix(limit)), total: items.count)
         }
         var query = [URLQueryItem(name: "projectId", value: projectId),
                      URLQueryItem(name: "dismissed", value: String(dismissed)),
                      URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "offset", value: String(offset))]
         if let kind { query.append(URLQueryItem(name: "kind", value: kind.rawValue)) }
+        if closedByLabel { query.append(URLQueryItem(name: "closedByLabel", value: "true")) }
         return try await missionRequest(["tracked-items"], query: query)
     }
 

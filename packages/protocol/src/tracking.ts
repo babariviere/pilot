@@ -5,11 +5,18 @@ export type TrackingJson = null | boolean | number | string | TrackingJson[] | {
 export type SlackMessageType = "bug" | "question" | "request" | "unknown";
 export type SlackSeverity = "low" | "medium" | "high" | "critical";
 export type SlackLocalStatus = "open" | "in_progress" | "done" | "dismissed";
+/**
+ * What a project label does to its Slack messages. none: listed as usual. hide: kept out of the Inbox, behind
+ * Show hidden in Slack triage. close: dismissed by Pilot when the label is applied (by the classifier or the user),
+ * unless the user set the message's status; reopened when the label no longer applies or stops closing.
+ */
+export type SlackLabelEffect = "none" | "hide" | "close";
 /** Name is the project-local label identity. No built-in labels. */
 export interface SlackProjectLabel {
 	name: string;
 	description: string;
-	hideFromInbox?: boolean;
+	/** Omitted means none. pilotd always stores it, and reads an older `hideFromInbox: true` as hide. */
+	effect?: SlackLabelEffect;
 }
 export interface SlackOverrides {
 	type?: SlackMessageType;
@@ -25,6 +32,8 @@ export interface SlackTriage {
 	severity: SlackSeverity;
 	status: SlackLocalStatus;
 	overrides: SlackOverrides;
+	/** Set while Pilot keeps the message dismissed because of this close label. Any status the user sets clears it. */
+	closedByLabel?: string;
 }
 /** GET /api/tracking/slack/corrections?projectId=... (newest first, at most 20). */
 export interface SlackCorrection {
@@ -75,7 +84,8 @@ export interface TrackedItemPatch {
 	sessionId?: string | null;
 	missionId?: string | null;
 }
-/** GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=... */
+/** GET /api/tracked-items?projectId=...&kind=...&dismissed=true&limit=...&offset=...
+ * closedByLabel=true lists only Slack messages a close label dismissed (implies dismissed=true). */
 export interface TrackedItemList {
 	items: TrackedItem[];
 	total: number;

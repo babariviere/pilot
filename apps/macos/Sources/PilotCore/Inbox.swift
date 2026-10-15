@@ -29,14 +29,33 @@ public struct InboxNeedsYouItem: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-/// Open Slack messages a project label marked "Hide from Inbox" leaves out.
+/// Slack messages a project label leaves out of the Inbox: open ones of a "Hide from Inbox" label, or, when closed,
+/// the ones a "Close" label dismissed.
 public struct InboxHiddenLabel: Codable, Equatable, Sendable {
     public let label: String
     public let count: Int
+    public let closed: Bool
 
-    public init(label: String, count: Int) {
+    public init(label: String, count: Int, closed: Bool = false) {
         self.label = label
         self.count = count
+        self.closed = closed
+    }
+
+    private enum CodingKeys: String, CodingKey { case label, count, closed }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        label = try container.decode(String.self, forKey: .label)
+        count = try container.decode(Int.self, forKey: .count)
+        closed = try container.decodeIfPresent(Bool.self, forKey: .closed) ?? false
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(label, forKey: .label)
+        try container.encode(count, forKey: .count)
+        if closed { try container.encode(true, forKey: .closed) }
     }
 }
 
@@ -125,15 +144,22 @@ public enum InboxText {
         count.needsYou + count.tracked
     }
 
-    /// "Hidden: 2 Slack messages labelled Product." nil when nothing is hidden.
+    /// "Hidden: 2 Slack messages labelled Product. Closed: 3 labelled Ops." nil when nothing is hidden or closed.
     public static func hiddenFooter(_ hidden: [InboxHiddenLabel]) -> String? {
-        let total = hidden.reduce(0) { $0 + $1.count }
-        guard total > 0 else { return nil }
-        let labels = hidden.map(\.label)
-        let names = labels.count <= 2
-            ? labels.joined(separator: " or ")
-            : "\(labels.dropLast().joined(separator: ", ")) or \(labels.last!)"
-        return "Hidden: \(total) Slack \(total == 1 ? "message" : "messages") labelled \(names)."
+        func sentence(_ title: String, _ entries: [InboxHiddenLabel], noun: Bool) -> String? {
+            let total = entries.reduce(0) { $0 + $1.count }
+            guard total > 0 else { return nil }
+            let labels = entries.filter { $0.count > 0 }.map(\.label)
+            let names = labels.count <= 2
+                ? labels.joined(separator: " or ")
+                : "\(labels.dropLast().joined(separator: ", ")) or \(labels.last!)"
+            let what = noun ? " Slack \(total == 1 ? "message" : "messages")" : ""
+            return "\(title): \(total)\(what) labelled \(names)."
+        }
+        let hiddenPart = sentence("Hidden", hidden.filter { !$0.closed }, noun: true)
+        let closedPart = sentence("Closed", hidden.filter(\.closed), noun: hiddenPart == nil)
+        let parts = [hiddenPart, closedPart].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " ")
     }
 
     /// "Showing the first 50 of 72." nil when every row is shown.

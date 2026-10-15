@@ -43,6 +43,7 @@ type Row = {
 	linear_start: string | null;
 	slack_overrides: string;
 	slack_status: SlackTriage["status"];
+	closed_by_label: string | null;
 	created_at: number;
 	updated_at: number;
 };
@@ -52,6 +53,8 @@ export interface TrackedQuery {
 	/** Internal scope guard for mixed-source lists. */
 	kinds?: TrackedKind[];
 	dismissed?: boolean;
+	/** Only Slack messages a close label dismissed. Implies dismissed. */
+	closedByLabel?: boolean;
 	limit?: number;
 	offset?: number;
 }
@@ -75,10 +78,14 @@ const SLACK_LABEL =
 /** Pairs of [projectId, label] in the second parameter. */
 const SLACK_HIDDEN = `EXISTS (SELECT 1 FROM json_each(?) AS hidden WHERE json_extract(hidden.value, '$[0]') = project_id AND json_extract(hidden.value, '$[1]') = ${SLACK_LABEL})`;
 const IN_PROJECTS = "project_id IN (SELECT value FROM json_each(?))";
+/** Labels in the bound JSON array. A missing label never matches (configured names are never empty). */
+const SLACK_LABEL_IN = `coalesce(${SLACK_LABEL}, '') IN (SELECT value FROM json_each(?))`;
 
 export class TrackedItemDisk {
 	private readonly db: DatabaseSync;
 	private readonly listeners = new Set<(projectId: string) => void>();
+	/** Each project's close labels, as last set by the daemon. A project without an entry is never reconciled. */
+	private readonly closeLabels = new Map<string, string>();
 	constructor(path: string) {
 		this.db = new DatabaseSync(path);
 		this.db.exec(`
@@ -130,6 +137,9 @@ export class TrackedItemDisk {
 				"UPDATE tracked_items SET slack_status=CASE WHEN dismissed=1 THEN 'dismissed' WHEN session_id IS NOT NULL OR mission_id IS NOT NULL THEN 'in_progress' ELSE 'open' END WHERE kind='slack'",
 			);
 		}
+		// The close label that dismissed a Slack message, while no status of the user's replaced it.
+		if (!columns.some((column) => column.name === "closed_by_label"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN closed_by_label TEXT");
 		// Legacy global results have no project label. Keep them for lazy, scoped adoption without model calls.
 		this.db.exec(`
 			CREATE TABLE IF NOT EXISTS slack_project_classifications (
@@ -230,6 +240,64 @@ export class TrackedItemDisk {
 			.all(projectId)
 			.map((row) => JSON.parse(String(row.value)) as SlackCorrection);
 	}
+	/**
+	 * Sets a project's close labels and applies them to every stored Slack message. Returns whether a row changed.
+	 * Called at startup and on settings changes, so effects edited while pilotd was stopped still apply.
+	 */
+	slackLabelEffects(projectId: string, close: string[]): boolean {
+		if (
+			typeof projectId !== "string" ||
+			!projectId ||
+			!Array.isArray(close) ||
+			close.length > 50 ||
+			close.some((label) => typeof label !== "string" || !label || label.length > 80)
+		)
+			throw new Error("Invalid Slack label effects");
+		this.closeLabels.set(projectId, JSON.stringify(close));
+		this.db.exec("BEGIN");
+		try {
+			const changed = this.reconcile(projectId, "", []);
+			this.db.exec("COMMIT");
+			if (changed) this.emit(projectId);
+			return changed;
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+	/**
+	 * Applies close labels to a project's Slack rows, optionally narrowed by an extra condition. Idempotent:
+	 * - a label-closed row whose effective label no longer closes reopens (it was open before Pilot closed it);
+	 * - a label-closed row relabelled to another close label keeps closed, under the new label;
+	 * - an open row with a close label and no status of the user's is dismissed, naming the label.
+	 * Rows whose status the user set (overrides.status) are never touched. Call inside a transaction.
+	 */
+	private reconcile(projectId: string, scope: string, scopeArgs: string[]): boolean {
+		const close = this.closeLabels.get(projectId);
+		if (close === undefined) return false;
+		const base = `project_id=? AND kind='slack'${scope}`;
+		let changes = 0;
+		for (const [set, where] of [
+			[
+				"slack_status='open', dismissed=0, closed_by_label=NULL",
+				`closed_by_label IS NOT NULL AND NOT ${SLACK_LABEL_IN}`,
+			],
+			[
+				`closed_by_label=${SLACK_LABEL}`,
+				`closed_by_label IS NOT NULL AND closed_by_label != ${SLACK_LABEL} AND ${SLACK_LABEL_IN}`,
+			],
+			[
+				`slack_status='dismissed', dismissed=1, closed_by_label=${SLACK_LABEL}`,
+				`closed_by_label IS NULL AND slack_status='open' AND dismissed=0 AND json_type(slack_overrides, '$.status') IS NULL AND ${SLACK_LABEL_IN}`,
+			],
+		] as const)
+			changes += Number(
+				this.db
+					.prepare(`UPDATE tracked_items SET ${set} WHERE ${base} AND ${where}`)
+					.run(projectId, ...scopeArgs, close).changes,
+			);
+		return changes > 0;
+	}
 	onChange(listener: (projectId: string) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
@@ -256,8 +324,8 @@ export class TrackedItemDisk {
 		const kinds = query.kind ? [query.kind] : query.kinds;
 		if (kinds?.some((kind) => kind !== "linear" && kind !== "slack")) throw new Error("Unknown tracking kind");
 		if (kinds && !kinds.length) return { items: [], total: 0 };
-		const filter = `project_id = ? AND active = 1 AND dismissed = ?${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}`;
-		const args = [query.projectId, query.dismissed ? 1 : 0, ...(kinds ?? [])];
+		const filter = `project_id = ? AND active = 1 AND dismissed = ?${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}${query.closedByLabel ? " AND closed_by_label IS NOT NULL" : ""}`;
+		const args = [query.projectId, query.dismissed || query.closedByLabel ? 1 : 0, ...(kinds ?? [])];
 		const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${filter}`).get(...args)!.n);
 		const items = (
 			this.db
@@ -327,7 +395,17 @@ export class TrackedItemDisk {
 						 WHERE ${IN_PROJECTS} AND ${SLACK_OPEN} AND ${SLACK_HIDDEN} GROUP BY 1 ORDER BY 2 DESC, 1`,
 					)
 					.all(slack, hidden)
-					.map((row) => ({ label: String(row.label), count: Number(row.n) })),
+					.map((row): InboxHiddenLabel => ({ label: String(row.label), count: Number(row.n) }))
+					.concat(
+						this.db
+							.prepare(
+								`SELECT closed_by_label AS label, COUNT(*) AS n FROM tracked_items
+								 WHERE ${IN_PROJECTS} AND kind = 'slack' AND active = 1 AND dismissed = 1 AND closed_by_label IS NOT NULL
+								 GROUP BY 1 ORDER BY 2 DESC, 1`,
+							)
+							.all(slack)
+							.map((row) => ({ label: String(row.label), count: Number(row.n), closed: true as const })),
+					),
 			},
 		};
 	}
@@ -417,6 +495,12 @@ export class TrackedItemDisk {
 						AND external_id ${operator} (SELECT value FROM json_each(?))`)
 							.run(next, projectId, kind, previous, ids).changes || changed;
 			}
+			// A new or reclassified message takes its label's effect at once.
+			if (kind === "slack" && items.length)
+				changed =
+					this.reconcile(projectId, " AND external_id IN (SELECT value FROM json_each(?))", [
+						JSON.stringify(items.map((item) => item.externalId)),
+					]) || changed;
 			if (checkpoint)
 				this.db
 					.prepare(
@@ -453,15 +537,19 @@ export class TrackedItemDisk {
 		const overrides: SlackOverrides = { ...item.slack?.overrides, ...patch.slack };
 		let status = item.slack?.status ?? "open";
 		// Linking occurs on confirmed send/create, never on prefill. Local only.
-		if (
+		const started =
 			patch.start &&
 			((patch.sessionId && !item.sessionIds?.includes(patch.sessionId)) ||
-				(patch.missionId && !item.missionIds?.includes(patch.missionId)))
-		)
-			status = "in_progress";
+				(patch.missionId && !item.missionIds?.includes(patch.missionId)));
+		if (started) status = "in_progress";
 		if (patch.dismissed !== undefined) status = patch.dismissed ? "dismissed" : "open";
 		if (patch.slack?.status !== undefined) status = patch.slack.status;
-		if (item.slack && status !== item.slack.status) overrides.status = status;
+		// A status the user sets or confirms is theirs, even when it matches what a close label set. Other edits
+		// (type, severity, label, links) never turn the label's dismissal into a user status.
+		const explicit = !!started || patch.dismissed !== undefined || patch.slack?.status !== undefined;
+		const userStatus = !!item.slack && explicit;
+		if (userStatus) overrides.status = status;
+		const closedByLabel = userStatus ? undefined : item.slack?.closedByLabel;
 		const dismissed = item.slack ? status === "dismissed" : (patch.dismissed ?? item.dismissed);
 		const links = JSON.stringify({ sessions, missions });
 		const correction =
@@ -473,6 +561,7 @@ export class TrackedItemDisk {
 		if (
 			dismissed === item.dismissed &&
 			status === (item.slack?.status ?? "open") &&
+			closedByLabel === item.slack?.closedByLabel &&
 			links === JSON.stringify({ sessions: item.sessionIds ?? [], missions: item.missionIds ?? [] }) &&
 			JSON.stringify(overrides) === JSON.stringify(item.slack?.overrides ?? {})
 		)
@@ -481,7 +570,7 @@ export class TrackedItemDisk {
 		try {
 			this.db
 				.prepare(
-					"UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=?, links=?, slack_overrides=?, slack_status=? WHERE id=?",
+					"UPDATE tracked_items SET dismissed=?, session_id=?, mission_id=?, links=?, slack_overrides=?, slack_status=?, closed_by_label=? WHERE id=?",
 				)
 				.run(
 					dismissed ? 1 : 0,
@@ -490,18 +579,24 @@ export class TrackedItemDisk {
 					links,
 					JSON.stringify(overrides),
 					status,
+					closedByLabel ?? null,
 					id,
 				);
+			// A label the user picks takes its effect, and leaving a close label reopens what it closed.
+			if (item.kind === "slack") this.reconcile(item.projectId, " AND id = ?", [id]);
 			if (correction) {
+				// The outcome after the label's effect, so the classifier learns what the user ended with. A reopened
+				// label-closed message records its label with an open status.
+				const after = this.require(id).slack!;
 				const value: SlackCorrection = {
 					itemId: id,
 					summary: item.title.slice(0, 240),
 					correctedAt: Date.now(),
 					values: {
-						type: overrides.type ?? item.slack!.type,
-						label: overrides.label !== undefined ? overrides.label : item.slack!.label,
-						severity: overrides.severity ?? item.slack!.severity,
-						status,
+						type: after.type,
+						label: after.label,
+						severity: after.severity,
+						status: after.status,
 					},
 				};
 				this.db
@@ -574,6 +669,7 @@ function decode(row: Row): TrackedItem {
 					...overrides,
 					status: row.slack_status,
 					overrides,
+					...(row.closed_by_label ? { closedByLabel: row.closed_by_label } : {}),
 				}
 			: undefined;
 	return {

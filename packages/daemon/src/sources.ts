@@ -1,33 +1,33 @@
+import { createHash } from "node:crypto";
 import type {
 	DashboardTrackedSource,
 	Inbox,
+	LinearSourceSummary,
 	LinearTeamOption,
 	Project,
 	ProjectTrackingConfig,
 	SlackChannelOption,
 	SlackChannelStatus,
+	SlackExcerpt,
 	SourceSignIn,
+	TrackedItem,
+	TrackedItemPatch,
+	TrackedItemPrefill,
 	TrackedKind,
 	TrackingJson,
 	TrackingLookup,
 	TrackingSource,
-	LinearSourceSummary,
-	SlackExcerpt,
-	TrackedItemPrefill,
-	TrackedItem,
-	TrackedItemPatch,
 } from "@pilot/protocol";
-import { createHash } from "node:crypto";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
-import type { ProjectStore } from "./projects.ts";
-import { SourceRateLimited, SourceSignInRequired, type SourceMcpClient } from "./source-mcp.ts";
-import { SourceSignIns } from "./source-sign-in.ts";
 import { linearPrefill, linearStart } from "./linear-source.ts";
-import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
-import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
-import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
-import { SlackFormatChanged } from "./slack-format.ts";
+import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
+import { SlackFormatChanged } from "./slack-format.ts";
+import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
+import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
+import { SourceSignIns } from "./source-sign-in.ts";
+import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
+import { lookupLinearTeams, lookupSlackChannels } from "./tracking-lookup.ts";
 
 export interface SourcePollContext {
 	project: Project;
@@ -85,6 +85,8 @@ export class SourceRegistry {
 	private excerptGeneration = 0;
 	/** Configured Slack channels per project, to hide items of removed channels once. */
 	private slackChannels = new Map<string, string>();
+	/** Close labels last sent to the store per project, so only changed effects reconcile stored messages. */
+	private readonly slackClose = new Map<string, string>();
 	private readonly projects: Pick<ProjectStore, "list" | "require" | "onChange">;
 	readonly items: TrackedItemStore;
 	private readonly mcp: SourceMcpClient;
@@ -110,12 +112,15 @@ export class SourceRegistry {
 		this.slackChannels = new Map(
 			projects.list().map((project) => [project.id, JSON.stringify(project.tracking?.slackChannels ?? [])]),
 		);
+		this.syncLabelEffects();
 		this.disposers = [
 			items.onChange((projectId) => this.emit({ type: "items", projectId })),
 			projects.onChange(() => {
 				const current = new Set(projects.list().map((project) => project.id));
 				for (const id of this.knownProjects) if (!current.has(id)) items.unload(id);
 				this.knownProjects = current;
+				for (const id of this.slackClose.keys()) if (!current.has(id)) this.slackClose.delete(id);
+				this.syncLabelEffects();
 				for (const project of projects.list()) {
 					const channels = project.tracking?.slackChannels ?? [];
 					if (this.slackChannels.get(project.id) === JSON.stringify(channels)) continue;
@@ -138,6 +143,23 @@ export class SourceRegistry {
 	register(kind: TrackedKind, poller: SourcePoller): void {
 		if (this.pollers.has(kind)) throw new Error(`Source ${kind} is already registered`);
 		this.pollers.set(kind, poller);
+	}
+	/** Sends changed close labels to the store, which closes and reopens stored messages to match. At startup every
+	 * project is sent, so effects and stored rows agree after a restart or an edit made while pilotd was stopped. */
+	private syncLabelEffects(): void {
+		const entries = this.projects
+			.list()
+			.map((project) => ({ projectId: project.id, close: closeLabels(project) }))
+			.filter((entry) => this.slackClose.get(entry.projectId) !== JSON.stringify(entry.close));
+		if (!entries.length) return;
+		for (const entry of entries) this.slackClose.set(entry.projectId, JSON.stringify(entry.close));
+		void this.items.slackLabelEffects(entries).catch((error: unknown) => {
+			// Retry with the next settings change.
+			for (const entry of entries)
+				if (this.slackClose.get(entry.projectId) === JSON.stringify(entry.close))
+					this.slackClose.delete(entry.projectId);
+			console.warn(`pilotd: Slack label effects failed: ${logCause(error)}`);
+		});
 	}
 	/** Five-minute cadence, no app polling, timer released when nothing is configured. */
 	startPolling(kind: TrackedKind): void {
@@ -726,7 +748,11 @@ function configKey(project: Project, kind: TrackedKind): string {
 
 /** Project labels whose Slack messages stay out of the Inbox. */
 function hiddenLabels(project: Project): string[] {
-	return (project.tracking?.slackLabels ?? []).filter((label) => label.hideFromInbox).map((label) => label.name);
+	return (project.tracking?.slackLabels ?? []).filter((label) => label.effect === "hide").map((label) => label.name);
+}
+/** Project labels that close their Slack messages. */
+function closeLabels(project: Project): string[] {
+	return (project.tracking?.slackLabels ?? []).filter((label) => label.effect === "close").map((label) => label.name);
 }
 
 function isConfigured(project: Project, kind: TrackedKind): boolean {

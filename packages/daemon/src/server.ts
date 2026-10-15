@@ -320,6 +320,9 @@ export function createDaemonServer(
 					const dismissed = url.searchParams.get("dismissed");
 					if (dismissed !== null && dismissed !== "true" && dismissed !== "false")
 						throw new HttpError(400, "Invalid dismissed filter");
+					const closedByLabel = url.searchParams.get("closedByLabel");
+					if (closedByLabel !== null && closedByLabel !== "true" && closedByLabel !== "false")
+						throw new HttpError(400, "Invalid closedByLabel filter");
 					return json(
 						res,
 						200,
@@ -327,6 +330,7 @@ export function createDaemonServer(
 							projectId,
 							kind,
 							dismissed: dismissed === "true",
+							...(closedByLabel === "true" ? { closedByLabel: true } : {}),
 							limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 100,
 							offset: url.searchParams.has("offset") ? Number(url.searchParams.get("offset")) : 0,
 						}),

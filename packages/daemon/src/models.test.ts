@@ -1,4 +1,3 @@
-import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -7,10 +6,11 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
-import type { SlackClassifierContext } from "./slack-classifier.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
+import type { SlackClassifierContext } from "./slack-classifier.ts";
+import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
 type Model = Parameters<ModelRuntime["completeSimple"]>[0];
 const model = (id: string, input: number, output: number): Model => ({
@@ -34,7 +34,7 @@ test("Slack classification uses scoped Luna, strict JSON, no tools or thinking, 
 	const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
 	const expected = { type: "bug" as const, confidence: 0.95, severity: "high", summary: "Crash", label: null };
 	const classifierContext: SlackClassifierContext = {
-		labels: [{ name: "Client", description: "Questions about the app", hideFromInbox: true }],
+		labels: [{ name: "Client", description: "Questions about the app", effect: "hide" }],
 		corrections: Array.from({ length: 25 }, (_, i) => ({
 			itemId: `item-${i}`,
 			summary: `Invented question ${i}`,

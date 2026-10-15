@@ -61,12 +61,34 @@ public enum SlackSeverity: String, Codable, Hashable, Sendable { case low, mediu
 public enum SlackLocalStatus: String, Codable, Hashable, Sendable {
     case open, inProgress = "in_progress", done, dismissed
 }
+/// What a project label does to its Slack messages. none: listed as usual. hide: kept out of the Inbox, behind Show
+/// hidden in Slack triage. close: dismissed by Pilot when the label is applied, unless the user set the status, and
+/// reopened when the label no longer applies or stops closing.
+public enum SlackLabelEffect: String, Codable, CaseIterable, Hashable, Sendable { case none, hide, close }
 public struct SlackProjectLabel: Codable, Equatable, Hashable, Sendable {
     public var name: String
     public var description: String
-    public var hideFromInbox: Bool?
-    public init(name: String, description: String, hideFromInbox: Bool? = nil) {
-        self.name = name; self.description = description; self.hideFromInbox = hideFromInbox
+    public var effect: SlackLabelEffect
+    public init(name: String, description: String, effect: SlackLabelEffect = .none) {
+        self.name = name; self.description = description; self.effect = effect
+    }
+    enum CodingKeys: String, CodingKey { case name, description, effect, hideFromInbox }
+    /// Older daemons sent hideFromInbox: true; an unknown effect reads as none.
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decode(String.self, forKey: .name)
+        description = try values.decode(String.self, forKey: .description)
+        if let raw = try values.decodeIfPresent(String.self, forKey: .effect) {
+            effect = SlackLabelEffect(rawValue: raw) ?? .none
+        } else {
+            effect = try values.decodeIfPresent(Bool.self, forKey: .hideFromInbox) == true ? .hide : .none
+        }
+    }
+    public func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(name, forKey: .name)
+        try values.encode(description, forKey: .description)
+        try values.encode(effect, forKey: .effect)
     }
 }
 public struct SlackOverrides: Codable, Equatable, Sendable {
@@ -104,9 +126,12 @@ public struct SlackTriage: Codable, Equatable, Sendable {
     public let severity: SlackSeverity
     public let status: SlackLocalStatus
     public let overrides: SlackOverrides
+    /// Set while Pilot keeps the message dismissed because of this close label. Any status the user sets clears it.
+    public let closedByLabel: String?
     public init(type: SlackMessageType, label: String? = nil, severity: SlackSeverity, status: SlackLocalStatus,
-                overrides: SlackOverrides = .init()) {
+                overrides: SlackOverrides = .init(), closedByLabel: String? = nil) {
         self.type = type; self.label = label; self.severity = severity; self.status = status; self.overrides = overrides
+        self.closedByLabel = closedByLabel
     }
 }
 public struct SlackCorrection: Codable, Equatable, Sendable {

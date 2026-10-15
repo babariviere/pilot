@@ -8,15 +8,15 @@ import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ProjectDashboard, ServerMessage, SessionSummary, SourceSignIn, TrackingSource } from "@pilot/protocol";
 import { WebSocket } from "ws";
+import { pollLinear } from "./linear-source.ts";
 import type { ModelCatalog } from "./models.ts";
 import { ProjectStore } from "./projects.ts";
 import { createDaemonServer } from "./server.ts";
 import type { SessionManager } from "./sessions.ts";
-import { SourceRegistry } from "./sources.ts";
 import { SourceSignInRequired } from "./source-mcp.ts";
+import { SourceRegistry } from "./sources.ts";
 import type { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
-import { pollLinear } from "./linear-source.ts";
 
 test("tracking HTTP, WS invalidation and DashboardProviders.tracked share project-scoped data", async (t) => {
 	const home = await mkdtemp(join(tmpdir(), "pilot-tracking-server-"));
@@ -26,7 +26,7 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 		path: home,
 		tracking: {
 			slackChannels: ["C1"],
-			slackLabels: [{ name: "Client", description: "App support", hideFromInbox: true }],
+			slackLabels: [{ name: "Client", description: "App support", effect: "hide" }],
 			linearTeam: "ENG",
 		},
 	});
@@ -219,13 +219,14 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 			{
 				tracking: {
 					slackChannels: ["C1"],
+					// An older app's label: hideFromInbox: true is saved as the hide effect.
 					slackLabels: [{ name: "Client", description: "App support", hideFromInbox: true }],
 				},
 			},
 			"PATCH",
 		)
 	).json();
-	assert.equal(saved.tracking.slackLabels[0].hideFromInbox, true);
+	assert.deepEqual(saved.tracking.slackLabels, [{ name: "Client", description: "App support", effect: "hide" }]);
 	assert.equal(
 		(
 			await api(

@@ -87,6 +87,11 @@ import Testing
 
 @Test func inboxFooterNamesHiddenLabels() {
     #expect(InboxText.hiddenFooter([]) == nil)
+    #expect(InboxText.hiddenFooter([InboxHiddenLabel(label: "Product", count: 2, closed: true)])
+        == "Closed: 2 Slack messages labelled Product.")
+    #expect(InboxText.hiddenFooter([InboxHiddenLabel(label: "Archive", count: 1),
+                                    InboxHiddenLabel(label: "Product", count: 2, closed: true)])
+        == "Hidden: 1 Slack message labelled Archive. Closed: 2 labelled Product.")
     #expect(InboxText.hiddenFooter([InboxHiddenLabel(label: "Product", count: 1)])
         == "Hidden: 1 Slack message labelled Product.")
     #expect(InboxText.hiddenFooter([InboxHiddenLabel(label: "Product", count: 2), InboxHiddenLabel(label: "Billing", count: 1)])
