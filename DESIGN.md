@@ -162,6 +162,9 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
   `InspectorPaneHeader` for inspector panes (no per-pane close button), `EmptyStateView` for empty or failed
   panes, `DisclosureChevron`, `ListToggle` ("Show all N" / "Show fewer") and `MetaText` for quiet metadata
   instead of capsule tags.
+- Nested rows go one level deep, as Linear sub-issues do (`LinearSubIssues.swift`): children indent one icon column
+  under their parent, joined by a hairline through its icon column, and the parent carries a quiet "N sub-issues"
+  that collapses them. A parent the list does not hold leads as a read-only header: identifier, title and link only.
 - Errors use `InlineProblem` (a `Theme.error` triangle, muted text and "Retry") beside what failed. Amber stays
   for things the user can act on, so errors never use `warning`, `blocked` or orange.
 - Times use `RelativeDate`: "3d ago" in rows, "3 minutes ago" in sentences, "Today 9:00 AM" for upcoming times,

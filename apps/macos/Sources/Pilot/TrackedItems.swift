@@ -575,6 +575,8 @@ struct TrackedItemRow: View {
     var group: TrackedItemText.LinearGroup? = nil
     /// Leads the subtitle, such as the project name in the Inbox.
     var context: String? = nil
+    /// A parent's "N sub-issues" with collapse, when it leads sub-issues in the list.
+    var subIssues: SubIssueDisclosure? = nil
     /// Called after a dismiss or link, so lists can refresh.
     var changed: () -> Void = {}
     @EnvironmentObject private var model: AppModel
@@ -624,6 +626,7 @@ struct TrackedItemRow: View {
                     shownSize.map { "\($0.title)." }, subtitle,
                 ].compactMap { $0 }.joined(separator: " "))
                 .accessibilityHint("Opens in the browser")
+                if let subIssues { SubIssueToggle(disclosure: subIssues, parent: TrackedItemText.identifier(item)) }
                 if let shownSize {
                     LinearSizeChip(size: shownSize, setByUser: actions.sizeSetByUser(item),
                                    saving: actions.isSavingSize(item)) { correctSize($0) }
@@ -950,7 +953,8 @@ struct LinearCycleHeader: View {
 }
 
 /// My Linear issues by status: In progress and To do as rows, Done collapsed behind a disclosure.
-/// Shared by the project page's Current cycle section and the tracked items sheet.
+/// Sub-issues follow their parent, so a group takes its parent's status. Shared by the project page's Current
+/// cycle section and the tracked items sheet.
 struct LinearIssueGroups: View {
     /// In progress and to do issues, in display order.
     let open: [TrackedItem]
@@ -967,13 +971,15 @@ struct LinearIssueGroups: View {
     var showAllDone: (() -> Void)? = nil
 
     var body: some View {
+        let tree = LinearIssueTree.build(open)
         VStack(alignment: .leading, spacing: 6) {
             ForEach([TrackedItemText.LinearGroup.inProgress, .todo], id: \.self) { group in
-                let items = open.filter { TrackedItemText.linearGroup($0) == group }
-                if !items.isEmpty {
+                let groups = tree.filter { $0.status == group }
+                if !groups.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
-                        SectionLabel(title: group.title, count: items.count).padding(.horizontal, 8).padding(.top, 6)
-                        rows(items, group: group)
+                        SectionLabel(title: group.title, count: groups.reduce(0) { $0 + $1.items.count })
+                            .padding(.horizontal, 8).padding(.top, 6)
+                        rows(groups, group: group)
                     }
                 }
             }
@@ -993,7 +999,7 @@ struct LinearIssueGroups: View {
                     .accessibilityLabel("Done, \(doneCount)")
                     .accessibilityHint(showDone ? "Hides done issues" : "Shows done issues")
                     if showDone {
-                        rows(done, group: .done)
+                        rows(LinearIssueTree.build(done), group: .done)
                         if doneCount > done.count, let showAllDone {
                             Button("Show all \(doneCount) done", action: showAllDone)
                                 .buttonStyle(.plain)
@@ -1007,10 +1013,12 @@ struct LinearIssueGroups: View {
         }
     }
 
-    private func rows(_ items: [TrackedItem], group: TrackedItemText.LinearGroup) -> some View {
-        ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-            if index > 0 { HairlineDivider(leading: 34) }
-            TrackedItemRow(item: item, actions: actions, now: now, group: group, changed: changed)
+    private func rows(_ groups: [LinearIssueTree.Group], group: TrackedItemText.LinearGroup) -> some View {
+        LinearIssueTreeRows(groups: groups) { item, subIssues in
+            // A sub-issue in another status than its parent's group names its own.
+            TrackedItemRow(item: item, actions: actions, now: now,
+                           group: TrackedItemText.linearGroup(item) == group ? group : nil,
+                           subIssues: subIssues, changed: changed)
         }
     }
 }

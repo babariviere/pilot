@@ -202,6 +202,56 @@ private let slack = TrackedItem(
     #expect(!TrackedItemText.chatPrompt(base, prefill: nil).contains("parent"))
 }
 
+private func issue(_ id: String, parent: String? = nil, header: Bool = true, project: String = "p",
+                   status: String = "started") -> TrackedItem {
+    var metadata: [String: JSONValue] = ["identifier": .string(id.uppercased()), "statusType": .string(status)]
+    if let parent { metadata["parentId"] = .string(parent) }
+    let linearParent = parent.flatMap {
+        header ? LinearParentHeader(id: $0, identifier: $0.uppercased(), title: "Parent \($0)",
+                                    url: "https://linear.app/acme/issue/\($0.uppercased())") : nil
+    }
+    return TrackedItem(id: "\(project)-\(id)", projectId: project, kind: .linear, externalId: id, title: id,
+                       url: "https://linear.app/acme/issue/\(id.uppercased())", status: "", metadata: metadata,
+                       linearParent: linearParent, createdAt: ms, updatedAt: ms)
+}
+
+/// "a(b,c) [e](x)": leads in order, children in brackets, read-only headers in square brackets.
+private func outline(_ items: [TrackedItem]) -> String {
+    LinearIssueTree.build(items).map { group in
+        let lead = switch group.lead {
+        case let .item(item): item.externalId
+        case let .header(header, _): "[\(header.id)]"
+        }
+        let children = group.children.map(\.externalId).joined(separator: ",")
+        return children.isEmpty ? lead : "\(lead)(\(children))"
+    }.joined(separator: " ")
+}
+
+@Test func subIssuesFollowTheirParentOneLevelDeep() {
+    // Children follow their parent wherever the parent sorts; other rows keep their order.
+    #expect(outline([issue("a"), issue("b", parent: "a"), issue("c"), issue("d", parent: "a")]) == "a(b,d) c")
+    #expect(outline([issue("b", parent: "a"), issue("c"), issue("a")]) == "c a(b)")
+    // A parent outside the list leads as a header, at its first child's place.
+    #expect(outline([issue("c"), issue("x", parent: "e"), issue("y", parent: "e")]) == "c [e](x,y)")
+    // Without a resolved header, a sub-issue stays a plain row.
+    #expect(outline([issue("x", parent: "e", header: false)]) == "x")
+    // Grandchildren join their nearest ancestor's group, so nesting stays one level.
+    #expect(outline([issue("a"), issue("b", parent: "a"), issue("g", parent: "b")]) == "a(b,g)")
+    #expect(outline([issue("b", parent: "e"), issue("g", parent: "b")]) == "[e](b,g)")
+    // Malformed cycles and same IDs in other projects never lose or misplace a row.
+    #expect(outline([issue("a", parent: "b"), issue("b", parent: "a")]) == "b(a)")
+    #expect(outline([issue("a", project: "p"), issue("b", parent: "a", project: "q")]) == "a [a](b)")
+}
+
+@Test func subIssueGroupsTakeTheirLeadsStatus() {
+    let groups = LinearIssueTree.build([issue("a", status: "unstarted"), issue("b", parent: "a"),
+                                        issue("x", parent: "e", status: "completed"), issue("y", parent: "e")])
+    #expect(groups.map(\.status) == [.todo, .done])
+    #expect(groups.map { $0.items.map(\.externalId) } == [["a", "b"], ["x", "y"]])
+    #expect(SubIssueDisclosure(count: 1, expanded: true, toggle: {}).title == "1 sub-issue")
+    #expect(SubIssueDisclosure(count: 3, expanded: false, toggle: {}).title == "3 sub-issues")
+}
+
 @Test func slackStartErrorsAreQuietAndDoNotAffectSuccessfulOrSkippedReactions() {
     for outcome in ["reacted", "skipped", "error"] {
         let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",

@@ -369,6 +369,11 @@ Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
 
+Linear sub-issues appear under their parent in the Inbox, the Overview's current cycle and the full list,
+with a collapsible "N sub-issues" count on the parent, one level deep. When the parent is not one of your
+tracked issues, its identifier, title and link (read with `get_issue`, cached and bounded) head the group
+as a read-only row. Starting work on a sub-issue quotes its parent's identifier and title.
+
 Each Slack channel can optionally track only new threads that mention you, directly or through one of
 your groups. Add your own group handles in Tracking settings because the dedicated Slack MCP does not
 expose memberships. A mention in any reply qualifies the parent thread, which is classified with its
