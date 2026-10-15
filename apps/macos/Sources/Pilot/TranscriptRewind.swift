@@ -68,7 +68,11 @@ struct TranscriptRewindHost: ViewModifier {
                 }
             }
             .onDisappear { rewind.perform = nil }
-            .onChange(of: retryEntryID, initial: true) { _, id in rewind.retryEntryID = id }
+            .onChange(of: retryEntryID, initial: true) { _, id in
+                rewind.retryEntryID = id
+                runPendingRetry()
+            }
+            .onReceive(AppModel.shared.$pendingRetry) { _ in runPendingRetry() }
             .confirmationDialog(title, isPresented: confirming) {
                 Button("Stop and Continue") {
                     if let request = rewind.confirmation { rewind.run(request) }
@@ -81,6 +85,19 @@ struct TranscriptRewindHost: ViewModifier {
     private var title: String {
         guard let request = rewind.confirmation else { return "" }
         return TranscriptRewind.confirmationTitle(request.action)
+    }
+
+    /// Runs a retry the command palette asked for, once this chat shows its failed turn's Retry.
+    private func runPendingRetry() {
+        let model = AppModel.shared
+        guard let request = model.pendingRetry, request.sessionId == sessionId else { return }
+        guard request.isCurrent(for: sessionId) else {
+            model.pendingRetry = nil
+            return
+        }
+        guard let entryID = rewind.retryEntryID, !rewind.pending else { return }
+        model.pendingRetry = nil
+        rewind.request(.retry, entryID: entryID)
     }
 
     private var confirming: Binding<Bool> {

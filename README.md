@@ -21,6 +21,9 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
+- **Jump anywhere from the keyboard.** ⌘K opens a command palette over chats (by title, branch, project or pull
+  request number), pages, missions and tasks (`#25`), project scopes, Linear and Slack Inbox items, and actions such
+  as new chat, pin, archive, stop, retry or opening the pull request on GitHub.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
   Optional closed-lid work requires power and Wi-Fi; otherwise agents pause and resume on the next full wake
   with connectivity. See [agent-aware sleep](docs/agent-sleep.md) for authorization and interruption limits.
