@@ -43,7 +43,7 @@ struct SessionSidebar: View {
             if client.projects.isEmpty, client.sessions.isEmpty, model.projectFolders.folders.isEmpty {
                 VStack(spacing: 10) {
                     PilotSymbol(PilotIcon.newProject, context: .emptyState).foregroundStyle(.secondary)
-                    Text("Add a project to get started").font(.callout).foregroundStyle(.secondary)
+                    Text("Add a project to get started").font(.pilot(.label)).foregroundStyle(.secondary)
                     Button("Add Project…") { model.addProject() }
                 }
                 .padding()
@@ -192,7 +192,7 @@ struct SessionSidebar: View {
         }
         if groups.isEmpty, !client.projects.isEmpty {
             Text(searching ? "No matching chats" : "No chats yet")
-                .font(.caption).foregroundStyle(Theme.faintForeground)
+                .font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                 .selectionDisabled(true)
         }
     }
@@ -226,7 +226,7 @@ struct SessionSidebar: View {
                         }
                         if projects.isEmpty {
                             Text("Move projects here using their context menu")
-                                .font(.caption).foregroundStyle(Theme.faintForeground)
+                                .font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                                 .padding(.leading, 12)
                                 .selectionDisabled(true)
                         }
@@ -286,7 +286,7 @@ struct SessionSidebar: View {
                     missionRow(mission)
                 }
                 if active.isEmpty, !searching {
-                    Text("No active missions").font(.caption).foregroundStyle(Theme.faintForeground)
+                    Text("No active missions").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                         .selectionDisabled(true)
                 }
                 if !inactive.isEmpty {
@@ -304,7 +304,7 @@ struct SessionSidebar: View {
             } header: {
                 HStack(spacing: 6) {
                     PilotSymbol(PilotIcon.mission).frame(width: 14)
-                    Text("Missions").font(.system(size: 11, weight: .semibold))
+                    Text("Missions").font(.pilot(.caption, weight: .semibold))
                     Spacer(minLength: 0)
                     Button { model.missionSheet = .create(projectId: projectId) } label: { PilotSymbol(PilotIcon.add) }
                         .buttonStyle(.borderless)
@@ -347,7 +347,7 @@ struct SessionSidebar: View {
                 .padding(.leading, indented ? 20 : 0).tag(session.id)
         }
         if sessions.isEmpty {
-            Text("No sessions").font(.caption).foregroundStyle(Theme.faintForeground)
+            Text("No sessions").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                 .padding(.leading, indented ? 20 : 0)
                 .selectionDisabled(true)
         }
@@ -406,7 +406,7 @@ struct SidebarDisclosureRow: View {
         Button(action: action) {
             HStack(spacing: 6) {
                 PilotSymbol(expanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).frame(width: 14)
-                Text(title).font(.caption)
+                Text(title).font(.pilot(.small))
                 Spacer(minLength: 0)
             }
             .foregroundStyle(Theme.mutedForeground)
@@ -425,7 +425,7 @@ private struct SidebarSectionHeader: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(title).font(.system(size: 11, weight: .semibold))
+            Text(title).font(.pilot(.caption, weight: .semibold))
             if let count, count > 0 {
                 CountBadge(count: count, style: attention ? .attention : .neutral)
             }
@@ -454,7 +454,7 @@ private struct ProjectHeader: View {
                 HStack(spacing: 6) {
                     PilotSymbol(PilotIcon.project).frame(width: 14)
                     Text(project.name)
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(.pilot(.caption, weight: .semibold))
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(selected ? Theme.foreground : Color.secondary)
@@ -579,7 +579,7 @@ struct SessionRow: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
-                    .font(.system(size: 13, weight: unread ? .semibold : .regular))
+                    .font(.pilot(.body, weight: unread ? .semibold : .regular))
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -591,7 +591,7 @@ struct SessionRow: View {
                     }
                     if reason == nil {
                         Text(SessionTimeFormatting.relative(session.listActivityAt, now: now))
-                            .font(.caption)
+                            .font(.pilot(.small))
                             .foregroundStyle(Theme.mutedForeground)
                             .monospacedDigit()
                             .fixedSize()
@@ -603,25 +603,25 @@ struct SessionRow: View {
             HStack(spacing: 4) {
                 if let projectName {
                     Text(projectName)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.pilot(.small, weight: .medium))
                         .foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1)
                         .layoutPriority(1)
-                    Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                    Text("·").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                 }
                 if session.isMissionCoordinator {
                     SessionCoordinatorLine(session: session, unread: needsAttention)
                 } else {
                     if let missionId = session.missionId, let missionTitle {
                         SessionMissionLabel(title: missionTitle) { model.openMission(missionId) }
-                        Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                        Text("·").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                     }
                     SessionRepositoryMetadata(session: session)
                     if let reason {
                         if session.isAsk || session.branch != nil || !session.linkedPullRequests.isEmpty {
-                            Text("·").font(.system(size: 10)).foregroundStyle(Theme.faintForeground)
+                            Text("·").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                         }
-                        Text(reason).font(.system(size: 10)).foregroundStyle(Theme.mutedForeground)
+                        Text(reason).font(.pilot(.small)).foregroundStyle(Theme.mutedForeground)
                             .lineLimit(1).layoutPriority(1)
                     }
                 }
@@ -679,7 +679,7 @@ private struct ConnectionFooter: View {
             Text("Connecting to pilotd…")
             Spacer()
         }
-        .font(.caption)
+        .font(.pilot(.small))
         .foregroundStyle(.secondary)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -697,7 +697,7 @@ private struct SearchField: View {
             PilotSymbol(PilotIcon.search).foregroundStyle(Theme.faintForeground)
             TextField("Search chats", text: $text)
                 .textFieldStyle(.plain)
-                .font(.system(size: 12))
+                .font(.pilot(.label))
                 .focused(focused)
                 .onExitCommand(perform: onDismiss)
             Button(action: onDismiss) {

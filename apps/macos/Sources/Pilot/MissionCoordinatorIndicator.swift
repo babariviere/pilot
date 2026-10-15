@@ -8,7 +8,7 @@ struct MissionCoordinatorIndicator: View {
         Group {
             if showsLabel {
                 Label("Coordinator", icon: PilotIcon.coordinator)
-                    .font(.caption2.weight(.semibold))
+                    .font(.pilot(.small, weight: .semibold))
                     .padding(.horizontal, 6).padding(.vertical, 1)
                     .background(Capsule().fill(Theme.warning.opacity(0.15)))
             } else {

@@ -160,7 +160,7 @@ struct CircleIconButtonStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .font(.system(size: 12, weight: .bold))
+                .font(.pilot(.label, weight: .bold))
                 .foregroundStyle(.white)
                 .frame(width: 26, height: 26)
                 .background(Circle().fill(isEnabled ? tint : Color.black.opacity(0.15)))

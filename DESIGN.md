@@ -91,6 +91,11 @@ pilotd is unreachable.
   toolbar, inline, empty state, structural disclosure) and outlined unless its documented state fills it.
   Use symbols, not emoji or Unicode stand-ins. Add a missing concept there instead of
   picking a symbol per screen; service and Git marks use `PilotMark`.
+- Chrome text uses `.pilot` type roles and shapes use `Theme.Radius`; `apps/macos/scripts/check-font-roles.py`
+  (run by the Swift test step) rejects new fixed font sizes and SwiftUI text styles.
+- A row's selection is its only fill. Actions inside rows use `rowIconButtonStyle` (no background) and whole-row
+  buttons `rowButtonStyle`, which both draw the keyboard focus ring; `QuietIconButtonStyle` is for standalone
+  toolbar and composer buttons.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
 - Check every change with long content and with loading, empty, error and disabled states. Keep keyboard access

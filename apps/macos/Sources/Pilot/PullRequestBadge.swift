@@ -22,7 +22,7 @@ struct PullRequestBadge: View {
                     PilotSymbol(PilotIcon.warning)
                     if presentation == .details { Text("PR status unavailable") }
                 }
-                .font(.system(size: 10, weight: .medium))
+                .font(.pilot(.small, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground)
                 .accessibilityLabel("Pull request lookup unavailable")
             }
