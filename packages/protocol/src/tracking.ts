@@ -1,6 +1,27 @@
 /** External text is untrusted. Tracking never starts agents. Only a confirmed Linear start may update its workflow state. */
 export type TrackedKind = "linear" | "slack";
 export type LinearSize = "quick_fix" | "needs_planning" | "unknown";
+export interface SlackCommonCase {
+	id: string;
+	name: string;
+	description: string;
+	count: number;
+	severityMix: Record<SlackSeverity, number>;
+	label: string | null;
+	firstSeen: number;
+	lastSeen: number;
+	trend: "rising" | "steady" | "fading";
+}
+export interface SlackCommonCaseList {
+	cases: SlackCommonCase[];
+	windowDays: 30;
+	windowLimit: number;
+	truncated: boolean;
+}
+export type SlackCaseEdit =
+	| { action: "rename"; name: string }
+	| { action: "merge"; targetId: string }
+	| { action: "split"; name: string; itemIds: string[] };
 export type TrackingJson = null | boolean | number | string | TrackingJson[] | { [key: string]: TrackingJson };
 
 export type SlackMessageType = "bug" | "question" | "request" | "unknown";
@@ -95,6 +116,7 @@ export interface LinearWorkflowStateOption extends LinearWorkflowState {
 	type: string;
 }
 export interface TrackedItem {
+	caseId?: string;
 	id: string;
 	projectId: string;
 	kind: TrackedKind;

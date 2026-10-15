@@ -18,6 +18,7 @@ import { NotFound } from "./errors.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
 import { LinearSizeDisk } from "./linear-size.ts";
+import { SlackCaseDisk } from "./slack-cases.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
@@ -71,10 +72,12 @@ type Row = {
 	slack_reaction_checked: number;
 	slack_status_version: number;
 	linear_size_override: import("@pilot/protocol").LinearSize | null;
+	slack_case_id: string | null;
 	created_at: number;
 	updated_at: number;
 };
 export interface TrackedQuery {
+	caseId?: string;
 	projectId: string;
 	kind?: TrackedKind;
 	/** Internal scope guard for mixed-source lists. */
@@ -112,6 +115,7 @@ export class TrackedItemDisk {
 	private readonly db: DatabaseSync;
 	readonly triage: TriageGuideDisk;
 	readonly sizes: LinearSizeDisk;
+	readonly cases: SlackCaseDisk;
 	private readonly listeners = new Set<(projectId: string) => void>();
 	/** Each project's close labels, as last set by the daemon. A project without an entry is never reconciled. */
 	private readonly closeLabels = new Map<string, string>();
@@ -234,6 +238,9 @@ export class TrackedItemDisk {
 		`);
 		this.triage = new TriageGuideDisk(this.db);
 		this.sizes = new LinearSizeDisk(this.db);
+		if (!columns.some((column) => column.name === "slack_case_id"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_case_id TEXT");
+		this.cases = new SlackCaseDisk(this.db, this.triage);
 		if (!columns.some((column) => column.name === "linear_size_override"))
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_size_override TEXT");
 		if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1)
@@ -418,8 +425,13 @@ export class TrackedItemDisk {
 		const kinds = query.kind ? [query.kind] : query.kinds;
 		if (kinds?.some((kind) => kind !== "linear" && kind !== "slack")) throw new Error("Unknown tracking kind");
 		if (kinds && !kinds.length) return { items: [], total: 0 };
-		const filter = `project_id = ? AND active = 1 AND dismissed = ?${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}${query.closedByLabel ? " AND closed_by_label IS NOT NULL" : ""}`;
-		const args = [query.projectId, query.dismissed || query.closedByLabel ? 1 : 0, ...(kinds ?? [])];
+		const filter = `project_id = ? AND active = 1 AND dismissed = ?${kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : ""}${query.closedByLabel ? " AND closed_by_label IS NOT NULL" : ""}${query.caseId ? " AND slack_case_id=?" : ""}`;
+		const args = [
+			query.projectId,
+			query.dismissed || query.closedByLabel ? 1 : 0,
+			...(kinds ?? []),
+			...(query.caseId ? [query.caseId] : []),
+		];
 		const total = Number(this.db.prepare(`SELECT COUNT(*) AS n FROM tracked_items WHERE ${filter}`).get(...args)!.n);
 		const items = (
 			this.db
@@ -508,7 +520,14 @@ export class TrackedItemDisk {
 		const label = kind === "linear" ? "Linear" : "Slack";
 		if (kind !== "linear") {
 			const page = this.list({ projectId, kind, limit: 5 });
-			return { source: kind, label, status: "idle", total: page.total, items: page.items.map(previewItem) };
+			return {
+				source: kind,
+				label,
+				status: "idle",
+				total: page.total,
+				items: page.items.map(previewItem),
+				commonCases: this.cases.list(projectId, Date.now()).cases.slice(0, 3),
+			};
 		}
 		// Open issues lead (in progress, then to do, by priority); done ones are a separate, collapsed group.
 		const filter = "project_id = ? AND kind = 'linear' AND active = 1 AND dismissed = 0";
@@ -1049,6 +1068,7 @@ function decode(row: Row): TrackedItem {
 				}
 			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
 		...(slack ? { slack } : {}),
+		...(slack && row.slack_case_id ? { caseId: row.slack_case_id } : {}),
 		...(row.kind === "linear"
 			? {
 					linearSize: row.linear_size_override ?? metadata.size ?? "unknown",
@@ -1078,6 +1098,7 @@ function previewItem(item: TrackedItem): import("@pilot/protocol").DashboardTrac
 		externalId,
 		metadata,
 		...(item.slack ? { slack: item.slack } : {}),
+		...(item.caseId ? { caseId: item.caseId } : {}),
 		...(item.linearSize ? { linearSize: item.linearSize } : {}),
 		...(item.linearSizeOverride ? { linearSizeOverride: item.linearSizeOverride } : {}),
 		...(sessionId ? { sessionId } : {}),

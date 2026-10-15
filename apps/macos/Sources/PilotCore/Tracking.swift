@@ -2,6 +2,34 @@ import Foundation
 
 // Mirrors packages/protocol/src/tracking.ts.
 public enum TrackedKind: String, Codable, Hashable, Sendable { case linear, slack }
+public struct SlackCommonCase: Codable, Identifiable, Equatable, Sendable {
+    public let id: String
+    public let name: String
+    public let description: String
+    public let count: Int
+    public let severityMix: [String: Int]
+    public let label: String?
+    public let firstSeen: Double
+    public let lastSeen: Double
+    public enum Trend: String, Codable, Sendable { case rising, steady, fading }
+    public let trend: Trend
+}
+public struct SlackCommonCaseList: Codable, Equatable, Sendable {
+    public let cases: [SlackCommonCase]
+    public let windowDays: Int
+    public let windowLimit: Int
+    public let truncated: Bool
+}
+public struct SlackCaseEdit: Encodable, Sendable {
+    public enum Action: String, Encodable, Sendable { case rename, merge, split }
+    public let action: Action
+    public var name: String?
+    public var targetId: String?
+    public var itemIds: [String]?
+    public init(action: Action, name: String? = nil, targetId: String? = nil, itemIds: [String]? = nil) {
+        self.action = action; self.name = name; self.targetId = targetId; self.itemIds = itemIds
+    }
+}
 public enum LinearSize: String, Codable, Hashable, Sendable {
     case quickFix = "quick_fix", needsPlanning = "needs_planning", unknown
 }
@@ -11,6 +39,12 @@ public struct TriageGuide: Codable, Equatable, Sendable {
     public let text: String
     public let updatedAt: Double
     public let throughSeq: Int
+}
+public struct TriageCorrection: Codable, Equatable, Sendable {
+    public let itemId: String
+    public let summary: String
+    public let correctedAt: Double
+    public let values: [String: JSONValue]
 }
 public struct LinearCycleSummary: Codable, Equatable, Sendable {
     public let id: String
@@ -242,6 +276,7 @@ public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
     }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
+    public let caseId: String?
     public let linearSize: LinearSize?
     public let linearSizeOverride: LinearSize?
     public let id: String
@@ -268,7 +303,8 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
                 status: String, metadata: [String: JSONValue] = [:], dismissed: Bool = false,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
                 missionIds: [String]? = nil, slack: SlackTriage? = nil, linearSize: LinearSize? = nil,
-                linearSizeOverride: LinearSize? = nil, createdAt: Double, updatedAt: Double) {
+                linearSizeOverride: LinearSize? = nil, caseId: String? = nil, createdAt: Double, updatedAt: Double) {
+        self.caseId = caseId
         self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.id = id; self.projectId = projectId; self.kind = kind; self.externalId = externalId
         self.title = title; self.url = url; self.status = status; self.metadata = metadata; self.dismissed = dismissed
@@ -284,7 +320,7 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
                   title: row.title, url: row.url ?? "", status: row.status ?? "", metadata: row.metadata ?? [:],
                   sessionId: row.sessionId, missionId: row.missionId, sessionIds: row.sessionIds,
                   missionIds: row.missionIds, slack: row.slack, linearSize: row.linearSize,
-                  linearSizeOverride: row.linearSizeOverride, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
+                  linearSizeOverride: row.linearSizeOverride, caseId: row.caseId, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
     }
 }
 public struct TrackedItemList: Codable, Equatable, Sendable {

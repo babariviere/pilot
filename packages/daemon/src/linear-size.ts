@@ -84,7 +84,7 @@ export function createLinearSizePoller(
 					if (active.has(item.externalId) && !fresh.has(item.externalId)) fresh.set(item.externalId, item);
 				if (offset + 100 >= backlog.total) break;
 			}
-		const input = await store.triageInput(context.project.id, "linear");
+		const input = await store.triageContext(context.project.id, "linear");
 		let attempts = 0;
 		const items: TrackedInput[] = [];
 		for (const item of fresh.values()) {
@@ -124,7 +124,7 @@ export function createLinearSizePoller(
 								title: issue.title.slice(0, 2000),
 								description: typeof issue.description === "string" ? issue.description.slice(0, 12000) : "",
 								guide: input.guide.text,
-								corrections: input.corrections.slice(-5),
+								corrections: input.corrections,
 							});
 						size = parseSize(await complete(context.project.path, prompt, SIZE_SCHEMA, context.signal));
 						context.signal.throwIfAborted();

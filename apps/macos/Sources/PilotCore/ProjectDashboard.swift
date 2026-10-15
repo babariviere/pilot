@@ -340,6 +340,7 @@ public enum DashboardSourceStatus: String, LenientStringEnum {
 }
 
 public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
+    public let caseId: String?
     public let linearSize: LinearSize?
     public let linearSizeOverride: LinearSize?
     public let slack: SlackTriage?
@@ -360,7 +361,8 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
                 externalId: String? = nil, metadata: [String: JSONValue]? = nil,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
                 missionIds: [String]? = nil, slack: SlackTriage? = nil,
-                linearSize: LinearSize? = nil, linearSizeOverride: LinearSize? = nil) {
+                linearSize: LinearSize? = nil, linearSizeOverride: LinearSize? = nil, caseId: String? = nil) {
+        self.caseId = caseId
         self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.slack = slack
         self.id = id
@@ -376,6 +378,7 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
 
 /// Extension point for tracked items: one group per configured source, with its own status.
 public struct DashboardTrackedSource: Codable, Identifiable, Equatable, Sendable {
+    public let commonCases: [SlackCommonCase]?
     /// Source identifier, for example "linear" or "slack".
     public let source: String
     public let label: String
@@ -394,8 +397,9 @@ public struct DashboardTrackedSource: Codable, Identifiable, Equatable, Sendable
     public init(
         source: String, label: String, status: DashboardSourceStatus = .ok, error: String? = nil, total: Int = 0,
         items: [DashboardTrackedItem] = [], done: DashboardSection<DashboardTrackedItem>? = nil,
-        linear: LinearSourceSummary? = nil
+        linear: LinearSourceSummary? = nil, commonCases: [SlackCommonCase]? = nil
     ) {
+        self.commonCases = commonCases
         self.source = source
         self.label = label
         self.status = status

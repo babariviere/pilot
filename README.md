@@ -372,6 +372,15 @@ cheapest scoped model and no tools or thinking. Descriptions are transient; fail
 until the issue changes. User size corrections survive sync and feed the shared guide. This never auto-starts
 work. Size chips and suggested primary actions are a separate UI follow-up.
 
+Slack common cases group classifier summaries and corrections, never raw thread text. The shared grooming run
+uses the newest 200 bugs within 30 days, preserves case IDs and memberships, and computes counts, severity mix,
+majority label and trend locally. Trend compares the newest 15 days with the preceding 15 days. Empty cases
+retire after 30 days without a report. Names, merge and split edits are local corrections, fenced against stale
+model runs. The cases API exposes the window limit and truncation, and dashboard data includes the top three.
+Up to 100 case identities are retained per project. The shared groomer admits at most one attempt per
+source/project every five minutes, up to 48 per UTC day, folding at most 64 new corrections per run.
+The Common cases toggle, filtering, case actions and Overview display are a separate Opus UI follow-up.
+
 Triage keeps up to 500 corrections per project across sources. A debounced, tool-free worker folds three new
 corrections (or a day with new corrections) into a short read-only guide. Classifiers use that guide and five
 recent examples. Guides contain rules and summaries, not Slack excerpts. Tracking guide APIs support reading

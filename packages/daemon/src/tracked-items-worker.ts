@@ -11,6 +11,29 @@ parentPort!.on("message", ({ id, method, args }) => {
 		changed = false;
 		let value: unknown, projectId: string | undefined, projectIds: string[] | undefined;
 		switch (method) {
+			case "triageContext":
+				value = disk.triage.context(args.projectId, args.kind);
+				break;
+			case "reserveGrooming":
+				value = disk.triage.reserve(args.projectId, args.kind, args.now);
+				break;
+			case "caseInput":
+				changed = disk.cases.retire(args.projectId, args.now);
+				if (changed) projectId = args.projectId;
+				value = disk.cases.input(args.projectId, args.now);
+				break;
+			case "commonCases":
+				value = disk.cases.list(args.projectId, args.now);
+				break;
+			case "saveCases":
+				changed = disk.cases.save(args.projectId, args.input, args.groups, args.now);
+				projectId = args.projectId;
+				break;
+			case "editCase":
+				disk.cases.edit(args.projectId, args.caseId, args.edit, args.now);
+				changed = true;
+				projectId = args.projectId;
+				break;
 			case "reserveLinearSize":
 				value = disk.sizes.reserve(args.projectId, args.externalId, args.version, args.now);
 				break;

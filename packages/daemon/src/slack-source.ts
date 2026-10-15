@@ -202,14 +202,19 @@ export function createSlackPoller(
 								)
 							: { messages: [message] };
 					message.replies = thread.messages[0]!.replies;
-					classifierContext ??= {
-						labels: context.config.slackLabels ?? [],
-						corrections: (await store.corrections(context.project.id)).slice(0, 5),
-						guide:
-							"triageInput" in store
-								? (await (store as TrackedItemStore).triageInput(context.project.id, "slack")).guide.text
-								: "",
-					};
+					if (!classifierContext) {
+						const recent =
+							"triageContext" in store
+								? await (store as TrackedItemStore).triageContext(context.project.id, "slack")
+								: undefined;
+						classifierContext = {
+							labels: context.config.slackLabels ?? [],
+							corrections: recent
+								? (recent.corrections as SlackClassifierContext["corrections"])
+								: (await store.corrections(context.project.id)).slice(0, 5),
+							guide: recent?.guide.text ?? "",
+						};
+					}
 					classify ??= models.prepareSlackClassifier
 						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)
 						: (text) => models.classifySlack(context.project.path, text, context.signal, classifierContext);

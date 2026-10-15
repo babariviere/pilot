@@ -989,6 +989,7 @@ export interface DashboardScheduledItem {
 export type DashboardSourceStatus = import("./tracking.ts").SourceStatus;
 
 export interface DashboardTrackedItem {
+	caseId?: string;
 	linearSize?: import("./tracking.ts").LinearSize;
 	linearSizeOverride?: import("./tracking.ts").LinearSize;
 	slack?: import("./tracking.ts").SlackTriage;
@@ -1008,6 +1009,7 @@ export interface DashboardTrackedItem {
 
 /** Extension point for tracked items, one group per configured source. Empty until a source is configured. */
 export interface DashboardTrackedSource {
+	commonCases?: import("./tracking.ts").SlackCommonCase[];
 	/** Source identifier, for example "linear" or "slack". */
 	source: string;
 	label: string;
