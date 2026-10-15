@@ -114,8 +114,8 @@ private let slack = TrackedItem(
     let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",
                           title: "Sample question", url: "https://example.com", status: "done",
                           metadata: ["slackDone": .object(["outcome": .string("error"), "error": .string("private detail")])],
-                          createdAt: ms, updatedAt: ms,
-                          slack: SlackTriage(type: .question, severity: .low, status: .done, doneReason: "Done · ✅ in Slack"))
+                          slack: SlackTriage(type: .question, severity: .low, status: .done, doneReason: "Done · ✅ in Slack"),
+                          createdAt: ms, updatedAt: ms)
     #expect(TrackedItemText.startError(item) == "Couldn't add done reaction in Slack")
     #expect(TrackedItemText.startErrorHelp(item)?.contains("local status") == true)
     #expect(!SlackTriageText.accessibilityLabel(item, now: now).contains("private detail"))
