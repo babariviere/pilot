@@ -54,14 +54,27 @@ export interface ProjectTrackingConfig {
 	linearTeam?: string;
 	/** Display name of the attached team. */
 	linearTeamName?: string;
-	/** Start targets keyed by the issue's actual team (including sub-teams). Missing entries use In progress. */
-	linearStartStates?: Record<string, LinearWorkflowState>;
+	/** Workflow mappings keyed by actual issue team, including sub-teams. Only inProgress is automated today. */
+	linearStateMappings?: Record<string, LinearStateMapping>;
 }
 
-/** A started-category workflow state, from the team's live Linear workflow. */
+export interface LinearStateMapping {
+	todo?: LinearWorkflowState;
+	inProgress?: LinearWorkflowState;
+	inReview?: LinearWorkflowState;
+	merged?: LinearWorkflowState;
+	deployed?: LinearWorkflowState;
+}
+
+/** A saved workflow reference. Names are display-only; writes validate the ID against the live workflow. */
 export interface LinearWorkflowState {
 	id: string;
 	name: string;
+}
+
+export interface LinearWorkflowStateOption extends LinearWorkflowState {
+	/** Linear category, for example unstarted, started or completed. */
+	type: string;
 }
 export interface TrackedItem {
 	id: string;

@@ -69,17 +69,32 @@ import Testing
     #expect(try JSONValue.decode(JSONEncoder().encode(legacy))["tracking"]?["mcp"] == nil)
 }
 
-@Test func trackingRoundTripsLinearStartStateChoices() throws {
+@Test func trackingRoundTripsAllLinearStateMappings() throws {
     let json = Data(#"""
-    {"slackChannels":[],"linearTeam":"root","linearStartStates":{"child":{"id":"active","name":"Building"}}}
+    {"slackChannels":[],"linearTeam":"root","linearStateMappings":{"child":{
+      "todo":{"id":"todo","name":"Todo"},"inProgress":{"id":"active","name":"Building"},
+      "inReview":{"id":"review","name":"Review"},"merged":{"id":"merged","name":"Merged"},
+      "deployed":{"id":"deployed","name":"Deployed"}}}}
     """#.utf8)
     let config = try JSONDecoder().decode(ProjectTrackingConfig.self, from: json)
-    #expect(config.linearStartStates == ["child": LinearWorkflowState(id: "active", name: "Building")])
+    #expect(config.linearStateMappings?["child"]?.inProgress == LinearWorkflowState(id: "active", name: "Building"))
+    for stage in LinearWorkflowStage.allCases {
+        #expect(config.linearStateMappings?["child"]?[stage] != nil)
+    }
     let roundTrip = try JSONDecoder().decode(ProjectTrackingConfig.self, from: JSONEncoder().encode(config))
     #expect(roundTrip == config)
-    let states = try JSONDecoder().decode(TrackingLookup<LinearWorkflowState>.self,
-        from: Data(#"{"status":"ok","items":[{"id":"active","name":"In progress"}]}"#.utf8))
+    let states = try JSONDecoder().decode(TrackingLookup<LinearWorkflowStateOption>.self,
+        from: Data(#"{"status":"ok","items":[{"id":"active","name":"In progress","type":"started"}]}"#.utf8))
     #expect(states.items.first?.id == "active")
+    #expect(states.items.first?.type == "started")
+    #expect(states.items.first?.reference.id == "active")
+    var mapping = LinearStateMapping()
+    for stage in LinearWorkflowStage.allCases {
+        mapping[stage] = LinearWorkflowState(id: stage.rawValue, name: stage.title)
+        #expect(mapping[stage]?.id == stage.rawValue)
+        mapping[stage] = nil
+        #expect(mapping[stage] == nil)
+    }
 }
 
 @Test func trackingDecodesItemsStatusAndWebSocketChanges() throws {

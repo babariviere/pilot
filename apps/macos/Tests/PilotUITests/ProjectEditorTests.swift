@@ -64,23 +64,31 @@ import Testing
     #expect(editor.request.tracking?.slackChannelNames == nil)
 }
 
-@Test @MainActor func projectEditorTracksAndPreservesPerTeamStartStates() {
-    let states = ["team-child": LinearWorkflowState(id: "active", name: "Building")]
+@Test @MainActor func projectEditorTracksAndPreservesPerTeamStateMappings() {
+    let states = ["team-child": LinearStateMapping(
+        todo: .init(id: "todo", name: "Todo"), inProgress: .init(id: "active", name: "Building"),
+        inReview: .init(id: "review", name: "Review"), merged: .init(id: "merged", name: "Merged"),
+        deployed: .init(id: "deployed", name: "Deployed"))]
     let editor = ProjectEditor()
     let project = Project(id: "p", name: "Repo", path: "/repo",
-                          tracking: .init(linearTeam: "team-root", linearStartStates: states), createdAt: 1)
+                          tracking: .init(linearTeam: "team-root", linearStateMappings: states), createdAt: 1)
     editor.load(project)
     #expect(!editor.hasChanges)
-    #expect(editor.linearStartStates == states)
+    #expect(editor.linearStateMappings == states)
     editor.name = "Renamed"
-    #expect(editor.request.tracking?.linearStartStates == states)
+    #expect(editor.request.tracking?.linearStateMappings == states)
     editor.load(project)
-    editor.linearStartStates["team-root"] = LinearWorkflowState(id: "started", name: "In progress")
+    editor.linearStateMappings["team-root"] = LinearStateMapping(inProgress: .init(id: "started", name: "In progress"))
     #expect(editor.hasChanges)
-    #expect(editor.request.tracking?.linearStartStates?.count == 2)
+    #expect(editor.request.tracking?.linearStateMappings?.count == 2)
+    editor.load(project)
+    editor.linearStateMappings["team-child"]?.deployed = nil
+    #expect(editor.hasChanges)
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.deployed == nil)
+    #expect(editor.request.tracking?.linearStateMappings?["team-child"]?.merged?.id == "merged")
     editor.linearTeam = nil
-    #expect(editor.request.tracking?.linearStartStates == nil)
+    #expect(editor.request.tracking?.linearStateMappings == nil)
     editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))
-    #expect(editor.linearStartStates.isEmpty)
+    #expect(editor.linearStateMappings.isEmpty)
     #expect(!editor.hasChanges)
 }

@@ -330,7 +330,13 @@ test("Linear cycle/fallback and transient prefill are exposed through the tracki
 	const poll = await fetch(`${root}/sources/${project.id}:linear/poll`, { method: "POST" });
 	const states = await fetch(`${root}/tracking/linear/states?team=team-child`);
 	assert.equal(states.status, 200);
-	assert.deepEqual(await states.json(), { status: "ok", items: [{ id: "active", name: "In progress" }] });
+	assert.deepEqual(await states.json(), {
+		status: "ok",
+		items: [
+			{ id: "done", name: "Done", type: "completed" },
+			{ id: "active", name: "In progress", type: "started" },
+		],
+	});
 	assert.equal(poll.status, 200);
 	assert.equal((await poll.json()).linear.currentCycle.progress, 0.5);
 	const dashboard = await (await fetch(`${root}/projects/${project.id}/dashboard`)).json();

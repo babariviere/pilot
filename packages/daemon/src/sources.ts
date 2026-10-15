@@ -4,7 +4,7 @@ import type {
 	Inbox,
 	LinearSourceSummary,
 	LinearTeamOption,
-	LinearWorkflowState,
+	LinearWorkflowStateOption,
 	Project,
 	ProjectTrackingConfig,
 	SlackChannelOption,
@@ -21,7 +21,7 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { linearPrefill, linearStart } from "./linear-source.ts";
-import { startedWorkflowStates } from "./linear-workflow.ts";
+import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
@@ -551,8 +551,8 @@ export class SourceRegistry {
 						controller.signal.throwIfAborted();
 						if (this.currentKey(sourceId) !== key) throw new Conflict("Tracking configuration changed");
 						if (
-							JSON.stringify(this.projects.require(item.projectId).tracking?.linearStartStates) !==
-							JSON.stringify(project.tracking?.linearStartStates)
+							JSON.stringify(this.projects.require(item.projectId).tracking?.linearStateMappings) !==
+							JSON.stringify(project.tracking?.linearStateMappings)
 						)
 							throw new Conflict("Linear start states changed");
 						return this.mcp.call("linear", tool, args, controller.signal);
@@ -787,9 +787,9 @@ export class SourceRegistry {
 	linearTeams(query?: string): Promise<TrackingLookup<LinearTeamOption>> {
 		return this.lookup("linear", (call) => lookupLinearTeams(call, query));
 	}
-	linearStates(team: string): Promise<TrackingLookup<LinearWorkflowState>> {
+	linearStates(team: string): Promise<TrackingLookup<LinearWorkflowStateOption>> {
 		return this.lookup("linear", async (call) => ({
-			items: startedWorkflowStates(await call("states", { team })),
+			items: workflowStates(await call("states", { team })),
 			more: false,
 		}));
 	}

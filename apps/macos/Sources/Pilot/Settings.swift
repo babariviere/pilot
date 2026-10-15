@@ -464,7 +464,7 @@ final class ProjectEditor: ObservableObject {
     @Published var slackChannels: [TrackedChannelRef] = []
     @Published var slackLabels: [EditableSlackLabel] = []
     @Published var linearTeam: TrackedTeamRef?
-    @Published var linearStartStates: [String: LinearWorkflowState] = [:]
+    @Published var linearStateMappings: [String: LinearStateMapping] = [:]
     @Published var error: String?
     @Published private var loaded: Fields?
 
@@ -476,13 +476,13 @@ final class ProjectEditor: ObservableObject {
         var requirePullRequest: Bool
         var channels: [String]
         var team: String?
-        var startStates: [String: LinearWorkflowState]
+        var stateMappings: [String: LinearStateMapping]
         var labels: [SlackProjectLabel]
     }
 
     private var fields: Fields {
         Fields(name: name, model: model, privateClones: privateClones, requirePullRequest: requirePullRequest,
-               channels: slackChannels.map(\.id), team: linearTeam?.id, startStates: linearStartStates, labels: savedLabels)
+               channels: slackChannels.map(\.id), team: linearTeam?.id, stateMappings: linearStateMappings, labels: savedLabels)
     }
 
     /// Labels as saved. Unnamed labels are drafts and are left out.
@@ -501,7 +501,7 @@ final class ProjectEditor: ObservableObject {
         slackLabels = (tracking?.slackLabels ?? []).map(EditableSlackLabel.init)
         slackChannels = (tracking?.slackChannels ?? []).map { TrackedChannelRef(id: $0, name: tracking?.slackChannelNames?[$0]) }
         linearTeam = tracking?.linearTeam.flatMap { $0.isEmpty ? nil : TrackedTeamRef(id: $0, name: tracking?.linearTeamName) }
-        linearStartStates = tracking?.linearStartStates ?? [:]
+        linearStateMappings = tracking?.linearStateMappings ?? [:]
         error = nil
         loaded = fields
     }
@@ -536,7 +536,7 @@ final class ProjectEditor: ObservableObject {
                 linearTeam: linearTeam?.id ?? "",
                 linearTeamName: linearTeam?.name,
                 slackLabels: labels.isEmpty ? nil : labels,
-                linearStartStates: linearTeam == nil || linearStartStates.isEmpty ? nil : linearStartStates
+                linearStateMappings: linearTeam == nil || linearStateMappings.isEmpty ? nil : linearStateMappings
             )
         )
     }

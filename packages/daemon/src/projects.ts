@@ -184,11 +184,11 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		"slackLabels",
 		"linearTeam",
 		"linearTeamName",
-		"linearStartStates",
+		"linearStateMappings",
 	];
 	if (Object.keys(config).some((key) => !keys.includes(key)))
 		throw new Error(
-			"Tracking supports only slackChannels, slackChannelNames, slackLabels, linearTeam, linearTeamName and linearStartStates",
+			"Tracking supports only slackChannels, slackChannelNames, slackLabels, linearTeam, linearTeamName and linearStateMappings",
 		);
 	if (
 		!Array.isArray(config.slackChannels) ||
@@ -204,7 +204,7 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 	)
 		throw new Error("linearTeamName must be a string of at most 200 characters");
 	const labels = config.slackLabels;
-	const startStates = config.linearStartStates;
+	const startStates = config.linearStateMappings;
 	if (
 		startStates !== undefined &&
 		(!startStates ||
@@ -212,18 +212,29 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 			Array.isArray(startStates) ||
 			Object.entries(startStates).length > 250 ||
 			Object.entries(startStates).some(
-				([team, state]) =>
+				([team, mapping]) =>
 					!team.trim() ||
 					team !== team.trim() ||
 					team.length > 200 ||
-					!state ||
-					typeof state !== "object" ||
-					Array.isArray(state) ||
-					Object.keys(state).some((key) => !["id", "name"].includes(key)) ||
-					[state.id, state.name].some((value) => typeof value !== "string" || !value.trim() || value.length > 200),
+					!mapping ||
+					typeof mapping !== "object" ||
+					Array.isArray(mapping) ||
+					Object.entries(mapping).some(
+						([stage, state]) =>
+							!["todo", "inProgress", "inReview", "merged", "deployed"].includes(stage) ||
+							!state ||
+							typeof state !== "object" ||
+							Array.isArray(state) ||
+							Object.keys(state).some((key) => !["id", "name"].includes(key)) ||
+							[state.id, state.name].some(
+								(value) => typeof value !== "string" || !value.trim() || value.length > 200,
+							),
+					),
 			))
 	)
-		throw new Error("linearStartStates must map at most 250 team IDs to workflow state IDs and names");
+		throw new Error(
+			"linearStateMappings must map at most 250 team IDs to Todo, In progress, In review, Merged and Deployed state references",
+		);
 	if (
 		labels !== undefined &&
 		(!Array.isArray(labels) ||
@@ -282,10 +293,15 @@ export function validateTrackingConfig(value: unknown): ProjectTrackingConfig {
 		...(linearTeam && config.linearTeamName?.trim() ? { linearTeamName: config.linearTeamName.trim() } : {}),
 		...(linearTeam && startStates && Object.keys(startStates).length
 			? {
-					linearStartStates: Object.fromEntries(
-						Object.entries(startStates).map(([team, state]) => [
+					linearStateMappings: Object.fromEntries(
+						Object.entries(startStates).map(([team, mapping]) => [
 							team,
-							{ id: state.id.trim(), name: state.name.trim() },
+							Object.fromEntries(
+								Object.entries(mapping).map(([stage, state]) => [
+									stage,
+									{ id: state.id.trim(), name: state.name.trim() },
+								]),
+							),
 						]),
 					),
 				}
