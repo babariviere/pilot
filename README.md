@@ -96,8 +96,13 @@ re-pairing. The unauthenticated API remains bound to `127.0.0.1` only.
 Linux omits Mac energy/system-events helpers. Its agents and daemon-owned processes do not depend on a
 client connection, and disconnecting a client does not stop them. HTML, React and image artifact authoring
 remain available; SwiftUI rendering requires macOS. Linux coordinator execution stays unavailable until a
-validated OS-isolation backend is installed, with no unrestricted fallback. This does not add remote app
-routing, credential copying or cross-host context/delegation semantics.
+validated OS-isolation backend is installed, with no unrestricted fallback.
+
+The source includes [host-qualified client routing](docs/host-routing.md),
+[durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)
+and [staged image/artifact transfers](docs/host-transfers.md). These are integration adapters, not a complete
+remote setup or chat-selection workflow in the app. They do not copy credentials or implement cross-host
+context/delegation semantics.
 
 ### Start your first chat
 
