@@ -2,8 +2,8 @@ import AppKit
 import PilotCore
 import SwiftUI
 
-/// Missions first, then chats by urgency (Needs you, Ready to merge, Working, Recent), pinned first, then PR status
-/// and stable activity. The scope switcher at the top lists every project (the default) or focuses on one, which
+/// Missions first, then chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent), each in PR status and
+/// stable activity order. The scope switcher at the top lists every project (the default) or focuses on one, which
 /// then shows only that project's missions and chats, always by urgency and without project names. All projects
 /// can group chats by project and optional user-created folders instead. Search appears on ⌘F, and the footer only
 /// when the connection to pilotd needs attention. Each chat's state is its dithered corner (`DitherCorner`).
@@ -124,11 +124,11 @@ struct SessionSidebar: View {
         return model.selectedSessionId == nil && model.selectedProjectId == focused.id
     }
 
-    /// Why every project's chats need the user, for the Inbox badge's tooltip.
+    /// Why every project's chats need the user, for the Inbox badge's tooltip. Like pilotd's counts, read results
+    /// no longer count (even while their chat is open) and pinned chats count by their state.
     private var needsYouReasons: NeedsYouReasons {
         let unread = { (session: SessionSummary) in model.isUnread(session) }
-        let groups = SidebarUrgency.groups(client.activeSessions, unread: unread,
-                                           awaitingReply: { model.isAwaitingReply($0) })
+        let groups = SidebarUrgency.groups(client.activeSessions, unread: unread, separatingPinned: false)
         return NeedsYouReasons(groups.needsYou, unread: unread)
     }
 
@@ -137,15 +137,25 @@ struct SessionSidebar: View {
             && model.selectedProjectId == nil
     }
 
-    /// Chats by urgency. Mission chats are listed like any chat, their mission on the second line. With
-    /// `projectNames` (All projects) each row names its project; a focused project leaves it out. Folders and
-    /// project headers stay out of the way; the scope switcher and project pages reach them. Ready to merge waits
-    /// on the user but never badges.
+    /// Chats by urgency, pinned chats first in their own group. Mission chats are listed like any chat, their
+    /// mission on the second line. With `projectNames` (All projects) each row names its project; a focused project
+    /// leaves it out. Folders and project headers stay out of the way; the scope switcher and project pages reach
+    /// them. Ready to merge waits on the user but never badges. A result read in the open chat keeps its group until
+    /// the user leaves the chat.
     @ViewBuilder
     private func urgencyGroups(_ sessions: [SessionSummary], searching: Bool, recentListId: String,
                                projectNames names: [String: String]? = nil) -> some View {
         let groups = SidebarUrgency.groups(sessions, unread: { model.isUnread($0) },
-                                           awaitingReply: { model.isAwaitingReply($0) })
+                                           held: { model.isHeld($0) })
+        if !groups.pinned.isEmpty {
+            Section {
+                ForEach(groups.pinned) { session in
+                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                }
+            } header: {
+                SidebarSectionHeader(title: "Pinned")
+            }
+        }
         if !groups.needsYou.isEmpty {
             Section {
                 ForEach(groups.needsYou) { session in
@@ -564,7 +574,7 @@ struct SessionRow: View {
 
     @ViewBuilder private func row(now: Date) -> some View {
         let unread = model.isUnread(session)
-        let needsAttention = unread || model.isAwaitingReply(session)
+        let needsAttention = unread || model.isHeld(session)
         let signal = session.signal(unread: needsAttention)
         let reason = session.needsYouReason(unread: needsAttention)?.label(at: session.outcomeAt ?? session.updatedAt, now: now)
         let missionTitle = session.missionId.flatMap { model.client.mission($0)?.title }
@@ -657,11 +667,6 @@ struct SessionRow: View {
                     Link("Open PR #\(pr.number) in Browser", destination: url)
                         .help(session.pullRequestHelpText ?? "")
                 }
-            }
-            if unread {
-                Button("Mark as reviewed") { model.review(session, explicit: true) }
-            } else if model.isAwaitingReply(session) {
-                Button("Remove from Needs you") { model.review(session, explicit: true) }
             }
         }
     }

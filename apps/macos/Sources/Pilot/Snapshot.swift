@@ -287,7 +287,7 @@ enum Snapshot {
             return
         }
 
-        // Real sidebar preview: pinned chats lead, polling does not reset old ages,
+        // Real sidebar preview: pinned chats lead in their own group, polling does not reset old ages,
         // and unpinned terminal PRs stay below other chats without unread dots.
         if CommandLine.arguments.contains("--session-ordering-only") {
             model.client.loadFixture(projects: [Fixtures.projects[0]], sessions: Fixtures.orderingSessions)
@@ -996,7 +996,11 @@ enum Snapshot {
         if let missions = try? JSONDecoder().decode([MissionDetail].self, from: Data(missionJSON.utf8)) {
             model.client.loadMissionFixture(missions)
         }
-        for id in ["d1", "pr1"] { if let session = model.client.session(id) { model.review(session, explicit: true) } }
+        // Read, then left: these results have moved out of Needs you.
+        for id in ["d1", "pr1"] {
+            if let session = model.client.session(id) { model.attention.review(session, chatVisible: true, appActive: true) }
+        }
+        model.leaveOpenChat()
         func linear(_ number: Int, _ title: String, _ type: String, _ state: String, priority: Double, ago: Double,
                     sessions: [String]? = nil, missions: [String]? = nil, startFailed: Bool = false) -> TrackedItem {
             var metadata: [String: JSONValue] = ["identifier": .string("ENG-\(number)"), "statusType": .string(type),

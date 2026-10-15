@@ -44,6 +44,8 @@ final class AppModel: ObservableObject {
 
     @Published var selectedSessionId: String? {
         didSet {
+            // Leaving a chat lets the results read there regroup (Recent or Ready to merge).
+            if oldValue != selectedSessionId, attention.leave(keeping: selectedSessionId) { reviewRevision += 1 }
             guard selectedSessionId != nil else { return }
             if selectedMissionId != nil { selectedMissionId = nil }
             if selectedProjectId != nil { selectedProjectId = nil }
@@ -454,14 +456,18 @@ final class AppModel: ObservableObject {
     }
 
     func isUnread(_ session: SessionSummary) -> Bool { attention.isUnread(session) }
-    func isAwaitingReply(_ session: SessionSummary) -> Bool { attention.isAwaitingReply(session) }
+    /// Read in the open chat, so its row keeps its sidebar group until the user leaves the chat.
+    func isHeld(_ session: SessionSummary) -> Bool { attention.isHeld(session) }
 
-    func review(_ session: SessionSummary, chatVisible: Bool = false, explicit: Bool = false) {
-        let reviewed = attention.review(session, chatVisible: chatVisible, appActive: NSApp.isActive, explicit: explicit)
-        let dismissed = explicit && attention.dismiss(session)
-        if reviewed || dismissed {
+    func review(_ session: SessionSummary, chatVisible: Bool) {
+        if attention.review(session, chatVisible: chatVisible, appActive: NSApp.isActive) {
             reviewRevision += 1
         }
+    }
+
+    /// The window closed: no chat is open any more, so every read result regroups.
+    func leaveOpenChat() {
+        if attention.leave(keeping: nil) { reviewRevision += 1 }
     }
 
     var archiveFilter: ArchiveFilter {

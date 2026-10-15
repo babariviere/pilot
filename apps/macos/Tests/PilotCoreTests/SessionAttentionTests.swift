@@ -88,10 +88,10 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
             #expect(session.status == .working)
             #expect(session.visibleOutcomeAt == nil)
             #expect(!attention.isUnread(session))
-            #expect(!attention.isAwaitingReply(session))
+            #expect(!attention.isHeld(session))
             #expect(attention.observe([session], snapshot: false).isEmpty)
             #expect(session.signal(unread: true) == .working)
-            let groups = SidebarUrgency.groups([session], unread: attention.isUnread, awaitingReply: attention.isAwaitingReply)
+            let groups = SidebarUrgency.groups([session], unread: attention.isUnread, held: attention.isHeld)
             #expect(groups.working.count == 1)
             #expect(groups.needsYou.isEmpty)
             #expect([session].filter(\.isWorking).count == 1)
@@ -117,7 +117,7 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     #expect(summary(outcome: nil).status == .idle)
 }
 
-@Test func reviewRequiresVisibleActiveChatOrExplicitActionAndPersists() {
+@Test func reviewRequiresVisibleChatInActiveAppAndPersists() {
     withDefaults { defaults in
         let attention = SessionAttention(defaults: defaults)
         let session = summary(outcome: .done)
@@ -131,7 +131,7 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
         let reopened = SessionAttention(defaults: defaults)
         #expect(!reopened.isUnread(summary(state: "stopped", outcome: .done, updatedAt: 999)))
         #expect(reopened.isUnread(summary(outcome: .done, at: 101)))
-        #expect(reopened.review(summary(at: 101), chatVisible: false, appActive: false, explicit: true))
+        #expect(reopened.review(summary(at: 101), chatVisible: true, appActive: true))
         #expect(!SessionAttention(defaults: defaults).isUnread(summary(at: 101)))
     }
 }
@@ -219,41 +219,94 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     }
 }
 
-@Test func viewingKeepsResultAwaitingReplyUntilAnsweredDismissedOrArchived() {
+@Test func readResultKeepsItsGroupUntilTheUserLeavesTheChat() {
     withDefaults { defaults in
         let attention = SessionAttention(defaults: defaults)
         let done = summary(at: 100)
+        let other = summary(id: "o", at: 50)
         _ = attention.observe([done], snapshot: true)
+        let group = { (session: SessionSummary) in
+            SidebarUrgency.groups([session], unread: attention.isUnread, held: attention.isHeld)
+        }
+        #expect(group(done).needsYou == [done])
         #expect(attention.review(done, chatVisible: true, appActive: true))
         #expect(!attention.isUnread(done))
-        #expect(attention.isAwaitingReply(done))
-        // Persists across launches.
-        #expect(SessionAttention(defaults: defaults).isAwaitingReply(done))
+        // While the chat stays open, its row does not move.
+        #expect(attention.isHeld(done))
+        #expect(group(done).needsYou == [done])
+        #expect(!attention.leave(keeping: "s"))
+        #expect(attention.isHeld(done))
 
-        // A reply starts work, then a new outcome, which ends the entry.
-        let working = summary(state: "working", at: 100)
-        #expect(!attention.isAwaitingReply(working))
-        _ = attention.observe([summary(at: 200)], snapshot: false)
-        #expect(!attention.isAwaitingReply(summary(at: 200)))
-        #expect(!attention.isAwaitingReply(done))
+        // Reconnects keep the open chat in place without making it unread or notifying again.
+        #expect(attention.observe([done], snapshot: true).isEmpty)
+        #expect(attention.observe([done], snapshot: false).isEmpty)
+        #expect(attention.isHeld(done))
+        #expect(!attention.isUnread(done))
 
-        // Dismissing or archiving also ends it.
-        let other = summary(id: "o", at: 50)
-        attention.review(other, chatVisible: true, appActive: true)
-        #expect(attention.isAwaitingReply(other))
-        #expect(attention.dismiss(other))
-        #expect(!attention.isAwaitingReply(other))
+        // Opening another chat leaves this one: it regroups to Recent, and only the open chat is held.
+        #expect(attention.review(other, chatVisible: true, appActive: true))
+        #expect(attention.leave(keeping: "o"))
+        #expect(!attention.isHeld(done))
+        #expect(attention.isHeld(other))
+        #expect(group(done).recent == [done])
+        #expect(group(done).needsYou.isEmpty)
 
-        let third = summary(id: "t", at: 60)
-        attention.review(third, chatVisible: true, appActive: true)
-        let archived = SessionSummary(id: "t", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 200, state: "idle",
-                                      outcome: .done, outcomeAt: 60, archivedAt: 70)
-        _ = attention.observe([archived], snapshot: false)
-        #expect(!attention.isAwaitingReply(third))
+        // Leaving every chat (Home, the Inbox or closing the window) releases the rest.
+        #expect(attention.leave(keeping: nil))
+        #expect(!attention.isHeld(other))
+        #expect(!attention.leave(keeping: nil))
 
-        // An explicit review is a dismissal, so it never sticks.
-        let explicit = summary(id: "e", at: 80)
-        attention.review(explicit, chatVisible: false, appActive: false, explicit: true)
-        #expect(!attention.isAwaitingReply(explicit))
+        // Nothing persists: a relaunch neither holds nor re-reads.
+        #expect(attention.review(summary(id: "n", at: 10), chatVisible: true, appActive: true))
+        let relaunched = SessionAttention(defaults: defaults)
+        #expect(!relaunched.isHeld(summary(id: "n", at: 10)))
+        #expect(!relaunched.isUnread(summary(id: "n", at: 10)))
+
+        // A reply, a newer result or archiving end the hold while the chat is still open.
+        #expect(!attention.isHeld(summary(id: "n", state: "working", at: 10)))
+        #expect(!attention.isHeld(summary(id: "n", at: 20)))
+        let archived = SessionSummary(id: "n", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 200, state: "idle",
+                                      outcome: .done, outcomeAt: 10, archivedAt: 70)
+        #expect(!attention.isHeld(archived))
+    }
+}
+
+@Test func readResultWithReadyPullRequestMovesToReadyToMergeOnLeave() {
+    withDefaults { defaults in
+        let attention = SessionAttention(defaults: defaults)
+        let pr = SessionPullRequest(number: 1, url: "https://github.com/o/r/pull/1", title: "PR", state: .open,
+                                    checkedAt: 1, readiness: .init(state: .ready, reasons: [], checkedAt: 1))
+        let ready = SessionSummary(id: "r", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 200, state: "idle",
+                                   outcome: .done, outcomeAt: 100, pullRequest: pr, pullRequests: [pr])
+        let group = { SidebarUrgency.groups([ready], unread: attention.isUnread, held: attention.isHeld) }
+        #expect(group().needsYou == [ready])
+        #expect(attention.review(ready, chatVisible: true, appActive: true))
+        #expect(group().needsYou == [ready])
+        #expect(attention.leave(keeping: nil))
+        #expect(group().readyToMerge == [ready])
+        #expect(group().needsYou.isEmpty)
+    }
+}
+
+@Test func failuresAndQuestionsStayUnderNeedsYouAfterLeaving() {
+    withDefaults { defaults in
+        let attention = SessionAttention(defaults: defaults)
+        let failed = summary(id: "f", outcome: .failed)
+        let question = summary(id: "q", outcome: .question)
+        for session in [failed, question] {
+            #expect(attention.review(session, chatVisible: true, appActive: true))
+        }
+        #expect(attention.leave(keeping: nil))
+        let groups = SidebarUrgency.groups([failed, question], unread: attention.isUnread, held: attention.isHeld)
+        #expect(groups.needsYou == [failed, question])
+    }
+}
+
+@Test func legacyAwaitingReplyEntriesAreDropped() {
+    withDefaults { defaults in
+        defaults.set(["s": 100.0], forKey: "pilot.awaitingReplyOutcomeAt")
+        let attention = SessionAttention(defaults: defaults)
+        #expect(defaults.object(forKey: "pilot.awaitingReplyOutcomeAt") == nil)
+        #expect(!attention.isHeld(summary(at: 100)))
     }
 }

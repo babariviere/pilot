@@ -229,7 +229,7 @@ test("needs you lists failures, mission questions, failed schedules and unread r
 	assert.equal(dashboard.scheduled.items[0]?.id, "x2");
 });
 
-test("reviewed results leave needs you and appear under recent instead", () => {
+test("reviewed results leave needs you and appear under recent instead, but failures stay until retried", () => {
 	const seen = session({ outcome: "done", outcomeAt: 300 });
 	const fresh = session({ outcome: "done", outcomeAt: 400 });
 	const reviewedFailure = session({ outcome: "failed", outcomeAt: 200 });
@@ -239,13 +239,13 @@ test("reviewed results leave needs you and appear under recent instead", () => {
 	});
 	assert.deepEqual(
 		dashboard.needsYou.items.map((item) => item.sessionId),
-		[fresh.id],
+		[reviewedFailure.id, fresh.id],
 	);
 	assert.deepEqual(
 		dashboard.recent.items.map((item) => item.sessionId),
-		[seen.id, reviewedFailure.id],
+		[seen.id],
 	);
-	assert.equal(dashboard.recent.total, 2);
+	assert.equal(dashboard.recent.total, 1);
 	// A newer completion is unread again.
 	assert.equal(build({ sessions: [{ ...seen, outcomeAt: 301 }], isUnread: (_id, at) => at > 300 }).needsYou.total, 1);
 });
@@ -555,6 +555,45 @@ test("the Inbox lists ready PRs across projects, leaving out chats that work or 
 	// Ready PRs never add to the badge counts.
 	assert.equal(f.service.counts().projects.p2, undefined);
 	assert.throws(() => f.service.inbox("missing", 50));
+});
+
++test("reading results updates counts, reasons and the Inbox together; failures and questions stay", () => {
+	const ready = { state: "ready" as const, reasons: [], checkedAt: 1 };
+	const read = new Set<string>();
+	const f = service(
+		[
+			session({ id: "done", projectId: "p1", outcome: "done", outcomeAt: 5 }),
+			session({
+				id: "ready",
+				projectId: "p1",
+				outcome: "done",
+				outcomeAt: 6,
+				pullRequest: pr(1, { readiness: ready }),
+			}),
+			session({ id: "failed", projectId: "p1", outcome: "failed", outcomeAt: 7 }),
+			session({ id: "question", projectId: "p1", outcome: "question", outcomeAt: 8 }),
+		],
+		{ reviews: { isUnread: (id) => !read.has(id), onChange: () => () => {} } },
+	);
+	const kinds = () => f.service.inbox(undefined, 50).needsYou.items.map((item) => item.sessionId);
+	assert.deepEqual(f.service.counts().projects.p1, {
+		working: 0,
+		needsYou: 4,
+		needsYouReasons: { failed: 1, asks: 1, not_reviewed: 2 },
+	});
+	assert.deepEqual(kinds(), ["failed", "question", "ready", "done"]);
+	assert.deepEqual(f.service.inbox(undefined, 50).readyToMerge.total, 0);
+	for (const id of ["done", "ready", "failed", "question"]) read.add(id);
+	assert.deepEqual(f.service.counts().projects.p1, {
+		working: 0,
+		needsYou: 2,
+		needsYouReasons: { failed: 1, asks: 1 },
+	});
+	assert.deepEqual(kinds(), ["failed", "question"]);
+	assert.deepEqual(
+		f.service.inbox(undefined, 50).readyToMerge.items.map((item) => item.sessionId),
+		["ready"],
+	);
 });
 
 test("providers feed scheduled and tracked sections and report changes", () => {

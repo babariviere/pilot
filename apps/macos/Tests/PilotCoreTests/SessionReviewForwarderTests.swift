@@ -6,7 +6,7 @@ private typealias Mark = ReviewRequest.Mark
 private enum ReviewFailure: Error { case offline }
 
 @Test(arguments: [SessionOutcome.done, .failed, .stopped])
-@MainActor func visibleAndExplicitReviewsForwardOnlyAdvancingOutcomeVersions(outcome: SessionOutcome) async throws {
+@MainActor func visibleReviewsForwardOnlyAdvancingOutcomeVersions(outcome: SessionOutcome) async throws {
     let suite = "ReviewForwarderTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suite))
     defer { defaults.removePersistentDomain(forName: suite) }
@@ -20,14 +20,16 @@ private enum ReviewFailure: Error { case offline }
     }
     #expect(!attention.review(session("inactive"), chatVisible: true, appActive: false))
     #expect(!attention.review(session("hidden"), chatVisible: false, appActive: true))
-    #expect(!attention.review(session("working", state: "working"), chatVisible: true, appActive: true, explicit: true))
+    #expect(!attention.review(session("working", state: "working"), chatVisible: true, appActive: true))
     #expect(attention.review(session("visible"), chatVisible: true, appActive: true))
-    #expect(attention.review(session("explicit"), chatVisible: false, appActive: false, explicit: true))
+    #expect(attention.review(session("other"), chatVisible: true, appActive: true))
+    // Leaving the chat regroups it locally; pilotd already stopped counting it when it was read.
+    #expect(attention.leave(keeping: nil))
     #expect(!attention.review(session("visible"), chatVisible: true, appActive: true))
     await forwarder.task?.value
     #expect(requests.count == 1)
     #expect(requests[0].marks.sorted { $0.sessionId < $1.sessionId } == [
-        Mark(sessionId: "explicit", outcomeAt: 100), Mark(sessionId: "visible", outcomeAt: 100),
+        Mark(sessionId: "other", outcomeAt: 100), Mark(sessionId: "visible", outcomeAt: 100),
     ])
     #expect(attention.review(session("visible", at: 101), chatVisible: true, appActive: true))
     await forwarder.task?.value

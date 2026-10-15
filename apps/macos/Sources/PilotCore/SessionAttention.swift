@@ -67,19 +67,23 @@ public struct SessionOutcomeNotification: Equatable, Sendable {
 
 /// Persistent review and notification high-water marks, independent of UI and transport.
 /// Call on the client's serial executor. Reviewing never changes the session's outcome.
+///
+/// Reading a result marks it reviewed at once (and pilotd stops counting it), but the open chat keeps its sidebar
+/// group until the user leaves it, so the row never jumps away under the pointer. That hold lives in memory only:
+/// leaving the chat, closing the window or quitting releases it.
 public final class SessionAttention {
     private let defaults: UserDefaults
     private let reviewedKey = "pilot.reviewedOutcomeAt"
     private let observedKey = "pilot.observedOutcomeAt"
-    private let awaitingReplyKey = "pilot.awaitingReplyOutcomeAt"
+    /// Earlier builds persisted viewed results here to keep them under Needs you. Removed on launch.
+    private static let legacyAwaitingReplyKey = "pilot.awaitingReplyOutcomeAt"
     private var reviewed: [String: Double]
     private var observed: [String: Double]
-    /// Results the user opened but has neither answered, dismissed nor archived. They keep their place under
-    /// Needs you so opening a chat does not move it away. A reply starts a new outcome, which ends the entry.
-    private var awaitingReply: [String: Double]
+    /// Results read while their chat was open, by outcome version. Released when the user leaves the chat.
+    private var held: [String: Double] = [:]
     private var receivedSnapshot = false
 
-    /// Fired only when a review high-water mark advances, for explicit and visible reviews alike.
+    /// Fired only when a review high-water mark advances.
     public var onReview: ((ReviewRequest.Mark) -> Void)?
 
     /// One bounded launch backfill. Prefer recent reviews, with stable ordering for equal versions.
@@ -98,7 +102,7 @@ public final class SessionAttention {
         self.defaults = defaults
         reviewed = defaults.dictionary(forKey: reviewedKey) as? [String: Double] ?? [:]
         observed = defaults.dictionary(forKey: observedKey) as? [String: Double] ?? [:]
-        awaitingReply = defaults.dictionary(forKey: awaitingReplyKey) as? [String: Double] ?? [:]
+        defaults.removeObject(forKey: Self.legacyAwaitingReplyKey)
     }
 
     public func isUnread(_ session: SessionSummary) -> Bool {
@@ -108,34 +112,31 @@ public final class SessionAttention {
         return reviewed[session.id].map { $0 < version } ?? true
     }
 
-    /// Reviewed by viewing, but still waiting on a reply, a dismissal or archiving.
-    public func isAwaitingReply(_ session: SessionSummary) -> Bool {
+    /// Read while its chat is open, so the row keeps its group until the user leaves the chat. A reply or a newer
+    /// result (another outcome version), archiving or settled PRs end the hold on their own.
+    public func isHeld(_ session: SessionSummary) -> Bool {
         guard !session.isArchived, !session.hasTerminalPullRequest, let version = session.visibleOutcomeAt else {
             return false
         }
-        return awaitingReply[session.id] == version
+        return held[session.id] == version
     }
 
-    /// Takes a viewed result out of Needs you without replying. Returns whether anything changed.
+    /// The user left every chat except `openSessionId` (nil when no chat is open): their read results regroup.
+    /// Returns whether anything changed.
     @discardableResult
-    public func dismiss(_ session: SessionSummary) -> Bool {
-        guard awaitingReply.removeValue(forKey: session.id) != nil else { return false }
-        defaults.set(awaitingReply, forKey: awaitingReplyKey)
+    public func leave(keeping openSessionId: String?) -> Bool {
+        guard held.keys.contains(where: { $0 != openSessionId }) else { return false }
+        held = held.filter { $0.key == openSessionId }
         return true
     }
 
+    /// Marks a result read when its chat is visible in the active app, and holds its group until the user leaves.
     @discardableResult
-    public func review(_ session: SessionSummary, chatVisible: Bool, appActive: Bool, explicit: Bool = false) -> Bool {
-        guard explicit || (chatVisible && appActive), isUnread(session), let version = session.visibleOutcomeAt else { return false }
+    public func review(_ session: SessionSummary, chatVisible: Bool, appActive: Bool) -> Bool {
+        guard chatVisible && appActive, isUnread(session), let version = session.visibleOutcomeAt else { return false }
         reviewed[session.id] = version
         defaults.set(reviewed, forKey: reviewedKey)
-        // Viewing keeps the chat under Needs you until answered. An explicit review is the user dismissing it.
-        if explicit {
-            dismiss(session)
-        } else {
-            awaitingReply[session.id] = version
-            defaults.set(awaitingReply, forKey: awaitingReplyKey)
-        }
+        held[session.id] = version
         onReview?(ReviewRequest.Mark(sessionId: session.id, outcomeAt: version))
         return true
     }
@@ -146,7 +147,6 @@ public final class SessionAttention {
     public func observe(_ sessions: [SessionSummary], snapshot: Bool) -> [SessionOutcomeNotification] {
         let baseline = snapshot && !receivedSnapshot
         if snapshot { receivedSnapshot = true }
-        pruneAwaitingReply(sessions, snapshot: snapshot)
         var notifications: [SessionOutcomeNotification] = []
         for session in sessions {
             guard session.outcome != nil, let version = session.outcomeAt, version.isFinite else { continue }
@@ -168,26 +168,5 @@ public final class SessionAttention {
         }
         defaults.set(observed, forKey: observedKey)
         return notifications
-    }
-
-    /// Drops entries whose chat was answered (new or no outcome), archived, or, on a full snapshot, deleted.
-    private func pruneAwaitingReply(_ sessions: [SessionSummary], snapshot: Bool) {
-        guard !awaitingReply.isEmpty else { return }
-        var seen = Set<String>()
-        var changed = false
-        for session in sessions {
-            seen.insert(session.id)
-            guard let version = awaitingReply[session.id] else { continue }
-            if session.isArchived || session.outcomeAt != version {
-                awaitingReply.removeValue(forKey: session.id)
-                changed = true
-            }
-        }
-        if snapshot {
-            let before = awaitingReply.count
-            awaitingReply = awaitingReply.filter { seen.contains($0.key) }
-            changed = changed || awaitingReply.count != before
-        }
-        if changed { defaults.set(awaitingReply, forKey: awaitingReplyKey) }
     }
 }
