@@ -1,6 +1,6 @@
 /** Socket I/O lives off the caller thread. Only MCP's pinned synchronous status methods use this bridge. */
 import { parentPort } from "node:worker_threads";
-import { AUTH_FRAME_LIMIT, credentialRequest } from "./credential-rpc.ts";
+import { AUTH_FRAME_LIMIT, CredentialBrokerError, credentialRequest } from "./credential-rpc.ts";
 
 parentPort!.on("message", async ({ endpoint, request, shared }) => {
 	const status = new Int32Array(shared, 0, 2);
@@ -8,8 +8,8 @@ parentPort!.on("message", async ({ endpoint, request, shared }) => {
 	let value: string;
 	try {
 		value = JSON.stringify({ ok: true, value: await credentialRequest(endpoint, request) });
-	} catch {
-		value = '{"ok":false}';
+	} catch (error) {
+		value = JSON.stringify({ ok: false, code: error instanceof CredentialBrokerError ? error.code : "unavailable" });
 	}
 	const bytes = Buffer.from(value);
 	if (bytes.length > AUTH_FRAME_LIMIT) {

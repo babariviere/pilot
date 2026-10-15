@@ -33,7 +33,11 @@ export function installCredentialBrokerHooks(): Promise<void> {
 		prototype.tokens = function (name: string, url: string) {
 			const client = credentialClient();
 			return client
-				? (client.mcpStore(name, url).load() as { tokens?: unknown } | undefined)?.tokens
+				? (
+						client.sync({ op: "peek", namespace: "mcp", key: client.mcpKey(name, url) }) as
+							| { tokens?: unknown }
+							| undefined
+					)?.tokens
 				: tokens.call(this, name, url);
 		};
 		prototype.remove = function (name: string, url: string) {
