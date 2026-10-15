@@ -18,44 +18,51 @@ struct ConnectionSettingsContent: View {
 
     var body: some View {
         if let status {
-            Section {
+            SettingsSection("MCP servers", explanation: status.servers.isEmpty
+                ? "Add servers with pi mcp add or in ~/.pi/agent/mcp.json. Pilot checks again when that file changes."
+                : "From ~/.pi/agent/mcp.json. Pilot checks them when it starts and whenever pi's MCP files change, including a sign-in from a terminal. Run pi mcp list for full errors.") {
                 if status.servers.isEmpty {
-                    Text(status.checking ? "Checking MCP servers…" : "pi has no MCP servers yet.")
-                        .font(.pilot(.label))
-                        .foregroundStyle(Theme.mutedForeground)
+                    SettingsRow {
+                        Text(status.checking ? "Checking MCP servers…" : "pi has no MCP servers yet.")
+                            .font(.pilot(.label))
+                            .foregroundStyle(Theme.mutedForeground)
+                    }
                 } else {
                     ForEach(status.servers) { server in McpServerRow(server: server) }
                 }
-            } header: {
-                Text("MCP servers")
-            } footer: {
-                SettingsFooter(status.servers.isEmpty
-                    ? "Add servers with pi mcp add or in ~/.pi/agent/mcp.json. Pilot checks again when that file changes."
-                    : "From ~/.pi/agent/mcp.json. Pilot checks them when it starts and whenever pi's MCP files change, including a sign-in from a terminal. Run pi mcp list for full errors.")
             }
             if let count = status.configProblems, count > 0 {
-                Section {
-                    InlineProblem("\(count) \(count == 1 ? "entry" : "entries") in mcp.json \(count == 1 ? "is" : "are") invalid. Run pi mcp list for details.")
+                SettingsSection {
+                    SettingsRow {
+                        InlineProblem("\(count) \(count == 1 ? "entry" : "entries") in mcp.json \(count == 1 ? "is" : "are") invalid. Run pi mcp list for details.")
+                    }
                 }
             }
         } else {
-            Section { ProgressView("Checking MCP servers…") }
+            SettingsSection {
+                SettingsRow { ProgressView("Checking MCP servers…").controlSize(.small) }
+            }
         }
         if let error {
-            Section { InlineProblem(error) }
+            SettingsSection {
+                SettingsRow { InlineProblem(error) }
+            }
         }
     }
 }
 
-/// The Connections sidebar row, counting servers that need the user. Only this row observes MCP status.
-struct ConnectionsTabLabel: View {
+/// The count on the Connections sidebar row: servers that need the user. Only this badge observes MCP status.
+struct ConnectionsTabBadge: View {
     @ObservedObject private var store = AppModel.shared.client.mcp
 
     var body: some View {
         let count = store.needingUser.count
-        Label(SettingsTab.connections.title, icon: SettingsTab.connections.icon)
-            .badge(count)
-            .accessibilityValue(count > 0 ? "\(count) \(count == 1 ? "server needs" : "servers need") you" : "")
+        if count > 0 {
+            CountBadge(count: count, style: .attention)
+                .padding(.trailing, 6)
+                .help("\(count) \(count == 1 ? "server needs" : "servers need") you")
+                .accessibilityLabel("\(count) \(count == 1 ? "server needs" : "servers need") you")
+        }
     }
 }
 
@@ -122,23 +129,26 @@ struct McpServerRow: View {
 
     var body: some View {
         let text = McpServerRowText.state(server)
-        LabeledContent {
+        SettingsRow {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(server.name).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if text.attention {
+                        PilotSymbol(server.state == .needsSignIn ? PilotIcon.signInRequired : PilotIcon.warning)
+                            .accessibilityHidden(true)
+                    }
+                    Text(text.text).fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.pilot(.caption))
+                .foregroundStyle(text.attention ? Theme.blocked : Theme.mutedForeground)
+            }
+        } control: {
             HStack(spacing: 6) {
                 if text.waiting { ProgressView().controlSize(.small) }
                 McpServerAction(server: server)
             }
-        } label: {
-            Text(server.name)
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if text.attention {
-                    PilotSymbol(server.state == .needsSignIn ? PilotIcon.signInRequired : PilotIcon.warning)
-                        .accessibilityHidden(true)
-                }
-                Text(text.text).fixedSize(horizontal: false, vertical: true)
-            }
-            .font(.pilot(.caption))
-            .foregroundStyle(text.attention ? Theme.blocked : Theme.mutedForeground)
         }
+        .contentShape(Rectangle())
         .help(server.state == .failed ? "Run pi mcp list in a terminal for the full error." : "")
         .contextMenu {
             if server.canSignIn == true, server.state == .connected {

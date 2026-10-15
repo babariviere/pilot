@@ -220,7 +220,7 @@ struct SidebarNavRow<Accessory: View>: View {
         HStack(spacing: 0) {
             Button(action: action) {
                 HStack(spacing: 7) {
-                    PilotSymbol(icon, filled: selected, context: .row)
+                    PilotSymbol(icon, filled: selected && icon.stateFillName != nil, context: .row)
                         .foregroundStyle(selected ? Theme.foreground : Theme.mutedForeground)
                         .frame(width: 16)
                     Text(title)

@@ -386,38 +386,43 @@ struct UpdateSettings: View {
     @StateObject private var editor = UpdateTokenEditor()
 
     var body: some View {
-        Section {
-            LabeledContent {
+        SettingsSection {
+            SettingsRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(updater.repository?.name ?? "Development build").font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                    Text(updater.status).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+            } control: {
                 Button("Check for Updates…") { Task { await updater.check() } }.disabled(!updater.canCheck)
-            } label: {
-                Text(updater.repository?.name ?? "Development build")
-                Text(updater.status).textSelection(.enabled)
             }
-            Toggle(isOn: $updater.automaticChecks) {
-                Text("Check automatically every hour")
-                Text("Updates wait for active tool calls, pause agents, then restart Pilot and pilotd. Unfinished chats resume automatically. Terminal shells close.")
-            }
-            .disabled(!updater.configured)
+            SettingsToggle("Check automatically every hour",
+                           detail: "Updates wait for active tool calls, pause agents, then restart Pilot and pilotd. Unfinished chats resume automatically. Terminal shells close.",
+                           isOn: $updater.automaticChecks)
+                .disabled(!updater.configured)
         }
-        Section {
+        SettingsSection("Access", explanation: "Pilot first uses gh auth token from your login-shell PATH. If gh is unavailable or cannot access this repository, enter a fine-grained token with Contents: Read-only access. Only tokens you enter are stored in Keychain.") {
             if updater.accessSource == .githubCLI && !editor.showingTokenField {
-                LabeledContent {
+                SettingsRow("Using gh authentication", detail: "Pilot reads gh auth token from your login shell.") {
                     Button("Use a Token Instead…") { editor.showingTokenField = true }
                         .disabled(!updater.configured || !updater.credentialsEditable)
-                } label: {
-                    Text("Using gh authentication")
-                    Text("Pilot reads gh auth token from your login shell.")
                 }
             } else {
                 if updater.accessSource == .savedToken {
-                    LabeledContent("Using a saved token") {
+                    SettingsRow("Using a saved token") {
                         Button("Remove Saved Token") { updater.removeToken() }
                             .disabled(!updater.configured || !updater.credentialsEditable)
                     }
                 }
-                SecureField("GitHub token", text: $editor.token, prompt: Text("Fine-grained token"))
-                    .disabled(!updater.configured || !updater.credentialsEditable)
-                HStack {
+                SettingsRow("GitHub token") {
+                    SecureField("GitHub token", text: $editor.token, prompt: Text("Fine-grained token"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 240)
+                }
+                .disabled(!updater.configured || !updater.credentialsEditable)
+                SettingsRow { HStack {
                     if updater.accessSource == .githubCLI {
                         Button("Use gh Authentication") {
                             editor.token = ""
@@ -432,12 +437,8 @@ struct UpdateSettings: View {
                     Button("Save Token") {
                         Task { if await updater.saveToken(editor.token) { editor.token = "" } }
                     }.disabled(editor.token.isEmpty || !updater.configured || !updater.credentialsEditable)
-                }
+                } }
             }
-        } header: {
-            Text("Access")
-        } footer: {
-            SettingsFooter("Pilot first uses gh auth token from your login-shell PATH. If gh is unavailable or cannot access this repository, enter a fine-grained token with Contents: Read-only access. Only tokens you enter are stored in Keychain.")
         }
     }
 }

@@ -120,6 +120,8 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
   status colours. A focus ring on the selected row shows when keyboard navigation belongs to the list.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
+- Settings pages use the same reading column: `SettingsSection` (heading, explanation above the rows) and
+  `SettingsRow` hairline rows with native controls trailing (`Settings.swift`), never grouped forms.
 - Pages, sheets and panes share their chrome (`PageComponents.swift`): `PageHeader` for page titles,
   `InspectorPaneHeader` for inspector panes (no per-pane close button), `EmptyStateView` for empty or failed
   panes, `DisclosureChevron`, `ListToggle` ("Show all N" / "Show fewer") and `MetaText` for quiet metadata

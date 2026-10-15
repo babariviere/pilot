@@ -1164,10 +1164,9 @@ enum Snapshot {
         let editor = ProjectEditor()
         editor.load(projects[0])
         editor.addChannel(SlackChannelOption(id: "G0INCIDNT1", name: "incidents", isPrivate: true))
-        await render(Form { TrackingSettingsSection(project: projects[0], editor: editor) }.formStyle(.grouped),
+        await render(SettingsColumn { TrackingSettingsSection(project: projects[0], editor: editor) },
                      size: CGSize(width: 560, height: 520), to: directory.appending(path: "tracking-settings.png"))
-        await render(Form { TrackingSettingsSection(project: projects[0], editor: editor, channelQuery: "re") }
-            .formStyle(.grouped),
+        await render(SettingsColumn { TrackingSettingsSection(project: projects[0], editor: editor, channelQuery: "re") },
                      size: CGSize(width: 560, height: 640), to: directory.appending(path: "tracking-settings-search.png"))
 
         // Settings while signed out of Linear, and while Slack waits for the browser.
@@ -1183,7 +1182,7 @@ enum Snapshot {
             ], items: [],
             teams: TrackingLookup(status: .signInRequired, error: "Sign in required", signInCommand: "pi mcp login linear"),
             myChannels: channels, searchChannels: channels))
-        await render(Form { TrackingSettingsSection(project: projects[0], editor: editor) }.formStyle(.grouped),
+        await render(SettingsColumn { TrackingSettingsSection(project: projects[0], editor: editor) },
                      size: CGSize(width: 560, height: 560), to: directory.appending(path: "tracking-settings-signin.png"))
 
         // The project page's Current cycle and Tracked sections: live rows, no cycle, sign-in and nothing attached.

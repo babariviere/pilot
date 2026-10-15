@@ -535,10 +535,45 @@ struct RowButtonStyle: ButtonStyle {
     }
 }
 
+/// Outlined red button for a destructive action that ends a page, such as Remove Project in project settings: red
+/// label (the text-weight `Theme.error`), a red hairline outline and no fill at rest, a soft red fill while pressed.
+/// Keep it away from the page's primary action, beside one line saying what it does, and confirm before acting.
+/// Apply it with `destructiveOutlineButtonStyle()`, which also draws the keyboard focus ring.
+struct DestructiveOutlineButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        DestructiveOutlineButton(configuration: configuration)
+    }
+
+    private struct DestructiveOutlineButton: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            let shape = RoundedRectangle(cornerRadius: Theme.Radius.row)
+            configuration.label
+                .font(.pilot(.label, weight: .medium))
+                .foregroundStyle(Theme.error)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(shape.fill(Theme.destructive.opacity(configuration.isPressed ? 0.08 : 0)))
+                .overlay(shape.strokeBorder(Theme.destructive.opacity(0.55), lineWidth: 1))
+                .opacity(isEnabled ? 1 : 0.4)
+                .contentShape(shape)
+                .focusRing(isFocused, outset: 2)
+        }
+    }
+}
+
 extension View {
     /// Fill-less row action. See `RowIconButtonStyle`.
     func rowIconButtonStyle(hoverTint: Color = Theme.foreground, size: CGFloat = 20) -> some View {
         buttonStyle(RowIconButtonStyle(hoverTint: hoverTint, size: size)).focusEffectDisabled()
+    }
+
+    /// Red outline button for a destructive action at the end of a page. See `DestructiveOutlineButtonStyle`.
+    func destructiveOutlineButtonStyle() -> some View {
+        buttonStyle(DestructiveOutlineButtonStyle()).focusEffectDisabled()
     }
 
     /// A whole-row button with the row focus ring. See `RowButtonStyle`.

@@ -43,7 +43,7 @@ struct TrackingSettingsSection: View {
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
-        Section {
+        SettingsSection("Linear and Slack", explanation: "Pilot reads Linear and Slack through your pi MCP servers. Confirming Start chat or Start mission applies the In progress mapping, or adds an eyes reaction on Slack. The other Linear mappings are saved only. Pilot never posts messages or comments, and never starts work on its own.") {
             LinearTeamPicker(selection: $editor.linearTeam,
                              stateMappings: $editor.linearStateMappings,
                              source: client.source(projectId: project.id, kind: .linear),
@@ -51,10 +51,6 @@ struct TrackingSettingsSection: View {
             SlackChannelsEditor(editor: editor,
                                 source: client.source(projectId: project.id, kind: .slack),
                                 saved: Set(project.tracking?.slackChannels ?? []), query: channelQuery)
-        } header: {
-            Text("Linear and Slack")
-        } footer: {
-            SettingsFooter("Pilot reads Linear and Slack through your pi MCP servers. Confirming Start chat or Start mission applies the In progress mapping, or adds an eyes reaction on Slack. The other Linear mappings are saved only. Pilot never posts messages or comments, and never starts work on its own.")
         }
         if !editor.slackChannels.isEmpty || !editor.slackLabels.isEmpty {
             SlackLabelsSection(project: project, editor: editor)
@@ -77,7 +73,13 @@ struct LinearTeamPicker: View {
     private var teams: [LinearTeamOption] { lookup?.items ?? [] }
 
     var body: some View {
-        LabeledContent {
+        SettingsRow {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Linear team").font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } control: {
             HStack(spacing: 6) {
                 if loading { ProgressView().controlSize(.small) }
                 Picker("Linear team", selection: binding) {
@@ -93,16 +95,15 @@ struct LinearTeamPicker: View {
                 .labelsHidden()
                 .fixedSize()
             }
-        } label: {
-            Text("Linear team")
-            Text(detail).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
         }
         .task { await load(force: false) }
         .onChange(of: signIns[.linear]?.state) { _, state in
             if state == .done { Task { await load(force: true) } }
         }
         if let lookup, lookup.status == .error {
-            TrackingLookupProblem(service: "Linear", lookup: lookup) { Task { await load(force: true) } }
+            SettingsRow {
+                TrackingLookupProblem(service: "Linear", lookup: lookup) { Task { await load(force: true) } }
+            }
         }
         SourceAccountRow(kind: .linear, label: "Linear",
                          needsSignIn: lookup?.status == .signInRequired || source?.status == .signInRequired,
@@ -180,29 +181,30 @@ struct SlackChannelsEditor: View {
     }
 
     var body: some View {
-        LabeledContent {
-            EmptyView()
-        } label: {
-            Text("Slack channels")
-            Text(editor.slackChannels.isEmpty ? "Add the channels to follow. New messages are sorted into bugs, questions and requests by a small model."
-                : "Each channel is read from the moment you add it, with a short look back.")
-                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+        SettingsRow {
+            SettingsRowLabel(title: "Slack channels",
+                             detail: editor.slackChannels.isEmpty ? "Add the channels to follow. New messages are sorted into bugs, questions and requests by a small model."
+                                 : "Each channel is read from the moment you add it, with a short look back.")
         }
         ForEach(editor.slackChannels) { channel in
-            SlackChannelRow(channel: channel, status: source?.channels?.first { $0.id == channel.id },
-                            saved: saved.contains(channel.id)) { editor.removeChannel(channel.id) }
+            SettingsRow {
+                SlackChannelRow(channel: channel, status: source?.channels?.first { $0.id == channel.id },
+                                saved: saved.contains(channel.id)) { editor.removeChannel(channel.id) }
+            }
         }
-        HStack(spacing: 6) {
-            PilotSymbol(PilotIcon.search).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
-            TextField("Add channel", text: $query, prompt: Text("Search channels to add"))
-                .textFieldStyle(.plain)
-                .labelsHidden()
-                .focused($focused)
-                .onSubmit { if let first = candidates.first { add(first) } }
-            if searching { ProgressView().controlSize(.small) }
+        SettingsRow {
+            HStack(spacing: 6) {
+                PilotSymbol(PilotIcon.search).foregroundStyle(Theme.mutedForeground).accessibilityHidden(true)
+                TextField("Add channel", text: $query, prompt: Text("Search channels to add"))
+                    .textFieldStyle(.plain)
+                    .labelsHidden()
+                    .focused($focused)
+                    .onSubmit { if let first = candidates.first { add(first) } }
+                if searching { ProgressView().controlSize(.small) }
+            }
         }
         if focused || !query.isEmpty {
-            suggestions
+            SettingsRow { suggestions }
         }
         SourceAccountRow(kind: .slack, label: "Slack",
                          needsSignIn: mine?.status == .signInRequired || results?.status == .signInRequired
@@ -383,99 +385,146 @@ struct SlackLabelsSection: View {
     var body: some View {
         let names = editor.slackLabels.map(\.label.name).filter { !$0.isEmpty }
         let duplicates = Set(names.filter { name in names.filter { $0 == name }.count > 1 })
-        Section {
+        SettingsSection("Slack labels", explanation: "The classifier gives each message at most one label, using its description and your corrections in Slack triage.") {
             if editor.slackLabels.isEmpty {
-                Text("No labels yet. Add one for each kind of message you sort, such as an owning team.")
-                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                SettingsRow {
+                    Text("No labels yet. Add one for each kind of message you sort, such as an owning team.")
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                }
             }
             ForEach($editor.slackLabels) { $label in
                 SlackLabelRow(label: $label, duplicate: duplicates.contains(label.label.name)) {
                     editor.removeLabel(label.id)
                 }
             }
-            HStack {
-                Button("Add Label") { editor.addLabel() }
-                    .disabled(editor.slackLabels.count >= 50)
-                Spacer()
+            SettingsRow {
+                Button { editor.addLabel() } label: {
+                    Label("Add label", icon: PilotIcon.add)
+                        .font(.pilot(.label))
+                        .contentShape(Rectangle())
+                }
+                .rowButtonStyle(outset: 2)
+                .foregroundStyle(Theme.mutedForeground)
+                .disabled(editor.slackLabels.count >= 50)
             }
             SlackCorrectionsList(projectId: project.id)
-        } header: {
-            Text("Slack labels")
-        } footer: {
-            SettingsFooter("The classifier gives each message at most one label, using its description and your corrections in Slack triage.")
         }
     }
 }
 
+/// A label: its name and a description that wraps to two lines, the effect menu and a remove button revealed on
+/// hover (and under keyboard focus, and as a VoiceOver action).
 private struct SlackLabelRow: View {
     @Binding var label: EditableSlackLabel
     let duplicate: Bool
     let remove: () -> Void
+    @State private var hovered = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
+        SettingsRow {
             VStack(alignment: .leading, spacing: 3) {
                 TextField("Name", text: $label.name, prompt: Text("Label name"))
                     .textFieldStyle(.plain).labelsHidden()
                     .font(.pilot(.body, weight: .medium))
                 TextField("Description", text: $label.description,
-                          prompt: Text("Which messages get this label, in one line"))
+                          prompt: Text("Which messages get this label, in one sentence"), axis: .vertical)
                     .textFieldStyle(.plain).labelsHidden()
+                    .lineLimit(1 ... 2)
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 if duplicate {
                     Text("Another label has this name.").font(.pilot(.caption)).foregroundStyle(Theme.error)
                 }
             }
-            Spacer(minLength: 8)
-            Picker("Effect", selection: $label.effect) {
-                Text("None").tag(SlackLabelEffect.none)
-                Text("Hide from Inbox").tag(SlackLabelEffect.hide)
-                Text("Close").tag(SlackLabelEffect.close)
+        } control: {
+            HStack(spacing: 6) {
+                Menu {
+                    Picker("Effect", selection: $label.effect) {
+                        ForEach(SlackLabelEffect.allCases, id: \.self) { effect in
+                            Text(effect.settingsTitle).tag(effect)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    Text("Effect: \(label.effect.settingsTitle)")
+                }
+                .menuStyle(.borderlessButton)
+                .font(.pilot(.label))
+                .foregroundStyle(Theme.mutedForeground)
+                .fixedSize()
+                .accessibilityLabel("Label effect, \(label.effect.settingsTitle)")
+                .help("Hide keeps messages out of the Inbox. Close dismisses them unless you set a status. Both stay in Slack triage behind Show hidden.")
+                Button(action: remove) { PilotSymbol(PilotIcon.remove) }
+                    .rowIconButtonStyle(hoverTint: Theme.destructive)
+                    .help("Remove this label")
+                    .accessibilityLabel(label.name.isEmpty ? "Remove label" : "Remove \(label.name)")
+                    .revealed(hovered)
             }
-            .pickerStyle(.menu).labelsHidden().controlSize(.small)
-            .frame(width: 140)
-            .accessibilityLabel("Label effect")
-            .help("Hide keeps messages out of the Inbox. Close dismisses them unless you set a status. Both stay in Slack triage behind Show hidden.")
-            Button(action: remove) { PilotSymbol(PilotIcon.remove) }
-                .rowIconButtonStyle(hoverTint: Theme.destructive)
-                .help("Remove this label")
-                .accessibilityLabel(label.name.isEmpty ? "Remove label" : "Remove \(label.name)")
         }
+        .contentShape(Rectangle())
+        .onHover { hovered = $0 }
         .accessibilityElement(children: .contain)
+        .accessibilityAction(named: label.name.isEmpty ? "Remove label" : "Remove \(label.name)", remove)
     }
 }
 
-/// The latest triage corrections, newest first. Read-only; they change as the user reclassifies messages.
+extension SlackLabelEffect {
+    /// The effect's name in the settings menu ("Effect: None").
+    var settingsTitle: String {
+        switch self {
+        case .none: "None"
+        case .hide: "Hide from Inbox"
+        case .close: "Close"
+        }
+    }
+}
+
+/// The latest triage corrections, newest first, five at a time with "Show N more". Read-only; they change as the user
+/// reclassifies messages.
 private struct SlackCorrectionsList: View {
     let projectId: String
     @ObservedObject private var client = AppModel.shared.client
     @State private var corrections: [SlackCorrection]?
     @State private var failed = false
+    @State private var expanded = false
     private static let shown = 5
 
     var body: some View {
         let items = corrections ?? []
-        LabeledContent {
-            EmptyView()
-        } label: {
-            Text("Recent corrections")
+        let visible = expanded ? items : Array(items.prefix(Self.shown))
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Recent corrections").font(.pilot(.body, weight: .medium)).foregroundStyle(Theme.foreground)
+                .accessibilityAddTraits(.isHeader)
             Text(failed ? "Couldn't load your corrections."
                 : items.isEmpty ? "Changes you make in Slack triage appear here. The latest 20 teach the classifier."
                 : "The latest 20 teach the classifier.")
                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                .fixedSize(horizontal: false, vertical: true)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.top, 18)
+        .padding(.bottom, 8)
         .task(id: projectId) { await load() }
-        ForEach(Array(items.prefix(Self.shown).enumerated()), id: \.offset) { _, correction in
-            HStack(spacing: 8) {
-                Text(correction.summary).lineLimit(1).truncationMode(.tail)
-                Spacer(minLength: 8)
+        ForEach(Array(visible.enumerated()), id: \.offset) { _, correction in
+            SettingsRow {
+                Text(correction.summary).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                    .lineLimit(1).truncationMode(.tail)
+            } control: {
                 Text(SlackTriageText.correction(correction.values)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1).fixedSize()
             }
             .accessibilityElement(children: .combine)
         }
         if items.count > Self.shown {
-            Text("And \(items.count - Self.shown) more").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+            SettingsRow {
+                Button { expanded.toggle() } label: {
+                    Text(expanded ? "Show fewer" : "Show \(items.count - Self.shown) more")
+                        .font(.pilot(.caption))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .contentShape(Rectangle())
+                }
+                .rowButtonStyle(outset: 2)
+            }
         }
     }
 
@@ -503,21 +552,23 @@ private struct SourceAccountRow: View {
     var body: some View {
         let state = TrackingAccountText.state(signIns[kind], needsSignIn: needsSignIn, connected: connected,
                                               purpose: purpose)
-        LabeledContent {
+        SettingsRow {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(label) account").font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                    if state.attention {
+                        PilotSymbol(PilotIcon.signInRequired).accessibilityHidden(true)
+                    }
+                    Text(state.text).fixedSize(horizontal: false, vertical: true)
+                }
+                .font(.pilot(.caption))
+                .foregroundStyle(state.attention ? Theme.blocked : Theme.mutedForeground)
+            }
+        } control: {
             HStack(spacing: 6) {
                 if state.waiting { ProgressView().controlSize(.small) }
                 SourceSignInButton(kind: kind, label: label, again: !needsSignIn)
             }
-        } label: {
-            Text("\(label) account")
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                if state.attention {
-                    PilotSymbol(PilotIcon.signInRequired).accessibilityHidden(true)
-                }
-                Text(state.text).fixedSize(horizontal: false, vertical: true)
-            }
-            .font(.pilot(.caption))
-            .foregroundStyle(state.attention ? Theme.blocked : Theme.mutedForeground)
         }
         .accessibilityElement(children: .contain)
     }
