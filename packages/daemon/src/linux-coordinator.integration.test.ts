@@ -207,6 +207,17 @@ assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
 		);
 	}
 	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") await bindFixture(mounted, driver);
+	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") {
+		const ancestorAlias = join(root, "ancestor-alias");
+		await mkdir(ancestorAlias);
+		await bindFixture(
+			ancestorAlias,
+			`import {forkLinuxCoordinator} from ${JSON.stringify(module)};import {readFile} from 'node:fs/promises';import assert from 'node:assert/strict';
+const credentials=JSON.parse(await readFile(${JSON.stringify(capabilityFile)},'utf8'));
+await assert.rejects(forkLinuxCoordinator(${JSON.stringify(bindEntry)},${JSON.stringify(view)},{storageDir:${JSON.stringify(join(ancestorAlias, "durable"))},agentDir:${JSON.stringify(agentDir)},credentials}),/alias.*overlap/);
+await assert.rejects(readFile(${JSON.stringify(join(source, "durable"))}),{code:'ENOENT'});assert.equal(await readFile(${JSON.stringify(file)},'utf8'),'protected');`,
+		);
+	}
 	// Never recursively clean a legacy auth path on the host before isolation: it could itself
 	// be a bind alias. These unreleased snapshots are unused, not a reason to traverse host state.
 	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") {

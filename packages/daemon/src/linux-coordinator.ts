@@ -1,7 +1,20 @@
 /** Linux coordinators require a verified bubblewrap boundary. No binary-presence or chmod fallback. */
 import { type ChildProcess, execFile, fork } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, opendir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	lstat,
+	mkdir,
+	mkdtemp,
+	open,
+	opendir,
+	readFile,
+	readlink,
+	realpath,
+	rm,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -27,6 +40,60 @@ function within(path: string, parent: string): boolean {
 	return part === "" || (!part.startsWith("..") && !isAbsolute(part));
 }
 
+/** Compare kernel filesystem coordinates, not just names: a bind above a private root aliases too.
+ * Missing leaves are resolved via their existing ancestor, before mkdir can modify a source alias.
+ */
+async function validateOrigins(writable: string[], protectedPaths: string[]): Promise<void> {
+	if (process.platform !== "linux") return;
+	const decode = (s: string) =>
+		s.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(Number.parseInt(octal, 8)));
+	const mounts = new Map(
+		(await readFile("/proc/self/mountinfo", "utf8"))
+			.trim()
+			.split("\n")
+			.map((line) => {
+				const f = line.split(" ");
+				return [f[0]!, { device: f[2]!, root: decode(f[3]!), path: decode(f[4]!) }] as const;
+			}),
+	);
+	async function origin(path: string) {
+		const requested = resolve(path);
+		let ancestor = requested;
+		for (;;) {
+			try {
+				if ((await realpath(ancestor)) !== ancestor)
+					throw new Error("Coordinator private paths must have canonical ancestors");
+				const fd = await open(ancestor, 0x200000); // Linux O_PATH, as in the launch guard.
+				try {
+					const id = /^mnt_id:\s+(\d+)$/m.exec(await readFile(`/proc/self/fdinfo/${fd.fd}`, "utf8"))?.[1];
+					const mount = mounts.get(id ?? "");
+					if (!mount || !within(ancestor, mount.path))
+						throw new Error("Cannot verify coordinator path mount origin");
+					return { device: mount.device, path: resolve(mount.root, relative(mount.path, requested)) };
+				} finally {
+					await fd.close();
+				}
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "ENOENT" || ancestor === "/") throw error;
+				ancestor = dirname(ancestor);
+			}
+		}
+	}
+	const protectedOrigins = await Promise.all(protectedPaths.map(async (path) => origin(await realpath(path))));
+	const seen: Awaited<ReturnType<typeof origin>>[] = [];
+	for (const path of writable) {
+		const value = await origin(path);
+		if (
+			[...protectedOrigins, ...seen].some(
+				(other) =>
+					other.device === value.device && (within(value.path, other.path) || within(other.path, value.path)),
+			)
+		)
+			throw new Error("Coordinator private filesystem alias overlaps protected or private state");
+		seen.push(value);
+	}
+}
+
 async function bubblewrap(): Promise<string> {
 	// Only system-owned installation locations, never an executable supplied by the workspace/PATH.
 	for (const path of ["/usr/bin/bwrap", "/bin/bwrap"]) {
@@ -43,6 +110,7 @@ async function bubblewrap(): Promise<string> {
 
 /** Reject broad roots, symlink roots, shared directories and pre-existing hardlink write aliases. */
 export async function validateCoordinatorWrites(writable: string[], protectedPaths: string[]): Promise<string[]> {
+	await validateOrigins(writable, protectedPaths);
 	const protectedCanonical = await Promise.all(protectedPaths.map((path) => realpath(path)));
 	const mounts =
 		process.platform === "linux"
@@ -178,20 +246,21 @@ export async function forkLinuxCoordinator(
 		if ((await realpath(sessionDir)) !== resolve(sessionDir))
 			throw new Error("Coordinator session directory is not canonical");
 		const artifacts = join(sessionDir, "artifacts");
+		await validateOrigins([view.scratch, state.storageDir, artifacts], [...view.protectedPaths, state.agentDir]);
 		for (const path of [state.storageDir, artifacts]) await mkdir(path, { recursive: true, mode: 0o700 });
 		const writable = await validateCoordinatorWrites(
 			[view.scratch, state.storageDir, artifacts],
 			view.protectedPaths,
 		);
-		const sentinel = join(sessionDir, "coordinator-isolation-sentinel");
+		const sentinel = join(sessionDir, `coordinator-isolation-${randomUUID()}`);
 		const agent = await realpath(state.agentDir);
 		const sources = await Promise.all(view.protectedPaths.map((path) => realpath(path)));
 		if ([...sources, ...writable].some((path) => within(path, agent) || within(agent, path)))
 			throw new Error("Canonical agent configuration overlaps protected source or writable private state");
-		await writeFile(sentinel, "protected", { mode: 0o600 });
+		await writeFile(sentinel, "protected", { mode: 0o600, flag: "wx" });
 		const config = await boundary(writable, view.protectedPaths, sentinel);
 		const args = argumentsFor(writable, view.scratch);
-		return fork(entry, [], {
+		const child = fork(entry, [], {
 			cwd: view.scratch,
 			execPath: executable,
 			execArgv: [...args, process.execPath, guard, JSON.stringify(config)],
@@ -210,6 +279,13 @@ export async function forkLinuxCoordinator(
 			serialization: "advanced",
 			stdio: ["ignore", "inherit", "inherit", "ipc"],
 		});
+		child.once("exit", () => {
+			void rm(sentinel, { force: true }).catch(() => {});
+		});
+		child.once("error", () => {
+			void rm(sentinel, { force: true }).catch(() => {});
+		});
+		return child;
 	} catch (error) {
 		throw new Error(`Linux coordinator isolation: ${error instanceof Error ? error.message : error}. ${guidance}`);
 	}
