@@ -270,7 +270,7 @@ extension PilotIcon {
         case .inReview: "Waiting on review."
         case .draft: "A draft pull request or a decision proposal."
         case .unset: "No state yet: a running tool, an unknown event, no mission health."
-        case .working: "Live work uses the shared DitherRipple in icon form, never an SF Symbol or braille spinner."
+        case .working: "Live work uses the shared DotGridSpinner (4×4 dot grid), never an SF Symbol or a braille spinner."
         case .scheduled: "A scheduled item."
         case .scheduleFailed: "A scheduled item that could not start."
         case .chats: "A list of chats or channels."
@@ -396,7 +396,9 @@ struct PilotSymbol: View {
 
     var body: some View {
         if icon == .working {
-            DitherRipple(markSize: context.markSize).accessibilityLabel("Working").accessibilityHidden(false)
+            DotGridSpinner()
+                .frame(width: context.markSize, height: context.markSize)
+                .accessibilityLabel("Working").accessibilityHidden(false)
         } else if icon == .branch || icon == .pullRequest {
             PilotMarkIcon(mark: .gitBranch, context: context)
         } else if let name = icon.systemName(filled: filled) {
@@ -422,7 +424,7 @@ extension Label where Title == Text, Icon == PilotSymbol {
 /// - pullRequestMerged, pullRequestClosed: terminal pull request states (`PullRequestGlyph`, octicons).
 ///
 /// Other custom images are artwork or animation, not icons, and stay outside this file: the plane app and
-/// menu bar icon (`PlaneImage`), the working ripple (`DitherRipple`), dithered art (`DitherSky`,
+/// menu bar icon (`PlaneImage`), the working spinner (`DotGridSpinner`), dithered art (`DitherSky`,
 /// `DitherScene`, `DitherCorner`) and image attachment previews.
 enum PilotMark: CaseIterable {
     case github, linear, slack, gitBranch, pullRequestMerged, pullRequestClosed

@@ -97,3 +97,53 @@ import Testing
     let large = DitherCornerRenderer.coverage(.needsYou, u: 25, v: 12.5, frame: 0, recede: 0, extent: 2.5)
     #expect(abs(small - large) < 0.000_001)
 }
+
+@Test func composerCornerShowsWorkOnly() {
+    func chat(state: String, working: Bool?, jobs: [SessionJob]? = nil, sleepPaused: Bool = false) -> SessionSummary {
+        var session = SessionSummary(id: "c", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1, state: state,
+                                     runningJobs: jobs, working: working)
+        session.sleepPaused = sleepPaused ? true : nil
+        return session
+    }
+    let tests = [SessionJob(id: "t", name: "Tests", startedAt: 0, outputPath: "/tmp/t.log")]
+    // The agent's own run: the full working ripple, with or without jobs.
+    #expect(ComposerCorner(agentWorking: true, session: nil) == ComposerCorner(signal: .working))
+    #expect(ComposerCorner(agentWorking: true, session: chat(state: "working", working: true, jobs: tests))
+        == ComposerCorner(signal: .working))
+    // Idle agent, background jobs running: the background ripple.
+    let waiting = ComposerCorner(agentWorking: false, session: chat(state: "idle", working: true, jobs: tests))
+    #expect(waiting == ComposerCorner(signal: .working, background: true))
+    #expect(waiting.background)
+    // Idle: nothing, including a paused chat whose jobs still exist.
+    #expect(ComposerCorner(agentWorking: false, session: chat(state: "idle", working: false)).signal == nil)
+    #expect(ComposerCorner(agentWorking: false, session: nil).signal == nil)
+    #expect(ComposerCorner(agentWorking: false, session: chat(state: "idle", working: true, jobs: tests, sleepPaused: true))
+        .signal == nil)
+    // Background only applies to working.
+    #expect(!ComposerCorner(signal: nil, background: true).background)
+}
+
+@MainActor @Test func composerCornerCacheStaysBounded() throws {
+    let extent = ComposerCorner.extent
+    let size = DitherCorner.grid(extent: extent)
+    let first = try #require(DitherCornerRenderer.image(for: DitherCornerRequest(signal: .working, previous: nil, frame: 0,
+                                                                                 extent: extent)))
+    #expect(first.width == size.columns && first.height == size.rows)
+    let before = DitherCornerRenderer.cachedCount
+    // Two full clock loops of both ripples add at most one image per distinct loop frame.
+    for _ in 0 ..< 2 {
+        for frame in 0 ..< 2 * DitherCorner.backgroundFrameCount {
+            for background in [false, true] {
+                let request = DitherCornerRequest(signal: .working, previous: nil,
+                                                  frame: DitherCorner.loopFrame(frame, background: background),
+                                                  extent: extent, background: background)
+                _ = DitherCornerRenderer.image(for: request)
+            }
+        }
+    }
+    #expect(DitherCornerRenderer.cachedCount - before <= DitherCorner.frameCount + DitherCorner.backgroundFrameCount)
+    // Dissolves are one-offs and never enter the cache.
+    let after = DitherCornerRenderer.cachedCount
+    _ = DitherCornerRenderer.image(for: DitherCornerRequest(signal: nil, previous: .working, frame: 0, mix: 0.4, extent: extent))
+    #expect(DitherCornerRenderer.cachedCount == after)
+}

@@ -4,7 +4,7 @@ import SwiftUI
 import Testing
 @testable import Pilot
 
-@Test @MainActor func workingRippleChangesFramesWhileVisible() async throws {
+@Test @MainActor func workingSpinnerChangesFramesWhileVisible() async throws {
     _ = NSApplication.shared
     if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { return }
     let hosting = NSHostingView(rootView: SessionStatusIcon(status: .working)

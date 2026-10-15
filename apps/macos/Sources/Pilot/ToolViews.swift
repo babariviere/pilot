@@ -3,7 +3,8 @@ import SwiftUI
 
 /// A turn's thinking, notes and tool calls as one quiet line ("Worked for 3 min · read 3 files, ran 2 commands").
 /// Open while the turn runs, with its latest steps visible; folded once it ends, unless its last step failed.
-/// Steps read as sentences on a thin guide line; done steps draw no mark, running ones ripple and failed ones are red.
+/// Steps read as sentences on a thin guide line; done steps draw no mark, running ones show the dot grid spinner and
+/// failed ones are red.
 /// Artifacts a step published stay visible while the line is folded.
 struct WorkGroupView: View {
     @Environment(\.pilotFonts) private var fonts
@@ -117,7 +118,7 @@ private struct WorkStepView: View {
     }
 }
 
-/// The leading mark of a step: its tool icon, a small ripple while it runs, a red cross when it failed.
+/// The leading mark of a step: its tool icon, the dot grid spinner while it runs, a red cross when it failed.
 private struct StepMark: View {
     let icon: PilotIcon
     var status: ToolStatus = .done
@@ -127,7 +128,7 @@ private struct StepMark: View {
         Group {
             switch status {
             case .running where active, .pending where active:
-                DitherRipple(markSize: 12)
+                DotGridSpinner()
             case .error:
                 PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.destructive)
             default:
