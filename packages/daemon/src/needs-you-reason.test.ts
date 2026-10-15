@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { SessionSummary, SubscriptionUsage } from "@pilot/protocol";
-import { reasonLine, sessionNeedsYouReason, subscriptionLimit } from "./needs-you-reason.ts";
+import type {
+	PullRequestReadinessReason,
+	SessionPullRequest,
+	SessionSummary,
+	SubscriptionUsage,
+} from "@pilot/protocol";
+import { reasonLine, sessionNeedsYouReason, stuckPullRequestReason, subscriptionLimit } from "./needs-you-reason.ts";
 
 const session = (extra: Partial<SessionSummary>): SessionSummary => ({
 	id: "s",
@@ -11,6 +16,70 @@ const session = (extra: Partial<SessionSummary>): SessionSummary => ({
 	createdAt: 1,
 	updatedAt: 1,
 	...extra,
+});
+
+test("stuck PR details use the worst actionable problem across all owned heads", () => {
+	const pr = (number: number, reasons: PullRequestReadinessReason[]): SessionPullRequest => ({
+		number,
+		url: `https://github.com/o/r/pull/${number}`,
+		title: "Fix",
+		state: "open",
+		checkedAt: 1,
+		readiness: { state: "blocked", checkedAt: 1, reasons },
+	});
+	const problems: [PullRequestReadinessReason, string][] = [
+		[{ code: "conflicts" }, "merge conflicts"],
+		[{ code: "failing_checks", names: ["test"] }, "checks failing"],
+		[{ code: "behind", value: "feat/base" }, "diverged from feat/base"],
+		[{ code: "unresolved_comments", count: 2 }, "2 review threads"],
+	];
+	for (const [index, [problem, detail]] of problems.entries()) {
+		const heads = problems.slice(index).map(([reason], i) => pr(10 + i, [reason]));
+		assert.deepEqual(stuckPullRequestReason(heads.reverse()), { kind: "pr_stuck", detail: `PR #10 · ${detail}` });
+		assert.deepEqual(
+			stuckPullRequestReason([
+				pr(
+					10,
+					problems
+						.slice(index)
+						.map(([reason]) => reason)
+						.reverse(),
+				),
+			]),
+			{
+				kind: "pr_stuck",
+				detail: `PR #10 · ${detail}`,
+			},
+		);
+		assert.equal(stuckPullRequestReason([{ ...pr(10, [problem]), state: "closed" }]), undefined);
+	}
+	assert.deepEqual(
+		stuckPullRequestReason([{ ...pr(10, [{ code: "unresolved_comments", count: 1 }]), state: "draft" }]),
+		{
+			kind: "pr_stuck",
+			detail: "PR #10 · 1 review thread",
+		},
+	);
+	assert.equal(
+		stuckPullRequestReason([
+			pr(10, [
+				{ code: "draft" },
+				{ code: "checks_pending" },
+				{ code: "review_required" },
+				{ code: "changes_requested" },
+				{ code: "behind", value: "BEHIND" },
+				{ code: "unresolved_comments", count: 0 },
+			]),
+		]),
+		undefined,
+	);
+});
+
+test("failure and asks beat stuck PRs, which beat not-reviewed without duplicating the row", () => {
+	const attentionReason = { kind: "pr_stuck" as const, detail: "PR #10 · checks failing" };
+	assert.equal(sessionNeedsYouReason(session({ attentionReason, outcome: "failed" })).kind, "failed");
+	assert.equal(sessionNeedsYouReason(session({ attentionReason, outcome: "question" })).kind, "asks");
+	assert.deepEqual(sessionNeedsYouReason(session({ attentionReason, outcome: "done" })), attentionReason);
 });
 
 test("attention reasons use the first nonempty error or question line and bound long text", () => {

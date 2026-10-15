@@ -6,6 +6,7 @@ public enum NeedsYouReasonKind: String, LenientStringEnum {
     case notReviewed = "not_reviewed"
     case couldntStart = "couldnt_start"
     case longJob = "long_job"
+    case prStuck = "pr_stuck"
     public static let fallback = NeedsYouReasonKind.notReviewed
 }
 
@@ -28,6 +29,7 @@ public struct NeedsYouReason: Codable, Hashable, Sendable {
         case .asks: return "Asks: \(detail ?? "A question is waiting for your answer")"
         case .couldntStart: return "Couldn't start: \(detail ?? "The scheduled chat could not start")"
         case .longJob: return "Long job: \(detail ?? "A background job has run for over an hour")"
+        case .prStuck: return detail ?? "A pull request needs your help"
         case .mission: return "Mission: \(detail ?? "A question or blocked task is waiting on you")"
         case .limit:
             guard let resumesAt, resumesAt.isFinite else { return "Limit reached" }
@@ -59,6 +61,7 @@ extension DashboardNeedsYouItem {
         case .scheduledFailed: return NeedsYouReason(kind: .couldntStart, detail: reason)
         case .unread: return NeedsYouReason(kind: .notReviewed)
         case .longJob: return NeedsYouReason(kind: .longJob, detail: reason)
+        case .prStuck: return NeedsYouReason(kind: .prStuck, detail: reason)
         }
     }
 
@@ -69,12 +72,13 @@ extension SessionSummary {
     /// Derive sidebar reasons from the same outcome fields pilotd uses. `unread` includes awaiting-reply rows.
     public func needsYouReason(unread: Bool, now: Date = Date()) -> NeedsYouReason? {
         guard signal(unread: unread)?.needsUser == true else { return nil }
-        if let attentionReason { return attentionReason }
+        if let attentionReason, attentionReason.kind == .longJob { return attentionReason }
         if status == .failed {
             if let limit = subscriptionLimit(now: now) { return limit }
             return NeedsYouReason(kind: .failed, detail: NeedsYouReason.firstLine(outcomeReason) ?? error)
         }
         if status == .question { return NeedsYouReason(kind: .asks, detail: outcomeReason) }
+        if let attentionReason { return attentionReason }
         return NeedsYouReason(kind: .notReviewed)
     }
 
@@ -123,6 +127,7 @@ extension InboxText {
             for (kind, number) in count.needsYouReasons ?? [:] { reasons[kind, default: 0] += number }
         }
         let vocabulary = [("long_job", "long job", "long jobs"), ("asks", "question", "questions"), ("failed", "failed", "failed"),
+                          ("pr_stuck", "stuck PR", "stuck PRs"),
                           ("not_reviewed", "not reviewed", "not reviewed"),
                           ("couldnt_start", "couldn't start", "couldn't start"),
                           ("limit", "limit reached", "limits reached"),

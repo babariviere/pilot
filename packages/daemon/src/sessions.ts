@@ -55,6 +55,7 @@ import { githubRepository, linkedPullRequest, type PullRequestProblems } from ".
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { ModelCatalog } from "./models.ts";
+import { stuckPullRequestReason } from "./needs-you-reason.ts";
 import { PullRequestAutoRebase } from "./pr-auto-rebase.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
 import { type ProjectStore, requireDirectory } from "./projects.ts";
@@ -4676,6 +4677,7 @@ export class SessionManager {
 			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
 			...(meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : {}),
+			...(!working ? this.stuckPullRequestAttention(meta) : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
@@ -4964,41 +4966,77 @@ export class SessionManager {
 		return promise;
 	}
 
-	/** `prs` defaults to the session's known PRs; health planning passes fresh ones not yet applied. */
-	private canFollowUp(
-		meta: SessionMeta,
-		prs = sessionPullRequests(meta),
-		eligible = (pr: SessionPullRequest) => this.ownsOpenPullRequest(meta, pr),
-	): boolean {
+	/** Transient admission gates shared by automatic follow-ups and stuck-PR attention. */
+	private pullRequestFollowUpIdle(meta: SessionMeta): boolean {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
 				!this.isMissionCoordinator(meta.id) &&
-				(meta.workspace || meta.boundPullRequests?.length) &&
-				meta.mode !== "ask" &&
 				meta.archivedAt === undefined &&
 				!meta.failure &&
 				!meta.inputError &&
 				!this.kernelBackingOff(meta.id) &&
 				!this.sleepPause &&
+				!meta.sleepPaused &&
+				!meta.updatePaused &&
+				!this.updateGate.paused &&
 				!meta.working &&
 				!meta.kernelRestartPending &&
 				!meta.initializing &&
 				!meta.preparing &&
 				!meta.workspaceRecovery &&
 				!this.workspaceMaintenance.has(meta.id) &&
-				!meta.cancelled &&
 				!meta.pending?.length &&
 				!this.starting.has(meta.id) &&
 				!this.sending.has(meta.id) &&
 				!this.parking.has(meta.id) &&
 				!this.changingModels.has(meta.id) &&
 				!this.archiveTransitions.has(meta.id) &&
-				(!worker || (worker.state === "idle" && worker.busy === false)) &&
-				prs.some(eligible) &&
-				(meta.prFollowUp?.attempts ?? 0) < 3 &&
-				Date.now() >= (meta.prFollowUp?.nextAttemptAt ?? 0),
+				(!worker || (worker.state === "idle" && worker.busy === false)),
 		);
+	}
+
+	private automaticPullRequestFollowUp(meta: SessionMeta): boolean {
+		return !!((meta.workspace || meta.boundPullRequests?.length) && meta.mode !== "ask" && !meta.cancelled);
+	}
+
+	/** `prs` defaults to the session's known PRs; health planning passes fresh ones not yet applied. */
+	private canFollowUp(
+		meta: SessionMeta,
+		prs = sessionPullRequests(meta),
+		eligible = (pr: SessionPullRequest) => this.ownsOpenPullRequest(meta, pr),
+	): boolean {
+		return (
+			this.automaticPullRequestFollowUp(meta) &&
+			(meta.prFollowUp?.attempts ?? 0) < 3 &&
+			Date.now() >= (meta.prFollowUp?.nextAttemptAt ?? 0) &&
+			this.pullRequestFollowUpIdle(meta) &&
+			!this.backgroundWorking(meta) &&
+			prs.some(eligible)
+		);
+	}
+
+	private stuckPullRequestAttention(meta: SessionMeta): Pick<SessionSummary, "attentionReason"> {
+		// summary() has already ruled out work, live jobs, their result gap and pending children.
+		// Failure/limit and an unanswered question win; PR trouble wins over a merely unread result.
+		if (
+			(!meta.pullRequest && !meta.previousPullRequests?.length) ||
+			meta.outcome === "failed" ||
+			meta.outcome === "question" ||
+			Date.now() < (meta.prFollowUp?.nextAttemptAt ?? 0) ||
+			!this.pullRequestFollowUpIdle(meta)
+		)
+			return {};
+		const exhausted = (meta.prFollowUp?.attempts ?? 0) >= 3;
+		const automatic = this.automaticPullRequestFollowUp(meta);
+		const attentionReason = stuckPullRequestReason(
+			sessionPullRequests(meta).filter(
+				(pr) =>
+					(exhausted || !automatic || (!pr.branch && pr.url !== meta.pullRequest?.url)) &&
+					this.ownsOpenPullRequest(meta, pr),
+			),
+		);
+		return attentionReason ? { attentionReason } : {};
 	}
 
 	private ownsOpenPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {

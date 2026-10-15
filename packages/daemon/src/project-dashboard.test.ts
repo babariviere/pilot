@@ -83,6 +83,39 @@ test("an empty project has empty bounded sections and no extension data", () => 
 	assert.deepEqual(dashboard.tracked, []);
 });
 
+test("stuck PRs survive reading, count once per chat and exclude every head from Ready to merge", () => {
+	const attentionReason = { kind: "pr_stuck" as const, detail: "PR #2 · checks failing" };
+	const chat = session({
+		id: "stuck",
+		missionId: "m",
+		outcome: "done",
+		outcomeAt: 1,
+		attentionReason,
+		// A healthy current head must not mask a stuck earlier PR in a stack.
+		pullRequest: pr(1, { readiness: { state: "ready", reasons: [], checkedAt: 10 } }),
+		pullRequests: [pr(2, { readiness: { state: "blocked", reasons: [{ code: "failing_checks" }], checkedAt: 10 } })],
+	});
+	const read = { isUnread: () => false, onChange: () => () => {} };
+	const f = service([chat], { reviews: read });
+	assert.deepEqual(f.service.counts().projects.p1, { working: 0, needsYou: 1, needsYouReasons: { pr_stuck: 1 } });
+	const dashboard = build({ sessions: [chat], missions: [mission({ id: "m" })], isUnread: () => false });
+	assert.equal(dashboard.needsYou.total, 1);
+	assert.equal(dashboard.needsYou.items[0]?.kind, "pr_stuck");
+	assert.deepEqual(dashboard.needsYou.items[0]?.attentionReason, attentionReason);
+	assert.equal(dashboard.missions.items[0]?.needsYou, 1);
+	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 0);
+	for (const outcome of ["failed", "question"] as const) {
+		chat.outcome = outcome;
+		const rows = f.service.inbox(undefined, 50).needsYou;
+		assert.equal(rows.total, 1);
+		assert.equal(rows.items[0]?.attentionReason.kind, outcome === "failed" ? "failed" : "asks");
+	}
+	chat.outcome = "done";
+	delete chat.attentionReason;
+	assert.equal(f.service.inbox(undefined, 50).needsYou.total, 0);
+	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 1);
+});
+
 test("dashboard supports a larger but explicitly bounded section limit", () => {
 	const sessions = Array.from({ length: 8 }, (_, i) => session({ id: `work-${i}`, state: "working" }));
 	const dashboard = buildProjectDashboard(
