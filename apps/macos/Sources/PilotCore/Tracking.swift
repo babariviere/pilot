@@ -84,11 +84,30 @@ public struct TrackedItemPrefill: Codable, Equatable, Sendable {
     public let url: String
     public let description: String
     public let gitBranchName: String?
+    /// Sub-issues: the parent issue, quoted in the prompt as context.
+    public let parent: LinearParentRef?
     public let prompt: String
     public init(itemId: String, identifier: String, title: String, url: String, description: String,
-                gitBranchName: String? = nil, prompt: String) {
+                gitBranchName: String? = nil, parent: LinearParentRef? = nil, prompt: String) {
         self.itemId = itemId; self.identifier = identifier; self.title = title; self.url = url
-        self.description = description; self.gitBranchName = gitBranchName; self.prompt = prompt
+        self.description = description; self.gitBranchName = gitBranchName; self.parent = parent; self.prompt = prompt
+    }
+}
+/// A sub-issue's parent as quoted in a start prompt: identifier and title only.
+public struct LinearParentRef: Codable, Equatable, Hashable, Sendable {
+    public let identifier: String
+    public let title: String
+    public init(identifier: String, title: String) { self.identifier = identifier; self.title = title }
+}
+/// The parent issue of a Linear sub-issue: identity and link only, whether or not the parent is a tracked item.
+/// `id` matches the child's `metadata.parentId` and, when the parent is tracked, its `externalId`.
+public struct LinearParentHeader: Codable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let identifier: String
+    public let title: String
+    public let url: String
+    public init(id: String, identifier: String, title: String, url: String) {
+        self.id = id; self.identifier = identifier; self.title = title; self.url = url
     }
 }
 /// The first message of a Slack thread, read on demand for the triage inspector. Transient: pilotd never stores it.
@@ -290,8 +309,10 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let url: String
     public let status: String
     /// Local linearStart (moved/skipped/error) and slackStart (reacted/skipped/error) outcomes,
-    /// with attemptedAt and an optional safe error. Source sync preserves them.
+    /// with attemptedAt and an optional safe error. Source sync preserves them. Linear sub-issues carry parentId.
     public let metadata: [String: JSONValue]
+    /// Linear sub-issues: the parent's header, when pilotd resolved it.
+    public let linearParent: LinearParentHeader?
     public let dismissed: Bool
     public let slack: SlackTriage?
     /// Latest bound chat and mission.
@@ -305,15 +326,22 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public init(id: String, projectId: String, kind: TrackedKind, externalId: String, title: String, url: String,
                 status: String, metadata: [String: JSONValue] = [:], dismissed: Bool = false,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
-                missionIds: [String]? = nil, slack: SlackTriage? = nil, linearSize: LinearSize? = nil,
-                linearSizeOverride: LinearSize? = nil, caseId: String? = nil, createdAt: Double, updatedAt: Double) {
+                missionIds: [String]? = nil, slack: SlackTriage? = nil, linearParent: LinearParentHeader? = nil,
+                linearSize: LinearSize? = nil, linearSizeOverride: LinearSize? = nil, caseId: String? = nil,
+                createdAt: Double, updatedAt: Double) {
         self.caseId = caseId
         self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.id = id; self.projectId = projectId; self.kind = kind; self.externalId = externalId
         self.title = title; self.url = url; self.status = status; self.metadata = metadata; self.dismissed = dismissed
         self.sessionId = sessionId; self.missionId = missionId; self.createdAt = createdAt; self.updatedAt = updatedAt
         self.sessionIds = sessionIds ?? sessionId.map { [$0] }
-        self.missionIds = missionIds ?? missionId.map { [$0] }; self.slack = slack
+        self.missionIds = missionIds ?? missionId.map { [$0] }; self.slack = slack; self.linearParent = linearParent
+    }
+
+    /// Linear sub-issues: the parent issue's ID.
+    public var linearParentId: String? {
+        guard kind == .linear, let id = metadata["parentId"]?.string, !id.isEmpty else { return nil }
+        return id
     }
 
     /// A project dashboard row as a full item, so pages reuse the tracked row and its actions.
@@ -322,8 +350,9 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
         self.init(id: row.id, projectId: projectId, kind: kind, externalId: row.externalId ?? row.id,
                   title: row.title, url: row.url ?? "", status: row.status ?? "", metadata: row.metadata ?? [:],
                   sessionId: row.sessionId, missionId: row.missionId, sessionIds: row.sessionIds,
-                  missionIds: row.missionIds, slack: row.slack, linearSize: row.linearSize,
-                  linearSizeOverride: row.linearSizeOverride, caseId: row.caseId, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
+                  missionIds: row.missionIds, slack: row.slack, linearParent: row.linearParent,
+                  linearSize: row.linearSize, linearSizeOverride: row.linearSizeOverride, caseId: row.caseId,
+                  createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
     }
 }
 public struct TrackedItemList: Codable, Equatable, Sendable {

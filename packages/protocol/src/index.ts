@@ -1047,6 +1047,8 @@ export interface DashboardTrackedItem {
 	updatedAt?: number;
 	externalId?: string;
 	metadata?: Record<string, import("./tracking.ts").TrackingJson>;
+	/** Linear sub-issues: the parent's minimal header. */
+	linearParent?: import("./tracking.ts").LinearParentHeader;
 	sessionId?: string;
 	missionId?: string;
 	sessionIds?: string[];

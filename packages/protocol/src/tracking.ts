@@ -126,8 +126,12 @@ export interface TrackedItem {
 	status: string;
 	/** Local start results, preserved by sync:
 	 * linearStart { outcome: moved|skipped|error, attemptedAt, error? };
-	 * slackStart { outcome: reacted|skipped|error, attemptedAt, error? }, once per item. */
+	 * slackStart { outcome: reacted|skipped|error, attemptedAt, error? }, once per item.
+	 * Linear sub-issues also carry parentId, the parent issue's ID (matches the parent's externalId when tracked). */
 	metadata: Record<string, TrackingJson>;
+	/** Linear sub-issues: the parent's minimal header, whether or not the parent is itself a tracked item.
+	 * Absent until pilotd resolves it (bounded per project), or when the parent can't be read. */
+	linearParent?: LinearParentHeader;
 	dismissed: boolean;
 	linearSize?: LinearSize;
 	linearSizeOverride?: LinearSize;
@@ -140,6 +144,15 @@ export interface TrackedItem {
 	missionIds?: string[];
 	createdAt: number;
 	updatedAt: number;
+}
+/** The parent issue of a Linear sub-issue: identity and link only, never other data about it. Cached per project
+ * from list_issues (tracked parents) or get_issue with fields id, title and url (other parents). */
+export interface LinearParentHeader {
+	/** The parent's issue ID, as in the child's metadata.parentId. */
+	id: string;
+	identifier: string;
+	title: string;
+	url: string;
 }
 /** Local actions, except confirmed starts (Linear state or Slack eyes). A link adds to the item's bound chats or missions; null clears them all.
  * Source refreshes never overwrite these fields. */
@@ -204,6 +217,8 @@ export interface TrackedItemPrefill {
 	url: string;
 	description: string;
 	gitBranchName?: string;
+	/** Sub-issues: the parent issue, quoted in the prompt as context. */
+	parent?: Pick<LinearParentHeader, "identifier" | "title">;
 	/** Explicitly quoted external content. User confirmation is required before starting work. */
 	prompt: string;
 }
