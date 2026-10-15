@@ -46,7 +46,9 @@ tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
 tracking.register("slack", createSlackPoller(trackedItems, models));
 tracking.startPolling("slack");
-const memory = new ProjectMemoryService(config.home, (prompt, signal) => models.summarizeMemory(prompt, signal));
+const memory = new ProjectMemoryService(config.home, (prompt, signal, observe) =>
+	models.summarizeMemory(prompt, signal, observe),
+);
 // Load metadata and resume pending compaction, but a damaged/busy memory store cannot stop pilotd.
 const knownMemoryProjects = new Set<string>();
 for (const project of projects.list()) {

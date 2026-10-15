@@ -1,12 +1,13 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Inspect the private recall worker lifetime without widening the service API.
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
-import { cover } from "./memory-cover.ts";
 import { Conflict } from "./errors.ts";
+import { captureMemory, type MemoryCompactionTrace } from "./memory-compaction.ts";
+import { cover } from "./memory-cover.ts";
 import { MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
 import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 
@@ -301,6 +302,59 @@ test("exhausted summary corrections preserve notes and existing summaries across
 	);
 	assert.deepEqual(await readFile(treePath), saved);
 	assert.ok((await reopened.load("p")).compaction.pending > 0);
+});
+
+test("compaction diagnostics are bounded, owner-only, and atomically replace crash-left files", async (t) => {
+	const home = await mkdtemp(join(tmpdir(), "pilot-memory-diagnostic-"));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const disk = new MemoryDisk(home, "device");
+	t.after(() => disk.close());
+	const payload = captureMemory("\0🛫".repeat(20_000));
+	const trace: MemoryCompactionTrace = {
+		version: 1,
+		lo: 0,
+		hi: 1,
+		epoch: 0,
+		startedAt: 123,
+		status: "failed",
+		prompt: payload,
+		attempts: Array.from({ length: 3 }, () => ({
+			number: 1,
+			at: 123,
+			model: "test/model",
+			request: payload,
+			response: payload,
+			issue: "too long",
+			bytes: 500,
+		})),
+		failure: payload,
+	};
+	const latest = join(home, "compaction-latest.json");
+	await writeFile(`${latest}.tmp`, "crash left this behind");
+	disk.diagnostic(trace);
+	assert.deepEqual(JSON.parse(await readFile(latest, "utf8")), trace);
+	assert.ok((await stat(latest)).size <= 128 * 1024);
+	assert.equal((await stat(latest)).mode & 0o777, 0o600);
+	const failure = await readFile(join(home, "compaction-failure.json"));
+	disk.diagnostic({ ...trace, status: "succeeded" });
+	assert.deepEqual(await readFile(join(home, "compaction-failure.json")), failure);
+	await assert.rejects(stat(`${latest}.tmp`), { code: "ENOENT" });
+	assert.throws(() => disk.diagnostic({ ...trace, error: "x".repeat(128 * 1024) }), /exceeds 128 KiB/);
+});
+
+test("unwritable compaction diagnostics do not block valid summaries or log memory text", async (t) => {
+	const warnings: string[] = [];
+	t.mock.method(console, "warn", (message: string) => warnings.push(message));
+	const { home, service } = await fixture(t, async () => "valid summary");
+	await service.load("p");
+	await mkdir(join(home, "memory", "p", "compaction-latest.json"));
+	await service.note("p", "private first condition", "chat");
+	await service.note("p", "private second condition", "chat");
+	await until(() => service.summary("p").compaction.state === "idle");
+	assert.equal(service.summary("p").compaction.pending, 0);
+	assert.equal(warnings.length, 1, "one warning per run, not one per snapshot");
+	assert.match(warnings[0]!, /could not save compaction diagnostics/);
+	assert.doesNotMatch(warnings[0]!, /private|valid summary/);
 });
 
 test("a pathological recall regex is timed out without blocking append or wake", async (t) => {
