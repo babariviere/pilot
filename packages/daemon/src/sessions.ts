@@ -5521,20 +5521,22 @@ export class SessionManager {
 			),
 		);
 		if (!issues.length) return;
-		if (issues.some(({ problems }) => problems.divergedFrom)) {
+		// CI may already be fixed on the base. Try the same safe restack before spending a model turn;
+		// the trial verifies ancestry and never pushes an already-current PR.
+		const needsRebase = ({ problems }: (typeof issues)[number]) =>
+			Boolean(problems.divergedFrom || problems.failedChecks.length);
+		if (issues.some(needsRebase)) {
 			let releaseAuto: () => void;
 			try {
 				releaseAuto = this.updateGate.begin();
 			} catch {
 				return;
 			}
-			const affected = new Set(
-				issues.filter(({ problems }) => problems.divergedFrom).map(({ pr }) => pr.stack?.number),
-			);
+			const affected = new Set(issues.filter(needsRebase).flatMap(({ pr }) => (pr.stack ? [pr.stack.number] : [])));
 			this.rebasingWorkspaces.add(meta.id);
 			const prs = current.filter(
 				(pr) =>
-					issues.some((issue) => issue.pr.url === pr.url && issue.problems.divergedFrom) ||
+					issues.some((issue) => issue.pr.url === pr.url && needsRebase(issue)) ||
 					(pr.stack && affected.has(pr.stack.number) && this.ownsOpenPullRequest(meta, pr)),
 			);
 			const allowed = (pr: SessionPullRequest) => {
@@ -5649,11 +5651,24 @@ export class SessionManager {
 				});
 			issues = issues.flatMap((issue) => {
 				const result = results.get(issue.pr.url);
-				if (result && "rebased" in result) {
-					// Health belongs to the old head. Wait for fresh CI/mergeability, not a stale follow-up.
-					return [];
+				if (!result) return [issue];
+				if ("rebased" in result) {
+					// CI/mergeability belongs to the old head. Wait for fresh results, but don't swallow
+					// independent review feedback just because a mechanical rebase succeeded.
+					return issue.problems.reviewComments
+						? [
+								{
+									...issue,
+									problems: {
+										failedChecks: [],
+										reviewComments: issue.problems.reviewComments,
+										mergeConflicts: false,
+									},
+								},
+							]
+						: [];
 				}
-				if (result && "unchanged" in result) {
+				if ("unchanged" in result) {
 					const { divergedFrom: _diverged, ...problems } = issue.problems;
 					return problems.failedChecks.length || problems.reviewComments || problems.mergeConflicts
 						? [{ ...issue, problems }]
@@ -5662,7 +5677,7 @@ export class SessionManager {
 				return [
 					{
 						...issue,
-						rebaseSkipped: result && "skipped" in result ? result.skipped : "PR is not bound to this chat",
+						rebaseSkipped: result.skipped,
 					},
 				];
 			});
@@ -5716,9 +5731,9 @@ export class SessionManager {
 			...(problems.divergedFrom
 				? [
 						`The PR has diverged from its stacked base branch ${JSON.stringify(problems.divergedFrom)} and must be rebased onto it.`,
-						...(rebaseSkipped ? [`Automatic rebase skipped: ${rebaseSkipped}.`] : []),
 					]
 				: []),
+			...(rebaseSkipped ? [`Automatic rebase skipped: ${rebaseSkipped}.`] : []),
 		]);
 		const content = [
 			`Pilot automatic PR follow-up (${attempt}/3) for ${issues.map(({ pr }) => pr.url).join(", ")}.`,

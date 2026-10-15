@@ -150,8 +150,11 @@ or its chat is still open. Failures, unanswered questions and other actionable p
 
 Pilot monitors agent-owned PRs from isolated Build sessions for failed CI, unresolved review threads and
 merge conflicts, including earlier PRs in a stack. It sends follow-up work only when the agent is idle
-and no user messages are queued. Automatic follow-ups are limited to three per session, with a
-five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
+and no user messages are queued. Before a failed-CI follow-up, eligible jj workspaces try a safe,
+conflict-free rebase onto the PR's current base, once per PR/base commit. A successful rebase waits for
+fresh CI without spending a follow-up attempt; unresolved review feedback still goes to the agent.
+Unsafe or conflicting rebases go to the agent instead. Automatic follow-ups are limited to three per
+session, with a five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
 not GitHub comments or reviews. Ask and direct-checkout sessions do not receive automatic PR follow-ups.
 Owned PRs still blocked by conflicts, failing checks, unresolved review threads or a diverged stack after
 three attempts (or without an automatic follow-up route) appear in Needs you once the chat is idle and

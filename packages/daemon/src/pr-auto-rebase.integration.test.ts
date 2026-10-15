@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import type { KernelCommand } from "@pilot/kernel";
 import type { SessionPullRequest } from "@pilot/protocol";
+import type { PullRequestProblems } from "./github.ts";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
 import { fixture, git, jj } from "./testing/shared-workspace.ts";
@@ -137,11 +138,18 @@ async function setup(conflict = false) {
 		commands,
 		manager,
 		meta,
-		follow: async () => {
+		follow: async (
+			problems: PullRequestProblems = {
+				failedChecks: [],
+				reviewComments: 0,
+				mergeConflicts: conflict,
+				divergedFrom: "main",
+			},
+		) => {
 			await manager["followUpPullRequests"](meta, "fix/feature", 0, [
 				{
 					pr: prs[0]!,
-					problems: { failedChecks: [], reviewComments: 0, mergeConflicts: conflict, divergedFrom: "main" },
+					problems,
 				},
 			]);
 			await Promise.all(manager["starting"].values());
@@ -152,6 +160,86 @@ async function setup(conflict = false) {
 		},
 	};
 }
+
+for (const scenario of ["clean", "conflict", "current", "reviews"] as const) {
+	test(`failed CI on an unstacked PR: ${scenario}`, async () => {
+		const f = await setup(scenario === "conflict");
+		try {
+			delete f.prs[0]!.stack;
+			if (scenario === "current") {
+				// The PR already contains its current base, so rewriting it cannot help CI.
+				git(f.remote, "update-ref", "refs/heads/main", git(f.remote, "rev-parse", `${f.oldHead}^`));
+			}
+			await f.follow({
+				failedChecks: ["tests"],
+				reviewComments: scenario === "reviews" ? 1 : 0,
+				mergeConflicts: scenario === "conflict",
+			});
+			const head = git(f.remote, "rev-parse", "refs/heads/fix/feature");
+			const meta = f.manager["metas"].get(f.meta.id)!;
+			const inputs = f.commands.filter((command) => command.type === "input");
+			if (scenario === "clean" || scenario === "reviews") {
+				assert.notEqual(head, f.oldHead);
+				assert.equal(git(f.remote, "rev-parse", `${head}^`), f.base);
+				assert.equal(git(f.remote, "show", `${head}:feature.txt`), "PR change");
+				assert.equal(f.controls.pushCalls, 1);
+				if (scenario === "reviews") {
+					assert.equal(inputs.length, 1);
+					assert.match(inputs[0]!.content, /1 unresolved, non-outdated review thread/);
+					assert.doesNotMatch(inputs[0]!.content, /Failed CI checks|Automatic rebase skipped|merge conflicts/);
+				} else {
+					assert.equal(inputs.length, 0, "old-head failures must not wake the agent after a rebase");
+					assert.equal(meta.prFollowUp?.attempts ?? 0, 0);
+					const saved = JSON.parse(
+						readFileSync(join(f.root, "daemon", "sessions", f.meta.id, "meta.json"), "utf8"),
+					);
+					assert.equal(saved.prFollowUp?.attempts ?? 0, 0);
+					assert.equal(saved.prAutoRebases.length, 1);
+					// The next health observation still fails: wake the agent, never rewrite on the same base twice.
+					await f.follow({ failedChecks: ["tests after rebase"], reviewComments: 0, mergeConflicts: false });
+					assert.equal(f.controls.pushCalls, 1);
+					const followUps = f.commands.filter((command) => command.type === "input");
+					assert.equal(followUps.length, 1);
+					assert.match(followUps[0]!.content, /tests after rebase/);
+					assert.doesNotMatch(followUps[0]!.content, /"tests"/);
+					assert.equal(meta.prFollowUp?.attempts, 1);
+				}
+			} else {
+				assert.equal(head, f.oldHead);
+				assert.equal(f.controls.pushCalls, 0);
+				assert.equal(inputs.length, 1);
+				assert.match(inputs[0]!.content, /Failed CI checks: \["tests"\]/);
+				assert.doesNotMatch(inputs[0]!.content, /stacked base branch/);
+				if (scenario === "conflict")
+					assert.match(inputs[0]!.content, /Automatic rebase skipped: Rebase has conflicts/);
+				else assert.doesNotMatch(inputs[0]!.content, /Automatic rebase skipped/);
+			}
+			assert.equal(readFileSync(join(f.a.path, "dirty.txt"), "utf8"), "uncommitted user input\n");
+			assert.equal(
+				jj(f.a.path, "--ignore-working-copy", "op", "log", "--no-graph", "--limit", "1", "-T", "id"),
+				f.operation,
+			);
+		} finally {
+			await f.close();
+		}
+	});
+}
+
+test("review-only feedback does not trigger a rebase", async () => {
+	const f = await setup();
+	try {
+		delete f.prs[0]!.stack;
+		await f.follow({ failedChecks: [], reviewComments: 1, mergeConflicts: false });
+		assert.equal(f.controls.metadataCalls, 0);
+		assert.equal(f.controls.pushCalls, 0);
+		assert.equal(git(f.remote, "rev-parse", "refs/heads/fix/feature"), f.oldHead);
+		const inputs = f.commands.filter((command) => command.type === "input");
+		assert.equal(inputs.length, 1);
+		assert.match(inputs[0]!.content, /1 unresolved, non-outdated review thread/);
+	} finally {
+		await f.close();
+	}
+});
 
 for (const scenario of ["clean", "conflict", "moved-head"] as const) {
 	test(`automatic divergence handling: ${scenario}`, async () => {
