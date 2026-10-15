@@ -33,6 +33,10 @@ cp "$repo/package.json" "$repo/pnpm-lock.yaml" "$repo/pnpm-workspace.yaml" "$sta
 manager="$(node -p "require('$repo/package.json').packageManager")"
 [[ "$manager" =~ ^pnpm@[0-9]+\.[0-9]+\.[0-9]+$ ]]
 npm install --prefix "$stage/tools" --ignore-scripts --no-audit --no-fund "$manager"
+# pnpm's standalone distribution does not supply node-gyp. Reuse the one in the checksum-pinned
+# Node/npm archive, only in this private CI build-tools directory.
+ln -s "$node_root/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js" "$stage/tools/node_modules/.bin/node-gyp"
+export PATH="$stage/tools/node_modules/.bin:$PATH"
 export npm_config_nodedir="$node_root"
 export npm_config_build_from_source=true
 export LDFLAGS="-static-libstdc++ -static-libgcc"

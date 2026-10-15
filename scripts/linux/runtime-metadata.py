@@ -52,8 +52,11 @@ def audit(root):
                 raise ValueError(f"Not little-endian ELF64 x86-64: {path}")
             dynamic = subprocess.run(["readelf", "-d", str(path)], check=True, capture_output=True, text=True).stdout
             for entry in re.findall(r"\((?:RPATH|RUNPATH)\).*?\[(.*?)\]", dynamic):
-                if any(not part.startswith("$ORIGIN") for part in entry.split(":")):
-                    raise ValueError(f"Non-relative runtime search path: {path}: {entry}")
+                for part in entry.split(":"):
+                    if part != "$ORIGIN" and not part.startswith("$ORIGIN/"):
+                        raise ValueError(f"Non-relative runtime search path: {path}: {entry}")
+                    if not (path.parent / part.removeprefix("$ORIGIN").removeprefix("/")).resolve().is_relative_to(root):
+                        raise ValueError(f"Runtime search path escapes package: {path}: {entry}")
             versions = subprocess.run(["readelf", "-V", str(path)], check=True, capture_output=True, text=True).stdout
             needed = [tuple(map(int, v.split("."))) for v in re.findall(r"\bGLIBC_([0-9]+\.[0-9]+)\b", versions)]
             glibc = max([glibc] + needed)

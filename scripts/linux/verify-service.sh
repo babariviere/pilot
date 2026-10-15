@@ -101,4 +101,16 @@ import json, sys
 assert json.load(open(sys.argv[1]))['daemonId'] == json.load(open(sys.argv[2]))['daemonId']
 PY
 "${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' stop"
+sudo systemctl stop "user@$uid.service"
+sudo systemctl start "user@$uid.service"
+for attempt in $(seq 1 60); do
+	if curl -fsS http://127.0.0.1:4319/api/hello > "$work/hello-manager-restarted.json"; then break; fi
+	sleep 1
+done
+userctl is-active pilotd.service
+python3 - "$work/hello.json" "$work/hello-manager-restarted.json" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1]))['daemonId'] == json.load(open(sys.argv[2]))['daemonId']
+PY
+"${ssh_cmd[@]}" "'$runtime/bin/pilot-runtime' stop"
 echo 'Relocated production service: SSH logout survival, reconnect, orderly stop, durable identity restart passed.'
