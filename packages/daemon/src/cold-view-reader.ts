@@ -22,6 +22,7 @@ type Job = {
 	after?: number;
 	/** Read a page of entries hidden by compaction instead of the active view. */
 	earlier?: { before: number; limit: number };
+	todoCount?: boolean;
 	resolve(view: SizedSessionView): void;
 	reject(error: Error): void;
 };
@@ -104,6 +105,17 @@ export class ColdViewReader {
 		}).then(({ bytes: _bytes, ...view }) => view as unknown as EarlierEntriesRead);
 	}
 
+	/** Read only the small progress document, never transcript entries or Markdown bodies. */
+	readTodoCount(directory: string): Promise<number> {
+		if (this.closed) return Promise.reject(new Error("Session reader is closed"));
+		if (this.waiting.length >= MAX_QUEUED_READS)
+			return Promise.reject(new ServiceUnavailable("Session history is busy. Retry shortly."));
+		return new Promise<SizedSessionView>((resolve, reject) => {
+			this.waiting.push({ directory, cwd: directory, includeTodos: false, todoCount: true, resolve, reject });
+			this.drain();
+		}).then((view) => (view as unknown as { openCount: number }).openCount);
+	}
+
 	private drain(): void {
 		while (!this.closed && this.active.size < 2 && this.waiting.length) {
 			const job = this.waiting.shift()!;
@@ -118,6 +130,7 @@ export class ColdViewReader {
 						...(job.subagentConversation === undefined ? {} : { subagentConversation: job.subagentConversation }),
 						...(job.after === undefined ? {} : { after: job.after }),
 						...(job.earlier === undefined ? {} : { earlier: job.earlier }),
+						...(job.todoCount ? { todoCount: true } : {}),
 					},
 					execArgv: [],
 				});

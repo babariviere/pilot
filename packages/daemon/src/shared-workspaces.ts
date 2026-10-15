@@ -43,7 +43,7 @@ export interface WorkspaceRecovery {
 	path: string;
 	/** Internal Git ref, never a bookmark and never exported by jj. */
 	archiveRef: string;
-	/** SHA-256 of bounded ignored inputs (mise configs and .pi/todos), relative to recoveryDirectory. */
+	/** SHA-256 of bounded ignored mise configs, relative to recoveryDirectory. */
 	localConfigs: Record<string, string>;
 }
 
@@ -57,10 +57,8 @@ interface Binding {
 
 const queues = new Map<string, Promise<unknown>>();
 const hash = (input: string | Buffer) => createHash("sha256").update(input).digest("hex");
-const recoverableInput = (path: string) =>
-	localConfigs.includes(path) || /^\.pi\/todos\/[a-zA-Z0-9_-]+\.(md|json)$/.test(path);
-const recoveryInputDirectory = (path: string) =>
-	localConfigs.some((config) => config.startsWith(`${path}/`)) || path === ".pi" || path === ".pi/todos";
+const recoverableInput = (path: string) => localConfigs.includes(path);
+const recoveryInputDirectory = (path: string) => localConfigs.some((config) => config.startsWith(`${path}/`));
 const fullCommit = /^[0-9a-f]{40}$/;
 /** Where a child's gitdir file is hidden while jj updates or snapshots it without importing Git refs. */
 const PARKED_GIT = ".jj/pilot-refresh-git";

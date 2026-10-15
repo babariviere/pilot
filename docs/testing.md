@@ -146,6 +146,22 @@ temporary copies; no real chats, providers, credentials or network services are 
 index migration are outside the measurement. This isolates synchronous store work, not whole-daemon latency,
 Git diff performance, IPC throughput or live GUI responsiveness. Run without a competing local test/build.
 
+## Durable todo progress probe
+
+An offline probe on 2026-10-15 (macOS arm64, Node 24.21.0) seeded 10,000 transcript entries and
+256 todos with 768,000 bytes of Markdown. Five samples of 20 unchanged reads compared the prior
+`TodosWatch.refresh()` filesystem metadata scan with a warm `TodoProgressDoc` snapshot. Median wall
+time was 29.45 ms versus 0.019 ms; process CPU was 67.60 ms versus 0.026 ms. Twenty fresh read-only
+SQLite count reads took 4.20 ms wall and 4.84 ms CPU. Creation and initial imports were outside the
+measurement. No providers, accounts or GUI were used.
+
+This isolates repeated progress retrieval, not streaming or whole-daemon latency. The new implementation
+does not schedule those unchanged reads at all: committed document watches replace the one-second
+filesystem poll. Count-only cold reads use the same bounded reader queue as transcript reads, without
+materializing transcript entries or todo Markdown. Live counts arrive on worker readiness/mutations.
+`todos.test.ts` covers bounded latest-only documents, concurrent child writes, restart and workspace
+replacement; the real child-process profile test checks structured todo calls through codemode.
+
 ## Cold subagent reader startup
 
 ```sh

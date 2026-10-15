@@ -29,7 +29,6 @@ import {
 } from "./snapshot.ts";
 import { openSessionReader, openSessionStorage, StorageBusy } from "./storage.ts";
 import { subagentStorageSignature } from "./subagent-watch.ts";
-import { TodosWatch } from "./todos.ts";
 
 test("cold snapshot matches durable active view under a writer lease, without running pending tools", async (t) => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-reader-"));
@@ -178,7 +177,7 @@ test("cold reader rejects unsupported schemas instead of migrating or creating a
 	assert.deepEqual(await readFile(file), before);
 });
 
-test("cold snapshot of an unopened session creates no storage and reads TODO files without extension loading", async () => {
+test("cold snapshot of an unopened session creates no storage and ignores legacy TODO files", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "pilot-cold-unopened-"));
 	try {
 		await mkdir(join(dir, ".pi", "todos"), { recursive: true });
@@ -196,7 +195,7 @@ test("cold snapshot of an unopened session creates no storage and reads TODO fil
 			view.events.find((event) => event.type === "todos_update"),
 			{
 				type: "todos_update",
-				items: [{ id: "TODO-aabbccdd", title: "Check", status: "open", createdAt: "today" }],
+				items: [],
 			},
 		);
 		assert.deepEqual(await readdir(dir), [".pi"]);
@@ -210,7 +209,6 @@ test("Ask cold snapshots return empty TODOs without reading live checkout extens
 	t.after(() => rm(dir, { recursive: true, force: true }));
 	await mkdir(join(dir, ".pi", "todos"), { recursive: true });
 	await writeFile(join(dir, ".pi", "todos", "aabbccdd.md"), '{"title":"Live checkout only","status":"open"}');
-	t.mock.method(TodosWatch.prototype, "refresh", () => assert.fail("Ask cold readers must not read checkout TODOs"));
 	const durable = join(dir, "durable");
 	const unopened = await readSessionSnapshot(durable, dir, false);
 	assert.deepEqual(

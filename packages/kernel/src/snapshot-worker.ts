@@ -1,8 +1,8 @@
 /** One-shot reader. No extension/agent initialization or writer lease; compaction metadata may load the SDK estimator. */
 import { parentPort, workerData } from "node:worker_threads";
-import { readEarlierEntries, readSessionSnapshot, readSubagentTranscript } from "./snapshot.ts";
+import { readEarlierEntries, readSessionSnapshot, readSessionTodoCount, readSubagentTranscript } from "./snapshot.ts";
 
-const { directory, cwd, includeTodos, subagentConversation, after, earlier } = workerData as {
+const { directory, cwd, includeTodos, subagentConversation, after, earlier, todoCount } = workerData as {
 	directory: string;
 	cwd: string;
 	includeTodos?: boolean;
@@ -10,10 +10,12 @@ const { directory, cwd, includeTodos, subagentConversation, after, earlier } = w
 	after?: number;
 	/** Read a page of entries hidden by compaction instead of the active view. */
 	earlier?: { before: number; limit: number };
+	todoCount?: boolean;
 };
 try {
-	const view =
-		earlier !== undefined
+	const view = todoCount
+		? { openCount: await readSessionTodoCount(directory) }
+		: earlier !== undefined
 			? await readEarlierEntries(directory, earlier.before, earlier.limit)
 			: subagentConversation === undefined
 				? await readSessionSnapshot(directory, cwd, includeTodos)

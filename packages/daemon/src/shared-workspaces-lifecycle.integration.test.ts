@@ -1,14 +1,5 @@
 import assert from "node:assert/strict";
-import {
-	existsSync,
-	mkdirSync,
-	readdirSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { SharedWorkspaceStore } from "./shared-workspaces.ts";
@@ -255,7 +246,7 @@ test("old jj fails clearly; missing partials are harmless and pristine private c
 	}
 });
 
-test("repeat reclamation stores changed ignored inputs content-addressed, preserves bounded todos and skips Swift outputs", async () => {
+test("repeat reclamation preserves mise configs but discards ignored legacy todos and Swift outputs", async () => {
 	const f = fixture();
 	try {
 		writeFileSync(join(f.source, "mise.local.toml"), "first\n");
@@ -266,7 +257,7 @@ test("repeat reclamation stores changed ignored inputs content-addressed, preser
 		mkdirSync(join(w.path, ".build"));
 		writeFileSync(join(w.path, ".build/output"), "generated\n");
 		const first = await f.store.snapshot(w.path, w.shared!, f.recovery);
-		assert.equal(Object.keys(first.localConfigs).length, 2);
+		assert.equal(Object.keys(first.localConfigs).length, 1);
 		assert.equal(statSync(w.shared!.repository).mode & 0o777, 0o700);
 		assert.equal(statSync(dirname(w.shared!.repository)).mode & 0o777, 0o700);
 		assert.equal(statSync(`${w.shared!.repository}.json`).mode & 0o777, 0o600);
@@ -275,6 +266,7 @@ test("repeat reclamation stores changed ignored inputs content-addressed, preser
 		await f.store.remove(w.path, w.shared!, first);
 		await f.store.restore(w.path, w.shared!, first, f.recovery);
 		writeFileSync(join(w.path, "mise.local.toml"), "second\n");
+		mkdirSync(join(w.path, ".pi/todos"), { recursive: true });
 		writeFileSync(join(w.path, ".pi/todos/TODO-abcd.md"), "todo second\n");
 		const second = await f.store.snapshot(w.path, w.shared!, f.recovery);
 		assert.equal(first.commitId, second.commitId);
@@ -282,45 +274,35 @@ test("repeat reclamation stores changed ignored inputs content-addressed, preser
 		await f.store.remove(w.path, w.shared!, second);
 		await f.store.restore(w.path, w.shared!, second, f.recovery);
 		assert.equal(readFileSync(join(w.path, "mise.local.toml"), "utf8"), "second\n");
-		assert.equal(readFileSync(join(w.path, ".pi/todos/TODO-abcd.md"), "utf8"), "todo second\n");
+		assert.equal(existsSync(join(w.path, ".pi/todos")), false);
 		assert.equal(existsSync(join(w.path, ".build")), false);
+		mkdirSync(join(w.path, ".pi"), { recursive: true });
 		writeFileSync(join(w.path, ".pi/secret"), "block\n");
 		const third = await f.store.snapshot(w.path, w.shared!, f.recovery);
 		await f.store.remove(w.path, w.shared!, third);
 		await f.store.restore(w.path, w.shared!, third, f.recovery);
 		assert.equal(existsSync(join(w.path, ".pi/secret")), false);
-		assert.equal(readFileSync(join(w.path, ".pi/todos/TODO-abcd.md"), "utf8"), "todo second\n");
+		assert.equal(existsSync(join(w.path, ".pi/todos")), false);
 	} finally {
 		f.close();
 	}
 });
 
-test("oversized and excess ignored recovery inputs are skipped, and later ignored changes do not block removal", async () => {
+test("oversized ignored configs and all legacy todos are skipped, and later changes do not block removal", async () => {
 	const f = fixture();
 	try {
 		const w = await f.store.create(f.source, f.path());
 		writeFileSync(join(w.path, "mise.local.toml"), Buffer.alloc(1024 * 1024 + 1));
 		mkdirSync(join(w.path, ".pi/todos"), { recursive: true });
 		for (let index = 0; index < 257; index++)
-			writeFileSync(join(w.path, `.pi/todos/TODO-${index}.md`), "bounded todo\n");
+			writeFileSync(join(w.path, `.pi/todos/TODO-${index}.md`), "legacy todo\n");
 		const recovery = await f.store.snapshot(w.path, w.shared!, f.recovery);
-		assert.equal(Object.keys(recovery.localConfigs).length, 256);
-		assert.equal(recovery.localConfigs["mise.local.toml"], undefined);
-		const saved = Object.keys(recovery.localConfigs)[0]!;
-		writeFileSync(join(w.path, saved), "changed after snapshot\n");
+		assert.deepEqual(recovery.localConfigs, {});
+		writeFileSync(join(w.path, ".pi/todos/TODO-later.md"), "later\n");
 		await f.store.remove(w.path, w.shared!, recovery);
 		await f.store.restore(w.path, w.shared!, recovery, f.recovery);
-		assert.equal(readFileSync(join(w.path, saved), "utf8"), "bounded todo\n");
 		assert.equal(existsSync(join(w.path, "mise.local.toml")), false);
-		assert.equal(readdirSync(join(w.path, ".pi/todos")).length, 256);
-		rmSync(join(w.path, ".pi/todos"), { recursive: true });
-		mkdirSync(join(w.path, ".pi/todos"));
-		for (let index = 0; index < 5; index++)
-			writeFileSync(join(w.path, `.pi/todos/TODO-${index}.md`), Buffer.alloc(1024 * 1024));
-		const bounded = await f.store.snapshot(w.path, w.shared!, f.recovery);
-		assert.equal(Object.keys(bounded.localConfigs).length, 4, "recover at most 4 MiB, discard the excess");
-		await f.store.remove(w.path, w.shared!, bounded);
-		assert.equal(existsSync(w.path), false);
+		assert.equal(existsSync(join(w.path, ".pi/todos")), false);
 	} finally {
 		f.close();
 	}

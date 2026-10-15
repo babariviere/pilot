@@ -139,7 +139,7 @@ Pilot can reclaim safe archived jj workspaces and restore them from a saved snap
 also prune generated build and dependency output from legacy clones. Dependencies may need reinstalling
 after recovery.
 Ignored content does not block jj workspace reclamation and is discarded, except for bounded regular
-mise local configs and `.pi/todos` files saved for recovery. Track any other files you need to retain.
+mise local configs saved for recovery. Track any other files you need to retain.
 
 ### Missions
 
@@ -209,11 +209,25 @@ retained: a chat card opens the revision sent there, while the sidebar opens the
 SwiftUI artifacts are static renders, not live app views.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,
-patch editing, web, browser, todos, subscription usage, background jobs and persistent subagents.
-No separate extension installation is needed. Children inherit sandbox, patch, web, browser and todos,
+patch editing, web, browser, subscription usage, background jobs and persistent subagents.
+No separate extension installation is needed. Children inherit sandbox, patch, web and browser,
 but cannot launch jobs or recursive subagents. Browser and web services still need their own prerequisites
 and credentials. Secrets, router and Clef remain optional personal extensions; terminal-only UI,
 workspace automation, PR automation and night mode are not bundled.
+
+Pilot owns the `todo` tool. Each Build chat has one durable list in its Harness SQLite storage, shared
+with its subagents even when they use another working directory. Todos survive restarts, workspace
+reclamation and restore, and remain shared across chat attempts. Claim/release assigns work to the
+parent or an individual child agent, not to a workspace. Closing (`done` or `closed`, case-insensitive)
+clears the assignment; every other status counts as unclosed. Progress updates are committed events,
+not filesystem polling. The daemon receives an unclosed count without reading todo bodies.
+Child assignments identify an agent instance; after child-worker replacement, use `force` to reclaim
+or release an old assignment. Assignments are advisory and never prevent updates or closing work.
+
+Lists hold at most 256 items, each with up to 64 KiB of Markdown, and at most 1 MiB in total. Writes
+over these limits fail without losing existing items; delete obsolete items to make room. Historical
+todo document versions are not retained. Existing `.pi/todos` files and `PI_TODO_PATH` are ignored,
+never imported or changed, and ignored legacy files are no longer specially saved during reclamation.
 
 Build sessions also load personal pi configuration from `~/.pi/agent`. Bundled capabilities take
 precedence over duplicate package entries before those copies execute; unrelated extensions remain

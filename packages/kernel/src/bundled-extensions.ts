@@ -1,11 +1,6 @@
 /** Required, pinned extensions, loaded through Pi's TypeScript extension loader, not Node imports. */
-import { fileURLToPath } from "node:url";
-import {
-	PILOT_CHILD_PROFILE_PATH,
-	PILOT_EXTENSION_NAMES,
-	PILOT_PROFILE_PATH,
-	PILOT_WEB_PATH,
-} from "@babariviere/pi-extensions/profile";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { PILOT_EXTENSION_NAMES, PILOT_PROFILE_PATH, PILOT_WEB_PATH } from "@babariviere/pi-extensions/profile";
 import { EmbeddedResourceLoader } from "@babariviere/pi-extensions/resource-loader";
 import {
 	DefaultResourceLoader,
@@ -15,6 +10,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export const ANTHROPIC_AUTH_PATH = fileURLToPath(import.meta.resolve("@gotgenes/pi-anthropic-auth/src/index.ts"));
+export const CHILD_PROFILE_PATH = fileURLToPath(new URL("./child-profile.ts", import.meta.url));
+// Select individual entries before importing. Upstream aggregate profiles import file-backed todos.
+const PROFILE_PATHS = PILOT_EXTENSION_NAMES.filter((name) => name !== "todos").map((name) =>
+	fileURLToPath(new URL(`../extensions/${name}/index.ts`, pathToFileURL(PILOT_PROFILE_PATH))),
+);
 
 export function bundledResourceLoader(
 	options: ConstructorParameters<typeof DefaultResourceLoader>[0],
@@ -23,7 +23,7 @@ export function bundledResourceLoader(
 ): EmbeddedResourceLoader {
 	return new EmbeddedResourceLoader(options, {
 		projectTrusted,
-		requiredPaths: [...(profile ? [PILOT_PROFILE_PATH] : []), ANTHROPIC_AUTH_PATH],
+		requiredPaths: [...(profile ? PROFILE_PATHS : []), ANTHROPIC_AUTH_PATH],
 		ownedPackages: {
 			"@babariviere/pi-extensions": profile
 				? [...PILOT_EXTENSION_NAMES.map((name) => `extensions/${name}`), "embedding/pilot.ts", "embedding/child.ts"]
@@ -58,7 +58,7 @@ export async function bundledAskTools(cwd: string, agentDir: string): Promise<To
 
 /** Session workers pass trusted, absolute paths to children, without editing personal Pi settings. */
 export function configureBundledChildren(): void {
-	process.env.PILOT_PI_EXTENSIONS_PROFILE = PILOT_CHILD_PROFILE_PATH;
+	process.env.PILOT_PI_EXTENSIONS_PROFILE = CHILD_PROFILE_PATH;
 	process.env.PILOT_ANTHROPIC_AUTH_EXTENSION = ANTHROPIC_AUTH_PATH;
 }
 

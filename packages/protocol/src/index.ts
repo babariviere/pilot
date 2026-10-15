@@ -139,7 +139,7 @@ export interface QueueUpdateEvent {
 	automatic?: PendingAutomaticInput[];
 }
 
-/** Read-only projection of the pi-extensions file-backed TODO store. */
+/** Read-only projection of this chat's durable TODO store (also shared by its subagents). */
 export interface SessionTodo {
 	id: string;
 	title: string;
@@ -148,7 +148,7 @@ export interface SessionTodo {
 	assignedToSession?: string;
 }
 
-/** Full replacement, sent on subscription and when TODO files change. */
+/** Full replacement, sent on subscription and after committed TODO progress changes. */
 export interface TodosUpdateEvent {
 	type: "todos_update";
 	items: SessionTodo[];

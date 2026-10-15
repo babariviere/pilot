@@ -1,240 +1,264 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, open, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { setTimeout as sleep } from "node:timers/promises";
-import type { TodosUpdateEvent } from "@pilot/protocol";
-import { parseTodo, TodosWatch, todosDirectory } from "./todos.ts";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import {
+	fauxAssistantMessage,
+	fauxProvider,
+	InMemoryCredentialStore,
+	InMemoryModelsStore,
+} from "@earendil-works/pi-ai";
+import { createModels } from "@earendil-works/pi-ai/models";
+import { ModelRuntime, SettingsManager, wrapRegisteredTool } from "@earendil-works/pi-coding-agent";
+import { createRegistry, Harness } from "@earendil-works/pi-durable";
+import type { AgentEvent } from "@pilot/protocol";
+import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
+import { KernelSession } from "./session.ts";
+import { readSessionSnapshot, readSessionTodoCount } from "./snapshot.ts";
+import { openSessionStorage } from "./storage.ts";
+import { callParentTodo, startTodoBridge } from "./todo-bridge.ts";
+import {
+	applyTodo,
+	TODO_BODY_BYTES,
+	TODO_LIMIT,
+	type TodoArgs,
+	TodoProgressDoc,
+	type TodoRecord,
+	TodosDoc,
+	todoProgress,
+} from "./todos.ts";
 
-const record = (title = "Add tests", extra = {}) => ({
-	id: "deadbeef",
-	title,
-	status: "open",
-	created_at: "2026-07-01T00:00:00Z",
-	tags: [],
-	...extra,
-});
-const markdown = (value: unknown) => `${JSON.stringify(value, null, 2)}\n\nBody with {braces}\n`;
-
-test("TODO reader accepts extension front matter and ignores markdown bodies and private fields", () => {
-	assert.deepEqual(
-		parseTodo(
-			markdown(record('Escaped "quote", \\ and {braces}', { assigned_to_session: "session-1", secret: "hidden" })),
-			"DEADBEEF",
-		),
-		{
-			id: "TODO-deadbeef",
-			title: 'Escaped "quote", \\ and {braces}',
-			status: "open",
-			createdAt: "2026-07-01T00:00:00Z",
-			assignedToSession: "session-1",
-		},
-	);
-	assert.equal(parseTodo("{partial", "deadbeef"), undefined);
-	assert.equal(parseTodo("Not JSON", "deadbeef"), undefined);
-	assert.equal(parseTodo(markdown({ title: 42, status: "open" }), "deadbeef"), undefined);
-	assert.equal(parseTodo(JSON.stringify(record()), "deadbeef")?.assignedToSession, undefined);
-});
-
-test("TODO path matches extension defaults and relative/absolute environment overrides", () => {
-	assert.equal(todosDirectory("/workspace", ""), "/workspace/.pi/todos");
-	assert.equal(todosDirectory("/workspace", " shared/tasks "), "/workspace/shared/tasks");
-	assert.equal(todosDirectory("/workspace", "/shared/tasks"), "/shared/tasks");
-});
-
-test("TODO watch sends a fresh snapshot, live mutations, and deletions, without duplicate updates", async (t) => {
-	const root = await mkdtemp(join(tmpdir(), "pilot-todos-"));
-	t.after(() => rm(root, { recursive: true, force: true }));
-	const directory = join(root, ".pi/todos");
-	const watch = new TodosWatch(directory);
-	const events: TodosUpdateEvent[] = [];
-	const stop = watch.subscribe((event) => events.push(event));
-	t.after(stop);
-	assert.deepEqual(events, [{ type: "todos_update", items: [] }]);
-	await mkdir(directory, { recursive: true });
-	const file = join(directory, "deadbeef.md");
-	await writeFile(file, markdown(record()));
-	await writeFile(join(directory, "settings.json"), "{}");
-	await writeFile(join(directory, "invalid.md"), markdown(record()));
-	await writeFile(join(directory, "deadbeef.lock"), "{}");
-	await mkdir(join(directory, "aabbccdd.md"));
-	if (process.platform !== "win32") execFileSync("mkfifo", [join(directory, "12345678.md")]);
-	await watch.refresh();
-	assert.equal(events.at(-1)?.items.length, 1);
-	await watch.refresh();
-	assert.equal(events.length, 2);
-	await writeFile(file, markdown(record("Implement tests", { assigned_to_session: "session-1" })));
-	await watch.refresh();
-	assert.equal(events.at(-1)?.items[0]?.assignedToSession, "session-1");
-	await writeFile(file, "{partial");
-	await watch.refresh();
-	assert.equal(events.length, 3, "partial writes retain the last good state");
-	await writeFile(file, markdown(record("Implement tests", { status: "closed" })));
-	await watch.refresh();
-	assert.equal(events.at(-1)?.items[0]?.status, "closed");
-	assert.equal(events.at(-1)?.items[0]?.assignedToSession, undefined);
-	stop();
-	await rm(file);
-	const reconnected: TodosUpdateEvent[] = [];
-	const stopAgain = watch.subscribe((event) => reconnected.push(event));
-	t.after(stopAgain);
-	await watch.refresh();
-	assert.deepEqual(reconnected.at(-1), { type: "todos_update", items: [] });
+function mutate(items: TodoRecord[], args: TodoArgs, actor = "parent"): TodoRecord {
+	return applyTodo(items, args, actor) as TodoRecord;
+}
+test("compatible actions, summaries, assignments, and every unclosed status", () => {
+	const items: TodoRecord[] = [];
+	const item = mutate(items, { action: "create", title: "First", tags: ["qa"], body: "Notes" });
+	assert.match(item.id, /^TODO-[a-f0-9]{8}$/);
+	assert.equal(mutate(items, { action: "get", id: item.id.slice(5).toUpperCase() }).body, "Notes");
+	assert.equal(mutate(items, { action: "append", id: item.id, body: "More" }).body, "Notes\n\nMore");
+	assert.equal(mutate(items, { action: "claim", id: item.id }, "child").assigned_to_session, "child");
+	assert.throws(() => mutate(items, { action: "claim", id: item.id }), /another agent/);
+	assert.throws(() => mutate(items, { action: "release", id: item.id }), /another agent/);
+	assert.equal(mutate(items, { action: "release", id: item.id, force: true }).assigned_to_session, undefined);
+	mutate(items, { action: "claim", id: item.id });
+	for (const status of ["open", "in_progress", "blocked", "arbitrary"]) {
+		mutate(items, { action: "update", id: item.id, status });
+		assert.equal(todoProgress(items).openCount, 1);
+	}
+	mutate(items, { action: "update", id: item.id, status: "DONE" });
+	assert.equal(items[0].assigned_to_session, undefined);
+	assert.equal(todoProgress(items).openCount, 0);
+	assert.deepEqual(applyTodo(items, { action: "list" }, "parent"), []);
+	const all = applyTodo(items, { action: "listAll" }, "parent") as Omit<TodoRecord, "body">[];
+	assert.equal(all.length, 1);
+	assert.equal("body" in all[0], false);
+	assert.throws(() => mutate(items, { action: "claim", id: item.id }), /Reopen/);
+	mutate(items, { action: "update", id: item.id, status: "open", body: "Replaced", tags: [] });
+	assert.equal(mutate(items, { action: "get", id: `#${item.id}` }).body, "Replaced");
+	assert.equal(mutate(items, { action: "delete", id: item.id }).id, item.id);
+	assert.equal(items.length, 0);
+	assert.throws(() => mutate(items, { action: "get", id: item.id }), /not found/);
 });
 
-test("TODO polling runs only while subscribed and detects files during long tool calls", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pilot-todos-poll-"));
+test("storage, item, UTF-8 and input bounds reject without committing partial data", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pilot-todo-bounds-"));
 	t.after(() => rm(directory, { recursive: true, force: true }));
-	const watch = new TodosWatch(directory, 10);
-	const events: TodosUpdateEvent[] = [];
-	const stop = watch.subscribe((event) => events.push(event));
-	t.after(stop);
-	assert.equal(typeof stop, "function", "subscription does not await display-only filesystem I/O");
-	await writeFile(join(directory, "deadbeef.md"), markdown(record()));
-	const deadline = Date.now() + 2_000;
-	while (events.length < 2 && Date.now() < deadline) await sleep(10);
-	assert.equal(events.at(-1)?.items[0]?.title, "Add tests");
-	stop();
-	await writeFile(join(directory, "deadbeef.md"), markdown(record("Changed after stop")));
-	await sleep(40);
-	assert.equal(events.length, 2);
-});
-
-test("TODO cached snapshots stay sorted and defensive across getters and listener deliveries", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pilot-todos-snapshot-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	await writeFile(join(directory, "deadbeef.md"), markdown(record("later", { created_at: "2026-07-02" })));
-	await writeFile(join(directory, "aabbccdd.md"), markdown(record("earlier", { created_at: "2026-07-01" })));
-	const watch = new TodosWatch(directory);
-	await watch.refresh();
-	const mutated = watch.current;
-	mutated.items[0].title = "mutated";
-	mutated.items.reverse();
-	const expected = ["earlier", "later"];
-	assert.deepEqual(
-		watch.current.items.map((todo) => todo.title),
-		expected,
-	);
-	const offFirst = watch.subscribe((event) => {
-		event.items[0].title = "listener mutation";
-		event.items.reverse();
+	const owned = await openSessionStorage(directory);
+	const harness = await Harness.open(owned.storage, { models: createModels(), registry: createRegistry() }, context);
+	t.after(async () => {
+		await harness.close(context);
+		owned.release();
 	});
-	t.after(offFirst);
-	const received: TodosUpdateEvent[] = [];
-	const offSecond = watch.subscribe((event) => received.push(event));
-	t.after(offSecond);
-	await watch.refresh();
-	assert.equal(received.length, 1, "unchanged polls compare the stable cached representation");
-	assert.deepEqual(
-		received[0].items.map((todo) => todo.title),
-		expected,
-	);
-	await writeFile(join(directory, "deadbeef.md"), markdown(record("updated", { created_at: "2026-07-02" })));
-	await watch.refresh();
-	assert.equal(received.length, 2);
-	assert.deepEqual(
-		received[1].items.map((todo) => todo.title),
-		["earlier", "updated"],
-	);
-	assert.deepEqual(
-		watch.current.items.map((todo) => todo.title),
-		["earlier", "updated"],
-	);
+	const commit = (args: TodoArgs) =>
+		harness.commit(async (tx) => {
+			const state = await tx.doc(TodosDoc);
+			const copy = state.items.map((item) => ({ ...item, tags: [...item.tags] }));
+			const result = applyTodo(copy, args, "parent");
+			state.items = copy;
+			Object.assign(await tx.doc(TodoProgressDoc), todoProgress(copy));
+			return result;
+		}, context);
+	await commit({ action: "create", title: "Keep", body: "safe" });
+	const before = await harness.snapshot(TodosDoc, context);
+	await assert.rejects(commit({ action: "create", title: "Too big", body: "é".repeat(TODO_BODY_BYTES) }), /UTF-8/);
+	assert.deepEqual(await harness.snapshot(TodosDoc, context), before);
+	const items = structuredClone(before!.items);
+	for (let index = items.length; index < TODO_LIMIT; index++) mutate(items, { action: "create", title: "Bounded" });
+	assert.throws(() => mutate(items, { action: "create", title: "Extra" }), /limit/);
+	assert.throws(() => mutate([], { action: "create", title: " " }), /nonempty/);
+	assert.throws(() => mutate(items, { action: "update", id: "../../file" }), /Expected/);
+	assert.throws(() => mutate(items, { action: "update", id: items[0].id, tags: [42] as unknown as string[] }), /Tag/);
+	for (let index = 0; index < 15; index++)
+		await commit({ action: "create", title: "Body", body: "x".repeat(TODO_BODY_BYTES) });
+	await assert.rejects(commit({ action: "create", title: "Over total", body: "x".repeat(TODO_BODY_BYTES) }), /1 MiB/);
+	const full = await harness.snapshot(TodosDoc, context);
+	await assert.rejects(commit({ action: "append", id: full!.items[1].id, body: "x" }), /UTF-8/);
+	assert.deepEqual(await harness.snapshot(TodosDoc, context), full);
+	const db = new DatabaseSync(join(directory, "harness.sqlite"), { readOnly: true });
+	try {
+		assert.equal(
+			db.prepare("SELECT COUNT(*) AS n FROM document_revisions").get()!.n,
+			2,
+			"latest-only checkpoints bound document revisions",
+		);
+	} finally {
+		db.close();
+	}
 });
 
-test("TODO polls cache unchanged metadata, read bounded headers, and retry invalid writes", async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pilot-todos-cache-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	const fs = { open, readdir, stat };
-	let bytes = 0;
-	const opened = t.mock.method(
-		fs,
-		"open",
-		async (path: Parameters<typeof open>[0], flags: Parameters<typeof open>[1]) => {
-			const handle = await open(path, flags);
-			const read = t.mock.method(handle, "read");
-			const close = handle.close.bind(handle);
-			t.mock.method(handle, "close", async () => {
-				for (const call of read.mock.calls) {
-					const args: readonly unknown[] = call.arguments;
-					bytes += Number(args[2]);
-				}
-				await close();
-			});
-			return handle;
-		},
-	);
-	const watch = new TodosWatch(directory, 1_000, fs);
-	const file = join(directory, "deadbeef.md");
-	await writeFile(file, `${markdown(record("first"))}${"large body\n".repeat(100_000)}`);
-	await watch.refresh();
-	assert.equal(watch.current.items[0]?.title, "first");
-	assert.equal(bytes, 4096, "a huge markdown body is not read in full");
-	await watch.refresh();
-	assert.equal(opened.mock.callCount(), 1, "unchanged polls stat files without opening them");
-	await writeFile(join(directory, "replacement"), markdown(record("other")));
-	await rename(join(directory, "replacement"), file);
-	await watch.refresh();
-	assert.equal(watch.current.items[0]?.title, "other", "atomic replacement invalidates metadata");
-	await writeFile(file, `{${" ".repeat(200_000)}`);
-	const before = bytes;
-	await watch.refresh();
-	assert.equal(bytes - before, 64 * 1024, "a malformed/oversized header has a hard read budget");
-	assert.equal(watch.current.items[0]?.title, "other", "retain the last good TODO");
-	const count = opened.mock.callCount();
-	await watch.refresh();
-	assert.equal(opened.mock.callCount(), count + 1, "invalid headers are retried, not cached");
-	await writeFile(file, markdown(record("recovered")));
-	await watch.refresh();
-	assert.equal(watch.current.items[0]?.title, "recovered");
-	await rm(file);
-	await watch.refresh();
-	assert.equal(watch.current.items.length, 0);
-	await writeFile(file, markdown(record("recreated")));
-	await watch.refresh();
-	assert.equal(watch.current.items[0]?.title, "recreated");
-});
-
-test("TODO polling bounds concurrent file work and coalesces refresh requests", { timeout: 5_000 }, async (t) => {
-	const directory = await mkdtemp(join(tmpdir(), "pilot-todos-concurrency-"));
-	t.after(() => rm(directory, { recursive: true, force: true }));
-	for (let id = 0; id < 20; id++)
-		await writeFile(join(directory, `${id.toString(16).padStart(8, "0")}.md`), markdown(record()));
-	const fs = { open, readdir, stat };
-	let active = 0;
-	let maximum = 0;
-	let unblock!: () => void;
-	const blocked = new Promise<void>((resolve) => {
-		unblock = resolve;
+test("parent tools and concurrent child writes share a durable list, events and cheap count across restore", {
+	timeout: 30_000,
+}, async (t) => {
+	const root = await mkdtemp(join(tmpdir(), "pilot-todo-session-"));
+	const cwd = join(root, "workspace");
+	const storageDir = join(root, "durable");
+	await mkdir(join(cwd, ".pi/todos"), { recursive: true });
+	const legacy = join(cwd, ".pi/todos/aabbccdd.md");
+	await writeFile(legacy, '{"title":"Legacy","status":"open"}');
+	const runtime = await ModelRuntime.create({
+		credentials: new InMemoryCredentialStore(),
+		modelsStore: new InMemoryModelsStore(),
+		modelsPath: null,
+		allowModelNetwork: false,
+		refreshOnCreate: false,
 	});
-	t.after(unblock);
-	let filled!: () => void;
-	const ready = new Promise<void>((resolve) => {
-		filled = resolve;
-	});
-	t.mock.method(fs, "open", async (path: Parameters<typeof open>[0], flags: Parameters<typeof open>[1]) => {
-		const handle = await open(path, flags);
-		active++;
-		maximum = Math.max(maximum, active);
-		const close = handle.close.bind(handle);
-		t.mock.method(handle, "close", async () => {
-			await close();
-			active--;
+	const faux = fauxProvider();
+	runtime.registerNativeProvider(faux.provider);
+	let native!: NativeAdapter;
+	const open = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+		native = await open.call(NativeAdapter, {
+			...options,
+			agentDir: root,
+			projectTrusted: false,
+			bundledExtensions: false,
+			settingsManager: SettingsManager.inMemory({ defaultTools: ["+codemode"], codemode: { mode: "only" } }),
+			loaderOptions: {
+				cwd,
+				agentDir: root,
+				noSkills: true,
+				noContextFiles: true,
+				noPromptTemplates: true,
+				noThemes: true,
+			},
+			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
 		});
-		if (active === 4) filled();
-		await blocked;
-		return handle;
+		return native;
 	});
-	const watch = new TodosWatch(directory, 1_000, fs);
-	const refreshing = watch.refresh();
-	assert.equal(watch.refresh(), refreshing);
-	await ready;
-	assert.equal(active, 4);
-	unblock();
-	await refreshing;
-	assert.equal(maximum, 4);
-	assert.equal(active, 0, "every header handle closes");
-	assert.equal(watch.current.items.length, 20);
+	let session: KernelSession | undefined;
+	t.after(async () => {
+		await session?.close();
+		await rm(root, { recursive: true, force: true });
+	});
+	const counts: number[] = [];
+	const spec = { sessionId: "parent", storageDir, cwd };
+	session = await KernelSession.open(spec, { onWorking: () => {}, onTodosChanged: (count) => counts.push(count) });
+	const events: AgentEvent[] = [];
+	await session.watch("todos", (batch) => {
+		events.push(...batch);
+	});
+	assert.deepEqual(
+		events.find((e) => e.type === "todos_update"),
+		{ type: "todos_update", items: [] },
+	);
+	faux.setResponses([
+		fauxAssistantMessage(
+			{
+				type: "toolCall",
+				id: "todo-call",
+				name: "codemode",
+				arguments: { code: 'return await tools.todo({action:"create",title:"From parent",body:"Durable"});' },
+			},
+			{ stopReason: "toolUse" },
+		),
+		fauxAssistantMessage("Saved"),
+	]);
+	await session.submit("input", "Create a todo", "followUp");
+	await session.harness.waitForIdle(context);
+	assert.equal(session.openTodoCount, 1);
+	const children = (await Promise.all(
+		Array.from({ length: 4 }, (_, i) => callParentTodo({ action: "create", title: `Child ${i}` }, `child-${i}`)),
+	)) as TodoRecord[];
+	assert.equal(session.openTodoCount, 5);
+	await callParentTodo({ action: "claim", id: children[0].id }, "child-0");
+	await assert.rejects(callParentTodo({ action: "release", id: children[0].id }, "child-1"), /another agent/);
+	await callParentTodo({ action: "update", id: children[0].id, status: "closed" }, "child-0");
+	assert.equal(await readSessionTodoCount(storageDir), 4);
+	assert.equal(session.openTodoCount, 4);
+	assert.equal(counts.at(-1), 4);
+	assert.deepEqual(await readFile(legacy, "utf8"), '{"title":"Legacy","status":"open"}');
+	const view = await readSessionSnapshot(storageDir, cwd);
+	const progress = view.events.find((e) => e.type === "todos_update");
+	assert.equal(progress?.items.length, 5);
+	assert.equal(events.filter((e) => e.type === "todos_update").at(-1)?.items.length, 5);
+	await session.close();
+	session = undefined;
+	await rm(cwd, { recursive: true, force: true });
+	await mkdir(cwd);
+	assert.equal(await readSessionTodoCount(storageDir), 4);
+	session = await KernelSession.open(spec, { onWorking: () => {} });
+	assert.equal(session.openTodoCount, 4);
+	assert.equal((await session.harness.snapshot(TodosDoc, context))?.items[0].body, "Durable");
+	assert.deepEqual(
+		(await readSessionSnapshot(storageDir, cwd)).events.find((e) => e.type === "todos_update"),
+		progress,
+	);
+	const tool = native.session.getToolDefinition("todo")!;
+	const sourceInfo = native.session.getAllTools().find((tool) => tool.name === "todo")!.sourceInfo;
+	const result = await wrapRegisteredTool({ definition: tool, sourceInfo }, native.session.extensionRunner).execute(
+		"get",
+		{ action: "get", id: children[0].id },
+	);
+	assert.equal((result.details as TodoRecord).status, "closed");
+	await session.close();
+	session = undefined;
+	session = await KernelSession.open(
+		{ ...spec, sessionId: "other-chat", storageDir: join(root, "other-durable") },
+		{ onWorking: () => {} },
+	);
+	assert.equal(session.openTodoCount, 0, "another chat in the same workspace has its own list");
+	assert.deepEqual((await session.harness.snapshot(TodosDoc, context))?.items, []);
+	assert.equal(await readSessionTodoCount(storageDir), 4, "the first chat's list is untouched");
+});
+
+test("a child cannot fall back to checkout storage when its parent bridge closes", async () => {
+	const bridge = await startTodoBridge(async () => []);
+	assert.deepEqual(await callParentTodo({ action: "list" }, "child"), []);
+	await bridge.close();
+	await assert.rejects(callParentTodo({ action: "list" }, "child"), /unavailable/);
+});
+
+test("parent bridge shutdown drains admitted commits before releasing its owner", async () => {
+	let release!: () => void;
+	const gate = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	let started!: () => void;
+	const admitted = new Promise<void>((resolve) => {
+		started = resolve;
+	});
+	const bridge = await startTodoBridge(async () => {
+		started();
+		await gate;
+		return [];
+	});
+	const call = callParentTodo({ action: "list" }, "child");
+	await admitted;
+	let closed = false;
+	const closing = bridge.close().then(() => {
+		closed = true;
+	});
+	try {
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(closed, false);
+	} finally {
+		release();
+	}
+	await call;
+	await closing;
+	assert.equal(closed, true);
 });

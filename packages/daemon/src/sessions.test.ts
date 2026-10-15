@@ -72,6 +72,19 @@ function supervisedWorker(t: TestContext, commandTimeoutMs = 1_000) {
 	return { child, worker, ready, packets };
 }
 
+test("todo counts arrive on readiness and committed mutations without starting extra work", async (t) => {
+	const { child, worker, ready } = supervisedWorker(t);
+	ready();
+	await worker.ready;
+	child.emit("message", { type: "ready", model: "test/model", working: false, usage: {}, openTodoCount: 7 });
+	assert.equal(worker.openTodoCount, 7);
+	const sent = child.sent.length;
+	child.emit("message", { type: "todos.changed", openCount: 6 });
+	assert.equal(worker.openTodoCount, 6);
+	assert.equal(child.sent.length, sent);
+	assert.equal(worker.state, "idle");
+});
+
 test("unexpected disconnect still fails an idle worker", async (t) => {
 	const { child, worker, ready, packets } = supervisedWorker(t);
 	ready();
@@ -904,6 +917,23 @@ async function fixture(t: TestContext) {
 	});
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
+
+test("todo count uses the live cache, ignores retired workers, and cold-reads without opening an agent", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager();
+	const created = await sessions.spawn({ cwd: f.source, message: "Start" });
+	await sessions["starting"].get(created.id);
+	const worker = f.workers[0];
+	const meta = sessions["metas"].get(created.id)!;
+	sessions["onPacket"](meta, worker, { type: "todos.changed", openCount: 3 });
+	assert.equal(await sessions.openTodoCount(created.id), 3);
+	const retired = { ...worker } as unknown as SessionWorker;
+	sessions["onPacket"](meta, retired, { type: "todos.changed", openCount: 99 });
+	assert.equal(await sessions.openTodoCount(created.id), 3);
+	sessions["workers"].delete(created.id);
+	assert.equal(await sessions.openTodoCount(created.id), 0, "unopened durable storage has no todos");
+	assert.equal(f.workers.length, 1, "counting never reopens a parked agent");
+});
 
 test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {
 	const f = await fixture(t);

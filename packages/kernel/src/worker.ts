@@ -341,6 +341,7 @@ export function runKernelWorker(): void {
 					onWorking: (working, completion) =>
 						notify({ type: "working", working, ...(completion ? { completion } : {}) }),
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
+					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
@@ -361,6 +362,7 @@ export function runKernelWorker(): void {
 					thinking: session.thinkingLevel,
 					working: session.working,
 					usage: session.usage,
+					openTodoCount: session.openTodoCount,
 					...(session.completion ? { completion: session.completion } : {}),
 					commands: session.commands,
 					...(session.attempts ? { attempts: session.attempts } : {}),

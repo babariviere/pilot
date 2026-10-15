@@ -6,8 +6,34 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { createSession } from "@earendil-works/pi-durable";
+import { openSessionStorage } from "../../kernel/src/storage.ts";
+import { TodoProgressDoc } from "../../kernel/src/todos.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { ServiceUnavailable } from "./errors.ts";
+
+test("cold todo counts read committed progress under a live writer lease without opening transcript storage", async (t) => {
+	const directory = await mkdtemp(join(tmpdir(), "pilot-todo-count-"));
+	const reader = new ColdViewReader();
+	const owned = await openSessionStorage(directory);
+	const session = createSession(owned.storage);
+	t.after(async () => {
+		await reader.close();
+		await session.close(context);
+		owned.release();
+		await rm(directory, { recursive: true, force: true });
+	});
+	await session.commit(async (tx) => {
+		(await tx.doc(TodoProgressDoc)).openCount = 7;
+	}, context);
+	assert.equal(await reader.readTodoCount(directory), 7);
+	await session.commit(async (tx) => {
+		(await tx.doc(TodoProgressDoc)).openCount = 6;
+	}, context);
+	assert.equal(await reader.readTodoCount(directory), 6, "reads are fresh rather than a snapshot cache");
+	assert.equal(await reader.readTodoCount(join(directory, "unopened")), 0);
+});
 
 test("cold-reader admission bounds queued work and releases it on shutdown", async () => {
 	const reader = new ColdViewReader();
