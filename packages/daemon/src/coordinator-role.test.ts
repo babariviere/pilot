@@ -278,3 +278,117 @@ test("Git-only direct chats gain a read-only source view and an isolated workspa
 	await manager.archive(id);
 	assert.equal(existsSync(scratch), false);
 });
+
+test("every cold worker-open entry point preserves the coordinator source role and private cwd", async (t) => {
+	const home = await realpath(await mkdtemp(join(tmpdir(), "pilot-coordinator-entrypoints-")));
+	t.after(() => rm(home, { recursive: true, force: true }));
+	const source = join(home, "source");
+	copyGitSeed(source, { "file.txt": "base\n" });
+	const projects = new ProjectStore(home);
+	const project = await projects.create({ path: source, workspace: "direct" });
+	const actions: Array<[string, (manager: SessionManager, id: string) => Promise<unknown>]> = [
+		["commands", (manager, id) => manager.commands(id)],
+		["compact", (manager, id) => manager.compact(id)],
+		[
+			"changeModel",
+			(manager, id) =>
+				manager.changeModel(id, "fixture/model", {
+					list: async () => ({ models: [{ id: "fixture/model", provider: "fixture", name: "Fixture" }] }),
+				}),
+		],
+		["editQueuedMessage", (manager, id) => manager.editQueuedMessage(id, 1, "edit")],
+		["removeQueuedMessage", (manager, id) => manager.removeQueuedMessage(id, 1)],
+		["heldMessages", (manager, id) => manager.heldMessages(id, "discard")],
+		["rewind", (manager, id) => manager.rewind(id, "restore", 1)],
+		["activateAttempt", (manager, id) => manager.activateAttempt(id, "1")],
+		["subagentCommand", (manager, id) => manager.subagentCommand(id, "child", { action: "stop" })],
+		["send", (manager, id) => manager.send(id, "read source")],
+		[
+			"startup/recovery",
+			async (manager, id) => {
+				const meta = manager["require"](id);
+				meta.working = true;
+				await manager["save"](meta);
+				await manager.load();
+				await manager["starting"].get(id);
+			},
+		],
+	];
+	for (const [name, action] of actions)
+		await t.test(name, async () => {
+			const local = join(home, name.replaceAll("/", "-"));
+			const specs: KernelSpec[] = [];
+			const manager = new SessionManager(
+				local,
+				projects,
+				undefined,
+				{
+					worker: (spec) => {
+						specs.push(spec);
+						throw new Error("isolation entrypoint gate");
+					},
+					title: async () => undefined,
+				},
+				{
+					runner: async () => {
+						throw new Error("No GitHub calls");
+					},
+				},
+			);
+			manager.setMissionBridge({
+				membership: () => ({ missionId: "g", active: true, coordinator: true }),
+				context: () => ({
+					id: "g",
+					title: "Read",
+					goal: "",
+					status: "active",
+					coordinator: "self",
+					tasks: [],
+					decisions: [],
+				}),
+				spawnProject: () => project.id,
+				joinSpawn() {},
+				call: async () => ({}),
+			});
+			try {
+				const id = randomUUID();
+				const scratch = join(local, "sessions", id, "scratch");
+				await mkdir(scratch, { recursive: true, mode: 0o700 });
+				await manager["save"]({
+					id,
+					projectId: project.id,
+					cwd: source,
+					title: "Read",
+					createdAt: 1,
+					updatedAt: 1,
+					coordinatorView: {
+						originalCwd: source,
+						path: source,
+						scratch,
+						head: "a".repeat(40),
+						repository: source,
+					},
+					subagents: [
+						{
+							name: "child",
+							state: "idle",
+							task: "read",
+							cwd: scratch,
+							createdAt: 1,
+							storage: "private",
+							conversationId: "1",
+						},
+					],
+				});
+				await action(manager, id).catch((error: Error) =>
+					assert.match(error.message, /isolation entrypoint gate|Retry startup before starting its worker/),
+				);
+				assert.equal(specs.length, 1, `${name} must reach exactly one central worker-open gate`);
+				assert.equal(specs[0]!.cwd, scratch);
+				assert.equal(specs[0]!.pilot?.coordinatorView?.path, source);
+				assert.ok(specs[0]!.pilot?.coordinatorView?.protectedPaths.includes(source));
+			} finally {
+				await manager.shutdown();
+			}
+		});
+});

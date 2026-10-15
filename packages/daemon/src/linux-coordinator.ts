@@ -190,12 +190,12 @@ export async function forkLinuxCoordinator(
 		const artifacts = join(sessionDir, "artifacts");
 		for (const path of [state.storageDir, artifacts, auth]) await mkdir(path, { recursive: true, mode: 0o700 });
 		// Validate before touching auth contents, then again after materializing the private snapshots.
-		await validateCoordinatorWrites([view.scratch, state.storageDir, artifacts, auth], view.protectedPaths);
-		await privateAuth(auth, state.agentDir);
 		const writable = await validateCoordinatorWrites(
 			[view.scratch, state.storageDir, artifacts, auth],
 			view.protectedPaths,
 		);
+		await privateAuth(auth, state.agentDir);
+		await validateCoordinatorWrites([auth], view.protectedPaths);
 		const sentinel = join(sessionDir, "coordinator-isolation-sentinel");
 		await writeFile(sentinel, "protected", { mode: 0o600 });
 		const config = await boundary(writable, view.protectedPaths, sentinel);
