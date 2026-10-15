@@ -57,6 +57,7 @@ import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
 import { submitIdleInput } from "./idle-input.ts";
+import { continueModelInPlace } from "./model-continuation.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
@@ -366,6 +367,7 @@ export class KernelSession {
 			};
 			if (!spec.pilot?.ask) todoBridge = await startTodoBridge(callTodo);
 			adapter = await NativeAdapter.open({
+				subscriptionPolicy: spec.subscriptionPolicy,
 				cwd: spec.cwd,
 				ask: spec.pilot?.ask,
 				agentDir: spec.agentDir,
@@ -399,8 +401,12 @@ export class KernelSession {
 							},
 						}),
 				...(wakePrompt ? { memoryPrompt: wakePrompt } : {}),
-				model: pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model,
-				thinking: pinned?.thinkingLevel ?? spec.thinking,
+				model:
+					spec.continuationModel?.model ??
+					(pinned ? `${pinned.model.provider}/${pinned.model.modelId}` : spec.model),
+				thinking: spec.continuationModel
+					? spec.continuationModel.thinking
+					: (pinned?.thinkingLevel ?? spec.thinking),
 			});
 			// Only mission chats declare the tool. It stays registered so joining can enable it live.
 			if (missionTools.length) adapter.setToolActive(MISSION_TOOL, !!mission.current);
@@ -420,6 +426,7 @@ export class KernelSession {
 				const tracked = jobs.prepare(refs ? refs.prepare(audited) : audited);
 				return toolDrain.prepare(
 					compactionEvents(provenance ? provenance.prepare(tracked) : tracked, () => harness),
+					(context) => adapter!.waitForSubscription(context.abortSignal),
 				);
 			};
 			const registry = createRegistry();
@@ -453,6 +460,19 @@ export class KernelSession {
 				active === ROOT_CONVERSATION_ID
 					? await root()
 					: ((await harness.conversation(active, context)) ?? (await root()));
+			let resumeContinuation: (() => Promise<void>) | undefined;
+			if (spec.continuationModel) {
+				// Never reinterpret another provider's compacted context or live generation.
+				if (pinned && pinned.model.provider !== adapter.model.provider)
+					throw new Error("In-place continuation requires the same provider");
+				resumeContinuation = await continueModelInPlace(
+					harness,
+					conversation,
+					adapter,
+					toolDrain,
+					spec.continuationModel.requestId,
+				);
+			}
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			artifactConversation = conversation;
 			if (!spec.pilot?.ask) {
@@ -557,7 +577,6 @@ export class KernelSession {
 			await harness.commit(async (tx) => {
 				await tx.doc(HeldInputsDoc, conversation.id);
 			}, context);
-			harness.resume();
 			// Extension messages that start a turn (subagent answers) become durable follow-ups.
 			session.onSystemMessageState = hooks.onSystemMessageState;
 			await session.publishSystemMessageStates();
@@ -574,6 +593,8 @@ export class KernelSession {
 					})
 					.catch((error: unknown) => console.warn("pilot: could not admit extension input", error));
 			};
+			await resumeContinuation?.();
+			harness.resume();
 			return session;
 		} catch (error) {
 			await jobs.close();

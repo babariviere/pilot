@@ -77,6 +77,12 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let working: Bool?
     /// Work paused by the Mac sleep policy. Omitted by older daemons.
     public var sleepPaused: Bool? = nil
+    /// A provider window reached its usage limit. Omitted when nothing is held, or by older daemons.
+    public var subscriptionPause: SubscriptionPause? = nil
+    /// The chat this one continues after a switch to another provider's model.
+    public var continuationOf: String? = nil
+    /// The chat that took over this one's work. Set means this chat is read-only and never resumes.
+    public var continuedTo: String? = nil
     /// Worker startup failed. Retry reloads it without replacing queued messages or history.
     public let canRetryStartup: Bool?
     /// Live jobs owned by this worker. Nil when none.
@@ -116,6 +122,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     /// The workspace has work no PR carries, so terminal-PR rules do not apply. Omitted when none, or by older daemons.
     public let unpublishedWork: Bool?
 
+    /// pilotd already reports `working: false` while a usage pause holds the main run with nothing else running.
     public var isWorking: Bool { sleepPaused != true && (working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty)) }
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }

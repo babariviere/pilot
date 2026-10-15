@@ -1,7 +1,7 @@
 // biome-ignore-all lint/complexity/useLiteralKeys: Exercise registry seams without launching a kernel.
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
@@ -77,7 +77,7 @@ async function fixture(t: TestContext, models: Record<string, string>) {
 		await Promise.allSettled(sessions["saving"].values());
 		await rm(home, { recursive: true, force: true });
 	});
-	return { agentDir, ids, sessions, cache: () => cache, workerUsage };
+	return { home, agentDir, ids, sessions, cache: () => cache, workerUsage };
 }
 
 test("parked sessions share their provider's subscription usage without a kernel", async (t) => {
@@ -113,4 +113,152 @@ test("live kernels contribute context and their physical provider for virtual mo
 		context,
 		subscription: { fetchedAt: 20, provider: "openai", windows: codex.snapshot.windows },
 	});
+});
+
+test("a 95% reading holds durable work, not idle results, and force is chat/child scoped", async (t) => {
+	const f = await fixture(t, { first: "openai-codex/gpt-5", second: "openai-codex/gpt-5" });
+	const first = f.ids.first!,
+		second = f.ids.second!;
+	await f.sessions["start"](first);
+	await f.sessions["start"](second);
+	const worker = f.sessions["workers"].get(first)!;
+	worker.state = "working";
+	f.sessions["metas"].get(first)!.working = true;
+	const completed = f.sessions["metas"].get(second)!;
+	completed.outcome = "done";
+	completed.outcomeAt = 100;
+	const fetchedAt = Date.now();
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt,
+		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(fetchedAt + 60_000).toISOString() }] },
+	});
+	await f.cache().refresh();
+	await f.sessions["subscriptionPolicyWrites"];
+	assert.equal(f.sessions.get(first)?.working, false);
+	assert.equal(f.sessions.get(first)?.state, "working", "the kernel still owns a recoverable durable run");
+	assert.equal(f.sessions.get(first)?.outcome, undefined);
+	assert.equal(f.sessions.get(second)?.outcome, "done", "an unrelated usage warning cannot hide a finished result");
+	const policyFile = (id: string) => join(f.home, "sessions", id, "subscription-policy.json");
+	const blocked = JSON.parse(await readFile(policyFile(first), "utf8"));
+	assert.equal(blocked.windows.length, 1);
+	assert.deepEqual(blocked.forced, []);
+	await f.sessions.forceSubscription(first, true);
+	assert.equal(f.sessions.get(first)?.subscriptionPause?.forced, true);
+	assert.equal(f.sessions.get(first)?.working, true);
+	assert.equal(f.sessions.get(second)?.subscriptionPause?.forced, undefined);
+	assert.equal(JSON.parse(await readFile(policyFile(first), "utf8")).forced.length, 1);
+	assert.equal(JSON.parse(await readFile(policyFile(second), "utf8")).forced.length, 0);
+	assert.equal(
+		JSON.parse(await readFile(join(f.home, "sessions", first, "meta.json"), "utf8")).subscriptionPolicy.forced.length,
+		1,
+	);
+	await f.sessions.forceSubscription(first, false);
+	assert.equal(f.sessions.subscriptionPaused(first), true);
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt: Date.now() + 60_000,
+		snapshot: { windows: [{ label: "5h", usedPercent: 10 }] },
+	});
+	// A future clock is not a fresh reading. Do not release on it.
+	await f.cache().refresh();
+	await f.sessions["subscriptionPolicyWrites"];
+	assert.equal(f.sessions.subscriptionPaused(first), true);
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt: Date.now(),
+		snapshot: { windows: [{ label: "5h", usedPercent: 10 }] },
+	});
+	await f.cache().refresh();
+	await f.sessions["subscriptionPolicyWrites"];
+	assert.equal(f.sessions.get(first)?.subscriptionPause, undefined);
+	assert.equal(f.sessions.get(first)?.working, true);
+});
+
+test("a different-provider child cannot escape limits, and its parent exposes the warning", async (t) => {
+	const f = await fixture(t, { parent: "anthropic/claude-sonnet" });
+	const id = f.ids.parent!;
+	await f.sessions["start"](id);
+	f.sessions["metas"].get(id)!.subagents = [
+		{
+			name: "child",
+			state: "working",
+			task: "work",
+			createdAt: 0,
+			cwd: f.home,
+			storage: join(f.home, "child"),
+			model: "openai-codex/gpt-5",
+		},
+	];
+	const fetchedAt = Date.now();
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt,
+		snapshot: { windows: [{ label: "Week", usedPercent: 97 }] },
+	});
+	await f.cache().refresh();
+	await f.sessions["subscriptionPolicyWrites"];
+	assert.equal(f.sessions.get(id)?.subscriptionPause?.windows[0]?.provider, "openai");
+	assert.equal(f.sessions.get(id)?.working, false, "only blocked child work remains");
+	assert.equal(f.sessions.get(id)?.state, "working", "the paused child is not a completed chat");
+	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
+	assert.equal(
+		policy.windows[0].provider,
+		"openai",
+		"children inherit the full policy, not only the parent's provider",
+	);
+	await f.sessions.forceSubscription(id, true);
+	assert.equal(f.sessions.get(id)?.working, true);
+});
+
+test("the reset timer releases work and expires force without a new provider reading", async (t) => {
+	const f = await fixture(t, { chat: "openai-codex/gpt-5" });
+	const id = f.ids.chat!;
+	const reset = Date.now() + 150;
+	const resumed = new Promise<void>((resolve) =>
+		f.sessions.onChange((summary) => {
+			if (summary.id === id && !summary.subscriptionPause && Date.now() >= reset) resolve();
+		}),
+	);
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt: Date.now(),
+		snapshot: { windows: [{ label: "5h", usedPercent: 95, resetsAt: new Date(reset).toISOString() }] },
+	});
+	await f.cache().refresh();
+	assert.ok(f.sessions.get(id)?.subscriptionPause);
+	await f.sessions.forceSubscription(id, true);
+	await resumed;
+	assert.equal(f.sessions.get(id)?.subscriptionPause, undefined);
+	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
+	assert.deepEqual(policy.windows, []);
+	assert.deepEqual(policy.forced, []);
+});
+
+test("a known pause and its per-chat force survive daemon restart when provider usage is unavailable", async (t) => {
+	const f = await fixture(t, { chat: "openai-codex/gpt-5" });
+	const id = f.ids.chat!;
+	await writeUsageCache(f.agentDir, "openai", {
+		fetchedAt: Date.now(),
+		snapshot: { windows: [{ label: "Week", usedPercent: 97 }] },
+	});
+	await f.cache().refresh();
+	await f.sessions.forceSubscription(id, true);
+	await f.sessions.shutdown();
+	const reopened = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		f.agentDir,
+		{
+			worker: () => new FakeWorker({ provider: "openai-codex" }),
+		},
+		{},
+		{
+			subscriptionUsage: () => ({ get: () => undefined, start: async () => {}, close() {} }),
+		},
+	);
+	t.after(() => reopened.shutdown());
+	await reopened.load();
+	assert.equal(reopened.get(id)?.subscriptionPause?.forced, true);
+	await reopened.forceSubscription(id, false);
+	assert.equal(reopened.subscriptionPaused(id), true, "a missing provider reading cannot release the durable pause");
+	await reopened["start"](id);
+	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
+	assert.equal(policy.windows[0]?.usedPercent, 97);
+	assert.deepEqual(policy.forced, []);
 });

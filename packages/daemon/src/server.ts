@@ -5,6 +5,7 @@ import type {
 	ArtifactLibrary,
 	BindPullRequestRequest,
 	ChangeModelRequest,
+	SubscriptionForceRequest,
 	RenameSessionRequest,
 	ClientMessage,
 	CompactRequest,
@@ -592,6 +593,11 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "sessions" && parts.length === 4 && req.method === "POST") {
 			const id = parts[2]!;
+			if (parts[3] === "subscription-force") {
+				const body = await readJson<SubscriptionForceRequest>(req);
+				if (!body || typeof body.force !== "boolean") throw new HttpError(400, "force must be a boolean");
+				return json(res, 200, await sessions.forceSubscription(id, body.force));
+			}
 			if (parts[3] === "archive") return json(res, 200, await sessions.archive(id));
 			if (parts[3] === "restore") return json(res, 200, await sessions.restore(id));
 			if (parts[3] === "pin") return json(res, 200, await sessions.setPinned(id, true));
@@ -603,13 +609,19 @@ export function createDaemonServer(
 				return json(res, 200, await sessions.rename(id, body.title));
 			}
 			if (parts[3] === "reclaim-workspace") return json(res, 200, await sessions.reclaimWorkspace(id));
-			if (parts[3] === "model") {
+			if (parts[3] === "model" || parts[3] === "continue-model") {
 				const body = await readJson<ChangeModelRequest>(req);
 				if (!body || typeof body.model !== "string" || !body.model.trim())
 					throw new HttpError(400, "model is required");
 				if (body.thinking !== undefined && (typeof body.thinking !== "string" || !body.thinking))
 					throw new HttpError(400, "thinking must be a supported level");
-				return json(res, 200, await sessions.changeModel(id, body.model, models, body.thinking));
+				return json(
+					res,
+					200,
+					await (parts[3] === "continue-model"
+						? sessions.continueModel(id, body.model, models, body.thinking)
+						: sessions.changeModel(id, body.model, models, body.thinking)),
+				);
 			}
 			if (parts[3] === "messages") {
 				const body = await readJson<SendRequest>(req);

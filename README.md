@@ -99,6 +99,25 @@ from background jobs, PR follow-ups and other chats stay held, without restartin
 to start one run with them, **Discard** to remove all or an individual held message, or send your next
 message to carry them along. Waiting system messages are read-only.
 
+### Subscription limits
+
+Chats pause new model requests and tool calls at **95%** of any subscription window. Active tools finish
+safely, and subagents respect their own provider's limits, even when it differs from the parent chat.
+Work resumes automatically when the blocked windows reset or a fresh usage reading drops below 95%.
+Known pauses survive restarts and unavailable readings. Usage comes from pi's shared cache, without
+additional provider polling; unknown usage cannot predict a limit, and in-flight requests may still use tokens.
+
+Beside the usage warning, **Force work** lets that chat and its subagents continue past the current
+windows. The override ends when those windows reset or clear. **Pause at limit** restores the guard early.
+
+**Continue with another model…** explains the change before confirming. A model from the same provider
+keeps this chat and compatible context, but does not bypass its subscription limit. A different provider
+starts a linked chat with a bounded plain-text handoff, not provider-specific history or compaction. It
+takes over the existing workspace, branch, PR ownership and mission task claims. The original remains
+readable and never resumes automatically. Previous subagent tasks are handed off as text, not recovered
+with their old provider context. New-model usage limits still apply.
+Finish or stop background jobs and close live terminals before changing the model for paused work.
+
 ### Ask and Build
 
 | | Ask | Build |

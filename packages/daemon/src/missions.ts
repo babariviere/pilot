@@ -196,6 +196,10 @@ CREATE TABLE IF NOT EXISTS members (
 	joined_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS members_by_mission ON members (mission_id);
+CREATE TABLE IF NOT EXISTS session_continuations (
+	from_session_id TEXT PRIMARY KEY,
+	to_session_id TEXT NOT NULL
+);
 -- A first automatic observation is consumed even when task attribution is ambiguous.
 -- Keep it after unlinking so creation/discovery replay cannot recreate deleted links.
 CREATE TABLE IF NOT EXISTS automatic_pull_request_observations (
@@ -2790,6 +2794,55 @@ export class MissionStore {
 
 	// Membership
 
+	/** Ownership handoff, not leave/join: retain every claim, status, PR link and observation tombstone. */
+	continueSession(from: string, to: string): void {
+		if (from === to) throw new Conflict("A continuation requires a fresh chat");
+		const previous = this.one("SELECT to_session_id FROM session_continuations WHERE from_session_id = ?", from);
+		if (previous && previous.to_session_id !== to) throw new Conflict("Chat already continued elsewhere");
+		const id = this.missionOf(from);
+		if (!id) {
+			this.run(
+				"INSERT OR IGNORE INTO session_continuations (from_session_id, to_session_id) VALUES (?, ?)",
+				from,
+				to,
+			);
+			return; // The same journal may be replayed after the transaction committed.
+		}
+		if (this.missionOf(to)) throw new Conflict("The continuation chat already belongs to a mission");
+		this.transaction(() => {
+			this.run(
+				"INSERT OR IGNORE INTO session_continuations (from_session_id, to_session_id) VALUES (?, ?)",
+				from,
+				to,
+			);
+			this.run("UPDATE members SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE tasks SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE missions SET coordinator_session_id = ? WHERE coordinator_session_id = ?", to, from);
+			this.run("UPDATE member_runs SET session_id = ? WHERE session_id = ?", to, from);
+			this.run("UPDATE notices SET session_id = ? WHERE session_id = ? AND delivered_at IS NULL", to, from);
+			this.run(
+				"UPDATE comments SET target_session_id = ? WHERE target_session_id = ? AND resolved_at IS NULL",
+				to,
+				from,
+			);
+			// Copy both positive bindings and negative tombstones. Never re-infer task attribution.
+			this.run(
+				`INSERT INTO pull_request_bindings (session_id, url, bound, mission_id, task_id)
+				SELECT ?, url, bound, mission_id, task_id FROM pull_request_bindings WHERE session_id = ?`,
+				to,
+				from,
+			);
+			this.run("UPDATE pull_request_bindings SET bound = 0 WHERE session_id = ?", from);
+			this.run(
+				"UPDATE resources SET added_by_session_id = ? WHERE added_by_session_id = ? AND relationship = 'ownership'",
+				to,
+				from,
+			);
+			this.event(id, "member", `Chat ${from} continued in ${to}`, { sessionId: to });
+		});
+		this.changed(id, [from, to]);
+	}
+
 	/** Hot session-summary path: no attention counts, task bodies or mission detail. Always read current roles. */
 	membership(sessionId: string): { missionId: string; active: boolean; coordinator: boolean } | undefined {
 		const row = this.one(
@@ -2824,6 +2877,8 @@ export class MissionStore {
 
 	/** Moving a chat from another mission releases its tasks there. */
 	join(sessionId: string, id: string, actor: MissionActor = USER): void {
+		if (this.one("SELECT 1 FROM session_continuations WHERE from_session_id = ?", sessionId))
+			throw new Conflict("This chat continued elsewhere and cannot own mission work");
 		this.require(id);
 		const previous = this.missionOf(sessionId);
 		if (previous === id) return;

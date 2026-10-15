@@ -247,6 +247,24 @@ rendering, GUI launch latency or total retained worker memory. All admitted agen
 concurrently. Two connected but stalled initializations can hold both slots: elapsed time alone must
 not revoke a live writer's storage lease. No live chats, credentials or model services were used.
 
+## Subscription admission
+
+`subscription-policy.test.ts` and `session-subscription-usage.test.ts` cover the 95% boundary, all-window
+blocking, fresh lower readings, reset timers, unknown/error/stale readings, per-chat force expiry and
+restart persistence, and children using another provider. `subscription-pause.integration.test.ts`
+checks the real parent Harness/native adapter, safe tool drainage and SQLite recovery without replay.
+The pinned pi-extensions gate tests cover child admission, direct model/compaction calls and aborts.
+Continuation tests cover provider-neutral handoffs, same-provider model changes, ownership transfer,
+read-only originals and journal recovery. All providers and cache data in these checks are synthetic.
+
+Run `node packages/kernel/src/subscription-gate.bench.ts` for the incremental gate cost. On macOS arm64,
+five alternating samples of 1,000 sequential admissions measured medians of 0.14ms wall/0.14ms CPU
+without a configured gate and 58ms wall/63ms CPU with an empty policy file (about 58µs per admission).
+File reads are asynchronous; there are no timers while unblocked, and only blocked requests wait on a
+cancellable two-second local-file check. This isolates the new boundary, not large-history preparation,
+provider/GUI latency, or disk-cold performance. Parked never-opened chats update display policy in memory
+instead of writing admission files on every usage change; files are persisted before workers resume.
+
 ## Workspace fixtures and clocks
 
 Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real

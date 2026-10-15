@@ -6,6 +6,7 @@
  * provider authentication from the user's pi configuration (settings, packages, extensions, MCP).
  */
 import { createHash, randomUUID } from "node:crypto";
+import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import { performance } from "node:perf_hooks";
 import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
@@ -84,6 +85,7 @@ export interface ExtensionInput {
 }
 
 export interface NativeAdapterOptions {
+	subscriptionPolicy?: string;
 	/** Host-enforced read-only source or pinned object tree. Overrides all resource/tool configuration. */
 	ask?: AskContext;
 	/** Host-owned session-local artifact store and installed sandboxed renderers. */
@@ -236,6 +238,7 @@ export class NativeAdapter {
 	#harness?: Harness;
 	#conversationId?: ConversationId;
 	#closed = false;
+	#requestBarrier?: Promise<void>;
 	#activity?: ActivityStream;
 	#renderPrompt?: () => string;
 	#forcedPrompt?: string;
@@ -251,6 +254,8 @@ export class NativeAdapter {
 	#pendingPreparation?: PreparationMark;
 	#toolFinished?: number;
 	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
+	readonly #subscriptionGate: SubscriptionGate;
+	#physicalSubscriptionProvider?: string;
 
 	readonly session: AgentSession;
 	readonly usage: UsageTracker;
@@ -262,7 +267,9 @@ export class NativeAdapter {
 		ask = false,
 		infrastructure = new InfrastructureChildren(),
 		timings?: PerformanceSink,
+		subscriptionPolicy?: string,
 	) {
+		this.#subscriptionGate = new SubscriptionGate(subscriptionPolicy);
 		this.infrastructure = infrastructure;
 		this.session = session;
 		this.usage = usage;
@@ -272,6 +279,11 @@ export class NativeAdapter {
 		// stream never snapshot credentials. No second credential store or auth-resolution layer.
 		this.models = new Proxy(session.modelRuntime, {
 			get: (target, key) => {
+				if (key === "fetchDeferred")
+					return async (...args: Parameters<Models["fetchDeferred"]>) => {
+						await this.waitForRequestBarrier(args[2]?.signal);
+						return target.fetchDeferred(...args);
+					};
 				if (key === "streamSimple")
 					return (
 						model: Parameters<Models["streamSimple"]>[0],
@@ -441,7 +453,14 @@ export class NativeAdapter {
 					customTools: sessionConfig.customTools ?? [],
 				})
 			: (await createAgentSession(sessionConfig)).session;
-		const adapter = new NativeAdapter(session, usage, !!options.ask, infrastructure, options.performance);
+		const adapter = new NativeAdapter(
+			session,
+			usage,
+			!!options.ask,
+			infrastructure,
+			options.performance,
+			options.subscriptionPolicy,
+		);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
 		// bindExtensions reads the committed activity source dynamically, including
@@ -588,7 +607,12 @@ export class NativeAdapter {
 			if (latest?.role === "assistant")
 				model = this.session.modelRuntime.getPhysicalModel(latest.provider, latest.model) ?? model;
 		}
-		this.usage.set(contextUsage(view, model?.contextWindow), model?.provider);
+		this.usage.set(
+			contextUsage(view, model?.contextWindow),
+			this.session.model?.api === "pi-virtual"
+				? (this.#physicalSubscriptionProvider ?? model?.provider)
+				: model?.provider,
+		);
 	}
 	private assertOpen(): void {
 		if (this.#closed) throw new Error("Native adapter is closed");
@@ -1008,6 +1032,40 @@ export class NativeAdapter {
 		};
 	}
 
+	waitForSubscription(signal?: AbortSignal): Promise<void> {
+		return this.#subscriptionGate.wait(this.#physicalSubscriptionProvider ?? this.model.provider, signal);
+	}
+
+	/** Startup cancellation may enable the scheduler. Block dispatch until its old checkpoints settle. */
+	holdModelRequests(): () => void {
+		let release!: () => void;
+		const barrier = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		this.#requestBarrier = barrier;
+		return () => {
+			if (this.#requestBarrier === barrier) this.#requestBarrier = undefined;
+			release();
+		};
+	}
+
+	private async waitForRequestBarrier(signal?: AbortSignal): Promise<void> {
+		signal?.throwIfAborted();
+		const barrier = this.#requestBarrier;
+		if (!barrier) return;
+		await new Promise<void>((resolve, reject) => {
+			const abort = () => {
+				signal?.removeEventListener("abort", abort);
+				reject(signal?.reason);
+			};
+			signal?.addEventListener("abort", abort, { once: true });
+			void barrier.then(() => {
+				signal?.removeEventListener("abort", abort);
+				resolve();
+			});
+		});
+	}
+
 	private requestStream(
 		dispatch: (observe: (error: unknown) => void, timing?: RequestTiming) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
@@ -1039,6 +1097,8 @@ export class NativeAdapter {
 		};
 		void (async () => {
 			try {
+				await this.waitForRequestBarrier(signal);
+				await this.#subscriptionGate.wait(model.provider, signal);
 				if (this.#harness)
 					await this.sync(signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT);
 				this.assertOpen();
@@ -1128,6 +1188,9 @@ export class NativeAdapter {
 				payload: unknown,
 				model: Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1],
 			) => {
+				this.#physicalSubscriptionProvider = model.provider;
+				this.usage.set(this.usage.current.context, model.provider);
+				await this.#subscriptionGate.wait(model.provider, options.signal);
 				const value = await runner.emitBeforeProviderRequest(
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);

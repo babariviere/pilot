@@ -8,8 +8,14 @@ final class ChatModelPickerState: ObservableObject {
     }
     @Published var changing = false
     @Published var error: String?
+    /// The continuation sheet's draft. Set opens the sheet; nil closes it.
+    @Published var continuation: ContinuationDraft?
+    @Published var continuing = false
+    @Published var continuationError: String?
 
     private let changeModel: (String, ChangeModelRequest) async throws -> Void
+    private let continueModel: (String, ContinueModelRequest) async throws -> SessionSummary
+    private let showContinuedChat: @MainActor (SessionSummary) -> Void
     private let cachedModels: @MainActor (String) -> ModelList?
     private let fetchModels: (String) async throws -> ModelList
     private(set) var providers: [String] = []
@@ -48,9 +54,15 @@ final class ChatModelPickerState: ObservableObject {
         },
         fetchModels: @escaping (String) async throws -> ModelList = { cwd in
             try await AppModel.shared.client.models(projectId: nil, cwd: cwd)
-        }
+        },
+        continueModel: @escaping (String, ContinueModelRequest) async throws -> SessionSummary = { id, request in
+            try await AppModel.shared.client.continueModel(id, model: request.model, thinking: request.thinking)
+        },
+        showContinuedChat: @escaping @MainActor (SessionSummary) -> Void = { AppModel.shared.reveal(session: $0.id) }
     ) {
         self.changeModel = changeModel
+        self.continueModel = continueModel
+        self.showContinuedChat = showContinuedChat
         self.cachedModels = cachedModels
         self.fetchModels = fetchModels
         // A chat switch creates a new picker. Seed it before the first body evaluation,
@@ -62,7 +74,59 @@ final class ChatModelPickerState: ObservableObject {
     }
 
     func canChange(session: SessionSummary, working: Bool) -> Bool {
-        !working && !session.isWorking && !session.isArchived && session.state != "failed" && !changing
+        !working && !session.isWorking && !session.isReadOnlyHistory && session.state != "failed" && !changing
+            && !continuing
+    }
+
+    /// pilotd accepts a continuation only while an unforced pause holds the chat, even with queued messages held.
+    func canContinue(session: SessionSummary, working: Bool) -> Bool {
+        !session.isReadOnlyHistory && session.state != "failed" && !changing && !continuing
+            && session.isSubscriptionPaused
+    }
+
+    /// The chip stays usable while a pause holds queued messages, because a pick then goes through the sheet.
+    func canPick(session: SessionSummary, working: Bool) -> Bool {
+        canChange(session: session, working: working) || canContinue(session: session, working: working)
+    }
+
+    /// While paused at a usage limit, a pick asks first: another provider means a new chat.
+    @discardableResult
+    func pick(_ model: String, session: SessionSummary, working: Bool) -> Task<Void, Never>? {
+        if model != session.model, canContinue(session: session, working: working) {
+            beginContinuation(session: session, model: model, working: working)
+            return nil
+        }
+        return selectModel(model, session: session, working: working)
+    }
+
+    func beginContinuation(session: SessionSummary, model: String? = nil, working: Bool) {
+        guard canContinue(session: session, working: working) else { return }
+        continuationError = nil
+        continuation = ContinuationDraft(sessionId: session.id, model: model == session.model ? nil : model)
+    }
+
+    func continuationKind(session: SessionSummary, model: String) -> ModelContinuation {
+        ModelContinuation.kind(current: session.model, usageProvider: session.usage?.subscription?.provider,
+                               target: model, models: models)
+    }
+
+    /// Confirms the sheet. A new chat (another provider) is selected as soon as pilotd returns it.
+    @discardableResult
+    func confirmContinuation(session: SessionSummary) -> Task<Void, Never>? {
+        guard let draft = continuation, draft.sessionId == session.id, let model = draft.model, model != session.model,
+              !continuing, !changing, !session.isReadOnlyHistory else { return nil }
+        continuing = true
+        continuationError = nil
+        return Task {
+            defer { continuing = false }
+            do {
+                let next = try await continueModel(session.id, ContinueModelRequest(model: model))
+                continuation = nil
+                if next.id != session.id { showContinuedChat(next) }
+            } catch {
+                continuationError = error.localizedDescription
+            }
+        }
     }
 
     func thinkingLevels(for session: SessionSummary) -> [String] {
@@ -126,7 +190,43 @@ struct ChatModelControls: View {
     }
 }
 
-/// Model selection is an idle-only operation, never an interruption of a running turn.
+/// The sheet behind "Continue with another model…": what the chosen model does to this chat, then confirm.
+struct ContinuationDraft: Identifiable, Equatable {
+    let sessionId: String
+    var model: String?
+    var id: String { sessionId }
+}
+
+/// The catalog grouped by provider, the current model ticked. Shared by the chip and the continuation sheet.
+struct ModelMenuItems: View {
+    let session: SessionSummary
+    @ObservedObject var state: ChatModelPickerState
+    var selected: String?
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        ForEach(state.providers, id: \.self) { provider in
+            Section(provider) {
+                ForEach(state.modelsByProvider[provider] ?? []) { option in
+                    Button { onSelect(option.id) } label: {
+                        if (selected ?? session.model) == option.id {
+                            Label(option.name, icon: PilotIcon.selectedOption)
+                        } else {
+                            Text(option.name)
+                        }
+                    }
+                }
+            }
+        }
+        if state.models.models.isEmpty {
+            Text("No models loaded")
+            Button("Reload models") { Task { await state.loadModels(cwd: session.cwd) } }
+        }
+    }
+}
+
+/// Model selection is an idle-only operation, never an interruption of a running turn. Near a usage limit a pick
+/// opens the continuation sheet instead, so switching provider is always confirmed.
 struct ChatModelPicker: View {
     let session: SessionSummary
     let working: Bool
@@ -134,30 +234,65 @@ struct ChatModelPicker: View {
 
     var body: some View {
         Menu {
-            ForEach(state.providers, id: \.self) { provider in
-                Section(provider) {
-                    ForEach(state.modelsByProvider[provider] ?? []) { option in
-                        Button { state.selectModel(option.id, session: session, working: working) } label: {
-                            if session.model == option.id {
-                                Label(option.name, icon: PilotIcon.selectedOption)
-                            } else {
-                                Text(option.name)
-                            }
-                        }
-                    }
-                }
-            }
-            if state.models.models.isEmpty {
-                Text("No models loaded")
-                Button("Reload models") { Task { await state.loadModels(cwd: session.cwd) } }
-            }
+            ModelMenuItems(session: session, state: state) { state.pick($0, session: session, working: working) }
         } label: {
-            ChipLabel(title: state.displayName(for: session.model), icon: PilotIcon.model, maxTitleWidth: 200, loading: state.changing)
+            ChipLabel(title: state.displayName(for: session.model), icon: PilotIcon.model, maxTitleWidth: 200,
+                      loading: state.changing || state.continuing)
         }
         .chipMenuStyle()
         .fixedSize(horizontal: true, vertical: false)
-        .disabled(!state.canChange(session: session, working: working))
-        .help(working || session.isWorking ? "Model can be changed when idle with no queued messages" : "Change the model for this chat")
+        .disabled(!state.canPick(session: session, working: working))
+        .help(help)
         .accessibilityLabel("Model: \(state.displayName(for: session.model))")
+    }
+
+    private var help: String {
+        if session.isContinued { return "This chat continued in another chat" }
+        if session.isSubscriptionPaused { return ModelContinuation.pickerHelp }
+        return working || session.isWorking ? "Model can be changed when idle with no queued messages" : "Change the model for this chat"
+    }
+}
+
+struct ModelContinuationSheet: View {
+    let session: SessionSummary
+    @ObservedObject var state: ChatModelPickerState
+
+    private var model: String? { state.continuation?.model }
+    private var kind: ModelContinuation? { model.map { state.continuationKind(session: session, model: $0) } }
+
+    var body: some View {
+        SheetScaffold(
+            "Continue with another model",
+            subtitle: "Now on \(state.displayName(for: session.model))",
+            error: state.continuationError,
+            primary: SheetPrimaryAction(title: kind?.confirmTitle ?? "Continue",
+                                        enabled: model != nil && !state.continuing) {
+                state.confirmContinuation(session: session)
+            },
+            cancel: { state.continuation = nil }
+        ) {
+            Menu {
+                ModelMenuItems(session: session, state: state, selected: model) { picked in
+                    state.continuation?.model = picked == session.model ? nil : picked
+                    state.continuationError = nil
+                }
+            } label: {
+                ChipLabel(title: model.map { state.displayName(for: $0) } ?? "Choose a model", icon: PilotIcon.model,
+                          maxTitleWidth: 260, loading: state.continuing)
+            }
+            .chipMenuStyle()
+            .fixedSize(horizontal: true, vertical: false)
+            .disabled(state.continuing)
+            .accessibilityLabel("Model to continue with")
+            Label {
+                Text(kind.map { $0.explanation(modelName: state.displayName(for: model)) } ?? ModelContinuation.pickerHelp)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                PilotSymbol(kind == .newChat ? PilotIcon.handoff : PilotIcon.info)
+            }
+            .font(.pilot(.body))
+            .foregroundStyle(Theme.mutedForeground)
+        }
+        .interactiveDismissDisabled(state.continuing)
     }
 }

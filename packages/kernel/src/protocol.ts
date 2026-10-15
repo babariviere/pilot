@@ -33,10 +33,14 @@ export interface KernelSpec {
 	projectId?: string;
 	/** Private directory holding this session's durable storage. */
 	storageDir: string;
+	/** Host-owned admission policy shared with subagents, outside their durable model history. */
+	subscriptionPolicy?: string;
 	cwd: string;
 	/** Used only when the session is created; later starts reuse the pinned model. */
 	model?: string;
 	thinking?: string;
+	/** Explicit same-provider continuation after the previous worker's tool drain and close. */
+	continuationModel?: { model: string; thinking?: string; requestId: string };
 	agentDir?: string;
 	/** Directory whose pi project trust applies (the project's own checkout, not its clone). */
 	trustDirectory?: string;
@@ -61,6 +65,8 @@ export type KernelCommand =
 	| { type: "activity"; requestId: string; text: string }
 	| { type: "editQueuedMessage"; requestId: string; submissionId: number; content: string; mode?: DeliveryMode }
 	| { type: "changeModel"; requestId: string; model: string; thinking?: string }
+	/** Drain committed tool effects and quiesce children before relinquishing workspace ownership. */
+	| { type: "continuation.pause"; requestId: string }
 	| { type: "removeQueuedMessage"; requestId: string; submissionId: number }
 	/** Manual compaction, acknowledged with `accepted` once its task is committed. */
 	| { type: "compact"; requestId: string; instructions?: string }

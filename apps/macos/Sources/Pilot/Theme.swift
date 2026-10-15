@@ -300,7 +300,7 @@ extension SessionStatus {
         case .failed: PilotIcon.warning
         case .stopped: PilotIcon.stopped
         case .idle: PilotIcon.idle
-        case .paused: PilotIcon.paused
+        case .paused, .usagePaused: PilotIcon.paused
         }
     }
 
