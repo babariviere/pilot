@@ -124,7 +124,6 @@ Read-only workers use the SDK settings-storage seam to read existing canonical c
 creating adjacent lock directories. Live writer locks, malformed, oversized or changing files fail closed;
 configuration writes remain denied. Fixed trusted preloads install the same adapters before immutable
 child SDK runtimes are constructed, after the Linux boundary has been validated.
-This does not add remote app routing or cross-host context/delegation semantics.
 
 The source includes [host-qualified client routing](docs/host-routing.md),
 [durable operation receipts](docs/durable-operations.md), [server-side repository/file reads](docs/host-repositories.md)
