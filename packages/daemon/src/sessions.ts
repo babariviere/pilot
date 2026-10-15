@@ -4818,9 +4818,11 @@ export class SessionManager {
 					this.isMissionCoordinator(id) !== !!view ||
 					meta.coordinatorView?.scratch !== view?.scratch
 				) {
+					child?.once("error", () => {});
 					child?.kill("SIGKILL");
 					throw new Conflict("This chat's lifecycle or workspace role changed while preparing isolation");
 				}
+				if (meta.pending?.[0]?.type === "abort") spec.stopOnOpen = true;
 				return new Worker(spec, onPacket, onExit, this.pool, { ...this.workerOptions, child });
 			});
 		const mission = this.missions?.context(id);

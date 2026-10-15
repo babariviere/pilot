@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, copyFile, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -35,6 +35,12 @@ test("private write roots reject symlink roots, protected overlaps, hardlinks, b
 	await link(join(source, "file"), join(scratch, "hardlink"));
 	await assert.rejects(validateCoordinatorWrites([scratch], [source]), /hardlink/);
 	await rm(join(scratch, "hardlink"));
+	execFileSync("mkfifo", [join(scratch, "fifo")]);
+	await assert.rejects(validateCoordinatorWrites([scratch], [source]), /special file/);
+	await rm(join(scratch, "fifo"));
+	await chmod(scratch, 0o770);
+	await assert.rejects(validateCoordinatorWrites([scratch], [source]), /private/);
+	await chmod(scratch, 0o700);
 	// Symlinks inside private scratch are safe: following one still uses the readonly target mount.
 	await symlink(source, join(scratch, "source-alias"));
 	assert.deepEqual(await validateCoordinatorWrites([scratch], [source]), [scratch]);
@@ -156,46 +162,46 @@ import {once} from 'node:events';import assert from 'node:assert/strict';
 const child=await forkLinuxCoordinator(${JSON.stringify(bindEntry)},${JSON.stringify(view)},${JSON.stringify({ storageDir, agentDir })});
 const exit=once(child,'exit');const message=await Promise.race([once(child,'message'),exit.then(()=>{throw Error('guard rejected bind alias')})]);
 assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
-	const outer = [
-		"--unshare-user",
-		"--unshare-pid",
-		"--ro-bind",
-		"/",
-		"/",
-		"--proc",
-		"/proc",
-		"--dev",
-		"/dev",
-		"--bind",
-		root,
-		root,
-	];
-	await promisify(execFile)(
-		"/usr/bin/bwrap",
-		[...outer, "--bind", source, mounted, process.execPath, "--input-type=module", "-e", driver],
-		{ timeout: 15_000 },
-	);
+	// The privileged fixture only creates a bind mount in a disposable, non-propagating CI
+	// mount namespace. The actual launcher and kernel still run as the unprivileged runner.
+	async function bindFixture(destination: string, code: string) {
+		assert.equal(process.env.GITHUB_ACTIONS, "true", "Privileged bind fixtures are CI-only");
+		await promisify(execFile)(
+			"sudo",
+			[
+				"-n",
+				"unshare",
+				"--mount",
+				"--fork",
+				"--propagation",
+				"private",
+				"/bin/sh",
+				"-ceu",
+				'mount --bind "$1" "$2"; exec setpriv --reuid="$3" --regid="$4" --clear-groups "$5" --input-type=module -e "$6"',
+				"pilot-bind-fixture",
+				source,
+				destination,
+				String(process.getuid!()),
+				String(process.getgid!()),
+				process.execPath,
+				code,
+			],
+			{ timeout: 15_000 },
+		);
+	}
+	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") await bindFixture(mounted, driver);
 	// Writable exceptions must reject nested bind mounts, otherwise an alias inside scratch would
 	// make protected inodes writable despite the read-only source mount and nlink==1 checks.
 	const scratchMount = join(scratch, "mounted-source");
 	await mkdir(scratchMount);
-	await promisify(execFile)(
-		"/usr/bin/bwrap",
-		[
-			...outer,
-			"--bind",
-			source,
+	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1")
+		await bindFixture(
 			scratchMount,
-			process.execPath,
-			"--input-type=module",
-			"-e",
 			`
 import {validateCoordinatorWrites} from ${JSON.stringify(module)};import assert from 'node:assert/strict';
 await assert.rejects(validateCoordinatorWrites([${JSON.stringify(scratch)}],[${JSON.stringify(source)}]),/mount point/);
 `,
-		],
-		{ timeout: 15_000 },
-	);
+		);
 	await link(file, join(scratch, "preexisting-hardlink"));
 	await assert.rejects(forkLinuxCoordinator(entry, view, { storageDir, agentDir }), /hardlink/);
 });
@@ -203,7 +209,7 @@ await assert.rejects(validateCoordinatorWrites([${JSON.stringify(scratch)}],[${J
 test("namespace/security-policy denial and missing sandbox tooling remain actionable and fail closed", {
 	skip: process.platform !== "linux",
 	timeout: 30_000,
-}, async () => {
+}, async (t) => {
 	const capability = await probeLinuxCoordinatorIsolation();
 	if (!capability.available) {
 		assert.match(capability.detail!, /bubblewrap|namespace/);
@@ -213,6 +219,10 @@ test("namespace/security-policy denial and missing sandbox tooling remain action
 		return;
 	}
 	const probe = fileURLToPath(new URL("./linux-coordinator-probe.ts", import.meta.url));
+	const root = await realpath(await mkdtemp(join(tmpdir(), "pilot-denied-policy-")));
+	t.after(() => rm(root, { recursive: true, force: true }));
+	const executable = join(root, "bwrap");
+	await copyFile("/usr/bin/bwrap", executable);
 	const base = [
 		"--unshare-user",
 		"--disable-userns",
@@ -227,13 +237,20 @@ test("namespace/security-policy denial and missing sandbox tooling remain action
 		"--tmpfs",
 		"/tmp",
 	];
-	// This policy prohibits the probe from opening another user namespace even though bwrap exists.
-	await assert.rejects(promisify(execFile)("/usr/bin/bwrap", [...base, process.execPath, probe]), (error: unknown) => {
-		const result = JSON.parse((error as { stdout: string }).stdout);
-		assert.equal(result.available, false);
-		assert.match(result.detail, /namespace|Operation not permitted/);
-		return true;
-	});
+	// Map the fixture owner to root so the copied binary is root-owned in the outer userns.
+	// This reaches the real namespace restriction, rather than failing binary-ownership validation.
+	const restricted = [...base, "--uid", "0", "--ro-bind", executable, "/usr/bin/bwrap"];
+	await assert.rejects(
+		promisify(execFile)("/usr/bin/bwrap", [...restricted, process.execPath, probe]),
+		(error: unknown) => {
+			const result = JSON.parse((error as { stdout: string }).stdout);
+			assert.equal(result.available, false);
+			assert.match(result.detail, /Command failed:.*bwrap/s);
+			assert.match(result.detail, /namespace|Operation not permitted/);
+			assert.doesNotMatch(result.detail, /bubblewrap executable is required/);
+			return true;
+		},
+	);
 	// Hide both supported installation paths. Mere unshare presence must never enable isolation.
 	const absent = [...base, "--ro-bind", "/dev/null", "/usr/bin/bwrap"];
 	if ((await realpath("/bin/bwrap")) !== (await realpath("/usr/bin/bwrap")))

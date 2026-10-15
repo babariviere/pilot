@@ -2,7 +2,20 @@
 import { type ChildProcess, execFile, fork } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { access, lstat, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
+import {
+	access,
+	lstat,
+	mkdir,
+	mkdtemp,
+	opendir,
+	readdir,
+	readFile,
+	readlink,
+	realpath,
+	rm,
+	stat,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -65,7 +78,7 @@ export async function validateCoordinatorWrites(writable: string[], protectedPat
 			throw new Error(`Coordinator private state is not owned by this user: ${path}`);
 		if (info.isDirectory()) {
 			if (info.mode & 0o022) throw new Error(`Coordinator private state is shared-writable: ${path}`);
-			for (const child of await readdir(path)) await inspect(join(path, child));
+			for await (const child of await opendir(path)) await inspect(join(path, child.name));
 		} else if (!info.isFile() || info.nlink !== 1)
 			throw new Error(`Coordinator private state contains a hardlink or special file: ${path}`);
 	}
@@ -170,11 +183,21 @@ async function privateAuth(directory: string, agentDir: string): Promise<void> {
 	const marker = join(directory, ".source-revisions.json");
 	let revisions: Record<string, string> = {};
 	try {
+		const info = await lstat(marker);
+		if (!info.isFile() || info.size > 4096) throw new Error("Invalid coordinator auth revision marker");
 		revisions = JSON.parse(await readFile(marker, "utf8"));
+		if (!revisions || typeof revisions !== "object" || Array.isArray(revisions))
+			throw new Error("Invalid coordinator auth revisions");
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 	for (const name of ["auth.json", "mcp-auth.json"]) {
+		const info = await stat(join(agentDir, name)).catch((error: NodeJS.ErrnoException) => {
+			if (error.code !== "ENOENT") throw error;
+			return undefined;
+		});
+		if (info && (!info.isFile() || info.size > 4 * 1024 * 1024))
+			throw new Error(`Coordinator auth source must be a bounded regular file: ${name}`);
 		const value = await readFile(join(agentDir, name)).catch((error: NodeJS.ErrnoException) => {
 			if (error.code !== "ENOENT") throw error;
 			return Buffer.from("{}");
@@ -225,6 +248,7 @@ export async function forkLinuxCoordinator(
 		for (const name of await readdir(agentDir)) {
 			if (["auth.json", "mcp-auth.json", "auth.json.lock", "mcp-auth.json.lock"].includes(name)) continue;
 			args.push("--ro-bind", join(agentDir, name), join(agentDir, name));
+			if (args.length > 8000) throw new Error("Coordinator agent resources exceed the isolation mount limit");
 		}
 		// The shadow agent directory is a second private writable alias, validated by the guard.
 		config.writable.push(agentDir);
