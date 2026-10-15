@@ -19,23 +19,22 @@ import Testing
     let fence = try hosts.token(for: host)
     var received = 0
     let unsubscribe = try hosts.subscribe(ref) { _ in received += 1 }
-    old.handle(.events("same", [.string("old")], nil))
+    old.handle(.events(sessionId: "same", events: [.string("old")], seq: nil))
     #expect(received == 1)
     await hosts.disconnect(host)
-    old.handle(.events("same", [.string("late")], nil))
+    old.handle(.events(sessionId: "same", events: [.string("late")], seq: nil))
     #expect(received == 1)
     let replacement = fixture()
     try hosts.install(replacement, host: host)
-    old.handle(.events("same", [.string("older")], nil))
-    replacement.handle(.events("same", [.string("new")], nil))
+    old.handle(.events(sessionId: "same", events: [.string("older")], seq: nil))
+    replacement.handle(.events(sessionId: "same", events: [.string("new")], seq: nil))
     #expect(received == 2)
     #expect(throws: HostRoutingError.staleGeneration) { try hosts.validate(fence) }
     unsubscribe()
     unsubscribe()
-    replacement.handle(.events("same", [.string("after unsubscribe")], nil))
+    replacement.handle(.events(sessionId: "same", events: [.string("after unsubscribe")], seq: nil))
     #expect(received == 2)
     #expect(throws: HostRoutingError.identityChanged) {
         try hosts.install(replacement, host: HostRef(hostId: "other", daemonId: "daemon", lineageId: "history"))
     }
 }
-
