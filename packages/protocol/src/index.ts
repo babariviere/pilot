@@ -1417,7 +1417,7 @@ export { DAEMON_PROTOCOL_VERSION, MINIMUM_CLIENT_PROTOCOL_VERSION } from "./hell
 export type * from "./inbox.ts";
 export type * from "./mcp.ts";
 export type * from "./memory.ts";
+export * from "./operations.ts";
 export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./schedules.ts";
 export type * from "./tracking.ts";
-export * from "./operations.ts";
