@@ -28,6 +28,42 @@ private let slack = TrackedItem(
                "summary": .string("Checkout button does nothing on Safari")],
     createdAt: ms - 600_000, updatedAt: ms - 600_000)
 
+@Test func triageGuideRulesArePlainLinesAndTheNoteSaysWhenItWasUpdated() {
+    #expect(TriageGuideText.rules("  Billing exports get the Billing label.\n\n Typos are low severity. \n")
+        == ["Billing exports get the Billing label.", "Typos are low severity."])
+    #expect(TriageGuideText.rules(Array(repeating: "A rule.", count: 60).joined(separator: "\n")).count == 40)
+    #expect(TriageGuideText.rules("").isEmpty)
+    let about = "Rules Pilot writes from your corrections in Slack triage. The classifier reads them with your latest five corrections."
+    let empty = TriageGuide(kind: .slack, text: "", updatedAt: 0, throughSeq: 0)
+    let guide = TriageGuide(kind: .slack, text: "A rule.", updatedAt: ms - 3 * 3_600_000, throughSeq: 4)
+    #expect(TriageGuideText.note(nil, rebuild: .idle, kind: .slack) == about)
+    #expect(TriageGuideText.note(empty, rebuild: .idle, kind: .slack) == about)
+    let updated = TriageGuideText.note(guide, rebuild: .idle, kind: .slack, now: now)
+    #expect(updated.hasPrefix("Updated ") && updated.hasSuffix(about) && updated != "Updated . \(about)")
+    #expect(TriageGuideText.note(guide, rebuild: .waiting(since: 1), kind: .slack, now: now) == updated)
+    #expect(TriageGuideText.note(guide, rebuild: .queued(since: 1), kind: .slack, now: now) == "Rebuild queued. \(about)")
+    #expect(TriageGuideText.note(nil, rebuild: .idle, kind: .linear).contains("your Linear size corrections"))
+    #expect(TriageGuideText.tooltip(empty).isEmpty)
+    #expect(TriageGuideText.tooltip(guide).hasPrefix("Updated "))
+    #expect(TriageGuideText.rebuildFailed(" ") == "Couldn't start a rebuild.")
+    #expect(TriageGuideText.rebuildFailed("Tracking is unavailable") == "Couldn't start a rebuild: Tracking is unavailable")
+}
+
+@Test func triageGuideRebuildWaitsForAGuideNewerThanTheOneItReturned() {
+    let before = TriageGuide(kind: .slack, text: "A rule.", updatedAt: 100, throughSeq: 1)
+    let rebuilt = TriageGuide(kind: .slack, text: "A better rule.", updatedAt: 200, throughSeq: 3)
+    #expect(TriageGuideModel.settle(.waiting(since: 100), with: before) == .waiting(since: 100))
+    #expect(TriageGuideModel.settle(.waiting(since: 100), with: rebuilt) == .idle)
+    #expect(TriageGuideModel.settle(.queued(since: 100), with: before) == .queued(since: 100))
+    #expect(TriageGuideModel.settle(.queued(since: 100), with: rebuilt) == .idle)
+    // A first guide (none built before) settles it too.
+    #expect(TriageGuideModel.settle(.waiting(since: 0), with: rebuilt) == .idle)
+    #expect(TriageGuideModel.settle(.requesting, with: rebuilt) == .requesting)
+    #expect(TriageGuideModel.settle(.idle, with: rebuilt) == .idle)
+    #expect(TriageGuideRebuild.requesting.isBusy && TriageGuideRebuild.waiting(since: 1).isBusy)
+    #expect(!TriageGuideRebuild.idle.isBusy && !TriageGuideRebuild.queued(since: 1).isBusy)
+}
+
 @Test func trackedItemLabelsReadNaturally() {
     #expect(TrackedItemText.identifier(linear()) == "ENG-12")
     #expect(TrackedItemText.identifier(slack) == "#bugs")

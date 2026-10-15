@@ -472,6 +472,43 @@ struct SettingsNote: View {
     }
 }
 
+/// A heading between groups of rows inside one settings section, such as "Triage guide" and "Recent corrections"
+/// under Slack labels: medium body text, an optional muted note, and an optional small control (such as Rebuild)
+/// trailing on the title's baseline. Lighter than a section heading, so the rows still read as one section.
+struct SettingsSubheading<Accessory: View>: View {
+    let title: String
+    let note: String?
+    let accessory: Accessory
+
+    init(_ title: String, note: String? = nil, @ViewBuilder accessory: () -> Accessory) {
+        self.title = title
+        self.note = note
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.pilot(.body, weight: .medium))
+                    .foregroundStyle(Theme.foreground)
+                    .accessibilityAddTraits(.isHeader)
+                if let note { SettingsNote(note) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            accessory
+        }
+        .padding(.top, 18)
+        .padding(.bottom, 8)
+    }
+}
+
+extension SettingsSubheading where Accessory == EmptyView {
+    init(_ title: String, note: String? = nil) {
+        self.init(title, note: note) { EmptyView() }
+    }
+}
+
 /// The Appearance page's accessory: puts every font back to the system defaults.
 private struct AppearanceDefaultsButton: View {
     @ObservedObject private var settings = AppSettings.shared

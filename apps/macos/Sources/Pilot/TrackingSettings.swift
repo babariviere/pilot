@@ -403,8 +403,8 @@ struct EditableSlackLabel: Identifiable, Equatable {
     }
 }
 
-/// Labels Slack messages are sorted into, defined per project, then the latest corrections. The classifier
-/// reads each label's name and description and picks at most one. Effects hide or close messages locally.
+/// Labels Slack messages are sorted into, defined per project, then the triage guide and the latest corrections. The
+/// classifier reads each label's name and description and picks at most one. Effects hide or close messages locally.
 struct SlackLabelsSection: View {
     let project: Project
     @ObservedObject var editor: ProjectEditor
@@ -434,6 +434,7 @@ struct SlackLabelsSection: View {
                 .foregroundStyle(Theme.mutedForeground)
                 .disabled(editor.slackLabels.count >= 50)
             }
+            TriageGuideSection(projectId: project.id, kind: .slack)
             SlackCorrectionsList(projectId: project.id)
         }
     }
@@ -506,35 +507,272 @@ extension SlackLabelEffect {
     }
 }
 
-/// The latest triage corrections, newest first, five at a time with "Show N more". Read-only; they change as the user
-/// reclassifies messages.
+/// A source's triage guide: the short rules pilotd's grooming model writes from the project's corrections, when they
+/// were last updated, and Rebuild, which folds the latest corrections in now. Read-only: the rules are untrusted model
+/// output, shown as plain text, and change only through corrections. A saved guide replaces the rows in place.
+struct TriageGuideSection: View {
+    let projectId: String
+    let kind: TrackedKind
+    @StateObject private var model: TriageGuideModel
+    @State private var expanded = false
+    private static let shown = 5
+
+    init(projectId: String, kind: TrackedKind) {
+        self.projectId = projectId
+        self.kind = kind
+        _model = StateObject(wrappedValue: TriageGuideModel(kind: kind))
+    }
+
+    var body: some View {
+        let rules = TriageGuideText.rules(model.guide?.text ?? "")
+        let visible = expanded ? rules : Array(rules.prefix(Self.shown))
+        SettingsSubheading("Triage guide", note: TriageGuideText.note(model.guide, rebuild: model.rebuild, kind: kind)) {
+            TriageGuideRebuildControl(busy: model.rebuild.isBusy) { model.requestRebuild() }
+        }
+        .help(TriageGuideText.tooltip(model.guide))
+        .onAppear { model.start(client: AppModel.shared.client, projectId: projectId) }
+        .onChange(of: projectId) { _, id in model.start(client: AppModel.shared.client, projectId: id) }
+        .onDisappear { model.stop() }
+        if model.guide == nil, model.loadFailed {
+            SettingsRow { InlineProblem("Couldn't load the triage guide.") { model.reload() } }
+        } else if model.guide != nil, rules.isEmpty {
+            SettingsRow {
+                Text(TriageGuideText.empty).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        ForEach(Array(visible.enumerated()), id: \.offset) { _, rule in
+            SettingsRow {
+                Text(verbatim: rule).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                    .lineLimit(3).fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+        }
+        if rules.count > Self.shown {
+            SettingsRow { ListToggle(total: rules.count, expanded: $expanded, noun: "rules") }
+        }
+        if let error = model.rebuildError {
+            SettingsRow { InlineProblem(error) { model.requestRebuild() } }
+        }
+    }
+}
+
+/// Rebuild, or the ellipsis spinner and "Rebuilding…" while pilotd works on it.
+private struct TriageGuideRebuildControl: View {
+    let busy: Bool
+    let action: () -> Void
+
+    var body: some View {
+        if busy {
+            HStack(spacing: 5) {
+                EllipsisSpinner()
+                Text("Rebuilding…").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Rebuilding the triage guide")
+        } else {
+            Button("Rebuild", action: action)
+                .controlSize(.small)
+                .help("Fold your latest corrections into the guide now")
+                .accessibilityLabel("Rebuild the triage guide")
+        }
+    }
+}
+
+/// Where a Rebuild request stands.
+enum TriageGuideRebuild: Equatable {
+    case idle
+    /// The request is on its way to pilotd.
+    case requesting
+    /// Queued; done once a guide newer than `since` arrives.
+    case waiting(since: Double)
+    /// Still queued after `rebuildPatience`, such as behind pilotd's throttle or a retry. Rebuild is offered again.
+    case queued(since: Double)
+
+    var isBusy: Bool {
+        switch self {
+        case .requesting, .waiting: true
+        case .idle, .queued: false
+        }
+    }
+}
+
+/// One source's guide for one project, reloaded when pilotd reports a tracking change for the project (a saved guide
+/// sends one), never polled. Rebuild queues a run in pilotd (202) and waits for a guide newer than the one it returned.
+@MainActor
+final class TriageGuideModel: ObservableObject {
+    let kind: TrackedKind
+    @Published private(set) var guide: TriageGuide?
+    @Published private(set) var loadFailed = false
+    @Published private(set) var rebuild: TriageGuideRebuild = .idle
+    @Published private(set) var rebuildError: String?
+    private var projectId: String?
+    private weak var client: PilotClient?
+    private var observer: UUID?
+    private var loading: Task<Void, Never>?
+    private var request: Task<Void, Never>?
+    private var patience: Task<Void, Never>?
+    /// pilotd bounds one grooming run to 90 s, so a rebuild still pending after this waits for a later run.
+    static let rebuildPatience: Duration = .seconds(120)
+
+    init(kind: TrackedKind) { self.kind = kind }
+
+    func start(client: PilotClient, projectId: String) {
+        if self.projectId != projectId {
+            stop()
+            self.projectId = projectId
+            guide = nil
+            loadFailed = false
+            rebuild = .idle
+            rebuildError = nil
+        }
+        self.client = client
+        if observer == nil {
+            observer = client.observeTrackedItems { [weak self] changed in
+                guard let self, changed == self.projectId else { return }
+                self.reload(after: .milliseconds(300))
+            }
+        }
+        reload()
+    }
+
+    func stop() {
+        if let observer { client?.stopObservingTrackedItems(observer) }
+        observer = nil
+        loading?.cancel()
+        request?.cancel()
+        patience?.cancel()
+        // Nothing finishes these once stopped: a request in flight is dropped, a wait resumes as queued.
+        switch rebuild {
+        case .requesting: rebuild = .idle
+        case let .waiting(since): rebuild = .queued(since: since)
+        case .idle, .queued: break
+        }
+    }
+
+    /// Latest wins. A shown guide stays until the new one arrives, and stays on failure.
+    func reload(after delay: Duration = .zero) {
+        loading?.cancel()
+        loading = Task { [weak self] in
+            if delay > .zero { try? await Task.sleep(for: delay) }
+            guard !Task.isCancelled, let self, let client = self.client, let projectId = self.projectId else { return }
+            do {
+                let guide = try await client.triageGuide(projectId: projectId, kind: self.kind)
+                guard !Task.isCancelled, projectId == self.projectId else { return }
+                self.apply(guide)
+                if self.loadFailed { self.loadFailed = false }
+            } catch {
+                guard !Task.isCancelled, projectId == self.projectId else { return }
+                self.loadFailed = true
+            }
+        }
+    }
+
+    func requestRebuild() {
+        guard let client, let projectId, !rebuild.isBusy else { return }
+        let kind = kind
+        rebuild = .requesting
+        rebuildError = nil
+        request = Task { [weak self] in
+            do {
+                let before = try await client.rebuildTriageGuide(projectId: projectId, kind: kind)
+                guard let self, !Task.isCancelled, projectId == self.projectId else { return }
+                self.rebuild = .waiting(since: before.updatedAt)
+                self.apply(before)
+                self.armPatience(since: before.updatedAt)
+            } catch {
+                guard let self, !Task.isCancelled, projectId == self.projectId else { return }
+                self.rebuild = .idle
+                self.rebuildError = TriageGuideText.rebuildFailed(error.localizedDescription)
+            }
+        }
+    }
+
+    /// Done once a guide newer than the one the rebuild request returned arrives.
+    nonisolated static func settle(_ state: TriageGuideRebuild, with guide: TriageGuide) -> TriageGuideRebuild {
+        switch state {
+        case let .waiting(since), let .queued(since): guide.updatedAt > since ? .idle : state
+        case .idle, .requesting: state
+        }
+    }
+
+    private func apply(_ guide: TriageGuide) {
+        if self.guide != guide { self.guide = guide }
+        let next = Self.settle(rebuild, with: guide)
+        guard next != rebuild else { return }
+        rebuild = next
+        if next == .idle { patience?.cancel() }
+    }
+
+    private func armPatience(since: Double) {
+        patience?.cancel()
+        patience = Task { [weak self] in
+            try? await Task.sleep(for: Self.rebuildPatience)
+            guard let self, !Task.isCancelled, self.rebuild == .waiting(since: since) else { return }
+            self.rebuild = .queued(since: since)
+        }
+    }
+}
+
+/// Wording of the triage guide, kept apart from the view for tests.
+enum TriageGuideText {
+    /// pilotd's limit on guide rules.
+    static let maxRules = 40
+    static let empty = "No rules yet. Pilot writes them after a few corrections, or when you choose Rebuild."
+
+    /// One rule per line, blank lines dropped.
+    static func rules(_ text: String) -> [String] {
+        Array(text.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .prefix(maxRules))
+    }
+
+    /// "Updated 3 hours ago. Rules Pilot writes from …", or "Rebuild queued. …" while a rebuild waits.
+    static func note(_ guide: TriageGuide?, rebuild: TriageGuideRebuild, kind: TrackedKind,
+                     now: Date = Date()) -> String {
+        let source = kind == .slack ? "your corrections in Slack triage" : "your Linear size corrections"
+        let about = "Rules Pilot writes from \(source). The classifier reads them with your latest five corrections."
+        if case .queued = rebuild { return "Rebuild queued. \(about)" }
+        guard let guide, guide.updatedAt > 0 else { return about }
+        return "Updated \(RelativeDate.sentence(guide.updatedAt, now: now)). \(about)"
+    }
+
+    /// The exact update time, for the heading's tooltip.
+    static func tooltip(_ guide: TriageGuide?) -> String {
+        guard let guide, guide.updatedAt > 0 else { return "" }
+        return "Updated \(RelativeDate.exact(guide.updatedAt))"
+    }
+
+    static func rebuildFailed(_ reason: String) -> String {
+        let reason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        return reason.isEmpty ? "Couldn't start a rebuild." : "Couldn't start a rebuild: \(reason)"
+    }
+}
+
+/// The project's Slack triage corrections, newest first: five, then 25 more at a time. Read-only; they change as the
+/// user reclassifies messages. pilotd keeps the latest 500.
 private struct SlackCorrectionsList: View {
     let projectId: String
     @ObservedObject private var client = AppModel.shared.client
     @State private var corrections: [SlackCorrection]?
     @State private var failed = false
-    @State private var expanded = false
+    @State private var visibleCount = Self.shown
     private static let shown = 5
+    private static let page = 25
 
     var body: some View {
         let items = corrections ?? []
-        let visible = expanded ? items : Array(items.prefix(Self.shown))
-        VStack(alignment: .leading, spacing: 3) {
-            Text("Recent corrections").font(.pilot(.body, weight: .medium)).foregroundStyle(Theme.foreground)
-                .accessibilityAddTraits(.isHeader)
-            Text(failed ? "Couldn't load your corrections."
-                : items.isEmpty ? "Changes you make in Slack triage appear here. The latest 20 teach the classifier."
-                : "The latest 20 teach the classifier.")
-                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                .fixedSize(horizontal: false, vertical: true)
+        SettingsSubheading("Recent corrections", note: corrections != nil && items.isEmpty
+            ? "Changes you make in Slack triage appear here."
+            : "Newest first. Pilot keeps the latest 500 for the guide.")
+            .task(id: projectId) { await load() }
+        if failed, corrections == nil {
+            SettingsRow { InlineProblem("Couldn't load your corrections.") { Task { await load() } } }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 18)
-        .padding(.bottom, 8)
-        .task(id: projectId) { await load() }
-        ForEach(Array(visible.enumerated()), id: \.offset) { _, correction in
+        ForEach(Array(items.prefix(visibleCount).enumerated()), id: \.offset) { _, correction in
             SettingsRow {
-                Text(correction.summary).font(.pilot(.body)).foregroundStyle(Theme.foreground)
+                Text(verbatim: correction.summary).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                     .lineLimit(1).truncationMode(.tail)
             } control: {
                 Text(SlackTriageText.correction(correction.values)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
@@ -544,15 +782,28 @@ private struct SlackCorrectionsList: View {
         }
         if items.count > Self.shown {
             SettingsRow {
-                Button { expanded.toggle() } label: {
-                    Text(expanded ? "Show fewer" : "Show \(items.count - Self.shown) more")
-                        .font(.pilot(.caption))
-                        .foregroundStyle(Theme.mutedForeground)
-                        .contentShape(Rectangle())
+                HStack(spacing: 14) {
+                    if items.count > visibleCount {
+                        moreButton("Show \(min(Self.page, items.count - visibleCount)) more") {
+                            visibleCount += Self.page
+                        }
+                    }
+                    if visibleCount > Self.shown {
+                        moreButton("Show fewer") { visibleCount = Self.shown }
+                    }
                 }
-                .rowButtonStyle(outset: 2)
             }
         }
+    }
+
+    private func moreButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.pilot(.caption))
+                .foregroundStyle(Theme.mutedForeground)
+                .contentShape(Rectangle())
+        }
+        .rowButtonStyle(outset: 2)
     }
 
     private func load() async {

@@ -75,7 +75,16 @@ extension Snapshot {
                                 values: SlackOverrides(type: .unknown)),
                 SlackCorrection(itemId: "m6", summary: "Typo on the pricing page footer", correctedAt: now - day,
                                 values: SlackOverrides(label: "Product-owned", severity: .low)),
-            ]))
+            ],
+            guides: [.slack: TriageGuide(kind: .slack, text: """
+                Invoices, VAT numbers and payment provider errors get the Billing team label.
+                Feature requests, pricing and copy changes get the Product-owned label and type Request.
+                Slowness reports without an error, page or time are Unknown with Low severity.
+                Typos and wording on marketing pages are Low severity bugs.
+                Checkout or sign-in failures for many customers are Critical bugs.
+                Questions about rate limits or quotas are type Question.
+                Exports that drop or duplicate rows are High severity bugs.
+                """, updatedAt: now - 3 * hour, throughSeq: 12)]))
         let size = CGSize(width: 1180, height: 640)
         let excerpts: [String: SlackExcerptState] = [
             "m5": .loaded(SlackExcerpt(itemId: "m5", author: "Dana Okafor", text: """
@@ -111,7 +120,7 @@ extension Snapshot {
         let editor = ProjectEditor()
         editor.load(projects[0])
         await render(SettingsColumn { SlackLabelsSection(project: projects[0], editor: editor) },
-                     size: CGSize(width: 600, height: 480), to: directory.appending(path: "slack-labels-settings.png"))
+                     size: CGSize(width: 600, height: 860), to: directory.appending(path: "slack-labels-settings.png"))
         print("snapshots written to \(directory.path)")
     }
 }
