@@ -577,10 +577,12 @@ struct SessionRow: View {
         let missionTitle = session.missionId.flatMap { model.client.mission($0)?.title }
         let coordinatorDetail = session.isMissionCoordinator
             ? MissionCoordinatorStatus.detail(session, unread: needsAttention) : nil
+        let draft = model.chatDraft(session.id)
         // Branch-free segments for the label and tooltip; the line itself adds the loaded branch.
-        let described = RowLineSegments.session(session, projectName: projectName, missionId: session.missionId,
-                                                missionTitle: missionTitle, reason: reason,
-                                                coordinatorDetail: coordinatorDetail)
+        let described = RowLineSegments.described(
+            RowLineSegments.session(session, projectName: projectName, missionId: session.missionId,
+                                    missionTitle: missionTitle, reason: reason, coordinatorDetail: coordinatorDetail),
+            draft: draft)
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
@@ -605,9 +607,11 @@ struct SessionRow: View {
                 .revealed(hovered)
             }
             SessionRepositoryMetadata(session: session) { branch in
-                RowLine(segments: RowLineSegments.session(
+                RowLine(segments: RowLineSegments.shown(RowLineSegments.session(
                     session, projectName: projectName, missionId: session.missionId, missionTitle: missionTitle,
-                    reason: reason, branch: branch, coordinatorDetail: coordinatorDetail)) { model.openMission($0) }
+                    reason: reason, branch: branch, coordinatorDetail: coordinatorDetail), draft: draft)) {
+                    model.openMission($0)
+                }
             }
             // Fade out before the corner's dense cells.
             .padding(.trailing, RowLine.cornerGutter)
@@ -618,7 +622,8 @@ struct SessionRow: View {
         .onHover { hovered = $0 }
         .onPreferenceChange(SessionRepositoryHelpKey.self) { repositoryHelp = $0 }
         .animation(Theme.Motion.quick, value: hovered)
-        .help([[reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
+        .help([draft?.help,
+               [reason ?? signal?.label, missionTitle.map { "Mission: \($0)" }, session.cwd.abbreviatingHome]
                 .compactMap { $0 }.joined(separator: " · "), RowLineSegments.pullRequestSummary(session), repositoryHelp]
             .compactMap { $0 }.joined(separator: "\n"))
         .accessibilityElement(children: .contain)

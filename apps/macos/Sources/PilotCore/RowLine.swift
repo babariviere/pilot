@@ -26,6 +26,8 @@ public struct RowLineSegment: Equatable, Sendable, Identifiable {
         case branch(String)
         /// Any other quiet text, such as a project's counts or a mission's progress.
         case text(String)
+        /// The chat's unsent composer text or images, shown in place of the usual details.
+        case draft(RowDraft)
     }
 
     public let kind: Kind
@@ -44,6 +46,7 @@ public struct RowLineSegment: Equatable, Sendable, Identifiable {
         case let .mission(id, title): "mission:\(id ?? title)"
         case let .branch(name): "branch:\(name)"
         case let .text(text): "text:\(text)"
+        case .draft: "draft"
         }
     }
 
@@ -61,7 +64,70 @@ public struct RowLineSegment: Equatable, Sendable, Identifiable {
         case let .mission(_, title): "Mission \(title)"
         case let .branch(name): "Branch \(name)"
         case let .text(text): text
+        case let .draft(draft): draft.accessibilityText
         }
+    }
+
+    var isProject: Bool {
+        if case .project = kind { return true }
+        return false
+    }
+}
+
+/// A chat's unsent composer content as its list rows show it. Whitespace-only text without images is no draft.
+/// Queued follow-ups are not drafts: they already wait in pilotd.
+public struct RowDraft: Equatable, Sendable {
+    /// Characters of the first line kept for the row. The line fades long before this in every list.
+    public static let previewLimit = 120
+    /// The tooltip keeps a few lines of the draft; VoiceOver reads all of it.
+    public static let helpLineLimit = 4
+    public static let helpCharacterLimit = 280
+
+    /// The draft without leading or trailing whitespace.
+    public let text: String
+    public let imageCount: Int
+
+    public init?(text: String, imageCount: Int = 0) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = max(0, imageCount)
+        guard !trimmed.isEmpty || images > 0 else { return nil }
+        self.text = trimmed
+        self.imageCount = images
+    }
+
+    /// The first line with whitespace collapsed, in quotes, or "Image draft" / "N images" without text.
+    public var preview: String {
+        guard let first = text.split(whereSeparator: \.isNewline).first else { return imageSummary }
+        let collapsed = first.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        guard collapsed.count > Self.previewLimit else { return "\u{201C}\(collapsed)\u{201D}" }
+        let shown = collapsed.prefix(Self.previewLimit).trimmingCharacters(in: .whitespaces) + "…"
+        return "\u{201C}\(shown)\u{201D}"
+    }
+
+    /// "Unsent draft: <full text>" for VoiceOver.
+    public var accessibilityText: String { "Unsent draft: " + describe(text) }
+
+    /// "Unsent draft: <text>" for a tooltip, clamped to a few lines.
+    public var help: String {
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).prefix(Self.helpLineLimit + 1)
+            .map(String.init)
+        var clamped = lines.count > Self.helpLineLimit
+        lines = Array(lines.prefix(Self.helpLineLimit))
+        var joined = lines.joined(separator: "\n")
+        if joined.count > Self.helpCharacterLimit {
+            joined = String(joined.prefix(Self.helpCharacterLimit))
+            clamped = true
+        }
+        if clamped { joined = joined.trimmingCharacters(in: .whitespacesAndNewlines) + "…" }
+        return "Unsent draft: " + describe(joined)
+    }
+
+    private var imageSummary: String { imageCount == 1 ? "Image draft" : "\(imageCount) images" }
+
+    private func describe(_ text: String) -> String {
+        let images = imageCount == 1 ? "1 image" : "\(imageCount) images"
+        if text.isEmpty { return images }
+        return imageCount == 0 ? text : "\(text) (with \(images))"
     }
 }
 
@@ -114,6 +180,21 @@ public enum RowLineSegments {
         let numbers = session.linkedPullRequests.map { "#\($0.number)" }
         guard !numbers.isEmpty else { return nil }
         return (numbers.count == 1 ? "Pull request " : "Pull requests: ") + numbers.joined(separator: ", ")
+    }
+
+    /// The line a row shows: with a draft, the project (in lists that mix projects) and then only the draft, in
+    /// place of the usual details. The row's corner, group and order never change for a draft.
+    public static func shown(_ segments: [RowLineSegment], draft: RowDraft?) -> [RowLineSegment] {
+        guard let draft else { return segments }
+        return Array(segments.prefix(while: \.isProject)) + [RowLineSegment(.draft(draft))]
+    }
+
+    /// The segments a row's label and tooltip describe: the draft after the project, then the usual details, so
+    /// nothing the draft hides on the line goes unsaid.
+    public static func described(_ segments: [RowLineSegment], draft: RowDraft?) -> [RowLineSegment] {
+        guard let draft else { return segments }
+        let project = Array(segments.prefix(while: \.isProject))
+        return project + [RowLineSegment(.draft(draft))] + Array(segments.dropFirst(project.count))
     }
 }
 

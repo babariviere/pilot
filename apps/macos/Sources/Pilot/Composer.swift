@@ -5,6 +5,8 @@ import SwiftUI
 @MainActor
 final class ComposerDraftState: ObservableObject {
     var onDraftChanged: (() -> Void)?
+    /// Called when the composer's text view gains or loses keyboard focus. Not published: focus never re-renders it.
+    var onEditingChanged: ((Bool) -> Void)?
     @Published var draft = "" {
         didSet {
             trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -421,7 +423,7 @@ private struct ComposerDraftEditor: View {
                            focusToken: focusToken, onNavigateQueue: onNavigateQueue, onCancel: onCancel,
                            onPasteImages: onPasteImages, completionDirectory: completionDirectory,
                            slashCommands: slashCommands, onSlashCommandsNeeded: onSlashCommandsNeeded,
-                           onSubmit: onSubmit)
+                           onFocusChange: { [state] in state.onEditingChanged?($0) }, onSubmit: onSubmit)
                 .frame(height: state.height)
         }
     }

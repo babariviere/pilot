@@ -91,6 +91,8 @@ A row's metadata line is a `RowLine`: whole segments in a fixed order (project, 
 mission, branch) with a dot only between shown segments. When they do not fit, the line fades out before the
 corner instead of truncating each segment or widening the row; the tooltip and VoiceOver keep every segment.
 Home, Inbox and Overview rows use the same line and may wrap it once.
+An unsent composer draft replaces the segments after the project with a pencil and the draft's first line, in
+muted text. It is the user's own work, so it never colours, badges or regroups the row.
 
 ## Consistency
 

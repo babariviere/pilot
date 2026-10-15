@@ -37,6 +37,11 @@ final class AppModel: ObservableObject {
     /// Drafts outlive their views and are saved locally by the production app.
     let newSessionForm = NewSessionForm()
     private var chatComposers: [String: ComposerState] = [:]
+    /// Unsent composer drafts as chat rows show them, by chat. Typing never publishes: the chat whose composer has
+    /// focus is left out until focus moves on, and unchanged drafts are not reassigned.
+    @Published private(set) var chatDrafts: [String: RowDraft] = [:]
+    /// The chat whose composer has keyboard focus.
+    private var editingComposerId: String?
     /// In-memory brief drafts outlive tab and page navigation, independently for each mission.
     var missionBriefEditors: [String: BriefEditorState] = [:]
     private var knownScheduleStates: [String: ScheduleState] = [:]
@@ -173,8 +178,41 @@ final class AppModel: ObservableObject {
         if let composer = chatComposers[sessionId] { return composer }
         let composer = ComposerState()
         chatComposers[sessionId] = composer
-        composer.onDraftChanged = { [weak self] in self?.saveDrafts() }
+        composer.onDraftChanged = { [weak self] in
+            self?.saveDrafts()
+            self?.refreshChatDraft(sessionId)
+        }
+        composer.draftState.onEditingChanged = { [weak self] editing in
+            self?.setComposerEditing(editing, sessionId: sessionId)
+        }
         return composer
+    }
+
+    /// The draft row for a chat, or nil while its composer has focus or holds nothing worth sending.
+    func chatDraft(_ sessionId: String?) -> RowDraft? {
+        sessionId.flatMap { chatDrafts[$0] }
+    }
+
+    private func refreshChatDraft(_ sessionId: String) {
+        guard editingComposerId != sessionId else { return }
+        let draft = chatComposers[sessionId].flatMap {
+            RowDraft(text: $0.draft, imageCount: $0.attachments.items.count)
+        }
+        if chatDrafts[sessionId] != draft { chatDrafts[sessionId] = draft }
+    }
+
+    private func setComposerEditing(_ editing: Bool, sessionId: String) {
+        if editing {
+            if let previous = editingComposerId, previous != sessionId {
+                editingComposerId = nil
+                refreshChatDraft(previous)
+            }
+            editingComposerId = sessionId
+            if chatDrafts[sessionId] != nil { chatDrafts[sessionId] = nil }
+        } else if editingComposerId == sessionId {
+            editingComposerId = nil
+            refreshChatDraft(sessionId)
+        }
     }
 
     private func restoreDrafts(_ drafts: StoredDrafts, from store: DraftStore) {

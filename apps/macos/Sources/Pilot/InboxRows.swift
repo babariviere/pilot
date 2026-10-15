@@ -76,6 +76,9 @@ extension AppModel {
 /// reason, the chat's PRs, its mission and branch. A ready-to-merge row passes its pull request, shown in place of
 /// the chat's badges with its branch. These rows have more room than the sidebar, so the line may wrap once before
 /// it fades. Rows show no file or line counts; those stay in the chat's Changes pane.
+///
+/// A chat's unsent draft replaces the details after the project, as on its sidebar row. Pull request rows keep their
+/// badge instead: they stand for the pull request, not the chat.
 struct InboxRowDetail: View {
     var projectName: String?
     /// The live chat behind the row, when there is one.
@@ -86,7 +89,15 @@ struct InboxRowDetail: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        RowLine(segments: segments(unread: session.map { model.isUnread($0) } ?? false), maxLines: 2)
+        let draft = draft
+        let line = RowLine(segments: RowLineSegments.shown(segments(unread: session.map { model.isUnread($0) } ?? false),
+                                                           draft: draft), maxLines: 2)
+        // The row's own tooltip stays on the rest of the row; the line names the whole draft.
+        if let draft { line.help(draft.help) } else { line }
+    }
+
+    private var draft: RowDraft? {
+        pullRequest == nil ? model.chatDraft(session?.id) : nil
     }
 
     private func segments(unread: Bool) -> [RowLineSegment] {
@@ -100,9 +111,9 @@ struct InboxRowDetail: View {
     /// The same line as plain text, for VoiceOver, with every segment the line has no room for.
     var accessibilityText: String {
         let coordinator = session.flatMap { $0.isActiveMissionCoordinator ? $0 : nil }
-        return RowLineSegments.session(
+        return RowLineSegments.described(RowLineSegments.session(
             session, projectName: projectName, missionTitle: missionTitle, reason: reason, branch: session?.branch,
-            coordinatorDetail: coordinator == nil ? nil : "", pullRequest: pullRequest).accessibilityText
+            coordinatorDetail: coordinator == nil ? nil : "", pullRequest: pullRequest), draft: draft).accessibilityText
     }
 }
 
