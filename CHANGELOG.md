@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.36.0](https://github.com/babariviere/pilot/compare/v1.35.1...v1.36.0) (2026-10-15)
+
+
+### Features
+
+* **macos:** render branded inline service links ([334f829](https://github.com/babariviere/pilot/commit/334f829d4307422d11b6db23625934a25bb21bc7))
+* **tasks:** delegate linked work from Linear assignees ([56ca4cc](https://github.com/babariviere/pilot/commit/56ca4ccc8ec4fce8a9fd2006470673b6ffd85b1e))
+* **tasks:** show delegated work quietly in task views ([8791634](https://github.com/babariviere/pilot/commit/87916344a2fd18edd554d7733dd06ebdb490f02c))
+* **tracking:** add close effects to Slack labels ([dc548b8](https://github.com/babariviere/pilot/commit/dc548b8ca092a90871333a33d25da19129803692))
+* **tracking:** finish Slack items after linked work completes ([c397e45](https://github.com/babariviere/pilot/commit/c397e45f14dad4ac60922a919f5f71991f75e8c1))
+* **tracking:** react with eyes when Slack work starts ([fe26088](https://github.com/babariviere/pilot/commit/fe260881e06b8a11a482e137128ec9fe9ecf0150))
+
+
+### Bug Fixes
+
+* **daemon:** defer main refreshes during update preparation ([8a551ea](https://github.com/babariviere/pilot/commit/8a551ea7dfd4f32bf954ccadb09672e55e00cf98))
+* **daemon:** recover pending work of idle parents ([dd1f94d](https://github.com/babariviere/pilot/commit/dd1f94d53dbd3ee694dbd4b1da38368ddd5f460d))
+* **macos:** restore Copy Link in agent replies ([b1947e0](https://github.com/babariviere/pilot/commit/b1947e0b816ae5bd28b0989fa727b5f831a7c9a1))
+* **macos:** seed copy source before link preparation ([41f19d9](https://github.com/babariviere/pilot/commit/41f19d947123170e7de3fc0e886e600f5eafbd64))
+
 ## [1.35.1](https://github.com/babariviere/pilot/compare/v1.35.0...v1.35.1) (2026-10-15)
 
 
