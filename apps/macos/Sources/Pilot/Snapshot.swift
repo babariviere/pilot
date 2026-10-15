@@ -822,8 +822,8 @@ enum Snapshot {
                 to: directory.appending(path: width == 760 ? "usage-composer.png" : "usage-composer-narrow.png")
             )
         }
-        for (name, working) in [("menubar-idle", false), ("menubar-working", true)] {
-            let image = PlaneImage.menuBar(working: working)
+        do {
+            let image = PlaneImage.menuBar
             let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 72, pixelsHigh: 72, bitsPerSample: 8,
                                        samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
                                        bytesPerRow: 0, bitsPerPixel: 0)!
@@ -832,7 +832,7 @@ enum Snapshot {
             NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
             image.draw(in: NSRect(origin: .zero, size: image.size))
             NSGraphicsContext.restoreGraphicsState()
-            try? rep.representation(using: .png, properties: [:])?.write(to: directory.appending(path: "\(name).png"))
+            try? rep.representation(using: .png, properties: [:])?.write(to: directory.appending(path: "menubar.png"))
         }
         for session in Fixtures.sessions where session.outcome == .done {
             model.selectedSessionId = session.id

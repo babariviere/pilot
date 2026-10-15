@@ -21,8 +21,8 @@ import Testing
     let source = try String(contentsOf: svg, encoding: .utf8)
     #expect(source.contains("<path id=\"plane\" d=\"\(PlaneGlyph.svgPath)\"/>"))
     let bounds = PlaneGlyph.path.boundingBoxOfPath
-    #expect(bounds.minX == -308 && bounds.maxX == 308)
-    #expect(bounds.minY == -300 && bounds.maxY == PlaneGlyph.tail.y)
+    #expect(bounds.minX == -300 && bounds.maxX == 300)
+    #expect(bounds.minY == -300 && abs(bounds.maxY - 310) < 0.01)
     // The wing roots overlap the fuselage; one winding keeps the overlap filled rather than cut out.
     #expect(PlaneGlyph.path.contains(CGPoint(x: 32, y: 0)))
     #expect(PlaneGlyph.path.contains(CGPoint(x: 0, y: 0)))

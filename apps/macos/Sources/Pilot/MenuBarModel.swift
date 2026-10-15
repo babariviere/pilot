@@ -2,28 +2,6 @@ import Combine
 import Foundation
 import PilotCore
 
-/// The label only changes when activity crosses the idle/working boundary. Observing
-/// PilotClient directly would invalidate it for every project, artifact and session update.
-@MainActor
-final class MenuBarIconModel: ObservableObject {
-    @Published private(set) var isWorking: Bool
-    private var observation: AnyCancellable?
-
-    init(client: PilotClient) {
-        isWorking = client.workingCount > 0
-        observation = client.$sessions
-            .map { $0.unarchivedSessions.contains(where: \.isWorking) }
-            // One session update can remove, append and sort synchronously. Do not
-            // expose its transient empty list as an idle/working icon flip.
-            .debounce(for: .zero, scheduler: DispatchQueue.main)
-            .removeDuplicates()
-            .sink { [weak self] value in
-                guard let self, self.isWorking != value else { return }
-                self.isWorking = value
-            }
-    }
-}
-
 struct MenuBarSessionRow: Identifiable, Equatable {
     let session: SessionSummary
     let isUnread: Bool

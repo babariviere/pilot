@@ -4,77 +4,31 @@ import PilotCore
 import Testing
 @testable import Pilot
 
-@Test @MainActor func menuBarImagesKeepIdentityAndTemplateRendering() throws {
-    let idle = PlaneImage.menuBar(working: false)
-    let working = PlaneImage.menuBar(working: true)
-    for _ in 0..<100 {
-        #expect(PlaneImage.menuBar(working: false) === idle)
-        #expect(PlaneImage.menuBar(working: true) === working)
-    }
-    #expect(idle !== working)
-    for image in [idle, working] {
-        #expect(image.isTemplate)
-        #expect(image.size == NSSize(width: 18, height: 18))
-        let bitmap = NSBitmapImageRep(cgImage: try #require(image.cgImage(forProposedRect: nil, context: nil, hints: nil)))
-        var opaque = 0
-        var transparent = 0
-        for y in 0..<bitmap.pixelsHigh {
-            for x in 0..<bitmap.pixelsWide {
-                let alpha = try #require(bitmap.colorAt(x: x, y: y)).alphaComponent
-                if alpha > 0.5 { opaque += 1 }
-                if alpha < 0.1 { transparent += 1 }
-            }
+@Test @MainActor func menuBarImageKeepsIdentityAndTemplateRendering() throws {
+    let image = PlaneImage.menuBar
+    for _ in 0..<100 { #expect(PlaneImage.menuBar === image) }
+    #expect(image.isTemplate)
+    #expect(image.size == NSSize(width: 18, height: 18))
+    let bitmap = NSBitmapImageRep(cgImage: try #require(image.cgImage(forProposedRect: nil, context: nil, hints: nil)))
+    var opaque = 0
+    var transparent = 0
+    for y in 0..<bitmap.pixelsHigh {
+        for x in 0..<bitmap.pixelsWide {
+            let alpha = try #require(bitmap.colorAt(x: x, y: y)).alphaComponent
+            if alpha > 0.5 { opaque += 1 }
+            if alpha < 0.1 { transparent += 1 }
         }
-        #expect(opaque > 5 && transparent > 5)
     }
-    #expect(idle.tiffRepresentation != working.tiffRepresentation)
+    #expect(opaque > 5 && transparent > 5)
 }
 
-@Test func menuBarContrailStepsAwayFromTheTailWithoutTouchingThePlane() throws {
+@Test func menuBarPlaneHeadsTopRightInsideTheImage() throws {
     var transform = PlaneImage.planeTransform
     let plane = try #require(PlaneGlyph.path.copy(using: &transform))
-    // Heading to the top right, inside the 18 pt image.
     #expect(CGRect(x: 0, y: 0, width: 18, height: 18).insetBy(dx: 0.4, dy: 0.4).contains(plane.boundingBoxOfPath))
     let nose = CGPoint(x: 0, y: -300).applying(PlaneImage.planeTransform)
-    let tail = PlaneGlyph.tail.applying(PlaneImage.planeTransform)
+    let tail = CGPoint(x: 0, y: 300).applying(PlaneImage.planeTransform)
     #expect(nose.x > tail.x && nose.y < tail.y)
-    var previous = CGRect(origin: tail, size: .zero)
-    for square in PlaneImage.contrail {
-        // Behind the tail toward the bottom left, smaller each step, on the half-point grid, clear of the plane.
-        #expect(square.maxX <= previous.minX + 0.01 && square.minY >= previous.maxY - 0.01)
-        #expect(square.width == square.height && (previous.width == 0 || square.width < previous.width))
-        #expect((square.minX * 2).rounded() == square.minX * 2 && (square.minY * 2).rounded() == square.minY * 2)
-        #expect(square.minX >= 0 && square.maxY <= 18)
-        for corner in [CGPoint(x: square.maxX, y: square.minY), CGPoint(x: square.midX, y: square.midY)] {
-            #expect(!plane.contains(corner))
-        }
-        previous = square
-    }
-}
-
-@Test @MainActor func menuBarIconOnlyPublishesIdleWorkingTransitionsAsynchronously() async {
-    let client = PilotClient()
-    let icon = MenuBarIconModel(client: client)
-    var changes: [Bool] = []
-    let observation = icon.$isWorking.dropFirst().sink { changes.append($0) }
-    await drainMenuUpdates()
-    #expect(changes.isEmpty)
-
-    client.loadFixture(projects: [], sessions: [menuSession(state: "starting")])
-    #expect(!icon.isWorking) // Never notify the menu host inside the source's publication.
-    await drainMenuUpdates()
-    #expect(icon.isWorking && changes == [true])
-    for i in 0..<100 {
-        // Match PilotClient.update's synchronous remove/append/sort publication burst.
-        client.loadFixture(projects: [], sessions: [])
-        client.loadFixture(projects: [], sessions: [menuSession(state: "working", updatedAt: Double(i))])
-    }
-    await drainMenuUpdates()
-    #expect(changes == [true])
-    client.loadFixture(projects: [], sessions: [menuSession(state: "working", archivedAt: 10)])
-    await drainMenuUpdates()
-    #expect(!icon.isWorking && changes == [true, false])
-    withExtendedLifetime(observation) {}
 }
 
 @Test @MainActor func menuBarContentIgnoresUnrelatedUpdatesButRetainsLiveVisibleChanges() async {

@@ -88,7 +88,7 @@ Native SwiftUI client for pilotd, with a libghostty terminal per session.
 - **Settings (⌘,).** Chat and code fonts and sizes, terminal font family and size (live, on top of your
   `~/.config/ghostty/config`, which can be turned off), and projects.
 - **Menu bar.** Daemon status, recent sessions, open, restart/stop pilotd, open the log. The icon is the app
-  icon's plane seen flat from above, with a short dithered contrail while agents are working.
+  icon's plane, simplified and seen flat from above. It does not change while agents are working.
 - **Results.** Status icons are separate from lifecycle: green for Done, red for Failed, and gray for
   Stopped/Idle, with an animated working indicator. Hover for the status label;
   screen readers announce it too.
@@ -133,7 +133,7 @@ swift run Pilot              # unbundled dev run (no notifications)
                              # thread-priority.png: a fresh completion first, closed/merged PRs last without unread dots
                              # also usage-footers.png and usage-footer-narrow.png: limits and fallback
                              # also session-queued.png, session-long-queue.png and queued-message-editor.png
-                             # and menubar-idle.png / menubar-working.png: the menu bar plane glyph
+                             # and menubar.png: the menu bar plane glyph
                              # also pr-open.png, pr-merged.png, pr-stale.png and pr-dashboard.png
                              # also sidebar-folders.png, sidebar-folders-collapsed.png and sidebar-folders-search.png
                              # add --sidebar-folders-only to stop after the folder previews
