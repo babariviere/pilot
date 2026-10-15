@@ -157,7 +157,7 @@ export class OfflineGate {
 
 /** Only a failed provider request is repeated. Its durable request checkpoint and input ID stay unchanged. */
 export function offlineRequestStream(
-	dispatch: (signal: AbortSignal) => AssistantMessageEventStream,
+	dispatch: (signal: AbortSignal) => AssistantMessageEventStream | Promise<AssistantMessage>,
 	model: Model<Api>,
 	gate: OfflineGate,
 	signal?: AbortSignal,
@@ -183,10 +183,13 @@ export function offlineRequestStream(
 				let message: AssistantMessage;
 				try {
 					const source = dispatch(requestSignal);
-					// Do not forward terminal errors: Harness must retain its request checkpoint during an outage.
-					for await (const event of source)
-						if (event.type !== "error" && event.type !== "done") stream.push(event);
-					message = await source.result();
+					if ("then" in source) message = await source;
+					else {
+						// Do not forward terminal errors: Harness must retain its request checkpoint during an outage.
+						for await (const event of source)
+							if (event.type !== "error" && event.type !== "done") stream.push(event);
+						message = await source.result();
+					}
 				} catch (error) {
 					if (offline && !signal?.aborted && !providerFailure(error)) continue;
 					if (await gate.recover(error, signal)) continue;

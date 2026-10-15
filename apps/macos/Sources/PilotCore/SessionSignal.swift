@@ -25,7 +25,7 @@ public enum SessionSignal: String, CaseIterable, Hashable, Sendable {
 extension SessionSummary {
     /// The chat's current PR is open, not a draft, and GitHub reports no blockers.
     public var isReadyToMerge: Bool {
-        guard !isMissionCoordinator, attentionReason?.kind != .prStuck,
+        guard offlinePaused != true, !isMissionCoordinator, attentionReason?.kind != .prStuck,
               let pullRequest, pullRequest.state == .open else { return false }
         return pullRequest.readiness?.state == .ready
     }
