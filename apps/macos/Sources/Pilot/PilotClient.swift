@@ -184,6 +184,31 @@ final class PilotClient: ObservableObject {
 
     // MARK: Commands
 
+    func repositoryDirectory(_ selection: RepositorySelection, offset: Int = 0) async throws -> RepositoryDirectoryPage {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(url: baseURL.appending(path: "api/repositories/directories"), resolvingAgainstBaseURL: false)!
+        url.queryItems = [URLQueryItem(name: "rootId", value: selection.rootId),
+                          URLQueryItem(name: "path", value: selection.path),
+                          URLQueryItem(name: "offset", value: String(offset))]
+        return try await get(url.url!)
+    }
+
+    func createRepositoryProject(_ selection: RepositorySelection) async throws -> Project {
+        struct Request: Encodable { let selection: RepositorySelection }
+        let project: Project = try await call("api/repositories/projects", body: Request(selection: selection))
+        upsert(project)
+        return project
+    }
+
+    func file(_ sessionId: String, path: String) async throws -> SessionFileContent {
+        guard let baseURL else { throw HostRoutingError.disconnected }
+        var url = URLComponents(url: baseURL.appending(path: "api/sessions/\(sessionId)/files"), resolvingAgainstBaseURL: false)!
+        url.queryItems = [URLQueryItem(name: "path", value: path)]
+        let value: SessionFileContent = try await get(url.url!)
+        guard value.path == path else { throw HostRoutingError.invalidReference }
+        return value
+    }
+
     /// The daemon updates project dashboards and sidebar counts over the existing WebSocket.
     func review(_ request: ReviewRequest) async throws {
         guard request.marks.count <= ReviewRequest.maxMarks else { throw ClientError("Too many review marks") }
