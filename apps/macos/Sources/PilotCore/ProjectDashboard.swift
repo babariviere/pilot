@@ -340,6 +340,8 @@ public enum DashboardSourceStatus: String, LenientStringEnum {
 }
 
 public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
+    public let linearSize: LinearSize?
+    public let linearSizeOverride: LinearSize?
     public let slack: SlackTriage?
     public let id: String
     public let title: String
@@ -357,7 +359,9 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
     public init(id: String, title: String, url: String? = nil, status: String? = nil, updatedAt: Double? = nil,
                 externalId: String? = nil, metadata: [String: JSONValue]? = nil,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
-                missionIds: [String]? = nil, slack: SlackTriage? = nil) {
+                missionIds: [String]? = nil, slack: SlackTriage? = nil,
+                linearSize: LinearSize? = nil, linearSizeOverride: LinearSize? = nil) {
+        self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.slack = slack
         self.id = id
         self.title = title

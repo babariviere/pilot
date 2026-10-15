@@ -989,6 +989,8 @@ export interface DashboardScheduledItem {
 export type DashboardSourceStatus = import("./tracking.ts").SourceStatus;
 
 export interface DashboardTrackedItem {
+	linearSize?: import("./tracking.ts").LinearSize;
+	linearSizeOverride?: import("./tracking.ts").LinearSize;
 	slack?: import("./tracking.ts").SlackTriage;
 	id: string;
 	title: string;

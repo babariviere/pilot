@@ -1,5 +1,6 @@
 /** External text is untrusted. Tracking never starts agents. Only a confirmed Linear start may update its workflow state. */
 export type TrackedKind = "linear" | "slack";
+export type LinearSize = "quick_fix" | "needs_planning" | "unknown";
 export type TrackingJson = null | boolean | number | string | TrackingJson[] | { [key: string]: TrackingJson };
 
 export type SlackMessageType = "bug" | "question" | "request" | "unknown";
@@ -106,6 +107,8 @@ export interface TrackedItem {
 	 * slackStart { outcome: reacted|skipped|error, attemptedAt, error? }, once per item. */
 	metadata: Record<string, TrackingJson>;
 	dismissed: boolean;
+	linearSize?: LinearSize;
+	linearSizeOverride?: LinearSize;
 	slack?: SlackTriage;
 	/** Latest chat and mission started from (or linked to) this item. */
 	sessionId?: string;
@@ -121,6 +124,7 @@ export interface TrackedItem {
 export interface TrackedItemPatch {
 	/** Only on confirmed Start chat/mission, with exactly one new link. Never for ordinary linking. */
 	start?: boolean;
+	linearSize?: LinearSize;
 	slack?: SlackOverrides;
 	dismissed?: boolean;
 	sessionId?: string | null;

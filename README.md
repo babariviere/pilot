@@ -366,6 +366,12 @@ Confirming Start chat or Start mission moves an eligible Linear ticket to that s
 reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
 counts an existing reaction as success, and is never removed automatically. Failures never block the
 work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
+Linear size classification suggests Quick fix, Needs planning or Unknown from a bounded title and description.
+It runs once per issue update, at most eight attempts per poll and 200 per UTC day across projects, with the
+cheapest scoped model and no tools or thinking. Descriptions are transient; failed attempts remain Unknown
+until the issue changes. User size corrections survive sync and feed the shared guide. This never auto-starts
+work. Size chips and suggested primary actions are a separate UI follow-up.
+
 Triage keeps up to 500 corrections per project across sources. A debounced, tool-free worker folds three new
 corrections (or a day with new corrections) into a short read-only guide. Classifiers use that guide and five
 recent examples. Guides contain rules and summaries, not Slack excerpts. Tracking guide APIs support reading

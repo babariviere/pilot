@@ -12,6 +12,7 @@ import type {
 } from "@pilot/protocol";
 import { NotFound, ServiceUnavailable } from "./errors.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
+import type { SizeReservation } from "./linear-size.ts";
 import type {
 	InboxQuery,
 	InboxTracked,
@@ -126,6 +127,17 @@ export class TrackedItemStore {
 	}
 	corrections(projectId: string): Promise<SlackCorrection[]> {
 		return this.rpc("corrections", { projectId });
+	}
+	reserveLinearSize(projectId: string, externalId: string, version: number, now: number): Promise<SizeReservation> {
+		return this.rpc("reserveLinearSize", { projectId, externalId, version, now });
+	}
+	finishLinearSize(
+		projectId: string,
+		externalId: string,
+		version: number,
+		size: import("@pilot/protocol").LinearSize,
+	): Promise<void> {
+		return this.rpc("finishLinearSize", { projectId, externalId, version, size });
 	}
 	triageInput(
 		projectId: string,
