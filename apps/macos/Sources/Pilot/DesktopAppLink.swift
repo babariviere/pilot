@@ -1,8 +1,15 @@
 import Foundation
 
+/// A Slack workspace the desktop app is signed in to.
+struct SlackWorkspace: Equatable {
+    let id: String
+    let host: String?
+}
+
 /// Translate content links only. Marketing, sign-in and unrelated URLs stay in the browser.
 enum DesktopAppLink {
-    static func url(for url: URL) -> URL? {
+    static func url(for url: URL,
+                    slackWorkspaces: () -> [SlackWorkspace] = SlackDesktopState.workspaces) -> URL? {
         guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               ["http", "https"].contains(parts.scheme?.lowercased()),
               parts.user == nil, parts.password == nil, parts.port == nil,
@@ -41,18 +48,54 @@ enum DesktopAppLink {
         for timestamp in [message, thread].compactMap({ $0 }) {
             guard timestamp.range(of: #"^[0-9]+\.[0-9]{6}$"#, options: .regularExpression) != nil else { return nil }
         }
+        // slack://channel needs a team: without one Slack only comes to the front. Most
+        // permalinks carry none, so resolve it from the workspaces the app is signed in to.
+        // An unknown workspace opens in the browser, which can resolve it properly.
+        guard let team = team ?? slackTeam(host: host, workspaces: slackWorkspaces()) else { return nil }
         var native = URLComponents()
         native.scheme = "slack"
         native.host = "channel"
-        native.queryItems = []
-        // Some permalinks (including tracked messages) have no team ID. Let Slack resolve
-        // those in its active workspace rather than guessing an ID from the subdomain.
-        if let team { native.queryItems?.append(URLQueryItem(name: "team", value: team)) }
-        native.queryItems?.append(URLQueryItem(name: "id", value: channel))
-        // Slack's channel deep link uses ts, not message. An ignored parameter still
-        // launches Slack successfully, but leaves it at the channel's current position.
-        if let timestamp = message ?? thread { native.queryItems?.append(URLQueryItem(name: "ts", value: timestamp)) }
+        native.queryItems = [URLQueryItem(name: "team", value: team), URLQueryItem(name: "id", value: channel)]
+        // Slack scrolls to `message`; it ignores `ts` and stays at the channel's current position.
+        if let timestamp = message ?? thread { native.queryItems?.append(URLQueryItem(name: "message", value: timestamp)) }
         if let thread { native.queryItems?.append(URLQueryItem(name: "thread_ts", value: thread)) }
         return native.url
     }
+
+    /// A workspace subdomain names its team; bare slack.com links are unambiguous only with one workspace.
+    static func slackTeam(host: String, workspaces: [SlackWorkspace]) -> String? {
+        if host == "slack.com" || host == "app.slack.com" {
+            return workspaces.count == 1 ? workspaces[0].id : nil
+        }
+        return workspaces.first { $0.host == host }?.id
+    }
 }
+
+/// Reads the Slack desktop app's signed-in workspaces. Only on a Slack link click, never polled.
+enum SlackDesktopState {
+    static func workspaces() -> [SlackWorkspace] {
+        let support = FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library")
+        for base in ["Application Support/Slack",
+                     "Containers/com.tinyspeck.slackmacgap/Data/Library/Application Support/Slack"] {
+            let file = support.appending(path: base).appending(path: "storage/root-state.json")
+            // The state file is a few kilobytes; skip anything implausibly large.
+            guard let size = try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize, size < 4_000_000,
+                  let data = try? Data(contentsOf: file) else { continue }
+            return workspaces(rootState: data)
+        }
+        return []
+    }
+
+    static func workspaces(rootState data: Data) -> [SlackWorkspace] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = root["workspaces"] as? [String: Any] else { return [] }
+        return entries.values.compactMap { entry -> SlackWorkspace? in
+            guard let entry = entry as? [String: Any], let id = entry["id"] as? String,
+                  id.range(of: #"^[TE][A-Z0-9]+$"#, options: .regularExpression) != nil else { return nil }
+            let host = (entry["url"] as? String).flatMap { URL(string: $0)?.host?.lowercased() }
+                ?? (entry["domain"] as? String).map { "\($0.lowercased()).slack.com" }
+            return SlackWorkspace(id: id, host: host)
+        }.sorted { $0.id < $1.id }
+    }
+}
+

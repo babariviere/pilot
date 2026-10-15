@@ -17,28 +17,56 @@ import Testing
     }
 }
 
-@Test func desktopSlackLinksKeepChannelMessageThreadAndKnownWorkspace() throws {
+@Test func desktopSlackLinksKeepChannelMessageThreadAndWorkspace() throws {
+    // Slack ignores slack://channel without a team and only scrolls to `message`, not `ts`.
+    let workspaces = [SlackWorkspace(id: "T123", host: "acme.slack.com"),
+                      SlackWorkspace(id: "E456", host: "corp.enterprise.slack.com")]
     let cases: [(String, String)] = [
-        ("https://slack.com/archives/C123/p1791885305000001",
-         "slack://channel?id=C123&ts=1791885305.000001"),
-        ("https://acme.slack.com/archives/C123/p1791885305000001?thread_ts=1791885000.000002&cid=C123&team=T123",
-         "slack://channel?team=T123&id=C123&ts=1791885305.000001&thread_ts=1791885000.000002"),
-        ("https://acme.slack.com/archives/C123?thread_ts=1791885000.000002",
-         "slack://channel?id=C123&ts=1791885000.000002&thread_ts=1791885000.000002"),
-        ("https://acme.enterprise.slack.com/archives/G123",
-         "slack://channel?id=G123"),
+        ("https://acme.slack.com/archives/C123/p1791885305000001",
+         "slack://channel?team=T123&id=C123&message=1791885305.000001"),
+        ("https://ACME.slack.com/archives/C123/p1791885305000001?thread_ts=1791885000.000002&cid=C123",
+         "slack://channel?team=T123&id=C123&message=1791885305.000001&thread_ts=1791885000.000002"),
+        ("https://other.slack.com/archives/C123?thread_ts=1791885000.000002&team=T999",
+         "slack://channel?team=T999&id=C123&message=1791885000.000002&thread_ts=1791885000.000002"),
+        ("https://corp.enterprise.slack.com/archives/G123",
+         "slack://channel?team=E456&id=G123"),
         ("https://app.slack.com/client/T123/D123/1791885305.000001",
-         "slack://channel?team=T123&id=D123&ts=1791885305.000001"),
+         "slack://channel?team=T123&id=D123&message=1791885305.000001"),
         ("https://app.slack.com/client/E123/C123",
          "slack://channel?team=E123&id=C123"),
-        ("https://slack.com/archives/C123/p1000001",
-         "slack://channel?id=C123&ts=1.000001"),
     ]
     for (web, native) in cases {
         let url = try #require(URL(string: web))
-        #expect(DesktopAppLink.url(for: url)?.absoluteString == native)
-        #expect(BrowserLinkOpener.handles(url))
+        #expect(DesktopAppLink.url(for: url, slackWorkspaces: { workspaces })?.absoluteString == native)
     }
+}
+
+@Test func desktopSlackLinksWithoutKnownWorkspaceStayInBrowser() throws {
+    let one = [SlackWorkspace(id: "T123", host: "acme.slack.com")]
+    let two = one + [SlackWorkspace(id: "T456", host: "beta.slack.com")]
+    let bare = try #require(URL(string: "https://slack.com/archives/C123/p1000001"))
+    // A bare slack.com permalink is unambiguous only when one workspace is signed in.
+    #expect(DesktopAppLink.url(for: bare, slackWorkspaces: { one })?.absoluteString
+        == "slack://channel?team=T123&id=C123&message=1.000001")
+    #expect(DesktopAppLink.url(for: bare, slackWorkspaces: { two }) == nil)
+    #expect(DesktopAppLink.url(for: bare, slackWorkspaces: { [] }) == nil)
+    let unknown = try #require(URL(string: "https://gamma.slack.com/archives/C123/p1791885305000001"))
+    #expect(DesktopAppLink.url(for: unknown, slackWorkspaces: { two }) == nil)
+}
+
+@Test func slackDesktopStateReadsSignedInWorkspaces() throws {
+    let json = #"""
+    {"workspaces":{
+      "T123":{"id":"T123","domain":"acme","url":"https://acme.slack.com/","name":"Acme"},
+      "T456":{"id":"T456","domain":"Beta"},
+      "bad":{"id":"not-an-id","url":"https://evil.slack.com/"}
+    },"teams":{}}
+    """#
+    #expect(SlackDesktopState.workspaces(rootState: Data(json.utf8)) == [
+        SlackWorkspace(id: "T123", host: "acme.slack.com"),
+        SlackWorkspace(id: "T456", host: "beta.slack.com"),
+    ])
+    #expect(SlackDesktopState.workspaces(rootState: Data("[]".utf8)).isEmpty)
 }
 
 @Test func desktopLinksRejectUnrelatedUnsafeOrMalformedURLs() throws {
@@ -63,7 +91,7 @@ import Testing
 
 @Test @MainActor func desktopAppHandoffAvoidsBrowserAndUnavailableAppFallsBackToOriginalURL() throws {
     for service in ["https://linear.app/acme/issue/ENG-42/title#comment-1",
-                    "https://slack.com/archives/C123/p1791885305000001"] {
+                    "https://slack.com/archives/C123/p1791885305000001?team=T123"] {
         let web = try #require(URL(string: service))
         let native = try #require(DesktopAppLink.url(for: web))
         var desktopAvailable = true
