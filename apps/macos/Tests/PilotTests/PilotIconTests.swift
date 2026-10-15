@@ -69,7 +69,8 @@ import Testing
 
 @Test @MainActor func reviewQuarterLeavesOnlyTheTopLeftQuarterEmpty() throws {
     let mark = ReviewQuarterGlyph.draw(pointSize: 64, weight: .regular)
-    let bitmap = try #require(NSBitmapImageRep(data: try #require(mark.tiffRepresentation)))
+    let tiff = try #require(mark.tiffRepresentation)
+    let bitmap = try #require(NSBitmapImageRep(data: tiff))
     let (width, height) = (bitmap.pixelsWide, bitmap.pixelsHigh)
     func alpha(_ x: Double, _ y: Double) -> CGFloat {
         // Bitmap rows run top to bottom.
