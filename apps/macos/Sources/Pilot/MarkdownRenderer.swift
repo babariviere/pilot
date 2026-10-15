@@ -88,7 +88,12 @@ actor MarkdownRenderer {
 
     private func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        let parsed = (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        return ServiceLinks.detecting(in: parsed)
+    }
+
+    func preparePlainText(_ text: String) -> AttributedString {
+        ServiceLinks.detecting(in: AttributedString(text))
     }
 
     private func trim<Key, Value>(_ entries: inout [Key: Entry<Value>]) {
