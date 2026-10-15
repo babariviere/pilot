@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.35.1](https://github.com/babariviere/pilot/compare/v1.35.0...v1.35.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **macos:** read guardian replies without waiting for EOF ([3b181f9](https://github.com/babariviere/pilot/commit/3b181f9d13d1b007e3eee2e8eab99d052073f601))
+* **memory:** ensure oversized summaries make compaction progress ([a02c0e0](https://github.com/babariviere/pilot/commit/a02c0e08ba970cd4e123ebb0617175d12d060f04))
+
 ## [1.35.0](https://github.com/babariviere/pilot/compare/v1.34.0...v1.35.0) (2026-10-15)
 
 
