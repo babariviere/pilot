@@ -202,8 +202,6 @@ struct SelectableMessageText: NSViewRepresentable {
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
-        // Individual runs own their styling: branded references are quiet, ordinary links stay blue.
-        view.linkTextAttributes = [.cursor: NSCursor.pointingHand]
         view.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
@@ -229,6 +227,7 @@ struct SelectableMessageText: NSViewRepresentable {
         if view.content != text || view.style != style {
             view.content = text
             view.style = style
+            view.updateLinkHover(at: nil)
             view.textStorage?.setAttributedString(Self.attributed(text, style: style))
             view.invalidateMeasurements()
             view.invalidateIntrinsicContentSize()
@@ -260,8 +259,6 @@ struct SelectableMessageText: NSViewRepresentable {
             ]
             if let link = run.link {
                 attributes[.link] = link
-                attributes[.foregroundColor] = NSColor.linkColor
-                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
             }
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             result.append(NSAttributedString(string: String(text[run.range].characters), attributes: attributes))
@@ -290,6 +287,57 @@ final class MessageSelectionTextView: NSTextView {
     private var measurements: [(width: CGFloat, hugsContent: Bool, size: CGSize)] = []
     /// The text view does not own a TextKit 1 stack it was given, so it retains the root here.
     private var ownedStorage: NSTextStorage?
+    private var linkTrackingArea: NSTrackingArea?
+    private(set) var hoveredLinkRange: NSRange?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let linkTrackingArea { removeTrackingArea(linkTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+            options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        linkTrackingArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        updateLinkHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateLinkHover(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        updateLinkHover(at: nil)
+    }
+
+    /// Hit-test actual glyphs, not the nearest insertion point in trailing whitespace. Hover only
+    /// invalidates drawing when the link changes; it never edits storage or invalidates layout.
+    func updateLinkHover(at point: NSPoint?) {
+        let range = point.flatMap { linkRange(at: $0) }
+        guard range != hoveredLinkRange else { return }
+        hoveredLinkRange = range
+        needsDisplay = true
+    }
+
+    private func linkRange(at point: NSPoint) -> NSRange? {
+        guard visibleRect.contains(point), let layout = layoutManager, let container = textContainer,
+              let storage = textStorage, storage.length > 0 else { return nil }
+        let local = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        let glyph = layout.glyphIndex(for: local, in: container)
+        guard glyph < layout.numberOfGlyphs,
+              layout.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: container).contains(local)
+        else { return nil }
+        let index = layout.characterIndexForGlyph(at: glyph)
+        var range = NSRange()
+        guard storage.attribute(.link, at: index, longestEffectiveRange: &range,
+                                in: NSRange(location: 0, length: storage.length)) != nil else { return nil }
+        return range
+    }
 
     /// A TextKit 1 stack whose layout manager draws the message's shared selection highlight.
     static func make() -> MessageSelectionTextView {
@@ -300,6 +348,7 @@ final class MessageSelectionTextView: NSTextView {
         layout.addTextContainer(container)
         let view = MessageSelectionTextView(frame: .zero, textContainer: container)
         view.ownedStorage = storage
+        view.linkTextAttributes = MessageServiceLinks.linkTextAttributes
         return view
     }
 
@@ -473,6 +522,44 @@ final class MessageSelectionTextView: NSTextView {
 /// Paints every selected region of a message in the same color: active while any of its regions
 /// is focused in the key window, inactive otherwise.
 final class MessageSelectionLayoutManager: NSLayoutManager {
+    @MainActor func linkUnderlineColor(at index: Int) -> NSColor {
+        if let view = firstTextView as? MessageSelectionTextView,
+           let range = view.hoveredLinkRange, NSLocationInRange(index, range) {
+            return NSColor(Theme.foreground)
+        }
+        return NSColor(Theme.LinkUnderline.ink)
+    }
+
+    /// TextKit supplies wrapped/bidirectional title fragments. Keep their exact horizontal bounds
+    /// and move only the underline, without changing font metrics, selection or line layout.
+    override func drawUnderline(forGlyphRange glyphRange: NSRange, underlineType underlineVal: NSUnderlineStyle,
+                                baselineOffset: CGFloat, lineFragmentRect lineRect: NSRect,
+                                lineFragmentGlyphRange lineGlyphRange: NSRange, containerOrigin: NSPoint) {
+        guard glyphRange.length > 0, let storage = textStorage,
+              storage.attribute(.link, at: characterIndexForGlyph(at: glyphRange.location), effectiveRange: nil) != nil,
+              let container = textContainer(forGlyphAt: glyphRange.location, effectiveRange: nil) else {
+            super.drawUnderline(forGlyphRange: glyphRange, underlineType: underlineVal, baselineOffset: baselineOffset,
+                                lineFragmentRect: lineRect, lineFragmentGlyphRange: lineGlyphRange,
+                                containerOrigin: containerOrigin)
+            return
+        }
+        MainActor.assumeIsolated {
+            NSGraphicsContext.saveGraphicsState()
+            defer { NSGraphicsContext.restoreGraphicsState() }
+            linkUnderlineColor(at: characterIndexForGlyph(at: glyphRange.location)).setFill()
+            let baseline = lineRect.minY + location(forGlyphAt: glyphRange.location).y
+            enumerateEnclosingRects(forGlyphRange: glyphRange, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0),
+                                    in: container) { rect, _ in
+                Self.linkUnderlineRect(enclosing: rect, baseline: baseline, origin: containerOrigin).fill()
+            }
+        }
+    }
+
+    static func linkUnderlineRect(enclosing rect: NSRect, baseline: CGFloat, origin: NSPoint) -> NSRect {
+        NSRect(x: origin.x + rect.minX, y: origin.y + baseline + Theme.LinkUnderline.baselineOffset,
+               width: rect.width, height: Theme.LinkUnderline.thickness)
+    }
+
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int,
                                           forCharacterRange charRange: NSRange, color: NSColor) {
         // Text views draw on the main thread. Background attributes keep AppKit's color.

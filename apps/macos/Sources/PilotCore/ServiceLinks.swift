@@ -57,7 +57,8 @@ public struct ServiceLink: Equatable, Sendable {
 }
 
 public enum ServiceLinks {
-    /// Runs after Markdown parsing, off the UI actor. Explicit destinations and inline code win.
+    /// Detects web URLs in literal user text and parsed Markdown, off the UI actor.
+    /// Explicit destinations and inline code win; only recognized services get branded later.
     public static func detecting(in text: AttributedString) -> AttributedString {
         var result = AttributedString()
         for run in text.runs {
@@ -72,7 +73,7 @@ public enum ServiceLinks {
                 guard let range = source.range(of: mention.url, range: cursor..<source.endIndex) else { continue }
                 result.append(AttributedString(String(source[cursor..<range.lowerBound]), attributes: run.attributes))
                 var link = AttributedString(mention.url, attributes: run.attributes)
-                if let url = URL(string: mention.url), ServiceLink(url: url) != nil { link.link = url }
+                if let url = URL(string: mention.url) { link.link = url }
                 result.append(link)
                 cursor = range.upperBound
             }

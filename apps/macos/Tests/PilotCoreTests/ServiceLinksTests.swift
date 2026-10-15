@@ -64,3 +64,12 @@ import Testing
     #expect(detected.runs.compactMap(\.link).count == 2)
     #expect(detected.runs.filter { $0.link != nil }.map { String(detected[$0.range].characters) } == [url, url])
 }
+
+@Test func literalWebURLsKeepTheirFullTextAndDestinations() {
+    let url = "https://example.com/docs?q=one%20two#section"
+    let source = "Read \(url), then http://localhost:3000/help."
+    let detected = ServiceLinks.detecting(in: AttributedString(source))
+    #expect(String(detected.characters) == source)
+    #expect(detected.runs.compactMap(\.link).map(\.absoluteString) == [url, "http://localhost:3000/help"])
+    #expect(ServiceLinks.detecting(in: detected) == detected)
+}

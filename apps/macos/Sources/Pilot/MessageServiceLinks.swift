@@ -22,7 +22,9 @@ enum MessageServiceLinks {
             cursor = NSMaxRange(range)
             let original = source.substring(with: range)
             guard let link = ServiceLink(url: url, label: original) else {
-                result.append(text.attributedSubstring(from: range))
+                let plain = NSMutableAttributedString(attributedString: text.attributedSubstring(from: range))
+                styleTitle(plain, range: NSRange(location: 0, length: plain.length), url: url)
+                result.append(plain)
                 continue
             }
             let mark: PilotMark
@@ -41,13 +43,30 @@ enum MessageServiceLinks {
             attributes[.font] = font
             attributes[.foregroundColor] = NSColor(Theme.foreground)
             attributes[.underlineStyle] = nil
+            attributes[.underlineColor] = nil
             attributes[.toolTip] = url.absoluteString
             attributes[copySource] = original
             replacement.addAttributes(attributes, range: NSRange(location: 0, length: replacement.length))
+            // The attachment and its non-breaking space remain clickable, but never underlined.
+            styleTitle(replacement, range: NSRange(location: 2, length: replacement.length - 2), url: url)
             result.append(replacement)
         }
         result.append(text.attributedSubstring(from: NSRange(location: cursor, length: text.length - cursor)))
         text.setAttributedString(result)
+    }
+
+    static var linkTextAttributes: [NSAttributedString.Key: Any] {
+        // Do not set an underline here: NSTextView would also apply it to service attachments.
+        [.cursor: NSCursor.pointingHand, .foregroundColor: NSColor(Theme.foreground)]
+    }
+
+    private static func styleTitle(_ text: NSMutableAttributedString, range: NSRange, url: URL) {
+        text.addAttributes([
+            .foregroundColor: NSColor(Theme.foreground),
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+            .underlineColor: NSColor(Theme.LinkUnderline.ink),
+            .toolTip: url.absoluteString,
+        ], range: range)
     }
 
     static func copiedText(_ text: NSAttributedString, range: NSRange) -> String {

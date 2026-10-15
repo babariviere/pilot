@@ -23,6 +23,12 @@ enum Theme {
     static let tray = Color(hex: 0xF5F5F5)
     static let code = Color(hex: 0xFAFAFA)
     static let primary = Color(hex: 0x262626)
+    /// Inline message links keep the text ink; only their title underline changes on hover.
+    enum LinkUnderline {
+        static let ink = Theme.foreground.opacity(0.18)
+        static let thickness: CGFloat = 1
+        static let baselineOffset: CGFloat = 5
+    }
     /// Keyboard focus ring on rows and row buttons (`focusRing(_:radius:outset:)`). Follows the system accent.
     static let focusRing = Color(nsColor: .keyboardFocusIndicatorColor)
 
