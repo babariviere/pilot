@@ -9,6 +9,11 @@ closed-lid work only when external power **and** a usable Wi-Fi path are present
 either while the lid remains closed pauses agents, restores normal sleep and requests sleep.
 Without that option, ordinary lid sleep still pauses work for the next wake.
 
+While agents work with closed-lid mode enabled, AC power and Wi-Fi connected, macOS ignores
+**Apple menu → Sleep**, even with the lid open. Turn off **Keep going with the lid closed**
+(or wait for agents to finish) before choosing Sleep. The override blocks the sleep request
+before Pilot receives a sleep notification; it does not trigger an agent pause.
+
 Pilot does not lock the screen or change macOS password/lock-delay settings. With closed-lid
 keep-awake on, whether the Mac locks depends on macOS and your settings, such as requiring a
 password after the display turns off. Suppressing lid sleep can bypass its normal locking path;
@@ -52,7 +57,7 @@ opt out of automatic resume.
 - Closed-lid work uses `pmset disablesleep 1/0`, the same mechanism documented by
   [Vorssaint](https://github.com/vorssaint/vorssaint-utils). This implementation is independent, not
   copied from its GPL source. The setting is **system-wide and persistent**, not a process assertion.
-  While enabled it can affect other system-sleep requests too. Keep ventilation clear.
+  While armed it blocks Apple-menu Sleep as well as lid sleep, even with the lid open. Keep ventilation clear.
 - A one-time, explicit administrator dialog installs `/etc/sudoers.d/pilot-power`, granting the
   current numeric uid only `/usr/bin/pmset disablesleep 1` and `0`. Subsequent calls use `sudo -n`.
   Neither Pilot nor its daemon runs as root. No administrator password is retained.
