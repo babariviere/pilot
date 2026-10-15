@@ -83,6 +83,7 @@ const sessions = new SessionManager(
 	},
 );
 sessions.setProjectMemory(memory);
+sessions.setMcpStatus(mcpStatus);
 sessions.setPullRequestObserver((observation) => trackedItems.observeSlackPullRequests(observation));
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));

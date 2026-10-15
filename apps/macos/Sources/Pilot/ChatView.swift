@@ -298,6 +298,14 @@ struct ChatView: View {
                 if showingJobs, !session.isReadOnlyHistory {
                     JobsPanel(sessionId: session.id, jobs: runningJobs) { showingJobs = false }
                 }
+                if !session.isArchived, let reason = session.attentionReason, reason.kind == .mcp {
+                    // Matches the other rows above the composer, such as the Ask row above.
+                    McpChatNotice(reason: reason)
+                        .padding(.horizontal, 14)
+                        .frame(maxWidth: Theme.column)
+                        .padding(.horizontal, 24)
+                        .padding(.bottom, 2)
+                }
                 if session.isArchived {
                     ArchivedComposer(session: session)
                 } else if let next = session.continuedTo {

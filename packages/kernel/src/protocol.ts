@@ -131,6 +131,8 @@ export type KernelPacket =
 	/** The agent may have created, moved or pushed a branch. A hint to recheck PRs, not ownership. */
 	| { type: "refs.changed" }
 	| { type: "github.action"; action: import("@pilot/protocol").GitHubAction }
+	/** A top-level tool call reached for MCP servers (namespaces, dashes as underscores). A hint, at most once a minute. */
+	| { type: "mcp.used"; namespaces: string[]; failed: boolean }
 	/** A `mission` tool call, answered by `mission.result`. */
 	| { type: "mission.call"; callId: string; action: MissionAction; args: Record<string, JsonValue> }
 	| {

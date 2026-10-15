@@ -273,6 +273,9 @@ files change (including `pi mcp login` in a terminal), never on a timer. Servers
 **Sign in** button that runs pi's browser sign-in; chats pick up the new sign-in on their next turn. The
 sidebar shows a quiet footer while a server waits for sign-in. Errors stay short; run `pi mcp list` for
 the full message.
+A chat whose tool call reached for a server that needs sign-in (or fails to connect) moves to **Needs
+you** with that server named, and shows a one-line notice above its composer with the same action. It
+clears once the server works again, you write in the chat, or you archive it.
 
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.

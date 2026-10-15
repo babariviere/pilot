@@ -663,9 +663,11 @@ struct ProjectNeedsYouRow: View {
     /// The project name, when the list mixes projects.
     var context: String? = nil
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var mcp = AppModel.shared.client.mcp
+    @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        let action = ProjectPageText.needsAction(item)
+        let action = item.kind == .mcp ? McpServerRowText.title(mcpAction) : ProjectPageText.needsAction(item)
         let detail = detail
         NeedsYouRow(title: item.title, action: action, help: item.needsYouLabel(now: now),
                     accessibilityDetail: detail.accessibilityText(using: model), open: open) { detail }
@@ -686,6 +688,11 @@ struct ProjectNeedsYouRow: View {
                               reason: ProjectPageText.needsSubtitle(item, now: now))
     }
 
+    /// A chat blocked on an MCP server: sign in from the row when pi can, else open Connections.
+    private var mcpAction: McpServerRowText.AttentionAction {
+        McpServerRowText.attentionAction(item.attentionReason?.server.flatMap { mcp.status?.server(named: $0) })
+    }
+
     private func open() {
         switch item.kind {
         case .question:
@@ -693,6 +700,10 @@ struct ProjectNeedsYouRow: View {
             else if let missionId = item.missionId { model.openMission(missionId) }
         case .unread, .failed, .scheduledFailed, .longJob, .prStuck:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
+        case .mcp:
+            let action = mcpAction
+            let server = item.attentionReason?.server
+            Task { await model.client.performMcpAttention(action, server: server) { openSettings() } }
         }
     }
 }
@@ -1144,6 +1155,7 @@ enum ProjectPageText {
         switch item.kind {
         case .unread: item.sessionId == nil ? nil : "Review"
         case .failed, .longJob, .prStuck: item.sessionId == nil ? nil : "Open chat"
+        case .mcp: "Open Connections"
         case .question: item.sessionId == nil && item.missionId == nil ? nil : "Answer"
         case .scheduledFailed: item.sessionId == nil ? nil : "Open chat"
         }

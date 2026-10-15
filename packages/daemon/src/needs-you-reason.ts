@@ -11,7 +11,9 @@ export function reasonLine(text: string | undefined): string | undefined {
 }
 
 export function sessionNeedsYouReason(session: SessionSummary, now = Date.now()): NeedsYouReason {
-	if (session.attentionReason?.kind === "long_job") return session.attentionReason;
+	// Live attention the user can act on outranks the outcome; it clears once fixed and the outcome shows again.
+	if (session.attentionReason?.kind === "long_job" || session.attentionReason?.kind === "mcp")
+		return session.attentionReason;
 	if (session.outcome === "failed" || (!session.outcome && session.state === "failed")) {
 		const limit = subscriptionLimit(session, now);
 		if (limit) return { kind: "limit", ...(limit.resumesAt !== undefined ? { resumesAt: limit.resumesAt } : {}) };

@@ -116,6 +116,20 @@ test("stuck PRs survive reading, count once per chat and exclude every head from
 	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 1);
 });
 
+test("chats blocked on an MCP server need the user even while working, with the server to fix", () => {
+	const attentionReason = { kind: "mcp" as const, detail: "datadog needs sign-in", server: "datadog" };
+	const chat = session({ id: "logs", state: "working", working: true, attentionReason, attentionAt: 7 });
+	const dashboard = build({ sessions: [chat] });
+	assert.equal(dashboard.needsYou.total, 1);
+	assert.equal(dashboard.needsYou.items[0]?.kind, "mcp");
+	assert.equal(dashboard.needsYou.items[0]?.reason, "datadog needs sign-in");
+	assert.deepEqual(dashboard.needsYou.items[0]?.attentionReason, attentionReason);
+	assert.equal(dashboard.needsYou.items[0]?.at, 7);
+	assert.equal(dashboard.working.total, 0, "a blocked chat shows once, under Needs you");
+	const f = service([chat]);
+	assert.deepEqual(f.service.counts().projects.p1, { working: 0, needsYou: 1, needsYouReasons: { mcp: 1 } });
+});
+
 test("dashboard supports a larger but explicitly bounded section limit", () => {
 	const sessions = Array.from({ length: 8 }, (_, i) => session({ id: `work-${i}`, state: "working" }));
 	const dashboard = buildProjectDashboard(

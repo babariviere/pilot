@@ -55,7 +55,7 @@ export interface DashboardInput {
 	memory?: ProjectMemorySummary;
 }
 
-const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, long_job: 3, pr_stuck: 4, unread: 5 } as const;
+const KIND_RANK = { failed: 0, question: 1, scheduled_failed: 2, long_job: 3, mcp: 4, pr_stuck: 5, unread: 6 } as const;
 const isTerminal = (pr: SessionPullRequest) => pr.state === "merged" || pr.state === "closed";
 const isWorking = (session: SessionSummary) =>
 	session.working ?? (session.state === "working" || session.state === "starting" || !!session.runningJobs?.length);
@@ -86,7 +86,8 @@ function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | un
  * a ready current PR supersedes an unreviewed result. Failures stay until retried and questions until answered.
  */
 function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread"]): boolean {
-	if (session.attentionReason?.kind === "long_job") return true;
+	// Live attention holds while the chat works: a long job, or an MCP server the chat could not use.
+	if (session.attentionReason?.kind === "long_job" || session.attentionReason?.kind === "mcp") return true;
 	if (isWorking(session)) return false;
 	if (session.attentionReason?.kind === "pr_stuck") return true;
 	// A question waits until it is answered, not until the chat is viewed.
@@ -124,7 +125,9 @@ export function buildProjectDashboard(input: DashboardInput, limit = DASHBOARD_S
 			needsYouByMission.set(session.missionId, (needsYouByMission.get(session.missionId) ?? 0) + 1);
 		const attentionReason = sessionNeedsYouReason(session);
 		const attention =
-			attentionReason.kind === "long_job" || attentionReason.kind === "pr_stuck" ? attentionReason.kind : undefined;
+			attentionReason.kind === "long_job" || attentionReason.kind === "pr_stuck" || attentionReason.kind === "mcp"
+				? attentionReason.kind
+				: undefined;
 		const isFailure = !attention && failed(session);
 		const reason = reasonLine(
 			attention ? attentionReason.detail : (session.outcomeReason ?? (isFailure ? session.error : undefined)),
