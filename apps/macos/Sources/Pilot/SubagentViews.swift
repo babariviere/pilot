@@ -141,7 +141,7 @@ struct SubagentsStrip: View {
             HStack(spacing: 8) {
                 Group {
                     if working {
-                        DotGridSpinner()
+                        EllipsisSpinner()
                     } else {
                         PilotSymbol(PilotIcon.subagents).foregroundStyle(Theme.faintForeground)
                     }

@@ -42,7 +42,7 @@ enum Theme {
     /// Soft indigo for live work in the sidebar's dithered corners (`DitherCorner`). Distinct from the attention
     /// colors, so working rows read as activity without asking for the user.
     static let working = Color(hex: 0x6366F1)
-    /// Deeper indigo for live work drawn as small marks, such as the crest of `DotGridSpinner`'s dots, where the
+    /// Deeper indigo for live work drawn as small marks, such as the lit dot of `EllipsisSpinner`, where the
     /// softer `working` sits too close in lightness to the grey around it to read at a glance.
     static let workingInk = Color(hex: 0x4F46E5)
     /// Text-weight amber for blockers the user can act on, such as a PR blocked from merging or a

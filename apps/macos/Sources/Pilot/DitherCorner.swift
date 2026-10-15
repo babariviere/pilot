@@ -185,7 +185,7 @@ private struct DitherCornerClocked: View {
     }
 }
 
-/// Redraws `content` on each shared clock frame while it is on screen. Also drives `DotGridSpinner`.
+/// Redraws `content` on each shared clock frame while it is on screen. Also drives `EllipsisSpinner`.
 struct DitherCornerTicking<Content: View>: View {
     @ViewBuilder let content: (Int) -> Content
     @ObservedObject private var clock = DitherCornerClock.shared
