@@ -116,3 +116,13 @@ private func pullRequest(_ state: DashboardPullRequestState = .open,
     app.newSession(in: "p")
     #expect(app.selectedProjectId == nil)
 }
+
+@Test func missionRowsOpenTheDashboardCoordinatorOrTheLiveOne() {
+    let live = Mission(id: "m", projectId: "p", title: "M", goal: "", status: .active,
+                       coordinatorSessionId: "live", createdAt: 1, updatedAt: 1)
+    let withCoordinator = DashboardMission(id: "m", title: "M", coordinatorSessionId: "dashboard")
+    #expect(ProjectPageText.coordinator(withCoordinator, live: live) == "dashboard")
+    let without = DashboardMission(id: "m", title: "M")
+    #expect(ProjectPageText.coordinator(without, live: live) == "live")
+    #expect(ProjectPageText.coordinator(without, live: nil) == nil)
+}
