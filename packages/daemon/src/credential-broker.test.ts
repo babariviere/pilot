@@ -357,7 +357,16 @@ export default pi=>{const faux=fauxProvider();pi.registerProvider({...faux.provi
 	);
 	await writeFile(
 		join(dir, "settings.json"),
-		JSON.stringify({ extensions: [join(dir, "fixture.ts")], defaultProvider: "faux", defaultModel: "faux-1" }),
+		JSON.stringify({
+			extensions: [join(dir, "second-loader.ts"), join(dir, "fixture.ts")],
+			defaultProvider: "faux",
+			defaultModel: "faux-1",
+		}),
+	);
+	// The immutable child profile loads this through Jiti after native ESM installed it.
+	await writeFile(
+		join(dir, "second-loader.ts"),
+		`import {installCredentialBrokerHooks} from ${JSON.stringify(new URL("../../kernel/src/credential-hooks.ts", import.meta.url).href)};export default async()=>{await installCredentialBrokerHooks()};`,
 	);
 	const old = credentialEnvironment();
 	for (const key of Object.keys(old)) old[key] = process.env[key];

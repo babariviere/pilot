@@ -3,14 +3,16 @@ import { getAgentDir, ModelRuntime, SettingsManager } from "@earendil-works/pi-c
 import { credentialClient } from "./credential-client.ts";
 import { readonlySettings } from "./readonly-settings.ts";
 
-let installed: Promise<void> | undefined;
+// Jiti child profiles and native ESM share this SDK class, but not module-local state.
+const key = Symbol.for("pilot.credential-broker.hooks.v1");
+const sdk = ModelRuntime as typeof ModelRuntime & { [key]?: Promise<void> };
 export function installCredentialBrokerHooks(options: { descendants?: boolean } = {}): Promise<void> {
 	if (options.descendants && process.env.PILOT_REQUIRE_CREDENTIAL_BROKER === "1") {
 		const preload = `--import=${new URL("./credential-preload.ts", import.meta.url).href}`;
 		if (!process.env.NODE_OPTIONS?.split(/\s+/).includes(preload))
 			process.env.NODE_OPTIONS = [process.env.NODE_OPTIONS, preload].filter(Boolean).join(" ");
 	}
-	installed ??= (async () => {
+	sdk[key] ??= (async () => {
 		const settings = SettingsManager.create;
 		SettingsManager.create = (cwd, agentDir = getAgentDir(), options = {}) =>
 			process.env.PILOT_READ_ONLY_CONFIG === "1"
@@ -58,5 +60,5 @@ export function installCredentialBrokerHooks(options: { descendants?: boolean } 
 				: remove.call(this, name, url);
 		};
 	})();
-	return installed;
+	return sdk[key];
 }
