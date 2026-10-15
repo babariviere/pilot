@@ -124,8 +124,8 @@ export interface SessionMissionBridge {
 	noticeAllowed?(sessionId: string, requestId: string): boolean;
 	/** Validate new-chat admission and resolve the mission's project. */
 	spawnProject(missionId: string): string;
-	/** Join and optionally claim a task after metadata is saved, but before starting the worker. */
-	joinSpawn(sessionId: string, missionId: string, coordinator?: boolean, taskId?: string): void;
+	/** Join and optionally claim all selected tasks after metadata is saved, before worker startup. */
+	joinSpawn(sessionId: string, missionId: string, coordinator?: boolean, taskId?: string | string[]): void;
 	/** Roll back membership if saving/admission fails before a worker starts. */
 	leaveSpawn?(sessionId: string): void;
 	/** The chat's mission, its status and this member's coordinator role. */
@@ -2596,7 +2596,7 @@ export class SessionManager {
 			throw new Error("Invalid Ask snapshot context");
 	}
 
-	async spawn(request: SpawnRequest, coordinator = false, taskId?: string): Promise<SessionSummary> {
+	async spawn(request: SpawnRequest, coordinator = false, taskId?: string | string[]): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
 			return await this.spawnAdmitted(request, coordinator, taskId);
@@ -2684,7 +2684,11 @@ export class SessionManager {
 		}
 	}
 
-	private async spawnAdmitted(request: SpawnRequest, coordinator: boolean, taskId?: string): Promise<SessionSummary> {
+	private async spawnAdmitted(
+		request: SpawnRequest,
+		coordinator: boolean,
+		taskId?: string | string[],
+	): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
 			throw new Error("mode must be build or ask");

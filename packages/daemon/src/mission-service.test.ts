@@ -2710,6 +2710,279 @@ for (const change of ["claimed", "deleted"] as const) {
 	});
 }
 
+test("multi-start orders a single chat's tasks and attaches supplied references to every task", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [
+			{ title: "Base", body: "Build base" },
+			{ title: "Feature", body: "Build feature" },
+			{ title: "Docs", body: "Write docs" },
+		],
+	});
+	const [a, b, c] = f.store.tasks(mission.id);
+	f.store.updateTask(mission.id, b!.id, { dependsOn: [a!.id] });
+	const artifact = await f.sessions["artifactStore"](lead.id).create({ title: "Spec", kind: "html", source: "ok" });
+	const session = (await f.service.call(lead.id, "start", {
+		ids: [b!.id, "1-3", "#1"],
+		message: "Ship carefully",
+		artifacts: [{ artifactId: artifact.id, revision: 1 }],
+		links: [{ url: "https://example.com/spec", title: "Context" }],
+	})) as SessionSummary;
+	assert.equal(session.title, "Base");
+	assert.equal(f.sessions.list().length, 2);
+	for (const task of [a!, b!, c!]) {
+		assert.equal(f.store.task(mission.id, task.id).sessionId, session.id);
+		assert.equal(f.store.task(mission.id, task.id).status, "in_progress");
+		const detail = f.store.detail(mission.id);
+		assert.equal(
+			detail.artifacts.filter((ref) => ref.taskId === task.id && ref.artifactId === artifact.id).length,
+			1,
+		);
+		assert.equal(
+			detail.resources.filter((ref) => ref.taskId === task.id && ref.url === "https://example.com/spec").length,
+			1,
+		);
+	}
+	const worker = await until(() => f.workers.get(session.id));
+	assert.deepEqual(
+		worker.spec.mission?.tasks.map((task) => task.number),
+		[1, 2, 3],
+	);
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(input.type, "input");
+	if (input.type !== "input") return;
+	assert.match(input.content, /#1: Base\nBuild base[\s\S]*#2: Feature\nBuild feature[\s\S]*#3: Docs\nWrite docs/);
+	assert.match(input.content, /one PR per task/);
+	assert.match(input.content, /--base <previous-head>/);
+	assert.match(input.content, /gh stack link/);
+	assert.match(input.content, /link \+ taskId/);
+	assert.match(input.content, /Ship carefully/);
+	assert.ok(input.content.length <= 4000);
+	assert.equal(f.store.events(mission.id).filter((event) => event.text.startsWith("Started #")).length, 3);
+});
+
+test("multi-start uses dependency order then given order, not display or task-number order", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }],
+	});
+	f.store.updateTask(mission.id, "2", { dependsOn: ["1"] });
+	f.store.updateTask(mission.id, "1", { order: 100 });
+	f.store.updateTask(mission.id, "4", { order: -100 });
+	const spawn = t.mock.method(f.sessions, "spawn");
+	await f.service.startTasks(mission.id, ["2", "3", "1", "4"]);
+	const args = spawn.mock.calls[0]!.arguments;
+	assert.deepEqual(
+		args[2],
+		["3", "1", "2", "4"].map((ref) => f.store.resolveTask(mission.id, ref).id),
+	);
+	assert.match(args[0].message, /#3: C[\s\S]*#1: A[\s\S]*#2: B[\s\S]*#4: D/);
+});
+
+test("multi-start rejects outside unfinished dependencies and cycles without writes", async (t) => {
+	const f = await fixture(t);
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+	});
+	f.store.updateTask(mission.id, "2", { dependsOn: ["1"] });
+	for (const status of ["todo", "dropped"] as const) {
+		f.store.updateTask(mission.id, "1", { status });
+		const before = f.store.detail(mission.id);
+		await assert.rejects(
+			f.service.startTasks(mission.id, ["2", "3"]),
+			/#2 depends on task #1 outside the start list, which is not done/,
+		);
+		assert.deepEqual(f.store.detail(mission.id), before);
+	}
+	f.store.updateTask(mission.id, "1", { status: "done" });
+	await f.service.startTasks(mission.id, ["2", "3"]);
+	// Cycles can exist in task metadata; start must reject them before creating a chat.
+	f.store.updateTask(mission.id, "1", { status: "todo", dependsOn: ["2"] });
+	f.store.releaseTask(mission.id, "2");
+	const before = f.store.detail(mission.id);
+	await assert.rejects(f.service.startTasks(mission.id, ["2", "1"]), /Dependency cycle among tasks #2, #1/);
+	assert.deepEqual(f.store.detail(mission.id), before);
+	assert.equal(f.sessions.list().length, 1);
+});
+
+test("multi-start reports every claim/terminal conflict and rolls back the entire selection", async (t) => {
+	const f = await fixture(t);
+	const owner = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }, { title: "C" }, { title: "D" }],
+	});
+	f.service.join(owner.id, { missionId: mission.id, taskId: "2" });
+	f.store.updateTask(mission.id, "3", { status: "done" });
+	f.store.updateTask(mission.id, "4", { status: "dropped" });
+	const before = f.store.detail(mission.id);
+	await assert.rejects(
+		f.service.startTasks(mission.id, ["1", "2", "3", "4"]),
+		/#2 is already claimed[\s\S]*#3 is done[\s\S]*#4 is dropped/,
+	);
+	assert.deepEqual(f.store.detail(mission.id), before);
+	assert.equal(f.sessions.list().length, 1);
+	// No leaked reservation on the otherwise eligible task.
+	await f.service.startTask(mission.id, "1");
+});
+
+for (const first of ["single", "batch"] as const) {
+	test(`multi-start shares all reservations with single starts (${first} first)`, async (t) => {
+		const f = await fixture(t);
+		const { mission } = await f.service.create({
+			projectId: f.project.id,
+			title: "M",
+			tasks: [{ title: "A" }, { title: "B" }, { title: "C" }],
+		});
+		let release!: () => void;
+		const blocked = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let entered!: () => void;
+		const preparing = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		const original = f.sessions.spawn.bind(f.sessions);
+		let calls = 0;
+		t.mock.method(f.sessions, "spawn", async (...args: Parameters<typeof original>) => {
+			if (++calls === 1) {
+				entered();
+				await blocked;
+			}
+			return original(...args);
+		});
+		const pending =
+			first === "single" ? f.service.startTask(mission.id, "2") : f.service.startTasks(mission.id, ["1", "2"]);
+		try {
+			await preparing;
+			await assert.rejects(
+				first === "single" ? f.service.startTasks(mission.id, ["1", "2"]) : f.service.startTask(mission.id, "#2"),
+				/already starting/,
+			);
+			if (first === "batch") await assert.rejects(f.service.startTask(mission.id, "1"), /already starting/);
+			else await f.service.startTask(mission.id, "1"); // failed batch never reserved its free task
+			await f.service.startTask(mission.id, "3");
+		} finally {
+			release();
+		}
+		const winner = await pending;
+		assert.equal(f.store.resolveTask(mission.id, "2").sessionId, winner.id);
+	});
+}
+
+test("multi-start admission rechecks every claim after spawn I/O with no partial claim", async (t) => {
+	const f = await fixture(t);
+	const owner = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	let prepared!: () => void;
+	const preparing = new Promise<void>((resolve) => {
+		prepared = resolve;
+	});
+	const original = f.sessions["missions"]!.spawnProject;
+	t.mock.method(f.sessions["missions"]!, "spawnProject", (id: string) => {
+		const project = original(id);
+		prepared();
+		return project;
+	});
+	const pending = assert.rejects(f.service.startTasks(mission.id, ["1", "2"]), /#2 is already claimed/);
+	await preparing;
+	f.service.join(owner.id, { missionId: mission.id, taskId: "2" });
+	await pending;
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, owner.id);
+	assert.deepEqual(f.store.members(mission.id), [owner.id]);
+	assert.deepEqual(
+		f.sessions.list().map((session) => session.id),
+		[owner.id],
+	);
+	assert.deepEqual(await readdir(join(f.home, "data", "sessions")), [owner.id]);
+	assert.ok(!f.store.events(mission.id).some((event) => event.text.startsWith("Started #")));
+	f.store.releaseTask(mission.id, "2");
+	await f.service.startTasks(mission.id, ["1", "2"]);
+});
+
+test("multi-start caps the whole prompt including bodies, instructions and references", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [
+			{ title: "A", body: "a".repeat(2000) },
+			{ title: "B", body: "b".repeat(2000) },
+		],
+	});
+	const before = f.store.detail(mission.id);
+	await assert.rejects(
+		f.service.call(lead.id, "start", { ids: ["1-2"] }),
+		/Opening message is too long \(\d+ characters; max 4000\)/,
+	);
+	assert.deepEqual(f.store.detail(mission.id), before);
+	f.store.updateTask(mission.id, "1", { body: "" });
+	f.store.updateTask(mission.id, "2", { body: "" });
+	const basePrompt = f.sessions.spawn;
+	const probe = t.mock.method(f.sessions, "spawn", async (..._args: Parameters<SessionManager["spawn"]>) => {
+		throw new Error("probe");
+	});
+	await assert.rejects(f.service.startTasks(mission.id, ["1", "2"]), /probe/);
+	const base = probe.mock.calls[0]!.arguments[0].message;
+	probe.mock.restore();
+	assert.equal(f.sessions.spawn, basePrompt);
+	const extra = "x".repeat(4000 - base.length - 2);
+	const clean = f.store.detail(mission.id);
+	await assert.rejects(
+		f.service.startTasks(mission.id, ["1", "2"], { message: extra + "x", links: [{ url: "https://example.com" }] }),
+		/max 4000/,
+	);
+	await assert.rejects(f.service.startTasks(mission.id, ["1", "2"], { message: extra + "x" }), /4001 characters/);
+	assert.deepEqual(f.store.detail(mission.id), clean);
+	const session = await f.service.startTasks(mission.id, ["1", "2"], { message: extra });
+	const worker = await until(() => f.workers.get(session.id));
+	const input = await until(() => worker.requests.find((command) => command.type === "input"));
+	assert.equal(input.type === "input" ? input.content.length : 0, 4000);
+});
+
+test("coordinator start validates ids selectors without changing single-id admission", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: lead.id,
+		draft: false,
+		tasks: [{ title: "A" }, { title: "B" }],
+	});
+	for (const args of [
+		{ ids: [] },
+		{ ids: "1-2" },
+		{ ids: [false] },
+		{ ids: ["2-1"] },
+		{ id: "1", ids: [2] },
+		{ ids: [3] },
+	])
+		await assert.rejects(f.service.call(lead.id, "start", args));
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	const session = (await f.service.call(lead.id, "start", { ids: [2, "1"] })) as SessionSummary;
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, session.id);
+	assert.equal(f.store.resolveTask(mission.id, "2").sessionId, session.id);
+});
+
 test("Start chat spawns a member chat that owns the task; leaving releases it", async (t) => {
 	const f = await fixture(t);
 	const { mission } = await f.service.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Auth" }] });
