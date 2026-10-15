@@ -295,7 +295,7 @@ struct ScheduledItemRow: View {
                         .lineLimit(1).fixedSize()
                         .help(when)
                 }
-                Button(action: remove) { PilotSymbol(PilotIcon.close) }
+                Button(action: remove) { PilotSymbol(PilotIcon.dismiss) }
                     .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                     .revealed(hovered)
                     .help(pending ? "Cancel this scheduled item" : "Dismiss")
@@ -406,7 +406,7 @@ private struct ScheduledMessageBubble: View {
                     .help("Edit when this message is sent")
                     .accessibilityLabel("Edit schedule")
                     .revealed(hovered)
-                Button(action: cancel) { PilotSymbol(PilotIcon.close) }
+                Button(action: cancel) { PilotSymbol(PilotIcon.dismiss) }
                     .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
                     .help("Cancel this scheduled message")
                     .accessibilityLabel("Cancel schedule")
