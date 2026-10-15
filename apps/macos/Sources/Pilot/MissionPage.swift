@@ -290,7 +290,7 @@ struct MissionOverviewTab: View {
             if drafting {
                 MissionDraftingBanner(mission: mission)
             } else if detail.tasks.isEmpty {
-                EmptyStateView(icon: "checklist", title: "Plan the work",
+                EmptyStateView(icon: PilotIcon.tasks, title: "Plan the work",
                                message: mission.coordinatorSessionId == nil
                                    ? "Break the goal into tasks, or start a coordinator to draft them from the brief."
                                    : "Break the goal into tasks, or ask the coordinator to draft them from the brief.") {

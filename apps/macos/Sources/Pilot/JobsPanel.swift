@@ -20,7 +20,7 @@ struct JobsPanel: View {
                 Text("\(jobs.count)").monospacedDigit().foregroundStyle(Theme.mutedForeground)
                 Spacer()
                 Button(action: close) {
-                    PilotSymbol(PilotIcon.close, context: .row).frame(width: 20, height: 20)
+                    PilotSymbol(PilotIcon.dismiss, context: .row).frame(width: 20, height: 20)
                 }
                 .help("Close jobs").accessibilityLabel("Close jobs")
             }
