@@ -429,6 +429,22 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
     #expect(counts[.dropped] == 0)
 }
 
+@Test func overviewProgressLineCountsDoneAndWorkingTasks() {
+    let tasks = [
+        MissionTask(id: "a", number: 1, title: "A", status: .done, order: 1),
+        MissionTask(id: "b", number: 2, title: "B", status: .blocked, order: 2),
+        MissionTask(id: "c", number: 3, title: "C", status: .inReview, order: 3),
+        MissionTask(id: "d", number: 4, title: "D", status: .inProgress, order: 4),
+        MissionTask(id: "e", number: 5, title: "E", status: .todo, order: 5),
+        MissionTask(id: "f", number: 6, title: "F", status: .dropped, order: 6),
+    ]
+    let working = MissionTaskOrdering.inFlight(tasks)
+    #expect(working.map(\.id) == ["d", "c", "b"], "in progress, then in review, then blocked")
+    #expect(MissionTaskCounts(tasks).progressLine(working: working.count) == "1 of 5 done · 3 working now")
+    #expect(MissionTaskCounts(tasks).progressLine() == "1 of 5 done")
+    #expect(MissionTaskCounts([]).progressLine(working: 2) == "No tasks yet")
+}
+
 @Test func decisionNumbersAndProposalsRoundTripAndNeedAttention() throws {
     let data = Data(#"""
     {"mission":{"id":"m","projectId":"p","title":"Shared","goal":"g","status":"active","briefRevision":0,"createdAt":1,"updatedAt":2,"needsYouCount":1},

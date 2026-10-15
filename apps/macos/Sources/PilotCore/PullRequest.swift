@@ -98,6 +98,23 @@ public struct PullRequestReadinessReason: Codable, Equatable, Hashable, Sendable
         self.count = count
         self.value = value
     }
+
+    /// What blocks the merge, in a few words: "Failing checks: build", "Merge conflicts".
+    public var label: String {
+        switch code {
+        case "failing_checks":
+            let names = (names ?? []).filter { !$0.isEmpty }
+            return names.isEmpty ? "Failing checks" : "Failing checks: \(names.joined(separator: ", "))"
+        case "unresolved_comments": return "\(count ?? 0) unresolved review comments"
+        case "conflicts": return "Merge conflicts"
+        case "draft": return "Draft pull request"
+        case "changes_requested": return "Changes requested"
+        case "review_required": return "Review required"
+        case "behind": return "Branch is behind its base"
+        case "readiness_unknown": return "Readiness could not be determined"
+        default: return value ?? code.replacingOccurrences(of: "_", with: " ")
+        }
+    }
 }
 
 /// Mirrors the protocol's read-only GitHub stack membership. Position 1 is nearest the base.

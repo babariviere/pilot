@@ -122,11 +122,13 @@ button shows ⌘↩.
 - Check every change with long content and with loading, empty, error and disabled states. Keep keyboard access
   and readable contrast.
 
-## Project page
+## Overview pages
 
-The project page follows these principles: a single reading column with a one-sentence summary, then sections in
-order of urgency (Needs you, Working now, Pull requests, Missions, Scheduled, Tracked, Recent), at most five rows
-each. Sections added later follow the same rules.
+A project's Overview follows these principles: a single reading column with a one-sentence summary, then sections in
+order of urgency (Up next, Working now, Pull requests, Missions, Scheduled, Current cycle, Slack, Memory, Recent), at
+most five rows each. A mission's Overview has the same shape: its goal, one meta line with a thin progress bar, then
+Needs you (hidden when empty), Working now and Links. Both share the Inbox's rows and words (Needs you rows, Ready to
+merge). Sections added later follow the same rules.
 
 ## UI review checklist
 

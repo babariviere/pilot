@@ -85,19 +85,7 @@ struct PullRequestLink: View {
         guard pr.state == .open else { return "Pull request #\(pr.number), \(pr.state.label)." }
         guard let readiness = pr.readiness else { return "Pull request #\(pr.number), \(pr.state.label). Readiness not checked." }
         if readiness.state == .ready { return "Pull request #\(pr.number) is ready to merge. Pilot will not merge it." }
-        let reasons = readiness.reasons.map { reason -> String in
-            switch reason.code {
-            case "failing_checks": return "Failing checks: \((reason.names ?? []).joined(separator: ", "))"
-            case "unresolved_comments": return "\(reason.count ?? 0) unresolved review comments"
-            case "conflicts": return "Merge conflicts"
-            case "draft": return "Draft pull request"
-            case "changes_requested": return "Changes requested"
-            case "review_required": return "Review required"
-            case "behind": return "Branch is behind its base"
-            case "readiness_unknown": return "Readiness could not be determined"
-            default: return reason.value ?? reason.code.replacingOccurrences(of: "_", with: " ")
-            }
-        }
+        let reasons = readiness.reasons.map(\.label)
         return ([readiness.state == .pending ? "Readiness pending" : "Blocked from merging"] + reasons).joined(separator: "\n")
     }
 }

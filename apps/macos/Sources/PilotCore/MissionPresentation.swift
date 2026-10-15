@@ -83,6 +83,11 @@ public enum MissionTaskOrdering {
         }
     }
 
+    /// The Overview's Working now tasks: in progress, then in review, then blocked, each in task order.
+    public static func inFlight(_ tasks: [MissionTask]) -> [MissionTask] {
+        groups(tasks).filter { [.inProgress, .inReview, .blocked].contains($0.status) }.flatMap(\.tasks)
+    }
+
     public struct Update: Equatable, Sendable {
         public let taskId: String
         public let order: Double
@@ -207,6 +212,13 @@ public struct MissionTaskCounts: Equatable, Sendable {
     public var done: Int { byStatus[.done] ?? 0 }
     public var total: Int { byStatus.values.reduce(0, +) }
     public subscript(status: MissionTaskStatus) -> Int { byStatus[status] ?? 0 }
+
+    /// Progress in words for the Overview's meta line: "12 of 18 done · 3 working now".
+    public func progressLine(working: Int = 0) -> String {
+        guard total > 0 else { return "No tasks yet" }
+        let finished = "\(done) of \(total) done"
+        return working > 0 ? "\(finished) · \(working) working now" : finished
+    }
 
     /// Progress bar order: finished work first, then review, active, blocked and waiting work.
     public static let barOrder: [MissionTaskStatus] = [.done, .inReview, .inProgress, .blocked, .todo, .delegated]

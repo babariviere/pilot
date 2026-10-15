@@ -664,18 +664,8 @@ struct ProjectNeedsYouRow: View {
     var body: some View {
         let action = ProjectPageText.needsAction(item)
         let detail = detail
-        Button(action: open) {
-            HoverRow(verticalPadding: 7) { hovered in
-                InboxRowLabel(title: item.title) { detail } trailing: {
-                    if let action { InboxRowAction(title: action, hovered: hovered) }
-                }
-            }
-        }
-        .rowButtonStyle()
-        .disabled(action == nil)
-        .help(item.needsYouLabel(now: now))
-        .accessibilityLabel("\(item.title). \(detail.accessibilityText)")
-        .accessibilityHint(action ?? "")
+        NeedsYouRow(title: item.title, action: action, help: item.needsYouLabel(now: now),
+                    accessibilityDetail: detail.accessibilityText, open: open) { detail }
         .modifier(NeedsYouRowActions(item: item, chatId: chatId))
     }
 
@@ -846,6 +836,31 @@ struct PullRequestReadinessStyle: Equatable {
         case .blocked:
             kind = .blocked
             let reasons = (pr.readiness?.reasons ?? []).filter { !$0.isEmpty }
+            label = reasons.isEmpty ? "Blocked" : reasons.joined(separator: " · ")
+        case nil:
+            kind = .open
+            label = "Open"
+        }
+    }
+
+    /// A chat's or mission link's open pull request, in the same vocabulary. Merged and closed ones read as their
+    /// state instead; callers label those.
+    init(_ pr: SessionPullRequest) {
+        if pr.state == .draft {
+            kind = .draft
+            label = "Draft"
+            return
+        }
+        switch pr.readiness?.state {
+        case .ready:
+            kind = .ready
+            label = "Ready to merge"
+        case .pending:
+            kind = .pending
+            label = "Checks pending"
+        case .blocked:
+            kind = .blocked
+            let reasons = (pr.readiness?.reasons ?? []).map(\.label).filter { !$0.isEmpty }
             label = reasons.isEmpty ? "Blocked" : reasons.joined(separator: " · ")
         case nil:
             kind = .open

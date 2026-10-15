@@ -275,26 +275,20 @@ struct MissionBriefTab: View {
 
     @ViewBuilder private var notices: some View {
         if let conflict = editor.conflict {
-            HStack(alignment: .top, spacing: 8) {
-                PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.warning)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Revision \(conflict) was saved while you were editing, so your changes were not saved.")
-                        .font(.pilot(.body, weight: .medium))
-                    Text("Copy your text, reload the latest brief and reapply your edits.")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                    HStack {
-                        Button("Copy My Text") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(editor.text, forType: .string)
-                        }
-                        Button("Reload Latest") { Task { await editor.reload(missionId: mission.id, client: client) } }
+            VStack(alignment: .leading, spacing: 6) {
+                InlineProblem("Revision \(conflict) was saved while you were editing, so your changes were not saved. "
+                    + "Copy your text, reload the latest brief and reapply your edits.")
+                HStack {
+                    Button("Copy My Text") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(editor.text, forType: .string)
                     }
-                    .controlSize(.small)
+                    Button("Reload Latest") { Task { await editor.reload(missionId: mission.id, client: client) } }
                 }
+                .controlSize(.small)
+                .padding(.leading, 18)
             }
-            .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.warning.opacity(0.08)))
         } else if editor.dirty, let latest = detail.brief?.revision, latest > editor.baseRevision {
             Text("Revision \(latest) arrived while you were editing. Saving will be rejected until you reload.")
                 .font(.pilot(.caption)).foregroundStyle(Theme.warning)
@@ -475,28 +469,20 @@ private struct BriefRevisionViewer: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Revision \(brief.revision)").font(.headline)
-                    Text("\(missionAuthorName(brief.authorSessionId, client: client)) · \(missionRelativeTime(brief.createdAt)) ago")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Copy into Editor") {
-                    editor.text = brief.markdown
-                    editor.editing = true
-                    dismiss()
-                }
-                .help("Replace the editor text with this revision. Saving creates a new revision.")
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            .padding()
-            Divider()
+        SheetScaffold("Revision \(brief.revision)",
+                      subtitle: "\(missionAuthorName(brief.authorSessionId, client: client)) · \(missionRelativeTime(brief.createdAt)) ago",
+                      width: nil, fillsHeight: true, content: {
             ScrollView {
-                MarkdownView(text: brief.markdown).padding(20).frame(maxWidth: .infinity, alignment: .leading)
+                MarkdownView(text: brief.markdown).frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
+        }, footerLeading: {
+            Button("Copy into Editor") {
+                editor.text = brief.markdown
+                editor.editing = true
+                dismiss()
+            }
+            .help("Replace the editor text with this revision. Saving creates a new revision.")
+        })
         .frame(minWidth: 640, minHeight: 520)
     }
 }
@@ -511,7 +497,7 @@ private struct CommentRow: View {
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .top, spacing: 10) {
                 PilotSymbol(comment.isOpen ? PilotIcon.update : PilotIcon.resolvedComment, context: .row)
-                    .foregroundStyle(comment.isOpen ? Theme.info : Theme.faintForeground).frame(width: 16)
+                    .foregroundStyle(comment.isOpen ? Theme.mutedForeground : Theme.faintForeground).frame(width: 16)
                 VStack(alignment: .leading, spacing: 4) {
                     if let anchor = comment.anchor, !anchor.isEmpty {
                         Text(anchor)
@@ -589,8 +575,7 @@ struct MissionTasksTab: View {
             if counts.total > 0 || phases.dropped > 0 {
                 HStack(alignment: .center, spacing: 12) {
                     if counts.total > 0 {
-                        MissionTaskProgress(counts: counts, compact: true)
-                            .frame(maxWidth: 280, alignment: .leading)
+                        MissionTaskProgress(counts: counts)
                     }
                     Spacer(minLength: 0)
                     if phases.dropped > 0 { droppedToggle(phases.dropped) }
@@ -794,7 +779,7 @@ struct MissionTaskRow: View {
                     if !resources.isEmpty || !artifactLinks.isEmpty {
                         ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
                             ForEach(resources) { item in
-                                MissionLinkChip(resource: item, missionId: mission.id, compact: true)
+                                MissionLinkChip(resource: item, missionId: mission.id)
                             }
                             ForEach(artifactLinks) { item in
                                 Button { open(item) } label: {
@@ -1447,13 +1432,13 @@ private struct MissionTimelineRow: View {
         let handoff = event.kind == .handoff
         HStack(alignment: .top, spacing: 12) {
             PilotSymbol(event.kind.icon)
-                .foregroundStyle(handoff ? Theme.info : Theme.mutedForeground)
+                .foregroundStyle(Theme.mutedForeground)
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(handoff ? Theme.info.opacity(0.14) : Theme.muted))
+                .background(Circle().fill(Theme.muted))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 if handoff {
-                    Text("Handoff").font(.pilot(.small, weight: .semibold)).foregroundStyle(Theme.info)
+                    Text("Handoff").font(.pilot(.small, weight: .semibold)).foregroundStyle(Theme.mutedForeground)
                 }
                 Text(event.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)

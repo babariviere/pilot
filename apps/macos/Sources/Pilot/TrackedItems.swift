@@ -24,8 +24,8 @@ struct TrackedItemBinding: Hashable, Codable {
     let label: String
 }
 
-/// The new-mission flow, prefilled from a tracked item.
-struct TrackedMissionDraft: Hashable {
+/// The new-mission flow, prefilled from a Linear issue or Slack message.
+struct SourceMissionDraft: Hashable {
     let itemId: String
     let projectId: String
     let label: String
@@ -254,7 +254,7 @@ enum TrackedItemText {
         return prompt(lead: lead, item: item, prefill: prefill)
     }
 
-    static func missionDraft(_ item: TrackedItem, prefill: TrackedItemPrefill?) -> TrackedMissionDraft {
+    static func missionDraft(_ item: TrackedItem, prefill: TrackedItemPrefill?) -> SourceMissionDraft {
         let label = identifier(item)
         let title = prefill?.title ?? item.title
         let fullTitle = item.kind == .linear ? "\(prefill?.identifier ?? label): \(title)" : title
@@ -264,7 +264,7 @@ enum TrackedItemText {
             ? "Fix the bug reported in \(label): \(title)"
             : "Follow up on the message in \(label): \(title)"
         }
-        return TrackedMissionDraft(
+        return SourceMissionDraft(
             itemId: item.id, projectId: item.projectId, label: label,
             title: String(fullTitle.prefix(200)), goal: goal,
             message: prompt(lead: "Plan this ticket as a mission: draft the brief and tasks from it.", item: item,
@@ -405,7 +405,7 @@ final class TrackedItemActions: ObservableObject {
 
     func startMission(_ item: TrackedItem, app: AppModel) {
         prepare(item, app: app, failure: "Couldn't prepare the mission") { prefill in
-            app.missionSheet = .tracked(TrackedItemText.missionDraft(item, prefill: prefill))
+            app.missionSheet = .fromSource(TrackedItemText.missionDraft(item, prefill: prefill))
         }
     }
 
