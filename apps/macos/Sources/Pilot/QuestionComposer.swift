@@ -112,7 +112,7 @@ struct QuestionComposer: View {
     private var reply: some View {
         HStack(alignment: .center, spacing: 10) {
             if !options.isEmpty {
-                QuestionKeyCap(key: "0", strong: !choicesFocused)
+                KeyCap(key: "0", strong: !choicesFocused).foregroundStyle(Theme.mutedForeground)
             }
             ZStack(alignment: .topLeading) {
                 if draft.draft.isEmpty {
@@ -261,7 +261,7 @@ private struct QuestionOptionRow: View {
                 if multiSelect {
                     QuestionCheckCap(key: "\(number)", checked: checked)
                 } else {
-                    QuestionKeyCap(key: "\(number)", strong: highlighted)
+                    KeyCap(key: "\(number)", strong: highlighted).foregroundStyle(Theme.mutedForeground)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -308,22 +308,6 @@ private struct QuestionOptionRow: View {
     }
 }
 
-/// Number key cap for answers. Dark when it is the active choice.
-private struct QuestionKeyCap: View {
-    let key: String
-    let strong: Bool
-
-    var body: some View {
-        Text(key)
-            .font(.pilot(.small, weight: .semibold).monospacedDigit())
-            .foregroundStyle(strong ? Color.white : Theme.mutedForeground)
-            .frame(width: 18, height: 18)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(strong ? Theme.primary : Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.row).strokeBorder(strong ? Color.clear : Theme.border))
-            .accessibilityHidden(true)
-    }
-}
-
 /// Checkbox for multi-select answers, showing its number key until ticked.
 private struct QuestionCheckCap: View {
     let key: String
@@ -339,40 +323,8 @@ private struct QuestionCheckCap: View {
                 Text(key).font(.pilot(.small, weight: .semibold).monospacedDigit()).foregroundStyle(Theme.mutedForeground)
             }
         }
-        .frame(width: 18, height: 18)
+        // Same footprint as KeyCap, so ticked and highlighted answers line up.
+        .frame(width: 16, height: 16)
         .accessibilityHidden(true)
-    }
-}
-
-/// The record of a question in the transcript. The reply follows as a user message.
-struct QuestionRow: View {
-    let question: AgentQuestion
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                PilotSymbol(PilotIcon.question)
-                    .foregroundStyle(Theme.mutedForeground)
-                    .accessibilityHidden(true)
-                Text(question.question)
-                    .font(.pilot(.body, weight: .medium))
-                    .foregroundStyle(Theme.foreground)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-            }
-            if !question.options.isEmpty {
-                Text(question.options.map(\.label).joined(separator: " · "))
-                    .font(.pilot(.caption))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .lineLimit(2)
-                    .padding(.leading, 18)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .card()
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Agent asked: \(question.question)")
     }
 }

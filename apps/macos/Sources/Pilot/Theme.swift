@@ -55,7 +55,7 @@ enum Theme {
     /// - `small`: key caps, checkboxes and other tiny marks.
     /// - `row`: list, sidebar and menu rows (selection, hover and focus), tabs and icon buttons inside rows.
     /// - `control`: chips, inline controls, code blocks, images and cards nested in another surface.
-    /// - `card`: cards, panels and notification cards.
+    /// - `card`: cards and panels.
     /// - `bubble`: message bubbles, including scheduled ones.
     /// - `tray`: composer trays, popover panels and large standalone cards.
     enum Radius {
@@ -395,6 +395,24 @@ extension Theme {
     }
 }
 
+/// The one key cap: a key or chord on a soft fill, used by `KeyHint` and by numbered answer choices. `strong` marks
+/// the active choice (dark fill, white text); otherwise the cap takes the surrounding text colour.
+struct KeyCap: View {
+    let key: String
+    var strong = false
+
+    var body: some View {
+        Text(key)
+            .font(.pilot(.small, weight: .medium).monospacedDigit())
+            .foregroundStyle(strong ? AnyShapeStyle(Color.white) : AnyShapeStyle(ForegroundStyle()))
+            .padding(.horizontal, 4)
+            .frame(minWidth: 16, minHeight: 16)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.small).fill(strong ? Theme.primary : Theme.muted))
+            .fixedSize()
+            .accessibilityHidden(true)
+    }
+}
+
 /// Keyboard shortcut hint: a key cap followed by a short action, such as "⌥↩ follow up".
 struct KeyHint: View {
     let key: String
@@ -402,11 +420,7 @@ struct KeyHint: View {
 
     var body: some View {
         HStack(spacing: 4) {
-            Text(key)
-                .font(.pilot(.small, weight: .medium))
-                .padding(.horizontal, 4)
-                .padding(.vertical, 1)
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.small).fill(Theme.muted))
+            KeyCap(key: key)
             Text(label)
         }
         .font(.pilot(.caption))

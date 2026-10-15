@@ -188,7 +188,8 @@ struct QueueModeSymbol: View {
 
     var body: some View {
         PilotSymbol(mode == .steer ? PilotIcon.steer : PilotIcon.queued)
-            .foregroundStyle(mode == .steer ? Theme.info : Theme.faintForeground)
+            // The symbol carries the mode; both stay muted, since neither needs the user.
+            .foregroundStyle(mode == .steer ? Theme.mutedForeground : Theme.faintForeground)
             .frame(width: 14)
             .help(mode == .steer ? "Steering: delivered during the current run" : "Follow-up: sent after the current run")
             .accessibilityLabel(mode == .steer ? "Steering" : "Follow-up")

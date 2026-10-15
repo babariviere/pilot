@@ -722,8 +722,8 @@ private struct FileRow: View {
         switch file.status {
         case "added", "untracked": Theme.success
         case "deleted": Theme.destructive
-        case "renamed": Theme.info
-        default: Theme.warning
+        // Modified and renamed files are the normal case, so they stay muted; colour marks added and deleted.
+        default: Theme.mutedForeground
         }
     }
 }

@@ -166,78 +166,69 @@ extension SubagentDisplayState {
 
 // MARK: - Strip above the composer
 
-/// Compact row of subagent chips above the composer. A chip opens live activity and actions.
+/// Subagents as one line at the top of the composer tray, shaped like `SystemMessagesStrip`: "2 subagents · 1 working".
+/// Click it to open the Agents tab, which lists each one with its transcript and Stop.
 struct SubagentsStrip: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
-    @State private var shown: String?
 
     var body: some View {
         let subagents = session.subagents ?? []
-        if !subagents.isEmpty {
-            HStack(spacing: 6) {
-                PilotSymbol(PilotIcon.subagents)
-                    .foregroundStyle(Theme.mutedForeground)
-                    .help("Subagents")
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(subagents) { subagent in chip(subagent) }
-                    }
-                    .padding(.vertical, 1)
+        let failed = subagents.filter(\.isFailed).count
+        Button {
+            model.inspectorTab = .agents
+            model.inspectorVisible = true
+        } label: {
+            HStack(spacing: 8) {
+                if subagents.contains(where: \.isWorking) {
+                    PilotSymbol(PilotIcon.working).frame(width: 14)
+                } else {
+                    PilotSymbol(PilotIcon.subagents).foregroundStyle(Theme.faintForeground).frame(width: 14)
                 }
-                Text(summary(subagents))
-                    .font(.pilot(.caption))
-                    .foregroundStyle(Theme.faintForeground)
+                Text(subagents.count == 1 ? "1 subagent" : "\(subagents.count) subagents")
+                    .font(.pilot(.label))
+                    .foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
                     .fixedSize()
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 6)
-            .frame(maxWidth: Theme.column + 56)
-            .frame(maxWidth: .infinity)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Subagents")
-        }
-    }
-
-    private func chip(_ subagent: SessionSubagent) -> some View {
-        let display = SubagentDisplayState(subagent, unread: model.isUnread(subagent, in: session.id))
-        let isShown = shown == subagent.name
-        return Button { shown = isShown ? nil : subagent.name } label: {
-            HStack(spacing: 5) {
-                SubagentStatusGlyph(state: display)
-                Text(subagent.name)
-                    .font(.pilot(.caption, weight: isShown ? .semibold : .regular))
-                    .foregroundStyle(Theme.foreground)
-                    .lineLimit(1)
+                let detail = summary(subagents)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.pilot(.label))
+                        .foregroundStyle(Theme.faintForeground)
+                        .lineLimit(1)
+                }
+                if failed > 0 {
+                    // Failure is the one state here that needs the user.
+                    Text("· \(failed) failed")
+                        .font(.pilot(.label))
+                        .foregroundStyle(Theme.destructive)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                Spacer(minLength: 4)
+                PilotSymbol(PilotIcon.disclosure, context: .disclosure)
+                    .foregroundStyle(Theme.faintForeground)
+                    .frame(width: 16, height: 16)
             }
             .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(isShown ? Theme.selected : Theme.muted))
-            .overlay(Capsule().strokeBorder(isShown ? Theme.border : .clear))
-            .contentShape(Capsule())
+            .frame(maxWidth: .infinity, minHeight: QueuedMessagesStrip.rowHeight, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("\(subagent.name): \(display.label)")
-        .accessibilityLabel("\(subagent.name), \(display.label)")
-        .popover(isPresented: Binding(
-            get: { shown == subagent.name },
-            set: { if !$0, shown == subagent.name { shown = nil } }
-        ), arrowEdge: .top) {
-            SubagentPopover(session: session, subagent: subagent) { shown = nil }
-                .environmentObject(model)
-        }
+        .help("Open the Agents tab")
+        .accessibilityLabel(([subagents.count == 1 ? "1 subagent" : "\(subagents.count) subagents", summary(subagents)]
+            + (failed > 0 ? ["\(failed) failed"] : [])).filter { !$0.isEmpty }.joined(separator: ", "))
+        .accessibilityHint("Opens the Agents tab")
     }
 
+    /// Working and new counts after the total, each after a dot. Failures are shown on their own, in red.
     private func summary(_ subagents: [SessionSubagent]) -> String {
         let working = subagents.filter(\.isWorking).count
         let unread = model.unreadSubagents(in: session)
-        let failed = subagents.filter(\.isFailed).count
         return [
             working > 0 ? "\(working) working" : nil,
             unread > 0 ? "\(unread) new" : nil,
-            failed > 0 ? "\(failed) failed" : nil,
-        ].compactMap { $0 }.joined(separator: " · ")
+        ].compactMap { $0 }.map { "· " + $0 }.joined(separator: " ")
     }
 }
 
@@ -580,25 +571,23 @@ private struct SubagentDetail: View {
 
 // MARK: - Answers delivered to the parent chat
 
-/// A subagent answer or failure delivered to this chat, shown as a compact card instead of a user bubble.
+/// A subagent answer or failure delivered to this chat, as a one-line event with Open beside Show.
 struct SubagentAnswerRow: View {
+    let id: String
     let notification: SubagentNotification
+    var timestamp: Double? = nil
+    var expansion: ExpansionState? = nil
     @EnvironmentObject private var model: AppModel
-    @StateObject private var expansion = ExpansionState()
 
     var body: some View {
-        NotificationCard(
-            icon: notification.failed ? PilotIcon.warning : PilotIcon.subagents,
-            title: notification.failed ? "\(notification.name) failed" : "\(notification.name) answered",
-            text: notification.text,
-            tint: notification.failed ? Theme.destructive : Theme.mutedForeground,
-            expansion: expansion
-        ) {
-            if let sessionId = model.selectedSessionId {
-                Button("Open") { model.openSubagent(notification.name, in: sessionId) }
-                    .buttonStyle(.link)
-                    .font(.pilot(.caption))
+        ChatEventRow(
+            event: .subagent(id: id, notification: notification, timestamp: timestamp),
+            expansion: expansion,
+            action: model.selectedSessionId.map { sessionId in
+                ChatEventRow.Action(label: "Open", help: "Open \(notification.name)'s transcript in the Agents tab") {
+                    model.openSubagent(notification.name, in: sessionId)
+                }
             }
-        }
+        )
     }
 }
