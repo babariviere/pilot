@@ -112,6 +112,7 @@ private struct MissionTabContent: View {
 }
 
 /// Section picker, New chat and mission actions in the window toolbar.
+/// Toolbar hosts can sit outside the page's environment, so each root receives the model explicitly.
 private struct MissionToolbar: ToolbarContent {
     let mission: Mission
     let model: AppModel
@@ -120,6 +121,7 @@ private struct MissionToolbar: ToolbarContent {
     var body: some ToolbarContent {
         ToolbarItem(placement: .principal) {
             MissionTabPicker(mission: mission, compact: compactTabs, selection: model.missionTabSelection)
+                .environmentObject(model)
         }
         ToolbarItem(placement: .primaryAction) {
             Menu {
@@ -131,6 +133,7 @@ private struct MissionToolbar: ToolbarContent {
             } primaryAction: {
                 model.newSession(in: mission)
             }
+            .environmentObject(model)
             .disabled(mission.status != .active)
             .help(mission.status == .active ? "Open a new chat in this mission" : "Reopen the mission to add chats")
         }
@@ -148,6 +151,7 @@ private struct MissionToolbar: ToolbarContent {
             } label: {
                 PilotSymbol(PilotIcon.more, context: .toolbar)
             }
+            .environmentObject(model)
             .menuIndicator(.hidden)
             .help("Mission actions")
             .accessibilityLabel("Mission actions")
