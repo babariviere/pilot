@@ -184,6 +184,11 @@ struct ChatView: View {
                 // treats the entire history as one estimated row, which can put the
                 // bottom marker beyond every realized message on opening or resizing.
                 VStack(alignment: .leading, spacing: 16) {
+                    if let origin = session.continuationOf {
+                        ContinuedFromRow(originId: origin)
+                            .frame(maxWidth: Theme.column, alignment: .leading)
+                            .frame(maxWidth: .infinity)
+                    }
                     if feed.loading, session.state != "failed" {
                         ProgressView(session.state == "starting" ? "Starting task…" : "Loading conversation…")
                             .frame(maxWidth: .infinity)
@@ -213,7 +218,7 @@ struct ChatView: View {
                     if let error = transcript.failureBannerText(for: session) {
                         VStack(alignment: .leading, spacing: 8) {
                             ErrorRow(text: error)
-                            if session.canRetryStartup == true, !session.isArchived {
+                            if session.canRetryStartup == true, !session.isReadOnlyHistory {
                                 Button {
                                     retryingStartup = true
                                     composer.error = nil
@@ -235,7 +240,7 @@ struct ChatView: View {
                         .frame(maxWidth: .infinity)
                     }
                     VStack(spacing: 0) {
-                        if !session.isArchived {
+                        if !session.isReadOnlyHistory {
                             // Pads itself only when it lists something, so an empty list adds no gap.
                             ScheduledMessages(sessionId: session.id, topPadding: 16)
                                 .frame(maxWidth: Theme.column)
@@ -258,7 +263,7 @@ struct ChatView: View {
             }
             .environment(\.transcriptContentPrepared, preparedAction.callback)
             .environment(\.transcriptMessageToggled, scroll.messageToggled)
-            .environment(\.transcriptRewind, session.isArchived ? nil : rewind)
+            .environment(\.transcriptRewind, session.isReadOnlyHistory ? nil : rewind)
             .onChange(of: transcript.revision) { _, _ in
                 guard scroll.follow.shouldScrollToBottom else { return }
                 proxy.scrollTo("bottom", anchor: .bottom)
@@ -290,11 +295,14 @@ struct ChatView: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 2)
                 }
-                if showingJobs, !session.isArchived {
+                if showingJobs, !session.isReadOnlyHistory {
                     JobsPanel(sessionId: session.id, jobs: runningJobs) { showingJobs = false }
                 }
                 if session.isArchived {
                     ArchivedComposer(session: session)
+                } else if let next = session.continuedTo {
+                    // Work moved on, so this chat never resumes or takes messages.
+                    ContinuedComposer(nextId: next)
                 } else if let question = pendingQuestion(transcript) {
                     QuestionComposer(question: question, draft: composer.draftState, onSend: answer)
                         // Each question starts with nothing highlighted or ticked.
@@ -325,7 +333,7 @@ struct ChatView: View {
                         onSlashCommandsNeeded: { [sessionId = session.id] in
                             slashCommands.load(sessionId: sessionId, client: AppModel.shared.client)
                         },
-                        onSchedule: session.isArchived ? nil : schedule
+                        onSchedule: session.isReadOnlyHistory ? nil : schedule
                     )
                     .transition(Theme.Motion.replacement(reduceMotion: reduceMotion))
                 }
@@ -340,7 +348,7 @@ struct ChatView: View {
         }
         .modifier(TranscriptRewindHost(
             rewind: rewind, feed: feed, composer: composer, sessionId: session.id,
-            retryEntryID: session.isArchived ? nil : transcript.retryEntryID
+            retryEntryID: session.isReadOnlyHistory ? nil : transcript.retryEntryID
         ))
         .onDisappear {
             feed.onEventsApplied = nil
@@ -371,7 +379,7 @@ struct ChatView: View {
     }
 
     private func send(_ message: String, _ mode: DeliveryMode) {
-        guard !session.isArchived else { return }
+        guard !session.isReadOnlyHistory else { return }
         composer.error = nil
         if let arguments = SlashCommands.jobsArguments(composer.trimmed) {
             guard arguments.isEmpty else {
@@ -412,7 +420,7 @@ struct ChatView: View {
 
     /// Send later: clears the draft at once like send, and restores it if pilotd rejects the schedule.
     private func schedule(_ message: String, _ when: ScheduleWhen) {
-        guard !session.isArchived else { return }
+        guard !session.isReadOnlyHistory else { return }
         composer.error = nil
         guard SlashCommands.jobsArguments(composer.trimmed) == nil else {
             composer.error = "Run /jobs now instead of scheduling it."

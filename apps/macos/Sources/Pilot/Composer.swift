@@ -226,7 +226,9 @@ struct Composer: View {
     var body: some View {
         let systemMessages = systemMessages
         VStack(spacing: 8) {
-            if let session { SubscriptionUsageNotice(usage: session.usage ?? SessionUsage()) }
+            if let session {
+                SubscriptionLimitNotice(session: session, working: working, modelPicker: modelPicker) { state.error = $0 }
+            }
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
                 if showsStatusLines || !systemMessages.isEmpty {
@@ -308,6 +310,9 @@ struct Composer: View {
             Button("OK") { modelPicker.error = nil }
         } message: {
             Text(modelPicker.error ?? "")
+        }
+        .sheet(item: $modelPicker.continuation) { _ in
+            if let session { ModelContinuationSheet(session: session, state: modelPicker) }
         }
     }
 

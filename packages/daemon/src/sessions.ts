@@ -42,6 +42,7 @@ import type {
 	SessionSubagent,
 	SessionSummary,
 	SessionUsage,
+	SubscriptionPause,
 	SpawnRequest,
 	StopResponse,
 	SubagentTranscript,
@@ -69,6 +70,7 @@ import {
 	sessionPullRequests,
 	workspaceChangeIds,
 } from "./pull-requests.ts";
+import { continuationAnswer, continuationHandoff, continuationQueuedInputs } from "./session-continuation.ts";
 import {
 	applyActivity,
 	applyFailure,
@@ -78,6 +80,12 @@ import {
 } from "./session-outcomes.ts";
 import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
 import { SubagentWatches, type SubagentWatchListener, type SubagentWatchStarter } from "./subagent-watches.ts";
+import {
+	refreshSubscriptionPolicy,
+	type SubscriptionPolicy,
+	subscriptionWindowKey,
+	windowUnexpired,
+} from "./subscription-policy.ts";
 import {
 	modelProvider,
 	type SubscriptionProvider,
@@ -122,6 +130,8 @@ export interface PullRequestBinding {
 
 /** Mission state lives in its own store. Sessions read membership and forward tool calls through this bridge. */
 export interface SessionMissionBridge {
+	/** Idempotent, atomic ownership move, retaining task links and PR observation tombstones. */
+	continueSession?(from: string, to: string): void;
 	/** Revalidate an automatic notice after persistence/startup, before kernel admission. */
 	noticeAllowed?(sessionId: string, requestId: string): boolean;
 	/** Validate new-chat admission and resolve the mission's project. */
@@ -238,6 +248,15 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	/** Durable known limits and window-scoped user exemptions, shared with child admission gates. */
+	subscriptionPolicy?: SubscriptionPolicy;
+	continuationOf?: string;
+	continuedTo?: string;
+	/** A committed handoff is rolled forward before this chat may start. */
+	continuationPending?: boolean;
+	/** Keep jj/Git path bindings unchanged while ownership moves to a fresh chat. */
+	workspaceOriginId?: string;
+	continuationModel?: WorkerSpec["continuationModel"];
 	/** Work closed by the system sleep policy, never a user Stop. */
 	sleepPaused?: boolean;
 	/** Interrupted durable work, retained until a replacement kernel is ready. */
@@ -797,6 +816,10 @@ export class SessionManager {
 			),
 		});
 	}
+	private subscriptionResetTimer?: ReturnType<typeof setTimeout>;
+	private subscriptionPolicyWrites: Promise<void> = Promise.resolve();
+	private readonly writtenSubscriptionPolicies = new Map<string, string>();
+	private readonly subscriptionPolicyFailures = new WeakSet<SessionWorker>();
 	private readonly deliveryReports = new Map<string, MessageDelivery | undefined>();
 	private readonly metas = new Map<string, SessionMeta>();
 	private readonly workers = new Map<string, SessionWorker>();
@@ -922,6 +945,8 @@ export class SessionManager {
 
 	private readonly home: string;
 	private readonly autoRebase: PullRequestAutoRebase;
+	/** A handoff must not relinquish the workspace in the middle of a daemon-owned rebase. */
+	private readonly rebasingWorkspaces = new Set<string>();
 	private readonly projects: ProjectStore;
 	private memory?: ProjectMemoryService;
 	private readonly agentDir?: string;
@@ -1041,6 +1066,10 @@ export class SessionManager {
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
 		await this.recoverPullRequestBinding();
+		await this.recoverContinuations();
+		// Read limits before any recovery kernel can dispatch a request.
+		await this.subscriptionUsage?.start();
+		this.scheduleSubscriptionReset();
 		// Seed silent, durable baselines before the first GitHub refresh starts.
 		for (const meta of this.metas.values()) await this.observePullRequests(meta);
 		// Durable work interrupted by a restart continues as soon as its kernel reopens.
@@ -1062,7 +1091,6 @@ export class SessionManager {
 			)
 				void this.start(meta.id, true);
 		this.pullRequests.start();
-		await this.subscriptionUsage?.start();
 		this.scheduleArchiveSweep();
 		// Resume dissociation interrupted by a restart.
 		for (const meta of this.metas.values()) if (!meta.preparing) this.dissociate(meta);
@@ -1213,6 +1241,7 @@ export class SessionManager {
 	}
 
 	private dissociate(meta: SessionMeta): void {
+		if (meta.continuedTo || meta.continuationPending) return;
 		if (meta.mode === "ask" || meta.coordinatorView) return;
 		if (!meta.workspace || !workspaceBorrowsObjects(meta.cwd)) return;
 		this.dissociation = this.dissociation.then(async () => {
@@ -1283,12 +1312,13 @@ export class SessionManager {
 				meta.workspace &&
 				!meta.workspace.shared &&
 				meta.mode !== "ask" &&
-				meta.cwd === join(this.dir(meta.id), "workspace") &&
+				meta.cwd === join(this.dir(meta.workspaceOriginId ?? meta.id), "workspace") &&
 				meta.archivedAt !== undefined &&
 				meta.archivedAt <= staleBefore &&
 				meta.workspacePrunedAt === undefined &&
 				!hasActivePullRequest(meta);
 			if (
+				meta.continuedTo ||
 				meta.coordinatorView ||
 				(!legacy && !meta.workspace?.shared) ||
 				meta.archivedAt === undefined ||
@@ -1477,6 +1507,7 @@ export class SessionManager {
 	}
 
 	private assertWorkspaceQuiescent(meta: SessionMeta): void {
+		this.assertNotContinued(meta);
 		const worker = this.workers.get(meta.id);
 		if (
 			this.closing ||
@@ -1500,7 +1531,10 @@ export class SessionManager {
 	}
 
 	private assertOwnedWorkspace(meta: SessionMeta): void {
-		if (meta.cwd !== join(this.dir(meta.id), "workspace")) throw new Error("Invalid session workspace destination");
+		if (meta.continuedTo) throw new Conflict("This workspace belongs to the continuing chat");
+		const origin = meta.workspaceOriginId ?? meta.id;
+		if (!ID_PATTERN.test(origin) || meta.cwd !== join(this.dir(origin), "workspace"))
+			throw new Error("Invalid session workspace destination");
 	}
 
 	private async restoreWorkspace(meta: SessionMeta): Promise<void> {
@@ -1606,6 +1640,8 @@ export class SessionManager {
 				if (this.closing) throw new Conflict("The daemon is shutting down");
 				await this.recoverPullRequestBinding();
 				const meta = this.require(id);
+				this.assertNotContinued(meta);
+				if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 				if (bound && this.isMissionCoordinator(id))
 					throw new Conflict("A coordinator cannot own a pull request. Bind it to a member chat instead.");
 				if (typeof raw !== "string" || !raw.trim() || raw.length > 2048)
@@ -1784,6 +1820,16 @@ export class SessionManager {
 	missionChanged(id: string, context = this.missions?.context(id)): void {
 		const meta = this.metas.get(id);
 		if (!meta) return;
+		if (meta.continuedTo || meta.continuationPending) {
+			this.emit(meta);
+			return;
+		}
+		if (this.changingModels.has(id)) {
+			// Membership may revoke write capability while a model handoff is draining.
+			this.workers.get(id)?.send({ type: "mission.context", ...(context ? { context } : {}) });
+			this.emit(meta);
+			return;
+		}
 		// Apply before yielding: promotion must beat an in-flight automatic title result.
 		// Startup uses this same idempotent repair for older metadata and interrupted writes.
 		if (context?.coordinator === "self" && (meta.title !== context.title || meta.titlePending)) {
@@ -1863,6 +1909,7 @@ export class SessionManager {
 		}
 		const meta = this.require(id);
 		const promote = this.isMissionCoordinator(id);
+		if (meta.continuedTo || meta.continuationPending || this.changingModels.has(id)) return;
 		const worker = this.workers.get(id);
 		if (
 			meta.preparing ||
@@ -1932,6 +1979,7 @@ export class SessionManager {
 							: await createWorkspace(source, destination);
 						meta.workspace = { source, ...created };
 						meta.cwd = destination;
+						delete meta.workspaceOriginId;
 					}
 					delete meta.coordinatorView;
 				}
@@ -2465,6 +2513,298 @@ export class SessionManager {
 		return this.modelCatalog.selectTaskModel(cwd, model, thinking);
 	}
 
+	/** Quota-paused work resumes in place only when the provider can interpret its existing context. */
+	async continueModel(
+		id: string,
+		model: string,
+		catalog: Pick<ModelCatalog, "list"> = this.modelCatalog,
+		thinking?: string,
+	): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		let release!: () => void;
+		const settled = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let locked = false;
+		try {
+			const meta = this.require(id);
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
+			if (meta.continuedTo) {
+				await this.recoverContinuations();
+				return this.summary(this.require(meta.continuedTo));
+			}
+			if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
+			if (thinking !== undefined && (typeof thinking !== "string" || !thinking))
+				throw new Error("thinking must be a supported level");
+			if (this.closing || this.sleepPause) throw new Conflict("Agents are not available for continuation");
+			if (!this.subscriptionPaused(id)) throw new Conflict("The session is not subscription-paused");
+			if (meta.archivedAt !== undefined || meta.failure || meta.preparing || meta.workspaceRecovery)
+				throw new Conflict("Restore a prepared, healthy session before continuing");
+			if (
+				this.changingModels.has(id) ||
+				this.archiveTransitions.has(id) ||
+				this.workspaceRefreshes.has(id) ||
+				this.roleTransitions.has(id) ||
+				this.isMissionCoordinator(id) !== !!meta.coordinatorView ||
+				this.workspaceMaintenance.has(id) ||
+				this.rebasingWorkspaces.has(id) ||
+				this.sending.has(id) ||
+				this.hasWorkspaceProcess(id)
+			)
+				throw new Conflict("Session is in use or changing configuration");
+			this.changingModels.set(id, settled);
+			locked = true;
+			// Do not hold the PR mutation queue while draining: an admitted tool may need it to finish.
+			const name = model.trim();
+			const option = (await catalog.list(meta.cwd)).models.find((entry) => entry.id === name);
+			if (!option) throw new Error(`Model is not available in this session's scope: ${name}`);
+			if (thinking !== undefined && !option.thinkingLevels?.includes(thinking))
+				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
+			await this.starting.get(id);
+			await this.unparked(id);
+			if (this.closing || this.sleepPause) throw new Conflict("Agents are not available for continuation");
+			const worker = this.workers.get(id);
+			const configuredProvider = modelProvider(meta.model);
+			const provider = worker?.usage?.provider ?? configuredProvider;
+			let continuationView: PersistedSessionView | undefined;
+			if (worker) {
+				await worker.ready;
+				if (worker.runningJobs?.length)
+					throw new Conflict("Finish or stop background jobs before continuing with another model");
+				// The ack includes child drains, not just model cancellation. Never close before it settles.
+				try {
+					await worker.request({ type: "continuation.pause", requestId: randomUUID() });
+				} catch (error) {
+					// No ownership commit happened. Let a later Force or retry use the old worker safely.
+					worker.send({ type: "update.resume" });
+					throw error;
+				}
+				if (this.workers.get(id) !== worker) throw new Conflict("The session worker changed during handoff");
+				if (worker.runningJobs?.length) {
+					worker.send({ type: "update.resume" });
+					throw new Conflict("Finish or stop background jobs before continuing with another model");
+				}
+				if (this.isMissionCoordinator(id) !== !!meta.coordinatorView) {
+					worker.send({ type: "update.resume" });
+					throw new Conflict("The chat's workspace role changed during continuation. Try again after it settles.");
+				}
+				try {
+					this.coldSnapshots.delete(id);
+					this.coldLoading.delete(id);
+					continuationView = await this.coldSnapshot(meta);
+					continuationQueuedInputs(continuationView.events);
+				} catch (error) {
+					worker.send({ type: "update.resume" });
+					throw error;
+				}
+				this.parked.add(worker);
+				const closing = worker.close();
+				this.parking.set(id, closing);
+				try {
+					await closing;
+				} finally {
+					if (this.parking.get(id) === closing) this.parking.delete(id);
+				}
+				this.workers.delete(id);
+				this.lastUse.delete(id);
+			}
+			continuationView ??= await this.coldSnapshot(meta);
+			const queuedInputs = continuationQueuedInputs(continuationView.events);
+			if (this.isMissionCoordinator(id) !== !!meta.coordinatorView)
+				throw new Conflict("The chat's workspace role changed during continuation. Try again after it settles.");
+			if (configuredProvider === option.provider && provider === option.provider) {
+				meta.continuationModel = {
+					model: name,
+					requestId: `model-continuation:${randomUUID()}`,
+					...(thinking !== undefined ? { thinking } : {}),
+				};
+				meta.model = name;
+				if (thinking === undefined) delete meta.thinking;
+				else meta.thinking = thinking;
+				meta.initializing = true;
+				delete meta.inputError;
+				meta.updatedAt = Date.now();
+				await this.save(meta);
+				await this.start(id, true);
+				return this.summary(meta);
+			}
+			// Only the ownership commit shares the mutation line with explicit PR bindings.
+			const work = this.bindingQueue
+				.catch(() => undefined)
+				.then(async () => {
+					await this.recoverPullRequestBinding();
+					this.coldSnapshots.delete(id);
+					this.coldLoading.delete(id);
+					const view = continuationView!;
+					const now = Date.now();
+					const targetId = randomUUID();
+					// At most two cold child reads at once, and no provider work. Working tasks come first.
+					const children = (meta.subagents ?? [])
+						.filter((child) => !child.retired)
+						.toSorted((a, b) => Number(b.state === "working") - Number(a.state === "working"))
+						.slice(0, 16);
+					const childHandoffs = [];
+					for (let offset = 0; offset < children.length; offset += 2) {
+						childHandoffs.push(
+							...(await Promise.all(
+								children.slice(offset, offset + 2).map(async (child) => {
+									const read = await this.subagentTranscript(id, child.name).catch(() => undefined);
+									return {
+										name: child.name,
+										task: child.task,
+										state: child.state,
+										error: child.error,
+										answer: read?.transcript ? continuationAnswer(read.transcript.events) : undefined,
+									};
+								}),
+							)),
+						);
+					}
+					const handoff = continuationHandoff(
+						{
+							id,
+							title: meta.title,
+							cwd: meta.cwd,
+							branch: meta.workspace?.branch,
+							children: childHandoffs,
+							pullRequests: sessionPullRequests(meta).map((pr) => pr.url),
+							pending: [],
+						},
+						view.events.filter((event) => event.type !== "queue_update"),
+					);
+					const target: SessionMeta = {
+						title: meta.title,
+						cwd: meta.cwd,
+						mode: meta.mode,
+						projectId: meta.projectId,
+						ask: structuredClone(meta.ask),
+						workspace: structuredClone(meta.workspace),
+						coordinatorView: meta.coordinatorView
+							? { ...meta.coordinatorView, scratch: join(this.dir(targetId), "scratch") }
+							: undefined,
+						pinned: meta.pinned,
+						workspaceReset: meta.workspaceReset,
+						workspaceUpdatedAt: meta.workspaceUpdatedAt,
+						workspaceCheckedAt: meta.workspaceCheckedAt,
+						workspaceRefreshDue: meta.workspaceRefreshDue,
+						workspaceBehind: meta.workspaceBehind,
+						pullRequest: structuredClone(meta.pullRequest),
+						previousPullRequests: structuredClone(meta.previousPullRequests),
+						previousBranches: structuredClone(meta.previousBranches),
+						agentPullRequests: [...(meta.agentPullRequests ?? [])],
+						boundPullRequests: [...(meta.boundPullRequests ?? [])],
+						unboundPullRequests: [...(meta.unboundPullRequests ?? [])],
+						prAutoRebases: structuredClone(meta.prAutoRebases),
+						unpublishedWork: meta.unpublishedWork,
+						pullRequestMergedAt: meta.pullRequestMergedAt,
+						id: targetId,
+						continuationOf: id,
+						continuationPending: true,
+						workspaceOriginId: meta.workspaceOriginId ?? id,
+						createdAt: now,
+						updatedAt: now,
+						lastUserMessageAt: now,
+						model: name,
+						thinking,
+						initializing: true,
+						pending: [
+							{ type: "input", requestId: `continuation:${targetId}`, content: handoff, mode: "followUp" },
+							...queuedInputs.map(
+								(input): PendingCommand => ({
+									type: "input",
+									requestId: `continuation-queued:${targetId}:${input.id}`,
+									content: input.content,
+									mode: input.mode,
+								}),
+							),
+							...(meta.pending ?? []).filter(
+								(command) => command.type === "input" && !inputOrigin(command.requestId),
+							),
+						],
+					};
+					const file = join(this.dir(id), "continuation.json");
+					await writeFile(`${file}.tmp`, JSON.stringify(target), { mode: 0o600 });
+					await rename(`${file}.tmp`, file);
+					// From this commit point all failures roll forward, never reopen the old writer.
+					await this.applyContinuation(meta, target);
+					await rm(file);
+					void this.start(target.id, true);
+					return this.summary(target);
+				});
+			this.bindingQueue = work;
+			return await work;
+		} finally {
+			if (locked) this.changingModels.delete(id);
+			release();
+			end();
+			const meta = this.metas.get(id);
+			if (locked && meta && !meta.continuedTo && this.isMissionCoordinator(id) !== !!meta.coordinatorView)
+				void this.prepareCoordinatorRole(id).catch((error: unknown) =>
+					console.warn(`pilotd: could not finish workspace role change after continuation: ${error}`),
+				);
+		}
+	}
+
+	private async recoverContinuations(): Promise<void> {
+		for (const source of this.metas.values()) {
+			const file = join(this.dir(source.id), "continuation.json");
+			let target: SessionMeta;
+			try {
+				target = JSON.parse(await readFile(file, "utf8")) as SessionMeta;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw error;
+			}
+			if (!ID_PATTERN.test(target.id) || target.continuationOf !== source.id || target.id === source.id)
+				throw new Error("Invalid session continuation journal");
+			await this.applyContinuation(source, this.metas.get(target.id) ?? target);
+			await rm(file);
+		}
+	}
+
+	private async applyContinuation(source: SessionMeta, target: SessionMeta): Promise<void> {
+		if (source.continuedTo && source.continuedTo !== target.id)
+			throw new Conflict("Chat already continued elsewhere");
+		source.continuedTo = target.id;
+		delete source.working;
+		delete source.initializing;
+		delete source.kernelRestartPending;
+		delete source.sleepPaused;
+		delete source.updatePaused;
+		delete source.pending;
+		delete source.titlePending;
+		delete source.inputError;
+		delete source.prActivities;
+		if (source.subagents)
+			source.subagents = source.subagents.map((child) => ({ ...child, state: "idle", retired: true }));
+		const owned = [...(source.agentPullRequests ?? []), ...(source.boundPullRequests ?? [])];
+		source.unboundPullRequests = [...new Set([...(source.unboundPullRequests ?? []), ...owned])];
+		delete source.agentPullRequests;
+		delete source.boundPullRequests;
+		delete source.prFollowUp;
+		source.prBindingOperation = target.id;
+		target.continuationPending = true;
+		this.metas.set(target.id, target);
+		// Publish one owner before yielding. No observer may reclaim the old owner's PR during the file writes.
+		for (const url of [...(target.agentPullRequests ?? []), ...(target.boundPullRequests ?? [])])
+			if (!this.excludedPullRequest(target, url)) this.boundPullRequestOwners.set(url.toLowerCase(), target.id);
+		await this.save(source);
+		await mkdir(this.dir(target.id), { recursive: true, mode: 0o700 });
+		await this.save(target);
+		if (this.missions?.membership(source.id) && !this.missions.continueSession)
+			throw new Conflict("Mission ownership transfer is unavailable");
+		this.missions?.continueSession?.(source.id, target.id);
+		delete target.continuationPending;
+		await this.save(target);
+		this.emit(source);
+		this.emit(target);
+	}
+
+	private assertNotContinued(meta: SessionMeta): void {
+		if (meta.continuedTo) throw new Conflict(`This chat is read-only. Continued in ${meta.continuedTo}`);
+		if (meta.continuationPending) throw new Conflict("Chat ownership transfer is not complete");
+	}
+
 	/** A parked idle conversation may reopen; configuration changes never interrupt or queue behind work. */
 	async changeModel(
 		id: string,
@@ -2480,6 +2820,7 @@ export class SessionManager {
 		});
 		try {
 			const meta = this.require(id);
+			this.assertNotContinued(meta);
 			if (typeof model !== "string" || !model.trim()) throw new Error("model is required");
 			if (this.closing) throw new Error("pilotd is shutting down");
 			if (meta.archivedAt !== undefined)
@@ -2558,6 +2899,8 @@ export class SessionManager {
 	/** Server-side capability check, independent of client controls. */
 	assertWritable(id: string): void {
 		const meta = this.require(id);
+		this.assertNotContinued(meta);
+		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		this.validateMode(meta);
 		if (meta.mode === "ask") throw new Conflict("Ask sessions are read-only");
 		if (this.isMissionCoordinator(id) || meta.coordinatorView)
@@ -2592,7 +2935,7 @@ export class SessionManager {
 			ask.branch.includes("@{") ||
 			ask.branch.endsWith(".") ||
 			ask.branch.split("/").some((part) => !part || part.startsWith(".") || part.endsWith(".lock")) ||
-			ask.gitDir !== join(this.dir(meta.id), "ask.git") ||
+			ask.gitDir !== join(this.dir(meta.workspaceOriginId ?? meta.id), "ask.git") ||
 			(ask.commit !== undefined &&
 				(typeof ask.commit !== "string" || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(ask.commit))) ||
 			((prepared || !meta.preparing) && !ask.commit) ||
@@ -2840,6 +3183,8 @@ export class SessionManager {
 		const worker = this.workers.get(id);
 		return (
 			!!meta &&
+			!meta.continuedTo &&
+			!meta.continuationPending &&
 			!this.closing &&
 			!this.sleepPause &&
 			meta.archivedAt === undefined &&
@@ -2972,6 +3317,7 @@ export class SessionManager {
 		report = false,
 	): Promise<void> {
 		const meta = this.require(id);
+		this.assertNotContinued(meta);
 		if (typeof message !== "string" || !message.trim()) throw new Error("message is required");
 		const transition = this.archiveTransitions.get(id);
 		if (transition) await transition.promise;
@@ -3085,6 +3431,7 @@ export class SessionManager {
 				"Agents are paused for sleep. Wake this Mac before stopping work, or archive the chat.",
 			);
 		const meta = this.require(id);
+		this.assertNotContinued(meta);
 		if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 		if (this.closing) throw new Error("pilotd is shutting down");
 		if (meta.failure) return { ok: true };
@@ -3634,6 +3981,8 @@ export class SessionManager {
 		let admitted = false;
 		try {
 			const meta = this.require(id);
+			this.assertNotContinued(meta);
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 			const transition = this.archiveTransitions.get(id);
 			if (transition) await transition.promise;
 			if (meta.archivedAt !== undefined)
@@ -3970,6 +4319,7 @@ export class SessionManager {
 		this.longJobTimers.close();
 		clearTimeout(this.updatePauseTimer);
 		for (const timer of this.kernelRestarts.values()) clearTimeout(timer);
+		clearTimeout(this.subscriptionResetTimer);
 		this.kernelRestarts.clear();
 		clearTimeout(this.archiveTimer);
 		clearTimeout(this.parkTimer);
@@ -3991,6 +4341,7 @@ export class SessionManager {
 		await Promise.all([...this.artifactNotifications.values()]);
 		await drainPullRequests;
 		await this.bindingQueue.catch(() => undefined);
+		await this.subscriptionPolicyWrites.catch(() => undefined);
 		await Promise.allSettled(this.workspaceRefreshes.values());
 		clearTimeout(this.mainRefreshTimer);
 		await Promise.allSettled(this.mainRefreshes.values());
@@ -4009,6 +4360,8 @@ export class SessionManager {
 		const existing = this.starting.get(id);
 		if (existing) return existing;
 		const meta = this.require(id);
+		if (meta.continuedTo || meta.continuationPending || (!admitted && this.changingModels.has(id)))
+			return Promise.resolve(new Map());
 		if (this.closing || this.sleepPause || meta.failure) return Promise.resolve(new Map());
 		// An existing drain owns its admission. Do not recheck its gate after any await.
 		if (!admitted && !this.workers.has(id)) this.updateGate.assertOpen();
@@ -4213,6 +4566,7 @@ export class SessionManager {
 	}
 
 	private async ensureWorker(id: string): Promise<SessionWorker> {
+		this.assertNotContinued(this.require(id));
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
@@ -4224,6 +4578,7 @@ export class SessionManager {
 				await refresh;
 				await this.unparked(id);
 			}
+			await this.syncSubscriptionPolicy(this.require(id));
 			return this.openWorker(id);
 		});
 	}
@@ -4235,6 +4590,7 @@ export class SessionManager {
 		if (existing) return existing;
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
+		this.assertNotContinued(meta);
 		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
 		if (meta.failure) throw new Conflict("Retry startup before starting its worker");
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
@@ -4254,9 +4610,11 @@ export class SessionManager {
 				sessionId: id,
 				...(meta.projectId ? { projectId: meta.projectId } : {}),
 				storageDir: join(this.dir(id), "durable"),
+				subscriptionPolicy: join(this.dir(id), "subscription-policy.json"),
 				cwd: meta.coordinatorView?.scratch ?? meta.cwd,
 				model: meta.model,
 				thinking: meta.thinking,
+				...(meta.continuationModel ? { continuationModel: meta.continuationModel } : {}),
 				agentDir: this.agentDir,
 				...(meta.workspace ? { trustDirectory: meta.workspace.source } : {}),
 				pilot: {
@@ -4599,6 +4957,7 @@ export class SessionManager {
 			const changed = applyActivity(meta, packet.working, packet.completion, this.backgroundWorking(meta, worker));
 			if (packet.type === "ready") {
 				if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openTodoCount;
+				if (meta.continuationModel?.model === packet.model) delete meta.continuationModel;
 				if (this.workers.get(meta.id) === worker) delete meta.kernelRestartPending;
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;
@@ -4652,7 +5011,16 @@ export class SessionManager {
 				this.backgroundWorking(meta, worker)
 			);
 		const usage = this.usage(meta, worker);
-		const state = paused
+		const subscriptionPause = this.subscriptionPause(meta, worker);
+		const quotaPaused = !!subscriptionPause && !subscriptionPause.forced;
+		const mainQuotaPaused =
+			quotaPaused &&
+			subscriptionPause.windows.some(
+				(window) =>
+					window.provider === this.subscriptionProviderOf(meta, worker) &&
+					!meta.subscriptionPolicy?.forced.includes(subscriptionWindowKey(window)),
+			);
+		const kernelState = paused
 			? "parked"
 			: meta.failure
 				? "failed"
@@ -4661,7 +5029,28 @@ export class SessionManager {
 					: meta.inputError && (!meta.working || !worker)
 						? "failed"
 						: (worker?.state ?? "parked");
-		const working = !paused && (state === "working" || state === "starting" || this.backgroundWorking(meta, worker));
+		const childrenWorking =
+			meta.archivedAt === undefined && (meta.subagents?.some((child) => child.state === "working") ?? false);
+		const runnableChildren =
+			meta.archivedAt === undefined &&
+			(meta.subagents?.some(
+				(child) =>
+					child.state === "working" &&
+					(!quotaPaused ||
+						!subscriptionPause?.windows.some(
+							(window) => window.provider === subscriptionProvider(modelProvider(child.model)),
+						)),
+			) ??
+				false);
+		const mainBusy =
+			kernelState === "working" ||
+			kernelState === "starting" ||
+			!!meta.working ||
+			!!meta.pending?.length ||
+			!!worker?.awaitingJobFollowUp;
+		const working = !paused && ((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
+		const heldAtQuota = quotaPaused && !working && (mainBusy || childrenWorking);
+		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
@@ -4670,6 +5059,8 @@ export class SessionManager {
 					(meta.workspace?.base.startsWith("origin/") ? meta.workspace.base.slice("origin/".length) : undefined));
 		return {
 			id: meta.id,
+			...(meta.continuationOf ? { continuationOf: meta.continuationOf } : {}),
+			...(meta.continuedTo ? { continuedTo: meta.continuedTo } : {}),
 			mode: meta.mode === "ask" ? "ask" : "build",
 			...(meta.mode !== "ask" ? { workspace: meta.workspace || meta.preparing ? "clone" : "direct" } : {}),
 			...(!coordinator && sourceBranch ? { sourceBranch } : {}),
@@ -4704,10 +5095,11 @@ export class SessionManager {
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),
+			...(subscriptionPause ? { subscriptionPause } : {}),
 			...(meta.subagents?.length ? { subagents: meta.subagents.map(publicSubagent) } : {}),
-			...(!working && meta.outcome ? { outcome: meta.outcome } : {}),
-			...(!working && meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
-			...(!working && meta.outcomeReason !== undefined
+			...(!working && !heldAtQuota && meta.outcome ? { outcome: meta.outcome } : {}),
+			...(!working && !heldAtQuota && meta.outcomeAt !== undefined ? { outcomeAt: meta.outcomeAt } : {}),
+			...(!working && !heldAtQuota && meta.outcomeReason !== undefined
 				? { outcomeReason: safeFailureText(meta.outcomeReason) }
 				: {}),
 			...(!coordinator && meta.pullRequest ? { pullRequest: meta.pullRequest } : {}),
@@ -4760,7 +5152,7 @@ export class SessionManager {
 		result: PullRequestResult,
 		health?: { context: FollowUpContext; checks: HealthCheck[] },
 	): Promise<void> {
-		if (this.isMissionCoordinator(meta.id)) return;
+		if (meta.continuedTo || meta.continuationPending || this.isMissionCoordinator(meta.id)) return;
 		const bindingOperation = meta.prBindingOperation;
 		// Explicit handoffs win over results already in flight, including discovery on the old branch.
 		const attached = (pr: SessionPullRequest) => {
@@ -4994,6 +5386,8 @@ export class SessionManager {
 		const worker = this.workers.get(meta.id);
 		return Boolean(
 			!this.closing &&
+				!meta.continuedTo &&
+				!meta.continuationPending &&
 				!this.isMissionCoordinator(meta.id) &&
 				meta.archivedAt === undefined &&
 				!meta.failure &&
@@ -5094,7 +5488,9 @@ export class SessionManager {
 	 */
 	private canClaimPullRequest(meta: SessionMeta, pr: SessionPullRequest): boolean {
 		return Boolean(
-			!this.isMissionCoordinator(meta.id) &&
+			!meta.continuedTo &&
+				!meta.continuationPending &&
+				!this.isMissionCoordinator(meta.id) &&
 				meta.workspace &&
 				!this.excludedPullRequest(meta, pr.url) &&
 				meta.mode !== "ask" &&
@@ -5134,6 +5530,7 @@ export class SessionManager {
 			const affected = new Set(
 				issues.filter(({ problems }) => problems.divergedFrom).map(({ pr }) => pr.stack?.number),
 			);
+			this.rebasingWorkspaces.add(meta.id);
 			const prs = current.filter(
 				(pr) =>
 					issues.some((issue) => issue.pr.url === pr.url && issue.problems.divergedFrom) ||
@@ -5245,7 +5642,10 @@ export class SessionManager {
 					},
 					this.shutdownSignal.signal,
 				)
-				.finally(releaseAuto);
+				.finally(() => {
+					this.rebasingWorkspaces.delete(meta.id);
+					releaseAuto();
+				});
 			issues = issues.flatMap((issue) => {
 				const result = results.get(issue.pr.url);
 				if (result && "rebased" in result) {
@@ -5382,6 +5782,145 @@ export class SessionManager {
 		return subscriptionUsageReadings(this.subscriptionUsage);
 	}
 
+	/** User-facing waiting state, independent from the kernel's still-durable run. */
+	subscriptionPaused(id: string): boolean {
+		const pause = this.subscriptionPause(this.require(id));
+		return !!pause && !pause.forced;
+	}
+
+	private subscriptionPause(meta: SessionMeta, worker = this.workers.get(meta.id)): SubscriptionPause | undefined {
+		const providers = new Set<SubscriptionProvider>();
+		const parent = this.subscriptionProviderOf(meta, worker);
+		if (parent) providers.add(parent);
+		for (const child of meta.subagents ?? []) {
+			const provider = subscriptionProvider(modelProvider(child.model));
+			if (child.state === "working" && provider) providers.add(provider);
+		}
+		const policy = meta.subscriptionPolicy;
+		const windows =
+			policy?.windows.filter((window) => providers.has(window.provider) && windowUnexpired(window)) ?? [];
+		if (!windows.length) return undefined;
+		const unforced = windows.filter((window) => !policy?.forced.includes(subscriptionWindowKey(window)));
+		return unforced.length ? { windows: unforced } : { windows, forced: true };
+	}
+
+	/** Persist policy before a cold kernel can resume. Writes are bounded to one file operation at a time. */
+	private async syncSubscriptionPolicy(meta: SessionMeta, persist = true): Promise<void> {
+		const previous = meta.subscriptionPolicy;
+		const next = refreshSubscriptionPolicy(meta.subscriptionPolicy, this.subscriptionUsage);
+		const changed = JSON.stringify(next) !== JSON.stringify(meta.subscriptionPolicy);
+		meta.subscriptionPolicy = next;
+		// Parked, never-opened chats need display data, not thousands of admission-file writes.
+		// Their next worker start persists the current policy before recovery can run.
+		if (!persist) return;
+		const saved =
+			changed && (previous?.windows.length || next.windows.length || this.writtenSubscriptionPolicies.has(meta.id))
+				? this.save(meta)
+				: Promise.resolve();
+		const contents = `${JSON.stringify(next)}\n`;
+		if (this.writtenSubscriptionPolicies.get(meta.id) === contents) {
+			await saved;
+			this.restoreSubscriptionAdmission(meta.id);
+			return;
+		}
+		const write = this.subscriptionPolicyWrites
+			.catch(() => undefined)
+			.then(async () => {
+				if (this.writtenSubscriptionPolicies.get(meta.id) === contents) return;
+				const file = join(this.dir(meta.id), "subscription-policy.json");
+				const temp = `${file}.${randomUUID()}.tmp`;
+				try {
+					await writeFile(temp, contents, { mode: 0o600 });
+					await rename(temp, file);
+					this.writtenSubscriptionPolicies.set(meta.id, contents);
+				} finally {
+					await rm(temp, { force: true });
+				}
+			});
+		this.subscriptionPolicyWrites = write;
+		await Promise.all([saved, write]);
+		this.restoreSubscriptionAdmission(meta.id);
+	}
+
+	private restoreSubscriptionAdmission(id: string): void {
+		const worker = this.workers.get(id);
+		if (
+			worker &&
+			this.subscriptionPolicyFailures.has(worker) &&
+			!this.updatePausing.has(worker) &&
+			!this.sleepPause &&
+			!this.changingModels.has(id)
+		) {
+			this.subscriptionPolicyFailures.delete(worker);
+			worker.send({ type: "update.resume" });
+		}
+	}
+
+	async forceSubscription(id: string, force: boolean): Promise<SessionSummary> {
+		const end = this.updateGate.begin();
+		try {
+			const meta = this.require(id);
+			this.assertNotContinued(meta);
+			if (this.closing) throw new ServiceUnavailable("pilotd is shutting down");
+			if (meta.archivedAt !== undefined) throw new Conflict("Restore this chat before resuming work");
+			if (this.changingModels.has(id)) throw new Conflict("Session is changing configuration");
+			if (meta.continuedTo) throw new Conflict("Continue in the replacement chat");
+			meta.subscriptionPolicy = refreshSubscriptionPolicy(meta.subscriptionPolicy, this.subscriptionUsage);
+			meta.subscriptionPolicy.forced = force ? meta.subscriptionPolicy.windows.map(subscriptionWindowKey) : [];
+			await this.save(meta);
+			await this.syncSubscriptionPolicy(meta);
+			this.scheduleSubscriptionReset();
+			this.emit(meta);
+			return this.summary(meta);
+		} finally {
+			end();
+		}
+	}
+
+	/** One timer for all window resets/force expiry. No per-chat/provider polling is added. */
+	private scheduleSubscriptionReset(): void {
+		clearTimeout(this.subscriptionResetTimer);
+		if (this.closing) return;
+		let next = Infinity;
+		for (const meta of this.metas.values())
+			for (const window of meta.subscriptionPolicy?.windows ?? []) {
+				const reset = Date.parse(window.resetsAt ?? "");
+				if (reset > Date.now()) next = Math.min(next, reset);
+			}
+		if (!Number.isFinite(next)) return;
+		this.subscriptionResetTimer = setTimeout(
+			() => {
+				for (const meta of this.metas.values()) {
+					if (meta.archivedAt !== undefined || !meta.subscriptionPolicy?.windows.length) continue;
+					void this.syncSubscriptionPolicy(
+						meta,
+						this.writtenSubscriptionPolicies.has(meta.id) ||
+							!!meta.working ||
+							!!meta.initializing ||
+							!!meta.pending?.length,
+					)
+						.then(() => {
+							if (!this.closing) this.emit(meta);
+						})
+						.catch((error) => this.subscriptionPolicyFailed(meta, error));
+				}
+				this.scheduleSubscriptionReset();
+			},
+			Math.max(1, Math.min(2_147_483_647, next - Date.now())),
+		);
+		this.subscriptionResetTimer.unref();
+	}
+
+	private subscriptionPolicyFailed(meta: SessionMeta, error: unknown): void {
+		console.warn(`pilotd: could not persist subscription policy for ${meta.id}: ${error}`);
+		// Never knowingly spend past a limit if its admission file could not be updated.
+		const worker = this.workers.get(meta.id);
+		if (worker) {
+			this.subscriptionPolicyFailures.add(worker);
+			if (!this.updatePausing.has(worker)) worker.send({ type: "update.pause", id: randomUUID() });
+		}
+	}
+
 	private usage(meta: SessionMeta, worker?: SessionWorker): SessionUsage | undefined {
 		const context = worker?.usage?.context;
 		const provider = this.subscriptionProviderOf(meta, worker);
@@ -5392,9 +5931,24 @@ export class SessionManager {
 
 	private subscriptionUsageChanged(provider: SubscriptionProvider): void {
 		if (this.closing) return;
-		for (const meta of this.metas.values())
-			if (meta.archivedAt === undefined && this.subscriptionProviderOf(meta, this.workers.get(meta.id)) === provider)
+		for (const meta of this.metas.values()) {
+			if (meta.archivedAt !== undefined) continue;
+			// Every child uses the same full policy, even if its provider differs from its parent.
+			void this.syncSubscriptionPolicy(
+				meta,
+				this.writtenSubscriptionPolicies.has(meta.id) ||
+					this.workers.has(meta.id) ||
+					!!meta.working ||
+					!!meta.initializing ||
+					!!meta.pending?.length,
+			).catch((error) => this.subscriptionPolicyFailed(meta, error));
+			if (
+				this.subscriptionProviderOf(meta, this.workers.get(meta.id)) === provider ||
+				meta.subagents?.some((child) => subscriptionProvider(modelProvider(child.model)) === provider)
+			)
 				this.emit(meta);
+		}
+		this.scheduleSubscriptionReset();
 	}
 
 	private require(id: string): SessionMeta {
@@ -5420,6 +5974,23 @@ export class SessionManager {
 			const file = join(this.dir(meta.id), "meta.json");
 			const temp = `${file}.${randomUUID()}.tmp`;
 			const persisted = JSON.parse(snapshot) as SessionMeta;
+			// Continuation fencing must survive lifecycle snapshots queued before the ownership commit.
+			for (const key of ["continuedTo", "continuationOf", "continuationPending", "workspaceOriginId"] as const) {
+				if (meta[key] === undefined) delete persisted[key];
+				else Object.assign(persisted, { [key]: meta[key] });
+			}
+			if (meta.continuedTo) {
+				persisted.subagents = meta.subagents;
+				for (const key of [
+					"working",
+					"initializing",
+					"kernelRestartPending",
+					"sleepPaused",
+					"updatePaused",
+					"pending",
+				] as const)
+					delete persisted[key];
+			}
 			// Role switches change cwd while lifecycle and PR writes may already be queued.
 			// Never reopen a demoted chat inside the shared read-only view after a restart.
 			if (persisted.cwd !== meta.cwd) {

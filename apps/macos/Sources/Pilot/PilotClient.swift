@@ -187,6 +187,7 @@ final class PilotClient: ObservableObject {
 
     func send(_ sessionId: String, message: String, mode: DeliveryMode) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before sending messages.") }
+        try ensureNotContinued(sessionId)
         let _: Ack = try await call("api/sessions/\(sessionId)/messages", body: SendRequest(message: message, mode: mode))
     }
 
@@ -231,6 +232,7 @@ final class PilotClient: ObservableObject {
     /// Starts a manual compaction; returns once it is queued, not when the summary is placed.
     func compact(_ sessionId: String, instructions: String?) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before compacting it.") }
+        try ensureNotContinued(sessionId)
         let _: Ack = try await call("api/sessions/\(sessionId)/compact", body: CompactRequest(instructions: instructions))
     }
 
@@ -238,6 +240,7 @@ final class PilotClient: ObservableObject {
     /// Returns the edited message's text for `.edit`, which belongs in the composer.
     func rewind(_ sessionId: String, action: RewindAction, entryId: Int) async throws -> String? {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat first.") }
+        try ensureNotContinued(sessionId)
         let response: RewindResponse = try await call(
             "api/sessions/\(sessionId)/rewind", body: RewindRequest(action: action, entryId: entryId)
         )
@@ -248,6 +251,7 @@ final class PilotClient: ObservableObject {
     /// Stops current work and continues another attempt of the chat.
     func activateAttempt(_ sessionId: String, attemptId: String) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat first.") }
+        try ensureNotContinued(sessionId)
         let session: SessionSummary = try await call(
             "api/sessions/\(sessionId)/attempts/\(attemptId)/activate", body: [String: String]()
         )
@@ -331,6 +335,7 @@ final class PilotClient: ObservableObject {
     /// Steers current work by default; `followUp` queues after it.
     func sendToSubagent(_ sessionId: String, name: String, message: String, mode: DeliveryMode = .steer) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before messaging subagents.") }
+        try ensureNotContinued(sessionId)
         let _: Ack = try await call(
             url: subagentURL(sessionId, name: name, action: "messages"),
             body: SubagentMessageRequest(message: message, mode: mode)
@@ -364,8 +369,33 @@ final class PilotClient: ObservableObject {
         return session
     }
 
+    /// Works past (true) or pauses again at (false) the subscription usage limit.
+    @discardableResult
+    func forceSubscription(_ sessionId: String, force: Bool) async throws -> SessionSummary {
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/subscription-force", body: SubscriptionForceRequest(force: force)
+        )
+        update(session)
+        return session
+    }
+
+    /// Continues the chat's work with another model. Returns this chat for the same provider, or the new chat that
+    /// took over for another provider (the original then reports `continuedTo`).
+    @discardableResult
+    func continueModel(_ sessionId: String, model: String, thinking: String? = nil) async throws -> SessionSummary {
+        guard session(sessionId)?.isReadOnlyHistory != true else {
+            throw ClientError("This chat is read-only and cannot continue with another model.")
+        }
+        let session: SessionSummary = try await call(
+            "api/sessions/\(sessionId)/continue-model", body: ContinueModelRequest(model: model, thinking: thinking)
+        )
+        update(session)
+        return session
+    }
+
     func editQueuedMessage(_ sessionId: String, submissionId: Int, message: String, mode: DeliveryMode? = nil) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before editing queued messages.") }
+        try ensureNotContinued(sessionId)
         let _: Ack = try await call(
             "api/sessions/\(sessionId)/queue/\(submissionId)",
             method: "PATCH",
@@ -375,6 +405,7 @@ final class PilotClient: ObservableObject {
 
     func removeQueuedMessage(_ sessionId: String, submissionId: Int) async throws {
         guard session(sessionId)?.isArchived != true else { throw ClientError("Restore this archived chat before removing queued messages.") }
+        try ensureNotContinued(sessionId)
         let _: RemoveQueuedMessageResponse = try await call(
             "api/sessions/\(sessionId)/queue/\(submissionId)", method: "DELETE", body: [String: String]()
         )
@@ -1273,6 +1304,13 @@ final class PilotClient: ObservableObject {
         Task {
             try? await Task.sleep(for: .seconds(delay))
             if self.control == nil { self.open() }
+        }
+    }
+
+    /// A continued chat keeps its history but takes no new work; pilotd rejects it too.
+    private func ensureNotContinued(_ sessionId: String) throws {
+        guard session(sessionId)?.isContinued != true else {
+            throw ClientError("This chat continued in another chat and is read-only.")
         }
     }
 

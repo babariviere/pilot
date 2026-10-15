@@ -35,12 +35,15 @@ public enum SessionStatus: String, Sendable {
     case stopped = "Stopped"
     case idle = "Idle"
     case paused = "Paused until wake"
+    /// Work is held at a subscription usage limit until it resets.
+    case usagePaused = "Paused at usage limit"
 }
 
 extension SessionSummary {
     /// Outcomes survive lifecycle changes. A completed turn does not finish active coordination.
     public var status: SessionStatus {
         if sleepPaused == true { return .paused }
+        if isHeldAtUsageLimit { return .usagePaused }
         if isWorking { return .working }
         switch outcome {
         case .done: return isActiveMissionCoordinator ? .idle : .done
@@ -52,7 +55,8 @@ extension SessionSummary {
     }
 
     public var visibleOutcomeAt: Double? {
-        guard sleepPaused != true, !isWorking, outcome != nil, let outcomeAt, outcomeAt.isFinite else { return nil }
+        guard sleepPaused != true, !isHeldAtUsageLimit, !isWorking, outcome != nil, let outcomeAt, outcomeAt.isFinite
+        else { return nil }
         return outcomeAt
     }
 }

@@ -101,6 +101,7 @@ export class MissionService {
 		this.notices = new MissionNotices(store, sessions);
 		this.compaction = new CoordinatorCompaction(store, sessions);
 		sessions.setMissionBridge({
+			continueSession: (from, to) => store.continueSession(from, to),
 			noticeAllowed: (sessionId, requestId) => this.notices.allowed(sessionId, requestId),
 			spawnProject: (missionId) => {
 				const mission = store.require(missionId);
@@ -309,6 +310,7 @@ export class MissionService {
 		const from = request.fromSessionId;
 		if (from !== undefined) {
 			const session = this.session(from);
+			if (session.continuedTo) throw new Conflict("Continue in the replacement chat");
 			if (session.projectId !== request.projectId) throw new Conflict("The chat belongs to another project");
 			if (session.archivedAt !== undefined) throw new Conflict("Restore the archived chat first");
 		}

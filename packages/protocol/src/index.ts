@@ -209,6 +209,10 @@ export interface UpdatePreparation {
 }
 
 export interface SessionSummary {
+	/** Fresh provider-safe chat which continues this readable, permanently read-only chat. */
+	continuedTo?: string;
+	/** Original chat whose workspace and task ownership this fresh chat continues. */
+	continuationOf?: string;
 	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
 	sleepPaused?: boolean;
 	/** Omitted by older daemons, meaning Build. */
@@ -289,6 +293,8 @@ export interface SessionSummary {
 	thinking?: string;
 	/** Latest context estimate and optional pi-extensions subscription snapshot. */
 	usage?: SessionUsage;
+	/** Subscription windows holding this chat or its working subagents. Force is scoped to these windows. */
+	subscriptionPause?: SubscriptionPause;
 	/** Named background subagents, in spawn order. Omitted when the session has none. */
 	subagents?: SessionSubagent[];
 	/** Mission this chat belongs to. Omitted when it has none. */
@@ -345,6 +351,19 @@ export interface SubscriptionUsage {
 export interface SessionUsage {
 	context?: ContextUsage;
 	subscription?: SubscriptionUsage;
+}
+
+export interface SubscriptionPauseWindow {
+	provider: "anthropic" | "openai";
+	label: string;
+	usedPercent: number;
+	resetsAt?: string;
+}
+
+export interface SubscriptionPause {
+	windows: SubscriptionPauseWindow[];
+	/** User explicitly allowed this chat and its children past these windows, until reset. */
+	forced?: boolean;
 }
 
 /** One named background subagent of a session, from the pi-extensions subagents host events. */
@@ -1084,6 +1103,14 @@ export interface ChangeModelRequest {
 	model: string;
 	/** Explicit supported level, overriding the model's scoped default for this chat. */
 	thinking?: string;
+}
+
+/** POST /api/sessions/:id/continue-model. Returns the same chat or a provider-safe replacement. */
+export type ContinueModelRequest = ChangeModelRequest;
+
+/** POST /api/sessions/:id/subscription-force. Returns SessionSummary. */
+export interface SubscriptionForceRequest {
+	force: boolean;
 }
 
 /** POST /api/sessions/:id/title. Renames a chat; the title is trimmed and must not be empty. */

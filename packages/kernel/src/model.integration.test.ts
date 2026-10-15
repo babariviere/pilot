@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	fauxAssistantMessage,
@@ -15,8 +16,8 @@ import {
 	Type,
 } from "@earendil-works/pi-ai";
 import {
-	createEventBus,
 	createCodemodeExtension,
+	createEventBus,
 	type ExtensionContext,
 	type ExtensionFactory,
 	ModelRuntime,
@@ -323,9 +324,15 @@ async function fixture(
 	const changes: KernelUsage[] = [];
 	const jobChanges: SessionJob[][] = [];
 	const completed = deferred<SessionCompletion>();
-	const open = async (model = first) => {
+	const open = async (model = first, continuationModel?: { model: string; thinking?: string; requestId?: string }) => {
 		const session = await KernelSession.open(
-			{ ...spec, model },
+			{
+				...spec,
+				model,
+				...(continuationModel
+					? { continuationModel: { requestId: `fixture:${randomUUID()}`, ...continuationModel } }
+					: {}),
+			},
 			{
 				onWorking: (_working, completion) => {
 					if (completion) completed.resolve(completion);
@@ -976,6 +983,149 @@ test("model selection updates native and durable choices, context usage and thin
 		globalSettings,
 		"session-specific selection does not rewrite pi's global model, thinking or scope settings",
 	);
+});
+
+test("same-provider continuation reconfigures a working durable run after draining, preserving its compaction and tool effects", {
+	timeout: 20_000,
+}, async (t) => {
+	const entered = deferred(),
+		finish = deferred();
+	let effects = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.registerTool({
+				name: "continuation_effect",
+				label: "Effect",
+				description: "Offline effect",
+				parameters: Type.Object({}),
+				execute: async () => {
+					effects++;
+					if (effects === 1) {
+						entered.resolve();
+						await finish.promise;
+					}
+					return { content: [{ type: "text", text: "effect saved" }], details: {} };
+				},
+			});
+		},
+	]);
+	t.after(() => finish.resolve());
+	const session = await f.open();
+	f.adapters[0]!.setToolActive("continuation_effect", true);
+	const marker = await session.conversation.commit(
+		(tx) =>
+			tx.appendEntry(session.conversation.id, {
+				kind: "pi.compaction",
+				head: "self",
+				data: { summary: "Same-provider retained summary" },
+				model: [{ role: "user", content: "Same-provider retained summary", timestamp: 1 }],
+			}),
+		context,
+	);
+	const requestedModels: string[] = [];
+	f.a.setResponses([
+		fauxAssistantMessage([fauxToolCall("continuation_effect", {}), fauxToolCall("continuation_effect", {})], {
+			stopReason: "toolUse",
+		}),
+		(_context, _options, _state, model) => {
+			requestedModels.push(model.id);
+			return fauxAssistantMessage(fauxToolCall("continuation_effect", {}), { stopReason: "toolUse" });
+		},
+		fauxAssistantMessage("Continued on the new model"),
+	]);
+	await session.submit("continue-work", "Finish both effects", "followUp");
+	await entered.promise;
+	await assert.rejects(session.changeModel(second), ConversationBusy);
+	const drained = session.pauseForUpdate();
+	finish.resolve();
+	await drained;
+	assert.equal(effects, 1, "drain joins the admitted effect and leaves the next call queued");
+	assert.equal(session.working, true, "the durable run remains unfinished");
+	await session.close();
+	const resumed = await f.open(first, { model: second, thinking: "low" });
+	await resumed.conversation.waitForIdle(context);
+	assert.equal(resumed.model, second);
+	assert.equal(resumed.thinkingLevel, "low");
+	assert.equal((await resumed.conversation.agent(context)).model?.modelId, "two");
+	assert.equal(effects, 2, "finished effects never replay");
+	assert.deepEqual(requestedModels, ["two"], "the model, not an old queued tool checkpoint, chooses the next effect");
+	const entries = (await resumed.conversation.context(context)).entries;
+	assert.ok(entries.some((entry) => entry.id === marker.id && entry.kind === "pi.compaction"));
+	assert.equal(
+		entries.filter((entry) => entry.kind === "pi.tool-result" && JSON.stringify(entry.model).includes("effect saved"))
+			.length,
+		2,
+	);
+	await resumed.close();
+	const reopened = await f.open(first);
+	assert.equal(reopened.model, second, "the explicit continuation selection becomes the durable pin");
+	await reopened.close();
+	await assert.rejects(f.open(first, { model: third }), /same provider/);
+});
+
+test("same-provider continuation redirects a quota-paused request checkpoint to the selected model and survives replay", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	let blocked = true;
+	const entered = deferred();
+	const wait = SubscriptionGate.prototype.wait;
+	t.mock.method(
+		SubscriptionGate.prototype,
+		"wait",
+		function (this: SubscriptionGate, provider: string | undefined, signal?: AbortSignal) {
+			if (!blocked || provider !== "pilot-model-a") return wait.call(this, provider, signal);
+			entered.resolve();
+			return new Promise<void>((_resolve, reject) => {
+				if (signal?.aborted) reject(signal.reason);
+				else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+			});
+		},
+	);
+	const session = await f.open();
+	const requests: string[] = [];
+	f.a.setResponses([
+		(_ctx, _options, _state, model) => {
+			requests.push(model.id);
+			return fauxAssistantMessage("Completed with the selected model");
+		},
+	]);
+	await session.submit("original-request", "Finish this work", "followUp");
+	await entered.promise;
+	await session.submit("queued-request", "Keep this queued request too", "followUp");
+	assert.equal(f.a.state.callCount, 0);
+	await session.pauseForUpdate();
+	await session.close();
+	blocked = false;
+	const plan = { model: second, thinking: "low", requestId: "stable-model-continuation" };
+	const binding = deferred(),
+		finishBinding = deferred();
+	t.after(() => finishBinding.resolve());
+	const bindHarness = NativeAdapter.prototype.bindHarness;
+	t.mock.method(
+		NativeAdapter.prototype,
+		"bindHarness",
+		async function (this: NativeAdapter, ...args: Parameters<NativeAdapter["bindHarness"]>) {
+			binding.resolve();
+			await finishBinding.promise;
+			return bindHarness.apply(this, args);
+		},
+	);
+	const reopening = f.open(first, plan);
+	await binding.promise;
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.deepEqual(requests, [], "startup continuation cannot dispatch before the native adapter is bound");
+	finishBinding.resolve();
+	const resumed = await reopening;
+	await resumed.conversation.waitForIdle(context);
+	assert.deepEqual(requests, ["two"], "the old request-phase model must never dispatch");
+	const entries = JSON.stringify((await resumed.conversation.context(context)).entries);
+	assert.match(entries, /Keep this queued request too/);
+	assert.match(entries, /Finish this work/);
+	await resumed.close();
+	const replayed = await f.open(first, plan);
+	await replayed.conversation.waitForIdle(context);
+	assert.deepEqual(requests, ["two"], "replaying the startup plan cannot duplicate its continuation input");
 });
 
 test("slash commands list prompt templates and skills, expand on input, and queue a manual compaction", {

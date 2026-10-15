@@ -538,7 +538,7 @@ private struct SubagentDetail: View {
         .padding(10)
     }
 
-    private var canMessage: Bool { subagent.acceptsMessages && !session.isArchived && !draft.sending }
+    private var canMessage: Bool { subagent.acceptsMessages && !session.isReadOnlyHistory && !draft.sending }
     private var canSend: Bool { canMessage && !draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     private func send(_ mode: DeliveryMode) {

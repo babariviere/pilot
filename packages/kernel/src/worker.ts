@@ -272,6 +272,10 @@ export function runKernelWorker(): void {
 					usage: session.usage,
 				});
 				break;
+			case "continuation.pause":
+				await session.pauseForUpdate();
+				await send({ type: "accepted", requestId: command.requestId });
+				break;
 			case "removeQueuedMessage":
 				await session.removeQueuedMessage(command.submissionId);
 				await send({ type: "accepted", requestId: command.requestId });
@@ -334,6 +338,9 @@ export function runKernelWorker(): void {
 			initialization = (async () => {
 				// Extensions resolve pi's agent directory from the environment, e.g. for the shared usage cache.
 				if (command.spec.agentDir) process.env.PI_CODING_AGENT_DIR = command.spec.agentDir;
+				if (command.spec.subscriptionPolicy)
+					process.env.PILOT_SUBSCRIPTION_POLICY = command.spec.subscriptionPolicy;
+				else delete process.env.PILOT_SUBSCRIPTION_POLICY;
 				const opened = await KernelSession.open(command.spec, {
 					onSystemMessageState: (event) => {
 						void send({ type: "systemMessageState", event });
