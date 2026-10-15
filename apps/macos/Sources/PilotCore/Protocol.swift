@@ -77,6 +77,8 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let working: Bool?
     /// Work paused by the Mac sleep policy. Omitted by older daemons.
     public var sleepPaused: Bool? = nil
+    /// Model work waiting for daemon-confirmed internet connectivity.
+    public var offlinePaused: Bool? = nil
     /// A provider window reached its usage limit. Omitted when nothing is held, or by older daemons.
     public var subscriptionPause: SubscriptionPause? = nil
     /// The chat this one continues after a switch to another provider's model.
@@ -123,7 +125,7 @@ public struct SessionSummary: Codable, Identifiable, Equatable, Hashable, Sendab
     public let unpublishedWork: Bool?
 
     /// pilotd already reports `working: false` while a usage pause holds the main run with nothing else running.
-    public var isWorking: Bool { sleepPaused != true && (working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty)) }
+    public var isWorking: Bool { sleepPaused != true && offlinePaused != true && (working ?? (state == "working" || state == "starting" || !(runningJobs ?? []).isEmpty)) }
     public var effectiveMode: ChatMode { mode ?? .build }
     public var isAsk: Bool { effectiveMode == .ask }
     public var workspaceLabel: String {

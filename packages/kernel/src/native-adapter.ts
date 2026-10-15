@@ -6,8 +6,8 @@
  * provider authentication from the user's pi configuration (settings, packages, extensions, MCP).
  */
 import { createHash, randomUUID } from "node:crypto";
-import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import { performance } from "node:perf_hooks";
+import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import type { JsonValue, Context as TaskContext } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import {
@@ -63,9 +63,10 @@ import type { DeliveryMode, SessionCommand, SessionJob } from "@pilot/protocol";
 import { type ActivityStream, InfrastructureChildren, inspectChildren, watchActivity } from "./activity.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
 import { type ArtifactToolOptions, createArtifactTools } from "./artifact-tools.ts";
-import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
 import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
+import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
+import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
@@ -86,6 +87,7 @@ export interface ExtensionInput {
 
 export interface NativeAdapterOptions {
 	subscriptionPolicy?: string;
+	connectivityPolicy?: string;
 	/** Host-enforced read-only source or pinned object tree. Overrides all resource/tool configuration. */
 	ask?: AskContext;
 	/** Host-owned session-local artifact store and installed sandboxed renderers. */
@@ -255,6 +257,7 @@ export class NativeAdapter {
 	#toolFinished?: number;
 	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
 	readonly #subscriptionGate: SubscriptionGate;
+	readonly #offlineGate: OfflineGate;
 	#physicalSubscriptionProvider?: string;
 
 	readonly session: AgentSession;
@@ -268,8 +271,10 @@ export class NativeAdapter {
 		infrastructure = new InfrastructureChildren(),
 		timings?: PerformanceSink,
 		subscriptionPolicy?: string,
+		connectivityPolicy?: string,
 	) {
 		this.#subscriptionGate = new SubscriptionGate(subscriptionPolicy);
+		this.#offlineGate = new OfflineGate(connectivityPolicy);
 		this.infrastructure = infrastructure;
 		this.session = session;
 		this.usage = usage;
@@ -292,10 +297,14 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							(observe, timing) =>
+							(observe, timing, signal) =>
 								session.extensionRunner
 									.getModelRegistry()
-									.streamSimple(model, context, this.requestOptions(options, observe, model.api, timing)),
+									.streamSimple(
+										model,
+										context,
+										this.requestOptions({ ...options, signal }, observe, model.api, timing),
+									),
 							model,
 							options?.signal,
 						);
@@ -308,14 +317,19 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							(observe, timing) =>
+							(observe, timing, signal) =>
 								// Instrument shared fields; the spread preserves provider-specific options unchanged.
 								session.extensionRunner
 									.getModelRegistry()
 									.stream(
 										model,
 										context,
-										this.requestOptions(options as ModelsSimpleStreamOptions, observe, model.api, timing),
+										this.requestOptions(
+											{ ...options, signal } as ModelsSimpleStreamOptions,
+											observe,
+											model.api,
+											timing,
+										),
 									),
 							model,
 							options?.signal,
@@ -460,6 +474,7 @@ export class NativeAdapter {
 			infrastructure,
 			options.performance,
 			options.subscriptionPolicy,
+			options.connectivityPolicy,
 		);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
@@ -673,6 +688,7 @@ export class NativeAdapter {
 			}, context);
 	}
 	private async preparePrompt(context: TaskContext): Promise<string> {
+		await this.#offlineGate.wait(context.abortSignal);
 		const messages = structuredClone([...(await this.sync(context))]);
 		const cached = (await this.#harness!.snapshot(NativeState, this.#conversationId!, context))?.prompt;
 		if (cached?.key === this.#inputKey) {
@@ -1067,7 +1083,36 @@ export class NativeAdapter {
 	}
 
 	private requestStream(
-		dispatch: (observe: (error: unknown) => void, timing?: RequestTiming) => AssistantMessageEventStream,
+		dispatch: (
+			observe: (error: unknown) => void,
+			timing?: RequestTiming,
+			signal?: AbortSignal,
+		) => AssistantMessageEventStream,
+		model: Parameters<Models["streamSimple"]>[0],
+		signal?: AbortSignal,
+	): AssistantMessageEventStream {
+		if (!this.#offlineGate.path) return this.rawRequestStream(dispatch, model, signal);
+		return offlineRequestStream(
+			(attemptSignal) => {
+				if (signal) {
+					const preparation = this.#preparations.get(signal);
+					if (preparation) this.#preparations.set(attemptSignal, preparation);
+					this.#preparations.delete(signal);
+				}
+				return this.rawRequestStream(dispatch, model, attemptSignal);
+			},
+			model,
+			this.#offlineGate,
+			signal,
+		);
+	}
+
+	private rawRequestStream(
+		dispatch: (
+			observe: (error: unknown) => void,
+			timing?: RequestTiming,
+			signal?: AbortSignal,
+		) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
 	): AssistantMessageEventStream {
@@ -1099,13 +1144,18 @@ export class NativeAdapter {
 			try {
 				await this.waitForRequestBarrier(signal);
 				await this.#subscriptionGate.wait(model.provider, signal);
+				await this.#offlineGate.wait(signal);
 				if (this.#harness)
 					await this.sync(signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT);
 				this.assertOpen();
 				timing?.providerStart();
-				const source = dispatch((error) => {
-					fetchError = error;
-				}, timing);
+				const source = dispatch(
+					(error) => {
+						fetchError = error;
+					},
+					timing,
+					signal,
+				);
 				for await (const event of source) {
 					if (
 						(event.type === "text_delta" || event.type === "thinking_delta" || event.type === "toolcall_delta") &&
@@ -1191,6 +1241,7 @@ export class NativeAdapter {
 				this.#physicalSubscriptionProvider = model.provider;
 				this.usage.set(this.usage.current.context, model.provider);
 				await this.#subscriptionGate.wait(model.provider, options.signal);
+				await this.#offlineGate.wait(options.signal);
 				const value = await runner.emitBeforeProviderRequest(
 					(await options?.onPayload?.(payload, model)) ?? payload,
 				);

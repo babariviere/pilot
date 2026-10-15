@@ -215,6 +215,8 @@ export interface SessionSummary {
 	continuationOf?: string;
 	/** Durable work paused by the Mac sleep policy, awaiting a later full wake with connectivity. */
 	sleepPaused?: boolean;
+	/** Durable model work waiting for confirmed internet connectivity. */
+	offlinePaused?: boolean;
 	/** Omitted by older daemons, meaning Build. */
 	mode?: ChatMode;
 	/** Actual Build workspace policy, including isolated workspaces without a task branch. */

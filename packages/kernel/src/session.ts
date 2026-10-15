@@ -375,6 +375,7 @@ export class KernelSession {
 			if (!spec.pilot?.ask) todoBridge = await startTodoBridge(callTodo);
 			adapter = await NativeAdapter.open({
 				subscriptionPolicy: spec.subscriptionPolicy,
+				connectivityPolicy: spec.connectivityPolicy,
 				cwd: spec.cwd,
 				ask: spec.pilot?.ask,
 				agentDir: spec.agentDir,
