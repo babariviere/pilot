@@ -140,6 +140,13 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+The coordinator can start one chat on several tasks with `start` and `ids` (IDs, numbers or ranges).
+Admission claims all tasks or none, ordering dependencies first and preserving the given order for ties.
+Dependencies outside the selection must be done. Each task gets its own PR, based on the preceding PR's
+head and linked as a stack. Supplied artifacts and links attach to every selected task. The whole opening
+prompt, including all task bodies, instructions and references, must fit 4,000 characters; oversized
+starts are rejected with the size, without truncation. The app's task Start chat action remains single-task.
+
 Decisions have an audience: **All chats**, **Coordinator only**, or **Reference** (the default).
 Choose it when recording or editing a decision, or change it from the row's context menu.
 Decisions have stable numbers (D1, D2, …). The coordinator can propose edits or removals for the user

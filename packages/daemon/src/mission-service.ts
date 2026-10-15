@@ -38,15 +38,22 @@ export function draftMessage(title: string): string {
 }
 
 function taskMessage(
-	task: MissionTask,
+	tasks: MissionTask[],
 	extra?: string,
 	artifacts: MissionArtifactLink[] = [],
 	links: Pick<MissionResource, "url" | "kind" | "title" | "externalId">[] = [],
 ): string {
+	const task = tasks[0]!;
 	const line = (value: string) => value.replace(/\s+/g, " ").trim();
 	const message = [
-		`Work on mission task #${task.number}: ${task.title}`,
-		...(task.body ? ["", task.body] : []),
+		...(tasks.length === 1
+			? [`Work on mission task #${task.number}: ${task.title}`, ...(task.body ? ["", task.body] : [])]
+			: [
+					"Work on these mission tasks in order:",
+					...tasks.flatMap((item) => ["", `#${item.number}: ${item.title}`, ...(item.body ? [item.body] : [])]),
+					"",
+					"Open one PR per task. Base the first on the requested starting branch, then each PR on the previous task's head with gh pr create --base <previous-head> --head <own-head>. Link PR URLs bottom-to-top with gh stack link. Attribute each PR with mission link + taskId. Keep plain chained PRs if stacks are unavailable.",
+				]),
 		...(extra?.trim() ? ["", extra.trim()] : []),
 		...(artifacts.length || links.length
 			? [
@@ -65,7 +72,9 @@ function taskMessage(
 				]
 			: []),
 		"",
-		"This task is already claimed for this chat. Start by reading the mission with the mission tool.",
+		tasks.length === 1
+			? "This task is already claimed for this chat. Start by reading the mission with the mission tool."
+			: "All these tasks are already claimed for this chat. Start by reading the mission with the mission tool.",
 	].join("\n");
 	if (message.length > 4000)
 		throw new Error(
@@ -106,7 +115,8 @@ export class MissionService {
 				this.assertSameProject(sessionId, missionId);
 				store.join(sessionId, missionId);
 				// Keep claim conflicts inside spawn admission, where rejected metadata is removed.
-				if (taskId !== undefined) store.claimTask(missionId, taskId, sessionId, {});
+				if (taskId !== undefined)
+					store.claimStartTasks(missionId, typeof taskId === "string" ? [taskId] : taskId, sessionId);
 				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
 			membership: (sessionId) => store.membership(sessionId),
@@ -364,28 +374,35 @@ export class MissionService {
 		return this.session(sessionId);
 	}
 
-	/** A new chat in the mission's project that joins and claims the task before its first turn. */
+	/** Single-task UI/API entry point, sharing reservations with coordinator batches. */
 	async startTask(missionId: string, taskId: string, request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
-		const task = this.store.resolveTask(missionId, taskId);
-		const key = `${missionId}:${task.id}`;
-		if (this.taskStarts.has(key)) throw new Conflict(`Task #${task.number} is already starting in another chat`);
-		this.taskStarts.add(key);
+		return this.startTasks(missionId, [taskId], request);
+	}
+
+	/** Reserve all canonical keys synchronously, or none, before asynchronous preparation. */
+	async startTasks(missionId: string, refs: string[], request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
+		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts);
+		const keys = tasks.map((task) => `${missionId}:${task.id}`);
+		for (const key of keys) this.taskStarts.add(key);
 		try {
-			return await this.startReservedTask(missionId, task.id, request);
+			return await this.startReservedTasks(
+				missionId,
+				tasks.map((task) => task.id),
+				request,
+			);
 		} finally {
-			this.taskStarts.delete(key);
+			for (const key of keys) this.taskStarts.delete(key);
 		}
 	}
 
-	private async startReservedTask(
+	private async startReservedTasks(
 		missionId: string,
-		taskId: string,
+		taskIds: string[],
 		request: StartMissionTaskRequest,
 	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
-		let task = this.store.resolveTask(missionId, taskId);
-		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by a chat`);
+		let tasks = this.store.prepareTaskStart(missionId, taskIds);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
 		const selection = await this.sessions.selectTaskModel(
@@ -394,8 +411,7 @@ export class MissionService {
 			request.thinking,
 		);
 		// Recheck claims after model/settings I/O.
-		if (this.store.resolveTask(missionId, taskId).sessionId)
-			throw new Conflict(`Task #${task.number} is already claimed by a chat`);
+		tasks = this.store.prepareTaskStart(missionId, taskIds);
 		for (const key of ["artifacts", "links"] as const)
 			if (request[key] !== undefined && (!Array.isArray(request[key]) || request[key].length > 40))
 				throw new Error(`${key} must be an array of at most 40 references`);
@@ -432,7 +448,6 @@ export class MissionService {
 				title: item.title,
 				kind: item.kind,
 				...(ref.revision !== undefined ? { revision: item.revision } : {}),
-				taskId: task.id,
 				linkedAt: 0,
 			};
 			const previous = artifacts.findIndex((item) => item.artifactId === value.artifactId);
@@ -440,40 +455,39 @@ export class MissionService {
 			else artifacts[previous] = value;
 		}
 		const detail = this.store.detail(missionId);
-		task = this.store.resolveTask(missionId, task.id);
+		tasks = this.store.prepareTaskStart(missionId, taskIds);
+		const selected = new Set(taskIds);
 		const taskArtifacts = detail.artifacts
-			.filter((item) => item.taskId === task.id && !artifacts.some((ref) => ref.artifactId === item.artifactId))
+			.filter(
+				(item) =>
+					item.taskId && selected.has(item.taskId) && !artifacts.some((ref) => ref.artifactId === item.artifactId),
+			)
 			.concat(artifacts);
-		const taskLinks = detail.resources.filter((item) => item.taskId === task.id);
-		const newLinks = links.filter(
-			(item, index) =>
-				!taskLinks.some((ref) => ref.url === item.url) && links.findIndex((ref) => ref.url === item.url) === index,
-		);
-		const message = taskMessage(task, request.message, taskArtifacts, [...taskLinks, ...newLinks]);
-		// Async artifact reads may race a claim or membership change. Recheck before writes.
-		if (this.store.resolveTask(missionId, task.id).sessionId)
-			throw new Conflict(`Task #${task.number} is already claimed by a chat`);
+		const taskLinks = detail.resources.filter((item) => item.taskId && selected.has(item.taskId));
+		const promptLinks = [...new Map([...links, ...taskLinks].map((item) => [item.url, item])).values()];
+		const message = taskMessage(tasks, request.message, taskArtifacts, promptLinks);
+		// Recheck artifact membership after asynchronous reads, before writes.
 		for (const item of artifacts)
 			if (
 				this.store.missionOf(item.sessionId) !== missionId &&
 				!detail.artifacts.some((ref) => ref.artifactId === item.artifactId && ref.sessionId === item.sessionId)
 			)
 				throw new Conflict("That artifact's chat is no longer in this mission");
-		this.store.attachTaskReferences(missionId, task.id, artifacts, newLinks);
+		this.store.attachTaskReferences(missionId, taskIds, artifacts, links);
 		const session = await this.sessions.spawn(
 			{
 				projectId: mission.projectId,
 				missionId,
 				message,
-				title: task.title,
+				title: tasks[0]!.title,
 				...selection,
 				...(request.mode ? { mode: request.mode } : {}),
 				...(request.baseBranch ? { baseBranch: request.baseBranch } : {}),
 			},
 			false,
-			task.id,
+			tasks.map((task) => task.id),
 		);
-		this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
+		for (const task of tasks) this.store.recordTaskStart(missionId, task.id, selection.model, selection.thinking);
 		return this.session(session.id);
 	}
 
@@ -545,8 +559,16 @@ export class MissionService {
 			}
 			case "start": {
 				if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
-				if (typeof args.id !== "string" || !args.id.trim()) throw new Error("start requires the task id or number");
-				const started = await this.startTask(missionId, args.id, {
+				if (args.id !== undefined && args.ids !== undefined) throw new Error("Use id or ids, not both");
+				if (args.ids !== undefined && !Array.isArray(args.ids)) throw new Error("start requires an ids array");
+				if (args.ids === undefined && (typeof args.id !== "string" || !args.id.trim()))
+					throw new Error("start requires the task id or number, or ids");
+				const start =
+					args.ids === undefined
+						? (request: StartMissionTaskRequest) => this.startTask(missionId, args.id as string, request)
+						: (request: StartMissionTaskRequest) =>
+								this.startTasks(missionId, parseTaskRefs(args.ids, "start"), request);
+				const started = await start({
 					...(args.message !== undefined ? { message: args.message as string } : {}),
 					...(args.model !== undefined ? { model: args.model as string } : {}),
 					...(args.thinking !== undefined ? { thinking: args.thinking as string } : {}),

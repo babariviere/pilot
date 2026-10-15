@@ -6,10 +6,10 @@ import { type TestContext, test } from "node:test";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
-	fauxProvider,
 	fauxAssistantMessage,
-	getCurrentTools,
+	fauxProvider,
 	getCurrentSystemPrompt,
+	getCurrentTools,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
 } from "@earendil-works/pi-ai";
@@ -346,9 +346,9 @@ test("coordinator declares bounded start references and forwards them unchanged"
 	assert.equal(properties.artifacts?.maxItems, 40);
 	assert.equal(properties.links?.maxItems, 40);
 	assert.match(tool.description, /Durable context belongs in the brief, decisions or task links/);
-	assert.match(tool.description, /task body and reference list must fit 4000 characters/);
+	assert.match(tool.description, /whole opening prompt .*must fit 4000 characters or start rejects with its size/);
 	const args = {
-		id: "1",
+		ids: ["1-2", 3],
 		artifacts: [{ artifactId: "a", revision: 2 }],
 		links: [{ url: "https://example.com", title: "Spec" }],
 	};

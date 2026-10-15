@@ -1472,6 +1472,64 @@ export class MissionStore {
 		this.changed(id, task.sessionId ? [task.sessionId] : []);
 	}
 
+	/** Validate the whole start batch, then stable dependency order (caller order breaks ties). */
+	prepareTaskStart(id: string, refs: string[], starting?: ReadonlySet<string>): MissionTask[] {
+		const tasks = [
+			...new Map(
+				refs.map((ref) => {
+					const task = this.resolveTask(id, ref);
+					return [task.id, task] as const;
+				}),
+			).values(),
+		];
+		if (!tasks.length) throw new Error("start requires at least one task");
+		const selected = new Set(tasks.map((task) => task.id));
+		const reasons: string[] = [];
+		for (const task of tasks) {
+			if (starting?.has(`${id}:${task.id}`))
+				reasons.push(`Task #${task.number} is already starting in another chat`);
+			if (task.sessionId) reasons.push(`Task #${task.number} is already claimed by a chat`);
+			if (task.status === "done" || task.status === "dropped")
+				reasons.push(`Task #${task.number} is ${task.status}`);
+			for (const depId of task.dependsOn ?? []) {
+				if (selected.has(depId)) continue;
+				const dep = this.resolveTask(id, depId);
+				if (dep.status !== "done")
+					reasons.push(
+						`Task #${task.number} depends on task #${dep.number} outside the start list, which is not done`,
+					);
+			}
+		}
+		if (reasons.length) throw new Conflict(reasons.join("; "));
+		const ordered: MissionTask[] = [];
+		const remaining = new Set(selected);
+		while (remaining.size) {
+			const next = tasks.find(
+				(task) => remaining.has(task.id) && !(task.dependsOn ?? []).some((dep) => remaining.has(dep)),
+			);
+			if (!next)
+				throw new Conflict(
+					`Dependency cycle among tasks ${tasks
+						.filter((task) => remaining.has(task.id))
+						.map((task) => `#${task.number}`)
+						.join(", ")}`,
+				);
+			ordered.push(next);
+			remaining.delete(next.id);
+		}
+		return ordered;
+	}
+
+	/** Spawn admission claims every selected task in one transaction, with no partial success. */
+	claimStartTasks(id: string, refs: string[], sessionId: string): MissionTask[] {
+		this.assertMember(id, sessionId);
+		const tasks = this.transaction(() =>
+			this.prepareTaskStart(id, refs).map((task) => this.takeTask(id, task, sessionId, {})),
+		);
+		this.changed(id, [sessionId]);
+		return tasks;
+	}
+
 	/** Atomic: a task owned by another chat is never taken over. */
 	claimTask(id: string, taskId: unknown, sessionId: string, actor: MissionActor = { sessionId }): MissionTask {
 		this.assertMember(id, sessionId);
@@ -1903,18 +1961,21 @@ export class MissionStore {
 	/** One commit and one detail/context broadcast, rather than one per reference. */
 	attachTaskReferences(
 		id: string,
-		taskId: string,
+		taskId: string | string[],
 		artifacts: Omit<MissionArtifactLink, "linkedAt" | "linkedBySessionId">[],
 		links: MissionResourceWrite[],
 	): void {
 		if (!artifacts.length && !links.length) return;
 		if (this.referenceBatch) throw new Error("A reference batch is already active");
-		this.resolveTask(id, taskId);
+		const taskIds = typeof taskId === "string" ? [taskId] : taskId;
+		for (const ref of taskIds) this.resolveTask(id, ref);
 		this.referenceBatch = id;
 		try {
 			this.transaction(() => {
-				for (const item of artifacts) this.linkArtifact(id, { ...item, taskId });
-				for (const item of links) this.addResource(id, { ...item, taskId, relationship: "reference" });
+				for (const taskId of taskIds) {
+					for (const item of artifacts) this.linkArtifact(id, { ...item, taskId });
+					for (const item of links) this.addResource(id, { ...item, taskId, relationship: "reference" });
+				}
 			});
 		} finally {
 			this.referenceBatch = undefined;
