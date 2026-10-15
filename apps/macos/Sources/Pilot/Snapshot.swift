@@ -478,6 +478,11 @@ enum Snapshot {
             await render(SessionSidebar(model: model, client: model.client), size: CGSize(width: 300, height: 680),
                          to: directory.appending(path: "missions-sidebar-phases.png"))
             model.openMission("m5", tab: .tasks)
+            // Editing a task's dependencies: #12 is chosen; nothing waits on #13, so every task is available.
+            if let waiting = phaseDetails[0].tasks.first(where: { $0.id == "p13" }) {
+                await render(MissionTaskDependencyEditor(task: waiting, missionId: "m5") {}, size: CGSize(width: 380, height: 420),
+                             to: directory.appending(path: "mission-task-dependencies.png"))
+            }
             // "Show task" on a dropped task in the folded phase unfolds it and shows dropped tasks.
             model.revealedMissionTaskId = "p4"
             await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 1200),

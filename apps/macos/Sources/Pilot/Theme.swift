@@ -31,6 +31,9 @@ enum Theme {
     }
     /// Keyboard focus ring on rows and row buttons (`focusRing(_:radius:outset:)`). Follows the system accent.
     static let focusRing = Color(nsColor: .keyboardFocusIndicatorColor)
+    /// The insertion line while a dragged row hovers over a list, such as tasks in a mission's Tasks tab. Follows the
+    /// system accent like native list drops.
+    static let dropIndicator = Color(nsColor: .controlAccentColor)
 
     static let info = Color(hex: 0x3B82F6)
     static let success = Color(hex: 0x10B981)
