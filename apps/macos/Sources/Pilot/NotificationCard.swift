@@ -44,8 +44,8 @@ struct NotificationCard<Accessory: View>: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: Theme.radius).strokeBorder(Theme.border))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.border))
     }
 }
 

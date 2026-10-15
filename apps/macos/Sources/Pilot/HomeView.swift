@@ -225,8 +225,8 @@ struct TaskComposer: View {
             }
         }
         // Opaque, so the sky's dissolving dots never show through.
-        .background(RoundedRectangle(cornerRadius: 14).fill(Theme.tray))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.tray).fill(Theme.tray))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
         .task(id: modelScopeKey) { await loadModels() }
         .task(id: branchLoadKey) { await loadBranches() }
         .onAppear { consumeDraft() }
@@ -255,7 +255,7 @@ struct TaskComposer: View {
                 }
             }
                 .padding(12)
-                .card(radius: 10)
+                .card()
                 .padding(.horizontal, 4)
             HStack(spacing: 6) {
                 if let mission = form.mission {
@@ -263,7 +263,7 @@ struct TaskComposer: View {
                         .font(.system(size: 12)).lineLimit(1)
                         .foregroundStyle(Theme.mutedForeground)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
                         .help("This new chat will join the mission, with no task attached.")
                 }
                 if let tracked = form.trackedItem {
@@ -278,7 +278,7 @@ struct TaskComposer: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Theme.mutedForeground)
                     .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
                     .help("This chat will be linked to \(tracked.label) when it starts. Pilot never changes the ticket.")
                 }
                 ProjectMenu(selected: project, folder: form.folder, projects: client.projects) { choice in
@@ -499,7 +499,7 @@ private struct RunningList: View {
                 .buttonStyle(.plain)
             }
         }
-        .card(radius: 10)
+        .card()
         .padding(.horizontal, 4)
         .padding(.bottom, 4)
     }

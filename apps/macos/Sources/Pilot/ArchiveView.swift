@@ -175,7 +175,7 @@ struct ArchivedComposer: View {
                 .buttonStyle(.bordered)
         }
         .padding(14)
-        .card(radius: 14)
+        .card(radius: Theme.Radius.tray)
         .frame(maxWidth: Theme.column)
         .padding(.horizontal, 24)
         .padding(.vertical, 16)

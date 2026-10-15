@@ -114,7 +114,7 @@ private struct BlockView: View {
                                   font: fonts.nsMono, monoFont: fonts.nsMono, lineSpacing: 0)
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Theme.subtleFill))
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
         case .rule:
             Divider().padding(.vertical, 4)
         }
@@ -139,7 +139,7 @@ struct CodeBlock: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 5)
-            .background(Theme.subtleFill)
+            .background(Theme.muted)
             ScrollView(.horizontal, showsIndicators: false) {
                 Group {
                     if selection != nil {
@@ -154,9 +154,9 @@ struct CodeBlock: View {
                 }.padding(10)
             }
         }
-        .background(Theme.codeBackground)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline))
+        .background(Theme.code)
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
         .task(id: CodeRenderKey(text: text, language: language)) {
             guard prepared == nil else { return }
             do {

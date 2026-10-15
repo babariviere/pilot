@@ -168,8 +168,8 @@ private struct QueuedMessageRow: View {
         }
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, minHeight: QueuedMessagesStrip.rowHeight, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isHovered ? Theme.selected : .clear))
-        .contentShape(RoundedRectangle(cornerRadius: 6))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(isHovered ? Theme.selected : .clear))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.row))
         .opacity(removing ? 0.5 : 1)
         .onTapGesture { state.selectQueuedMessage(message) }
         .onHover { isHovered = $0 }

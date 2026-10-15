@@ -350,8 +350,8 @@ struct Inspector: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: 6).fill(model.inspectorTab == value ? Theme.card : .clear))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(model.inspectorTab == value ? Theme.border : .clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(model.inspectorTab == value ? Theme.card : .clear))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.row).strokeBorder(model.inspectorTab == value ? Theme.border : .clear))
         }
         .buttonStyle(.plain)
     }

@@ -218,8 +218,8 @@ private struct CompletionPickerView: View {
             .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
         }
         .background(.white)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tray))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
         .shadow(color: .black.opacity(0.13), radius: 9, y: 3)
         .padding(10)
     }
@@ -249,12 +249,12 @@ private struct CompletionPickerView: View {
             .padding(.horizontal, 10).frame(height: 34)
             .background {
                 if selected {
-                    RoundedRectangle(cornerRadius: 9)
+                    RoundedRectangle(cornerRadius: Theme.Radius.control)
                         .fill(LinearGradient(colors: [Color(hex: 0xEEF2FF), Color(hex: 0xF5F7FF)], startPoint: .leading, endPoint: .trailing))
-                        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(accent.opacity(0.13)))
+                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(accent.opacity(0.13)))
                 }
             }
-            .contentShape(RoundedRectangle(cornerRadius: 9))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         }
         .buttonStyle(.plain)
         .frame(height: CompletionPickerMetrics.rowHeight)
@@ -269,8 +269,8 @@ private struct CompletionPickerView: View {
         HStack(spacing: 4) {
             Text(symbol).font(.system(size: 10, weight: .medium, design: .monospaced))
                 .padding(.horizontal, 4).padding(.vertical, 2)
-                .background(.white, in: RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Theme.border))
+                .background(.white, in: RoundedRectangle(cornerRadius: Theme.Radius.small))
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.small).strokeBorder(Theme.border))
             Text(label).font(.system(size: 10))
         }
         .foregroundStyle(Theme.mutedForeground)

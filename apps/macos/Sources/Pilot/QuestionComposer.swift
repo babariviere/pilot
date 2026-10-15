@@ -32,13 +32,13 @@ struct QuestionComposer: View {
             }
             // The tray's state, in the same amber breath as the sidebar's needs-you corner. It sits behind the
             // opaque reply card, so it shows in the margin and beside the hints.
-            .ditherCorner(.needsYou, outset: EdgeInsets(), cornerRadius: 14, extent: 2.5)
+            .ditherCorner(.needsYou, outset: EdgeInsets(), cornerRadius: Theme.Radius.tray, extent: 2.5)
             .background(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: Theme.Radius.tray)
                     .fill(Theme.tray)
                     .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
             )
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
             if let error {
                 Text(error).font(.caption).foregroundStyle(Theme.destructive)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -144,7 +144,7 @@ struct QuestionComposer: View {
         .padding(.leading, 10)
         .padding(.trailing, 6)
         .padding(.vertical, 6)
-        .card(radius: 10)
+        .card()
         .padding(.horizontal, 10)
         .padding(.top, options.isEmpty ? 0 : 8)
     }
@@ -292,10 +292,10 @@ private struct QuestionOptionRow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(
                 highlighted ? Theme.selected : hovered ? Theme.muted : .clear
             ))
-            .contentShape(RoundedRectangle(cornerRadius: 8))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         }
         .buttonStyle(.plain)
         .focusable(false)
@@ -318,8 +318,8 @@ private struct QuestionKeyCap: View {
             .font(.pilot(.small, weight: .semibold).monospacedDigit())
             .foregroundStyle(strong ? Color.white : Theme.mutedForeground)
             .frame(width: 18, height: 18)
-            .background(RoundedRectangle(cornerRadius: 5).fill(strong ? Theme.primary : Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(strong ? Color.clear : Theme.border))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(strong ? Theme.primary : Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.row).strokeBorder(strong ? Color.clear : Theme.border))
             .accessibilityHidden(true)
     }
 }
@@ -331,8 +331,8 @@ private struct QuestionCheckCap: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 5).fill(checked ? Theme.primary : Theme.card)
-            RoundedRectangle(cornerRadius: 5).strokeBorder(checked ? Color.clear : Theme.border)
+            RoundedRectangle(cornerRadius: Theme.Radius.small).fill(checked ? Theme.primary : Theme.card)
+            RoundedRectangle(cornerRadius: Theme.Radius.small).strokeBorder(checked ? Color.clear : Theme.border)
             if checked {
                 PilotSymbol(PilotIcon.selectedOption).foregroundStyle(.white)
             } else {
@@ -371,7 +371,7 @@ struct QuestionRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .card(radius: 10)
+        .card()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Agent asked: \(question.question)")
     }

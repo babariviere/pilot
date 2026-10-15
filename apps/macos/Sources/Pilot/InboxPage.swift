@@ -284,7 +284,7 @@ private struct InboxClearState: View {
             DitherScene()
                 .frame(height: 260)
                 .frame(maxWidth: .infinity)
-                .clipShape(UnevenRoundedRectangle(topLeadingRadius: Theme.radius, topTrailingRadius: Theme.radius))
+                .clipShape(UnevenRoundedRectangle(topLeadingRadius: Theme.Radius.card, topTrailingRadius: Theme.Radius.card))
             Text("Nothing is waiting on you").font(.pilot(.headline, weight: .semibold))
                 .foregroundStyle(Theme.foreground)
                 .padding(.top, -28)

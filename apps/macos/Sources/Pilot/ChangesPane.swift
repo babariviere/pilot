@@ -331,7 +331,7 @@ private struct BranchLinkRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 6).fill(current || hovered ? Theme.muted : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(current || hovered ? Theme.muted : .clear))
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
@@ -394,7 +394,7 @@ private struct PendingAttachedRow: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)
-        .background(RoundedRectangle(cornerRadius: 6).fill(hovered ? Theme.muted : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered ? Theme.muted : .clear))
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)

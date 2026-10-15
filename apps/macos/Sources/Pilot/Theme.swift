@@ -9,7 +9,6 @@ enum Theme {
     static let column: CGFloat = 760
     /// Readable width of settings pages; wider settings windows center the page.
     static let settingsColumn: CGFloat = 680
-    static let radius: CGFloat = 10
 
     static let background = Color.white
     static let sidebar = Color(hex: 0xFAFAFA)
@@ -24,6 +23,8 @@ enum Theme {
     static let tray = Color(hex: 0xF5F5F5)
     static let code = Color(hex: 0xFAFAFA)
     static let primary = Color(hex: 0x262626)
+    /// Keyboard focus ring on rows and row buttons (`focusRing(_:radius:outset:)`). Follows the system accent.
+    static let focusRing = Color(nsColor: .keyboardFocusIndicatorColor)
 
     static let info = Color(hex: 0x3B82F6)
     static let success = Color(hex: 0x10B981)
@@ -48,11 +49,23 @@ enum Theme {
         }
     }
 
-    // Older names, kept so views read naturally.
-    static var cardBackground: Color { card }
-    static var codeBackground: Color { code }
-    static var subtleFill: Color { muted }
-    static var hairline: Color { border }
+    /// Corner radii. Pick by what the shape is, not by its size, and use `RoundedRectangle(cornerRadius:)` with one
+    /// of these rather than a literal.
+    ///
+    /// - `small`: key caps, checkboxes and other tiny marks.
+    /// - `row`: list, sidebar and menu rows (selection, hover and focus), tabs and icon buttons inside rows.
+    /// - `control`: chips, inline controls, code blocks, images and cards nested in another surface.
+    /// - `card`: cards, panels and notification cards.
+    /// - `bubble`: message bubbles, including scheduled ones.
+    /// - `tray`: composer trays, popover panels and large standalone cards.
+    enum Radius {
+        static let small: CGFloat = 4
+        static let row: CGFloat = 6
+        static let control: CGFloat = 8
+        static let card: CGFloat = 10
+        static let bubble: CGFloat = 12
+        static let tray: CGFloat = 14
+    }
 
     /// Type scale for app chrome: sidebars, cards, panes, badges and metadata.
     ///
@@ -116,7 +129,7 @@ extension String {
 
 extension View {
     /// White card with a hairline border.
-    func card(radius: CGFloat = Theme.radius, shadow: Bool = false) -> some View {
+    func card(radius: CGFloat = Theme.Radius.card, shadow: Bool = false) -> some View {
         background(
             RoundedRectangle(cornerRadius: radius)
                 .fill(Theme.card)
@@ -194,8 +207,8 @@ struct ChipLabel: View {
         .foregroundStyle(Theme.mutedForeground)
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.muted))
-        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
     }
 }
 
@@ -393,7 +406,7 @@ struct KeyHint: View {
                 .font(.pilot(.small, weight: .medium))
                 .padding(.horizontal, 4)
                 .padding(.vertical, 1)
-                .background(RoundedRectangle(cornerRadius: 4).fill(Theme.muted))
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.small).fill(Theme.muted))
             Text(label)
         }
         .font(.pilot(.caption))
@@ -402,9 +415,11 @@ struct KeyHint: View {
     }
 }
 
-/// Borderless icon button for secondary row actions: muted, with a soft fill under the pointer and an
-/// optional tint (for example destructive) that only appears on hover. Always add an accessibility label.
-/// The default 20 pt fits rows; use 26 pt beside the composers' 26 pt circular send button.
+/// Borderless icon button for standalone toolbar and composer actions: muted, with a soft fill under the pointer
+/// and an optional tint (for example destructive) that only appears on hover. Inside rows use
+/// `rowIconButtonStyle(hoverTint:)` instead, so the row's selection stays its only fill. Always add an
+/// accessibility label. The default 20 pt fits small toolbars; use 26 pt beside the composers' 26 pt circular send
+/// button.
 struct QuietIconButtonStyle: ButtonStyle {
     var hoverTint: Color = Theme.foreground
     var size: CGFloat = 20
@@ -420,17 +435,105 @@ struct QuietIconButtonStyle: ButtonStyle {
         @Environment(\.isEnabled) private var isEnabled
         @State private var isHovered = false
 
+        private var radius: CGFloat { size > 20 ? Theme.Radius.control : Theme.Radius.row }
+
         var body: some View {
             let active = isHovered && isEnabled
             configuration.label
                 .font(.pilot(.caption, weight: .semibold))
                 .foregroundStyle(active ? hoverTint : Theme.mutedForeground)
                 .frame(width: size, height: size)
-                .background(RoundedRectangle(cornerRadius: size > 20 ? 7 : 5).fill(active ? Theme.selected : .clear))
+                .background(RoundedRectangle(cornerRadius: radius).fill(active ? Theme.selected : .clear))
                 .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
-                .contentShape(RoundedRectangle(cornerRadius: size > 20 ? 7 : 5))
+                .contentShape(RoundedRectangle(cornerRadius: radius))
                 .onHover { isHovered = $0 }
                 .animation(Theme.Motion.quick, value: isHovered)
+        }
+    }
+}
+
+/// Fill-less icon button for actions inside rows, such as a revealed edit, remove or ⋯ menu. The glyph goes from
+/// muted to `hoverTint` (for example destructive) under the pointer or keyboard focus and draws no background, so
+/// the row's selection stays its only fill. Apply it with `rowIconButtonStyle(hoverTint:)`, which also replaces the
+/// system focus effect with the row focus ring. Always add an accessibility label.
+struct RowIconButtonStyle: ButtonStyle {
+    var hoverTint: Color = Theme.foreground
+    var size: CGFloat = 20
+
+    func makeBody(configuration: Configuration) -> some View {
+        RowIconButton(configuration: configuration, hoverTint: hoverTint, size: size)
+    }
+
+    private struct RowIconButton: View {
+        let configuration: ButtonStyleConfiguration
+        let hoverTint: Color
+        let size: CGFloat
+        @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.isFocused) private var isFocused
+        @State private var isHovered = false
+
+        var body: some View {
+            let active = (isHovered || isFocused) && isEnabled
+            configuration.label
+                .font(.pilot(.caption, weight: .semibold))
+                .foregroundStyle(active ? hoverTint : Theme.mutedForeground)
+                .frame(width: size, height: size)
+                .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
+                .contentShape(Rectangle())
+                .focusRing(isFocused)
+                .onHover { isHovered = $0 }
+                .animation(Theme.Motion.quick, value: isHovered)
+        }
+    }
+}
+
+/// Plain style for a button that is a whole row, or a row's main area, such as a sidebar or Inbox row. It adds
+/// nothing at rest (the row draws its own hover and selection) and draws the focus ring around the label under
+/// keyboard focus. Apply it with `rowButtonStyle(radius:outset:)`.
+struct RowButtonStyle: ButtonStyle {
+    var radius: CGFloat = Theme.Radius.row
+    var outset: CGFloat = 0
+
+    func makeBody(configuration: Configuration) -> some View {
+        RowButton(configuration: configuration, radius: radius, outset: outset)
+    }
+
+    private struct RowButton: View {
+        let configuration: ButtonStyleConfiguration
+        let radius: CGFloat
+        let outset: CGFloat
+        @Environment(\.isFocused) private var isFocused
+
+        var body: some View {
+            configuration.label
+                .opacity(configuration.isPressed ? 0.75 : 1)
+                .focusRing(isFocused, radius: radius, outset: outset)
+        }
+    }
+}
+
+extension View {
+    /// Fill-less row action. See `RowIconButtonStyle`.
+    func rowIconButtonStyle(hoverTint: Color = Theme.foreground, size: CGFloat = 20) -> some View {
+        buttonStyle(RowIconButtonStyle(hoverTint: hoverTint, size: size)).focusEffectDisabled()
+    }
+
+    /// A whole-row button with the row focus ring. See `RowButtonStyle`.
+    func rowButtonStyle(radius: CGFloat = Theme.Radius.row, outset: CGFloat = 0) -> some View {
+        buttonStyle(RowButtonStyle(radius: radius, outset: outset)).focusEffectDisabled()
+    }
+
+    /// Keyboard focus ring for rows and row buttons: a 2 pt ring in the system focus colour, `outset` points outside
+    /// the view so it can follow a row's padding. Only shown while `focused`, so pointer use never sees it.
+    func focusRing(_ focused: Bool, radius: CGFloat = Theme.Radius.row, outset: CGFloat = 0) -> some View {
+        overlay {
+            if focused {
+                RoundedRectangle(cornerRadius: radius + outset)
+                    .strokeBorder(Theme.focusRing, lineWidth: 2)
+                    .padding(-outset)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
         }
     }
 }

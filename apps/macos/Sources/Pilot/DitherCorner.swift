@@ -22,7 +22,7 @@ extension View {
     /// The defaults fit sidebar rows: they reach the edges of the native selection highlight.
     func ditherCorner(_ signal: SessionSignal?, background: Bool = false,
                       outset: EdgeInsets = EdgeInsets(top: -3, leading: 0, bottom: -3, trailing: -6),
-                      cornerRadius: CGFloat = 5, extent: Double = 1) -> some View {
+                      cornerRadius: CGFloat = Theme.Radius.row, extent: Double = 1) -> some View {
         modifier(DitherCornerModifier(signal: signal, background: background && signal == .working, outset: outset,
                                       cornerRadius: cornerRadius, extent: extent))
     }

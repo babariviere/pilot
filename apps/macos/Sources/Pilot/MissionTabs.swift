@@ -257,7 +257,7 @@ struct MissionBriefTab: View {
                     .scrollContentBackground(.hidden)
                     .padding(10)
                     .frame(minHeight: 420)
-                    .card(radius: 8)
+                    .card(radius: Theme.Radius.control)
                     .accessibilityLabel("Brief Markdown")
             } else if editor.text.isEmpty {
                 EmptyStateView(icon: PilotIcon.document, title: "No brief yet",
@@ -294,7 +294,7 @@ struct MissionBriefTab: View {
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.warning.opacity(0.08)))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.warning.opacity(0.08)))
         } else if editor.dirty, let latest = detail.brief?.revision, latest > editor.baseRevision {
             Text("Revision \(latest) arrived while you were editing. Saving will be rejected until you reload.")
                 .font(.pilot(.caption)).foregroundStyle(Theme.warning)
@@ -666,7 +666,7 @@ struct MissionTasksTab: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
     }
 
     private func groupHeader(_ group: MissionTaskGroup) -> some View {
@@ -822,7 +822,7 @@ struct MissionTaskRow: View {
         .onChange(of: task.title) { _, value in title.title = value }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
-        .background(RoundedRectangle(cornerRadius: 7).fill(highlighted ? Theme.selected : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(highlighted ? Theme.selected : .clear))
         .animation(Theme.Motion.quick, value: highlighted)
         .contextMenu { menuItems }
         .popover(isPresented: $addingLink, arrowEdge: .bottom) {

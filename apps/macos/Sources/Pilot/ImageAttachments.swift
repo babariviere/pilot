@@ -168,8 +168,8 @@ struct ImageAttachmentPreviews: View {
                             .resizable()
                             .scaledToFit()
                             .frame(width: 96, height: 80)
-                            .background(Theme.muted, in: RoundedRectangle(cornerRadius: 8))
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
+                            .background(Theme.muted, in: RoundedRectangle(cornerRadius: Theme.Radius.control))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
                             .overlay(alignment: .topTrailing) {
                                 Button { attachments.remove(image.id) } label: {
                                     PilotSymbol(PilotIcon.clearField, context: .toolbar)

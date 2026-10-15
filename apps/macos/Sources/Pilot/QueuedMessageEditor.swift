@@ -29,8 +29,8 @@ struct QueuedMessageEditor: View {
             .frame(height: state.queueEditorHeight)
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Theme.card))
-            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.info.opacity(0.5)))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.card))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.info.opacity(0.5)))
             if let error = state.queueEditError {
                 Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
             } else if !available {

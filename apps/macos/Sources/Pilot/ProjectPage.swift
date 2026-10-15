@@ -526,7 +526,7 @@ struct ProjectRefreshBanner: View {
                 Button("Retry", action: retry).disabled(retrying)
             }
             .padding(12)
-            .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.muted))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Theme.muted))
             .accessibilityElement(children: .contain)
         }
     }

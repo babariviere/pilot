@@ -64,8 +64,8 @@ struct TodosPanel: View {
                 .frame(height: min(180, CGFloat(ordered.count) * 22 + 16))
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.hairline))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card).strokeBorder(Theme.border))
         .padding(.horizontal, 28)
         .padding(.vertical, 8)
         .frame(maxWidth: Theme.column + 56)

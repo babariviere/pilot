@@ -1013,10 +1013,10 @@ private struct SlackTriageCard: View {
         }
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(selected ? Theme.selected : hovered ? Theme.muted : Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 8)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(selected ? Theme.selected : hovered ? Theme.muted : Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control)
             .strokeBorder(selected ? Theme.faintForeground : Theme.border, lineWidth: 1))
-        .contentShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .onTapGesture { actions.select(item) }
@@ -1088,7 +1088,7 @@ struct SlackLabelTag: View {
                 .lineLimit(1)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 1)
-                .overlay(RoundedRectangle(cornerRadius: 4)
+                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.small)
                     .strokeBorder(hidden ? Theme.faintForeground : Theme.border,
                                   style: StrokeStyle(lineWidth: 1, dash: hidden ? [3, 2] : [])))
                 .help(hidden ? "\(name), hidden from the Inbox" : name)

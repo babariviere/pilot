@@ -500,7 +500,7 @@ private struct ProjectHeader: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 2)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.subtleFill : Color.clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected ? Theme.muted : Color.clear))
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .contextMenu {
@@ -709,7 +709,7 @@ private struct SearchField: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.card))
-        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(Theme.border))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.card))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
     }
 }
