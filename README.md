@@ -227,6 +227,10 @@ Pilot stores a classifier summary for each Slack message, not its text; the tria
 message from Slack when you select it, without saving it.
 Project labels can do nothing, hide messages from the Inbox, or close them locally. Close labels never replace a
 status you chose. Show hidden in Slack triage includes label-closed messages; reopening one teaches the classifier.
+Slack items become Done locally when every PR of a linked chat has merged, or a linked mission completes.
+The row explains why, for example “Done · PR #42 merged”. Closed unmerged PRs change nothing. Already Done or
+Dismissed items stay untouched, startup PR baselines do not close old items, and reopening is never undone by
+the same merge or completion. This makes no Slack writes.
 Slack messages and Linear issue or project links open in their desktop apps when installed, with a
 browser fallback when the app is unavailable. Copied links remain web URLs.
 Slack links without a workspace ID use Slack's active workspace.

@@ -64,6 +64,14 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.patch(args.id, args.patch);
 				projectId = disk.require(args.id).projectId;
 				break;
+			case "observeSlackPullRequests":
+				disk.observeSlackPullRequests(args);
+				if (changed) projectId = args.projectId;
+				break;
+			case "completeSlackMission":
+				disk.completeSlackMission(args.projectId, args.missionId, args.completedAt);
+				if (changed) projectId = args.projectId;
+				break;
 			case "retainSlack":
 				disk.retainSlack(args.projectId, args.channels);
 				projectId = args.projectId;

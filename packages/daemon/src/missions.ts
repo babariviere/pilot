@@ -390,6 +390,7 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 export class MissionStore {
 	private readonly db: DatabaseSync;
 	private readonly listeners = new Set<(missionId: string) => void>();
+	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
 	private readonly memberListeners = new Set<(sessionId: string) => void>();
 	private writing = false;
 	private referenceBatch?: string;
@@ -505,6 +506,11 @@ export class MissionStore {
 	onChange(listener: (missionId: string) => void): () => void {
 		this.listeners.add(listener);
 		return () => this.listeners.delete(listener);
+	}
+	/** Only committed transitions to Done, not general activity or startup snapshots. */
+	onCompleted(listener: (projectId: string, missionId: string, at: number) => void): () => void {
+		this.completionListeners.add(listener);
+		return () => this.completionListeners.delete(listener);
 	}
 
 	/** Called after a session joins or leaves a mission, or its mission is deleted. */
@@ -1193,6 +1199,8 @@ export class MissionStore {
 				for (const task of this.tasks(id)) this.reconcileTaskPullRequests(id, task.id);
 		});
 		// Status and coordinator changes alter every member's context.
+		if (next.status === "done" && mission.status !== "done")
+			for (const listener of this.completionListeners) listener(mission.projectId, id, mission.completedAt ?? now);
 		this.changed(id, this.members(id));
 		return this.require(id);
 	}

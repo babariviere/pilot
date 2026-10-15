@@ -34,6 +34,8 @@ export interface SlackTriage {
 	overrides: SlackOverrides;
 	/** Set while Pilot keeps the message dismissed because of this close label. Any status the user sets clears it. */
 	closedByLabel?: string;
+	/** Why a linked work result marked this message Done. Cleared by an explicit user status. */
+	doneReason?: string;
 }
 /** GET /api/tracking/slack/corrections?projectId=... (newest first, at most 20). */
 export interface SlackCorrection {

@@ -128,10 +128,12 @@ public struct SlackTriage: Codable, Equatable, Sendable {
     public let overrides: SlackOverrides
     /// Set while Pilot keeps the message dismissed because of this close label. Any status the user sets clears it.
     public let closedByLabel: String?
+    public let doneReason: String?
     public init(type: SlackMessageType, label: String? = nil, severity: SlackSeverity, status: SlackLocalStatus,
-                overrides: SlackOverrides = .init(), closedByLabel: String? = nil) {
+                overrides: SlackOverrides = .init(), closedByLabel: String? = nil, doneReason: String? = nil) {
         self.type = type; self.label = label; self.severity = severity; self.status = status; self.overrides = overrides
         self.closedByLabel = closedByLabel
+        self.doneReason = doneReason
     }
 }
 public struct SlackCorrection: Codable, Equatable, Sendable {

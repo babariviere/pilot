@@ -109,6 +109,7 @@ enum SlackTriageText {
     /// "Closed · Product" while a close label keeps the message dismissed, else the status.
     static func statusTitle(_ triage: SlackTriage) -> String {
         if triage.status == .dismissed, let label = triage.closedByLabel { return "Closed · \(label)" }
+        if triage.status == .done, let reason = triage.doneReason { return reason }
         return triage.status.title
     }
 
@@ -229,7 +230,8 @@ enum SlackTriageText {
         // A status the user sets replaces a close label's; pilotd confirms any label effect.
         return SlackTriage(type: change.type ?? triage.type, label: label, severity: change.severity ?? triage.severity,
                            status: change.status ?? triage.status, overrides: overrides,
-                           closedByLabel: change.status == nil ? triage.closedByLabel : nil)
+                           closedByLabel: change.status == nil ? triage.closedByLabel : nil,
+                           doneReason: change.status == nil ? triage.doneReason : nil)
     }
 
     /// "#bugs · 2h ago · 7 replies".
@@ -1034,7 +1036,7 @@ private struct SlackTriageCard: View {
                 .fixedSize(horizontal: false, vertical: true)
             TrackedStartText(item: item, text: SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .lineLimit(1)
-            if triage.closedByLabel != nil {
+            if triage.closedByLabel != nil || triage.doneReason != nil {
                 Text(SlackTriageText.statusTitle(triage)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1).help(SlackTriageText.statusTitle(triage))
             }
