@@ -45,17 +45,16 @@ struct CreateMissionSheet: View {
     private var source: SessionSummary? { sourceSessionId.flatMap { client.session($0) } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                Text(source == nil ? "New mission" : "Make a mission").font(.pilot(.body, weight: .semibold))
-                Spacer(minLength: 8)
-                if source == nil {
-                    projectMenu
-                        .disabled(tracked != nil)
-                } else if let name = client.project(source?.projectId)?.name {
-                    Label(name, icon: PilotIcon.project).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-                }
+        SheetScaffold(source == nil ? "New mission" : "Make a mission", error: form.error,
+                      primary: SheetPrimaryAction(title: createTitle, key: .commandReturn, enabled: canCreate, action: create),
+                      width: 500, accessory: {
+            if source == nil {
+                projectMenu
+                    .disabled(tracked != nil)
+            } else if let name = client.project(source?.projectId)?.name {
+                Label(name, icon: PilotIcon.project).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
             }
+        }) {
             if let source {
                 Text("“\(source.title)” joins the mission. Missions group chats of one project around a shared goal, brief and tasks.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
@@ -91,21 +90,8 @@ struct CreateMissionSheet: View {
                     CoordinatorChatFields(projectId: form.projectId, form: $form.chat) { if canCreate { create() } }
                 }
             }
-            if let error = form.error {
-                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button { create() } label: { ShortcutLabel(title: createTitle) }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help("\(createTitle) (⌘↩)")
-                    .disabled(!canCreate)
-            }
         }
         .disabled(form.saving)
-        .padding(20)
-        .frame(width: 500)
         .onAppear(perform: prepare)
     }
 
@@ -215,11 +201,14 @@ struct AddToMissionSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Add to mission").font(.headline)
+        SheetScaffold("Add to mission", error: form.error,
+                      primary: SheetPrimaryAction(title: form.saving ? "Adding…" : "Add",
+                                                  enabled: !form.saving && form.missionId != nil, action: add),
+                      width: 440) {
             if candidates.isEmpty {
                 Text("There are no active missions in this chat's project. Use Make a mission… to start one.")
-                    .font(.callout).foregroundStyle(.secondary)
+                    .font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 Form {
                     Picker("Mission", selection: $form.missionId) {
@@ -233,19 +222,7 @@ struct AddToMissionSheet: View {
                 }
                 .formStyle(.grouped)
             }
-            if let error = form.error {
-                Text(error).font(.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(form.saving ? "Adding…" : "Add") { add() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(form.saving || form.missionId == nil)
-            }
         }
-        .padding(20)
-        .frame(width: 440)
         .onAppear { if form.missionId == nil { form.missionId = candidates.first?.id } }
         .onChange(of: form.missionId) { _, _ in form.taskId = nil }
         .missionSubscription(form.missionId, client: client)
@@ -274,8 +251,10 @@ struct EditMissionSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Edit mission").font(.headline)
+        SheetScaffold("Edit mission", error: form.error,
+                      primary: SheetPrimaryAction(title: form.saving ? "Saving…" : "Save", key: .commandReturn,
+                                                  enabled: canSave, action: save),
+                      width: 480) {
             Form {
                 TextField("Title", text: $form.title).onSubmit { if canSave { save() } }
                 MissionTextArea(prompt: "Goal", text: $form.goal, minLines: 3, maxLines: 8, label: "Goal") {
@@ -283,20 +262,7 @@ struct EditMissionSheet: View {
                 }
             }
             .formStyle(.grouped)
-            if let error = form.error {
-                Text(error).font(.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button { save() } label: { ShortcutLabel(title: form.saving ? "Saving…" : "Save") }
-                    .keyboardShortcut(.return, modifiers: .command)
-                    .help("Save (⌘↩)")
-                    .disabled(!canSave)
-            }
         }
-        .padding(20)
-        .frame(width: 480)
         .onAppear {
             guard !form.prepared, let mission = client.mission(missionId) else { return }
             form.prepared = true
@@ -342,16 +308,5 @@ struct MissionToggleRow: View {
         .toggleStyle(.switch)
         .controlSize(.small)
         .help(detail)
-    }
-}
-
-/// Button title with its Command-Return shortcut, for sheets where Return inserts a newline.
-struct ShortcutLabel: View {
-    let title: String
-    var body: some View {
-        HStack(spacing: 6) {
-            Text(title)
-            Text("⌘↩").font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
-        }
     }
 }

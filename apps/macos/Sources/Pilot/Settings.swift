@@ -293,24 +293,9 @@ struct SettingsPage<Accessory: View, Content: View, Footer: View>: View {
         GeometryReader { proxy in
             let inset = max(0, (proxy.size.width - Theme.settingsColumn) / 2)
             VStack(spacing: 0) {
-                HStack(alignment: .center, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(title)
-                            .font(.pilot(.headline, weight: .semibold))
-                            .foregroundStyle(Theme.foreground)
-                            .lineLimit(1)
-                            .accessibilityAddTraits(.isHeader)
-                        Text(subtitle)
-                            .font(.pilot(.label))
-                            .foregroundStyle(Theme.mutedForeground)
-                            .lineLimit(2)
-                            .textSelection(.enabled)
-                    }
-                    Spacer(minLength: 12)
-                    accessory
-                }
-                .padding(.horizontal, 20 + inset)
-                .padding(.top, 20)
+                PageHeader(title, subtitle: subtitle) { accessory }
+                    .padding(.horizontal, 20 + inset)
+                    .padding(.top, 20)
                 Form { content }
                     .formStyle(.grouped)
                     .scrollContentBackground(.hidden)
@@ -571,9 +556,7 @@ private struct ProjectSettings: View {
             HStack(spacing: 12) {
                 Button("Remove Project…", role: .destructive) { confirmingRemoval = true }
                 if let error = editor.error {
-                    Label(error, icon: PilotIcon.warning)
-                        .font(.pilot(.caption))
-                        .foregroundStyle(Theme.destructive)
+                    InlineProblem(error)
                         .lineLimit(2)
                         .help(error)
                 }

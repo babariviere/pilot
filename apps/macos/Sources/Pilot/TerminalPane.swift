@@ -231,31 +231,22 @@ struct TerminalPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                PilotSymbol(PilotIcon.terminal)
-                Text(session.cwd.abbreviatingHome).font(.caption).lineLimit(1).truncationMode(.head)
-                Spacer()
+            InspectorPaneHeader("Shell", detail: {
+                Text(session.cwd.abbreviatingHome)
+                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                    .lineLimit(1).truncationMode(.head)
+                    .help(session.cwd)
+            }, trailing: {
                 Button {
                     store.restart(session)
                 } label: {
                     PilotSymbol(PilotIcon.refresh, context: .toolbar)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(QuietIconButtonStyle())
                 .disabled(session.state == "starting")
                 .help("Restart shell")
-                Button {
-                    AppModel.shared.inspectorVisible = false
-                } label: {
-                    PilotSymbol(PilotIcon.dismiss, context: .toolbar)
-                }
-                .buttonStyle(.borderless)
-                .help("Hide terminal (⌘J)")
-            }
-            .foregroundStyle(Theme.mutedForeground)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Theme.sidebar)
-            Rectangle().fill(Theme.border).frame(height: 1)
+                .accessibilityLabel("Restart shell")
+            })
             ZStack {
                 ForEach(store.order, id: \.self) { id in
                     if let state = store.states[id] {
@@ -298,9 +289,8 @@ private struct ExitedPlaceholder: View {
     let restart: () -> Void
 
     var body: some View {
-        VStack(spacing: 10) {
-            PilotSymbol(PilotIcon.terminal, context: .emptyState).foregroundStyle(Theme.faintForeground)
-            Text("Shell exited").font(.callout).foregroundStyle(Theme.mutedForeground)
+        EmptyStateView(icon: PilotIcon.terminal, title: "Shell exited",
+                       message: "Restart the shell to run commands in this chat's workspace.") {
             Button("Restart Shell", action: restart)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

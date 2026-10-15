@@ -134,7 +134,7 @@ struct MissionLinksSection: View {
         return VStack(alignment: .leading, spacing: 8) {
             Button { disclosure.otherExpanded = !expanded } label: {
                 HStack(spacing: 6) {
-                    PilotSymbol(expanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 10)
+                    DisclosureChevron(expanded: expanded).frame(width: 10)
                     Text("Other links").font(.pilot(.label, weight: .medium)).foregroundStyle(Theme.mutedForeground)
                     Text("\(links.count)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     Spacer(minLength: 0)
@@ -188,14 +188,10 @@ struct MissionLinksSection: View {
             }
         }
         if links.count > Self.collapsedLimit {
-            Button {
-                if expanded { disclosure.expanded.remove(list) } else { disclosure.expanded.insert(list) }
-            } label: {
-                Text(expanded ? "Show fewer" : "Show all \(links.count)\(noun)")
-                    .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            ListToggle(total: links.count, expanded: Binding(
+                get: { disclosure.expanded.contains(list) },
+                set: { if $0 { disclosure.expanded.insert(list) } else { disclosure.expanded.remove(list) } }
+            ), noun: noun.isEmpty ? nil : noun.trimmingCharacters(in: .whitespaces))
             .padding(.leading, 8).padding(.top, 4)
         }
     }
@@ -277,10 +273,7 @@ struct MissionLinkRow: View, Equatable {
                     .lineLimit(1).frame(width: 64, alignment: .leading)
                 Text(link.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                 if link.isDraft {
-                    Text("Draft").font(.pilot(.small, weight: .medium)).foregroundStyle(Theme.mutedForeground)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Capsule().fill(Theme.muted))
-                        .fixedSize()
+                    MetaText("Draft")
                 }
                 Spacer(minLength: 8)
                 if let number = link.taskNumber {

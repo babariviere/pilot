@@ -495,14 +495,14 @@ struct TrackedItemRow: View {
                             // A start error leads the meta line, so it never truncates away or shifts the row.
                             Group {
                                 if let startError {
-                                    Text("\(Text(verbatim: "\(startError) · ").foregroundColor(Theme.blocked))\(subtitle)")
+                                    Text("\(Text(verbatim: "\(startError) · ").foregroundColor(Theme.error))\(subtitle)")
                                 } else {
                                     Text(verbatim: subtitle)
                                 }
                             }
                             .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                             if let error = actions.errors[item.id] {
-                                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.blocked).lineLimit(2)
+                                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.error).lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
@@ -697,14 +697,15 @@ struct TrackedSourceStatusLine: View {
             case .attention:
                 PilotSymbol(source.status == .signInRequired ? PilotIcon.signInRequired
                     : PilotIcon.warning)
-                    .foregroundStyle(Theme.blocked).accessibilityHidden(true)
+                    .foregroundStyle(source.status == .signInRequired ? Theme.blocked : Theme.error)
+                    .accessibilityHidden(true)
             case .quiet: EmptyView()
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(line.text).foregroundStyle(line.tone == .attention ? Theme.foreground : Theme.faintForeground)
                     .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 if let error = problem {
-                    Text(error).foregroundStyle(Theme.blocked).lineLimit(2)
+                    Text(error).foregroundStyle(Theme.error).lineLimit(2)
                 }
             }
             Spacer(minLength: 8)
@@ -815,8 +816,7 @@ struct LinearIssueGroups: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Button { withAnimation(Theme.Motion.quick) { showDone.toggle() } } label: {
                         HStack(spacing: 5) {
-                            PilotSymbol(PilotIcon.disclosure, context: .disclosure)
-                                .rotationEffect(.degrees(showDone ? 90 : 0))
+                            DisclosureChevron(expanded: showDone, tint: Theme.mutedForeground)
                             Text(TrackedItemText.LinearGroup.done.title).font(.pilot(.label, weight: .medium))
                             CountBadge(count: doneCount)
                         }
@@ -957,26 +957,17 @@ struct TrackedInboxSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("\(project.name) · \(title)").font(.pilot(.title))
-                    .foregroundStyle(Theme.foreground).lineLimit(1)
-                Spacer(minLength: 8)
-                Button("Linear and Slack Settings…") { finish(openSettings) }
-                    .buttonStyle(.plain).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-            }
+        SheetScaffold(title, subtitle: project.name, cancel: { finish {} }, width: nil, fillsHeight: true, accessory: {
+            Button("Linear and Slack Settings…") { finish(openSettings) }
+                .buttonStyle(.plain).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
+        }, content: {
             content
-            HStack {
-                if !sources.isEmpty {
-                    Toggle("Show dismissed", isOn: $inbox.dismissed).toggleStyle(.checkbox).font(.pilot(.label))
-                }
-                Spacer()
-                Button("Done") { finish {} }.keyboardShortcut(.cancelAction)
+        }, footerLeading: {
+            if !sources.isEmpty {
+                Toggle("Show dismissed", isOn: $inbox.dismissed).toggleStyle(.checkbox).font(.pilot(.label))
             }
-        }
-        .padding(24)
+        })
         .frame(minWidth: 600, idealWidth: 680, minHeight: 480, idealHeight: 640)
-        .background(Theme.background)
         .onAppear {
             actions.present = finish
             inbox.start(client: client)

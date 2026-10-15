@@ -362,11 +362,8 @@ struct HomeOverview: View {
     }
 
     private func listToggle(count: Int, expanded: Binding<Bool>) -> some View {
-        Button(expanded.wrappedValue ? "Show fewer" : "Show all \(count)") {
-            expanded.wrappedValue.toggle()
-        }
-        .buttonStyle(.plain).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-        .padding(.leading, 8)
+        ListToggle(total: count, expanded: expanded)
+            .padding(.leading, 8)
     }
 }
 

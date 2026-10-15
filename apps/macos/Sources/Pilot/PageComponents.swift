@@ -164,7 +164,9 @@ struct QuoteBlock<Content: View>: View {
 }
 
 /// Centered empty state: a faint symbol, a short title, one sentence and the obvious next actions.
-/// Use it where a whole pane or section is empty; use a single quiet line inside busy pages.
+/// Use it where a whole pane, page or section is empty or failed to load (the warning symbol, the error as the
+/// message and a "Retry" action); use a single quiet line inside busy pages. Panes add `.frame(maxHeight: .infinity)`
+/// to centre it. Never tint the symbol: the state is in the words.
 struct EmptyStateView<Actions: View>: View {
     let icon: PilotIcon
     let title: String
@@ -186,6 +188,7 @@ struct EmptyStateView<Actions: View>: View {
             Text(message).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                 .multilineTextAlignment(.center).frame(maxWidth: 320)
                 .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
             HStack(spacing: 8) { actions() }.padding(.top, 4)
         }
         .frame(maxWidth: .infinity)
@@ -212,5 +215,277 @@ struct ComposerTray<Editor: View, Controls: View>: View {
         }
         .padding(6)
         .background(RoundedRectangle(cornerRadius: Theme.Radius.tray).fill(Theme.tray))
+    }
+}
+
+// MARK: - Page and sheet chrome
+
+/// Header of a page or sheet: a 15 pt semibold title, an optional muted subtitle and a trailing accessory (a
+/// status, a menu or one quiet action). Settings pages, Archived chats and every `SheetScaffold` use it, so
+/// titles share one style. Titles use sentence case ("Edit schedule", "Rename chat").
+struct PageHeader<Accessory: View>: View {
+    let title: String
+    var subtitle: String?
+    @ViewBuilder var accessory: () -> Accessory
+
+    init(_ title: String, subtitle: String? = nil, @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() }) {
+        self.title = title
+        self.subtitle = subtitle
+        self.accessory = accessory
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.pilot(.headline, weight: .semibold))
+                    .foregroundStyle(Theme.foreground)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.pilot(.label))
+                        .foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 12)
+            accessory()
+        }
+    }
+}
+
+/// How the keyboard confirms a sheet's primary button.
+enum SheetConfirmKey {
+    /// ↩, for forms made of single-line fields.
+    case `return`
+    /// ⌘↩, for forms with a multi-line editor, where ↩ inserts a newline. The button shows the shortcut.
+    case commandReturn
+}
+
+/// The primary button of a `SheetScaffold`, on the right of the footer after Cancel.
+struct SheetPrimaryAction {
+    let title: String
+    var key: SheetConfirmKey = .return
+    var enabled = true
+    let action: () -> Void
+}
+
+/// The one sheet layout: a `PageHeader` (sentence-case title, optional subtitle and accessory), the content, an
+/// inline error slot (`InlineProblem`) and a footer pinned to the bottom with optional leading controls, then Cancel
+/// and the primary action on the right. Esc cancels. The primary confirms with ↩ for single-line forms and ⌘↩ when
+/// the form holds a multi-line editor (`SheetConfirmKey`). Without a primary action the footer has a single Done.
+struct SheetScaffold<Accessory: View, Content: View, FooterLeading: View>: View {
+    let title: String
+    var subtitle: String?
+    var error: String?
+    var primary: SheetPrimaryAction?
+    /// Defaults to "Cancel" beside a primary action and "Done" alone.
+    var cancelTitle: String?
+    /// Defaults to dismissing the sheet.
+    var cancel: (() -> Void)?
+    /// Fixed width for forms. Nil lets the caller size browsing sheets with min and ideal frames.
+    var width: CGFloat?
+    /// Browsing sheets with scrolling content fill their height, so the footer stays at the bottom.
+    var fillsHeight = false
+    @ViewBuilder var accessory: () -> Accessory
+    @ViewBuilder var content: () -> Content
+    @ViewBuilder var footerLeading: () -> FooterLeading
+    @Environment(\.dismiss) private var dismiss
+
+    init(_ title: String, subtitle: String? = nil, error: String? = nil, primary: SheetPrimaryAction? = nil,
+         cancelTitle: String? = nil, cancel: (() -> Void)? = nil, width: CGFloat? = 420, fillsHeight: Bool = false,
+         @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() },
+         @ViewBuilder content: @escaping () -> Content,
+         @ViewBuilder footerLeading: @escaping () -> FooterLeading = { EmptyView() }) {
+        self.title = title
+        self.subtitle = subtitle
+        self.error = error
+        self.primary = primary
+        self.cancelTitle = cancelTitle
+        self.cancel = cancel
+        self.width = width
+        self.fillsHeight = fillsHeight
+        self.accessory = accessory
+        self.content = content
+        self.footerLeading = footerLeading
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PageHeader(title, subtitle: subtitle, accessory: accessory)
+                .padding(.horizontal, 20)
+                .padding(.top, 20)
+                .padding(.bottom, 14)
+            VStack(alignment: .leading, spacing: 14) { content() }
+                .padding(.horizontal, 20)
+                .frame(maxWidth: .infinity, maxHeight: fillsHeight ? .infinity : nil, alignment: .topLeading)
+            if let error, !error.isEmpty {
+                InlineProblem(error)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: 8) {
+                footerLeading()
+                Spacer(minLength: 8)
+                Button(cancelTitle ?? (primary == nil ? "Done" : "Cancel")) { (cancel ?? { dismiss() })() }
+                    .keyboardShortcut(.cancelAction)
+                if let primary { primaryButton(primary) }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 20)
+        }
+        .frame(width: width)
+        .background(Theme.background)
+    }
+
+    @ViewBuilder private func primaryButton(_ primary: SheetPrimaryAction) -> some View {
+        switch primary.key {
+        case .return:
+            Button(primary.title, action: primary.action)
+                .keyboardShortcut(.defaultAction)
+                .disabled(!primary.enabled)
+        case .commandReturn:
+            Button(action: primary.action) { ShortcutLabel(title: primary.title) }
+                .keyboardShortcut(.return, modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .help("\(primary.title) (⌘↩)")
+                .disabled(!primary.enabled)
+        }
+    }
+}
+
+/// Button title with its Command-Return shortcut, for sheets where Return inserts a newline.
+struct ShortcutLabel: View {
+    let title: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+            Text("⌘↩").font(.pilot(.caption)).opacity(0.7)
+        }
+    }
+}
+
+/// Header of an inspector pane (Changes, Terminal, Agents, Artifacts, Links): its title or count, optional quiet
+/// detail, an optional trailing control (such as refresh, in `QuietIconButtonStyle`) and a hairline below. The
+/// inspector's tab bar hides the whole inspector, so panes never add their own close button.
+struct InspectorPaneHeader<Detail: View, Trailing: View>: View {
+    let title: String
+    @ViewBuilder var detail: () -> Detail
+    @ViewBuilder var trailing: () -> Trailing
+
+    init(_ title: String, @ViewBuilder detail: @escaping () -> Detail = { EmptyView() },
+         @ViewBuilder trailing: @escaping () -> Trailing = { EmptyView() }) {
+        self.title = title
+        self.detail = detail
+        self.trailing = trailing
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.pilot(.label, weight: .medium))
+                    .foregroundStyle(Theme.foreground)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                detail()
+                Spacer(minLength: 8)
+                trailing()
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 32)
+            HairlineDivider()
+        }
+    }
+}
+
+/// A problem shown in place: an error triangle, the message in muted text and an optional Retry. Use it for failed
+/// loads, saves and lookups beside what failed, keeping the last data visible. The triangle uses `Theme.error`,
+/// never amber, and the action is always "Retry". A whole pane that failed uses `EmptyStateView` with the
+/// warning symbol and the same Retry.
+struct InlineProblem: View {
+    let message: String
+    var retrying = false
+    var retry: (() -> Void)?
+
+    init(_ message: String, retrying: Bool = false, retry: (() -> Void)? = nil) {
+        self.message = message
+        self.retrying = retrying
+        self.retry = retry
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            PilotSymbol(PilotIcon.warning)
+                .foregroundStyle(Theme.error)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.pilot(.caption))
+                .foregroundStyle(Theme.mutedForeground)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("Error: \(message)")
+            if let retry {
+                Button("Retry", action: retry)
+                    .controlSize(.small)
+                    .disabled(retrying)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// The chevron of a disclosure: points right when closed and down when open. Callers animate the change
+/// (`Theme.Motion.quick`) and label the button that holds it with what it shows or hides.
+struct DisclosureChevron: View {
+    let expanded: Bool
+    var tint: Color = Theme.faintForeground
+
+    var body: some View {
+        PilotSymbol(PilotIcon.disclosure, context: .disclosure)
+            .foregroundStyle(tint)
+            .rotationEffect(.degrees(expanded ? 90 : 0))
+            .accessibilityHidden(true)
+    }
+}
+
+/// "Show all N" / "Show fewer" under a bounded list that expands in place. A line that opens a full list somewhere
+/// else names where it goes instead.
+struct ListToggle: View {
+    let total: Int
+    @Binding var expanded: Bool
+    /// Optional noun after the count, such as "merged" in "Show all 12 merged".
+    var noun: String? = nil
+
+    var body: some View {
+        Button { expanded.toggle() } label: {
+            Text(expanded ? "Show fewer" : ["Show all \(total)", noun].compactMap { $0 }.joined(separator: " "))
+                .font(.pilot(.caption))
+                .foregroundStyle(Theme.mutedForeground)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+/// Quiet metadata in a byline or row, such as a decision's audience, "Draft" or "Suggested": muted caption text with
+/// no capsule. Capsules and badges are reserved for signals and counts.
+struct MetaText: View {
+    let text: String
+
+    init(_ text: String) {
+        self.text = text
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.pilot(.caption))
+            .foregroundStyle(Theme.mutedForeground)
+            .lineLimit(1)
+            .fixedSize()
     }
 }

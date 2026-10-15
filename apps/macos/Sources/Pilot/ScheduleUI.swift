@@ -195,8 +195,8 @@ struct ScheduleSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(title).font(.headline)
+        SheetScaffold(title, error: error,
+                      primary: SheetPrimaryAction(title: saving ? "Saving…" : confirmTitle, enabled: canSave, action: save)) {
             Form {
                 Section {
                     Picker("Start", selection: $trigger) {
@@ -213,19 +213,7 @@ struct ScheduleSheet: View {
                 }
             }
             .formStyle(.grouped)
-            if let error {
-                Text(error).font(.callout).foregroundStyle(Theme.destructive).textSelection(.enabled)
-            }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(saving ? "Saving…" : confirmTitle, action: save)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!canSave)
-            }
         }
-        .padding(20)
-        .frame(width: 420)
     }
 
     private func save() {

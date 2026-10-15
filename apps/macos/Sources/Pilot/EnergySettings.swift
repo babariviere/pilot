@@ -82,8 +82,7 @@ struct EnergySettingsContent: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let message = error ?? status.error {
-                Text(message).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
-                    .textSelection(.enabled).accessibilityLabel("Energy settings error: \(message)")
+                InlineProblem(message)
             }
         }
     }

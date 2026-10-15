@@ -362,15 +362,10 @@ private struct DaemonProblem: View {
     @ObservedObject private var daemon = AppModel.shared.daemon
 
     var body: some View {
-        VStack(spacing: 12) {
-            PilotSymbol(PilotIcon.warning, context: .emptyState).foregroundStyle(.orange)
-            Text(message).multilineTextAlignment(.center).textSelection(.enabled)
-            HStack {
-                Button("Start pilotd") { Task { await daemon.restart() } }
-                Button("Open Log") { NSWorkspace.shared.open(daemon.logURL) }
-            }
+        EmptyStateView(icon: PilotIcon.warning, title: "pilotd isn't running", message: message) {
+            Button("Start pilotd") { Task { await daemon.restart() } }
+            Button("Open Log") { NSWorkspace.shared.open(daemon.logURL) }
         }
-        .padding()
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

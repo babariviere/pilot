@@ -29,8 +29,7 @@ struct JobsPanel: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             Divider().opacity(0.5)
             if let error {
-                Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
-                    .textSelection(.enabled).lineLimit(3)
+                InlineProblem(error)
                     .padding(.horizontal, 12).padding(.top, 8)
             }
             if jobs.isEmpty {
@@ -65,7 +64,7 @@ struct JobsPanel: View {
                     if isExpanded { expanded.remove(job.id) } else { expanded.insert(job.id) }
                 } label: {
                     HStack(spacing: 8) {
-                        PilotSymbol(isExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 10)
+                        DisclosureChevron(expanded: isExpanded).frame(width: 10)
                         Text(job.name).font(.pilot(.label)).lineLimit(1)
                         Spacer(minLength: 8)
                         TimelineView(JobElapsedSchedule(startedAt: job.startedAt)) { context in

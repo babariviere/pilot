@@ -359,29 +359,27 @@ struct SubagentsPane: View {
     var body: some View {
         let subagents = session.subagents ?? []
         if subagents.isEmpty {
-            VStack(spacing: 8) {
-                PilotSymbol(PilotIcon.subagents, context: .emptyState).foregroundStyle(Theme.faintForeground)
-                Text("No subagents").font(.pilot(.body, weight: .medium))
-                Text("Subagents this chat starts appear here, with their transcripts.")
-                    .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            EmptyStateView(icon: PilotIcon.subagents, title: "No subagents",
+                           message: "Subagents this chat starts appear here, with their transcripts.")
+                .padding(.horizontal, 16)
+                .frame(maxHeight: .infinity)
         } else {
             let selected = subagents.first { $0.name == model.selectedSubagents[session.id] } ?? subagents[0]
-            HStack(spacing: 0) {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(subagents) { subagent in row(subagent, selected: subagent.name == selected.name) }
+            VStack(spacing: 0) {
+                InspectorPaneHeader("\(subagents.count) subagent\(subagents.count == 1 ? "" : "s")")
+                HStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(subagents) { subagent in row(subagent, selected: subagent.name == selected.name) }
+                        }
+                        .padding(6)
                     }
-                    .padding(6)
+                    .frame(width: 170)
+                    .background(Theme.sidebar)
+                    Rectangle().fill(Theme.border).frame(width: 1)
+                    SubagentDetail(session: session, subagent: selected)
+                        .id(selected.name)
                 }
-                .frame(width: 170)
-                .background(Theme.sidebar)
-                Rectangle().fill(Theme.border).frame(width: 1)
-                SubagentDetail(session: session, subagent: selected)
-                    .id(selected.name)
             }
         }
     }

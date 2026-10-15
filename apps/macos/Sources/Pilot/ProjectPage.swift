@@ -452,8 +452,7 @@ private struct ProjectFullListSheet: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("\(project.name) · \(list.title)").font(.pilot(.title)).foregroundStyle(Theme.foreground)
+        SheetScaffold(list.title, subtitle: project.name, width: nil, fillsHeight: true) {
             if let dashboard {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
@@ -485,15 +484,15 @@ private struct ProjectFullListSheet: View {
                     }
                 }
             } else if let error {
-                ContentUnavailableView("Couldn't load this list", systemImage: PilotIcon.warning.systemName!, description: Text(error))
-                Button("Retry", action: retry)
+                EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load this list", message: error) {
+                    Button("Retry", action: retry)
+                }
+                .frame(maxHeight: .infinity)
             } else {
                 ProgressView("Loading…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(24)
         .frame(minWidth: 560, minHeight: 420)
-        .background(Theme.background)
     }
 
     @ViewBuilder private func capNote(_ total: Int, _ count: Int) -> some View {
@@ -514,7 +513,7 @@ struct ProjectRefreshBanner: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             HStack(spacing: 10) {
-                PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.warning).frame(width: 16)
+                PilotSymbol(PilotIcon.warning).foregroundStyle(Theme.error).frame(width: 16)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Couldn't refresh this project").font(.pilot(.body)).foregroundStyle(Theme.foreground)

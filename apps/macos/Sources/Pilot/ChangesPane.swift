@@ -63,7 +63,6 @@ struct ChangesPane: View {
             ChangesRepositoryContext(session: session, changes: model.changes)
             Rectangle().fill(Theme.border).frame(height: 1)
             header
-            Rectangle().fill(Theme.border).frame(height: 1)
             content
         }
         .background(Theme.background)
@@ -78,37 +77,38 @@ struct ChangesPane: View {
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        let title = model.changes.map { changes in
+            changes.files.isEmpty ? "No changes" : "\(changes.files.count) file\(changes.files.count == 1 ? "" : "s")"
+        } ?? "Changes"
+        return InspectorPaneHeader(title, detail: {
             if let changes = model.changes {
-                Text(changes.files.isEmpty ? "No changes" : "\(changes.files.count) file\(changes.files.count == 1 ? "" : "s")")
-                    .font(.pilot(.label, weight: .medium))
                 DiffStat(
                     additions: changes.files.reduce(0) { $0 + $1.additions },
                     deletions: changes.files.reduce(0) { $0 + $1.deletions }
                 )
                 Text("since \(changes.base)").font(.pilot(.small)).foregroundStyle(Theme.faintForeground)
                     .lineLimit(1).truncationMode(.middle).help("Changes since \(changes.base)")
-            } else {
-                Text("Changes").font(.pilot(.label, weight: .medium))
             }
-            Spacer()
+        }, trailing: {
             if model.loading { ProgressView().controlSize(.mini) }
             Button { Task { await model.load() } } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
-                .buttonStyle(.borderless)
+                .buttonStyle(QuietIconButtonStyle())
                 .help("Refresh")
-        }
-        .foregroundStyle(Theme.foreground)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+                .accessibilityLabel("Refresh changes")
+        })
     }
 
     @ViewBuilder private var content: some View {
         if session.state == "starting", model.changes == nil {
             ProgressView("Preparing task…").frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if let error = model.error, model.changes == nil {
-            placeholder(icon: PilotIcon.warning, text: error)
+            EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load changes", message: error) {
+                Button("Retry") { Task { await model.load() } }
+            }
+            .frame(maxHeight: .infinity)
         } else if let changes = model.changes, changes.files.isEmpty {
-            placeholder(icon: PilotIcon.complete, text: "The working copy matches \(changes.base).")
+            EmptyStateView(icon: PilotIcon.complete, title: "No changes", message: "The working copy matches \(changes.base).")
+                .frame(maxHeight: .infinity)
         } else if let changes = model.changes {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
@@ -131,15 +131,6 @@ struct ChangesPane: View {
         } else {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-    }
-
-    private func placeholder(icon: PilotIcon, text: String) -> some View {
-        VStack(spacing: 8) {
-            PilotSymbol(icon, context: .emptyState).foregroundStyle(Theme.faintForeground)
-            Text(text).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground).multilineTextAlignment(.center)
-        }
-        .padding()
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
@@ -677,9 +668,7 @@ private struct FileRow: View {
     var body: some View {
         Button(action: toggle) {
             HStack(spacing: 8) {
-                PilotSymbol(PilotIcon.disclosure, context: .disclosure)
-                    .foregroundStyle(Theme.faintForeground)
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                DisclosureChevron(expanded: expanded)
                 Text(letter)
                     .font(.pilot(.small, weight: .bold, design: .monospaced))
                     .foregroundStyle(color)
