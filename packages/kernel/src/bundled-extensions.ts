@@ -1,6 +1,11 @@
 /** Required, pinned extensions, loaded through Pi's TypeScript extension loader, not Node imports. */
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { PILOT_EXTENSION_NAMES, PILOT_PROFILE_PATH, PILOT_WEB_PATH } from "@babariviere/pi-extensions/profile";
+import {
+	PILOT_CHILD_PROFILE_PATH,
+	PILOT_EXTENSION_NAMES,
+	PILOT_PROFILE_PATH,
+	PILOT_WEB_PATH,
+} from "@babariviere/pi-extensions/profile";
 import { EmbeddedResourceLoader } from "@babariviere/pi-extensions/resource-loader";
 import {
 	DefaultResourceLoader,
@@ -11,6 +16,9 @@ import {
 
 export const ANTHROPIC_AUTH_PATH = fileURLToPath(import.meta.resolve("@gotgenes/pi-anthropic-auth/src/index.ts"));
 export const CHILD_PROFILE_PATH = fileURLToPath(new URL("./child-profile.ts", import.meta.url));
+export const CHILD_WORKER_ENTRY = fileURLToPath(
+	new URL("../extensions/subagents/worker-bootstrap.mjs", pathToFileURL(PILOT_CHILD_PROFILE_PATH)),
+);
 // Select individual entries before importing. Upstream aggregate profiles import file-backed todos.
 const PROFILE_PATHS = PILOT_EXTENSION_NAMES.filter((name) => name !== "todos").map((name) =>
 	fileURLToPath(new URL(`../extensions/${name}/index.ts`, pathToFileURL(PILOT_PROFILE_PATH))),

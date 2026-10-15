@@ -30,6 +30,8 @@ export interface KernelSubagent extends SessionSubagent {
 export interface KernelSpec {
 	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
 	credentials?: CredentialEndpoint;
+	/** Host-resolved trust for read-only Linux configuration; never a writable trust-store exception. */
+	projectTrusted?: boolean;
 	/** Pilot session ID, reused as the native session ID. */
 	sessionId: string;
 	/** Project identity attached to published artifacts. */

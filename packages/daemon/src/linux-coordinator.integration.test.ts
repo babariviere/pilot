@@ -8,7 +8,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { type KernelSpec, workerEntry } from "@pilot/kernel";
+import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, CHILD_WORKER_ENTRY } from "@pilot/kernel/bundled-extensions";
 import { CredentialBroker } from "./credential-broker.ts";
 import {
 	forkLinuxCoordinator,
@@ -307,7 +309,7 @@ test("real Linux kernel opens durable storage and native resources only after bo
 		join(agentDir, "fixture.ts"),
 		`
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
-export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssistantMessage('isolated kernel')]); pi.registerProvider(faux.provider); };
+export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssistantMessage('isolated kernel')]); pi.registerProvider({...faux.provider,auth:{oauth:{name:'Broker fixture',login:async()=>{throw Error('No login')},refresh:async current=>({...current,access:'child-broker',expires:Date.now()+3600000}),toAuth:async current=>({apiKey:current.access})}}}); };
 `,
 	);
 	await writeFile(
@@ -318,11 +320,17 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 			defaultModel: "faux-1",
 		}),
 	);
+	await writeFile(
+		join(agentDir, "auth.json"),
+		JSON.stringify({ faux: { type: "oauth", access: "expired", refresh: "grant", expires: 0 } }),
+		{ mode: 0o600 },
+	);
 	const broker = new CredentialBroker(agentDir);
 	await broker.start();
 	const credentials = broker.grant();
 	const spec: KernelSpec = {
 		credentials,
+		projectTrusted: false,
 		sessionId: randomUUID(),
 		storageDir: join(root, "session", "durable"),
 		cwd: scratch,
@@ -333,6 +341,8 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 	const offline = process.env.PI_OFFLINE;
 	process.env.PI_OFFLINE = "1";
 	let worker: Worker | undefined;
+	let subagent: import("node:child_process").ChildProcess | undefined;
+	let subagentExit: Promise<unknown> | undefined;
 	try {
 		const child = await forkMainViewWorker(fileURLToPath(workerEntry), spec.pilot!.coordinatorView!, {
 			storageDir: spec.storageDir,
@@ -350,10 +360,87 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 		assert.equal(worker.state, "idle");
 		await worker.request({ type: "activity", requestId: randomUUID(), text: "Sandbox opened" });
 		assert.ok((await readFile(join(spec.storageDir, "harness.sqlite"))).length > 0);
+		await worker.close();
+		// Exercise the actual immutable child adapter, not just a generic descendant script. Any
+		// unbrokered SDK refresh would fail its auth.json write in this read-only mount namespace.
+		const childEnvironment = {
+			PI_CODE_MODE_SUBAGENT: "1",
+			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
+			PI_CODING_AGENT_DIR: agentDir,
+			PILOT_PI_EXTENSIONS_PROFILE: CHILD_PROFILE_PATH,
+			PILOT_ANTHROPIC_AUTH_EXTENSION: ANTHROPIC_AUTH_PATH,
+		};
+		const old = Object.fromEntries(Object.keys(childEnvironment).map((key) => [key, process.env[key]]));
+		try {
+			Object.assign(process.env, childEnvironment);
+			subagent = await forkMainViewWorker(CHILD_WORKER_ENTRY, spec.pilot!.coordinatorView!, {
+				storageDir: spec.storageDir,
+				agentDir,
+				credentials,
+			});
+		} finally {
+			for (const [key, value] of Object.entries(old)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+		subagentExit = once(subagent, "exit");
+		const packets: Array<{ type: string; id?: string; result?: { ok?: boolean }; error?: string }> = [];
+		const listeners = new Set<() => void>();
+		subagent.on("message", (value) => {
+			const message = value as (typeof packets)[number];
+			if (["ready", "answer", "error", "paused"].includes(message.type)) packets.push(message);
+			for (const notify of listeners) notify();
+		});
+		const packet = (type: string) =>
+			new Promise<(typeof packets)[number]>((resolve, reject) => {
+				const timer = setTimeout(() => {
+					listeners.delete(check);
+					reject(new Error("Child broker fixture did not answer"));
+				}, 20000);
+				const check = () => {
+					const found = packets.find((p) => p.type === type || p.type === "error");
+					if (!found) return;
+					clearTimeout(timer);
+					listeners.delete(check);
+					found.type === "error" ? reject(new Error(found.error ?? "Child failed")) : resolve(found);
+				};
+				listeners.add(check);
+				check();
+			});
+		subagent.send({
+			type: "start",
+			spec: {
+				name: "broker-child",
+				directory: join(spec.storageDir, "child"),
+				request: {
+					agent: { config: { name: "task" }, systemPrompt: "", sourcePath: "<builtin>", scope: "builtin" },
+					task: "Reply",
+					index: 0,
+					overrides: { model: "faux/faux-1" },
+				},
+				context: {
+					cwd: scratch,
+					sessionId: spec.sessionId,
+					runId: "broker-child",
+					timeoutMs: 20000,
+					projectTrusted: false,
+				},
+			},
+		});
+		await packet("ready");
+		subagent.send({ type: "input", id: "auth", message: "Reply", followUp: false });
+		assert.equal((await packet("answer")).result?.ok, true);
+		assert.equal(JSON.parse(await readFile(join(agentDir, "auth.json"), "utf8")).faux.access, "child-broker");
+		subagent.send({ type: "pause" });
+		await packet("paused");
+		await subagentExit;
 	} finally {
 		if (offline === undefined) delete process.env.PI_OFFLINE;
 		else process.env.PI_OFFLINE = offline;
 		await worker?.close();
+		if (subagent?.exitCode === null && subagent?.signalCode === null) subagent.kill("SIGKILL");
+		await subagentExit;
 		await broker.close();
 		await rm(root, { recursive: true, force: true });
 	}

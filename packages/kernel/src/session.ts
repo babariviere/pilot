@@ -382,6 +382,7 @@ export class KernelSession {
 				ask: spec.pilot?.ask,
 				agentDir: spec.agentDir,
 				trustDirectory: spec.trustDirectory,
+				projectTrusted: spec.projectTrusted,
 				sessionId: spec.sessionId,
 				sessionFile: join(spec.storageDir, "native.session"),
 				onUsageChanged: hooks.onUsageChanged,
