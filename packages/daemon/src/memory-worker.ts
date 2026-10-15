@@ -82,6 +82,9 @@ if (workerData.recall) {
 				case "zoom":
 					value = store.zoom(args.lo, args.hi);
 					break;
+				case "tree":
+					value = store.tree(args);
+					break;
 				case "forget":
 					store.forget(args.lo, args.hi);
 					value = { ok: true };

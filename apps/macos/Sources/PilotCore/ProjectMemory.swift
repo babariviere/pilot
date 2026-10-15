@@ -51,6 +51,38 @@ public struct MemoryView: Codable, Equatable, Sendable {
     }
 }
 
+/// One node of the memory tree as people browse it, newest first. A summary of more than 16 notes splits into its
+/// two halves; one of 16 or fewer lists its notes. `children` is nil when not loaded; with reveal it holds only the
+/// paths to the revealed notes.
+public struct MemoryTreeNode: Codable, Equatable, Sendable {
+    public let lo: Int
+    public let hi: Int
+    public let text: String?
+    public let entry: MemoryEntry?
+    public let pending: Bool?
+    public let replaced: Bool?
+    public let children: [MemoryTreeNode]?
+    public init(lo: Int, hi: Int, text: String? = nil, entry: MemoryEntry? = nil, pending: Bool? = nil,
+                replaced: Bool? = nil, children: [MemoryTreeNode]? = nil) {
+        self.lo = lo; self.hi = hi; self.text = text; self.entry = entry; self.pending = pending
+        self.replaced = replaced; self.children = children
+    }
+
+    /// The node without its children.
+    public var node: MemoryNode { MemoryNode(lo: lo, hi: hi, text: text, entry: entry, pending: pending, replaced: replaced) }
+}
+
+public struct MemoryTree: Codable, Equatable, Sendable {
+    public let count: Int
+    /// The top-level blocks, or the requested range's children, newest first.
+    public let nodes: [MemoryTreeNode]
+    /// pilotd's node limit stopped expansion early; nodes without children load on request.
+    public let truncated: Bool
+    public init(count: Int, nodes: [MemoryTreeNode], truncated: Bool = false) {
+        self.count = count; self.nodes = nodes; self.truncated = truncated
+    }
+}
+
 public struct MemoryRecall: Codable, Equatable, Sendable {
     public let count: Int
     public let matches: Int

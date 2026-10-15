@@ -135,6 +135,13 @@ struct CommandPaletteCatalog {
                 icon: .overview, suffix: project.name
             ) { [model] in model.showOverview(project.id) })
         }
+        for project in projects.filter({ $0.id == focused }) + projects.filter({ $0.id != focused }) {
+            entries.append(CommandPaletteEntry(
+                item: CommandPaletteItem(id: "page:memory:\(project.id)", kind: .page, title: "Memory",
+                                         keywords: [project.name, "notes", "summaries"]),
+                icon: .memory, suffix: project.name
+            ) { [model] in model.showMemory(project.id) })
+        }
         entries.append(CommandPaletteEntry(item: CommandPaletteItem(id: "page:archive", kind: .page, title: "Archive"),
                                            icon: .archive) { [model] in model.showArchive(in: model.focusedProject?.id) })
         entries.append(CommandPaletteEntry(item: CommandPaletteItem(id: "page:settings", kind: .page, title: "Settings"),
@@ -239,6 +246,12 @@ extension AppModel {
     func showOverview(_ projectId: String) {
         if let scope = sidebarScope, scope != projectId { focus(on: projectId) }
         openProject(projectId)
+    }
+
+    /// A project's Memory page, focusing the sidebar on that project when another one is focused.
+    func showMemory(_ projectId: String) {
+        if let scope = sidebarScope, scope != projectId { focus(on: projectId) }
+        openMemory(projectId)
     }
 }
 

@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { Conflict } from "./errors.ts";
 import { captureMemory, type MemoryCompactionTrace } from "./memory-compaction.ts";
 import { cover } from "./memory-cover.ts";
-import { MemoryDisk, RECORD_BYTES } from "./memory-disk.ts";
+import { MemoryDisk, RECORD_BYTES, TREE_NODE_LIMIT } from "./memory-disk.ts";
 import { type MemorySummarizer, ProjectMemoryService } from "./project-memory.ts";
 
 async function until(check: () => boolean) {
@@ -132,6 +132,86 @@ test("wake is bounded when summaries are missing; zoom reports pending children"
 		[-2, -1],
 	])
 		await assert.rejects(service.zoom("p", range[0]!, range[1]!));
+});
+
+test("tree lists newest-first blocks, lists notes under 16-note summaries and reveals paths in one request", async (t) => {
+	const { home, service } = await fixture(t);
+	const disk = new MemoryDisk(join(home, "tree"), "device");
+	t.after(() => disk.close());
+	for (let i = 0; i < 162; i++) disk.note(`fact ${i}`, "chat");
+	build(disk);
+	const span = (n: { lo: number; hi: number }) => [n.lo, n.hi];
+
+	const top = disk.tree();
+	assert.equal(top.count, 162);
+	assert.deepEqual(top.nodes.map(span), [
+		[160, 161],
+		[128, 159],
+		[0, 127],
+	]);
+	assert.ok(top.nodes.every((n) => n.children === undefined && n.text));
+
+	const whole = disk.tree({ depth: 64 });
+	assert.equal(whole.truncated, false);
+	const sizes: number[] = [];
+	let node = whole.nodes[2]!;
+	while (node.children) {
+		sizes.push(node.hi - node.lo + 1);
+		node = node.children[0]!;
+	}
+	assert.deepEqual(sizes, [128, 64, 32, 16]);
+	assert.equal(node.entry?.index, 127);
+	assert.deepEqual(
+		whole.nodes[0]!.children!.map((n) => n.entry?.index),
+		[161, 160],
+	);
+
+	const two = disk.tree({ depth: 2 });
+	assert.deepEqual(two.nodes[1]!.children!.map(span), [
+		[144, 159],
+		[128, 143],
+	]);
+	assert.equal(two.nodes[1]!.children![0]!.children, undefined);
+	assert.deepEqual(
+		disk.tree({ lo: 128, hi: 143 }).nodes.map((n) => n.lo),
+		Array.from({ length: 16 }, (_, i) => 143 - i),
+	);
+
+	const revealed = disk.tree({ reveal: [3, 150] });
+	assert.deepEqual(revealed.nodes.map(span), [
+		[128, 159],
+		[0, 127],
+	]);
+	const leaves: number[] = [];
+	const walk = (n: (typeof revealed.nodes)[number]) => {
+		if (n.entry) leaves.push(n.entry.index);
+		for (const child of n.children ?? []) walk(child);
+	};
+	for (const root of revealed.nodes) walk(root);
+	assert.deepEqual(leaves, [150, 3]);
+
+	for (const options of [{ depth: 0 }, { depth: 65 }, { reveal: [162] }, { lo: 1, hi: 2 }, { lo: 0 }])
+		assert.throws(() => disk.tree(options));
+	await service.note("p", "via the service", "chat");
+	assert.equal((await service.tree("p")).nodes[0]?.entry?.text, "via the service");
+});
+
+test("tree stops at its node limit and keeps each node's children whole", async (t) => {
+	const { home } = await fixture(t);
+	const disk = new MemoryDisk(join(home, "large"), "device");
+	t.after(() => disk.close());
+	for (let i = 0; i < 1100; i++) disk.note(`fact ${i}`, "chat");
+	const tree = disk.tree({ depth: 64 });
+	assert.equal(tree.truncated, true);
+	let total = 0;
+	const walk = (n: (typeof tree.nodes)[number]) => {
+		total++;
+		if (n.children) assert.equal(n.children.length, n.hi - n.lo + 1 > 16 ? 2 : n.hi - n.lo + 1);
+		for (const child of n.children ?? []) walk(child);
+	};
+	for (const root of tree.nodes) walk(root);
+	assert.ok(total <= TREE_NODE_LIMIT);
+	assert.ok(tree.nodes.every((n) => n.pending || n.entry));
 });
 
 test("forget drops dense suffixes and ancestors, rejects stale in-flight results, and rebuilds without touching the log", async (t) => {

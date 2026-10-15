@@ -946,16 +946,17 @@ final class PilotClient: ObservableObject {
         return try await call(request)
     }
 
-    func memoryZoom(_ projectId: String, lo: Int, hi: Int) async throws -> [MemoryNode] {
-        try await missionRequest(["projects", projectId, "memory", "zoom"], query: [
-            URLQueryItem(name: "lo", value: String(lo)), URLQueryItem(name: "hi", value: String(hi)),
-        ])
-    }
-
-    func memoryWake(_ projectId: String) async throws -> MemoryView {
-        try await missionRequest(["projects", projectId, "memory", "wake"], query: [
-            URLQueryItem(name: "lines", value: "96"),
-        ])
+    /// A bounded slice of the memory tree: the top-level blocks (or one range's children) to `depth` levels, or only
+    /// the paths to `reveal`ed notes.
+    func memoryTree(_ projectId: String, range: MemoryRange?, depth: Int, reveal: [Int]) async throws -> MemoryTree {
+        var query = [URLQueryItem(name: "depth", value: String(depth))]
+        if let range {
+            query += [URLQueryItem(name: "lo", value: String(range.lo)), URLQueryItem(name: "hi", value: String(range.hi))]
+        }
+        if !reveal.isEmpty {
+            query.append(URLQueryItem(name: "reveal", value: reveal.map(String.init).joined(separator: ",")))
+        }
+        return try await missionRequest(["projects", projectId, "memory", "tree"], query: query)
     }
 
     func memoryRecall(_ projectId: String, regex: String) async throws -> MemoryRecall {
