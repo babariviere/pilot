@@ -10,6 +10,8 @@ export type SubagentWatchStarter = (
 	directory: string,
 	conversationId: string,
 	onUpdate: (update: SubagentWatchUpdate) => void,
+	/** Module initialization is complete; this does not mean the first snapshot has been read. */
+	onReady?: () => void,
 ) => () => void;
 
 export interface SubagentWatchListener {
@@ -18,11 +20,13 @@ export interface SubagentWatchListener {
 	error(message: string): void;
 }
 
-export const startSubagentWatchWorker: SubagentWatchStarter = (directory, conversationId, onUpdate) => {
+export const startSubagentWatchWorker: SubagentWatchStarter = (directory, conversationId, onUpdate, onReady) => {
 	const worker = new Worker(subagentWatchWorkerEntry, { workerData: { directory, conversationId }, execArgv: [] });
 	let stopped = false;
-	worker.on("message", (update: SubagentWatchUpdate) => {
-		if (!stopped) onUpdate(update);
+	worker.on("message", (update: SubagentWatchUpdate | { ready: true }) => {
+		if (stopped) return;
+		if ("ready" in update) onReady?.();
+		else onUpdate(update);
 	});
 	worker.on("error", (error) => {
 		if (!stopped) onUpdate({ error: error.message });

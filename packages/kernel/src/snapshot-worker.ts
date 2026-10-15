@@ -1,4 +1,4 @@
-/** Lightweight one-shot reader. No native SDK, extension runtime, Harness, or writer lease. */
+/** One-shot reader. No extension/agent initialization or writer lease; compaction metadata may load the SDK estimator. */
 import { parentPort, workerData } from "node:worker_threads";
 import { readEarlierEntries, readSessionSnapshot, readSubagentTranscript } from "./snapshot.ts";
 

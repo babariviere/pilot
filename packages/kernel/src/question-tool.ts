@@ -5,7 +5,7 @@ import type { AgentQuestion } from "@pilot/protocol";
 
 export const QUESTION_TOOL = "ask_user";
 /** Transcript entry kind holding an `AgentQuestion`. Written outside model context, so codemode calls show it too. */
-export const QUESTION_ENTRY = "pilot.question";
+export { QUESTION_ENTRY } from "./question-entry.ts";
 export const MAX_QUESTION_OPTIONS = 9;
 
 /** Commits the question to the transcript. `callId` makes the write idempotent. */

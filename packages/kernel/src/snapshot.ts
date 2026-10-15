@@ -1,4 +1,4 @@
-/** Cold transcript viewing. Deliberately imports neither the SDK nor the Harness. */
+/** Cold transcript viewing, with no agent initialization. Only compaction statistics need the lazy SDK estimator. */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	AgentDoc,

@@ -146,6 +146,53 @@ temporary copies; no real chats, providers, credentials or network services are 
 index migration are outside the measurement. This isolates synchronous store work, not whole-daemon latency,
 Git diff performance, IPC throughput or live GUI responsiveness. Run without a competing local test/build.
 
+## Cold subagent reader startup
+
+```sh
+node packages/kernel/src/subagent-reader-startup.bench.ts 4cc44c17 4 5
+```
+
+This offline probe alternates five fresh reader threads from each revision, with four bounded CPU-busy
+threads owned and terminated by the probe. It materializes baseline source and package metadata in a
+temporary directory, reuses the identical dependency installation, and reads the same synthetic live
+`runs.sqlite` under its writer lease. It never starts an agent or uses real accounts. Omit the second
+argument (or use `0`) to measure ambient load alone. All readers, load threads and temporary files are
+released on completion or failure.
+
+JSON lines separate Worker `online`, bootstrap, cold import completion and first snapshot. Load hooks
+count module loads/source bytes; CPU and heap belong to the reader thread at import completion, not
+whole-process RSS. The 30-second probe ceiling deliberately permits observations beyond the old
+five-second fixture budget. It is not a production deadline. Fresh threads have independent module
+caches even when the parent process has already imported the same modules.
+
+The live-reader test uses a post-import readiness message, not Worker `online`, before starting its
+unchanged snapshot/delta polling budgets. The overall 20-second test bound, unchanged-data assertion,
+full snapshot and incremental-entry assertions remain. Readiness is internal control traffic, never
+transcript data. Normal cold reads do not load the coding SDK; saved compaction statistics still load
+its estimator lazily to preserve the existing numbers. `cold-reader-imports.test.ts` guards the ordinary
+reader entrypoints against accidentally restoring eager SDK imports.
+
+On 2026-10-15, macOS arm64/Node 24.21.0, five alternating pairs against `4cc44c17` with four busy
+threads and ambient one-minute load 35–61 gave the following medians (ranges in parentheses):
+
+| Metric | Baseline | Changed |
+| --- | --- | --- |
+| First snapshot | 10.93s (5.92–16.14s) | 5.94s (3.31–7.27s) |
+| Thread online | 83ms (47–204ms) | 101ms (36–209ms) |
+| After import completion to snapshot | 134ms (45–207ms) | 135ms (85–138ms) |
+| Import thread CPU | 1146ms | 430ms |
+| Module loads / source bytes | 1696 / 8.29MB | 752 / 1.67MB |
+| Heap after imports | 49.1MB | 24.5MB |
+
+The unchanged live-reader fixture also failed on clean `4cc44c17` with no updates after its polls
+expired under load. The graph reached the SDK through `chat-events.ts`'s estimator and
+`attention.ts` importing the question entry constant from the tool implementation. Each fresh thread
+paid that eager import cost before its first read. Removing those dependencies reduces the work, but
+import scheduling alone still exceeds five seconds under heavy load. That is why readiness separates
+module startup from the read budget rather than merely replacing one timeout number. This probe
+isolates cold startup of a tiny transcript, not disk-cold OS caches, large-history rendering or GUI
+responsiveness. It does not claim a fixed speedup under arbitrary machine load.
+
 ## Workspace fixtures and clocks
 
 Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real

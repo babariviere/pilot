@@ -13,6 +13,9 @@ const { directory, conversationId, intervalMs } = workerData as {
 	intervalMs?: number;
 };
 const interval = intervalMs ?? 250;
+// Unlike Worker "online", this barrier means the cold module graph has finished loading.
+// The first read follows it; consumers must still wait for the full snapshot.
+parentPort?.postMessage({ ready: true });
 let signature: string | undefined;
 let cursor: number | undefined;
 let started = false;
