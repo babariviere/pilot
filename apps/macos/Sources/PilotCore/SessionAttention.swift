@@ -41,6 +41,18 @@ public enum SessionStatus: String, Sendable {
 }
 
 extension SessionSummary {
+    /// One live line in the conversation, replacing the working indicator while work is held.
+    /// This is display state, not a transcript entry or a message that can wake the agent.
+    public var pauseNoticeText: String? {
+        guard !isReadOnlyHistory else { return nil }
+        switch status {
+        case .paused: return "Paused for sleep · resumes after this Mac wakes and connects"
+        case .offlinePaused: return "Paused offline · resumes automatically when connected"
+        case .usagePaused: return "Paused at usage limit · resumes automatically when usage is available"
+        default: return nil
+        }
+    }
+
     /// Outcomes survive lifecycle changes. A completed turn does not finish active coordination.
     public var status: SessionStatus {
         if sleepPaused == true { return .paused }

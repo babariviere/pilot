@@ -45,6 +45,46 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     #expect(chat.status == .paused)
 }
 
+@Test func chatPauseNoticesExplainTheHoldAndFollowStatusPrecedence() {
+    var chat = summary(state: "working", outcome: nil)
+    #expect(chat.pauseNoticeText == nil)
+    chat.subscriptionPause = SubscriptionPause(windows: [
+        SubscriptionPauseWindow(provider: .openai, label: "5h", usedPercent: 97),
+    ])
+    // A warning alone is not a held run: children or jobs can still be working.
+    #expect(chat.pauseNoticeText == nil)
+    var held = SessionSummary(id: "held", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2,
+                              state: "working", working: false)
+    held.subscriptionPause = chat.subscriptionPause
+    #expect(held.pauseNoticeText == "Paused at usage limit · resumes automatically when usage is available")
+    held.offlinePaused = true
+    #expect(held.pauseNoticeText == "Paused offline · resumes automatically when connected")
+    held.sleepPaused = true
+    #expect(held.pauseNoticeText == "Paused for sleep · resumes after this Mac wakes and connects")
+    held.sleepPaused = false
+    held.offlinePaused = false
+    held.subscriptionPause = nil
+    #expect(held.pauseNoticeText == nil)
+}
+
+@Test func chatPauseNoticesDoNotReplaceCompletedForcedOrReadOnlyWork() {
+    let windows = [SubscriptionPauseWindow(provider: .anthropic, label: "Week", usedPercent: 100)]
+    var finished = summary()
+    finished.subscriptionPause = SubscriptionPause(windows: windows)
+    #expect(finished.pauseNoticeText == nil)
+    var forced = SessionSummary(id: "forced", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2,
+                                state: "working", working: true)
+    forced.subscriptionPause = SubscriptionPause(windows: windows, forced: true)
+    #expect(forced.pauseNoticeText == nil)
+    finished.sleepPaused = true
+    finished.continuedTo = "replacement"
+    #expect(finished.pauseNoticeText == nil)
+    var archived = SessionSummary(id: "archived", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 2,
+                                  state: "working", archivedAt: 3)
+    archived.sleepPaused = true
+    #expect(archived.pauseNoticeText == nil)
+}
+
 @Test func legacyNeedsInputDecodesAsDoneAndEncodesNormally() throws {
     let outcome = try JSONDecoder().decode(SessionOutcome.self, from: Data(#""needs_input""#.utf8))
     #expect(outcome == .done)

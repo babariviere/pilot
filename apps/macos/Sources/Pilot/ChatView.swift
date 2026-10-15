@@ -208,10 +208,11 @@ struct ChatView: View {
                         RowView(row: row, toolExpansions: toolExpansions,
                             messageExpansions: messageExpansions, active: row.id == activeWork).equatable()
                     }
-                    if session.offlinePaused == true {
-                        Label("Paused offline · resumes automatically when connected", icon: .paused)
+                    if let pauseNotice = session.pauseNoticeText {
+                        Label(pauseNotice, icon: .paused)
                             .font(.pilot(.caption))
                             .foregroundStyle(Theme.mutedForeground)
+                            .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: Theme.column, alignment: .leading)
                             .frame(maxWidth: .infinity)
                     } else if showsWorkingIndicator(transcript) {
