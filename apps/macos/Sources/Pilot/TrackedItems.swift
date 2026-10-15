@@ -550,7 +550,7 @@ struct TrackedItemRow: View {
         Menu { menu(link: link) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
-            .buttonStyle(QuietIconButtonStyle())
+            .rowIconButtonStyle()
             .fixedSize()
             .help("More actions")
             .accessibilityLabel("More actions for \(TrackedItemText.identifier(item))")
@@ -712,7 +712,7 @@ struct TrackedSourceStatusLine: View {
                 SourceSignInButton(kind: source.kind, label: source.label)
             } else if !syncing {
                 Button { actions.sync(source, client: model.client) } label: { PilotSymbol(PilotIcon.refresh, context: .toolbar) }
-                    .buttonStyle(QuietIconButtonStyle())
+                    .rowIconButtonStyle()
                     .help("Sync now")
                     .accessibilityLabel("Sync \(source.label) now")
             }

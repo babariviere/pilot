@@ -211,7 +211,7 @@ struct ChangesRepositoryContext: View {
                         .textSelection(.enabled)
                     Spacer(minLength: 0)
                     Button { self.detachError = nil } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
-                        .buttonStyle(QuietIconButtonStyle())
+                        .rowIconButtonStyle()
                         .help("Dismiss")
                         .accessibilityLabel("Dismiss error")
                 }
@@ -429,7 +429,7 @@ private struct PullRequestRowMenu: View {
         } else {
             Menu { PullRequestRowActions(url: url, detach: detach) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                 .menuStyle(.button)
-                .buttonStyle(QuietIconButtonStyle())
+                .rowIconButtonStyle()
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help("Pull request actions")

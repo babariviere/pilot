@@ -200,10 +200,10 @@ struct MissionBriefTab: View {
                         if hovered {
                             HStack(spacing: 2) {
                                 Button { editDecision(item) } label: { PilotSymbol(PilotIcon.edit, context: .toolbar) }
-                                    .buttonStyle(QuietIconButtonStyle())
+                                    .rowIconButtonStyle()
                                     .help("Edit decision").accessibilityLabel("Edit decision")
                                 Button { removeDecision(item) } label: { PilotSymbol(PilotIcon.delete, context: .toolbar) }
-                                    .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                                    .rowIconButtonStyle(hoverTint: Theme.destructive)
                                     .help("Remove decision").accessibilityLabel("Remove decision")
                             }
                         } else {
@@ -529,7 +529,7 @@ private struct CommentRow: View {
                         Button("Resolve", action: resolve).controlSize(.small)
                     }
                     Button(action: delete) { PilotSymbol(PilotIcon.delete, context: .toolbar) }
-                        .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                        .rowIconButtonStyle(hoverTint: Theme.destructive)
                         .help("Delete comment").accessibilityLabel("Delete comment")
                 }
                 .revealed(hovered)
@@ -807,7 +807,7 @@ struct MissionTaskRow: View {
                     if hovered {
                         Menu { menuItems } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                             .menuStyle(.button)
-                            .buttonStyle(QuietIconButtonStyle())
+                            .rowIconButtonStyle()
                             .menuIndicator(.hidden)
                             .fixedSize()
                             .help("Task actions")
@@ -1101,7 +1101,7 @@ private struct MissionChatRow: View {
                         .opacity(hovered ? 0 : 1)
                     Menu { actions(coordinator: coordinator) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                         .menuStyle(.button)
-                        .buttonStyle(QuietIconButtonStyle())
+                        .rowIconButtonStyle()
                         .menuIndicator(.hidden)
                         .fixedSize()
                         .help("Chat actions")
@@ -1184,7 +1184,7 @@ struct MissionArtifactsTab: View {
                         Text("\(link.kind.uppercased()) · \(link.revision.map { "r\($0)" } ?? "latest")")
                             .font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.faintForeground)
                         Button { unlink(link) } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
-                            .buttonStyle(QuietIconButtonStyle())
+                            .rowIconButtonStyle()
                             .help(link.taskId == nil ? "Unlink from mission" : "Unlink from task")
                             .accessibilityLabel("Unlink \(link.title)")
                             .revealed(hovered)

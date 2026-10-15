@@ -55,7 +55,7 @@ struct MissionSidebarRow: View {
                     .revealed(hovered)
                 if active {
                     Button { model.newSession(in: mission) } label: { PilotSymbol(PilotIcon.compose, context: .toolbar) }
-                        .buttonStyle(QuietIconButtonStyle())
+                        .rowIconButtonStyle()
                         .help("New chat in \(mission.title)")
                         .accessibilityLabel("New chat in \(mission.title)")
                         .revealed(hovered)
@@ -126,7 +126,7 @@ struct MissionSidebarCoordinatorAction: View {
                 Button { model.selectedSessionId = coordinator } label: {
                     PilotSymbol(PilotIcon.coordinator)
                 }
-                .buttonStyle(QuietIconButtonStyle())
+                .rowIconButtonStyle()
                 .help("Open coordinator")
                 .accessibilityLabel("Open coordinator")
             }

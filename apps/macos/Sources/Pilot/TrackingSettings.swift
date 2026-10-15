@@ -321,7 +321,7 @@ private struct SlackChannelRow: View {
             .foregroundStyle(line.tone == .attention ? Theme.blocked : Color.secondary)
             .help(status?.error ?? (status?.status == .signInRequired ? "Sign in to Slack below." : line.text))
             Button(action: remove) { PilotSymbol(PilotIcon.remove) }
-                .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                .rowIconButtonStyle(hoverTint: Theme.destructive)
                 .help("Stop reading \(channel.display)")
                 .accessibilityLabel("Remove \(channel.display)")
         }
@@ -434,7 +434,7 @@ private struct SlackLabelRow: View {
                 .toggleStyle(.checkbox).font(.caption).fixedSize()
                 .help("Messages with this label stay out of the Inbox. Slack triage lists them behind Show hidden.")
             Button(action: remove) { PilotSymbol(PilotIcon.remove) }
-                .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                .rowIconButtonStyle(hoverTint: Theme.destructive)
                 .help("Remove this label")
                 .accessibilityLabel(label.name.isEmpty ? "Remove label" : "Remove \(label.name)")
         }

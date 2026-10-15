@@ -30,7 +30,7 @@ struct QueuedMessagesStrip: View {
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 4)
                     Button { state.dismissQueueRemovalError() } label: { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
-                        .buttonStyle(QuietIconButtonStyle())
+                        .rowIconButtonStyle()
                         .help("Dismiss removal error")
                         .accessibilityLabel("Dismiss removal error")
                 }
@@ -153,12 +153,12 @@ private struct QueuedMessageRow: View {
             } else if isHovered {
                 HStack(spacing: 0) {
                     Button { state.selectQueuedMessage(message) } label: { PilotSymbol(PilotIcon.edit, context: .toolbar) }
-                        .buttonStyle(QuietIconButtonStyle())
+                        .rowIconButtonStyle()
                         .disabled(state.mutatingQueue)
                         .help("Edit this queued message")
                         .accessibilityLabel("Edit queued message")
                     Button(action: onRemove) { PilotSymbol(PilotIcon.dismiss, context: .toolbar) }
-                        .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                        .rowIconButtonStyle(hoverTint: Theme.destructive)
                         .disabled(state.mutatingQueue || !available)
                         .help("Remove this queued message")
                         .accessibilityLabel("Remove queued message")
