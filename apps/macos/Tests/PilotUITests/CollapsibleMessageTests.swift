@@ -110,6 +110,30 @@ import Testing
     }
 }
 
+@Test @MainActor func userBubblesHugShortMessagesAndWrapLongOnes() throws {
+    _ = NSApplication.shared
+    let width = 600.0
+    // Row width less the 72 pt leading spacer and the bubble's horizontal padding.
+    let available = width - 72 - 28
+    func textFrame(_ text: String) throws -> NSRect {
+        let host = NSHostingView(rootView: UserMessage(text: text)
+            .fixedSize(horizontal: false, vertical: true).frame(width: width))
+        host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+        host.layoutSubtreeIfNeeded()
+        func find(_ view: NSView) -> MessageSelectionTextView? {
+            (view as? MessageSelectionTextView) ?? view.subviews.lazy.compactMap(find).first
+        }
+        return try #require(find(host)).frame
+    }
+    let short = try textFrame("what can we safely start with sol?")
+    #expect(short.width > 0)
+    #expect(short.width < available / 2)
+    let long = try textFrame(String(repeating: "what can we safely start with sol? ", count: 12))
+    #expect(long.width <= available)
+    #expect(long.width > available - 80)
+    #expect(long.height > short.height * 2)
+}
+
 @Test @MainActor func historicalMessageRetainsExpansionAfterRecreation() {
     _ = NSApplication.shared
     let source = String(repeating: "Report details\n", count: 40)

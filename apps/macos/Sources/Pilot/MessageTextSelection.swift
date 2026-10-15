@@ -365,13 +365,24 @@ final class MessageSelectionTextView: NSTextView {
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
         measuring = false
-        let size = CGSize(width: unwrapped || hugsContent ? ceil(used.width) : width, height: ceil(used.height))
+        let size = CGSize(width: unwrapped || hugsContent ? ceil(Self.linesWidth(layout, in: container)) : width,
+                          height: ceil(used.height))
         if measurements.count >= 4 { measurements.removeFirst() }
         measurements.append((width, hugsContent, size))
         // A sizing probe must not change how the placed text wraps. Otherwise the drawn text
         // follows whichever width SwiftUI probed last and reflows on every streamed update.
         if !unwrapped, frame.width > 0, frame.width != width { matchContainerToFrame() }
         return size
+    }
+
+    /// The widest laid-out line. Once the view is hosted, usedRect(for:) can report the whole
+    /// container width even for one short line, so a hugging bubble would fill its row.
+    private static func linesWidth(_ layout: NSLayoutManager, in container: NSTextContainer) -> CGFloat {
+        var width: CGFloat = 0
+        layout.enumerateLineFragments(forGlyphRange: layout.glyphRange(for: container)) { _, used, _, _, _ in
+            width = max(width, used.maxX)
+        }
+        return min(width, container.size.width)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
