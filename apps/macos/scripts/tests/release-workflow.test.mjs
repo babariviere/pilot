@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 test("every PR and main push runs CI, including manifest-only and lockfile-only changes", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const events = workflow.split("\non:\n")[1].split("\npermissions:\n")[0];
 	assert.match(events, /^  push:\n    branches: \[main\]\n  pull_request:\n  workflow_dispatch:/m);
 	assert.doesNotMatch(events, /paths(?:-ignore)?:/);
@@ -14,7 +14,7 @@ test("every PR and main push runs CI, including manifest-only and lockfile-only 
 });
 
 test("portable tests run on Linux and native coverage plus packaging stay on macOS", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const linux = workflow.split("\n  node:\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	const macos = workflow.split("\n  node-macos:\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	assert.match(linux, /runs-on: ubuntu-24\.04/);
@@ -30,7 +30,7 @@ test("portable tests run on Linux and native coverage plus packaging stay on mac
 });
 
 test("both Node lanes install architecture-matched checksum-verified jj before testing", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	assert.match(workflow, /JJ_VERSION: 0\.46\.0/);
 	assert.match(workflow, /JJ_SHA256: [a-f0-9]{64}/);
 	for (const [name, target, verifier] of [
@@ -51,7 +51,7 @@ test("both Node lanes install architecture-matched checksum-verified jj before t
 });
 
 test("Swift verification and bundle jobs cache only pinned dependencies with toolchain-specific keys", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	for (const name of ["swift-test", "app-bundle"]) {
 		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
 		assert.match(job, /id: swift-toolchain/);
@@ -71,7 +71,7 @@ test("Swift verification and bundle jobs cache only pinned dependencies with too
 });
 
 test("release job publishes only newly created stable releases or explicit draft retries", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } };
 	const verification = ["node", "node-macos", "swift-test", "app-bundle", "linux-publish"];
@@ -142,7 +142,7 @@ test("release job publishes only newly created stable releases or explicit draft
 });
 
 test("Linux release signing follows successful production verification and stays out of PR jobs", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const linux = workflow.split("\n  linux-release:\n")[1].split(/\n  [a-z-]+:\n/)[0];
 	assert.match(linux, /needs: \[node, node-macos, swift-test, app-bundle, release-please\]/);
 	assert.match(linux, /github\.ref == 'refs\/heads\/main'/);
@@ -178,7 +178,7 @@ test("DMG workflow is manual-only and limited to trusted main", () => {
 });
 
 test("draft retries apply current packaging helpers without changing tagged application source", () => {
-	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const workflow = readFileSync(new URL("../../../../.github/workflows/release.yml", import.meta.url), "utf8");
 	const tools = workflow.indexOf("- name: Load current release packaging tools");
 	const overlay = workflow.indexOf("- name: Apply current packaging policy");
 	const build = workflow.indexOf("- name: Build self-contained Pilot.app");
