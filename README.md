@@ -243,6 +243,13 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+Tasks can belong to ordered phases, each with a name and optional goal. The daemon API and coordinator
+tool manage phases; the current app continues to group tasks by their phase name. Existing milestone
+names migrate automatically. Phases complete when every task is done or dropped, reopen with unfinished
+work, and record those transitions in activity. Empty phases are complete. Optional phase gating is off
+by default; enabling it blocks claims and starts in later phases until earlier phases finish. Explicit
+user API assignments and starts can bypass the gate with \`overridePhaseGating\`; chats cannot override it.
+
 Open tasks linked to a Linear issue become **Delegated** when someone else
 is assigned in Linear. Returning the issue to you restores the previous status; unassignment changes
 nothing. A manual status change wins until the assignment changes again. Delegated work is not done

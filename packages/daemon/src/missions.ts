@@ -19,6 +19,8 @@ import type {
 	MissionEventKind,
 	MissionEventWrite,
 	MissionHealth,
+	MissionPhase,
+	MissionPhaseWrite,
 	MissionResource,
 	MissionResourceKind,
 	MissionResourceWrite,
@@ -32,9 +34,9 @@ import type {
 } from "@pilot/protocol";
 import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
+import { MissionReplica } from "./mission-replica.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import type { PullRequestBinding } from "./sessions.ts";
-import { MissionReplica } from "./mission-replica.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
 export interface MissionActor {
@@ -427,6 +429,8 @@ export class MissionStore {
 	private replica?: MissionReplica;
 	/** Records the changes of the current commit, for the replica. */
 	private session?: Session;
+	private readonly phaseReconciliations = new Set<string>();
+	private initializing = true;
 
 	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
@@ -450,6 +454,44 @@ export class MissionStore {
 		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
+		this.db.exec(`CREATE TABLE IF NOT EXISTS phases (
+			id TEXT PRIMARY KEY, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+			name TEXT NOT NULL, goal TEXT, sort REAL NOT NULL, completed_at INTEGER,
+			UNIQUE(mission_id, name)
+		);
+		CREATE INDEX IF NOT EXISTS phases_by_mission ON phases(mission_id, sort, id);`);
+		this.transaction(() => {
+			if (!this.all("PRAGMA table_info(missions)").some((row) => row.name === "phase_gating"))
+				this.db.exec("ALTER TABLE missions ADD COLUMN phase_gating INTEGER NOT NULL DEFAULT 0");
+			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "phase_id")) {
+				this.db.exec("ALTER TABLE tasks ADD COLUMN phase_id TEXT REFERENCES phases(id) ON DELETE SET NULL");
+				// Display order defines first appearance. Names are scoped to their mission.
+				for (const row of this.all(
+					"SELECT * FROM tasks WHERE milestone IS NOT NULL AND trim(milestone) <> '' ORDER BY mission_id, sort, number",
+				)) {
+					const missionId = str(row.mission_id!);
+					const name = str(row.milestone!).trim();
+					let phase = this.one("SELECT id FROM phases WHERE mission_id = ? AND name = ?", missionId, name);
+					if (!phase) {
+						const phaseId = randomUUID();
+						this.run(
+							"INSERT INTO phases (id, mission_id, name, sort) VALUES (?, ?, ?, (SELECT COUNT(*) FROM phases WHERE mission_id = ?))",
+							phaseId,
+							missionId,
+							name,
+							missionId,
+						);
+						phase = { id: phaseId };
+					}
+					this.run("UPDATE tasks SET phase_id = ?, milestone = ? WHERE id = ?", phase.id!, name, row.id!);
+					this.phaseReconciliations.add(missionId);
+				}
+			}
+			this.db.exec("CREATE INDEX IF NOT EXISTS tasks_by_phase ON tasks(phase_id, status)");
+			this.db.exec(
+				"CREATE INDEX IF NOT EXISTS unfinished_tasks_by_phase ON tasks(phase_id) WHERE status NOT IN ('done', 'dropped')",
+			);
+		});
 		this.db.exec(
 			"CREATE TABLE IF NOT EXISTS system_message_events (session_id TEXT NOT NULL, event_id TEXT NOT NULL, mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE, PRIMARY KEY (session_id, event_id))",
 		);
@@ -566,6 +608,11 @@ export class MissionStore {
 			});
 		this.db.exec(`CREATE INDEX IF NOT EXISTS user_notes_by_mission ON events (mission_id, id)
 			WHERE is_user_note = 1`);
+		this.initializing = false;
+		this.transaction(() => {
+			for (const row of this.all("SELECT DISTINCT mission_id FROM phases"))
+				this.phaseReconciliations.add(str(row.mission_id!));
+		});
 	}
 
 	/** Resolves once every committed change so far is on disk. Await before acknowledging a write. */
@@ -652,12 +699,14 @@ export class MissionStore {
 			this.writing = true;
 			try {
 				const result = work();
+				if (!this.initializing) for (const id of this.phaseReconciliations) this.reconcilePhases(id);
 				this.db.exec("COMMIT");
 				return result;
 			} catch (error) {
 				this.db.exec("ROLLBACK");
 				throw error;
 			} finally {
+				this.phaseReconciliations.clear();
 				this.writing = false;
 				// After a rollback the changeset is empty, or a no-op for rows the session saw change back.
 				this.replicate();
@@ -681,6 +730,7 @@ export class MissionStore {
 		} = {},
 	): MissionEvent {
 		const at = extra.at ?? Date.now();
+		if (kind === "task" || kind === "claim") this.phaseReconciliations.add(missionId);
 		const result = this.db
 			.prepare(
 				"INSERT INTO events (mission_id, kind, text, session_id, task_id, health, at, is_user_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1240,6 +1290,7 @@ export class MissionStore {
 					: []),
 			].map(commentFrom),
 			tasks: this.tasks(id),
+			phases: this.phases(id),
 			artifacts: this.all("SELECT * FROM artifact_links WHERE mission_id = ? ORDER BY linked_at DESC", id).map(
 				artifactFrom,
 			),
@@ -1307,6 +1358,12 @@ export class MissionStore {
 			next.autopilot = patch.autopilot;
 		}
 		let coordinator = mission.coordinatorSessionId ?? null;
+		if (patch.phaseGating !== undefined) {
+			if (typeof patch.phaseGating !== "boolean") throw new Error("phaseGating must be a boolean");
+			next.phaseGating = patch.phaseGating;
+			if (next.phaseGating !== mission.phaseGating)
+				notes.push(["update", `Phase gating ${next.phaseGating ? "enabled" : "disabled"}`]);
+		}
 		if (patch.coordinatorSessionId !== undefined) {
 			if (patch.coordinatorSessionId !== null) {
 				if (typeof patch.coordinatorSessionId !== "string")
@@ -1336,6 +1393,7 @@ export class MissionStore {
 				id,
 			);
 			for (const [kind, note] of notes) this.event(id, kind, note, actor, { at: now });
+			this.run("UPDATE missions SET phase_gating = ? WHERE id = ?", next.phaseGating ? 1 : 0, id);
 			if (next.status === "active" && mission.status !== "active")
 				for (const task of this.tasks(id)) this.reconcileTaskPullRequests(id, task.id);
 		});
@@ -1494,14 +1552,142 @@ export class MissionStore {
 		if (changed) this.changed(changed.missionId, changed.sessionId ? [changed.sessionId] : []);
 	}
 
+	// Phases
+	phases(id: string): MissionPhase[] {
+		return this.all("SELECT * FROM phases WHERE mission_id = ? ORDER BY sort, id", id).map(phaseFrom);
+	}
+
+	resolvePhase(id: string, ref: unknown): MissionPhase {
+		if (typeof ref !== "string") throw new Error("phase must be a name or ID");
+		const phases = this.phases(id);
+		const phase = phases.find((item) => item.id === ref) ?? phases.find((item) => item.name === ref.trim());
+		if (!phase) throw new NotFound(`Unknown phase: ${ref}`);
+		return phase;
+	}
+
+	addPhase(id: string, write: MissionPhaseWrite, actor: MissionActor = USER): MissionPhase {
+		this.require(id);
+		const phaseId = randomUUID();
+		this.transaction(() => {
+			this.insertPhase(id, phaseId, write, actor);
+		});
+		this.changed(id);
+		return this.resolvePhase(id, phaseId);
+	}
+
+	private insertPhase(id: string, phaseId: string, write: MissionPhaseWrite, actor: MissionActor): void {
+		const name = text(write.name, "phase name", MAX_TITLE)!;
+		const goal = write.goal === undefined ? null : text(write.goal, "phase goal", MAX_GOAL, { empty: true })!;
+		if (write.order !== undefined && (typeof write.order !== "number" || !Number.isFinite(write.order)))
+			throw new Error("order must be a number");
+		if (this.phases(id).some((phase) => phase.name === name)) throw new Conflict(`Phase already exists: ${name}`);
+		this.run(
+			"INSERT INTO phases (id, mission_id, name, goal, sort) VALUES (?, ?, ?, ?, ?)",
+			phaseId,
+			id,
+			name,
+			goal,
+			write.order ??
+				num(this.one("SELECT COALESCE(MAX(sort), 0) + 1 AS n FROM phases WHERE mission_id = ?", id)!.n!),
+		);
+		this.phaseReconciliations.add(id);
+		this.event(id, "update", `Phase added: ${name}`, actor);
+	}
+
+	updatePhase(id: string, ref: string, write: MissionPhaseWrite, actor: MissionActor = USER): MissionPhase {
+		const before = this.resolvePhase(id, ref);
+		const name = write.name === undefined ? before.name : text(write.name, "phase name", MAX_TITLE)!;
+		const goal = write.goal === undefined ? before.goal : text(write.goal, "phase goal", MAX_GOAL, { empty: true });
+		if (write.order !== undefined && (typeof write.order !== "number" || !Number.isFinite(write.order)))
+			throw new Error("order must be a number");
+		if (this.phases(id).some((phase) => phase.id !== before.id && phase.name === name))
+			throw new Conflict(`Phase already exists: ${name}`);
+		this.transaction(() => {
+			this.run(
+				"UPDATE phases SET name = ?, goal = ?, sort = ? WHERE id = ?",
+				name,
+				goal ?? null,
+				write.order ?? before.order,
+				before.id,
+			);
+			// Compatibility alias only. phase_id is authoritative.
+			this.run("UPDATE tasks SET milestone = ? WHERE phase_id = ?", name, before.id);
+			this.event(id, "update", `Phase updated: ${name}`, actor);
+		});
+		this.changed(id);
+		return this.resolvePhase(id, before.id);
+	}
+
+	removePhase(id: string, ref: string, actor: MissionActor = USER): void {
+		const phase = this.resolvePhase(id, ref);
+		this.transaction(() => {
+			this.run(
+				"UPDATE tasks SET phase_id = NULL, milestone = NULL, updated_at = ? WHERE phase_id = ?",
+				Date.now(),
+				phase.id,
+			);
+			this.run("DELETE FROM phases WHERE id = ?", phase.id);
+			this.event(id, "update", `Phase deleted: ${phase.name}`, actor);
+		});
+		this.changed(id);
+	}
+
+	/** Empty phases are complete too, so an empty stage never deadlocks later work. */
+	private reconcilePhases(id: string): void {
+		const rows = this.all(
+			`SELECT p.*, NOT EXISTS (SELECT 1 FROM tasks t
+				WHERE t.phase_id = p.id AND t.status NOT IN ('done', 'dropped')) AS complete
+			FROM phases p WHERE p.mission_id = ? ORDER BY p.sort, p.id`,
+			id,
+		);
+		for (const row of rows) {
+			const complete = num(row.complete!) === 1;
+			if (complete === (row.completed_at !== null)) continue;
+			this.run("UPDATE phases SET completed_at = ? WHERE id = ?", complete ? Date.now() : null, row.id!);
+			this.event(id, "update", `Phase ${complete ? "completed" : "reopened"}: ${str(row.name!)}`, USER, {
+				wake: true,
+			});
+		}
+	}
+
+	private phaseView(id: string, tasks: MissionTask[]): MissionTask[] {
+		if (this.one("SELECT phase_gating FROM missions WHERE id = ?", id)?.phase_gating !== 1) return tasks;
+		const phases = this.phases(id);
+		const blockers = new Map<string, string[]>();
+		const earlier: string[] = [];
+		for (const phase of phases) {
+			blockers.set(phase.id, [...earlier]);
+			if (phase.completedAt === undefined) earlier.push(phase.id);
+		}
+		return tasks.map((task) => {
+			if (!task.phaseId || ["done", "dropped", "delegated"].includes(task.status)) return task;
+			const blockedByPhases = blockers.get(task.phaseId) ?? [];
+			return blockedByPhases.length
+				? { ...task, status: "blocked", storedStatus: task.status, blockedByPhases }
+				: task;
+		});
+	}
+
+	private rawTask(task: MissionTask): MissionTask {
+		return task.storedStatus ? { ...task, status: task.storedStatus } : task;
+	}
+
+	private assertPhaseAdmission(task: MissionTask, override = false): void {
+		if (task.blockedByPhases?.length && !override)
+			throw new Conflict(`Task #${task.number} is blocked by earlier phases`);
+	}
+
 	tasks(id: string): MissionTask[] {
-		return this.all("SELECT * FROM tasks WHERE mission_id = ? ORDER BY sort, number", id).map(taskFrom);
+		return this.phaseView(
+			id,
+			this.all("SELECT * FROM tasks WHERE mission_id = ? ORDER BY sort, number", id).map(taskFrom),
+		);
 	}
 
 	task(id: string, taskId: string): MissionTask {
 		const row = this.one("SELECT * FROM tasks WHERE mission_id = ? AND id = ?", id, taskId);
 		if (!row) throw new NotFound(`Unknown task: ${taskId}`);
-		return taskFrom(row);
+		return this.phaseView(id, [taskFrom(row)])[0]!;
 	}
 
 	/** Agents may also refer to tasks by their display number. */
@@ -1513,7 +1699,7 @@ export class MissionStore {
 				Number(String(ref).replace("#", "")),
 			);
 			if (!row) throw new NotFound(`Unknown task: #${String(ref).replace("#", "")}`);
-			return taskFrom(row);
+			return this.phaseView(id, [taskFrom(row)])[0]!;
 		}
 		if (typeof ref !== "string") throw new Error("task id is required");
 		return this.task(id, ref);
@@ -1563,6 +1749,15 @@ export class MissionStore {
 		if (fields.decisionIds !== undefined)
 			this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), taskId);
 		if (fields.preference) this.writePreference(id, this.task(id, taskId), fields.preference, actor, now);
+		const phase = this.taskPhase(id, fields, actor);
+		this.run(
+			"UPDATE tasks SET phase_id = ?, milestone = ? WHERE id = ?",
+			phase?.id ?? null,
+			phase?.name ?? null,
+			taskId,
+		);
+		if (owner)
+			this.assertPhaseAdmission(this.task(id, taskId), !actor.sessionId && write.overridePhaseGating === true);
 		return this.task(id, taskId);
 	}
 
@@ -1575,6 +1770,14 @@ export class MissionStore {
 			throw new Error("order must be a number");
 		const milestone =
 			write.milestone === undefined ? undefined : text(write.milestone, "milestone", MAX_TITLE, { empty: true });
+		if (write.phaseId !== undefined && write.milestone !== undefined)
+			throw new Error("Use phaseId or milestone, not both");
+		const phaseId =
+			write.phaseId === undefined || write.phaseId === null
+				? write.phaseId
+				: this.resolvePhase(id, write.phaseId).id;
+		if (write.overridePhaseGating !== undefined && typeof write.overridePhaseGating !== "boolean")
+			throw new Error("overridePhaseGating must be a boolean");
 		let dependsOn: string[] | undefined;
 		if (write.dependsOn !== undefined) {
 			if (!Array.isArray(write.dependsOn)) throw new Error("dependsOn must be an array of task IDs");
@@ -1592,6 +1795,7 @@ export class MissionStore {
 			status: write.status,
 			order: write.order,
 			milestone,
+			phaseId,
 			dependsOn,
 			decisionIds,
 			preference: preference(write),
@@ -1636,10 +1840,26 @@ export class MissionStore {
 		);
 	}
 
+	private taskPhase(
+		id: string,
+		fields: { phaseId?: string | null; milestone?: string },
+		actor: MissionActor,
+	): MissionPhase | null | undefined {
+		if (fields.phaseId !== undefined) return fields.phaseId === null ? null : this.resolvePhase(id, fields.phaseId);
+		if (fields.milestone === undefined) return undefined;
+		if (!fields.milestone) return null;
+		const existing = this.phases(id).find((phase) => phase.name === fields.milestone);
+		if (existing) return existing;
+		const phaseId = randomUUID();
+		this.insertPhase(id, phaseId, { name: fields.milestone }, actor);
+		return this.resolvePhase(id, phaseId);
+	}
+
 	updateTask(id: string, taskId: string, write: MissionTaskWrite, actor: MissionActor = USER): MissionTask {
 		if (write.sessionId === null && Object.keys(write).length === 1 && !actor.sessionId)
 			return this.releaseTask(id, taskId, actor);
-		const before = this.resolveTask(id, taskId);
+		const projected = this.resolveTask(id, taskId);
+		const before = this.rawTask(projected);
 		const fields = this.taskFields(id, write, before.id);
 		const title = write.title === undefined ? before.title : text(write.title, "title", MAX_TITLE)!;
 		let owner = before.sessionId ?? null;
@@ -1651,6 +1871,7 @@ export class MissionStore {
 		const status = fields.status ?? before.status;
 		const now = Date.now();
 		this.transaction(() => {
+			const phase = this.taskPhase(id, fields, actor);
 			if (fields.decisionIds !== undefined)
 				this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), before.id);
 			if (fields.preference) this.writePreference(id, { ...before, title }, fields.preference, actor, now);
@@ -1671,7 +1892,7 @@ export class MissionStore {
 				(fields.body === undefined ? before.body : fields.body) || null,
 				status,
 				fields.order ?? before.order,
-				(fields.milestone === undefined ? before.milestone : fields.milestone) || null,
+				(phase === undefined ? before.milestone : phase?.name) || null,
 				fields.dependsOn === undefined
 					? before.dependsOn?.length
 						? JSON.stringify(before.dependsOn)
@@ -1684,6 +1905,15 @@ export class MissionStore {
 				status === "done" ? (before.completedAt ?? now) : null,
 				before.id,
 			);
+			if (phase !== undefined) {
+				this.run("UPDATE tasks SET phase_id = ? WHERE id = ?", phase?.id ?? null, before.id);
+				if ((phase?.id ?? undefined) !== before.phaseId)
+					this.event(id, "task", `Task #${before.number} phase ${phase?.name ?? "cleared"}: ${title}`, actor, {
+						taskId: before.id,
+					});
+			}
+			if (owner && owner !== before.sessionId)
+				this.assertPhaseAdmission(this.task(id, before.id), !actor.sessionId && write.overridePhaseGating === true);
 			if (status !== before.status)
 				this.event(id, "task", `Task #${before.number} ${statusLabel(status)}: ${title}`, actor, {
 					taskId: before.id,
@@ -1735,16 +1965,16 @@ export class MissionStore {
 		if (!changed.length) return tasks;
 		const now = Date.now();
 		this.transaction(() => {
-			const update = this.db.prepare("UPDATE tasks SET milestone = ?, updated_at = ? WHERE id = ?");
-			for (const task of changed) update.run(group || null, now, task.id);
+			const phase = this.taskPhase(id, { milestone: group }, actor);
+			const update = this.db.prepare("UPDATE tasks SET milestone = ?, phase_id = ?, updated_at = ? WHERE id = ?");
+			for (const task of changed) update.run(group || null, phase?.id ?? null, now, task.id);
 			this.event(id, "task", `${changed.length} task milestones ${group ? `set to ${group}` : "cleared"}`, actor, {
 				at: now,
 			});
 		});
 		this.changed(id, [...new Set(changed.flatMap((task) => (task.sessionId ? [task.sessionId] : [])))]);
-		return tasks.map((task) =>
-			(task.milestone ?? "") !== group ? { ...task, milestone: group || undefined, updatedAt: now } : task,
-		);
+		const updated = new Map(this.tasks(id).map((task) => [task.id, task]));
+		return tasks.map((task) => updated.get(task.id)!);
 	}
 
 	removeTask(id: string, taskId: string, actor: MissionActor = USER): void {
@@ -1774,7 +2004,12 @@ export class MissionStore {
 	}
 
 	/** Validate the whole start batch, then stable dependency order (caller order breaks ties). */
-	prepareTaskStart(id: string, refs: string[], starting?: ReadonlySet<string>): MissionTask[] {
+	prepareTaskStart(
+		id: string,
+		refs: string[],
+		starting?: ReadonlySet<string>,
+		overridePhaseGating = false,
+	): MissionTask[] {
 		const tasks = [
 			...new Map(
 				refs.map((ref) => {
@@ -1788,7 +2023,9 @@ export class MissionStore {
 		const reasons: string[] = [];
 		for (const task of tasks) {
 			if (starting?.has(`${id}:${task.id}`))
+				// Reservations remain authoritative even with a user gating override.
 				reasons.push(`Task #${task.number} is already starting in another chat`);
+			this.assertPhaseAdmission(task, overridePhaseGating);
 			if (task.sessionId) reasons.push(`Task #${task.number} is already claimed by a chat`);
 			if (task.status === "done" || task.status === "dropped" || task.status === "delegated")
 				reasons.push(`Task #${task.number} is ${task.status}`);
@@ -1822,10 +2059,12 @@ export class MissionStore {
 	}
 
 	/** Spawn admission claims every selected task in one transaction, with no partial success. */
-	claimStartTasks(id: string, refs: string[], sessionId: string): MissionTask[] {
+	claimStartTasks(id: string, refs: string[], sessionId: string, overridePhaseGating = false): MissionTask[] {
 		this.assertMember(id, sessionId);
 		const tasks = this.transaction(() =>
-			this.prepareTaskStart(id, refs).map((task) => this.takeTask(id, task, sessionId, {})),
+			this.prepareTaskStart(id, refs, undefined, overridePhaseGating).map((task) =>
+				this.takeTask(id, task, sessionId, {}, overridePhaseGating),
+			),
 		);
 		this.changed(id, [sessionId]);
 		return tasks;
@@ -1846,7 +2085,7 @@ export class MissionStore {
 	releaseTask(id: string, taskId: unknown, actor: MissionActor = USER): MissionTask {
 		const mission = this.require(id);
 		if (actor.sessionId) this.assertMember(id, actor.sessionId);
-		const before = this.resolveTask(id, taskId);
+		const before = this.rawTask(this.resolveTask(id, taskId));
 		const task = this.transaction(() => {
 			if (
 				actor.sessionId &&
@@ -1940,6 +2179,10 @@ export class MissionStore {
 					skipped.push({ ref, reason: `Task #${task.number} is already claimed by another chat`, task });
 					continue;
 				}
+				if (task.blockedByPhases?.length) {
+					skipped.push({ ref, reason: `Task #${task.number} is blocked by earlier phases`, task });
+					continue;
+				}
 				claimed.push(this.takeTask(id, task, sessionId, actor));
 			}
 			return { claimed, skipped };
@@ -1948,8 +2191,16 @@ export class MissionStore {
 		return result;
 	}
 
-	private takeTask(id: string, task: MissionTask, sessionId: string, actor: MissionActor): MissionTask {
+	private takeTask(
+		id: string,
+		task: MissionTask,
+		sessionId: string,
+		actor: MissionActor,
+		overridePhaseGating = false,
+	): MissionTask {
 		if (task.sessionId === sessionId) return task;
+		this.assertPhaseAdmission(task, overridePhaseGating && !actor.sessionId);
+		task = this.rawTask(task);
 		if (task.sessionId) throw new Conflict(`Task #${task.number} is already claimed by another chat`);
 		const now = Date.now();
 		const status = task.status === "todo" ? "in_progress" : task.status;
@@ -2663,7 +2914,7 @@ export class MissionStore {
 
 	private reconcileTaskPullRequests(id: string, taskId: string, handoffActor?: MissionActor): boolean {
 		if (!handoffActor && this.require(id).status !== "active") return false;
-		const task = this.task(id, taskId);
+		const task = this.rawTask(this.task(id, taskId));
 		if (
 			task.status === "done" ||
 			task.status === "dropped" ||
@@ -3102,6 +3353,7 @@ function missionFrom(row: Row): Mission {
 		status: str(row.status!) as MissionStatus,
 		...(row.coordinator_session_id ? { coordinatorSessionId: str(row.coordinator_session_id) } : {}),
 		...(row.autopilot ? { autopilot: true } : {}),
+		phaseGating: row.phase_gating === 1,
 		briefRevision: num(row.brief_revision!),
 		needsYouCount: num(row.needs_you_count!),
 		tasksDone: num(row.tasks_done!),
@@ -3156,6 +3408,17 @@ function commentFrom(row: Row): MissionComment {
 	};
 }
 
+function phaseFrom(row: Row): MissionPhase {
+	return {
+		id: str(row.id!),
+		missionId: str(row.mission_id!),
+		name: str(row.name!),
+		order: num(row.sort!),
+		...(row.goal ? { goal: str(row.goal) } : {}),
+		...(row.completed_at !== null ? { completedAt: num(row.completed_at!) } : {}),
+	};
+}
+
 function taskFrom(row: Row): MissionTask {
 	const dependsOn = row.depends_on ? (JSON.parse(str(row.depends_on)) as string[]) : undefined;
 	return {
@@ -3167,6 +3430,7 @@ function taskFrom(row: Row): MissionTask {
 		...(row.delegated_to ? { delegatedTo: str(row.delegated_to) } : {}),
 		order: num(row.sort!),
 		...(row.milestone ? { milestone: str(row.milestone) } : {}),
+		...(row.phase_id ? { phaseId: str(row.phase_id) } : {}),
 		...(dependsOn?.length ? { dependsOn } : {}),
 		...(row.decision_ids ? { decisionIds: JSON.parse(str(row.decision_ids)) as string[] } : {}),
 		...(row.session_id ? { sessionId: str(row.session_id) } : {}),

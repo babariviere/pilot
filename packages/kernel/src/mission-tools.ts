@@ -31,6 +31,7 @@ export const MISSION_ACTIONS = [
 	"propose",
 	"delete",
 	"group",
+	"phase",
 	"start",
 	"send",
 	"status",
@@ -50,14 +51,14 @@ export function createMissionTool(call: MissionCall, coordinator = false): ToolD
 		label: "Mission",
 		description: `Read and update the mission this chat belongs to. Mission state is shared with the user and the other chats of the mission.
 Actions:
-- get: without id, compact goal/status/brief revision, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
+- get: without id, compact goal/status/brief revision, tasks grouped by phase with progress, your open tasks and references, other open tasks as [number,title,status,dependsOn?], and counts. Coordinator also gets member states, needs-you, PRs in review and pending/recent decision proposals. No history. Read before work and handoff. With id (task ID or number), one full task: body, dependency/dependent numbers, assignee chat, links with kind/PR state, artifacts and 15 recent events (pass activityCursor as activity cursor with taskId for older events). Prefer this targeted read to scanning lists.
 - links, artifacts: references, filtered by taskId and filter open (default), done or all.
 - decisions: decisions not already in your prompt. Changes arrive as short notices; re-read, as current decisions supersede old prompt text.
 - comments: open comments on demand.
 - activity: newest first; filter taskId, kind, since (ISO timestamp with timezone or numeric event ID, exclusive), limit (default 15, max 100). Returns recentActivity with event IDs and cursor (null at end); pass cursor with the same filters for older events. Unfiltered first-page reads also include an independent recentUserNotes window.
 - brief: read a revision, or replace with markdown and expectedRevision (stale writes fail).
 - update: change the mission title or goal.
-- tasks: list tasks, filter open (default), done or all, mine and milestone. Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, milestone, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Use status "dropped" to retire work while keeping its history.
+- tasks: list tasks, filter open (default), done or all, mine and phase (name or ID, "" for none). Prefer filtered lists or get with id for detail. task: id alone aliases get with id; title creates one, other fields update it (body, status, phase, dependsOn, decisionIds to pin decisions). Tasks are referenced by ID or number (#3). Use status "delegated" for work owned by someone else (not finished or startable). Use status "dropped" to retire work while keeping its history.
 - claim: take id or ids (IDs, numbers or ranges such as ["1-5","#8"]). Returns claimed tasks and skipped tasks with reasons; never takes another chat's task.
 - release: clear claims using the same selectors. Members release their own, coordinator any. Resets active/blocked to todo, preserves other states and links.
 - decide: record a decision, audience all, coordinator or reference (default). Decisions override the brief; only the user changes them later.
@@ -70,6 +71,7 @@ Actions:
 				? `
 - propose (coordinator only): suggest an edit (decisionId, text, reason) or removal (decisionId, remove: true, reason). IDs accept D7. Decisions stay binding until the user accepts; get includes pending and recent outcomes.
 - delete (coordinator only): permanently remove a task by id or number. Removes dependency references and keeps its links at mission level. Prefer status "dropped" when history should remain.
+- phase (coordinator only): operation create (name, optional goal/order), rename (phase name/ID, name, optional goal), reorder (phase, order) or delete (phase). Deleting leaves tasks without a phase. Empty phases are complete. When phase gating is enabled, earlier incomplete phases block claim/start; only the user can override.
 - group (coordinator only): set milestone on every task selected by ids (IDs, numbers or ranges such as ["1-5", "#8"]). Use milestone "" to clear the group. All references must exist; the batch is atomic.
 - task order (coordinator only): set order when creating or updating a task to reorder it. Read tasks for current sort keys. Lower numbers sort first; fractional keys are allowed; ties sort by task number. Numbers and dependencies do not change.
 - task model/thinking (coordinator only): set the task's preferred model and thinking for new chats, validated like start; model "" clears. User-set preferences cannot be changed.
@@ -109,6 +111,9 @@ Actions:
 			goal: Type.Optional(Type.String({ maxLength: 4000 })),
 			body: Type.Optional(Type.String({ maxLength: 8000, description: "Task details." })),
 			status: Type.Optional(taskStatus),
+			phase: Type.Optional(
+				Type.String({ maxLength: 200, description: 'Phase name or ID; task/tasks: "" for none.' }),
+			),
 			milestone: Type.Optional(Type.String({ maxLength: 200 })),
 			dependsOn: Type.Optional(Type.Array(Type.String({ maxLength: 128 }), { description: "Task IDs or numbers." })),
 			decisionIds: Type.Optional(
@@ -134,6 +139,8 @@ Actions:
 			),
 			...(coordinator
 				? {
+						operation: Type.Optional(StringEnum(["create", "rename", "reorder", "delete"] as const)),
+						name: Type.Optional(Type.String({ maxLength: 200 })),
 						decisionId: Type.Optional(Type.String({ maxLength: 128 })),
 						remove: Type.Optional(Type.Literal(true)),
 						reason: Type.Optional(Type.String({ maxLength: 8000 })),

@@ -23,6 +23,120 @@ import { TerminalManager } from "./terminals.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 
+test("gated starts retain preferred model, thinking and app start options together", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Combined" });
+	const first = f.store.addPhase(id, { name: "Build" });
+	const later = f.store.addPhase(id, { name: "Ship" });
+	f.store.addTask(id, { title: "Earlier", phaseId: first.id });
+	const task = await f.service.addTask(id, {
+		title: "Later",
+		phaseId: later.id,
+		preferredModel: "test/preferred",
+		preferredThinking: "high",
+	});
+	f.store.update(id, { phaseGating: true });
+	await f.service.updateTask(id, task.id, { phaseId: later.id, preferredThinking: "low" });
+	const gated = f.store.task(id, task.id);
+	assert.deepEqual(
+		[gated.phaseId, gated.preferredModel, gated.preferredThinking, gated.storedStatus],
+		[later.id, "test/preferred", "low", "todo"],
+	);
+	await assert.rejects(f.service.startTask(id, task.id), /earlier phases/);
+	await assert.rejects(
+		f.service.startTask(id, task.id, { overridePhaseGating: true }, "coordinator"),
+		/Only the user/,
+	);
+	const links = [{ url: "https://example.com/spec" }];
+	await assert.rejects(
+		f.service.startTask(id, task.id, { overridePhaseGating: true, baseBranch: "release", links }),
+		/private-clone project/,
+	);
+	assert.equal(f.store.detail(id).resources.length, 0);
+	const spawn = t.mock.method(f.sessions, "spawn", f.sessions.spawn.bind(f.sessions));
+	const started = await f.service.startTask(id, task.id, {
+		overridePhaseGating: true,
+		mode: "ask",
+		baseBranch: "release",
+		message: "Investigate only",
+		links,
+	});
+	const request = spawn.mock.calls[0]!.arguments[0];
+	assert.deepEqual([request.model, request.thinking, started.mode], ["test/preferred", "low", "ask"]);
+	assert.equal(request.baseBranch, "release");
+	assert.equal(f.store.task(id, task.id).storedStatus, "in_progress");
+	assert.equal(f.store.task(id, task.id).preferredModelSetBy, "user");
+	assert.deepEqual(
+		f.store.detail(id).resources.map((resource) => resource.url),
+		[links[0]!.url],
+	);
+});
+
+test("phase tools enforce roles, assign by name or ID, and summarize grouped progress", async (t) => {
+	const f = await fixture(t);
+	const lead = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "Phases",
+		fromSessionId: lead.id,
+		draft: false,
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	await assert.rejects(
+		f.service.call(member.id, "phase", { operation: "create", name: "No" }),
+		/Only the mission coordinator/,
+	);
+	const first = (await f.service.call(lead.id, "phase", {
+		operation: "create",
+		name: "Build",
+		goal: "Foundation",
+	})) as { id: string };
+	const later = (await f.service.call(lead.id, "phase", { operation: "create", name: "Ship" })) as { id: string };
+	await f.service.call(member.id, "task", { title: "A", phase: "Build" });
+	await f.service.call(member.id, "task", { title: "B", phase: later.id });
+	f.store.update(mission.id, { phaseGating: true });
+	await assert.rejects(f.service.call(member.id, "claim", { id: "2", overridePhaseGating: true }), /earlier phases/);
+	await assert.rejects(f.service.call(lead.id, "start", { id: "2", overridePhaseGating: true }), /earlier phases/);
+	await f.service.call(lead.id, "phase", { operation: "rename", phase: first.id, name: "Foundation" });
+	await f.service.call(lead.id, "phase", { operation: "reorder", phase: "Ship", order: 0 });
+	const get = (await f.service.call(member.id, "get", {})) as {
+		phases: { name: string; tasks: number[]; progress: { done: number; dropped: number; total: number } }[];
+	};
+	assert.deepEqual(
+		get.phases.map((phase) => phase.name),
+		["Ship", "Foundation", "No phase"],
+	);
+	assert.deepEqual(get.phases[0]!.tasks, [2]);
+	assert.deepEqual(get.phases[0]!.progress, { done: 0, dropped: 0, total: 1 });
+	await f.service.call(lead.id, "phase", { operation: "delete", phase: later.id });
+	assert.equal(f.store.resolveTask(mission.id, "2").phaseId, undefined);
+	await f.service.call(member.id, "task", { id: "1", phase: "" });
+	assert.equal(f.store.resolveTask(mission.id, "1").milestone, undefined);
+});
+
+test("user phase-gating override survives final spawn admission; changed gates are rechecked", async (t) => {
+	const f = await fixture(t);
+	const { id } = f.store.create({ projectId: f.project.id, title: "Gated" });
+	const first = f.store.addPhase(id, { name: "Build" });
+	const later = f.store.addPhase(id, { name: "Ship" });
+	f.store.addTask(id, { title: "A", phaseId: first.id });
+	const b = f.store.addTask(id, { title: "B", phaseId: later.id });
+	f.store.update(id, { phaseGating: true });
+	await assert.rejects(f.service.startTask(id, b.id), /earlier phases/);
+	const session = await f.service.startTask(id, b.id, { overridePhaseGating: true });
+	assert.equal(f.store.task(id, b.id).sessionId, session.id);
+	assert.equal(f.store.task(id, b.id).storedStatus, "in_progress");
+	f.store.releaseTask(id, b.id);
+	f.store.update(id, { phaseGating: false });
+	t.mock.method(f.sessions, "selectTaskModel", async () => {
+		f.store.update(id, { phaseGating: true });
+		return { model: "test/model", thinking: "medium" };
+	});
+	await assert.rejects(f.service.startTask(id, b.id), /earlier phases/);
+	assert.equal(f.store.task(id, b.id).sessionId, undefined);
+});
+
 test("session summaries resolve current membership without attention or task-detail reads", async (t) => {
 	const f = await fixture(t);
 	const lead = await f.spawn();
@@ -4108,6 +4222,65 @@ test("HTTP routes and WebSocket mission subscriptions", async (t) => {
 	const task = await api(`/missions/${id}/tasks`, { method: "POST", body: JSON.stringify({ title: "Auth" }) });
 	assert.equal(task.status, 201);
 	const taskId = ((await task.json()) as { id: string }).id;
+	const phaseCreate = await api(`/missions/${id}/phases`, {
+		method: "POST",
+		body: JSON.stringify({ name: "Build", goal: "Foundation", order: 1 }),
+	});
+	assert.equal(phaseCreate.status, 201);
+	const buildPhase = (await phaseCreate.json()) as { id: string };
+	const shipPhase = (await api(`/missions/${id}/phases`, {
+		method: "POST",
+		body: JSON.stringify({ name: "Ship", order: 2 }),
+	}).then((response) => response.json())) as { id: string };
+	const renamedPhase = await api(`/missions/${id}/phases/${buildPhase.id}`, {
+		method: "PATCH",
+		body: JSON.stringify({ name: "Foundation", order: 0 }),
+	});
+	assert.equal(renamedPhase.status, 200);
+	assert.equal((await renamedPhase.json()).name, "Foundation");
+	assert.deepEqual(
+		(await api(`/missions/${id}/phases`).then((response) => response.json())).map(
+			(phase: { id: string }) => phase.id,
+		),
+		[buildPhase.id, shipPhase.id],
+	);
+	const gateTask = (await api(`/missions/${id}/tasks`, {
+		method: "POST",
+		body: JSON.stringify({ title: "Earlier", phaseId: buildPhase.id }),
+	}).then((response) => response.json())) as { id: string };
+	assert.equal(
+		(
+			await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ phaseGating: true }) }).then(
+				(response) => response.json(),
+			)
+		).phaseGating,
+		true,
+	);
+	const assignedPhase = await api(`/missions/${id}/tasks/${taskId}`, {
+		method: "PATCH",
+		body: JSON.stringify({ phaseId: shipPhase.id }),
+	}).then((response) => response.json());
+	assert.equal(assignedPhase.status, "blocked");
+	assert.equal(assignedPhase.storedStatus, "todo");
+	assert.equal(assignedPhase.milestone, "Ship");
+	const gatedStart = await api(`/missions/${id}/tasks/${taskId}/start`, { method: "POST", body: "{}" });
+	assert.equal(gatedStart.status, 409);
+	await gatedStart.arrayBuffer();
+	const deletedPhase = await api(`/missions/${id}/phases/${shipPhase.id}`, { method: "DELETE" });
+	assert.equal(deletedPhase.status, 200);
+	await deletedPhase.arrayBuffer();
+	const unphased = (await api(`/missions/${id}`).then((response) => response.json())).tasks.find(
+		(value: { id: string }) => value.id === taskId,
+	);
+	assert.equal(unphased.phaseId, undefined);
+	assert.equal(unphased.milestone, undefined);
+	await api(`/missions/${id}/tasks/${gateTask.id}`, { method: "DELETE" }).then((response) => response.arrayBuffer());
+	await api(`/missions/${id}/phases/${buildPhase.id}`, { method: "DELETE" }).then((response) =>
+		response.arrayBuffer(),
+	);
+	await api(`/missions/${id}`, { method: "PATCH", body: JSON.stringify({ phaseGating: false }) }).then((response) =>
+		response.arrayBuffer(),
+	);
 	const patched = await api(`/missions/${id}/tasks/${taskId}`, {
 		method: "PATCH",
 		body: JSON.stringify({ status: "blocked" }),

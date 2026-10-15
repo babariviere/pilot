@@ -131,6 +131,8 @@ export class MissionService {
 	private readonly contexts = new Map<string, string>();
 	/** Canonical mission/task keys reserved before any asynchronous start preparation. */
 	private readonly taskStarts = new Set<string>();
+	/** Scoped to an explicit user start, including the final synchronous spawn admission. */
+	private readonly phaseOverrides = new Set<string>();
 
 	constructor(store: MissionStore, sessions: SessionManager, projects: ProjectStore) {
 		this.store = store;
@@ -154,8 +156,15 @@ export class MissionService {
 				this.assertSameProject(sessionId, missionId);
 				store.join(sessionId, missionId);
 				// Keep claim conflicts inside spawn admission, where rejected metadata is removed.
-				if (taskId !== undefined)
-					store.claimStartTasks(missionId, typeof taskId === "string" ? [taskId] : taskId, sessionId);
+				if (taskId !== undefined) {
+					const refs = typeof taskId === "string" ? [taskId] : taskId;
+					store.claimStartTasks(
+						missionId,
+						refs,
+						sessionId,
+						refs.every((ref) => this.phaseOverrides.has(`${missionId}:${ref}`)),
+					);
+				}
 				if (coordinator) store.update(missionId, { coordinatorSessionId: sessionId });
 			},
 			membership: (sessionId) => store.membership(sessionId),
@@ -431,9 +440,13 @@ export class MissionService {
 		request: StartMissionTaskRequest = {},
 		by: TaskStarter = "user",
 	): Promise<SessionSummary> {
-		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts);
+		if (request.overridePhaseGating !== undefined && typeof request.overridePhaseGating !== "boolean")
+			throw new Error("overridePhaseGating must be a boolean");
+		if (by !== "user" && request.overridePhaseGating) throw new Conflict("Only the user can override phase gating");
+		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts, request.overridePhaseGating);
 		const keys = tasks.map((task) => `${missionId}:${task.id}`);
 		for (const key of keys) this.taskStarts.add(key);
+		if (request.overridePhaseGating) for (const key of keys) this.phaseOverrides.add(key);
 		try {
 			return await this.startReservedTasks(
 				missionId,
@@ -443,6 +456,7 @@ export class MissionService {
 			);
 		} finally {
 			for (const key of keys) this.taskStarts.delete(key);
+			for (const key of keys) this.phaseOverrides.delete(key);
 		}
 	}
 
@@ -501,7 +515,7 @@ export class MissionService {
 	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
-		let tasks = this.store.prepareTaskStart(missionId, taskIds);
+		let tasks = this.store.prepareTaskStart(missionId, taskIds, undefined, request.overridePhaseGating);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
 		// Workspace options are checked again at spawn, but references must not be saved for a start that cannot run.
@@ -523,7 +537,7 @@ export class MissionService {
 				);
 			});
 		// Recheck claims after model/settings I/O.
-		tasks = this.store.prepareTaskStart(missionId, taskIds);
+		tasks = this.store.prepareTaskStart(missionId, taskIds, undefined, request.overridePhaseGating);
 		for (const key of ["artifacts", "links"] as const)
 			if (request[key] !== undefined && (!Array.isArray(request[key]) || request[key].length > 40))
 				throw new Error(`${key} must be an array of at most 40 references`);
@@ -567,7 +581,7 @@ export class MissionService {
 			else artifacts[previous] = value;
 		}
 		const detail = this.store.detail(missionId);
-		tasks = this.store.prepareTaskStart(missionId, taskIds);
+		tasks = this.store.prepareTaskStart(missionId, taskIds, undefined, request.overridePhaseGating);
 		const selected = new Set(taskIds);
 		const taskArtifacts = detail.artifacts
 			.filter(
@@ -628,7 +642,7 @@ export class MissionService {
 		if (!missionId) throw new Error("This chat is not part of a mission. Ask the user to add it to one.");
 		const mission = this.store.require(missionId);
 		if (
-			(["propose", "delete", "group", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
+			(["propose", "delete", "group", "phase", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
 				(action === "task" &&
 					(args.order !== undefined || args.model !== undefined || args.thinking !== undefined))) &&
 			mission.coordinatorSessionId !== sessionId
@@ -640,6 +654,22 @@ export class MissionService {
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
 		switch (action) {
+			case "phase": {
+				const write = { name: args.name, goal: args.goal, order: args.order } as Parameters<
+					MissionStore["addPhase"]
+				>[1];
+				if (args.operation === "create") return this.store.addPhase(missionId, write, actor);
+				const phase = this.store.resolvePhase(missionId, args.phase ?? args.id);
+				if (args.operation === "delete") {
+					this.store.removePhase(missionId, phase.id, actor);
+					return { id: phase.id, deleted: true };
+				}
+				if (args.operation !== "rename" && args.operation !== "reorder")
+					throw new Error("phase requires operation create, rename, reorder or delete");
+				if (args.operation === "rename" && args.name === undefined) throw new Error("rename requires name");
+				if (args.operation === "reorder" && args.order === undefined) throw new Error("reorder requires order");
+				return this.store.updatePhase(missionId, phase.id, write, actor);
+			}
 			case "bindPr":
 			case "unbindPr": {
 				const target = str("targetSessionId");
@@ -789,8 +819,33 @@ export class MissionService {
 				const view = new MissionAgentView(detail, sessionId, this.sessions);
 				const open = detail.tasks.filter(isOpen);
 				const mine = open.filter((task) => task.sessionId === sessionId);
+				const phaseTasks = new Map<string | undefined, MissionTask[]>();
+				for (const task of detail.tasks) {
+					let group = phaseTasks.get(task.phaseId);
+					if (!group) {
+						group = [];
+						phaseTasks.set(task.phaseId, group);
+					}
+					group.push(task);
+				}
 				return {
 					mission: { title: mission.title, goal: mission.goal, status: mission.status },
+					phaseGating: mission.phaseGating ?? false,
+					phases: [
+						...detail.phases.map(({ missionId: _, ...phase }) => phase),
+						{ id: undefined, name: "No phase" },
+					].map((phase) => {
+						const tasks = phaseTasks.get(phase.id) ?? [];
+						return {
+							...phase,
+							progress: {
+								done: tasks.filter((task) => task.status === "done").length,
+								dropped: tasks.filter((task) => task.status === "dropped").length,
+								total: tasks.length,
+							},
+							tasks: tasks.filter(isOpen).map((task) => task.number),
+						};
+					}),
 					briefRevision: mission.briefRevision,
 					decisions: detail.decisions.map(({ number }) => `D${number}`),
 					tasks: mine.map((task) => view.task(task)),
@@ -953,13 +1008,20 @@ export class MissionService {
 				if (args.mine !== undefined && typeof args.mine !== "boolean") throw new Error("mine must be a boolean");
 				if (args.milestone !== undefined && typeof args.milestone !== "string")
 					throw new Error("milestone must be a string");
+				const phaseId =
+					args.phase === undefined
+						? undefined
+						: args.phase === ""
+							? null
+							: this.store.resolvePhase(missionId, args.phase).id;
 				return {
 					tasks: detail.tasks
 						.filter(
 							(task) =>
 								(filter === "all" || (filter === "done" ? !isOpen(task) : isOpen(task))) &&
 								(!args.mine || task.sessionId === sessionId) &&
-								(args.milestone === undefined || args.milestone === task.milestone),
+								(args.milestone === undefined || args.milestone === task.milestone) &&
+								(phaseId === undefined || (task.phaseId ?? null) === phaseId),
 						)
 						.map((task) => view.task(task, true)),
 				};
@@ -971,6 +1033,9 @@ export class MissionService {
 					...(args.status !== undefined ? { status: args.status } : {}),
 					...(args.order !== undefined ? { order: args.order } : {}),
 					...(args.milestone !== undefined ? { milestone: args.milestone } : {}),
+					...(args.phase !== undefined
+						? { phaseId: args.phase === "" ? null : this.store.resolvePhase(missionId, args.phase).id }
+						: {}),
 					...(args.dependsOn !== undefined ? { dependsOn: args.dependsOn } : {}),
 					...(args.decisionIds !== undefined ? { decisionIds: args.decisionIds } : {}),
 					// Tool strings cannot be null: an empty string clears the preference.
@@ -1233,6 +1298,10 @@ class MissionAgentView {
 					}
 				: {}),
 			...(task.milestone ? { milestone: task.milestone } : {}),
+			...(task.phaseId ? { phaseId: task.phaseId } : {}),
+			...(task.blockedByPhases?.length
+				? { blockedByPhases: task.blockedByPhases, storedStatus: task.storedStatus }
+				: {}),
 			...(task.dependsOn?.length ? { dependsOn: this.dependencies(task) } : {}),
 			...(full && task.decisionIds?.length
 				? {
