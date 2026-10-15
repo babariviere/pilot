@@ -162,10 +162,10 @@ private struct InboxSections: View {
                 Text(empty).font(.pilot(.body)).foregroundStyle(Theme.mutedForeground)
                     .padding(.horizontal, 8).padding(.vertical, 4)
             }
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                if index > 0 { HairlineDivider(leading: 34) }
+            // Linear sub-issues follow their parent. Slack rows have none, so they stay in order.
+            LinearIssueTreeRows(groups: LinearIssueTree.build(items)) { item, subIssues in
                 TrackedItemRow(item: item, actions: actions, now: now, context: projectName(item.projectId),
-                               changed: reload)
+                               subIssues: subIssues, changed: reload)
                     .inboxCorner(model.trackedItemSignal(item),
                                  background: model.trackedItemSession(item)?.isWaitingOnJobs == true)
             }
