@@ -98,8 +98,7 @@ export class OperationJournal {
 		if (Buffer.byteLength(JSON.stringify(op) ?? "") > MAX_PAYLOAD + 4096)
 			throw new OperationConflict("Oversized operation envelope");
 		if (
-			!op ||
-			op.schemaVersion !== 1 ||
+			op?.schemaVersion !== 1 ||
 			!identifier.test(op.operationId) ||
 			!identifier.test(op.producerId) ||
 			!Number.isSafeInteger(op.sequence) ||
