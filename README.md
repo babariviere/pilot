@@ -447,6 +447,9 @@ apps/macos/scripts/test.sh        # Swift tests
 apps/macos/scripts/build.sh       # native app build
 ```
 
+CI runs portable Node tests and typechecking on Linux, with a smaller macOS lane for native behavior
+and packaging. Both lanes gate releases alongside Swift verification.
+
 See [testing](docs/testing.md) for suite selection and offline fixtures, and the
 [CPU/memory](docs/performance-check.md) and [I/O](docs/io-performance-check.md) audits for measurement methods.
 For agent-side artifact preview screenshots, install the optional renderer with `pnpm artifacts:browser`.
@@ -461,7 +464,7 @@ Pilot's embedding exports; the current pin stays on the compatible embedding com
 manager refreshes `pnpm-lock.yaml` with dependency updates, and Renovate reports artifact generation
 success or failure on every update PR.
 Automerge is disabled. Renovate PRs also check an isolated production runtime before and after ZIP
-relocation in the Node CI job. Review those checks and the existing tests before merging.
+relocation in the macOS Node CI job. Review those checks and the existing tests before merging.
 
 Renovate runs through the [Renovate GitHub App](https://github.com/apps/renovate). Re-enable the
 `pi-extensions` package rule only after upstream `main` includes Pilot's embedding exports and the

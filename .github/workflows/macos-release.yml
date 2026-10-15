@@ -1,4 +1,4 @@
-name: macOS arm64
+name: Pilot CI and macOS release
 
 on:
   push:
@@ -30,15 +30,56 @@ env:
   JJ_SHA256: 43daa37ce0f9716cdf6fb65a29cbcae74a3160aef048cf3cb3d166d41cb4ab58
 
 jobs:
-  # Verification is split into independent jobs that run in parallel. Swift builds dominate
-  # (debug for tests, release for the bundle), and neither needs the Node toolchain.
+  # Portable tests use Linux so they do not compete for macOS runner capacity.
+  # Keep the existing node check name; native coverage and packaging gate releases separately.
   node:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: "pilot-ci-main-node-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      cancel-in-progress: true
+    env:
+      JJ_SHA256: fce0271158e665ceb82dc66c5eb95b1728649094e9133074f3b5baece345fc08
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+      - name: Install native addon build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes python3 make g++
+      - name: Install Jujutsu
+        run: |
+          install_dir="$RUNNER_TEMP/jj"
+          archive="$RUNNER_TEMP/jj.tar.gz"
+          mkdir -p "$install_dir"
+          curl --fail --location --retry 3 --output "$archive" "https://github.com/jj-vcs/jj/releases/download/v$JJ_VERSION/jj-v$JJ_VERSION-x86_64-unknown-linux-musl.tar.gz"
+          echo "$JJ_SHA256  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$install_dir"
+          echo "$install_dir" >> "$GITHUB_PATH"
+          "$install_dir/jj" --version
+      - name: Verify toolchain and architecture
+        run: |
+          test "$(uname -m)" = x86_64
+          node --version
+          jj --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test -- --lane=portable
+
+  # OS-sensitive smoke coverage, native Ask artifacts and packaging stay on Darwin.
+  node-macos:
     runs-on: macos-15
     timeout-minutes: 15
     # A newer main push cancels this job, which skips the superseded run's release jobs. Release
     # commits, PRs and dispatches get a unique group. Release jobs themselves are never cancelled.
     concurrency:
-      group: "pilot-ci-main-node-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
+      group: "pilot-ci-main-node-macos-${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !startsWith(github.event.head_commit.message, 'chore(main): release') && 'main' || github.run_id }}"
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@v4
@@ -66,8 +107,7 @@ jobs:
           node --version
           jj --version
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm test
+      - run: pnpm test -- --lane=macos
       - name: Packaging and release metadata tests
         run: |
           for script in apps/macos/scripts/*.sh; do bash -n "$script"; done
@@ -163,7 +203,7 @@ jobs:
           if-no-files-found: error
 
   release-please:
-    needs: [node, swift-test, app-bundle]
+    needs: [node, node-macos, swift-test, app-bundle]
     # Never expose write permissions or release credentials to PRs or forks.
     if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && inputs.release_tag == ''
     runs-on: ubuntu-latest
@@ -188,9 +228,9 @@ jobs:
           manifest-file: .release-please-manifest.json
 
   release:
-    needs: [node, swift-test, app-bundle, release-please]
+    needs: [node, node-macos, swift-test, app-bundle, release-please]
     # always() permits an explicit retry when release-please is intentionally skipped.
-    if: always() && needs.node.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
     # Serialize stable publishing. Semantic-version ordering protects latest.
@@ -227,7 +267,7 @@ jobs:
               raise SystemExit('Release tag must match the stable package.json version.')
           PY
           test "$(git rev-parse HEAD)" = "$(gh api "repos/$PILOT_UPDATE_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
-      # Tests are not repeated here. The node and swift-test jobs gate this job, and a draft
+      # Tests are not repeated here. Both Node lanes and Swift verification gate this job, and a draft
       # retry rebuilds a tag whose commit already passed them when it landed on main.
       - name: Load current release packaging tools
         uses: actions/checkout@v4

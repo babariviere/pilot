@@ -11,13 +11,28 @@ runner comparisons and the existing reopen benchmark, but is not needed by the d
 | `pnpm test:fast` | Explicitly selected unit and offline service tests for quick feedback |
 | `pnpm test:integration` | Real repository, process, persistence, transport and kernel integration tests |
 | `pnpm test:stress` | Large-file diff budgets, fan-out and 10,000-event notice regression tests |
-| `pnpm test` | Every group, including runner/helper tests. This remains the CI gate |
+| `pnpm test` | Every group, including runner/helper tests, on the current host |
+| `pnpm test -- --lane=portable` | Broad Linux CI gate, excluding native-only integration files |
+| `pnpm test -- --lane=macos` | Native-only integration plus explicit Darwin smoke coverage |
 | `pnpm test:timings` | Full gate plus the slowest reported test-file execution times |
 
 New tests default to integration unless explicitly admitted to the fast list in `scripts/test-suites.ts`.
 `*.stress.test.ts` belongs to stress. No group is silently dropped by the full command.
 `pnpm test -- --list` lists the full selection; each group also accepts `--list`. Native Node test flags
 can be forwarded, for example `pnpm test:integration -- --test-name-pattern='restore'`.
+
+CI runs the portable lane and typechecking on Ubuntu x86-64. A smaller macOS arm64 lane retains
+the real coordinator sandbox, native Ask artifact publication/preview, wake sampling, PTYs, runtime
+environment and bundled-extension coverage, plus packaging and relocated production-runtime checks.
+Both lanes gate releases alongside Swift tests and the app bundle. The separate Linux headless smoke
+workflow still verifies daemon/kernel execution and the native dependency ABI.
+
+Lane selection is explicit in `scripts/test-suites.ts`: new files default to the portable lane; only
+`kernel/ask.integration.test.ts` is currently native-only because it publishes and previews SwiftUI.
+OS-sensitive files intentionally run in both lanes. `--lane` intersects `--suite`, supports `--list`,
+and never changes plain `pnpm test` into a host-dependent subset. Running the macOS lane on another OS
+fails instead of silently losing native coverage (listing it is allowed). Renderer-dependent tests
+keep their existing optional-browser and `PILOT_SWIFTUI_TESTS=1` guards.
 
 The default is two test files concurrently, including in CI. `PILOT_TEST_CONCURRENCY=4 pnpm test`
 is useful on an otherwise quiet machine with headroom, but more Git/jj and compiler processes can make

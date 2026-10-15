@@ -13,21 +13,41 @@ test("every PR and main push runs CI, including manifest-only and lockfile-only 
 	assert.match(node, /run: pnpm test/);
 });
 
-test("verification installs checksum-verified jj before pnpm test", () => {
+test("portable tests run on Linux and native coverage plus packaging stay on macOS", () => {
+	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
+	const linux = workflow.split("\n  node:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	const macos = workflow.split("\n  node-macos:\n")[1].split(/\n  [a-z-]+:\n/)[0];
+	assert.match(linux, /runs-on: ubuntu-24\.04/);
+	assert.match(linux, /apt-get install --yes python3 make g\+\+/);
+	assert.match(linux, /pnpm test -- --lane=portable/);
+	assert.match(macos, /runs-on: macos-15/);
+	assert.match(macos, /pnpm test -- --lane=macos/);
+	assert.match(macos, /python3 -B -m unittest discover/);
+	assert.match(macos, /node --test apps\/macos\/scripts\/tests\/\*\.test\.mjs/);
+	assert.match(macos, /Verify packaged dependency updates/);
+	assert.doesNotMatch(linux, /ditto|Packaging and release metadata tests|Verify packaged dependency updates/);
+	assert.match(macos, /pilot-ci-main-node-macos-/);
+});
+
+test("both Node lanes install architecture-matched checksum-verified jj before testing", () => {
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	assert.match(workflow, /JJ_VERSION: 0\.46\.0/);
 	assert.match(workflow, /JJ_SHA256: [a-f0-9]{64}/);
-	const job = workflow.split("\n  node:\n")[1].split(/\n  [a-z-]+:\n/)[0];
-	const start = job.indexOf("- name: Install Jujutsu");
-	const end = job.indexOf("\n      -", start);
-	const test = job.indexOf("pnpm test");
-	assert.ok(start >= 0 && end > start && test > end, "node must install jj before testing");
-	const installation = job.slice(start, end);
-	assert.match(installation, /releases\/download\/v\$JJ_VERSION\/jj-v\$JJ_VERSION-aarch64-apple-darwin\.tar\.gz/);
-	assert.ok(installation.indexOf("shasum -a 256 --check") < installation.indexOf("tar -xzf"));
-	assert.match(installation, /echo "\$JJ_SHA256  \$archive" \| shasum -a 256 --check/);
-	assert.match(installation, /echo "\$install_dir" >> "\$GITHUB_PATH"/);
-	assert.match(installation, /"\$install_dir\/jj" --version/);
+	for (const [name, target, verifier] of [
+		["node", "x86_64-unknown-linux-musl", "sha256sum"],
+		["node-macos", "aarch64-apple-darwin", "shasum -a 256"],
+	]) {
+		const job = workflow.split(`\n  ${name}:\n`)[1].split(/\n  [a-z-]+:\n/)[0];
+		const start = job.indexOf("- name: Install Jujutsu");
+		const end = job.indexOf("\n      -", start);
+		assert.ok(start >= 0 && end > start && job.indexOf("pnpm test") > end);
+		const installation = job.slice(start, end);
+		assert.ok(installation.includes(`releases/download/v$JJ_VERSION/jj-v$JJ_VERSION-${target}.tar.gz`));
+		assert.ok(installation.indexOf(`${verifier} --check`) < installation.indexOf("tar -xzf"));
+		assert.ok(installation.includes(`echo "$JJ_SHA256  $archive" | ${verifier} --check`));
+		assert.match(installation, /echo "\$install_dir" >> "\$GITHUB_PATH"/);
+		assert.match(installation, /"\$install_dir\/jj" --version/);
+	}
 });
 
 test("Swift verification and bundle jobs cache only pinned dependencies with toolchain-specific keys", () => {
@@ -54,7 +74,7 @@ test("release job publishes only newly created stable releases or explicit draft
 	const workflow = readFileSync(new URL("../../../../.github/workflows/macos-release.yml", import.meta.url), "utf8");
 	const condition = workflow.split("\n  release:\n")[1].match(/^    if: (.+)$/m)[1];
 	const github = { event_name: "push", ref: "refs/heads/main", event: { repository: { fork: false } } };
-	const verification = ["node", "swift-test", "app-bundle"];
+	const verification = ["node", "node-macos", "swift-test", "app-bundle"];
 	const needs = {
 		...Object.fromEntries(verification.map((name) => [name, { result: "success" }])),
 		"release-please": { result: "success", outputs: { release_created: "false" } },
@@ -106,8 +126,8 @@ test("release job publishes only newly created stable releases or explicit draft
 		);
 		needs[name].result = "success";
 	}
-	assert.match(workflow, /\n  release-please:\n    needs: \[node, swift-test, app-bundle\]\n/);
-	assert.match(workflow, /\n  release:\n    needs: \[node, swift-test, app-bundle, release-please\]\n/);
+	assert.match(workflow, /\n  release-please:\n    needs: \[node, node-macos, swift-test, app-bundle\]\n/);
+	assert.match(workflow, /\n  release:\n    needs: \[node, node-macos, swift-test, app-bundle, release-please\]\n/);
 	github.ref = "refs/heads/other";
 	assert.equal(
 		evaluate(github, needs, { release_tag: "v1.2.3" }, () => true),
