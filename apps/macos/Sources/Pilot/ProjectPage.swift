@@ -698,7 +698,7 @@ struct ProjectNeedsYouRow: View {
         case .question:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
             else if let missionId = item.missionId { model.openMission(missionId) }
-        case .unread, .failed, .scheduledFailed, .longJob:
+        case .unread, .failed, .scheduledFailed, .longJob, .prStuck:
             if let sessionId = item.sessionId { model.selectedSessionId = sessionId }
         }
     }
@@ -1089,7 +1089,7 @@ enum ProjectPageText {
     static func needsAction(_ item: DashboardNeedsYouItem) -> String? {
         switch item.kind {
         case .unread: item.sessionId == nil ? nil : "Review"
-        case .failed, .longJob: item.sessionId == nil ? nil : "Open chat"
+        case .failed, .longJob, .prStuck: item.sessionId == nil ? nil : "Open chat"
         case .question: item.sessionId == nil && item.missionId == nil ? nil : "Answer"
         case .scheduledFailed: item.sessionId == nil ? nil : "Open chat"
         }

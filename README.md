@@ -127,6 +127,9 @@ merge conflicts, including earlier PRs in a stack. It sends follow-up work only 
 and no user messages are queued. Automatic follow-ups are limited to three per session, with a
 five-minute cooldown; sending a user message resets the limit. Results and blockers come back to Pilot,
 not GitHub comments or reviews. Ask and direct-checkout sessions do not receive automatic PR follow-ups.
+Owned PRs still blocked by conflicts, failing checks, unresolved review threads or a diverged stack after
+three attempts (or without an automatic follow-up route) appear in Needs you once the chat is idle and
+the cooldown has ended. Fixing the problem clears the reason; sending a message resets the follow-up budget.
 
 GitHub writes are attributed to the chat in its activity and, for mission members, in mission activity.
 The audit records a sanitized operation, PR or branch target when available, time and exit status, not

@@ -10,6 +10,7 @@ import type { KernelCommand } from "@pilot/kernel";
 import type { SessionPullRequest } from "@pilot/protocol";
 import { githubRepository } from "./github.ts";
 import { ProjectStore } from "./projects.ts";
+import { mergeReadiness } from "./pull-request-readiness.ts";
 import type { PullRequestResult } from "./pull-requests.ts";
 import { CommandRejected, SessionManager, type SessionWorker, WorkerUnavailable } from "./sessions.ts";
 import { legacyGitHub } from "./testing/legacy-github.ts";
@@ -428,6 +429,7 @@ test("all PR problems share three attempts, and the cooldown starts after worker
 			f.controls.conflicts = problem === "conflicts";
 			await f.refresh();
 			assert.equal(f.inputs.length, index + 1);
+			assert.equal(f.manager.get(f.id)?.attentionReason, undefined, "automatic work has not finished");
 			assert.equal(f.meta.prFollowUp?.attempts, index + 1);
 			f.working(true);
 			now += cooldown * 2;
@@ -438,17 +440,152 @@ test("all PR problems share three attempts, and the cooldown starts after worker
 			assert.equal(f.meta.prFollowUp?.nextAttemptAt, now + cooldown);
 			now += cooldown - 1;
 			await f.refresh();
+			assert.equal(f.manager.get(f.id)?.attentionReason, undefined, "cooling follow-ups never need the user");
 			assert.equal(f.inputs.length, index + 1, "cooldown is measured from finish, not admission");
 			now++;
 		}
 		await f.refresh();
 		assert.equal(f.inputs.length, 3);
+		assert.deepEqual(f.manager.get(f.id)?.attentionReason, { kind: "pr_stuck", detail: "PR #10 · merge conflicts" });
 		const attempts = f.meta.prFollowUp;
 		await f.restart();
 		assert.deepEqual(f.meta.prFollowUp, attempts);
 		assert.deepEqual(f.meta.agentPullRequests, [url]);
 		assert.equal(f.manager["workers"].size, 0, "the persisted cap prevents reopening after restart");
 		assert.equal(f.inputs.length, 3);
+		assert.equal(
+			f.manager.get(f.id)?.attentionReason?.kind,
+			"pr_stuck",
+			"derived again from persisted health/budget",
+		);
+	});
+});
+
+test("each fresh PR problem needs the user only after the budget, and fixes and user input clear it", async () => {
+	await fixture(async (f) => {
+		f.meta.prFollowUp = { attempts: 3, nextAttemptAt: 0, generation: 0 };
+		const before = activity(f.meta);
+		for (const [problem, detail] of [
+			["checks", "checks failing"],
+			["reviews", "1 review thread"],
+			["conflicts", "merge conflicts"],
+		] as const) {
+			f.controls.checks = problem === "checks";
+			f.controls.reviews = problem === "reviews";
+			f.controls.conflicts = problem === "conflicts";
+			f.controls.draft = problem === "reviews";
+			await f.refresh();
+			assert.deepEqual(f.manager.get(f.id)?.attentionReason, { kind: "pr_stuck", detail: `PR #10 · ${detail}` });
+			assert.equal(f.manager.get(f.id)?.pullRequest?.readiness?.state, "blocked");
+			assert.equal(f.inputs.length, 0);
+			assert.deepEqual(activity(f.meta), before, "PR attention is not an outcome or user activity");
+		}
+		f.controls.conflicts = false;
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.attentionReason, undefined, "fresh healthy status clears it");
+		f.controls.checks = true;
+		await f.refresh();
+		assert.equal(f.manager.get(f.id)?.attentionReason?.kind, "pr_stuck");
+		await f.manager.send(f.id, "Try another approach", "followUp", "reset-stuck");
+		assert.equal(f.meta.prFollowUp?.attempts, 0);
+		assert.equal(f.manager.get(f.id)?.attentionReason, undefined, "user input immediately resets attention");
+		await f.refresh();
+		assert.equal(f.meta.prFollowUp?.attempts, 1);
+		assert.equal(f.manager.get(f.id)?.attentionReason, undefined);
+	});
+});
+
+test("stuck PRs require ownership and true idle, never sleep/update pauses, jobs or pending work", async () => {
+	await fixture(async (f) => {
+		f.meta.prFollowUp = { attempts: 3, nextAttemptAt: 0, generation: 0 };
+		await f.refresh();
+		const manager = f.manager;
+		const meta = f.meta;
+		const worker = await f.worker();
+		const cases: [string, () => void, () => void][] = [
+			["working", () => (worker.state = "working"), () => (worker.state = "idle")],
+			["busy", () => (worker.busy = true), () => (worker.busy = false)],
+			[
+				"job",
+				() =>
+					(worker.runningJobs = [
+						{ id: "j", name: "Tests", state: "running", startedAt: Date.now(), outputPath: "/tmp/j" },
+					]),
+				() => delete worker.runningJobs,
+			],
+			["job follow-up gap", () => (worker.awaitingJobFollowUp = true), () => delete worker.awaitingJobFollowUp],
+			[
+				"pending input",
+				() =>
+					(meta.pending = [
+						{ type: "input", requestId: "auto", content: "Fix", mode: "followUp", onlyIfIdle: true },
+					]),
+				() => delete meta.pending,
+			],
+			[
+				"cooldown",
+				() => (meta.prFollowUp!.nextAttemptAt = Date.now() + 60_000),
+				() => (meta.prFollowUp!.nextAttemptAt = 0),
+			],
+			["sleep marker", () => (meta.sleepPaused = true), () => delete meta.sleepPaused],
+			["sleep gate", () => (manager["sleepPause"] = { since: 1 }), () => (manager["sleepPause"] = undefined)],
+			["update marker", () => (meta.updatePaused = true), () => delete meta.updatePaused],
+			[
+				"update gate",
+				() => {
+					manager["updateGate"].pause();
+				},
+				() => manager["updateGate"].release(),
+			],
+			["kernel recovery", () => (meta.kernelRestartPending = true), () => delete meta.kernelRestartPending],
+			["startup", () => (meta.initializing = true), () => delete meta.initializing],
+			["failure", () => (meta.outcome = "failed"), () => (meta.outcome = "done")],
+			["asks", () => (meta.outcome = "question"), () => (meta.outcome = "done")],
+			["unowned", () => (meta.agentPullRequests = []), () => (meta.agentPullRequests = [url])],
+			["archived", () => (meta.archivedAt = 1), () => delete meta.archivedAt],
+		];
+		for (const [label, start, stop] of cases) {
+			try {
+				start();
+				assert.equal(manager.get(f.id)?.attentionReason, undefined, label);
+			} finally {
+				stop();
+			}
+		}
+		assert.equal(manager.get(f.id)?.attentionReason?.kind, "pr_stuck");
+		meta.prFollowUp!.attempts = 2;
+		assert.equal(manager.get(f.id)?.attentionReason, undefined);
+		// An owned PR with no automatic route should not silently disappear into Recent.
+		meta.cancelled = true;
+		assert.equal(manager.get(f.id)?.attentionReason?.kind, "pr_stuck");
+	});
+});
+
+test("a diverged stack uses the cached health, but a closed or merged PR never needs attention", async () => {
+	await fixture(async (f) => {
+		f.meta.prFollowUp = { attempts: 3, nextAttemptAt: 0, generation: 0 };
+		const pr: SessionPullRequest = {
+			number: 10,
+			url,
+			title: "Stack head",
+			branch,
+			checkedAt: 1,
+			state: "open",
+			readiness: mergeReadiness(
+				{ state: "OPEN", isDraft: false, mergeable: "MERGEABLE", reviewDecision: null, mergeStateStatus: "CLEAN" },
+				{ failedChecks: [], reviewComments: 0, mergeConflicts: false, divergedFrom: "feat/base" },
+				false,
+			),
+		};
+		await f.manager["applyPullRequest"](f.meta, { pullRequest: pr });
+		assert.deepEqual(f.manager.get(f.id)?.attentionReason, {
+			kind: "pr_stuck",
+			detail: "PR #10 · diverged from feat/base",
+		});
+		for (const state of ["closed", "merged"] as const) {
+			await f.manager["applyPullRequest"](f.meta, { pullRequest: { ...pr, state } });
+			assert.equal(f.manager.get(f.id)?.attentionReason, undefined);
+		}
 	});
 });
 

@@ -26,7 +26,8 @@ public enum SessionSignal: String, CaseIterable, Hashable, Sendable {
 extension SessionSummary {
     /// The chat's current PR is open, not a draft, and GitHub reports no blockers.
     public var isReadyToMerge: Bool {
-        guard !isMissionCoordinator, let pullRequest, pullRequest.state == .open else { return false }
+        guard !isMissionCoordinator, attentionReason?.kind != .prStuck,
+              let pullRequest, pullRequest.state == .open else { return false }
         return pullRequest.readiness?.state == .ready
     }
 
@@ -36,7 +37,7 @@ extension SessionSummary {
         if isWorking { return .working }
         if status == .failed && !hasTerminalPullRequest { return .failed }
         // A question waits on the user until answered, even once viewed or after its PRs settled.
-        if unread || status == .question { return .needsYou }
+        if unread || status == .question || attentionReason?.kind == .prStuck { return .needsYou }
         if isReadyToMerge { return .readyToMerge }
         return nil
     }

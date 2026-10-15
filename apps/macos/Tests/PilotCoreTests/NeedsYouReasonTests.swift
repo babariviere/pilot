@@ -17,6 +17,33 @@ private let reasonNow = Date(timeIntervalSince1970: 1_000)
     #expect(NeedsYouReason(kind: .notReviewed).label(at: .nan, now: reasonNow) == "Not reviewed: finished just now")
 }
 
+@Test func stuckPullRequestsUseExistingRowsAndCannotBeReviewedAway() throws {
+    let data = Data(#"{"id":"s","title":"Chat","cwd":"/tmp","createdAt":1,"updatedAt":1,"state":"idle","outcome":"done","outcomeAt":1,"missionId":"m","attentionReason":{"kind":"pr_stuck","detail":"PR #10 · merge conflicts"},"pullRequest":{"number":11,"url":"https://github.com/o/r/pull/11","title":"Healthy head","state":"open","checkedAt":1,"readiness":{"state":"ready","reasons":[],"checkedAt":1}}}"#.utf8)
+    let chat = try JSONDecoder().decode(SessionSummary.self, from: data)
+    #expect(try JSONDecoder().decode(SessionSummary.self, from: JSONEncoder().encode(chat)) == chat)
+    #expect(!chat.isWorking)
+    #expect(!chat.isReadyToMerge)
+    #expect(chat.signal(unread: false) == .needsYou)
+    #expect(chat.needsYouReason(unread: false)?.label(at: 0) == "PR #10 · merge conflicts")
+    let groups = SidebarUrgency.groups([chat], unread: { _ in false })
+    #expect(groups.needsYou == [chat])
+    #expect(groups.readyToMerge.isEmpty)
+    let mission = try JSONDecoder().decode(Mission.self, from: Data(#"{"id":"m","projectId":"p","title":"Release","goal":"Ship","status":"active","briefRevision":0,"needsYouCount":0,"createdAt":1,"updatedAt":2}"#.utf8))
+    #expect(MissionNeedsYou.count(mission: mission, members: [chat], isUnread: { _ in false }) == 1)
+    #expect(MissionNeedsYou.items(mission: mission, detail: nil, members: [chat], isUnread: { _ in false }) == [.chat(chat)])
+    #expect(MissionNeedsYouItem.chat(chat).needsYouLabel() == "PR #10 · merge conflicts")
+    let row = DashboardNeedsYouItem(kind: .prStuck, id: "session:s", title: "Chat", sessionId: "s", at: 1, attentionReason: chat.attentionReason)
+    #expect(row.signal == .needsYou)
+    #expect(row.needsYouLabel() == "PR #10 · merge conflicts")
+    #expect(try JSONDecoder().decode(DashboardNeedsYouItem.self, from: JSONEncoder().encode(row)) == row)
+    #expect(InboxText.needsYouSummary([ProjectDashboardCount(needsYou: 1, needsYouReasons: ["pr_stuck": 1])]) == "1 needs you: 1 stuck PR")
+    for outcome in [SessionOutcome.failed, .question] {
+        let other = SessionSummary(id: "s", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1, state: "idle",
+                                   outcome: outcome, attentionReason: chat.attentionReason)
+        #expect(other.needsYouReason(unread: false)?.kind == (outcome == .failed ? .failed : .asks))
+    }
+}
+
 @Test func reasonFlowsThroughDashboardAndFlatInboxPayloads() throws {
     let data = Data(#"{"projectId":"p","kind":"question","id":"session:s","title":"Chat","sessionId":"s","at":1,"attentionReason":{"kind":"asks","detail":"Deploy?"}}"#.utf8)
     let row = try JSONDecoder().decode(InboxNeedsYouItem.self, from: data)

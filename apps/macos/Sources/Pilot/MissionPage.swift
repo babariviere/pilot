@@ -544,7 +544,7 @@ private struct NeedsYouRow: View {
         switch item {
         case let .chat(session):
             if session.isActiveMissionCoordinator { MissionCoordinatorIndicator() }
-            else { SessionStatusIcon(status: session.attentionReason?.kind == .longJob ? .question : session.status) }
+            else { SessionStatusIcon(status: session.attentionReason != nil ? .question : session.status) }
         case .blockedTask: PilotSymbol(MissionTaskStatus.blocked.icon).foregroundStyle(MissionTaskStatus.blocked.color)
         case .comment: PilotSymbol(PilotIcon.update).foregroundStyle(Theme.info)
         case .decisionProposal: PilotSymbol(PilotIcon.draft).foregroundStyle(Theme.blocked)
@@ -566,7 +566,7 @@ private struct NeedsYouRow: View {
 
     private var action: String {
         switch item {
-        case let .chat(session): session.outcome == .failed || session.attentionReason?.kind == .longJob ? "Open chat" : "Review"
+        case let .chat(session): session.outcome == .failed || session.attentionReason != nil ? "Open chat" : "Review"
         case .blockedTask: "View task"
         case .comment: "Reply"
         case .decisionProposal: "Review"

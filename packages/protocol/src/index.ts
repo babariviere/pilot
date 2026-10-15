@@ -247,9 +247,9 @@ export interface SessionSummary {
 	pinned?: boolean;
 	/** Live worker-owned jobs. Omitted when none; never restored from stale metadata. */
 	runningJobs?: SessionJob[];
-	/** Live user-only attention. Does not change working, outcomes or coordinator admission. */
+	/** User-only attention (live jobs or stuck owned PRs). Does not change outcomes or coordinator admission. */
 	attentionReason?: NeedsYouReason;
-	/** Epoch ms when live attention became due. Cleared with the job. */
+	/** Epoch ms when live job attention became due. Cleared with the job. */
 	attentionAt?: number;
 	state: SessionState;
 	/** Daemon-derived user-visible work, including live jobs and their pending follow-up. Prefer over state. */
@@ -817,7 +817,7 @@ export interface DashboardSection<T> {
  * - `long_job`: a live job has run for at least one hour. User-only, even inside a mission.
  * - `unread`: a chat finished or stopped and its result has not been reviewed.
  */
-export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "long_job" | "unread";
+export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "long_job" | "pr_stuck" | "unread";
 
 export type NeedsYouReasonKind =
 	| "failed"
@@ -826,6 +826,7 @@ export type NeedsYouReasonKind =
 	| "couldnt_start"
 	| "mission"
 	| "limit"
+	| "pr_stuck"
 	| "long_job";
 
 /**
