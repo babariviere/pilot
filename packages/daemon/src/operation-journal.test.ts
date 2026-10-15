@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -120,4 +120,18 @@ test("receipt equality does not depend on JSON property order, payload hash is a
 		journal.reserve({ ...operation(2), payload: oversized, payloadHash: payloadHash(oversized) }),
 		OperationConflict,
 	);
+});
+
+test("recovery finishes receipt deletion interrupted after replay-floor publication", async (t) => {
+	const { directory, journal } = await fixture(t);
+	const op = operation();
+	await journal.execute(op, async () => null);
+	const file = join(directory, `${payloadHash(op.operationId)}.json`);
+	const original = await readFile(file);
+	await journal.retire(origin, op.producerId, 1);
+	await writeFile(file, original); // Simulate a crash-left retired record.
+	const reopened = new OperationJournal(directory, destination);
+	await assert.rejects(reopened.lookup(op), OperationExpired);
+	await assert.rejects(readFile(file), { code: "ENOENT" });
+	assert.equal((await reopened.reserve(operation(2))).state, "pending");
 });
