@@ -1,0 +1,89 @@
+name: Linux production package
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+    secrets:
+      LINUX_RUNTIME_PRIVATE_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - name: Verify packaging contracts
+        run: |
+          for script in scripts/linux/*.sh; do bash -n "$script"; done
+          node --test scripts/linux/*.test.mjs
+      - name: Build private Node and production native dependencies in a bounded ABI toolchain
+        # A build toolchain, not a destination distro. Every ELF's actual required symbols are audited.
+        env:
+          SOURCE_COMMIT: ${{ inputs.ref }}
+        run: |
+          commit="$(git rev-parse HEAD)"
+          mkdir -p "$RUNNER_TEMP/linux-package"
+          docker run --rm -v "$PWD:/source:ro" -v "$RUNNER_TEMP/linux-package:/output" \
+            -e PILOT_RELEASE_COMMIT="$commit" \
+            quay.io/pypa/manylinux_2_28_x86_64@sha256:4131ddd7acb9c6c966af02fe7e71edc51e078c2d41f475966697676430bfa2ae \
+            bash /source/scripts/linux/bundle-runtime.sh /output
+      - name: Validate relocated production package on host libraries and real SSH user-service lifecycle
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y openssh-server dbus-user-session
+          bash scripts/linux/verify-service.sh "$RUNNER_TEMP/linux-package/Pilot-linux-x64.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-production-runtime
+          path: ${{ runner.temp }}/linux-package/*
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    if: inputs.publish && github.ref == 'refs/heads/main' && github.event.repository.fork == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-production-runtime
+          path: release
+      - name: Sign verified manifest and attach to the matching stable draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LINUX_RUNTIME_PRIVATE_KEY: ${{ secrets.LINUX_RUNTIME_PRIVATE_KEY }}
+          LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
+          RELEASE_TAG: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          node scripts/linux/release-manifest.mjs sign "$PWD/release"
+          test "$RELEASE_TAG" = "$(node -p "JSON.parse(require('node:fs').readFileSync('release/runtime-manifest.json')).tag")"
+          test "$(git rev-parse HEAD)" = "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)"
+          gh release view "$RELEASE_TAG" --json isDraft,isPrerelease > release-state.json
+          node --input-type=module -e 'import fs from "node:fs"; const r=JSON.parse(fs.readFileSync("release-state.json")); if (!r.isDraft || r.isPrerelease) throw Error("Only stable drafts may receive runtime assets")'
+          gh release upload "$RELEASE_TAG" release/Pilot-linux-x64.tar.gz release/runtime-manifest.json release/runtime-manifest.json.sig --clobber

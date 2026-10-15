@@ -14,6 +14,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  production:
+    uses: ./.github/workflows/linux-package.yml
+    with:
+      ref: ${{ github.sha }}
+
   runtime:
     # This runner is a test fixture, not a distribution/release requirement for devboxes.
     runs-on: ubuntu-24.04

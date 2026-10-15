@@ -83,8 +83,10 @@ The daemon and session workers can also run without a Mac app on **Linux x86-64*
 and a native dependency install on that host (`pnpm install --frozen-lockfile`, then `pnpm start`).
 Compatibility depends on the available runtime, shell and native module ABIs, not a distribution name
 or OS release. Linux CI executes the selected PTY, SQLite and artifact compiler dependencies and a real
-headless daemon/kernel smoke test. Production Linux packaging and persistent service setup are separate
-work; running a daemon in an interactive SSH shell is not a persistent service.
+headless daemon/kernel smoke test. [Production Linux packaging](scripts/linux/README.md) provides a
+signed manifest, private Node/jj runtime and an explicitly provisioned persistent systemd user service.
+CI verifies extracted production assets and real SSH logout survival. Automatic SSH delivery and app
+setup are separate work; running a daemon in an interactive SSH shell is not a persistent service.
 
 `GET /api/hello` returns a stable data-home `daemonId`, application `daemonVersion`, an independently
 versioned protocol range (`minimumClientProtocolVersion` through `protocolVersion`, currently 1),
