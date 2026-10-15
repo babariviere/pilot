@@ -863,6 +863,134 @@ async function fixture(t: TestContext) {
 	return { root, home, source, projects, project, workers, workerFactory, manager, stored };
 }
 
+test("large restart recovery keeps the daemon responsive and bounds cold starts without losing input IDs", async (t) => {
+	const f = await fixture(t);
+	const ids = Array.from({ length: 150 }, () => randomUUID());
+	for (const id of ids) {
+		await mkdir(join(f.home, "sessions", id), { recursive: true });
+		await writeFile(
+			join(f.home, "sessions", id, "meta.json"),
+			JSON.stringify({
+				id,
+				cwd: f.source,
+				title: "Recover",
+				createdAt: 1,
+				updatedAt: 1,
+				initializing: true,
+				pending: [{ type: "input", requestId: `input:${id}`, content: "original", mode: "followUp" }],
+			}),
+		);
+	}
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	await until(() => f.workers.length === 2);
+	assert.equal(sessions.list().length, ids.length, "metadata is available before workers become ready");
+	assert.deepEqual(sessions.prepareUpdate(), { ready: false }, "queued recoveries retain their admission");
+	await new Promise<void>((resolve) => setImmediate(resolve));
+	assert.equal(f.workers.length, 2, "the event loop can run while the recovery queue waits");
+	for (let index = 0; index < ids.length; index++) {
+		await until(() => f.workers.length > index);
+		const worker = f.workers[index]!;
+		worker.open();
+		await until(() => worker.requests.length === 1);
+		assert.equal(worker.requests[0]!.requestId, `input:${worker.spec.sessionId}`);
+	}
+	await Promise.all(sessions["starting"].values());
+	assert.equal(f.workers.length, ids.length);
+	assert.equal(sessions["starting"].size, 0);
+});
+
+test("Stop returns queued input without waiting behind unrelated cold starts", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	for (let index = 0; index < 2; index++) await sessions.spawn({ cwd: f.source, message: "blocked startup" });
+	await until(() => f.workers.length === 2);
+	const queued = await sessions.spawn({ cwd: f.source, message: "withdraw this" });
+	assert.deepEqual(await sessions.stop(queued.id), { ok: true, draft: "withdraw this" });
+	assert.equal(f.workers.length, 2);
+	assert.equal((await f.stored(queued.id)).pending[0]?.type, "abort");
+});
+
+test("queued worker admission waits for a role change rather than persisting a startup failure", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	for (let index = 0; index < 2; index++) await sessions.spawn({ cwd: f.source, message: "blocked startup" });
+	await until(() => f.workers.length === 2);
+	const queued = await sessions.spawn({ projectId: f.project.id, workspace: "direct", message: "promote" });
+	const role = deferred();
+	const roles = sessions as unknown as {
+		isMissionCoordinator(id: string): boolean;
+		prepareCoordinatorRole(id: string): Promise<void>;
+	};
+	t.mock.method(roles, "isMissionCoordinator", (id: string) => id === queued.id);
+	const prepare = t.mock.method(roles, "prepareCoordinatorRole", async (id: string) => {
+		if (id !== queued.id) return;
+		await role.promise;
+		const meta = sessions["require"](id);
+		meta.coordinatorView = {
+			originalCwd: f.source,
+			path: f.source,
+			scratch: f.home,
+			head: "a".repeat(40),
+			repository: f.source,
+		};
+	});
+	f.workers[0]!.open();
+	await until(() => prepare.mock.calls.length > 0);
+	assert.equal(f.workers.length, 2);
+	role.resolve();
+	await until(() => f.workers.length === 3);
+	assert.equal(f.workers[2]!.spec.cwd, f.home);
+	assert.ok(f.workers[2]!.spec.pilot?.coordinatorView);
+	f.workers[2]!.open();
+	await sessions["starting"].get(queued.id);
+	assert.equal((await f.stored(queued.id)).failure, undefined);
+});
+
+test("queued command discovery rechecks archival before opening a worker", async (t) => {
+	const f = await fixture(t);
+	const sessions = await f.manager({ worker: f.workerFactory(false) });
+	const idle = await sessions.spawn({ cwd: f.source, message: "idle" });
+	await until(() => f.workers.length === 1);
+	f.workers[0]!.open();
+	await until(() => sessions.get(idle.id)?.state === "working");
+	await sessions.stop(idle.id);
+	await f.workers[0]!.close();
+	for (let index = 0; index < 2; index++) await sessions.spawn({ cwd: f.source, message: "blocked startup" });
+	await until(() => f.workers.length === 3);
+	// Clear the ready command cache to exercise a first-time cold discovery.
+	sessions["commandLists"].delete(idle.id);
+	const discovery = sessions.commands(idle.id);
+	const rejected = assert.rejects(discovery, /Restore the archived session/);
+	await sessions["setArchived"](idle.id, true);
+	f.workers[1]!.open();
+	await rejected;
+	assert.equal(f.workers.length, 3, "archived chat was never forked");
+});
+
+for (const pause of ["shutdown", "sleep"] as const) {
+	test(`${pause} cancels queued session recoveries without forking or losing their durable outbox`, async (t) => {
+		const f = await fixture(t);
+		const sessions = await f.manager({ worker: f.workerFactory(false) });
+		const chats = [];
+		for (let index = 0; index < 8; index++)
+			chats.push(await sessions.spawn({ cwd: f.source, message: "unfinished" }));
+		await until(() => f.workers.length === 2);
+		if (pause === "shutdown") await sessions.shutdown();
+		else {
+			const sleeping = sessions.pauseForSleep("wake:1");
+			await assert.rejects(sessions["ensureWorker"](f.workers[0]!.spec.sessionId), /paused until the next wake/);
+			await sleeping;
+		}
+		await Promise.all(sessions["starting"].values());
+		assert.equal(f.workers.length, 2);
+		for (const chat of chats) {
+			const saved = await f.stored(chat.id);
+			assert.equal(saved.pending.length, 1);
+			assert.equal(saved.failure, undefined);
+		}
+	});
+}
+
 for (const workspace of ["clone", "direct"] as const) {
 	test(`${workspace} summaries project the session storage directory across restart`, async (t) => {
 		const f = await fixture(t);
@@ -1917,6 +2045,7 @@ test("malformed preparing metadata never removes or runs in the source directory
 	const sessions = await f.manager({ worker: f.workerFactory(false) });
 	const created = await sessions.spawn({ cwd: f.source, message: "corrupted destination" });
 	await sessions.shutdown();
+	const opened = f.workers.length;
 	const file = join(f.home, "sessions", created.id, "meta.json");
 	const meta = await f.stored(created.id);
 	meta.preparing = { source: f.source };
@@ -1930,7 +2059,7 @@ test("malformed preparing metadata never removes or runs in the source directory
 	await until(() => reopened.get(created.id)?.state === "failed");
 	assert.match(reopened.get(created.id)!.error!, /Invalid session workspace destination/);
 	assert.equal(await readFile(join(f.source, "keep"), "utf8"), "source untouched");
-	assert.equal(f.workers.length, 1);
+	assert.equal(f.workers.length, opened);
 });
 
 test("legacy persisted outcomes do not leak through HTTP or initial WebSocket session lists", async (t) => {
@@ -1992,6 +2121,7 @@ test("metadata with a mismatched session ID is skipped instead of trusted", asyn
 	const sessions = await f.manager({ worker: f.workerFactory(false) });
 	const created = await sessions.spawn({ cwd: f.source, message: "wrong id" });
 	await sessions.shutdown();
+	const opened = f.workers.length;
 	const meta = { ...(await f.stored(created.id)), id: "../source" };
 	await writeFile(join(f.home, "sessions", created.id, "meta.json"), JSON.stringify(meta));
 	const warning = mock.method(console, "warn", () => {});
@@ -1999,7 +2129,7 @@ test("metadata with a mismatched session ID is skipped instead of trusted", asyn
 	const reopened = await f.manager();
 	assert.deepEqual(reopened.list(), []);
 	assert.equal(warning.mock.callCount(), 1);
-	assert.equal(f.workers.length, 1);
+	assert.equal(f.workers.length, opened);
 });
 
 for (const phase of ["runtime", "initializing"] as const) {
@@ -2213,6 +2343,7 @@ test("Stop during crash backoff aborts durable work without later automatic inpu
 	await sessions["starting"].get(created.id);
 	f.workers[0]!.crash();
 	await sessions.stop(created.id);
+	await sessions["starting"].get(created.id);
 	assert.equal(f.workers.length, 2);
 	assert.deepEqual(
 		f.workers[1]!.requests.map((command) => command.type),
@@ -2584,7 +2715,7 @@ test("request errors do not complete active work or prevent restart resumption",
 		await flush(manager);
 		const reopened = new SessionManager(home, new ProjectStore(home));
 		const resumed: string[] = [];
-		reopened["ensureWorker"] = (id) => {
+		reopened["ensureWorker"] = async (id) => {
 			resumed.push(id);
 			return fakeWorker();
 		};

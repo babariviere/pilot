@@ -338,7 +338,7 @@ async function setup(cooldownMs?: number) {
 		get meta() {
 			return manager["metas"].get(id)!;
 		},
-		worker: () => manager["ensureWorker"](id) as SessionWorker & { busy: boolean | undefined },
+		worker: async () => (await manager["ensureWorker"](id)) as SessionWorker & { busy: boolean | undefined },
 		// Follow-up delivery runs detached from the PR sync. Wait for it too.
 		refresh: async () => {
 			await manager["pullRequests"].refresh(manager["metas"].get(id)!);
@@ -772,7 +772,7 @@ test("busy, queued, unowned, direct, ask, archived and transitional sessions nev
 	await fixture(async (f) => {
 		const manager = f.manager;
 		const meta = f.meta;
-		const worker = f.worker();
+		const worker = await f.worker();
 		const workspace = meta.workspace!;
 		const before = activity(meta);
 		const cases: [string, () => void, () => void][] = [
@@ -887,7 +887,7 @@ test("the first private session to discover an unowned PR claims it, and a PR ha
 		delete f.meta.agentPullRequests;
 		f.ownElsewhere(url);
 		await f.refresh();
-		f.manager["onPacket"](f.meta, f.worker(), { type: "pullRequest.created", url });
+		f.manager["onPacket"](f.meta, await f.worker(), { type: "pullRequest.created", url });
 		assert.equal(f.meta.agentPullRequests, undefined);
 		assert.ok(f.controls.healthCalls > 0, "unowned PR still receives display readiness");
 		assert.equal(f.inputs.length, 0);
@@ -918,7 +918,7 @@ test("PR-created packets persist ownership only from the current private workspa
 	await fixture(async (f) => {
 		delete f.meta.agentPullRequests;
 		const before = activity(f.meta);
-		const worker = f.worker();
+		const worker = await f.worker();
 		const packet = { type: "pullRequest.created" as const, url };
 		f.manager["onPacket"](f.meta, { ...worker }, packet);
 		assert.equal(f.meta.agentPullRequests, undefined, "stale worker cannot claim a PR");
@@ -954,7 +954,7 @@ test("user input wins a health-fetch race even after the user command has finish
 			await f.manager.send(f.id, "My next instruction", "followUp", "real-user");
 			assert.equal(f.inputs.length, 1);
 			assert.equal(f.inputs[0]?.requestId, "real-user");
-			assert.equal(f.worker().state, "idle");
+			assert.equal((await f.worker()).state, "idle");
 			const afterUser = activity(f.meta);
 			gate.resolve();
 			await refreshing;

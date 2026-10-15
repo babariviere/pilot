@@ -88,6 +88,7 @@ import {
 import { hasUnpublishedWork } from "./unpublished-work.ts";
 import { UpdateGate } from "./update-gate.ts";
 import { WorkerActivity } from "./worker-activity.ts";
+import { WorkerStarts } from "./worker-starts.ts";
 import {
 	createWorkspace,
 	dissociateWorkspace,
@@ -822,6 +823,7 @@ export class SessionManager {
 	/** Last unpublished-work check per session, and the one in flight. */
 	private readonly unpublishedChecks = new Map<string, { at: number; promise?: Promise<boolean> }>();
 	private readonly pool?: WorkerPool;
+	private readonly workerStarts = new WorkerStarts<SessionWorker>();
 	private readonly subscriptionUsage?: SubscriptionUsageSource;
 	private readonly idleParkMs: number;
 	private readonly prFollowUpCooldownMs: number;
@@ -2493,7 +2495,7 @@ export class SessionManager {
 				throw new Error(`Thinking level is not supported by ${name}: ${thinking}`);
 			await this.unparked(id);
 			const reopening = !this.workers.has(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			if (this.closing) throw new Error("pilotd is shutting down");
 			// A fresh worker's activity snapshot may follow ready. The kernel's atomic guard checks
@@ -3128,7 +3130,7 @@ export class SessionManager {
 			// acknowledgement. Those are deliberately released by the caller after Stop returns. Their
 			// existing drain will see the persisted abort; a settled drain can be awaited and retried below.
 			const worker = this.workers.get(id);
-			if (!meta.preparing && !this.delivering.has(id) && worker?.state !== "starting") {
+			if (!meta.preparing && !this.delivering.has(id) && worker && worker.state !== "starting") {
 				let rejected = await admission;
 				if (rejected.has(requestId)) throw rejected.get(requestId);
 				// An existing drain can finish just before observing the abort saved above.
@@ -3183,7 +3185,7 @@ export class SessionManager {
 			if (mode !== undefined && mode !== "steer" && mode !== "followUp")
 				throw new Error("mode must be steer or followUp");
 			await this.unparked(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			await worker.request({
 				type: "editQueuedMessage",
@@ -3213,7 +3215,7 @@ export class SessionManager {
 		try {
 			if (this.closing) throw new Error("pilotd is shutting down");
 			await this.unparked(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			return this.commandLists.get(id) ?? [];
 		} finally {
@@ -3305,7 +3307,7 @@ export class SessionManager {
 			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 			admitted = true;
 			await this.unparked(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			try {
 				await worker.request({
@@ -3342,7 +3344,7 @@ export class SessionManager {
 			if (this.changingModels.has(id)) throw new Conflict("Session is changing its model or conversation");
 			await this.start(id);
 			await this.unparked(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			await worker.request(
 				action === "send"
@@ -3377,7 +3379,7 @@ export class SessionManager {
 			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 			admitted = true;
 			await this.unparked(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			await worker.request({ type: "removeQueuedMessage", requestId: randomUUID(), submissionId });
 			meta.updatedAt = Date.now();
@@ -3452,7 +3454,7 @@ export class SessionManager {
 			if (meta.pending?.length) throw new Conflict("Session is still delivering a message. Try again shortly.");
 			await this.unparked(id);
 			if (this.closing) throw new Error("pilotd is shutting down");
-			let worker = this.ensureWorker(id);
+			let worker = await this.ensureWorker(id);
 			await worker.ready;
 			let result: { switched: boolean; content?: string } | undefined;
 			try {
@@ -3484,7 +3486,7 @@ export class SessionManager {
 				const refresh = !this.workers.has(id) ? this.workspaceRefreshes.get(id) : undefined;
 				if (refresh) await refresh;
 				if (this.closing) throw new Error("pilotd is shutting down");
-				worker = this.ensureWorker(id);
+				worker = await this.ensureWorker(id);
 				await worker.ready;
 			}
 			this.lastUse.set(id, Date.now());
@@ -3632,7 +3634,7 @@ export class SessionManager {
 			this.sending.set(id, (this.sending.get(id) ?? 0) + 1);
 			admitted = true;
 			await this.unparked(id);
-			const worker = this.ensureWorker(id);
+			const worker = await this.ensureWorker(id);
 			await worker.ready;
 			await worker.request(
 				command.action === "send"
@@ -3945,6 +3947,7 @@ export class SessionManager {
 
 	async shutdown(): Promise<void> {
 		this.closing = true;
+		this.workerStarts.close();
 		this.longJobTimers.close();
 		clearTimeout(this.updatePauseTimer);
 		for (const timer of this.kernelRestarts.values()) clearTimeout(timer);
@@ -4066,7 +4069,7 @@ export class SessionManager {
 				const refresh = this.workspaceRefreshes.get(id);
 				if (refresh) await refresh;
 				if (this.closing || this.sleepPause) return;
-				const worker = this.ensureWorker(id);
+				const worker = await this.ensureWorker(id);
 				await worker.ready;
 				if (this.closing || this.sleepPause) return;
 				if (this.workers.get(id) !== worker) throw new WorkerUnavailable("Kernel exited during startup");
@@ -4191,12 +4194,31 @@ export class SessionManager {
 		return task;
 	}
 
-	private ensureWorker(id: string): SessionWorker {
+	private async ensureWorker(id: string): Promise<SessionWorker> {
+		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
+		const existing = this.workers.get(id);
+		if (existing) return existing;
+		return this.workerStarts.open(id, async () => {
+			// A queued chat can change roles or begin parking while other kernels initialize.
+			await this.unparked(id);
+			const refresh = this.workspaceRefreshes.get(id);
+			if (refresh) {
+				await refresh;
+				await this.unparked(id);
+			}
+			return this.openWorker(id);
+		});
+	}
+
+	/** Recheck lifecycle and workspace state after waiting for a cold-start slot. */
+	private openWorker(id: string): SessionWorker {
 		if (this.sleepPause) throw new ServiceUnavailable("Agents are paused until the next wake with connectivity");
 		const existing = this.workers.get(id);
 		if (existing) return existing;
 		if (this.closing) throw new Error("pilotd is shutting down");
 		const meta = this.require(id);
+		if (meta.archivedAt !== undefined) throw new Conflict("Restore the archived session before starting its worker");
+		if (meta.failure) throw new Conflict("Retry startup before starting its worker");
 		if (meta.preparing) throw new Error("Session workspace is still preparing");
 		if (meta.workspaceRecovery) throw new Conflict("Restore the archived session before starting its worker");
 		if (this.isMissionCoordinator(id) !== !!meta.coordinatorView)

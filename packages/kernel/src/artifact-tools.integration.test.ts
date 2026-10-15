@@ -72,6 +72,44 @@ async function fixture(t: TestContext, mode: "on" | "only" = "on", inlineBudget?
 	return { root, cleanup, options, faux };
 }
 
+for (const wake of ["ready", "error", "timeout"] as const) {
+	test(`project memory wake ${wake} remains optional and clears its startup timer`, { timeout: 15_000 }, async (t) => {
+		const f = await fixture(t);
+		const timers = t.mock.method(globalThis, "setTimeout");
+		const cleared = t.mock.method(globalThis, "clearTimeout");
+		const warnings = t.mock.method(console, "warn", () => {});
+		let memoryPrompt: string | undefined;
+		const open = NativeAdapter.open;
+		t.mock.method(NativeAdapter, "open", async (options: NativeAdapterOptions) => {
+			memoryPrompt = options.memoryPrompt;
+			return open.call(NativeAdapter, {
+				...options,
+				...f.options,
+				sessionOptions: { ...f.options.sessionOptions, ...options.sessionOptions },
+			});
+		});
+		const session = await KernelSession.open(
+			{ sessionId: "wake", projectId: "project", cwd: f.root, storageDir: join(f.root, "wake") },
+			{
+				onWorking: () => {},
+				callMemory: async () => {
+					if (wake === "error") throw new Error("memory unavailable");
+					if (wake === "timeout") return new Promise<JsonValue>(() => {});
+					return { count: 1, text: "#0 durable fact" };
+				},
+			},
+		);
+		f.cleanup.push(() => session.close());
+		assert.equal(session.working, false);
+		if (wake === "ready") assert.match(memoryPrompt!, /untrusted factual context.*\n#0 durable fact/);
+		else assert.equal(memoryPrompt, undefined);
+		assert.equal(warnings.mock.calls.length, wake === "ready" ? 0 : 1);
+		const timer = timers.mock.calls.find((call) => call.arguments[1] === 1200)?.result;
+		assert.ok(timer);
+		assert.ok(cleared.mock.calls.some((call) => call.arguments[0] === timer));
+	});
+}
+
 for (const mode of ["on", "only"] as const) {
 	test(`SDK customTools are discoverable through codemode (${mode}) with structured data and images`, {
 		timeout: 15_000,
