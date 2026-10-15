@@ -256,6 +256,10 @@ head and linked as a stack. Supplied artifacts and links attach to every selecte
 prompt, including all task bodies, instructions and references, must fit 4,000 characters; oversized
 starts are rejected with the size, without truncation. The app's task Start chat action remains single-task.
 
+A task can have a preferred model and thinking level, set from the task's menu in the Tasks tab or by the
+coordinator. It uses the same scoped, price-capped model list as coordinator starts. New chats for the task
+start on it unless a start picks another model; the coordinator cannot change or override a preference you set.
+
 Decisions have an audience: **All chats**, **Coordinator only**, or **Reference** (the default).
 Choose it when recording or editing a decision, or change it from the row's context menu.
 Decisions have stable numbers (D1, D2, …). The coordinator can propose edits or removals for the user

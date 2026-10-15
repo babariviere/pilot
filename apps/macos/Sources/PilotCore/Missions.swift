@@ -227,6 +227,12 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public let decisionIds: [String]?
     /// Owning chat; at most one.
     public let sessionId: String?
+    /// Model for new chats on this task unless a start picks another (provider/modelId, scoped and price-capped).
+    public let preferredModel: String?
+    /// Thinking level for the preferred model; nil uses the model's default.
+    public let preferredThinking: String?
+    /// "user" or "coordinator". The coordinator never changes or overrides a user-set preference.
+    public let preferredModelSetBy: String?
     public let createdAt: Double
     public let updatedAt: Double
     public let completedAt: Double?
@@ -241,7 +247,8 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public init(
         id: String, number: Int, title: String, body: String? = nil, status: MissionTaskStatus = .todo,
         order: Double = 0, milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: String? = nil,
-        createdAt: Double = 0, updatedAt: Double = 0, completedAt: Double? = nil, delegatedTo: String? = nil
+        createdAt: Double = 0, updatedAt: Double = 0, completedAt: Double? = nil, delegatedTo: String? = nil,
+        preferredModel: String? = nil, preferredThinking: String? = nil, preferredModelSetBy: String? = nil
     ) {
         self.id = id
         self.number = number
@@ -254,6 +261,9 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
         self.dependsOn = dependsOn
         self.decisionIds = decisionIds
         self.sessionId = sessionId
+        self.preferredModel = preferredModel
+        self.preferredThinking = preferredThinking
+        self.preferredModelSetBy = preferredModelSetBy
         self.createdAt = createdAt
         self.updatedAt = updatedAt
         self.completedAt = completedAt
@@ -277,6 +287,7 @@ extension KeyedEncodingContainer {
 }
 
 /// POST creates; PATCH sends only changed fields. `sessionId` assigns a member chat, or `.clear` releases.
+/// `preferredModel` replaces the preference, including its thinking level; `.clear` removes it.
 public struct MissionTaskWrite: Encodable, Sendable {
     public var title: String?
     public var body: String?
@@ -286,10 +297,13 @@ public struct MissionTaskWrite: Encodable, Sendable {
     public var dependsOn: [String]?
     public var decisionIds: [String]?
     public var sessionId: NullableUpdate<String>?
+    public var preferredModel: NullableUpdate<String>?
+    public var preferredThinking: NullableUpdate<String>?
 
     public init(
         title: String? = nil, body: String? = nil, status: MissionTaskStatus? = nil, order: Double? = nil,
-        milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: NullableUpdate<String>? = nil
+        milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: NullableUpdate<String>? = nil,
+        preferredModel: NullableUpdate<String>? = nil, preferredThinking: NullableUpdate<String>? = nil
     ) {
         self.title = title
         self.body = body
@@ -299,9 +313,13 @@ public struct MissionTaskWrite: Encodable, Sendable {
         self.dependsOn = dependsOn
         self.decisionIds = decisionIds
         self.sessionId = sessionId
+        self.preferredModel = preferredModel
+        self.preferredThinking = preferredThinking
     }
 
-    private enum CodingKeys: String, CodingKey { case title, body, status, order, milestone, dependsOn, decisionIds, sessionId }
+    private enum CodingKeys: String, CodingKey {
+        case title, body, status, order, milestone, dependsOn, decisionIds, sessionId, preferredModel, preferredThinking
+    }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -313,6 +331,8 @@ public struct MissionTaskWrite: Encodable, Sendable {
         try container.encodeIfPresent(dependsOn, forKey: .dependsOn)
         try container.encodeIfPresent(decisionIds, forKey: .decisionIds)
         try container.encodeUpdate(sessionId, forKey: .sessionId)
+        try container.encodeUpdate(preferredModel, forKey: .preferredModel)
+        try container.encodeUpdate(preferredThinking, forKey: .preferredThinking)
     }
 }
 

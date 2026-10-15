@@ -148,6 +148,23 @@ import Testing
     #expect(try json(MissionTaskWrite(decisionIds: []))["decisionIds"] as? [String] == [])
 }
 
+@Test func preferredTaskModelsDecodeAndClearWithNull() throws {
+    let task = try JSONDecoder().decode(MissionTask.self, from: Data(#"""
+    {"id":"t1","number":1,"title":"Implement","status":"todo","order":1,"createdAt":1,"updatedAt":2,
+     "preferredModel":"openai/gpt","preferredThinking":"high","preferredModelSetBy":"user"}
+    """#.utf8))
+    #expect(task.preferredModel == "openai/gpt")
+    #expect(task.preferredThinking == "high")
+    #expect(task.preferredModelSetBy == "user")
+    #expect(try JSONDecoder().decode(MissionTask.self, from: JSONEncoder().encode(task)) == task)
+    let set = try json(MissionTaskWrite(preferredModel: .set("openai/gpt"), preferredThinking: .set("low")))
+    #expect(set["preferredModel"] as? String == "openai/gpt")
+    #expect(set["preferredThinking"] as? String == "low")
+    let clear = try json(MissionTaskWrite(preferredModel: .clear))
+    #expect(clear.keys.sorted() == ["preferredModel"])
+    #expect(clear["preferredModel"] is NSNull)
+}
+
 @Test func everyDecisionAudienceRoundTripsAndPartialWritesOmitText() throws {
     for audience in MissionDecisionAudience.allCases {
         let data = Data("{\"id\":\"d1\",\"text\":\"Rule\",\"audience\":\"\(audience.rawValue)\",\"createdAt\":1,\"updatedAt\":2}".utf8)

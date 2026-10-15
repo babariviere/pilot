@@ -12,6 +12,7 @@ import type {
 	MissionEventKind,
 	MissionResource,
 	MissionTask,
+	MissionTaskWrite,
 	SessionSummary,
 	StartMissionCoordinatorRequest,
 	StartMissionTaskRequest,
@@ -81,6 +82,42 @@ function taskMessage(
 			`Opening message is too long (${message.length} characters; max 4000). Shorten the task body, message or references. Put durable context in the brief, decisions or task links.`,
 		);
 	return message;
+}
+
+/** The app's Start chat acts for the user; the coordinator's start must respect user-set preferences. */
+export type TaskStarter = "user" | "coordinator";
+
+/**
+ * An explicit start choice wins, else the tasks' preferred model (a user-set one first), else the project's
+ * default. The coordinator cannot pick a model or thinking level that differs from a user-set preference.
+ */
+function taskModelChoice(
+	tasks: MissionTask[],
+	request: StartMissionTaskRequest,
+	by: TaskStarter,
+): { model?: string; thinking?: string; preferredBy?: MissionTask } {
+	const requested = typeof request.model === "string" ? request.model.trim() : request.model;
+	if (by === "coordinator")
+		for (const task of tasks) {
+			if (task.preferredModelSetBy !== "user") continue;
+			const thinking = task.preferredThinking;
+			if (
+				(requested !== undefined && requested !== task.preferredModel) ||
+				(request.thinking !== undefined && thinking !== undefined && request.thinking !== thinking)
+			)
+				throw new Conflict(
+					`Task #${task.number} has a user-set preferred model (${task.preferredModel}${thinking ? `, thinking ${thinking}` : ""}). Omit model and thinking to use it.`,
+				);
+		}
+	const preferred =
+		tasks.find((task) => task.preferredModelSetBy === "user") ?? tasks.find((task) => task.preferredModel);
+	if (!preferred?.preferredModel || (requested !== undefined && requested !== preferred.preferredModel))
+		return { model: request.model, thinking: request.thinking };
+	return {
+		model: preferred.preferredModel,
+		thinking: request.thinking ?? preferred.preferredThinking,
+		...(requested === undefined ? { preferredBy: preferred } : {}),
+	};
 }
 
 export class MissionService {
@@ -377,12 +414,22 @@ export class MissionService {
 	}
 
 	/** Single-task UI/API entry point, sharing reservations with coordinator batches. */
-	async startTask(missionId: string, taskId: string, request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
-		return this.startTasks(missionId, [taskId], request);
+	async startTask(
+		missionId: string,
+		taskId: string,
+		request: StartMissionTaskRequest = {},
+		by: TaskStarter = "user",
+	): Promise<SessionSummary> {
+		return this.startTasks(missionId, [taskId], request, by);
 	}
 
 	/** Reserve all canonical keys synchronously, or none, before asynchronous preparation. */
-	async startTasks(missionId: string, refs: string[], request: StartMissionTaskRequest = {}): Promise<SessionSummary> {
+	async startTasks(
+		missionId: string,
+		refs: string[],
+		request: StartMissionTaskRequest = {},
+		by: TaskStarter = "user",
+	): Promise<SessionSummary> {
 		const tasks = this.store.prepareTaskStart(missionId, refs, this.taskStarts);
 		const keys = tasks.map((task) => `${missionId}:${task.id}`);
 		for (const key of keys) this.taskStarts.add(key);
@@ -391,27 +438,80 @@ export class MissionService {
 				missionId,
 				tasks.map((task) => task.id),
 				request,
+				by,
 			);
 		} finally {
 			for (const key of keys) this.taskStarts.delete(key);
 		}
 	}
 
+	/** Task writes from the app and the tool: preferred models pass the same scope and price cap as starts. */
+	async addTask(missionId: string, write: MissionTaskWrite, actor: MissionActor = {}): Promise<MissionTask> {
+		const validated = await this.validatePreference(missionId, write, undefined, actor);
+		return this.store.addTask(missionId, validated, actor);
+	}
+
+	async updateTask(
+		missionId: string,
+		taskRef: string,
+		write: MissionTaskWrite,
+		actor: MissionActor = {},
+	): Promise<MissionTask> {
+		const taskId = this.store.resolveTask(missionId, taskRef).id;
+		const validated = await this.validatePreference(missionId, write, taskId, actor);
+		return this.store.updateTask(missionId, taskId, validated, actor);
+	}
+
+	private async validatePreference(
+		missionId: string,
+		write: MissionTaskWrite,
+		taskId: string | undefined,
+		actor: MissionActor,
+	): Promise<MissionTaskWrite> {
+		if (!write || typeof write !== "object") throw new Error("Expected a task object");
+		const { preferredModel, preferredThinking } = write;
+		if (preferredModel === undefined && preferredThinking === undefined) return write;
+		const task = taskId === undefined ? undefined : this.store.task(missionId, taskId);
+		// Fail before model I/O; the store repeats this check atomically with the write.
+		if (actor.sessionId && task?.preferredModelSetBy === "user")
+			throw new Conflict(
+				`Task #${task.number} has a user-set preferred model (${task.preferredModel}); only the user can change it`,
+			);
+		const model = preferredModel === undefined ? task?.preferredModel : preferredModel;
+		if (model === null || model === undefined) {
+			if (preferredThinking !== undefined && preferredThinking !== null)
+				throw new Error("preferredThinking requires a preferred model");
+			return write;
+		}
+		if (typeof model !== "string" || !model.trim())
+			throw new Error("preferredModel must be a provider/modelId string");
+		if (preferredThinking !== undefined && preferredThinking !== null && typeof preferredThinking !== "string")
+			throw new Error("preferredThinking must be a string");
+		const project = this.projects.require(this.store.require(missionId).projectId);
+		const selection = await this.sessions.selectTaskModel(project.path, model, preferredThinking ?? undefined);
+		return preferredModel === undefined ? write : { ...write, preferredModel: selection.model };
+	}
+
 	private async startReservedTasks(
 		missionId: string,
 		taskIds: string[],
 		request: StartMissionTaskRequest,
+		by: TaskStarter,
 	): Promise<SessionSummary> {
 		const mission = this.store.require(missionId);
 		if (mission.status !== "active") throw new Conflict("Reopen the mission before starting a new chat");
 		let tasks = this.store.prepareTaskStart(missionId, taskIds);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
-		const selection = await this.sessions.selectTaskModel(
-			this.projects.require(mission.projectId).path,
-			request.model,
-			request.thinking,
-		);
+		const choice = taskModelChoice(tasks, request, by);
+		const selection = await this.sessions
+			.selectTaskModel(this.projects.require(mission.projectId).path, choice.model, choice.thinking)
+			.catch((error: unknown) => {
+				if (!choice.preferredBy) throw error;
+				throw new Error(
+					`Preferred model of task #${choice.preferredBy.number}: ${error instanceof Error ? error.message : error}`,
+				);
+			});
 		// Recheck claims after model/settings I/O.
 		tasks = this.store.prepareTaskStart(missionId, taskIds);
 		for (const key of ["artifacts", "links"] as const)
@@ -519,10 +619,13 @@ export class MissionService {
 		const mission = this.store.require(missionId);
 		if (
 			(["propose", "delete", "group", "start", "send", "status", "bindPr", "unbindPr"].includes(action) ||
-				(action === "task" && args.order !== undefined)) &&
+				(action === "task" &&
+					(args.order !== undefined || args.model !== undefined || args.thinking !== undefined))) &&
 			mission.coordinatorSessionId !== sessionId
 		)
-			throw new Conflict(`Only the mission coordinator can use ${action}`);
+			throw new Conflict(
+				`Only the mission coordinator can use ${action === "task" && args.order === undefined ? "task model or thinking" : action}`,
+			);
 		const actor = { sessionId };
 		const who = (id: string | undefined) => (id === undefined ? "user" : id === sessionId ? "you" : id);
 		const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : undefined);
@@ -567,9 +670,10 @@ export class MissionService {
 					throw new Error("start requires the task id or number, or ids");
 				const start =
 					args.ids === undefined
-						? (request: StartMissionTaskRequest) => this.startTask(missionId, args.id as string, request)
+						? (request: StartMissionTaskRequest) =>
+								this.startTask(missionId, args.id as string, request, "coordinator")
 						: (request: StartMissionTaskRequest) =>
-								this.startTasks(missionId, parseTaskRefs(args.ids, "start"), request);
+								this.startTasks(missionId, parseTaskRefs(args.ids, "start"), request, "coordinator");
 				const started = await start({
 					...(args.message !== undefined ? { message: args.message as string } : {}),
 					...(args.model !== undefined ? { model: args.model as string } : {}),
@@ -859,13 +963,18 @@ export class MissionService {
 					...(args.milestone !== undefined ? { milestone: args.milestone } : {}),
 					...(args.dependsOn !== undefined ? { dependsOn: args.dependsOn } : {}),
 					...(args.decisionIds !== undefined ? { decisionIds: args.decisionIds } : {}),
-				} as Parameters<MissionStore["addTask"]>[1];
+					// Tool strings cannot be null: an empty string clears the preference.
+					...(args.model !== undefined ? { preferredModel: args.model === "" ? null : args.model } : {}),
+					...(args.thinking !== undefined
+						? { preferredThinking: args.thinking === "" ? null : args.thinking }
+						: {}),
+				} as MissionTaskWrite;
 				if (args.id !== undefined && !Object.keys(write).length) {
 					return this.taskDetail(missionId, args.id, sessionId);
 				}
 				return args.id === undefined
-					? this.store.addTask(missionId, write, actor)
-					: this.store.updateTask(missionId, this.store.resolveTask(missionId, args.id).id, write, actor);
+					? this.addTask(missionId, write, actor)
+					: this.updateTask(missionId, args.id as string, write, actor);
 			}
 			case "claim":
 			case "release": {
@@ -1096,6 +1205,13 @@ class MissionAgentView {
 			title: task.title,
 			status: task.status,
 			...(task.delegatedTo ? { delegatedTo: task.delegatedTo } : {}),
+			...(task.preferredModel
+				? {
+						preferredModel: task.preferredModel,
+						...(task.preferredThinking ? { preferredThinking: task.preferredThinking } : {}),
+						preferredModelSetBy: task.preferredModelSetBy,
+					}
+				: {}),
 			...(full && task.body ? { body: task.body } : {}),
 			...(full ? { order: task.order } : {}),
 			...(task.sessionId

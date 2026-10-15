@@ -3212,6 +3212,77 @@ test("task starts reject invalid model/thinking before spawning, and record expl
 	);
 });
 
+test("preferred task models are validated, kept from the coordinator and used by starts unless overridden", async (t) => {
+	const f = await fixture(t);
+	const select = t.mock.method(
+		f.sessions,
+		"selectTaskModel",
+		async (_cwd: string, model?: string, thinking?: string) => {
+			if (model === "test/outside")
+				throw new Error("Model test/outside is not available in the project's scope. Allowed models: test/model");
+			return { model: model?.trim() ?? "test/default", thinking: thinking ?? "medium" };
+		},
+	);
+	const coordinator = await f.spawn();
+	const member = await f.spawn();
+	const { mission } = await f.service.create({
+		projectId: f.project.id,
+		title: "M",
+		fromSessionId: coordinator.id,
+		draft: false,
+		tasks: [{ title: "User pick" }, { title: "Lead pick" }, { title: "Override" }, { title: "Stale" }],
+	});
+	f.service.join(member.id, { missionId: mission.id });
+	// App writes pass the same scope and price-cap validation as starts, and save the canonical ID.
+	await assert.rejects(f.service.updateTask(mission.id, "1", { preferredModel: "test/outside" }), /not available/);
+	assert.equal(f.store.resolveTask(mission.id, "1").preferredModel, undefined);
+	await f.service.updateTask(mission.id, "1", { preferredModel: " test/user ", preferredThinking: "high" });
+	assert.deepEqual(select.mock.calls.at(-1)?.arguments, [f.project.path, " test/user ", "high"]);
+	assert.equal(f.store.resolveTask(mission.id, "1").preferredModel, "test/user");
+	// Only the coordinator sets preferences through the tool, and never over the user's.
+	await assert.rejects(
+		f.service.call(member.id, "task", { id: "2", model: "test/lead" }),
+		/Only the mission coordinator can use task model or thinking/,
+	);
+	await assert.rejects(
+		f.service.call(coordinator.id, "task", { id: "1", model: "test/lead" }),
+		/user-set preferred model \(test\/user\)/,
+	);
+	await f.service.call(coordinator.id, "task", { id: "2", model: "test/lead", thinking: "low" });
+	const lead = f.store.resolveTask(mission.id, "2");
+	assert.deepEqual(
+		[lead.preferredModel, lead.preferredThinking, lead.preferredModelSetBy],
+		["test/lead", "low", "coordinator"],
+	);
+	const shown = (await f.service.call(coordinator.id, "get", { id: "2" })) as Record<string, unknown>;
+	assert.deepEqual([shown.preferredModel, shown.preferredThinking], ["test/lead", "low"]);
+	// The coordinator's start cannot override a user-set preference, but omitting the choice uses it.
+	for (const args of [{ model: "test/other" }, { thinking: "low" }])
+		await assert.rejects(f.service.call(coordinator.id, "start", { id: "1", ...args }), /Omit model and thinking/);
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, undefined);
+	const user = (await f.service.call(coordinator.id, "start", { id: "1" })) as SessionSummary;
+	let worker = await until(() => f.workers.get(user.id));
+	assert.deepEqual([worker.spec.model, worker.spec.thinking], ["test/user", "high"]);
+	// A coordinator-set preference can be overridden by the coordinator.
+	const leadStart = (await f.service.call(coordinator.id, "start", {
+		id: "2",
+		model: "test/model",
+	})) as SessionSummary;
+	worker = await until(() => f.workers.get(leadStart.id));
+	assert.deepEqual([worker.spec.model, worker.spec.thinking], ["test/model", "medium"]);
+	// The app's explicit choice overrides a user-set preference.
+	await f.service.updateTask(mission.id, "3", { preferredModel: "test/user", preferredThinking: "high" });
+	const override = await f.service.startTask(mission.id, "3", { model: "test/model", thinking: "low" });
+	worker = await until(() => f.workers.get(override.id));
+	assert.deepEqual([worker.spec.model, worker.spec.thinking], ["test/model", "low"]);
+	// A preference that left the scope fails with the task named, before claiming or spawning.
+	f.store.updateTask(mission.id, "4", { preferredModel: "test/outside" });
+	const sessions = f.sessions.list().length;
+	await assert.rejects(f.service.startTask(mission.id, "4"), /Preferred model of task #4: Model test\/outside/);
+	assert.equal(f.sessions.list().length, sessions);
+	assert.equal(f.store.resolveTask(mission.id, "4").sessionId, undefined);
+});
+
 test("coordinator actions check the current role on every call before causing side effects", async (t) => {
 	const f = await fixture(t);
 	const coordinator = await f.spawn();
@@ -3513,6 +3584,7 @@ test("coordinator start reuses Start chat with task IDs or numbers and validates
 		mission.id,
 		"#1",
 		{ message: "Focus on login", model: "test/model", thinking: "high" },
+		"coordinator",
 	]);
 	assert.ok(f.store.events(mission.id).some((event) => event.text === "Started #1 on test/model, thinking high"));
 	assert.equal(first.missionId, mission.id);
