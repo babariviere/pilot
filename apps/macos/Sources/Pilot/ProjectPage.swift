@@ -308,9 +308,10 @@ private struct ProjectDashboardBody: View {
 
             if !dashboard.missions.items.isEmpty {
                 ProjectPageSection(header: PageSectionHeader(title: "Missions", count: dashboard.missions.total)) {
+                    let coordinatorColumn = ProjectPageText.hasCoordinator(dashboard.missions.items, client: client)
                     ForEach(Array(dashboard.missions.items.enumerated()), id: \.element.id) { index, mission in
                         if index > 0 { HairlineDivider(leading: 34) }
-                        ProjectMissionRow(mission: mission)
+                        ProjectMissionRow(mission: mission, coordinatorColumn: coordinatorColumn)
                     }
                     ProjectMoreLine(hidden: dashboard.missions.hiddenCount, total: dashboard.missions.total,
                                     noun: "active") { showFullList(.missions) }
@@ -470,9 +471,11 @@ private struct ProjectFullListSheet: View {
                             }
                             capNote(dashboard.pullRequests.total, dashboard.pullRequests.items.count)
                         case .missions:
+                            let coordinatorColumn = ProjectPageText.hasCoordinator(dashboard.missions.items,
+                                                                                   client: model.client)
                             ForEach(Array(dashboard.missions.items.enumerated()), id: \.element.id) { index, item in
                                 if index > 0 { HairlineDivider(leading: 34) }
-                                ProjectMissionRow(mission: item)
+                                ProjectMissionRow(mission: item, coordinatorColumn: coordinatorColumn)
                             }
                             capNote(dashboard.missions.total, dashboard.missions.items.count)
                         case .scheduled:
@@ -916,41 +919,62 @@ private struct ProjectPullRequestRow: View {
 
 private struct ProjectMissionRow: View {
     let mission: DashboardMission
+    /// Some row of the list has a coordinator button: rows without one keep its space so progress bars line up.
+    var coordinatorColumn = false
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
         let done = min(mission.tasksDone, mission.tasksTotal)
         let progress = mission.tasksTotal == 0 ? "No tasks" : "\(done) of \(mission.tasksTotal)"
         let signal = signal
-        Button { model.openMission(mission.id) } label: {
-            HoverRow(verticalPadding: 7) { _ in
-                HStack(spacing: 10) {
-                    PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.foreground).frame(width: 16)
-                    Text(mission.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if mission.working > 0 { CountBadge(count: mission.working).help("\(mission.working) working") }
-                    if mission.needsYou > 0 {
-                        CountBadge(count: mission.needsYou, style: .attention).help("\(mission.needsYou) need you")
+        let coordinator = coordinator
+        // The row opens the mission; the coordinator button beside it is a sibling, so it never opens both.
+        HoverRow(verticalPadding: 7) { _ in
+            HStack(spacing: 10) {
+                Button { model.openMission(mission.id) } label: {
+                    HStack(spacing: 10) {
+                        PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.foreground).frame(width: 16)
+                        Text(mission.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if mission.working > 0 { CountBadge(count: mission.working).help("\(mission.working) working") }
+                        if mission.needsYou > 0 {
+                            CountBadge(count: mission.needsYou, style: .attention).help("\(mission.needsYou) need you")
+                        }
+                        SegmentedProgressBar(segments: [
+                            .init(id: "done", value: done, color: Theme.success),
+                            .init(id: "open", value: mission.tasksTotal - done, color: Theme.border),
+                        ], height: 5)
+                        .frame(width: 120)
+                        Text(progress).font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
+                            .frame(width: 56, alignment: .trailing)
                     }
-                    SegmentedProgressBar(segments: [
-                        .init(id: "done", value: done, color: Theme.success),
-                        .init(id: "open", value: mission.tasksTotal - done, color: Theme.border),
-                    ], height: 5)
-                    .frame(width: 120)
-                    Text(progress).font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
-                        .frame(width: 56, alignment: .trailing)
+                    .contentShape(Rectangle())
+                }
+                .rowButtonStyle()
+                .accessibilityLabel([mission.title,
+                                     mission.working > 0 ? "\(mission.working) working" : nil,
+                                     mission.needsYou > 0 ? "\(mission.needsYou) need you" : nil,
+                                     mission.tasksTotal == 0 ? "no tasks" : "\(done) of \(mission.tasksTotal) tasks done",
+                                     signal?.label]
+                    .compactMap { $0 }.joined(separator: ", "))
+                if let coordinator {
+                    Button { model.reveal(session: coordinator) } label: { coordinatorLabel }
+                        .buttonStyle(.plain)
+                        .help("Open the coordinator chat for \(mission.title)")
+                        .accessibilityLabel("Open coordinator for \(mission.title)")
+                } else if coordinatorColumn {
+                    coordinatorLabel.hidden().accessibilityHidden(true)
                 }
             }
         }
-        .rowButtonStyle()
         .inboxCorner(signal, background: waitingOnJobs)
-        .accessibilityLabel([mission.title,
-                             mission.working > 0 ? "\(mission.working) working" : nil,
-                             mission.needsYou > 0 ? "\(mission.needsYou) need you" : nil,
-                             mission.tasksTotal == 0 ? "no tasks" : "\(done) of \(mission.tasksTotal) tasks done",
-                             signal?.label]
-            .compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
+            if let coordinator {
+                Button { model.reveal(session: coordinator) } label: {
+                    Label("Open Coordinator", icon: PilotIcon.coordinator)
+                }
+                Divider()
+            }
             MissionEditAction(missionId: mission.id)
             Divider()
             // Dashboard rows carry counts, not status. Use the live mission summary.
@@ -960,6 +984,15 @@ private struct ProjectMissionRow: View {
             Divider()
             MissionDeleteAction(missionId: mission.id)
         }
+    }
+
+    private var coordinatorLabel: some View {
+        Label("Coordinator", icon: PilotIcon.coordinator)
+            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize()
+    }
+
+    private var coordinator: String? {
+        ProjectPageText.coordinator(mission, live: model.client.mission(mission.id))
     }
 
     /// The sidebar's mission corner (its most urgent chat), or the dashboard counts until the mission loads.
@@ -1097,6 +1130,16 @@ enum ProjectPageText {
 
     static func needsSubtitle(_ item: DashboardNeedsYouItem, now: Date = Date()) -> String {
         item.needsYouLabel(now: now)
+    }
+
+    /// The coordinator chat a mission row opens: the dashboard's, or the live mission summary's when it has none.
+    static func coordinator(_ mission: DashboardMission, live: Mission?) -> String? {
+        mission.coordinatorSessionId ?? live?.coordinatorSessionId
+    }
+
+    /// Whether any of these mission rows shows a coordinator button.
+    @MainActor static func hasCoordinator(_ missions: [DashboardMission], client: PilotClient) -> Bool {
+        missions.contains { coordinator($0, live: client.mission($0.id)) != nil }
     }
 
     static func staleDetail(receivedAt: Date?, error: String?, now: Date = Date()) -> String {
