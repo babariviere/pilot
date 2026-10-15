@@ -16,7 +16,10 @@ function text(content: unknown, limit: number): string {
 	return result.slice(0, limit);
 }
 
-/** Read newest-first pages, including pre-compaction history, without opening an agent or retaining raw tools. */
+/**
+ * Read newest-first pages, including pre-compaction history, without opening an agent. Only user and assistant
+ * text is kept: tool calls, tool results, thinking and images are skipped.
+ */
 export async function chatTitleContext(
 	opening: string,
 	read: (before: number, limit: number) => Promise<Page>,
@@ -24,7 +27,6 @@ export async function chatTitleContext(
 ): Promise<string> {
 	const excerpts: string[] = [];
 	let dialogueLeft = 17_000;
-	let toolsLeft = 2_000;
 	let before = Number.MAX_SAFE_INTEGER;
 	for (let pageIndex = 0; pageIndex < 8; pageIndex++) {
 		signal.throwIfAborted();
@@ -32,23 +34,20 @@ export async function chatTitleContext(
 		signal.throwIfAborted();
 		for (const entry of page.entries.toReversed()) {
 			// Compaction summaries and host metadata are not conversation messages.
-			if (!["pi.user", "pi.message", "pi.assistant", "pi.tool-result"].includes(entry.kind)) continue;
+			if (!["pi.user", "pi.message", "pi.assistant"].includes(entry.kind)) continue;
 			for (const message of (entry.model ?? []).toReversed()) {
-				const tool = message.role === "toolResult";
-				if (!tool && message.role !== "user" && message.role !== "assistant") continue;
-				const remaining = tool ? toolsLeft : dialogueLeft;
-				if (remaining <= 0) continue;
-				const body = text(message.content, Math.min(tool ? 300 : 4_000, remaining));
+				if (message.role !== "user" && message.role !== "assistant") continue;
+				if (dialogueLeft <= 0) continue;
+				const body = text(message.content, Math.min(4_000, dialogueLeft));
 				if (!body.trim()) continue;
-				const excerpt = `${tool ? "Tool result" : message.role}: ${body}`.slice(0, remaining);
+				const excerpt = `${message.role}: ${body}`.slice(0, dialogueLeft);
 				excerpts.push(excerpt);
-				if (tool) toolsLeft -= excerpt.length + 2;
-				else dialogueLeft -= excerpt.length + 2;
+				dialogueLeft -= excerpt.length + 2;
 			}
 		}
 		const next = Number(page.entries[0]?.id);
 		if (!page.more || !page.entries.length || !Number.isSafeInteger(next) || next >= before) break;
-		if (dialogueLeft <= 0 && toolsLeft <= 0) break;
+		if (dialogueLeft <= 0) break;
 		before = next;
 	}
 	return [`Opening request: ${opening.slice(0, 4_000)}`, "Conversation (bounded excerpts):", ...excerpts.reverse()]

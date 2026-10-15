@@ -9,7 +9,7 @@ function entry(id: number, kind: string, role: string, content: unknown): EntryR
 
 const signal = new AbortController().signal;
 
-test("title context includes chronological user, assistant and bounded tool excerpts across pages", async () => {
+test("title context includes only chronological user and assistant text across pages", async () => {
 	const reads: number[] = [];
 	const context = await chatTitleContext(
 		"Fix it",
@@ -20,6 +20,7 @@ test("title context includes chronological user, assistant and bounded tool exce
 				? {
 						entries: [
 							entry(4, "pi.tool-result", "toolResult", [{ type: "text", text: "Tests passed" }]),
+							entry(5, "pi.message", "toolResult", [{ type: "text", text: "TOOL OUTPUT" }]),
 							entry(5, "pi.assistant", "assistant", [
 								{ type: "thinking", thinking: "PRIVATE THOUGHT", signature: "SIGNATURE" },
 								{ type: "image", data: "IMAGE DATA" },
@@ -43,14 +44,23 @@ test("title context includes chronological user, assistant and bounded tool exce
 	assert.deepEqual(reads, [Number.MAX_SAFE_INTEGER, 4]);
 	assert.ok(
 		context.includes(
-			"user: Fix it\n\nuser: Wait until the first turn finishes\n\nTool result: Tests passed\n\nassistant: Fixed the title generator",
+			"user: Fix it\n\nuser: Wait until the first turn finishes\n\nassistant: Fixed the title generator",
 		),
 	);
-	for (const excluded of ["PRIVATE THOUGHT", "SIGNATURE", "IMAGE DATA", "TOOL ARGS", "COMPACTION SUMMARY"])
+	for (const excluded of [
+		"PRIVATE THOUGHT",
+		"SIGNATURE",
+		"IMAGE DATA",
+		"TOOL ARGS",
+		"Tests passed",
+		"TOOL OUTPUT",
+		"Tool result",
+		"COMPACTION SUMMARY",
+	])
 		assert.ok(!context.includes(excluded));
 });
 
-test("large title contexts preserve the opening and latest answer, without letting tools crowd out dialogue", async () => {
+test("large title contexts preserve the opening and latest answer within the limit", async () => {
 	let reads = 0;
 	const context = await chatTitleContext(
 		"Opening intent",
@@ -72,7 +82,7 @@ test("large title contexts preserve the opening and latest answer, without letti
 	assert.ok(context.startsWith("Opening request: Opening intent"));
 	assert.ok(context.includes("assistant: Latest answer"));
 	assert.ok(context.includes("user: "));
-	assert.ok(!context.includes("t".repeat(301)));
+	assert.ok(!context.includes("ttt"));
 	assert.ok(context.length <= TITLE_CONTEXT_LIMIT);
 	assert.ok(reads <= 8);
 });
