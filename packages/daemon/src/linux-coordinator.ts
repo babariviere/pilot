@@ -43,6 +43,17 @@ async function bubblewrap(): Promise<string> {
 /** Reject broad roots, symlink roots, shared directories and pre-existing hardlink write aliases. */
 export async function validateCoordinatorWrites(writable: string[], protectedPaths: string[]): Promise<string[]> {
 	const protectedCanonical = await Promise.all(protectedPaths.map((path) => realpath(path)));
+	const mounts =
+		process.platform === "linux"
+			? (await readFile("/proc/self/mountinfo", "utf8"))
+					.trim()
+					.split("\n")
+					.map((line) =>
+						line
+							.split(" ")[4]!
+							.replace(/\\([0-7]{3})/g, (_, octal: string) => String.fromCharCode(Number.parseInt(octal, 8))),
+					)
+			: [];
 	const result: string[] = [];
 	let count = 0;
 	async function inspect(path: string): Promise<void> {
@@ -70,6 +81,10 @@ export async function validateCoordinatorWrites(writable: string[], protectedPat
 			throw new Error(`Coordinator writable root overlaps protected source or a broad host location: ${path}`);
 		if (result.some((other) => within(canonical, other) || within(other, canonical)))
 			throw new Error(`Coordinator writable roots overlap: ${path}`);
+		// A bind mount can alias repository inodes without symlinks or nlink>1. Never recursively
+		// re-expose any pre-existing mount (even at the root itself) through a writable exception.
+		if (mounts.some((mount) => within(mount, canonical)))
+			throw new Error(`Coordinator private state contains a mount point: ${path}`);
 		await inspect(canonical);
 		result.push(canonical);
 	}
