@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The sign of live work inside a view, such as a running tool step or the chat's working line: a fixed 4×4 grid
-/// of round dots (1.6 pt on a 2.5 pt pitch, 10×10 pt). The dots never move. Each blends from Theme.faintForeground
-/// at rest to Theme.working as a wave runs diagonally from the top-left corner to the bottom-right, about 1.5 s a
+/// of round dots (1.6 pt on a 2.5 pt pitch, 10×10 pt). The dots never move. Each blends from a light grey at rest to
+/// Theme.workingInk as a wave runs diagonally from the top-left corner to the bottom-right, about 1.5 s a
 /// loop. `background` is fainter and half as fast, for an agent that is idle while its background jobs run (the
 /// same motion language as a background working corner).
 ///
@@ -27,8 +27,8 @@ struct DotGridSpinner: View {
 
     private func grid(frame: Int) -> some View {
         let levels = DotGrid.levels(frame: frame, background: background)
-        let rest = Theme.faintForeground.opacity(background ? DotGrid.backgroundRestOpacity : 1)
-        let tint = Theme.working
+        let rest = Theme.faintForeground.opacity(DotGrid.restOpacity * (background ? DotGrid.backgroundRestOpacity : 1))
+        let tint = Theme.workingInk
         return Canvas { context, _ in
             for (index, rect) in DotGrid.dotRects.enumerated() {
                 let dot = Path(ellipseIn: rect)
@@ -52,9 +52,12 @@ enum DotGrid {
     static let backgroundFrameCount = 36
     /// Width of the wave's crest along the diagonal, as a fraction of it.
     static let crest = 0.35
-    /// Peak blend toward Theme.working while only background jobs run.
+    /// Opacity of Theme.faintForeground for the resting dots. Light enough that the indigo crest stands apart in
+    /// lightness as well as hue, so the wave reads at a glance; still visible on white and row fills.
+    static let restOpacity = 0.5
+    /// Peak blend toward Theme.workingInk while only background jobs run.
     static let backgroundPeak = 0.5
-    /// Opacity of the resting dots while only background jobs run.
+    /// Further opacity of the resting dots while only background jobs run.
     static let backgroundRestOpacity = 0.6
 
     /// The 16 dots, row by row, centred in the 10×10 frame.
@@ -76,7 +79,7 @@ enum DotGrid {
         (background ? backgroundFrameCount : frameCount) / 2
     }
 
-    /// Blend in 0...1 toward Theme.working of the dot at column `x`, row `y`. The phase comes from `x + y`, so the
+    /// Blend in 0...1 toward Theme.workingInk of the dot at column `x`, row `y`. The phase comes from `x + y`, so the
     /// wave runs diagonally; the crest starts before the first corner and ends past the last, so a loop has a brief
     /// rest and wraps without a jump.
     static func level(x: Int, y: Int, frame: Int, background: Bool) -> Double {
