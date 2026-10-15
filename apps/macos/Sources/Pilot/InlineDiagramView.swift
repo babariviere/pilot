@@ -27,7 +27,7 @@ struct InlineDiagramBlock: View {
                 Color.clear.frame(height: InlineDiagramLayout.cachedHeight(kind: kind, source: text) ?? 180)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         .contextMenu {
             Button("Expand diagram") { state.viewer = true }
             Button(state.source ? "Show preview" : "Show source") { state.source.toggle() }

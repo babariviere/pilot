@@ -72,8 +72,8 @@ struct MissionSidebarRow: View {
         .padding(.trailing, 16)
         .padding(.vertical, 3)
         .padding(.leading, 4)
-        .ditherCorner(signal, background: waitingOnJobs, outset: EdgeInsets(), cornerRadius: 6)
-        .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.selected : (hovered ? Theme.muted : Color.clear)))
+        .ditherCorner(signal, background: waitingOnJobs, outset: EdgeInsets(), cornerRadius: Theme.Radius.row)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected ? Theme.selected : (hovered ? Theme.muted : Color.clear)))
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .contextMenu {

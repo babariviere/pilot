@@ -50,7 +50,7 @@ struct DecisionProposalView: View {
         .font(.pilot(.label))
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.subtleFill, in: RoundedRectangle(cornerRadius: 6))
+        .background(Theme.muted, in: RoundedRectangle(cornerRadius: Theme.Radius.row))
         .disabled(busy)
     }
 

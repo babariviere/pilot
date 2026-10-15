@@ -488,7 +488,7 @@ struct MissionDraftingBanner: View {
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: Theme.radius).fill(Theme.muted))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Theme.muted))
         .accessibilityElement(children: .combine)
     }
 }
@@ -692,8 +692,8 @@ struct MissionLinkChip: View {
         .font(.pilot(compact ? .caption : .label))
         .padding(.horizontal, compact ? 0 : 8)
         .padding(.vertical, compact ? 0 : 4)
-        .background(RoundedRectangle(cornerRadius: 7).fill(compact ? Color.clear : Theme.muted))
-        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(compact ? Color.clear : Theme.muted))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
         Group {
             if let url = URL(string: resource.url), url.scheme != nil {
                 Link(destination: url) { label }.buttonStyle(.plain)

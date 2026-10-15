@@ -234,7 +234,7 @@ struct SidebarNavRow<Accessory: View>: View {
         .padding(.leading, 8)
         .padding(.trailing, 2)
         .frame(height: 28)
-        .background(RoundedRectangle(cornerRadius: 7).fill(selected || hovered ? Theme.selected : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected || hovered ? Theme.selected : .clear))
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
     }
@@ -267,7 +267,7 @@ struct SidebarProjectSelector: View {
             .foregroundStyle(Theme.foreground)
             .padding(.horizontal, 8)
             .frame(height: 28)
-            .background(RoundedRectangle(cornerRadius: 7).fill(showingList || hovered ? Theme.selected : Theme.muted))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(showingList || hovered ? Theme.selected : Theme.muted))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -391,7 +391,7 @@ private struct SidebarScopeRow: View {
             .foregroundStyle(Theme.foreground)
             .padding(.horizontal, 8)
             .frame(height: 26)
-            .background(RoundedRectangle(cornerRadius: 5).fill(hovered ? Theme.selected : .clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered ? Theme.selected : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

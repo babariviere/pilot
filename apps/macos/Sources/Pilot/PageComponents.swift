@@ -74,7 +74,7 @@ struct HoverRow<Content: View>: View {
             .padding(.horizontal, horizontalPadding)
             .padding(.vertical, verticalPadding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 7).fill(hovered ? Theme.muted : .clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered ? Theme.muted : .clear))
             .contentShape(Rectangle())
             .onHover { hovered = $0 }
             .animation(Theme.Motion.quick, value: hovered)
@@ -82,9 +82,23 @@ struct HoverRow<Content: View>: View {
 }
 
 extension View {
-    /// Shows secondary row controls only while the row is hovered, keeping their space so rows do not jump.
+    /// Shows secondary row controls only while the row is hovered, keeping their space so rows do not jump. A
+    /// control that takes keyboard focus shows too, so tabbing through a row never lands on an invisible button.
     func revealed(_ visible: Bool) -> some View {
-        opacity(visible ? 1 : 0).allowsHitTesting(visible)
+        modifier(RevealedModifier(visible: visible))
+    }
+}
+
+private struct RevealedModifier: ViewModifier {
+    let visible: Bool
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        let shown = visible || focused
+        content
+            .focused($focused)
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
     }
 }
 
@@ -191,10 +205,10 @@ struct ComposerTray<Editor: View, Controls: View>: View {
                 .font(.pilot(.body))
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
-                .card(radius: 8)
+                .card(radius: Theme.Radius.control)
             HStack(spacing: 6) { controls() }
         }
         .padding(6)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Theme.tray))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.tray).fill(Theme.tray))
     }
 }

@@ -367,8 +367,8 @@ struct ToolStepRow: View {
                                     .padding(.vertical, 4)
                             }
                             .background(Theme.code)
-                            .clipShape(RoundedRectangle(cornerRadius: 8))
-                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.border))
+                            .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+                            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
                         }
                     } else if let body = summary.body {
                         CodeBlock(language: item.name == "codemode" ? "javascript" : nil, text: body)
@@ -401,7 +401,7 @@ private struct OutputBlock: View {
         }
         .frame(maxHeight: 260)
         .background(Color.black.opacity(0.04))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.hairline))
+        .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
     }
 }

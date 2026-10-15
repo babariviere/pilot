@@ -241,11 +241,11 @@ struct Composer: View {
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsQueue)
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: systemMessages.isEmpty)
             .background(
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: Theme.Radius.tray)
                     .fill(Theme.tray)
                     .shadow(color: .black.opacity(0.06), radius: 12, y: 4)
             )
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.border))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
             if let error = state.error {
                 Text(error).font(.caption).foregroundStyle(Theme.destructive)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -293,7 +293,7 @@ struct Composer: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
-        .card(radius: 10)
+        .card()
         .padding([.horizontal, .top], 4)
     }
 

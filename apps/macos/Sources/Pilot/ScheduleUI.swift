@@ -395,9 +395,9 @@ private struct ScheduledMessageBubble: View {
                     .truncationMode(.tail)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
-                    .overlay(RoundedRectangle(cornerRadius: 12)
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.bubble)
                         .strokeBorder(Theme.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                    .contentShape(RoundedRectangle(cornerRadius: 12))
+                    .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.bubble))
                     .onTapGesture { editing = true }
             }
             HStack(spacing: 2) {

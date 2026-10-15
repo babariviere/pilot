@@ -654,6 +654,6 @@ private struct ErrorRow: View {
         .font(.callout)
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.red.opacity(0.08)))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Color.red.opacity(0.08)))
     }
 }

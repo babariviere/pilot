@@ -40,7 +40,7 @@ struct ChatEventRow: View {
                         .font(.pilot(.caption, design: .monospaced))
                         .lineLimit(1).truncationMode(.middle)
                         .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(Theme.muted, in: RoundedRectangle(cornerRadius: Theme.radius))
+                        .background(Theme.muted, in: RoundedRectangle(cornerRadius: Theme.Radius.card))
                 }
                 if let title = event.title { Text(title).lineLimit(1).foregroundStyle(Theme.faintForeground) }
                 if event.detail != nil {

@@ -145,12 +145,12 @@ struct CollapsibleMessage<Content: View>: View {
                 .padding(.top, 10)
                 .padding(.bottom, folded ? 4 : 10)
                 .background {
-                    RoundedRectangle(cornerRadius: 12).fill(Theme.muted)
+                    RoundedRectangle(cornerRadius: Theme.Radius.bubble).fill(Theme.muted)
                         .background {
                             if folded {
                                 // Theme.muted is translucent: cast the shadow from an opaque
                                 // backing so it remains visible without darkening the bubble.
-                                RoundedRectangle(cornerRadius: 12).fill(Theme.background)
+                                RoundedRectangle(cornerRadius: Theme.Radius.bubble).fill(Theme.background)
                                     .foldedShadow()
                             }
                         }

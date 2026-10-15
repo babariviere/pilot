@@ -415,7 +415,7 @@ struct SubagentsPane: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 6).fill(selected ? Theme.selected : .clear))
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(selected ? Theme.selected : .clear))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

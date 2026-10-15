@@ -162,7 +162,7 @@ struct MissionInspectorPane: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Theme.muted))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.muted))
     }
 }
 
