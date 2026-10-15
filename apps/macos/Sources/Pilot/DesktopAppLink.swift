@@ -49,7 +49,9 @@ enum DesktopAppLink {
         // those in its active workspace rather than guessing an ID from the subdomain.
         if let team { native.queryItems?.append(URLQueryItem(name: "team", value: team)) }
         native.queryItems?.append(URLQueryItem(name: "id", value: channel))
-        if let message { native.queryItems?.append(URLQueryItem(name: "message", value: message)) }
+        // Slack's channel deep link uses ts, not message. An ignored parameter still
+        // launches Slack successfully, but leaves it at the channel's current position.
+        if let timestamp = message ?? thread { native.queryItems?.append(URLQueryItem(name: "ts", value: timestamp)) }
         if let thread { native.queryItems?.append(URLQueryItem(name: "thread_ts", value: thread)) }
         return native.url
     }

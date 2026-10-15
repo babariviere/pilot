@@ -20,17 +20,19 @@ import Testing
 @Test func desktopSlackLinksKeepChannelMessageThreadAndKnownWorkspace() throws {
     let cases: [(String, String)] = [
         ("https://slack.com/archives/C123/p1791885305000001",
-         "slack://channel?id=C123&message=1791885305.000001"),
+         "slack://channel?id=C123&ts=1791885305.000001"),
         ("https://acme.slack.com/archives/C123/p1791885305000001?thread_ts=1791885000.000002&cid=C123&team=T123",
-         "slack://channel?team=T123&id=C123&message=1791885305.000001&thread_ts=1791885000.000002"),
+         "slack://channel?team=T123&id=C123&ts=1791885305.000001&thread_ts=1791885000.000002"),
+        ("https://acme.slack.com/archives/C123?thread_ts=1791885000.000002",
+         "slack://channel?id=C123&ts=1791885000.000002&thread_ts=1791885000.000002"),
         ("https://acme.enterprise.slack.com/archives/G123",
          "slack://channel?id=G123"),
         ("https://app.slack.com/client/T123/D123/1791885305.000001",
-         "slack://channel?team=T123&id=D123&message=1791885305.000001"),
+         "slack://channel?team=T123&id=D123&ts=1791885305.000001"),
         ("https://app.slack.com/client/E123/C123",
          "slack://channel?team=E123&id=C123"),
         ("https://slack.com/archives/C123/p1000001",
-         "slack://channel?id=C123&message=1.000001"),
+         "slack://channel?id=C123&ts=1.000001"),
     ]
     for (web, native) in cases {
         let url = try #require(URL(string: web))
