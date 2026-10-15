@@ -190,7 +190,6 @@ private struct CompletionPickerView: View {
     @ObservedObject var model: CompletionPickerModel
     let hints: [CompletionPicker.Hint]
     let listHeight: CGFloat
-    private let accent = Color(hex: 0x6366F1)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -217,7 +216,7 @@ private struct CompletionPickerView: View {
             .background(Theme.sidebar)
             .overlay(alignment: .top) { Rectangle().fill(Theme.border).frame(height: 1) }
         }
-        .background(.white)
+        .background(Theme.card)
         .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.tray))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.tray).strokeBorder(Theme.border))
         .shadow(color: .black.opacity(0.13), radius: 9, y: 3)
@@ -233,15 +232,15 @@ private struct CompletionPickerView: View {
             HStack(spacing: 10) {
                 PilotSymbol(item.icon, context: .row).foregroundStyle(item.tint)
                     .frame(width: 18)
-                Text(item.title).font(.system(size: 13, weight: selected ? .medium : .regular))
+                Text(item.title).font(.pilot(.body, weight: selected ? .medium : .regular))
                     .foregroundStyle(Theme.foreground).lineLimit(1).truncationMode(.middle)
                     .layoutPriority(2)
                 if let suffix = item.suffix {
-                    Text(suffix).font(.system(size: 13)).foregroundStyle(Theme.faintForeground).lineLimit(1)
+                    Text(suffix).font(.pilot(.body)).foregroundStyle(Theme.faintForeground).lineLimit(1)
                         .layoutPriority(1)
                 }
                 if let detail = item.detail {
-                    Text(detail).font(.system(size: 12)).foregroundStyle(Theme.mutedForeground)
+                    Text(detail).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
                         .lineLimit(1).truncationMode(.tail)
                 }
                 Spacer(minLength: 4)
@@ -249,9 +248,7 @@ private struct CompletionPickerView: View {
             .padding(.horizontal, 10).frame(height: 34)
             .background {
                 if selected {
-                    RoundedRectangle(cornerRadius: Theme.Radius.control)
-                        .fill(LinearGradient(colors: [Color(hex: 0xEEF2FF), Color(hex: 0xF5F7FF)], startPoint: .leading, endPoint: .trailing))
-                        .overlay(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(accent.opacity(0.13)))
+                    RoundedRectangle(cornerRadius: Theme.Radius.control).fill(Theme.selected)
                 }
             }
             .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
@@ -266,13 +263,6 @@ private struct CompletionPickerView: View {
     }
 
     private func key(_ symbol: String, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Text(symbol).font(.system(size: 10, weight: .medium, design: .monospaced))
-                .padding(.horizontal, 4).padding(.vertical, 2)
-                .background(.white, in: RoundedRectangle(cornerRadius: Theme.Radius.small))
-                .overlay(RoundedRectangle(cornerRadius: Theme.Radius.small).strokeBorder(Theme.border))
-            Text(label).font(.system(size: 10))
-        }
-        .foregroundStyle(Theme.mutedForeground)
+        KeyHint(key: symbol, label: label)
     }
 }

@@ -75,7 +75,7 @@ struct DiffView: View {
         switch kind {
         case .addition: Theme.success.opacity(0.10)
         case .deletion: Theme.destructive.opacity(0.09)
-        case .hunk: Theme.info.opacity(0.06)
+        case .hunk: Theme.muted
         default: .clear
         }
     }

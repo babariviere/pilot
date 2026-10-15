@@ -149,6 +149,8 @@ struct Composer: View {
     let onSendHeld: (() async throws -> Void)?
     let onDiscardHeld: ((Int?) async throws -> Void)?
     var session: SessionSummary? = nil
+    /// The agent's todo list, summarised as one line at the top of the tray.
+    var todos: [SessionTodo] = []
     /// Slash command menu entries; nil disables the menu.
     var slashCommands: [SlashCommand]? = nil
     var onSlashCommandsNeeded: (() -> Void)? = nil
@@ -169,6 +171,7 @@ struct Composer: View {
         onSendHeld: (() async throws -> Void)? = nil,
         onDiscardHeld: ((Int?) async throws -> Void)? = nil,
         session: SessionSummary? = nil,
+        todos: [SessionTodo] = [],
         slashCommands: [SlashCommand]? = nil,
         onSlashCommandsNeeded: (() -> Void)? = nil,
         onSchedule: ((String, ScheduleWhen) -> Void)? = nil
@@ -185,6 +188,7 @@ struct Composer: View {
         self.onSendHeld = onSendHeld
         self.onDiscardHeld = onDiscardHeld
         self.session = session
+        self.todos = todos
         self.slashCommands = slashCommands
         self.onSlashCommandsNeeded = onSlashCommandsNeeded
         self.onSchedule = onSchedule
@@ -201,27 +205,49 @@ struct Composer: View {
         SystemMessagesStrip.visible(automaticInputs, working: working)
     }
 
+    private var showsSubagents: Bool {
+        guard let session, !session.isAsk else { return false }
+        return !(session.subagents ?? []).isEmpty
+    }
+
+    /// Tasks and subagents: one summary line each, above the system messages and the queue.
+    private var showsStatusLines: Bool { (!todos.isEmpty && session != nil) || showsSubagents }
+
+    private var trayDivider: some View {
+        Rectangle().fill(Theme.border).frame(height: 1).padding(.horizontal, 8)
+    }
+
     var body: some View {
         let systemMessages = systemMessages
         VStack(spacing: 8) {
             if let session { SubscriptionUsageNotice(usage: session.usage ?? SessionUsage()) }
             // Opaque tray, like the new-chat composer, so transcript text never shows behind the controls.
             VStack(spacing: 0) {
-                if !systemMessages.isEmpty {
+                if showsStatusLines || !systemMessages.isEmpty {
                     VStack(spacing: 2) {
-                        SystemMessagesStrip(inputs: systemMessages,
-                                            onSendHeld: onSendHeld.map { send -> () -> Void in
-                                                { Task { await state.performHeldAction(send) } }
-                                            },
-                                            onDiscardHeld: onDiscardHeld.map { discard -> () -> Void in
-                                                { Task { await state.discardHeldMessages(nil, perform: discard) } }
-                                            },
-                                            onDiscardRow: onDiscardHeld.map { discard -> (Int) -> Void in
-                                                { id in Task { await state.discardHeldMessages(id, perform: discard) } }
-                                            })
-                            .disabled(state.mutatingHeldMessages)
+                        if let session, !todos.isEmpty {
+                            TasksStrip(todos: todos, sessionId: session.id)
+                        }
+                        if showsSubagents, let session {
+                            if !todos.isEmpty { trayDivider }
+                            SubagentsStrip(session: session)
+                        }
+                        if !systemMessages.isEmpty {
+                            if showsStatusLines { trayDivider }
+                            SystemMessagesStrip(inputs: systemMessages,
+                                                onSendHeld: onSendHeld.map { send -> () -> Void in
+                                                    { Task { await state.performHeldAction(send) } }
+                                                },
+                                                onDiscardHeld: onDiscardHeld.map { discard -> () -> Void in
+                                                    { Task { await state.discardHeldMessages(nil, perform: discard) } }
+                                                },
+                                                onDiscardRow: onDiscardHeld.map { discard -> (Int) -> Void in
+                                                    { id in Task { await state.discardHeldMessages(id, perform: discard) } }
+                                                })
+                                .disabled(state.mutatingHeldMessages)
+                        }
                         if showsQueue {
-                            Rectangle().fill(Theme.border).frame(height: 1).padding(.horizontal, 8)
+                            trayDivider
                         }
                     }
                     .padding(.horizontal, 4)
@@ -240,6 +266,7 @@ struct Composer: View {
             }
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsQueue)
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: systemMessages.isEmpty)
+            .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsStatusLines)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.tray)
                     .fill(Theme.tray)

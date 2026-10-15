@@ -290,12 +290,6 @@ struct ChatView: View {
                     .padding(.horizontal, 24)
                     .padding(.bottom, 2)
                 }
-                if !session.isAsk && !transcript.todos.isEmpty {
-                    TodosPanel(todos: transcript.todos, sessionId: session.id)
-                }
-                if !session.isAsk {
-                    SubagentsStrip(session: session)
-                }
                 if showingJobs, !session.isArchived {
                     JobsPanel(sessionId: session.id, jobs: runningJobs) { showingJobs = false }
                 }
@@ -326,6 +320,7 @@ struct ChatView: View {
                         onSendHeld: { try await AppModel.shared.client.sendHeldMessages(session.id) },
                         onDiscardHeld: { id in try await AppModel.shared.client.discardHeldMessages(session.id, submissionId: id) },
                         session: session,
+                        todos: session.isAsk ? [] : transcript.todos,
                         slashCommands: slashCommands.commands,
                         onSlashCommandsNeeded: { [sessionId = session.id] in
                             slashCommands.load(sessionId: sessionId, client: AppModel.shared.client)
@@ -531,7 +526,8 @@ struct RowView: View, Equatable {
         switch row {
         case let .user(id, text, timestamp):
             if let notification = SubagentNotification(message: text) {
-                SubagentAnswerRow(notification: notification)
+                SubagentAnswerRow(id: id, notification: notification, timestamp: timestamp,
+                                  expansion: messageExpansions?.state(for: id))
             } else {
                 UserMessage(text: text, expansion: messageExpansions?.state(for: id),
                             timestamp: timestamp, entryID: row.entryID)
@@ -539,11 +535,11 @@ struct RowView: View, Equatable {
             }
         case let .automatic(id, text, origin, timestamp):
             if let notification = SubagentNotification(message: text) {
-                SubagentAnswerRow(notification: notification)
+                SubagentAnswerRow(id: id, notification: notification, timestamp: timestamp,
+                                  expansion: messageExpansions?.state(for: id))
             } else {
-                MessageWithActions(text: text, milliseconds: timestamp) {
-                    AutomaticMessageRow(text: text, origin: origin, expansion: messageExpansions?.state(for: id))
-                }
+                ChatEventRow(event: .automatic(id: id, text: text, origin: origin, timestamp: timestamp),
+                             expansion: messageExpansions?.state(for: id))
             }
         case let .text(_, text, timestamp):
             // Agent replies are always shown in full. Only user bubbles fold.
@@ -558,8 +554,8 @@ struct RowView: View, Equatable {
                           expansions: messageExpansions)
         case let .artifact(_, reference):
             ArtifactCard(reference: reference)
-        case let .question(_, question):
-            QuestionRow(question: question)
+        case let .question(id, question):
+            ChatEventRow(event: .question(id: id, question: question), expansion: messageExpansions?.state(for: id))
         case let .error(_, text):
             ErrorRow(text: text, entryID: row.entryID)
         case let .notice(id, text):

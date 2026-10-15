@@ -7,7 +7,6 @@ ChangesPane.swift 1
 ChatLinksPane.swift 3
 ChatView.swift 1
 CollapsibleMessage.swift 3
-CompletionPicker.swift 6
 Composer.swift 1
 ComposerUsage.swift 4
 HomeView.swift 7
@@ -24,7 +23,6 @@ ScheduleUI.swift 2
 SessionRename.swift 1
 Snapshot.swift 8
 TerminalPane.swift 6
-TodosPanel.swift 3
 ToolViews.swift 3
 TrackingSettings.swift 17
 TranscriptRewind.swift 1
