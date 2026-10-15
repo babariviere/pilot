@@ -64,6 +64,7 @@ struct ArtifactWebView: NSViewRepresentable {
         let libraries = ArtifactLibraryHandler(libraries: Set(revision.libraries), client: AppModel.shared.client)
         let view = Self.makeSandboxView(coordinator: context.coordinator, libraries: libraries, inline: inline)
         context.coordinator.measurementKind = revision.kind
+        context.coordinator.awaitingMermaid = revision.libraries.contains(.mermaid)
         context.coordinator.install(in: view, document: ArtifactPreviewDocument.document(revision, inline: inline))
         return view
     }
@@ -119,13 +120,17 @@ struct ArtifactWebView: NSViewRepresentable {
         /// Inline diagrams wait for their asynchronous renderer after navigation finishes.
         var onLoad: ((WKWebView) -> Void)?
         var measurementKind: ArtifactKind?
+        var awaitingMermaid = false
         var measurementTask: Task<Void, Never>?
         private var measurement = ArtifactContentMeasurement()
         private var initialNavigation = true
         private var document: String?
         private var restartedRenderer = false
 
-        init(state: ArtifactRenderState) { self.state = state }
+        init(state: ArtifactRenderState) {
+            self.state = state
+            measurement = ArtifactContentMeasurement(retaining: state.contentSize)
+        }
 
         func install(in view: WKWebView, document: String) {
             self.document = document
@@ -176,6 +181,13 @@ struct ArtifactWebView: NSViewRepresentable {
                 while !Task.isCancelled {
                     guard let self, self.active, let view else { return }
                     do {
+                        // Lazy rows can detach or be given a zero-sized host before dismantle.
+                        // Never replace the retained row size with geometry from that transition.
+                        let viewport = view.bounds.size
+                        guard view.window != nil, viewport.width > 0, viewport.height > 0 else {
+                            try await Task.sleep(for: .milliseconds(500))
+                            continue
+                        }
                         let intrinsic = measurementKind == .image || measurementKind == .swiftui
                         let result = try await view.callAsyncJavaScript("""
                         if (image) {
@@ -187,6 +199,10 @@ struct ArtifactWebView: NSViewRepresentable {
                         }
                         const body = document.body, root = document.documentElement;
                         if (!body || !root) return null;
+                        // A slow Mermaid render can leave its short source visible for several
+                        // polls. It is not the saved diagram's geometry, however stable it looks.
+                        if (mermaid && Array.from(document.querySelectorAll('.mermaid')).slice(0, 128)
+                          .some(node => !node.querySelector('svg'))) return null;
                         let width = Math.max(body.scrollWidth, root.scrollWidth);
                         const css = getComputedStyle(body);
                         // document scrollHeight is at least the viewport height, so it cannot
@@ -216,15 +232,20 @@ struct ArtifactWebView: NSViewRepresentable {
                             box.height * Math.min(1, Math.max(0, innerWidth - paddingX) / box.width) + paddingBottom);
                         }
                         return [preferredWidth, preferredHeight];
-                        """, arguments: ["image": intrinsic, "swiftui": measurementKind == .swiftui],
+                        """, arguments: ["image": intrinsic, "swiftui": measurementKind == .swiftui,
+                                         "mermaid": self.awaitingMermaid],
                             in: nil, contentWorld: .defaultClient) as? [Double]
                         guard self.active, !Task.isCancelled else { return }
-                        if result == previous, view.bounds.size == previousViewport { stableReads += 1 } else { stableReads = 0 }
+                        guard view.window != nil, view.bounds.size == viewport else {
+                            try await Task.sleep(for: .milliseconds(500))
+                            continue
+                        }
+                        if result == previous, viewport == previousViewport { stableReads += 1 } else { stableReads = 0 }
                         previous = result
-                        previousViewport = view.bounds.size
+                        previousViewport = viewport
                         if let result, result.count == 2,
                            let size = self.measurement.record(content: CGSize(width: result[0], height: result[1]),
-                                                              viewport: view.bounds.size, intrinsicImage: intrinsic),
+                                                              viewport: viewport, intrinsicImage: intrinsic),
                            self.state.contentSize != size {
                             self.state.contentSize = size
                         }
@@ -243,7 +264,7 @@ struct ArtifactWebView: NSViewRepresentable {
             if active, !restartedRenderer, let document {
                 restartedRenderer = true
                 measurementTask?.cancel()
-                measurement = ArtifactContentMeasurement()
+                measurement = ArtifactContentMeasurement(retaining: state.contentSize)
                 initialNavigation = true
                 state.error = nil
                 state.loading = true

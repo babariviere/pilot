@@ -56,13 +56,34 @@ public enum ArtifactViewerLayout {
 public struct ArtifactContentMeasurement {
     private var previousContent: CGSize?
     private var previousViewport: CGSize?
+    private var restoring = false
+    private var candidate: CGSize?
+    private var candidateViewport: CGSize?
     public private(set) var preferredSize: CGSize?
 
     public init() {}
 
+    /// A recreated renderer starts with an empty/partially rendered DOM. Keep the lazy row's
+    /// reservation until two consecutive reads agree, rather than caching its startup geometry.
+    public init(retaining size: CGSize?) {
+        preferredSize = size
+        restoring = size != nil
+    }
+
     public mutating func record(content: CGSize, viewport: CGSize, intrinsicImage: Bool = false) -> CGSize? {
         guard content.width.isFinite, content.height.isFinite, content.width > 0, content.height > 0,
-              viewport.width.isFinite, viewport.height.isFinite else { return preferredSize }
+              viewport.width.isFinite, viewport.height.isFinite,
+              viewport.width > 0, viewport.height > 0 else { return preferredSize }
+        if restoring {
+            let settled = candidate.map { abs($0.width - content.width) <= 1 && abs($0.height - content.height) <= 1 } == true
+                && candidateViewport == viewport
+            candidate = content
+            candidateViewport = viewport
+            guard settled else { return preferredSize }
+            restoring = false
+            candidate = nil
+            candidateViewport = nil
+        }
         func dimension(_ value: CGFloat, _ host: CGFloat, _ oldValue: CGFloat?, _ oldHost: CGFloat?, _ preferred: CGFloat?) -> CGFloat {
             guard !intrinsicImage, let oldValue, let oldHost, let preferred else { return ceil(value) }
             let contentDelta = value - oldValue
