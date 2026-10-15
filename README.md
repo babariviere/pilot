@@ -255,6 +255,8 @@ Dependencies outside the selection must be done. Each task gets its own PR, base
 head and linked as a stack. Supplied artifacts and links attach to every selected task. The whole opening
 prompt, including all task bodies, instructions and references, must fit 4,000 characters; oversized
 starts are rejected with the size, without truncation. The app's task Start chat action remains single-task.
+It opens a small sheet with optional instructions, model and thinking (defaulting to the task's preferred
+model), Build or Ask mode, base branch, and artifact or link references, validated like the coordinator's start.
 
 A task can have a preferred model and thinking level, set from the task's menu in the Tasks tab or by the
 coordinator. It uses the same scoped, price-capped model list as coordinator starts. New chats for the task

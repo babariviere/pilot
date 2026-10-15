@@ -53,20 +53,34 @@ struct ThinkingMenu: View {
 
 /// Model and thinking chips for a task chat, loaded from the task-start list once per project, never on typing.
 /// Empty values mean the default: `defaultModel` (a task's preferred model) when given, else the project's.
-struct TaskModelFields: View {
+/// `leading` places other option chips, such as mode and branch, in the same row.
+struct TaskModelFields<Leading: View>: View {
     let projectId: String
     @Binding var model: String
     @Binding var thinking: String
     @Binding var options: TaskModelOptions
     var defaultModel: String?
     var defaultThinking: String?
+    @ViewBuilder var leading: () -> Leading
     @ObservedObject private var client = AppModel.shared.client
+
+    init(projectId: String, model: Binding<String>, thinking: Binding<String>, options: Binding<TaskModelOptions>,
+         defaultModel: String? = nil, defaultThinking: String? = nil, @ViewBuilder leading: @escaping () -> Leading) {
+        self.projectId = projectId
+        _model = model
+        _thinking = thinking
+        _options = options
+        self.defaultModel = defaultModel
+        self.defaultThinking = defaultThinking
+        self.leading = leading
+    }
 
     private var fallback: String? { defaultModel ?? client.project(projectId)?.model ?? options.models.defaultModel }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
+                leading()
                 ModelMenu(model: $model, projectDefault: fallback, list: options.models)
                     .disabled(options.loading)
                 ThinkingMenu(thinking: $thinking, levels: options.option(model.isEmpty ? fallback : model)?.thinkingLevels ?? ["off"],
@@ -108,6 +122,14 @@ struct TaskModelFields: View {
             options.error = error.localizedDescription
         }
         options.loading = false
+    }
+}
+
+extension TaskModelFields where Leading == EmptyView {
+    init(projectId: String, model: Binding<String>, thinking: Binding<String>, options: Binding<TaskModelOptions>,
+         defaultModel: String? = nil, defaultThinking: String? = nil) {
+        self.init(projectId: projectId, model: model, thinking: thinking, options: options,
+                  defaultModel: defaultModel, defaultThinking: defaultThinking) { EmptyView() }
     }
 }
 
@@ -173,4 +195,3 @@ struct MissionTaskModelSheet: View {
         }
     }
 }
-
