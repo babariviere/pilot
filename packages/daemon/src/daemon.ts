@@ -5,7 +5,8 @@ import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
 import { daemonHello } from "./hello.ts";
-import { MissionLinearSource, pollLinear } from "./linear-source.ts";
+import { MissionLinearSource } from "./linear-source.ts";
+import { createLinearSizePoller } from "./linear-size.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
@@ -48,7 +49,7 @@ const mcpStatus = new McpStatusService({
 	watchDir: config.agentDir ?? getAgentDir(),
 });
 mcpStatus.start();
-tracking.register("linear", pollLinear);
+tracking.register("linear", createLinearSizePoller(trackedItems, workerTriage(config.agentDir)));
 tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
 tracking.register("slack", createSlackPoller(trackedItems, models));

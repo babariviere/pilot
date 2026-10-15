@@ -11,6 +11,12 @@ parentPort!.on("message", ({ id, method, args }) => {
 		changed = false;
 		let value: unknown, projectId: string | undefined, projectIds: string[] | undefined;
 		switch (method) {
+			case "reserveLinearSize":
+				value = disk.sizes.reserve(args.projectId, args.externalId, args.version, args.now);
+				break;
+			case "finishLinearSize":
+				disk.sizes.finish(args.projectId, args.externalId, args.version, args.size);
+				break;
 			case "triageInput":
 				value = disk.triage.input(args.projectId, args.kind);
 				break;

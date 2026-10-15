@@ -2,6 +2,9 @@ import Foundation
 
 // Mirrors packages/protocol/src/tracking.ts.
 public enum TrackedKind: String, Codable, Hashable, Sendable { case linear, slack }
+public enum LinearSize: String, Codable, Hashable, Sendable {
+    case quickFix = "quick_fix", needsPlanning = "needs_planning", unknown
+}
 /// Read-only, untrusted rules rebuilt from corrections. Mirrors TriageGuide.
 public struct TriageGuide: Codable, Equatable, Sendable {
     public let kind: TrackedKind
@@ -239,6 +242,8 @@ public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
     }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
+    public let linearSize: LinearSize?
+    public let linearSizeOverride: LinearSize?
     public let id: String
     public let projectId: String
     public let kind: TrackedKind
@@ -262,7 +267,9 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public init(id: String, projectId: String, kind: TrackedKind, externalId: String, title: String, url: String,
                 status: String, metadata: [String: JSONValue] = [:], dismissed: Bool = false,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
-                missionIds: [String]? = nil, slack: SlackTriage? = nil, createdAt: Double, updatedAt: Double) {
+                missionIds: [String]? = nil, slack: SlackTriage? = nil, linearSize: LinearSize? = nil,
+                linearSizeOverride: LinearSize? = nil, createdAt: Double, updatedAt: Double) {
+        self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.id = id; self.projectId = projectId; self.kind = kind; self.externalId = externalId
         self.title = title; self.url = url; self.status = status; self.metadata = metadata; self.dismissed = dismissed
         self.sessionId = sessionId; self.missionId = missionId; self.createdAt = createdAt; self.updatedAt = updatedAt
@@ -276,7 +283,8 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
         self.init(id: row.id, projectId: projectId, kind: kind, externalId: row.externalId ?? row.id,
                   title: row.title, url: row.url ?? "", status: row.status ?? "", metadata: row.metadata ?? [:],
                   sessionId: row.sessionId, missionId: row.missionId, sessionIds: row.sessionIds,
-                  missionIds: row.missionIds, slack: row.slack, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
+                  missionIds: row.missionIds, slack: row.slack, linearSize: row.linearSize,
+                  linearSizeOverride: row.linearSizeOverride, createdAt: row.updatedAt ?? 0, updatedAt: row.updatedAt ?? 0)
     }
 }
 public struct TrackedItemList: Codable, Equatable, Sendable {
@@ -285,6 +293,7 @@ public struct TrackedItemList: Codable, Equatable, Sendable {
     public init(items: [TrackedItem], total: Int) { self.items = items; self.total = total }
 }
 public struct TrackedItemPatch: Encodable, Sendable {
+    public var linearSize: LinearSize?
     /// Confirmed Start chat/mission only. Ordinary linking remains read-only.
     public var start: Bool?
     public var slack: SlackOverrides?
@@ -294,15 +303,18 @@ public struct TrackedItemPatch: Encodable, Sendable {
     public var clearSession: Bool
     public var clearMission: Bool
     public init(dismissed: Bool? = nil, sessionId: String? = nil, missionId: String? = nil,
-                clearSession: Bool = false, clearMission: Bool = false, slack: SlackOverrides? = nil, start: Bool? = nil) {
+                clearSession: Bool = false, clearMission: Bool = false, slack: SlackOverrides? = nil, start: Bool? = nil,
+                linearSize: LinearSize? = nil) {
+        self.linearSize = linearSize
         self.start = start
         self.dismissed = dismissed; self.sessionId = sessionId; self.missionId = missionId
         self.clearSession = clearSession; self.clearMission = clearMission; self.slack = slack
     }
-    enum CodingKeys: String, CodingKey { case dismissed, sessionId, missionId, slack, start }
+    enum CodingKeys: String, CodingKey { case dismissed, sessionId, missionId, slack, start, linearSize }
     public func encode(to encoder: any Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         try values.encodeIfPresent(start, forKey: .start)
+        try values.encodeIfPresent(linearSize, forKey: .linearSize)
         try values.encodeIfPresent(slack, forKey: .slack)
         try values.encodeIfPresent(dismissed, forKey: .dismissed)
         if clearSession { try values.encodeNil(forKey: .sessionId) }

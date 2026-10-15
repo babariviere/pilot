@@ -17,6 +17,7 @@ import type {
 import { NotFound } from "./errors.ts";
 import { parseSlackClassification, type SlackClassification } from "./slack-classifier.ts";
 import { TriageGuideDisk } from "./triage-guide-disk.ts";
+import { LinearSizeDisk } from "./linear-size.ts";
 
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
@@ -69,6 +70,7 @@ type Row = {
 	slack_reaction_seen: number;
 	slack_reaction_checked: number;
 	slack_status_version: number;
+	linear_size_override: import("@pilot/protocol").LinearSize | null;
 	created_at: number;
 	updated_at: number;
 };
@@ -109,6 +111,7 @@ const SLACK_LABEL_IN = `coalesce(${SLACK_LABEL}, '') IN (SELECT value FROM json_
 export class TrackedItemDisk {
 	private readonly db: DatabaseSync;
 	readonly triage: TriageGuideDisk;
+	readonly sizes: LinearSizeDisk;
 	private readonly listeners = new Set<(projectId: string) => void>();
 	/** Each project's close labels, as last set by the daemon. A project without an entry is never reconciled. */
 	private readonly closeLabels = new Map<string, string>();
@@ -230,6 +233,9 @@ export class TrackedItemDisk {
 			CREATE INDEX IF NOT EXISTS slack_corrections_project ON slack_corrections(project_id, seq DESC);
 		`);
 		this.triage = new TriageGuideDisk(this.db);
+		this.sizes = new LinearSizeDisk(this.db);
+		if (!columns.some((column) => column.name === "linear_size_override"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_size_override TEXT");
 		if (Number(this.db.prepare("PRAGMA user_version").get()!.user_version) < 1)
 			this.db.exec(`
 			UPDATE slack_classifications SET result=json_object(
@@ -845,6 +851,28 @@ export class TrackedItemDisk {
 		validatePatch(patch);
 		const item = this.require(id);
 		if (patch.slack && item.kind !== "slack") throw new Error("Slack overrides require a Slack item");
+		if (patch.linearSize !== undefined) {
+			if (item.kind !== "linear") throw new Error("Size overrides require a Linear item");
+			if (Object.keys(patch).length !== 1) throw new Error("Size correction must be a separate action");
+			if (patch.linearSize !== item.linearSizeOverride) {
+				this.db.exec("BEGIN");
+				try {
+					this.db.prepare("UPDATE tracked_items SET linear_size_override=? WHERE id=?").run(patch.linearSize, id);
+					this.triage.append(item.projectId, "linear", {
+						itemId: id,
+						summary: item.title.slice(0, 240),
+						correctedAt: Date.now(),
+						values: { size: patch.linearSize },
+					});
+					this.db.exec("COMMIT");
+				} catch (error) {
+					this.db.exec("ROLLBACK");
+					throw error;
+				}
+				this.emit(item.projectId);
+			}
+			return this.require(id);
+		}
 		const sessions = bind(item.sessionIds ?? [], patch.sessionId),
 			missions = bind(item.missionIds ?? [], patch.missionId);
 		const overrides: SlackOverrides = { ...item.slack?.overrides, ...patch.slack };
@@ -1021,6 +1049,12 @@ function decode(row: Row): TrackedItem {
 				}
 			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
 		...(slack ? { slack } : {}),
+		...(row.kind === "linear"
+			? {
+					linearSize: row.linear_size_override ?? metadata.size ?? "unknown",
+					...(row.linear_size_override ? { linearSizeOverride: row.linear_size_override } : {}),
+				}
+			: {}),
 		dismissed: !!row.dismissed,
 		...(row.session_id ? { sessionId: row.session_id } : {}),
 		...(row.mission_id ? { missionId: row.mission_id } : {}),
@@ -1044,6 +1078,8 @@ function previewItem(item: TrackedItem): import("@pilot/protocol").DashboardTrac
 		externalId,
 		metadata,
 		...(item.slack ? { slack: item.slack } : {}),
+		...(item.linearSize ? { linearSize: item.linearSize } : {}),
+		...(item.linearSizeOverride ? { linearSizeOverride: item.linearSizeOverride } : {}),
 		...(sessionId ? { sessionId } : {}),
 		...(missionId ? { missionId } : {}),
 		...(sessionIds ? { sessionIds } : {}),
@@ -1079,8 +1115,14 @@ function validateInput(item: TrackedInput): void {
 export function validatePatch(value: unknown): asserts value is TrackedItemPatch {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid tracked item patch");
 	const patch = value as TrackedItemPatch;
-	if (Object.keys(value).some((key) => !["dismissed", "sessionId", "missionId", "slack", "start"].includes(key)))
+	if (
+		Object.keys(value).some(
+			(key) => !["dismissed", "sessionId", "missionId", "slack", "start", "linearSize"].includes(key),
+		)
+	)
 		throw new Error("Unknown tracked item field");
+	if (patch.linearSize !== undefined && !["quick_fix", "needs_planning", "unknown"].includes(patch.linearSize))
+		throw new Error("Invalid Linear size");
 	if (patch.start !== undefined && typeof patch.start !== "boolean") throw new Error("start must be a boolean");
 	if (
 		patch.start &&
