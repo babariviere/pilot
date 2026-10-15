@@ -47,21 +47,49 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 
 ## Attention budget
 
-Only things that need the user may interrupt: notifications, sidebar and menu bar badges, and colored status.
-Failed chats, unreviewed results, agent and mission questions and failed scheduled items qualify. An agent's question
-stays until it is answered, not until the chat is viewed. Working, finished and
-merged things do not, they wait on the page. When lists mix states, sort by urgency: failed, question, scheduled
-failure, unread, then the rest.
+Only things that need the user may interrupt: notifications, the Inbox and menu bar badges, and colored status.
+Failed chats, unreviewed results, agent and mission questions, failed scheduled items, a stopping subscription
+limit, a pull request Pilot could not get unstuck, an MCP server that needs sign-in and a background job running for
+over an hour qualify. Working, finished and merged things do not, they wait on the page. When lists mix states, sort
+by urgency: failed, question, scheduled failure, unread, then the rest.
+
+- **Every Needs you item says why.** One short reason (`NeedsYouReason`: "Failed: …", "Asks: …", "Long job: …",
+  "Limit reached · resumes 18:00", "Not reviewed: finished 5m ago") appears in the row's metadata line, its tooltip
+  and VoiceOver label, and the Inbox badge's tooltip sums the reasons. Use these words everywhere; do not invent a
+  screen-specific phrasing.
+- **Needs you clears itself.** There is no "mark as reviewed" or "remove" action. A read result leaves once the user
+  leaves its chat (never while it is open, so nothing jumps), failures stay until retried and questions until
+  answered. Live reasons (a long job, an MCP sign-in) clear when their cause does.
+- **Ready to merge waits, it never badges.** It is the user's next step, not an alarm.
+- **Waiting is working.** An idle agent whose background jobs still run is Working: no done outcome, notification or
+  Needs you entry, and it never wakes a mission coordinator. Only a job past one hour asks for the user.
+
+## Views
+
+Each top-level view has one role. Keep new content in the view whose role it serves.
+
+- **Home watches.** It always covers every project and answers "how is everything doing": a one-sentence summary,
+  quiet subscription bars, projects under their folder headings, Working now, Missions and Activity. It has no badge;
+  its only actions are starting a chat and adding a project.
+- **The Inbox acts.** It is the one place to act across projects: Needs you, Ready to merge, Linear and Slack, most
+  urgent first, and it carries the attention badge. A toolbar menu filters it to one project, preset to the focused
+  project when opened from it and never remembered.
+- **Overview orients.** A project's or mission's Overview leads with what is next for it, then what is in progress
+  (see Overview pages).
+- **Lists stay light.** Sidebar rows, the Inbox, Overviews and Home show the PR badge, branch and reason, never file
+  or line diff counts. Changes live in the chat's Changes pane and the row tooltip.
+- Name sources (Linear, Slack, GitHub), never an umbrella word for "items Pilot follows".
 
 ## State vocabulary
 
 Each state has one label and one icon and color token in `Theme`, used the same way in the sidebar, Home and
-the project page. Do not restyle a state for a single screen.
+the project page. Do not restyle a state for a single screen. Linear tickets and mission tasks share one status
+ladder: empty circle to do, half-filled in progress, three-quarter circle in review, then done.
 
 | State | Meaning | Interrupts |
 | --- | --- | --- |
-| Working | An agent is running | No |
-| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, a chat blocked on an MCP server that needs sign-in. A read result keeps its place while its chat is open and leaves once the user leaves the chat; failures and questions stay until retried or answered; an MCP block clears once the server works or the user writes in the chat | Yes |
+| Working | An agent is running, or it is idle while its background jobs or subagents run | No |
+| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, limit reached, stuck pull request, MCP server needing sign-in, job running over an hour. Clears itself (see Attention budget) | Yes |
 | Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |
@@ -81,12 +109,18 @@ passes diagonally, fainter and half speed while only background jobs run, and st
 
 ## Sidebar
 
-The sidebar answers "what needs me" before "where is it". One header row holds the scope switcher, Home (badged with
-what needs the user) and compose; archived chats, search (⌘F) and project folders live in the switcher's menu. All
-projects groups chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent) with each row naming its project; a focused project
-lists its own missions and chats. Rows are a title and one metadata line. Time, pin and mission marks appear under
-the pointer. Quiet chats fold past the first few, and the footer appears only while
-pilotd is unreachable.
+The sidebar answers "what needs me" before "where is it". From the top: Home (with compose), the Inbox (with the
+attention badge), then the project selector ("All projects" or one project) heading the scoped list, and a focused
+project's Overview as its first row. Archived chats, search (⌘F) and project folders (New Folder…, Move to folder)
+live in the selector's menu; folders are headings there and on Home, never a sidebar scope.
+
+Below that, both scopes use the same order: Missions, then chats grouped only by urgency (Pinned, Needs you, Ready to
+merge, Working, Recent). All projects names each row's project; a focused project leaves it out. Missions never sit in
+the chat groups and their rows do not expand: clicking opens the mission, hover reveals its coordinator and new chat.
+Mission chats sit in the chat groups like any chat, their mission on the second line; a coordinator's line starts
+with "Coordinator". A pinned chat is listed only under Pinned, and its corner still shows its state. Rows are a title
+and one metadata line. Time, pin and mission marks appear under the pointer. Quiet chats fold past the first few,
+and the footer appears only while pilotd is unreachable or something needs setting up.
 
 A row's metadata line is a `RowLine`: whole segments in a fixed order (project, Ask or Coordinator, reason, PRs,
 mission, branch) with a dot only between shown segments. When they do not fit, the line fades out before the
@@ -121,7 +155,9 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
 - Settings pages use the same reading column: `SettingsSection` (heading, explanation above the rows) and
-  `SettingsRow` hairline rows with native controls trailing (`Settings.swift`), never grouped forms.
+  `SettingsRow` hairline rows with native controls trailing (`Settings.swift`), never grouped forms. Selection is
+  soft grey, never system blue. Pages that need an explicit Save show it (with Revert) only once something changed,
+  and destructive actions such as Remove Project sit at the end as a red outline button with one explaining line.
 - Pages, sheets and panes share their chrome (`PageComponents.swift`): `PageHeader` for page titles,
   `InspectorPaneHeader` for inspector panes (no per-pane close button), `EmptyStateView` for empty or failed
   panes, `DisclosureChevron`, `ListToggle` ("Show all N" / "Show fewer") and `MetaText` for quiet metadata
@@ -131,6 +167,25 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 - Times use `RelativeDate`: "3d ago" in rows, "3 minutes ago" in sentences, "Today 9:00 AM" for upcoming times,
   with the exact date in the tooltip.
 - The UI says "chat", never "session", and "Needs you" for anything waiting on the user.
+
+## Chats
+
+A chat reads as a conversation, not a log.
+
+- **A turn folds.** Thinking, notes and tool calls between the user's message and the answer fold into one line
+  ("Worked for 3 min · read 3 files, edited 1, ran 2 commands"). It stays open while the turn runs with the latest
+  step visible, folds when the turn ends and stays open on a failed step. Steps read as sentences; finished steps
+  show no checkmark.
+- **Automatic items are one-line events** (`ChatEventRow`): GitHub actions ("Agent pushed fix/x", "Agent opened PR
+  #441") where they happened, mission updates, compaction and reset, Stopped, job results, subagent answers,
+  coordinator messages, PR follow-ups and answered questions. They are written for the user, expand to the full text
+  on Show, and only real failures get a red mark. No cards, separators or ISO times.
+- **User bubbles** use `Theme.muted` with no border, hold their attachments, and show time, copy and rewind on hover.
+  Scheduled messages wait at the end as dashed outline bubbles saying when they send; queued follow-ups stay in the
+  composer tray.
+- **The working line** ("Working… · 2 jobs", "Waiting on 2 jobs…") carries live work and opens the jobs panel when
+  jobs run. Nothing else stacks above the composer except a subscription notice, shown only past 80% or when limited.
+  The context gauge lives in the composer bar.
 
 ## Sheets
 
@@ -144,9 +199,11 @@ button shows ⌘↩.
 
 ## Overview pages
 
-A project's Overview follows these principles: a single reading column with a one-sentence summary, then sections in
-order of urgency (Up next, Working now, Pull requests, Missions, Scheduled, Current cycle, Slack, Memory, Recent), at
-most five rows each. A mission's Overview has the same shape: its goal, one meta line, the task progress bar with its
+A project's Overview is a single reading column with a one-sentence summary, then sections in order of urgency (Up
+next, Working now, Pull requests, Missions, Scheduled, Current cycle, Slack, Memory, Recent), at most five rows each.
+Up next leads with the project's top Inbox rows (Needs you, then Ready to merge) and links to the Inbox filtered to
+the project; Pull requests then lists only those still waiting on checks, review or a fix, so each chat appears once.
+A mission's Overview has the same shape: its goal, one meta line, the task progress bar with its
 legend, then Needs you (hidden when empty), Working now and Links. Both share the Inbox's rows and words (Needs you
 rows, Ready to merge). Sections added later follow the same rules.
 

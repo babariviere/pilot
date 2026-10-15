@@ -21,6 +21,9 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 
 - **Run several agents at once.** Follow progress across projects, send follow-ups, queue messages or stop
   a run. Every session has its own worker process.
+- **See what needs you first.** Home shows how every project is doing. The Inbox is the one place to act: chats
+  that need you (each with a short reason), pull requests ready to merge, and Linear and Slack items, across
+  projects or filtered to one. Each project has an Overview that starts with what is next for it.
 - **Jump anywhere from the keyboard.** ⌘K opens a command palette over chats (by title, branch, project or pull
   request number), pages, missions and tasks (`#25`), project scopes, Linear and Slack Inbox items, and actions such
   as new chat, pin, archive, stop, retry or opening the pull request on GitHub.
@@ -95,6 +98,28 @@ keeping its history and workspace. Workspace preparation failures cannot use thi
 You can also archive a failed startup without discarding its queued messages. Restore it before retrying.
 
 ## Working with Pilot
+
+### Home, Inbox and Overview
+
+The sidebar starts with **Home**, the **Inbox** and the project selector. Home covers every project: a short
+summary, subscription usage, projects (under their folders), work in progress, missions and recent activity.
+The Inbox carries the badge and lists, most urgent first, what **Needs you**, what is **Ready to merge**, and your
+Linear and Slack items. Its toolbar filters it to one project. Focusing a project adds its **Overview**, which
+leads with Up next, then work in progress, pull requests, missions, schedules, the current Linear cycle, Slack,
+memory and recent chats. Project folders are managed from the project selector's menu.
+
+Below, chats are grouped by urgency in every scope: Missions first, then **Pinned**, **Needs you**, **Ready to
+merge**, **Working** and **Recent**. Every Needs you row says why ("Failed: …", "Asks: …", "Long job: …",
+"Limit reached · resumes 18:00"). It clears itself: a read result leaves once you leave its chat, failures stay
+until retried and questions until answered. Lists show the PR, branch and reason, not diff counts.
+
+A chat whose agent is idle while its background jobs run stays **Working**, with a quieter animation. Its working
+line ("Waiting on 2 jobs…") opens a panel of running jobs with Stop on each. A job still running after an hour
+moves the chat to Needs you.
+
+In a chat, each turn's thinking and tool calls fold into one line ("Worked for 3 min · read 3 files, ran 2
+commands"). Automatic items (pushes and pull requests, job results, subagent answers, mission updates, compaction
+and stops) appear as one-line events where they happened, expanding on **Show**.
 
 ### Stopping and system messages
 
@@ -207,9 +232,9 @@ marked unknown. Reads use the daemon's shared cache without waiting for provider
 contain no subscription usage, and no account, billing or cost details are exposed.
 
 Coordinator updates wait while member chats are working or have running background jobs. An idle chat
-with jobs is reported as waiting, not finished. Updates settle for 30 seconds after activity stops,
-with a 30-minute safety cap measured from the oldest pending event or a job's start, whichever is
-earlier. A capped update names still-running jobs and their elapsed time. Pending updates are durable;
+with jobs counts as working: it is not reported as finished, and its jobs never create an update or wake
+the coordinator. Updates settle for 30 seconds after activity stops, with a 30-minute safety cap measured
+from the oldest pending event. The coordinator's own jobs do not hold updates back. Pending updates are durable;
 running job processes belong to their live worker and do not survive orderly shutdown or replacement.
 A job still running after one hour moves its chat to **Needs you**, with its name and elapsed time.
 This fixed threshold is user-only attention, including inside missions: it never wakes a coordinator
