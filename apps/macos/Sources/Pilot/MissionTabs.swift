@@ -609,7 +609,10 @@ struct MissionTasksTab: View {
                 case let .header(group, folded):
                     MissionPhaseHeader(group: group, folded: folded, mission: mission, phases: index,
                                        onToggle: { folds.toggle(group) },
-                                       onDropTask: index.isEditable ? { moveTask($0, to: group.phase?.id, index: index) } : nil)
+                                       onDropTask: index.isEditable ? { id in
+                                           apply(MissionTaskMove.dropAtTop(id, of: group.phase?.id, tasks: detail.tasks,
+                                                                           phases: index))
+                                       } : nil)
                 case let .task(task, index, siblings):
                     let phaseId = phases.index.phaseId(of: task)
                     VStack(alignment: .leading, spacing: 0) {
@@ -624,7 +627,10 @@ struct MissionTasksTab: View {
                                        phaseChoices: choices,
                                        gating: MissionPhaseGating.text(phases.index.gatingPhases(of: task)),
                                        onShowTask: { show($0, scroll) },
-                                       onDropTask: choices.isEmpty ? nil : { moveTask($0, to: phaseId, index: phases.index) })
+                                       onDropTask: { id, after in
+                                           apply(MissionTaskMove.drop(id, on: task.id, after: after, tasks: detail.tasks,
+                                                                      phases: phases.index))
+                                       })
                     }
                 }
             }
@@ -638,12 +644,15 @@ struct MissionTasksTab: View {
         .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(scroll) }
     }
 
-    /// Moves a dropped task into a phase (nil: no phase) and opens that phase so the task stays in view.
-    private func moveTask(_ taskId: String, to phaseId: String?, index: MissionPhaseIndex) {
-        guard let task = detail.tasks.first(where: { $0.id == taskId }), index.phaseId(of: task) != phaseId else { return }
-        folds.unfold(MissionPhaseGroup.id(phaseId))
+    /// Saves a drag: the dragged task's order and phase, then any renumbered neighbours. A task moved into another
+    /// phase opens that phase so it stays in view.
+    private func apply(_ move: MissionTaskMove?) {
+        guard let move else { return }
+        if move.changesPhase { folds.unfold(MissionPhaseGroup.id(move.phaseId)) }
         model.missionAction { [client, id = mission.id] in
-            try await client.updateMissionTask(id, taskId: taskId, MissionTaskWrite(phaseId: phaseId.map { .set($0) } ?? .clear))
+            for write in move.writes {
+                try await client.updateMissionTask(id, taskId: write.taskId, write.request)
+            }
         }
     }
 
@@ -737,14 +746,18 @@ struct MissionTaskRow: View {
     /// Scrolls to a task and highlights it.
     var onShowTask: (String) -> Void = { _ in }
     /// Takes a task dropped on this row. Nil when the row takes no drops.
-    var onDropTask: ((String) -> Void)? = nil
+    /// Takes a task dropped on this row: its id, and whether it goes after the row rather than before.
+    var onDropTask: ((String, Bool) -> Void)? = nil
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @State private var choosingModel = false
     @State private var startingChat = false
-    @State private var dropTargeted = false
+    @State private var editingDependencies = false
+    /// Where a dragged task would land, for the insertion line, and the row height that splits its halves.
+    @State private var dropEdge: MissionTaskDropEdge?
+    @State private var height: CGFloat = 0
     @StateObject private var artifacts = MissionArtifactsState()
     /// Rows built, so the tab-switch check can confirm the list stays lazy.
     static var bodyEvaluations = 0
@@ -753,7 +766,7 @@ struct MissionTaskRow: View {
          dependencies: MissionTaskDependencies = .none, resources: [MissionResource] = [],
          artifactLinks: [MissionArtifactLink] = [], members: [SessionSummary] = [],
          phaseId: String? = nil, phaseChoices: [MissionPhase] = [], gating: String? = nil,
-         onShowTask: @escaping (String) -> Void = { _ in }, onDropTask: ((String) -> Void)? = nil) {
+         onShowTask: @escaping (String) -> Void = { _ in }, onDropTask: ((String, Bool) -> Void)? = nil) {
         self.task = task
         self.mission = mission
         self.siblings = siblings
@@ -781,6 +794,10 @@ struct MissionTaskRow: View {
                 Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     .frame(minWidth: 20, alignment: .leading)
                     .help([gating, dependencies.helpText].compactMap { $0 }.joined(separator: "\n"))
+                    // Anchors the dependency editor; the row's own popover holds the link form.
+                    .popover(isPresented: $editingDependencies, arrowEdge: .bottom) {
+                        MissionTaskDependencyEditor(task: task, missionId: mission.id) { editingDependencies = false }
+                    }
                 VStack(alignment: .leading, spacing: 3) {
                     TextField("Title", text: $title.title)
                         .textFieldStyle(.plain)
@@ -851,10 +868,25 @@ struct MissionTaskRow: View {
         .onChange(of: task.title) { _, value in title.title = value }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(highlighted || dropTargeted ? Theme.selected : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(highlighted ? Theme.selected : .clear))
         .animation(Theme.Motion.quick, value: highlighted)
+        .overlay(alignment: dropEdge == .below ? .bottom : .top) {
+            if dropEdge != nil {
+                Capsule().fill(Theme.dropIndicator).frame(height: 2).padding(.leading, 8)
+                    .offset(y: dropEdge == .below ? 1 : -1)
+                    .allowsHitTesting(false)
+            }
+        }
+        .background(GeometryReader { proxy in
+            Color.clear
+                .onAppear { height = proxy.size.height }
+                .onChange(of: proxy.size.height) { _, value in height = value }
+        })
+        // Drag a row to reorder it, or onto another phase to move it there.
         .onDrag { MissionTaskDrag.provider(task.id) }
-        .modifier(MissionTaskDropTarget(enabled: onDropTask != nil, targeted: $dropTargeted) { onDropTask?($0) })
+        .modifier(MissionTaskRowDropTarget(height: height, edge: $dropEdge, perform: onDropTask))
+        .accessibilityAction(named: "Move Up") { move(-1) }
+        .accessibilityAction(named: "Move Down") { move(1) }
         .contextMenu { menuItems }
         .popover(isPresented: $addingLink, arrowEdge: .bottom) {
             MissionAddLinkForm(missionId: mission.id, taskId: task.id, title: "Link to task #\(task.number)") {
@@ -912,7 +944,6 @@ struct MissionTaskRow: View {
     }
 
     @ViewBuilder private var menuItems: some View {
-        let index = siblings.firstIndex { $0.id == task.id } ?? 0
         if let sessionId = task.sessionId {
             Button("Open Chat") { model.selectedSessionId = sessionId }
         } else if task.status.canStart {
@@ -944,6 +975,7 @@ struct MissionTaskRow: View {
             }
         }
         Button(task.preferredModel == nil ? "Set Preferred Model…" : "Change Preferred Model…") { choosingModel = true }
+        Button(task.dependsOn?.isEmpty == false ? "Edit Dependencies…" : "Add Dependencies…") { editingDependencies = true }
         Divider()
         Button("Add Link…") { addingLink = true }
         if let needed = dependencies.neededByText {
@@ -953,9 +985,6 @@ struct MissionTaskRow: View {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString("#\(task.number) \(task.title)", forType: .string)
         }
-        Divider()
-        Button("Move Up") { move(-1) }.disabled(index == 0)
-        Button("Move Down") { move(1) }.disabled(index >= siblings.count - 1)
         Divider()
         Button("Delete Task", role: .destructive) {
             model.missionAction { [client, id = mission.id] in try await client.deleteMissionTask(id, taskId: task.id) }

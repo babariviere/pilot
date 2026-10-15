@@ -249,7 +249,8 @@ starting point, while tasks record ownership, dependencies and progress. You can
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
 Tasks can belong to ordered phases, each with a name and optional goal. The Tasks tab groups tasks by
-phase, folds finished phases, and lets you add, edit, reorder and delete phases or drag tasks between them.
+phase, folds finished phases, and lets you add, edit, reorder and delete phases. Drag tasks to reorder them
+or move them between phases, and edit a task's dependencies from its menu.
 The Overview shows one progress bar per phase with the current phase highlighted, and the sidebar names
 the current phase and its progress. The coordinator tool manages phases too. Existing milestone names
 migrate automatically. Phases complete when every task is done or dropped, reopen with unfinished work,

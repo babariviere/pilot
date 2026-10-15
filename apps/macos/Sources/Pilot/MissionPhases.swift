@@ -305,3 +305,54 @@ struct MissionTaskDropTarget: ViewModifier {
         }
     }
 }
+
+/// Where a dragged task would land on a task row: above it or below it.
+enum MissionTaskDropEdge {
+    case above, below
+}
+
+/// Applies `MissionTaskRowDrop` when the row takes drops.
+struct MissionTaskRowDropTarget: ViewModifier {
+    let height: CGFloat
+    @Binding var edge: MissionTaskDropEdge?
+    let perform: ((String, Bool) -> Void)?
+
+    func body(content: Content) -> some View {
+        if let perform {
+            content.onDrop(of: [.utf8PlainText], delegate: MissionTaskRowDrop(height: height, edge: $edge) { perform($0, $1) })
+        } else {
+            content
+        }
+    }
+}
+
+/// Drops on a task row: the upper half places the dragged task before the row, the lower half after it.
+struct MissionTaskRowDrop: DropDelegate {
+    /// The row's height, to tell its halves apart.
+    let height: CGFloat
+    @Binding var edge: MissionTaskDropEdge?
+    /// The dragged task id, and whether it goes after the row.
+    let perform: @MainActor (String, Bool) -> Void
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.utf8PlainText]) }
+
+    func dropEntered(info: DropInfo) { update(info) }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        update(info)
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) { edge = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let after = edge == .below
+        edge = nil
+        return MissionTaskDrag.receive(info.itemProviders(for: [.utf8PlainText])) { perform($0, after) }
+    }
+
+    private func update(_ info: DropInfo) {
+        let next: MissionTaskDropEdge = info.location.y > height / 2 ? .below : .above
+        if edge != next { edge = next }
+    }
+}
