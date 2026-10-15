@@ -1,4 +1,4 @@
-name: Pilot CI and macOS release
+name: Release
 
 on:
   push:
