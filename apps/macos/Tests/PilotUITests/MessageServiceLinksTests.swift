@@ -59,10 +59,11 @@ struct MessageServiceLinksTests {
             #expect(rich.attribute(.underlineStyle, at: 0, effectiveRange: nil) == nil)
         }
         let view = MessageSelectionTextView.make()
-        #expect(view.linkTextAttributes[.foregroundColor] as? NSColor == NSColor(Theme.foreground))
-        #expect(view.linkTextAttributes[.cursor] as? NSCursor == .pointingHand)
-        #expect(view.linkTextAttributes[.underlineStyle] == nil)
-        #expect(view.linkTextAttributes[.backgroundColor] == nil)
+        let linkAttributes = try #require(view.linkTextAttributes)
+        #expect(linkAttributes[.foregroundColor] as? NSColor == NSColor(Theme.foreground))
+        #expect(linkAttributes[.cursor] as? NSCursor == .pointingHand)
+        #expect(linkAttributes[.underlineStyle] == nil)
+        #expect(linkAttributes[.backgroundColor] == nil)
     }
 
     @Test func hoverDarkensOnlyTheHitLinkWithoutChangingStorageSelectionOrWrapping() throws {
