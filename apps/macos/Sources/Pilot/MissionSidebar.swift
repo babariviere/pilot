@@ -44,7 +44,7 @@ struct MissionSidebarRow: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .rowButtonStyle(outset: 2)
             .help("Open \(mission.title)")
             .accessibilityLabel([mission.title, progress, signal?.label].compactMap { $0 }.joined(separator: ", "))
             .accessibilityHint("Opens the mission")

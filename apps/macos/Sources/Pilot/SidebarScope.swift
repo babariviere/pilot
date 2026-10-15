@@ -225,7 +225,7 @@ struct SidebarNavRow<Accessory: View>: View {
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .rowButtonStyle(outset: 2)
             .help(help ?? "")
             .accessibilityLabel([title, accessibilityDetail].compactMap { $0 }.joined(separator: ", "))
             .accessibilityAddTraits(selected ? .isSelected : [])
@@ -270,7 +270,7 @@ struct SidebarProjectSelector: View {
             .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(showingList || hovered ? Theme.selected : Theme.muted))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .onHover { hovered = $0 }
         .animation(Theme.Motion.quick, value: hovered)
         .accessibilityLabel("Sidebar shows \(project?.name ?? "all projects")")
@@ -394,7 +394,7 @@ private struct SidebarScopeRow: View {
             .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(hovered ? Theme.selected : .clear))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .onHover { hovered = $0 }
         .help(help ?? "")
         .accessibilityLabel(accessibilityLabel)

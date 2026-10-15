@@ -276,7 +276,7 @@ struct HomeOverview: View {
             }
             .homeCorner(row.signal)
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .help("Open \(row.project.name) Overview")
         .accessibilityLabel(label + ". Open Overview.")
         .contextMenu {
@@ -318,7 +318,7 @@ struct HomeOverview: View {
             }
             .homeCorner(.working)
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .accessibilityLabel([session.title, project, mission, "working"].compactMap { $0 }.joined(separator: ", "))
         .contextMenu {
             Button("Open Chat") { app.selectedSessionId = session.id }
@@ -350,7 +350,7 @@ struct HomeOverview: View {
                     }
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .rowButtonStyle()
                 .accessibilityLabel("\(mission.title), \(detail). Open mission.")
                 let count = mission.status == .active ? mission.needsYouCount ?? 0 : 0
                 let coordinator = HomeStatus.coordinator(mission, sessionIds: sessionIds)

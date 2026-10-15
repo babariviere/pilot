@@ -208,7 +208,7 @@ struct InboxReadyToMergeRow: View {
                 }
             }
         }
-        .buttonStyle(.plain)
+        .rowButtonStyle()
         .help("Pull request #\(pr.number) is ready to merge. Pilot will not merge it. Chat: \(pr.sessionTitle)")
         .accessibilityLabel("\(pr.title). Ready to merge. \(detail.accessibilityText)")
         .accessibilityHint(url == nil ? "Opens the chat" : "Opens the pull request in the browser")
