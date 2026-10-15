@@ -84,6 +84,40 @@ private func item(_ id: String, state: ScheduleState = .pending, trigger: Schedu
     #expect(calendar.dateComponents([.hour, .minute], from: suggested) == DateComponents(hour: 23, minute: 0))
 }
 
+@Test(arguments: [
+    (1_800_000_000_123.25, 1_800_000_000_124.0),
+    (1_800_000_060_000.125, 1_800_000_060_001.0),
+    (1_800_003_599_999.75, 1_800_003_600_000.0),
+    (1_800_000_000_123.0, 1_800_000_000_123.0),
+    (1_800_003_600_000.0, 1_800_003_600_000.0),
+])
+func schedulePickerSendsWholeMillisecondsForCreateAndEdit(milliseconds: Double, expected: Double) throws {
+    // DatePicker can retain sub-millisecond precision, especially when clamped to its Date() minimum.
+    let date = Date(timeIntervalSince1970: milliseconds / 1000)
+    let when = ScheduleWhen(trigger: .at, at: date.timeIntervalSince1970 * 1000)
+    #expect(when.at == expected)
+    let targets: [ScheduleTarget] = [
+        .message(sessionId: "s", message: "Continue"),
+        .chat(SpawnRequest(projectId: "p", message: "Do work")),
+    ]
+    for target in targets {
+        let request = ScheduleRequest(trigger: when.trigger, at: when.at, target: target)
+        let data = try JSONEncoder().encode(request)
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect((json["at"] as? NSNumber)?.doubleValue == expected)
+        #expect(json["trigger"] as? String == "at")
+    }
+    let patch = SchedulePatch(trigger: when.trigger, at: when.at, expectedRevision: 1)
+    let data = try JSONEncoder().encode(patch)
+    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    #expect((json["at"] as? NSNumber)?.doubleValue == expected)
+}
+
+@Test func eventSchedulesDoNotSendATimestamp() {
+    #expect(ScheduleWhen(trigger: .onBack).at == nil)
+    #expect(ScheduleWhen(trigger: .onOnline).at == nil)
+}
+
 @Test func scheduleChoicesOfferOnlyLiveTriggers() {
     #expect(ScheduleText.choices == [.onBack, .onOnline, .at])
     #expect(!ScheduleText.choices.contains(.removed) && !ScheduleText.choices.contains(.onWake))

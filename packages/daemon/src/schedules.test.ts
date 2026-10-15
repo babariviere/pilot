@@ -432,6 +432,46 @@ test("nearest at deadline uses a fake clock, defers offline, and cancels timers 
 	assert.equal(f.triggers.active, false);
 });
 
+test("current-hour follow-ups fire once at their saved deadline, including edits to now", async (t) => {
+	const f = await fixture(t, true);
+	f.clock.time = Date.parse("2026-10-15T10:15:00.123Z");
+	const target = { kind: "message" as const, sessionId: "existing", message: "Continue" };
+	const at = Date.parse("2026-10-15T10:16:00.124Z");
+	const item = await f.service.create({ trigger: "at", at, target });
+	await f.restart();
+	assert.equal(f.service.require(item.id).at, at);
+	f.clock.advance(60_000);
+	await f.settle();
+	assert.equal(f.calls.length, 0);
+	assert.equal(f.service.require(item.id).state, "pending");
+	f.clock.advance(1);
+	await f.settle();
+	assert.equal(f.service.require(item.id).state, "fired");
+	assert.deepEqual(f.calls, [
+		{ kind: "message", id: "existing", message: "Continue", mode: "followUp", requestId: `schedule:${item.id}` },
+	]);
+	const edited = await f.service.create({ trigger: "at", at: at + 3_600_000, target });
+	await f.service.update(edited.id, { at: f.clock.now(), expectedRevision: edited.revision });
+	await f.settle();
+	assert.equal(f.service.require(edited.id).at, at);
+	assert.equal(f.service.require(edited.id).state, "fired");
+	await f.restart();
+	await f.settle();
+	assert.equal(f.calls.length, 2);
+	assert.equal(f.clock.timers.size, 0);
+});
+
+test("fractional milliseconds are rejected on create and edit without changing the saved deadline", async (t) => {
+	const f = await fixture(t);
+	const at = 1_800_000_000_123;
+	const request = chat({ trigger: "at", at });
+	await assert.rejects(f.service.create({ ...request, at: at + 0.25 }), /at must be epoch milliseconds/);
+	const item = await f.service.create(request);
+	await assert.rejects(f.service.update(item.id, { at: at + 0.25 }), /at must be epoch milliseconds/);
+	assert.equal(f.service.require(item.id).at, at);
+	assert.equal(f.service.require(item.id).revision, item.revision);
+});
+
 test("follow-ups use the durable admission key and deleted targets become Needs you", async (t) => {
 	const f = await fixture(t);
 	const request: ScheduleRequest = {
