@@ -28,6 +28,24 @@ cp "$captures/mission-window-tasks-1360.png" docs/screenshots/readme-mission.png
 Inspect all three images before publishing. Copy only these demo captures, never a live window capture
 containing private projects, conversations or credentials.
 
+## Mission task phases
+
+The mission Tasks tab groups tasks by phase (a task's milestone), from synthetic fixtures:
+
+- `mission-tasks-phases.png`: a finished phase folded, active work before done work in each phase, tasks
+  without a milestone last under "No phase", and dropped tasks behind "Show dropped".
+- `mission-tasks-phases-reveal.png`: "Show task" on a dropped task in the folded phase, which unfolds it, shows
+  dropped tasks and highlights the row.
+- `mission-tasks-flat.png`: a mission without milestones, shown as one flat list.
+
+Regenerate on macOS:
+
+```sh
+apps/macos/scripts/build.sh
+apps/macos/.build/debug/Pilot --snapshot /tmp/pilot-phases --missions-only
+cp /tmp/pilot-phases/mission-tasks-{phases,phases-reveal,flat}.png docs/screenshots/
+```
+
 ## Long chat messages
 
 Render the production message views with synthetic crash-report and assistant fixtures:

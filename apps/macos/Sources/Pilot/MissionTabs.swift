@@ -569,14 +569,16 @@ struct MissionTasksTab: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @State private var input = MissionInput()
-    /// Closed groups start folded.
-    @State private var collapsed: Set<MissionTaskStatus> = [.done, .dropped]
+    /// Finished phases start folded; the user's choices hold across refreshes.
+    @State private var folds = MissionPhaseFolds()
+    /// Dropped tasks stay hidden behind one quiet toggle for the whole list.
+    @State private var showDropped = false
     /// The task "Show task" just revealed, shown with a soft fill for a moment.
     @State private var highlighted: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let groups = MissionTaskOrdering.groups(detail.tasks)
+        let phases = MissionTaskPhases(detail.tasks, showDropped: showDropped)
         let counts = MissionTaskCounts(detail.tasks)
         // One id lookup, one dependents index, one link index and one member list per update, shared by
         // every row. The list is lazy: only rows on screen are created, so switching here stays fast.
@@ -584,13 +586,19 @@ struct MissionTasksTab: View {
         let links = MissionTaskLinkIndex(detail)
         let members = model.members(of: mission).filter { !$0.isArchived }
         LazyVStack(alignment: .leading, spacing: 0) {
-            if counts.total > 0 {
-                MissionTaskProgress(counts: counts, compact: true)
-                    .frame(maxWidth: 280, alignment: .leading)
-                    .padding(.bottom, 12)
+            if counts.total > 0 || phases.dropped > 0 {
+                HStack(alignment: .center, spacing: 12) {
+                    if counts.total > 0 {
+                        MissionTaskProgress(counts: counts, compact: true)
+                            .frame(maxWidth: 280, alignment: .leading)
+                    }
+                    Spacer(minLength: 0)
+                    if phases.dropped > 0 { droppedToggle(phases.dropped) }
+                }
+                .padding(.bottom, 12)
             }
             addField
-            if groups.isEmpty {
+            if detail.tasks.isEmpty {
                 EmptyStateView(icon: PilotIcon.tasks, title: "No tasks yet",
                                message: "Add the first task above, or ask a mission chat to plan them.")
             } else if counts.total > 0, counts.done == counts.total, mission.status == .active {
@@ -607,14 +615,15 @@ struct MissionTasksTab: View {
                 .font(.pilot(.body))
                 .padding(.top, 16)
             }
-            ForEach(MissionTaskListItem.items(groups, collapsed: collapsed)) { item in
+            if phases.isFlat, !phases.groups.isEmpty { Color.clear.frame(height: 12) }
+            ForEach(MissionTaskListItem.items(phases, folds: folds)) { item in
                 switch item {
-                case let .header(group):
-                    groupHeader(group)
-                case let .task(task, index, group):
+                case let .header(group, folded):
+                    phaseHeader(group, folded: folded)
+                case let .task(task, index, siblings):
                     VStack(alignment: .leading, spacing: 0) {
                         if index > 0 { HairlineDivider(leading: 58) }
-                        MissionTaskRow(task: task, mission: mission, siblings: group.tasks,
+                        MissionTaskRow(task: task, mission: mission, siblings: siblings,
                                        highlighted: highlighted == task.id,
                                        dependencies: dependencies.dependencies(of: task),
                                        resources: links.resources(of: task.id),
@@ -629,7 +638,7 @@ struct MissionTasksTab: View {
         .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(scroll) }
     }
 
-    /// Unfolds the group of the task named by "Show task", scrolls to it and highlights it briefly.
+    /// Unfolds the phase of the task named by "Show task", scrolls to it and highlights it briefly.
     private func reveal(_ proxy: ScrollViewProxy) {
         guard let id = model.revealedMissionTaskId else { return }
         model.revealedMissionTaskId = nil
@@ -638,10 +647,11 @@ struct MissionTasksTab: View {
 
     private func show(_ id: String, _ proxy: ScrollViewProxy) {
         guard let task = detail.tasks.first(where: { $0.id == id }) else { return }
-        collapsed.remove(task.status)
+        folds.unfold(MissionPhaseGroup.id(of: task))
+        if task.status == .dropped { showDropped = true }
         highlighted = id
         Task { @MainActor in
-            // Let the unfolded group lay out before scrolling.
+            // Let the unfolded phase lay out before scrolling.
             try? await Task.sleep(for: .milliseconds(60))
             if reduceMotion {
                 proxy.scrollTo(id, anchor: .center)
@@ -669,15 +679,26 @@ struct MissionTasksTab: View {
         .background(RoundedRectangle(cornerRadius: Theme.Radius.control).strokeBorder(Theme.border))
     }
 
-    private func groupHeader(_ group: MissionTaskGroup) -> some View {
-        let folded = collapsed.contains(group.status)
-        return Button {
-            if folded { collapsed.remove(group.status) } else { collapsed.insert(group.status) }
+    /// "Show dropped (3)": dropped tasks then appear last in their phases.
+    private func droppedToggle(_ count: Int) -> some View {
+        Button(showDropped ? "Hide dropped" : "Show dropped (\(count))") { showDropped.toggle() }
+            .buttonStyle(.plain)
+            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+            .accessibilityHint("Tasks that were retired without being done")
+    }
+
+    /// "Phase 1 polish · 12/18 done", folding like a disclosure.
+    private func phaseHeader(_ group: MissionPhaseGroup, folded: Bool) -> some View {
+        Button {
+            folds.toggle(group)
         } label: {
             HStack(spacing: 6) {
                 PilotSymbol(folded ? PilotIcon.disclosure : PilotIcon.disclosureOpen, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 12)
-                Text(group.status.label).font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
-                Text("\(group.tasks.count)").font(.pilot(.label)).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                Text(group.title).font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
+                    .lineLimit(1)
+                Text("·").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
+                Text(group.progress).font(.pilot(.label)).monospacedDigit().foregroundStyle(Theme.faintForeground)
+                    .fixedSize()
                 Spacer()
             }
             .contentShape(Rectangle())
@@ -685,7 +706,7 @@ struct MissionTasksTab: View {
         .buttonStyle(.plain)
         .padding(.top, 20)
         .padding(.bottom, 4)
-        .accessibilityLabel("\(group.status.label), \(group.tasks.count) task\(group.tasks.count == 1 ? "" : "s")")
+        .accessibilityLabel("\(group.title), \(group.progress)")
         .accessibilityValue(folded ? "Collapsed" : "Expanded")
         .accessibilityAddTraits(.isHeader)
     }

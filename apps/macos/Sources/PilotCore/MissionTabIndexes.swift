@@ -28,28 +28,35 @@ public struct MissionTaskLinkIndex: Sendable {
     public func artifacts(of taskId: String) -> [MissionArtifactLink] { artifactsByTask[taskId] ?? [] }
 }
 
-/// One line of the Tasks tab: a status group header or a task in an unfolded group. A flat list lets a
-/// lazy stack create only the rows on screen.
+/// One line of the Tasks tab: a phase header or a task in an unfolded phase. A flat list lets a lazy stack
+/// create only the rows on screen.
 public enum MissionTaskListItem: Identifiable, Equatable, Sendable {
-    case header(MissionTaskGroup)
-    /// `index` is the task's position in its group, `group` the list it reorders within.
-    case task(MissionTask, index: Int, group: MissionTaskGroup)
+    case header(MissionPhaseGroup, folded: Bool)
+    /// `index` is the task's position in its phase. `siblings` are the phase's tasks with the same status, the
+    /// list Move Up and Move Down reorder within.
+    case task(MissionTask, index: Int, siblings: [MissionTask])
 
     public var id: String {
         switch self {
-        case let .header(group): "group-" + group.id
+        case let .header(group, _): group.id
         case let .task(task, _, _): task.id
         }
     }
 
-    public static func items(_ groups: [MissionTaskGroup], collapsed: Set<MissionTaskStatus>) -> [MissionTaskListItem] {
+    /// A flat list has no headers and never folds.
+    public static func items(_ phases: MissionTaskPhases, folds: MissionPhaseFolds) -> [MissionTaskListItem] {
         var items: [MissionTaskListItem] = []
-        items.reserveCapacity(groups.reduce(groups.count) { $0 + $1.tasks.count })
-        for group in groups {
-            items.append(.header(group))
-            guard !collapsed.contains(group.status) else { continue }
+        items.reserveCapacity(phases.groups.reduce(phases.groups.count) { $0 + $1.tasks.count })
+        for group in phases.groups {
+            if !phases.isFlat {
+                let folded = folds.isFolded(group)
+                items.append(.header(group, folded: folded))
+                if folded { continue }
+            }
+            var byStatus: [MissionTaskStatus: [MissionTask]] = [:]
+            for task in group.tasks { byStatus[task.status, default: []].append(task) }
             for (index, task) in group.tasks.enumerated() {
-                items.append(.task(task, index: index, group: group))
+                items.append(.task(task, index: index, siblings: byStatus[task.status] ?? []))
             }
         }
         return items
