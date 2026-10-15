@@ -19,6 +19,10 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     #expect(session("f", outcome: .failed).signal(unread: true) == .failed)
     #expect(session("u", outcome: .done).signal(unread: true) == .needsYou)
     #expect(session("r", outcome: .done, pr: .open, readiness: .ready).signal(unread: false) == .readyToMerge)
+    #expect(session("r", outcome: .done, pr: .open, readiness: .ready).signal(unread: true) == .readyToMerge)
+    #expect(session("r", outcome: .done, pr: .open, readiness: .ready).needsYouReason(unread: true) == nil)
+    #expect(session("f", outcome: .failed, pr: .open, readiness: .ready).signal(unread: true) == .failed)
+    #expect(session("a", outcome: .question, pr: .open, readiness: .ready).signal(unread: false) == .needsYou)
     #expect(session("p", outcome: .done, pr: .open, readiness: .pending).signal(unread: false) == nil)
     #expect(session("d", outcome: .done, pr: .draft, readiness: .ready).signal(unread: false) == nil)
     #expect(session("q", outcome: .done).signal(unread: false) == nil)
@@ -59,9 +63,9 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     ]
     let groups = SidebarUrgency.groups(sessions, unread: { $0.id == "ready-unread" },
                                        held: { $0.id == "ready-viewed" })
-    // Unread results, and read ones whose chat is still open, need the user first; live work stays under Working.
-    #expect(groups.needsYou.map(\.id) == ["ready-unread", "ready-viewed"])
-    #expect(groups.readyToMerge.map(\.id) == ["ready", "ready-2"])
+    // Ready PRs supersede unreviewed and held results; live work stays under Working.
+    #expect(groups.needsYou.isEmpty)
+    #expect(groups.readyToMerge.map(\.id) == ["ready", "ready-unread", "ready-viewed", "ready-2"])
     #expect(groups.working.map(\.id) == ["ready-working"])
     #expect(groups.recent.map(\.id) == ["pending", "draft", "merged"])
     #expect(!SidebarUrgency.Groups(readyToMerge: [sessions[0]]).isEmpty)

@@ -144,6 +144,9 @@ is also available, but edits there affect your checkout.
 Project policy controls delivery. With **Require PR** enabled, agents deliver on a task branch for review.
 Disabling it permits direct default-branch delivery. Pilot never auto-merges pull requests.
 
+A chat with a ready-to-merge PR goes straight to **Ready to merge**, even if its result is not reviewed
+or its chat is still open. Failures, unanswered questions and other actionable problems stay in **Needs you**.
+
 Pilot monitors agent-owned PRs from isolated Build sessions for failed CI, unresolved review threads and
 merge conflicts, including earlier PRs in a stack. It sends follow-up work only when the agent is idle
 and no user messages are queued. Automatic follow-ups are limited to three per session, with a
