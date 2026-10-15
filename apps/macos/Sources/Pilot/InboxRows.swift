@@ -71,10 +71,11 @@ extension AppModel {
     }
 }
 
-/// The second line of an Inbox row, as in the chat's sidebar row: the project when the list mixes projects, then
-/// "<compass> Coordinator · <state>" for an active coordinator, or the chat's mission, PR badge, branch and the
-/// row's reason. A ready-to-merge row passes its pull request, shown in place of the chat's badge. Rows show no
-/// file or line counts; those stay in the chat's Changes pane.
+/// The second line of an Inbox or Overview row, laid out like the chat's sidebar row (`RowLine`): the project when
+/// the list mixes projects, then "<compass> Coordinator · <state>" for an active coordinator, or Ask, the row's
+/// reason, the chat's PRs, its mission and branch. A ready-to-merge row passes its pull request, shown in place of
+/// the chat's badges with its branch. These rows have more room than the sidebar, so the line may wrap once before
+/// it fades. Rows show no file or line counts; those stay in the chat's Changes pane.
 struct InboxRowDetail: View {
     var projectName: String?
     /// The live chat behind the row, when there is one.
@@ -85,74 +86,27 @@ struct InboxRowDetail: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        HStack(spacing: 4) {
-            if let projectName {
-                Text(projectName).fontWeight(.medium).lineLimit(1).layoutPriority(1)
-                if hasMore(afterProject: true) { dot }
-            }
-            if let session, session.isActiveMissionCoordinator {
-                SessionCoordinatorLine(session: session, unread: model.isUnread(session))
-            } else {
-                if let missionTitle {
-                    InboxMissionLabel(title: missionTitle)
-                    if hasMore(afterProject: false) { dot }
-                }
-                if let pullRequest {
-                    InboxPullRequestMark(pr: pullRequest)
-                    if let branch = pullRequest.branch, !branch.isEmpty {
-                        dot
-                        Text(branch).fontWeight(.medium).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
-                            .accessibilityLabel("Branch \(branch)")
-                    }
-                } else if let session, hasRepository(session) {
-                    SessionRepositoryMetadataContent(session: session, summary: nil, branch: session.branch, error: nil)
-                }
-                if let reason {
-                    if pullRequest != nil || session.map(hasRepository) == true { dot }
-                    Text(reason).lineLimit(1).layoutPriority(1)
-                }
-            }
-        }
-        .font(.pilot(.small))
-        .foregroundStyle(Theme.mutedForeground)
-        .lineLimit(1)
+        RowLine(segments: segments(unread: session.map { model.isUnread($0) } ?? false), maxLines: 2)
     }
 
-    private var dot: some View {
-        Text("·").foregroundStyle(Theme.faintForeground).accessibilityHidden(true)
+    private func segments(unread: Bool) -> [RowLineSegment] {
+        let coordinator = session.flatMap { $0.isActiveMissionCoordinator ? $0 : nil }
+        return RowLineSegments.session(
+            session, projectName: projectName, missionTitle: missionTitle, reason: reason,
+            branch: session?.branch, coordinatorDetail: coordinator.map { MissionCoordinatorStatus.detail($0, unread: unread) },
+            pullRequest: pullRequest)
     }
 
-    private func hasRepository(_ session: SessionSummary) -> Bool {
-        !session.isAsk && (session.branch?.isEmpty == false || !session.linkedPullRequests.isEmpty)
-    }
-
-    /// Whether anything follows the project name (or, with `afterProject` false, the mission label).
-    private func hasMore(afterProject: Bool) -> Bool {
-        if let session, session.isActiveMissionCoordinator { return afterProject }
-        if afterProject, missionTitle != nil { return true }
-        return pullRequest != nil || reason != nil || session.map(hasRepository) == true
-    }
-
-    /// The same line as plain text, for VoiceOver.
+    /// The same line as plain text, for VoiceOver, with every segment the line has no room for.
     var accessibilityText: String {
-        var parts = [projectName]
-        if let session, session.isActiveMissionCoordinator {
-            parts.append("Coordinator")
-        } else {
-            parts.append(missionTitle.map { "Mission \($0)" })
-            if let pullRequest {
-                parts.append("Pull request \(pullRequest.number)")
-                parts.append(pullRequest.branch.map { "Branch \($0)" })
-            } else if let branch = session?.branch, !branch.isEmpty, session?.isAsk == false {
-                parts.append("Branch \(branch)")
-            }
-            parts.append(reason)
-        }
-        return parts.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: ", ")
+        let coordinator = session.flatMap { $0.isActiveMissionCoordinator ? $0 : nil }
+        return RowLineSegments.session(
+            session, projectName: projectName, missionTitle: missionTitle, reason: reason, branch: session?.branch,
+            coordinatorDetail: coordinator == nil ? nil : "", pullRequest: pullRequest).accessibilityText
     }
 }
 
-/// A chat's mission on an Inbox row. Not a button: the row is one. The row's context menu opens the mission.
+/// A chat's mission on a row that is one button. The row's context menu opens the mission.
 struct InboxMissionLabel: View {
     let title: String
 

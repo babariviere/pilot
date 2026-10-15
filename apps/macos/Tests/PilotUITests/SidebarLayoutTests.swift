@@ -83,21 +83,23 @@ private func sidebarMeasuredSizes<V: View>(_ view: V, width: CGFloat) -> [CGSize
                 #expect(rows.allSatisfy { $0.width <= rowWidth + 0.5 })
                 #expect(rows.allSatisfy { $0.height < 60 })
             }
-            let metadataWidth = rowWidth - 22 // Status column and spacing.
-            let metadata = sidebarMeasuredSizes(
-                SessionRepositoryMetadataContent(session: session, summary: summary, branch: session.branch, error: nil),
-                width: metadataWidth)
-            #expect(!metadata.isEmpty)
-            #expect(metadata.allSatisfy { $0.width <= metadataWidth + 0.5 })
-            #expect(metadata.allSatisfy { $0.height < 25 })
+            let lineWidth = rowWidth - RowLine.cornerGutter
+            let segments = RowLineSegments.session(member, projectName: "A project with a long name",
+                                                   missionId: "mission", missionTitle: "A mission with a long title",
+                                                   reason: "Not reviewed: finished 4m ago", branch: member.branch)
+            let line = sidebarMeasuredSizes(RowLine(segments: segments).environmentObject(model), width: lineWidth)
+            #expect(!line.isEmpty)
+            // One line that never widens the row, however much it holds.
+            #expect(line.allSatisfy { $0.width <= lineWidth + 0.5 })
+            #expect(line.allSatisfy { $0.height < 25 })
+            let wrapped = sidebarMeasuredSizes(RowLine(segments: segments, maxLines: 2).environmentObject(model),
+                                               width: lineWidth)
+            #expect(wrapped.allSatisfy { $0.width <= lineWidth + 0.5 && $0.height < 45 })
         }
     }
-    // Branch-only rows must truncate rather than disappear or impose their intrinsic width.
-    let branchOnly = SessionSummary(id: "branch", title: "Branch", cwd: "/repository", branch: session.branch,
-                                    createdAt: now, updatedAt: now, state: "starting")
-    let branch = sidebarMeasuredSizes(
-        SessionRepositoryMetadataContent(session: branchOnly, summary: nil, branch: branchOnly.branch, error: "Offline"),
-        width: 150)
+    // A branch-only line keeps its branch whole at its natural width when unbounded, and fills a bounded proposal.
+    let branchOnly = RowLine(segments: [RowLineSegment(.branch(session.branch ?? ""))])
+    let branch = sidebarMeasuredSizes(branchOnly, width: 150)
     #expect(!branch.isEmpty)
     #expect(branch.allSatisfy { $0.width <= 150.5 && $0.height > 0 && $0.height < 25 })
 }
