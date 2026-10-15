@@ -31,7 +31,13 @@ const mounts = readFileSync("/proc/self/mountinfo", "utf8")
 	.split("\n")
 	.map((line) => {
 		const fields = line.split(" ");
-		return { id: fields[0]!, path: decode(fields[4]!), readonly: fields[5]!.split(",").includes("ro") };
+		return {
+			id: fields[0]!,
+			device: fields[2]!,
+			type: fields[fields.indexOf("-") + 1]!,
+			path: decode(fields[4]!),
+			readonly: fields[5]!.split(",").includes("ro"),
+		};
 	});
 // mountinfo also lists lower mounts covered by our new /proc and /dev. Resolve the actual
 // accessible mount ID with O_PATH (Linux ABI), without opening devices or reading file contents.
@@ -51,8 +57,16 @@ function mountId(path: string): string | undefined {
 }
 // Every host-backed mount, including alternate aliases and nested submounts, must be read-only.
 // /dev is a new private filesystem. /proc is a fresh PID-scoped, read-only procfs.
+const procId = mountId("/proc");
+const proc = mounts.find((mount) => mount.id === procId);
+assert.ok(proc?.type === "proc", "Missing private procfs");
 for (const mount of mounts) {
 	if (!mount.readonly && mountId(mount.path) !== mount.id) continue;
+	if (mount.type === "proc" && mountId(mount.path) === mount.id)
+		assert.ok(
+			within(mount.path, "/proc") && mount.device === proc.device,
+			`Unexpected host procfs alias: ${mount.path}`,
+		);
 	assert.ok(
 		mount.readonly || within(mount.path, "/dev") || config.writable.some((path) => within(mount.path, path)),
 		`Unexpected writable mount: ${mount.path}`,

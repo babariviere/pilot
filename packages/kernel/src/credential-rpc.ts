@@ -6,7 +6,7 @@ export interface CredentialEndpoint {
 	token: string;
 }
 export type CredentialNamespace = "pi" | "mcp";
-export type CredentialOperation = "read" | "list" | "begin" | "commit" | "abort" | "delete";
+export type CredentialOperation = "read" | "peek" | "list" | "begin" | "commit" | "delete";
 export interface CredentialRequest {
 	op: CredentialOperation;
 	namespace: CredentialNamespace;
@@ -15,10 +15,16 @@ export interface CredentialRequest {
 	value?: unknown;
 	changed?: boolean;
 }
-export function authError(code = "unavailable"): Error {
-	return new Error(
-		`Credential broker ${["invalid", "unauthorized", "uncertain", "stale", "busy"].includes(code) ? code : "unavailable"}. Sign in again if a refresh outcome is uncertain.`,
-	);
+export class CredentialBrokerError extends Error {
+	readonly code: string;
+	constructor(code: string) {
+		const safe = ["invalid", "unauthorized", "uncertain", "stale", "busy"].includes(code) ? code : "unavailable";
+		super(`Credential broker ${safe}. Sign in again if a refresh outcome is uncertain.`);
+		this.code = safe;
+	}
+}
+export function authError(code = "unavailable"): CredentialBrokerError {
+	return new CredentialBrokerError(code);
 }
 export class CredentialChannel {
 	private socket: Socket;

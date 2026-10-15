@@ -181,7 +181,7 @@ const exit=once(child,'exit');const message=await Promise.race([once(child,'mess
 assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
 	// The privileged fixture only creates a bind mount in a disposable, non-propagating CI
 	// mount namespace. The actual launcher and kernel still run as the unprivileged runner.
-	async function bindFixture(destination: string, code: string) {
+	async function bindFixture(destination: string, code: string, origin = source) {
 		assert.equal(process.env.GITHUB_ACTIONS, "true", "Privileged bind fixtures are CI-only");
 		await promisify(execFile)(
 			"sudo",
@@ -196,7 +196,7 @@ assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
 				"-ceu",
 				'mount --bind "$1" "$2"; exec setpriv --reuid="$3" --regid="$4" --clear-groups "$5" --input-type=module -e "$6"',
 				"pilot-bind-fixture",
-				source,
+				origin,
 				destination,
 				String(process.getuid!()),
 				String(process.getgid!()),
@@ -221,6 +221,19 @@ await assert.rejects(validateCoordinatorWrites([${JSON.stringify(scratch)}],[${J
 		);
 	await link(file, join(scratch, "preexisting-hardlink"));
 	await assert.rejects(forkLinuxCoordinator(entry, view, state), /hardlink/);
+	await rm(join(scratch, "preexisting-hardlink"));
+	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") {
+		const hostProc = join(root, "host-proc");
+		await mkdir(hostProc);
+		await bindFixture(
+			hostProc,
+			`import {forkLinuxCoordinator} from ${JSON.stringify(module)};import {readFile} from 'node:fs/promises';import {once} from 'node:events';import assert from 'node:assert/strict';
+const credentials=JSON.parse(await readFile(${JSON.stringify(capabilityFile)},'utf8'));
+const child=await forkLinuxCoordinator(${JSON.stringify(bindEntry)},${JSON.stringify(view)},{...${JSON.stringify({ storageDir, agentDir })},credentials});
+let imported=false;child.on('message',()=>{imported=true});const [code]=await once(child,'exit');assert.notEqual(code,0);assert.equal(imported,false);`,
+			"/proc",
+		);
+	}
 });
 
 test("namespace/security-policy denial and missing sandbox tooling remain actionable and fail closed", {
@@ -309,7 +322,8 @@ test("real Linux kernel opens durable storage and native resources only after bo
 		join(agentDir, "fixture.ts"),
 		`
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
-export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssistantMessage('isolated kernel')]); pi.registerProvider({...faux.provider,auth:{oauth:{name:'Broker fixture',login:async()=>{throw Error('No login')},refresh:async current=>({...current,access:'child-broker',expires:Date.now()+3600000}),toAuth:async current=>({apiKey:current.access})}}}); };
+import {writeFileSync} from 'node:fs';
+export default pi => { const faux=fauxProvider();writeFileSync(process.env.TMPDIR+'/fixture-registration.json',JSON.stringify({id:faux.provider.id,models:faux.provider.getModels().map(m=>m.id)}));pi.on('session_start',(_event,ctx)=>{const all=ctx.modelRegistry.getAll?.()??ctx.modelRegistry.getModels?.()??[];writeFileSync(process.env.TMPDIR+'/fixture-models.json',JSON.stringify(all.filter(m=>m.provider==='faux').map(m=>m.id)));}); faux.setResponses([fauxAssistantMessage('isolated kernel')]); pi.registerProvider({...faux.provider,auth:{oauth:{name:'Broker fixture',login:async()=>{throw Error('No login')},refresh:async current=>({...current,access:'child-broker',expires:Date.now()+3600000}),toAuth:async current=>({apiKey:current.access})}}}); };
 `,
 	);
 	await writeFile(
@@ -435,6 +449,15 @@ export default pi => { const faux=fauxProvider(); faux.setResponses([fauxAssista
 		subagent.send({ type: "pause" });
 		await packet("paused");
 		await subagentExit;
+	} catch (error) {
+		t.diagnostic(
+			"Fixture registration: " +
+				(await readFile(join(scratch, "fixture-registration.json"), "utf8").catch(() => "not imported")),
+		);
+		t.diagnostic(
+			"Fixture models: " + (await readFile(join(scratch, "fixture-models.json"), "utf8").catch(() => "not bound")),
+		);
+		throw error;
 	} finally {
 		if (offline === undefined) delete process.env.PI_OFFLINE;
 		else process.env.PI_OFFLINE = offline;

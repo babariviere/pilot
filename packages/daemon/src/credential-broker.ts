@@ -1,5 +1,6 @@
 /** Canonical, same-host auth authority. Never exchanges tokens, executes helpers, or handles file paths from clients. */
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, realpath, rename, rm, stat } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -13,7 +14,7 @@ import {
 import lockfile from "proper-lockfile";
 
 type ObjectValue = Record<string, unknown>;
-type Fence = { generation: number; fingerprint: string; pending?: string; revoked?: boolean };
+type Fence = { generation: number; fingerprint: string; pending?: string; revoked?: boolean; revoking?: boolean };
 type Journal = Record<string, Fence>;
 type Actor = { admin: boolean; sockets: Set<Socket> };
 type Held = {
@@ -88,7 +89,7 @@ function validValue(namespace: CredentialNamespace, value: unknown): boolean {
 	);
 }
 async function readObject(path: string, limit = 4 * 1024 * 1024): Promise<ObjectValue> {
-	const file = await open(path, "r");
+	const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
 	try {
 		const info = await file.stat();
 		if (!info.isFile() || info.size > limit) throw new Rejected("invalid");
@@ -190,12 +191,12 @@ export class CredentialBroker {
 			await release().catch(() => {});
 		}
 	}
-	private async updateJournal<T>(fn: (journal: Journal) => T): Promise<T> {
+	private async updateJournal<T>(fn: (journal: Journal) => T | Promise<T>): Promise<T> {
 		await this.regular(this.journal);
 		return this.mutex(this.journal, async () => {
 			const journal = (await readObject(this.journal)) as Journal;
 			if (Object.keys(journal).length > 4096) throw new Rejected("busy");
-			const result = fn(journal);
+			const result = await fn(journal);
 			await atomic(this.journal, journal);
 			return result;
 		});
@@ -207,6 +208,7 @@ export class CredentialBroker {
 				generation: (old?.generation ?? 0) + 1,
 				fingerprint: old?.fingerprint ?? "",
 				revoked: true,
+				revoking: true,
 			};
 			return journal[identity(namespace, key)]!.generation;
 		});
@@ -245,6 +247,7 @@ export class CredentialBroker {
 			});
 			if (socket.destroyed || compromised) throw new Rejected("unavailable");
 			const values = await readObject(path);
+			if (namespace === "mcp" && (await this.migrateLegacy(values, key))) await atomic(path, values);
 			const revision = await this.revision(path);
 			const value = Object.hasOwn(values, key) ? values[key] : undefined;
 			const fp = fingerprint(value);
@@ -252,6 +255,7 @@ export class CredentialBroker {
 			const generation = await this.updateJournal((journal) => {
 				let old = journal[identity(namespace, key)];
 				if (login && old?.generation !== loginGeneration) throw new Rejected("stale");
+				if (!login && old?.revoking) throw new Rejected("stale");
 				if (old?.fingerprint !== fp && !login) old = { generation: (old?.generation ?? 0) + 1, fingerprint: fp };
 				if (!login && old?.pending) throw new Rejected("uncertain");
 				if (!login && old?.revoked) throw new Rejected("stale");
@@ -285,6 +289,36 @@ export class CredentialBroker {
 	private async revision(path: string): Promise<string> {
 		const info = await stat(path, { bigint: true });
 		return `${info.ino}:${info.mtimeNs}:${info.ctimeNs}:${info.size}`;
+	}
+	private async migrateLegacy(values: ObjectValue, key: string): Promise<boolean> {
+		const legacy = key.slice(key.indexOf("|") + 1);
+		const journal = (await readObject(this.journal)) as Journal;
+		const fence = journal[identity("mcp", key)];
+		if (Object.hasOwn(values, key) || !Object.hasOwn(values, legacy) || fence?.revoked || fence?.pending)
+			return false;
+		values[key] = values[legacy];
+		delete values[legacy];
+		return true;
+	}
+	private async readCredential(namespace: CredentialNamespace, key: string, peek: boolean): Promise<unknown> {
+		if (peek && namespace !== "mcp") throw new Rejected("invalid");
+		const journal = (await readObject(this.journal)) as Journal;
+		const fence = journal[identity(namespace, key)];
+		if (fence?.revoking) return undefined;
+		const values = await readObject(this.paths[namespace]);
+		const value = Object.hasOwn(values, key) ? values[key] : undefined;
+		if (fence?.revoked && fence.fingerprint === fingerprint(value)) return undefined;
+		if (namespace === "mcp" && value === undefined && !fence?.revoked && !fence?.pending) {
+			const legacy = key.slice(key.indexOf("|") + 1);
+			if (!Object.hasOwn(values, legacy)) return undefined;
+			if (peek) return values[legacy];
+			return this.mutex(this.paths.mcp, async () => {
+				const latest = await readObject(this.paths.mcp);
+				if (await this.migrateLegacy(latest, key)) await atomic(this.paths.mcp, latest);
+				return Object.hasOwn(latest, key) ? latest[key] : undefined;
+			});
+		}
+		return value;
 	}
 	private async commit(held: Held, value: unknown, changed: boolean): Promise<void> {
 		if (held.compromised()) throw new Rejected("stale");
@@ -406,23 +440,25 @@ export class CredentialBroker {
 					}
 					if (!validKey(req.namespace, req.key)) throw new Rejected("invalid");
 					const key = req.key;
-					if (req.op === "read" && !held) {
-						const journal = (await readObject(this.journal)) as Journal;
-						const values = await readObject(this.paths[req.namespace]);
-						const value = Object.hasOwn(values, key) ? values[key] : undefined;
-						if (
-							journal[identity(req.namespace, key)]?.revoked &&
-							journal[identity(req.namespace, key)]?.fingerprint === fingerprint(value)
-						)
-							return send(undefined);
-						return send(value);
+					if ((req.op === "read" || req.op === "peek") && !held) {
+						return send(await this.readCredential(req.namespace, key, req.op === "peek"));
 					}
 					if (req.op === "delete" && actor.admin && !held) {
-						await this.fence(req.namespace, key);
+						const generation = await this.fence(req.namespace, key);
 						await this.mutex(this.paths[req.namespace], async () => {
 							const values = await readObject(this.paths[req.namespace]);
-							delete values[key];
-							await atomic(this.paths[req.namespace], values);
+							await this.updateJournal(async (journal) => {
+								if (journal[identity(req.namespace, key)]?.generation !== generation)
+									throw new Rejected("stale");
+								delete values[key];
+								if (req.namespace === "mcp") delete values[key.slice(key.indexOf("|") + 1)];
+								await atomic(this.paths[req.namespace], values);
+								journal[identity(req.namespace, key)] = {
+									generation,
+									fingerprint: fingerprint(undefined),
+									revoked: true,
+								};
+							});
 						});
 						return send(true);
 					}

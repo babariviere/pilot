@@ -2,9 +2,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Worker } from "node:worker_threads";
 import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+import { McpOAuthAuthorizationRequiredError } from "@earendil-works/pi-mcp/oauth";
 import {
 	AUTH_FRAME_LIMIT,
 	authError,
+	CredentialBrokerError,
 	CredentialChannel,
 	type CredentialEndpoint,
 	type CredentialNamespace,
@@ -37,7 +39,12 @@ export class CredentialClient {
 		}
 	}
 	sync(request: CredentialRequest): unknown {
-		this.syncWorker ??= new Worker(new URL("./credential-sync-worker.ts", import.meta.url));
+		if (!this.syncWorker) {
+			this.syncWorker = new Worker(new URL("./credential-sync-worker.ts", import.meta.url));
+			this.syncWorker.on("error", () => {
+				this.syncWorker = undefined;
+			});
+		}
 		this.syncWorker.unref();
 		const shared = new SharedArrayBuffer(AUTH_FRAME_LIMIT + 8);
 		const status = new Int32Array(shared, 0, 2);
@@ -46,7 +53,7 @@ export class CredentialClient {
 		if (Atomics.load(status, 0) !== 1) throw authError();
 		const reply = JSON.parse(Buffer.from(shared, 8, Atomics.load(status, 1)).toString());
 		new Uint8Array(shared).fill(0);
-		if (!reply.ok) throw authError();
+		if (!reply.ok) throw authError(reply.code);
 		return reply.value;
 	}
 	current(namespace: CredentialNamespace, key: string): Transaction | undefined {
@@ -64,7 +71,18 @@ export class CredentialClient {
 		try {
 			const value = await channel.request({ op: "begin", namespace, key, mode });
 			const state: Transaction = { namespace, key, value, changed: false };
-			const result = await this.active.run(state, fn);
+			let result: T;
+			try {
+				result = await this.active.run(state, fn);
+			} catch (error) {
+				// The pinned SDK cannot exchange a missing credential/refresh grant. A sign-in-required
+				// check is not an ambiguous external exchange, so it need not poison a future status read.
+				const record = value as { type?: string; tokens?: { refresh_token?: string } } | undefined;
+				const canExchange = namespace === "pi" ? record?.type === "oauth" : !!record?.tokens?.refresh_token;
+				if (mode === "refresh" && !canExchange && !state.changed)
+					await channel.request({ op: "commit", namespace, key, changed: false });
+				throw error;
+			}
 			await channel.request({ op: "commit", namespace, key, value: state.value, changed: state.changed });
 			return result;
 		} finally {
@@ -123,7 +141,15 @@ export class CredentialClient {
 				state.value = structuredClone(value);
 				state.changed = true;
 			},
-			withRefreshLock: <T>(fn: () => Promise<T>) => this.transaction("mcp", key, "refresh", fn),
+			withRefreshLock: async <T>(fn: () => Promise<T>) => {
+				try {
+					return await this.transaction("mcp", key, "refresh", fn);
+				} catch (error) {
+					if (error instanceof CredentialBrokerError && ["uncertain", "stale"].includes(error.code))
+						throw new McpOAuthAuthorizationRequiredError();
+					throw error;
+				}
+			},
 		};
 	}
 	async close(): Promise<void> {

@@ -12,6 +12,7 @@ import { createModels, type OAuthCredential } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { CredentialClient, credentialEnvironment } from "@pilot/kernel/credential-client";
 import { CredentialChannel } from "@pilot/kernel/credential-rpc";
+import { NativeAdapter } from "../../kernel/src/native-adapter.ts";
 import { CredentialBroker } from "./credential-broker.ts";
 import { workerProbe } from "./mcp-status.ts";
 import { approve, oauthFixture } from "./mcp-test-fixtures.ts";
@@ -200,6 +201,12 @@ test("logout and newer login fence in-flight stale commits; external canonical r
 	const logout = admin.pi.delete("fixture");
 	// A fence is durable before logout waits for the old refresh's canonical lock.
 	await fenced;
+	await writeFile(join(dir, "auth.json"), JSON.stringify({ fixture: credential("external-stale") }));
+	assert.equal(
+		await client.pi.read("fixture"),
+		undefined,
+		"a revocation intent hides even an intervening external write",
+	);
 	resume();
 	await assert.rejects(update, /stale/);
 	await logout;
@@ -236,6 +243,7 @@ test("logout and newer login fence in-flight stale commits; external canonical r
 test("capabilities, fixed auth schemas, paths, oversized frames and unavailable brokerage fail closed without secret errors", async (t) => {
 	const { root, dir, broker, client } = await fixture(t);
 	await assert.rejects(client.request({ op: "read", namespace: "pi", key: "../../settings.json" }), /invalid/);
+	await assert.rejects(client.request({ op: "read", namespace: "pi", key: "x".repeat(70_000) }), /invalid/);
 	await assert.rejects(client.request({ op: "delete", namespace: "pi", key: "fixture" }), /unauthorized/);
 	await assert.rejects(
 		client.transaction("pi", "fixture", "login", async () => {}),
@@ -315,6 +323,66 @@ test("real MCP sign-in/status/source workers share one canonical rotating grant 
 	server.state.dropRefreshReply = false;
 	await source.signIn("linear", { again: true, signal });
 	assert.equal(JSON.parse(await readFile(join(dir, "mcp-auth.json"), "utf8"))[key].tokens.access_token, "token-4");
+});
+
+test("legacy MCP grants are claimed once and a tombstone prevents legacy resurrection", async (t) => {
+	const { dir, client, admin } = await fixture(t);
+	const url = "https://example.invalid/mcp";
+	const state = {
+		serverUrl: url,
+		tokens: { access_token: "legacy", refresh_token: "legacy-refresh", token_type: "Bearer" },
+	};
+	await writeFile(join(dir, "mcp-auth.json"), JSON.stringify({ [url]: state }));
+	const a = client.mcpKey("a", url),
+		b = client.mcpKey("b", url);
+	assert.deepEqual(await client.request({ op: "peek", namespace: "mcp", key: a }), state);
+	assert.ok(Object.hasOwn(JSON.parse(await readFile(join(dir, "mcp-auth.json"), "utf8")), url));
+	assert.deepEqual(await client.request({ op: "read", namespace: "mcp", key: a }), state);
+	assert.equal(await client.request({ op: "read", namespace: "mcp", key: b }), undefined);
+	await admin.request({ op: "delete", namespace: "mcp", key: a });
+	await writeFile(join(dir, "mcp-auth.json"), JSON.stringify({ [url]: state }));
+	assert.equal(await client.request({ op: "read", namespace: "mcp", key: a }), undefined);
+});
+
+test("native parent runtime retains provider registration with canonical broker credentials", {
+	timeout: 20_000,
+}, async (t) => {
+	const { root, dir, broker } = await fixture(t);
+	await writeFile(join(dir, "auth.json"), JSON.stringify({ faux: credential() }));
+	await writeFile(
+		join(dir, "fixture.ts"),
+		`
+import {fauxProvider} from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
+export default pi=>{const faux=fauxProvider();pi.registerProvider({...faux.provider,auth:{oauth:{name:'Fixture',login:async()=>{throw Error('no login')},refresh:async current=>({...current,expires:Date.now()+3600000}),toAuth:async current=>({apiKey:current.access})}}});};`,
+	);
+	await writeFile(
+		join(dir, "settings.json"),
+		JSON.stringify({ extensions: [join(dir, "fixture.ts")], defaultProvider: "faux", defaultModel: "faux-1" }),
+	);
+	const old = credentialEnvironment();
+	for (const key of Object.keys(old)) old[key] = process.env[key];
+	old.PI_CODING_AGENT_DIR = process.env.PI_CODING_AGENT_DIR;
+	old.PI_OFFLINE = process.env.PI_OFFLINE;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	process.env.PI_OFFLINE = "1";
+	Object.assign(process.env, credentialEnvironment(broker.grant()));
+	let adapter: NativeAdapter | undefined;
+	try {
+		adapter = await NativeAdapter.open({
+			cwd: root,
+			agentDir: dir,
+			sessionFile: join(root, "parent.jsonl"),
+			projectTrusted: false,
+			model: "faux/faux-1",
+		});
+		assert.equal(adapter.model.provider, "faux");
+	} finally {
+		await adapter?.close();
+		for (const [key, value] of Object.entries(old)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
 });
 
 test("SIGKILL of the real authority preserves the uncertainty fence after stale SDK locks recover", {

@@ -185,6 +185,10 @@ export async function forkLinuxCoordinator(
 			view.protectedPaths,
 		);
 		const sentinel = join(sessionDir, "coordinator-isolation-sentinel");
+		const agent = await realpath(state.agentDir);
+		const sources = await Promise.all(view.protectedPaths.map((path) => realpath(path)));
+		if ([...sources, ...writable].some((path) => within(path, agent) || within(agent, path)))
+			throw new Error("Canonical agent configuration overlaps protected source or writable private state");
 		await writeFile(sentinel, "protected", { mode: 0o600 });
 		const config = await boundary(writable, view.protectedPaths, sentinel);
 		const args = argumentsFor(writable, view.scratch);
