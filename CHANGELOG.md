@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.36.1](https://github.com/babariviere/pilot/compare/v1.36.0...v1.36.1) (2026-10-15)
+
+
+### Bug Fixes
+
+* **macos:** give inline links soft title underlines ([8ccbeca](https://github.com/babariviere/pilot/commit/8ccbecab8be946d1e22e9d627ec7557516ad7ec3))
+
 ## [1.36.0](https://github.com/babariviere/pilot/compare/v1.35.1...v1.36.0) (2026-10-15)
 
 
