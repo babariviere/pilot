@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
 	DashboardTrackedSource,
 	Inbox,
+	LinearParentHeader,
 	LinearSourceSummary,
 	LinearTeamOption,
 	LinearWorkflowStateOption,
@@ -20,7 +21,7 @@ import type {
 	TrackingSource,
 } from "@pilot/protocol";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
-import { linearPrefill, linearStart } from "./linear-source.ts";
+import { linearParentHeaders, linearPrefill, linearStart } from "./linear-source.ts";
 import { workflowStates } from "./linear-workflow.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
@@ -354,8 +355,8 @@ export class SourceRegistry {
 					status: source.status,
 					...(source.error ? { error: source.error } : {}),
 					total,
-					items,
-					...(done ? { done } : {}),
+					items: this.withParents(items, () => projectId),
+					...(done ? { done: { ...done, items: this.withParents(done.items, () => projectId) } } : {}),
 					...(commonCases ? { commonCases } : {}),
 					...(source.linear ? { linear: source.linear } : {}),
 				};
@@ -376,7 +377,8 @@ export class SourceRegistry {
 			return this.require(id).configured && (!checkpoint || checkpoint.configKey === this.currentKey(id));
 		});
 		const { kind: _kind, ...rest } = query;
-		return this.items.list({ ...rest, kinds });
+		const list = await this.items.list({ ...rest, kinds });
+		return { ...list, items: this.withParents(list.items, (item) => item.projectId) };
 	}
 	/** Open tracked items the Inbox lists for a project, from cached counts: no disk read. */
 	inboxCount(projectId: string): number {
@@ -400,9 +402,33 @@ export class SourceRegistry {
 		const tracks = (kind: TrackedKind) => projects.some((project) => isConfigured(project, kind));
 		const result = await this.items.inbox({ linear, slack, limit });
 		return {
-			...(tracks("linear") ? { linear: result.linear } : {}),
+			...(tracks("linear")
+				? { linear: { ...result.linear, items: this.withParents(result.linear.items, (item) => item.projectId) } }
+				: {}),
 			...(tracks("slack") ? { slack: result.slack } : {}),
 		};
+	}
+	/** Attach cached parent headers to Linear sub-issues. Headers live in each project's Linear checkpoint, so
+	 * this reads no disk and makes no source calls. */
+	private withParents<T extends { metadata?: Record<string, TrackingJson>; linearParent?: LinearParentHeader }>(
+		items: T[],
+		projectOf: (item: T) => string,
+	): T[] {
+		const headers = new Map<string, Record<string, LinearParentHeader>>();
+		return items.map((item) => {
+			const parentId = item.metadata?.parentId;
+			if (typeof parentId !== "string") return item;
+			const projectId = projectOf(item);
+			let project = headers.get(projectId);
+			if (!project) {
+				const id = `${projectId}:linear`,
+					checkpoint = this.items.checkpoint(id);
+				project = checkpoint?.configKey === this.currentKey(id) ? linearParentHeaders(checkpoint?.cursor) : {};
+				headers.set(projectId, project);
+			}
+			const header = project[parentId];
+			return header ? { ...item, linearParent: header } : item;
+		});
 	}
 	/** Configured, with stored rows from its current settings (a team change must not show the old team's rows). */
 	private synced(project: Project, kind: TrackedKind): boolean {
@@ -420,7 +446,7 @@ export class SourceRegistry {
 		const run = { sourceId: "", key: "", controller, promise: Promise.resolve({} as TrackedItemPrefill) };
 		// Reserve the slot before reading disk, so repeated clicks cannot race.
 		const work = Promise.resolve().then(async () => {
-			const item = await this.items.require(itemId);
+			const item = this.withParents([await this.items.require(itemId)], (item) => item.projectId)[0]!;
 			controller.signal.throwIfAborted();
 			const id = `${item.projectId}:linear`,
 				key = this.currentKey(id);
@@ -532,7 +558,7 @@ export class SourceRegistry {
 			(patch.missionId && !before.missionIds?.includes(patch.missionId));
 		if (patch.start && newLink && item.kind === "linear") void this.startLinear(item).catch(() => {});
 		if (patch.start && newLink && item.kind === "slack") void this.startSlack(item).catch(() => {});
-		return item;
+		return this.withParents([item], (item) => item.projectId)[0]!;
 	}
 	/** Best effort, single flight per item, bounded with all other MCP work, no retry queue. */
 	startLinear(item: TrackedItem): Promise<void> {

@@ -181,6 +181,27 @@ private let slack = TrackedItem(
     #expect(draft.label == "ENG-12")
 }
 
+@Test func subIssuePromptsNameTheirParent() {
+    let base = linear()
+    let child = TrackedItem(id: base.id, projectId: base.projectId, kind: .linear, externalId: base.externalId,
+                            title: base.title, url: base.url, status: base.status,
+                            metadata: base.metadata.merging(["parentId": .string("uuid-epic")]) { $1 },
+                            linearParent: LinearParentHeader(id: "uuid-epic", identifier: "ENG-9",
+                                                             title: "Export revamp",
+                                                             url: "https://linear.app/acme/issue/ENG-9"),
+                            createdAt: base.createdAt, updatedAt: base.updatedAt)
+    #expect(child.linearParentId == "uuid-epic")
+    #expect(base.linearParentId == nil)
+    #expect(TrackedItemText.chatPrompt(child, prefill: nil).contains(#""parent": "ENG-9: Export revamp""#))
+    let prefill = TrackedItemPrefill(itemId: "i1", identifier: "ENG-12", title: "Export crashes on large files",
+                                     url: "https://linear.app/acme/issue/ENG-12", description: "",
+                                     parent: LinearParentRef(identifier: "ENG-10", title: "Import revamp"),
+                                     prompt: "unused")
+    #expect(TrackedItemText.missionDraft(child, prefill: prefill).message
+        .contains(#""identifier": "ENG-12",\#n  "parent": "ENG-10: Import revamp""#))
+    #expect(!TrackedItemText.chatPrompt(base, prefill: nil).contains("parent"))
+}
+
 @Test func slackStartErrorsAreQuietAndDoNotAffectSuccessfulOrSkippedReactions() {
     for outcome in ["reacted", "skipped", "error"] {
         let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",

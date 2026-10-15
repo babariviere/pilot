@@ -352,6 +352,8 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let updatedAt: Double?
     public let externalId: String?
     public let metadata: [String: JSONValue]?
+    /// Linear sub-issues: the parent's header.
+    public let linearParent: LinearParentHeader?
     public let sessionId: String?
     public let missionId: String?
     public let sessionIds: [String]?
@@ -360,11 +362,12 @@ public struct DashboardTrackedItem: Codable, Identifiable, Equatable, Sendable {
     public init(id: String, title: String, url: String? = nil, status: String? = nil, updatedAt: Double? = nil,
                 externalId: String? = nil, metadata: [String: JSONValue]? = nil,
                 sessionId: String? = nil, missionId: String? = nil, sessionIds: [String]? = nil,
-                missionIds: [String]? = nil, slack: SlackTriage? = nil,
+                missionIds: [String]? = nil, slack: SlackTriage? = nil, linearParent: LinearParentHeader? = nil,
                 linearSize: LinearSize? = nil, linearSizeOverride: LinearSize? = nil, caseId: String? = nil) {
         self.caseId = caseId
         self.linearSize = linearSize; self.linearSizeOverride = linearSizeOverride
         self.slack = slack
+        self.linearParent = linearParent
         self.id = id
         self.title = title
         self.url = url

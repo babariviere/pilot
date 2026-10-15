@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test, type TestContext } from "node:test";
 import type { Project, TrackingJson } from "@pilot/protocol";
-import { linearPrefill, pollLinear } from "./linear-source.ts";
+import { linearParentHeaders, linearPrefill, pollLinear } from "./linear-source.ts";
 import { ProjectStore } from "./projects.ts";
 import { logCause, SourceRegistry, type SourcePollContext } from "./sources.ts";
 import { SourceRateLimited } from "./source-mcp.ts";
@@ -147,6 +147,129 @@ test("malformed/repeated/oversized pages fail visibly rather than advance a part
 	assert.equal(page, 5);
 });
 
+function subIssues(recording: Fixture): Fixture {
+	recording.pages[1]!.issues[0]!.parentId = "issue-1";
+	recording.pages[0]!.issues.push({
+		...recording.pages[0]!.issues[0]!,
+		id: "issue-4",
+		identifier: "ENG-4",
+		title: "Add the empty state",
+		url: "https://linear.app/example/issue/ENG-4",
+		gitBranchName: null,
+		parentId: "epic-9",
+	});
+	return recording;
+}
+function withParents(f: ReturnType<typeof context>, parents: Record<string, TrackingJson | Error>) {
+	const inner = f.ctx.call;
+	f.ctx.call = async (tool, args) => {
+		if (tool === "issue" && typeof args.id === "string" && args.id in parents) {
+			f.calls.push({ tool, args });
+			assert.deepEqual(args.fields, ["id", "title", "url"], "parent headers read identity and link only");
+			const value = parents[args.id]!;
+			if (value instanceof Error) throw value;
+			return value;
+		}
+		return inner(tool, args);
+	};
+	return f;
+}
+const EPIC = {
+	id: "epic-9",
+	title: "Onboarding revamp",
+	url: "https://linear.app/example/issue/ENG-9/onboarding-revamp",
+};
+
+test("sub-issues store parentId and resolve bounded parent headers, cached between polls", async () => {
+	const first = withParents(context(subIssues(await fixture("current"))), { "epic-9": EPIC });
+	const result = await pollLinear(first.ctx);
+	const byId = new Map(result.items.map((item) => [item.externalId, item]));
+	assert.equal(byId.get("issue-2")?.metadata.parentId, "issue-1");
+	assert.equal(byId.get("issue-4")?.metadata.parentId, "epic-9");
+	assert.equal(byId.get("issue-1")?.metadata.parentId, undefined);
+	assert.ok(
+		first.calls
+			.filter((call) => call.tool === "issues")
+			.every((call) => (call.args.fields as string[]).includes("parentId")),
+	);
+	// The tracked parent comes from this poll's details; only the other parent is read, once.
+	assert.deepEqual(
+		first.calls.filter((call) => call.tool === "issue").map((call) => call.args.id),
+		["epic-9"],
+	);
+	assert.deepEqual(linearParentHeaders(result.cursor), {
+		"epic-9": { id: "epic-9", identifier: "ENG-9", title: "Onboarding revamp", url: EPIC.url },
+		"issue-1": {
+			id: "issue-1",
+			identifier: "ENG-1",
+			title: "Fix the settings refresh",
+			url: "https://linear.app/example/issue/ENG-1",
+		},
+	});
+	// An incremental poll reuses the cache.
+	const delta = withParents(context(subIssues(await fixture("current")), result.cursor), {
+		"epic-9": new Error("not expected"),
+	});
+	const next = await pollLinear(delta.ctx);
+	assert.equal(delta.calls.filter((call) => call.tool === "issue").length, 0);
+	assert.deepEqual(linearParentHeaders(next.cursor), linearParentHeaders(result.cursor));
+	// A full refresh rereads the other parent; a failed read keeps its cached header.
+	const stale = { ...(next.cursor as Record<string, TrackingJson>), refreshedAt: 0 };
+	const refresh = withParents(context(subIssues(await fixture("current")), stale), { "epic-9": new Error("gone") });
+	const refreshed = await pollLinear(refresh.ctx);
+	assert.equal(refresh.calls.filter((call) => call.tool === "issue").length, 1);
+	assert.equal(linearParentHeaders(refreshed.cursor)["epic-9"]?.title, "Onboarding revamp");
+	// A parent no sub-issue references any more leaves the cache.
+	const plain = await pollLinear(context(await fixture("current"), refreshed.cursor).ctx);
+	assert.deepEqual(linearParentHeaders(plain.cursor), {});
+	assert.equal((plain.cursor as Record<string, TrackingJson>).parents, undefined);
+});
+
+test("parent header reads are bounded per poll and never fail the poll", async () => {
+	const recording = await fixture("current");
+	const template = recording.pages[0]!.issues[0]!;
+	const parents: Record<string, TrackingJson | Error> = {};
+	for (let index = 0; index < 8; index++) {
+		recording.pages[0]!.issues.push({
+			...template,
+			id: `child-${index}`,
+			url: `https://linear.app/example/issue/ENG-${100 + index}`,
+			parentId: `parent-${index}`,
+		});
+		parents[`parent-${index}`] = {
+			id: `parent-${index}`,
+			title: index === 1 ? "x".repeat(5000) : `Parent ${index}`,
+			url: index === 2 ? "javascript:alert(1)" : `https://linear.app/example/issue/ENG-${200 + index}`,
+		};
+	}
+	parents["parent-0"] = { id: "another-issue", title: "Wrong", url: "https://linear.app/example/issue/ENG-1" };
+	const f = withParents(context(recording), parents);
+	const result = await pollLinear(f.ctx);
+	assert.equal(result.items.length, 10);
+	assert.equal(f.calls.filter((call) => call.tool === "issue").length, 5);
+	const headers = linearParentHeaders(result.cursor);
+	assert.deepEqual(
+		Object.keys(headers).sort(),
+		["parent-1", "parent-3", "parent-4"],
+		"wrong and unsafe parents are omitted",
+	);
+	assert.equal(headers["parent-1"]?.title.length, 300);
+	// The next poll reads the parents it has no header for yet, still bounded.
+	const next = withParents(context(recording, result.cursor), parents);
+	const after = await pollLinear(next.ctx);
+	assert.deepEqual(
+		next.calls.filter((call) => call.tool === "issue").map((call) => call.args.id),
+		["parent-0", "parent-2", "parent-5", "parent-6", "parent-7"],
+	);
+	assert.equal(Object.keys(linearParentHeaders(after.cursor)).length, 6);
+	// Rate limits stop parent reads for this poll; the items still commit.
+	const limited = withParents(context(recording), { ...parents, "parent-0": new SourceRateLimited(60_000) });
+	const partial = await pollLinear(limited.ctx);
+	assert.equal(partial.items.length, 10);
+	assert.equal(limited.calls.filter((call) => call.tool === "issue").length, 1);
+	assert.deepEqual(linearParentHeaders(partial.cursor), {});
+});
+
 async function registryFixture(t: TestContext) {
 	const home = await mkdtemp(join(tmpdir(), "pilot-linear-"));
 	const projects = new ProjectStore(home);
@@ -156,12 +279,13 @@ async function registryFixture(t: TestContext) {
 	await items.load([project.id]);
 	let recording = await fixture("current");
 	let failure: Error | undefined;
+	let parents: Record<string, TrackingJson | Error> = {};
 	const seen: Array<{ tool: string; args: Record<string, unknown> }> = [];
 	const registry = new SourceRegistry(projects, items, {
 		async call(kind, tool, args) {
 			assert.equal(kind, "linear");
 			if (failure) throw failure;
-			const f = context(recording);
+			const f = withParents(context(recording), parents);
 			const value = await f.ctx.call(tool, args);
 			seen.push(...f.calls);
 			return value;
@@ -185,6 +309,9 @@ async function registryFixture(t: TestContext) {
 		},
 		setFailure: (value?: Error) => {
 			failure = value;
+		},
+		setParents: (value: Record<string, TrackingJson | Error>) => {
+			parents = value;
 		},
 	};
 }
@@ -242,6 +369,58 @@ test("single issue prefill is bounded, quoted, branch-aware, deduplicated and ne
 	const scoped = context(recording);
 	await assert.rejects(linearPrefill(scoped.ctx, item), /no longer assigned/);
 	assert.ok(!scoped.calls.some((call) => call.tool === "issue"), "do not fetch a description after reassignment");
+});
+test("tracked items, the Inbox and the dashboard carry parent headers; a sub-issue's prompt quotes its parent", async (t) => {
+	const f = await registryFixture(t),
+		id = `${f.project.id}:linear`;
+	f.setRecording(subIssues(await fixture("current")));
+	f.setParents({ "epic-9": EPIC });
+	await f.registry.poll(id);
+	const list = await f.registry.listItems({ projectId: f.project.id });
+	const byId = new Map(list.items.map((item) => [item.externalId, item]));
+	assert.equal(byId.get("issue-4")?.linearParent?.identifier, "ENG-9");
+	assert.equal(byId.get("issue-2")?.linearParent?.id, "issue-1");
+	assert.equal(byId.get("issue-1")?.linearParent, undefined);
+	const inbox = await f.registry.inbox(f.project.id, 10);
+	assert.equal(
+		inbox.linear?.items.find((item) => item.externalId === "issue-4")?.linearParent?.title,
+		"Onboarding revamp",
+	);
+	const source = f.registry.dashboard(f.project.id)[0]!;
+	assert.equal(source.items.find((item) => item.externalId === "issue-4")?.linearParent?.url, EPIC.url);
+	assert.equal(source.done?.items.find((item) => item.externalId === "issue-2")?.linearParent?.identifier, "ENG-1");
+	// Stored rows keep only the parent's ID.
+	assert.equal((await f.items.require(byId.get("issue-4")!.id)).linearParent, undefined);
+
+	const before = f.seen.length;
+	const recording = subIssues(await fixture("current"));
+	recording.issue = { ...recording.issue!, id: "issue-4", title: "Add the empty state", parentId: "epic-9" };
+	f.setRecording(recording);
+	const prefill = await f.registry.prefill(byId.get("issue-4")!.id);
+	assert.deepEqual(prefill.parent, { identifier: "ENG-9", title: "Onboarding revamp" });
+	assert.match(prefill.prompt, /"parent": \{\s+"identifier": "ENG-9",\s+"title": "Onboarding revamp"\s+\}/);
+	assert.deepEqual(
+		f.seen
+			.slice(before)
+			.filter((call) => call.tool === "issue")
+			.map((call) => call.args.id),
+		["issue-4"],
+		"the cached header needs no second read",
+	);
+	// Without a cached header (the parent changed since the last sync), one header read.
+	const moved = subIssues(await fixture("current"));
+	moved.issue = { ...moved.issue!, id: "issue-4", parentId: "epic-10" };
+	f.setRecording(moved);
+	f.setParents({ "epic-10": { id: "epic-10", title: "Billing", url: "https://linear.app/example/issue/ENG-10" } });
+	assert.deepEqual((await f.registry.prefill(byId.get("issue-4")!.id)).parent, {
+		identifier: "ENG-10",
+		title: "Billing",
+	});
+	// Not a sub-issue: no parent.
+	f.setRecording(await fixture("current"));
+	const plain = await f.registry.prefill(byId.get("issue-1")!.id);
+	assert.equal(plain.parent, undefined);
+	assert.doesNotMatch(plain.prompt, /"parent"/);
 });
 test("rate limits preserve items/checkpoint and enforce retry-after without a retry storm", async (t) => {
 	const f = await registryFixture(t),

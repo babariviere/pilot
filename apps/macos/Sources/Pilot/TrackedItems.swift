@@ -301,6 +301,11 @@ enum TrackedItemText {
         switch item.kind {
         case .linear:
             fields.append(("identifier", prefill?.identifier ?? identifier(item)))
+            // A sub-issue names its parent as context. The live prefill wins over the last synced header.
+            let parent: LinearParentRef? = if let prefill { prefill.parent } else {
+                item.linearParent.map { LinearParentRef(identifier: $0.identifier, title: $0.title) }
+            }
+            if let parent { fields.append(("parent", "\(parent.identifier): \(parent.title)")) }
         case .slack:
             fields.append(("channel", identifier(item)))
             let triage = SlackTriageText.triage(item)
