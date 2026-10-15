@@ -1045,7 +1045,8 @@ enum Snapshot {
         }
         model.leaveOpenChat()
         func linear(_ number: Int, _ title: String, _ type: String, _ state: String, priority: Double, ago: Double,
-                    sessions: [String]? = nil, missions: [String]? = nil, startFailed: Bool = false) -> TrackedItem {
+                    sessions: [String]? = nil, missions: [String]? = nil, startFailed: Bool = false,
+                    size: LinearSize? = nil) -> TrackedItem {
             var metadata: [String: JSONValue] = ["identifier": .string("ENG-\(number)"), "statusType": .string(type),
                                                  "priority": .number(priority)]
             if startFailed {
@@ -1056,7 +1057,7 @@ enum Snapshot {
                         url: "https://linear.app/acme/issue/ENG-\(number)", status: state,
                         metadata: metadata,
                         sessionId: sessions?.last, missionId: missions?.last, sessionIds: sessions, missionIds: missions,
-                        createdAt: now - ago, updatedAt: now - ago)
+                        linearSize: size, createdAt: now - ago, updatedAt: now - ago)
         }
         func slack(_ id: String, _ title: String, channel: String, severity: String, ago: Double,
                    sessions: [String]? = nil) -> TrackedItem {
@@ -1069,13 +1070,13 @@ enum Snapshot {
             linear(412, "Export crashes when a quote has more than 200 lines", "started", "In Progress", priority: 1,
                    ago: 20 * minute, sessions: ["w1"]),
             linear(418, "Retry webhook delivery after a 502 from the billing provider", "started", "In Review",
-                   priority: 2, ago: 3 * 60 * minute),
+                   priority: 2, ago: 3 * 60 * minute, size: .quickFix),
             linear(388, "Flaky test: workspace lifecycle does not settle", "unstarted", "Todo", priority: 2,
-                   ago: 5 * 60 * minute, sessions: ["f1"]),
+                   ago: 5 * 60 * minute, sessions: ["f1"], size: .needsPlanning),
             linear(397, "Add a keyboard shortcut to archive a chat", "unstarted", "Todo", priority: 3, ago: day,
                    sessions: ["d1"], missions: ["m1"], startFailed: true),
             linear(420, "Settings window forgets its size between launches", "backlog", "Backlog", priority: 4,
-                   ago: 2 * day),
+                   ago: 2 * day, size: .quickFix),
             linear(371, "Upgrade the daemon to Node 24", "completed", "Done", priority: 3, ago: 3 * day),
             linear(366, "Document the release process", "completed", "Done", priority: 0, ago: 4 * day),
             slack("s1", "Checkout button does nothing on Safari 18", channel: "bugs", severity: "high", ago: 12 * minute),
@@ -1169,10 +1170,11 @@ enum Snapshot {
             DashboardTrackedItem(id: item.id, title: item.title, url: item.url, status: item.status,
                                  updatedAt: item.updatedAt, externalId: item.externalId, metadata: item.metadata,
                                  sessionId: item.sessionId, missionId: item.missionId, sessionIds: item.sessionIds,
-                                 missionIds: item.missionIds)
+                                 missionIds: item.missionIds, linearSize: item.linearSize)
         }
         let longIssue = linear(431, "Quotes with more than two hundred line items time out while exporting to PDF and "
-            + "the retry silently drops the attachments", "unstarted", "Todo", priority: 2, ago: 40 * minute)
+            + "the retry silently drops the attachments", "unstarted", "Todo", priority: 2, ago: 40 * minute,
+            size: .needsPlanning)
         let openIssues = [items[0], items[1], longIssue, items[2], items[3]]
         let doneIssues = [items[5], items[6]]
         let reports = Array(items[7...9])

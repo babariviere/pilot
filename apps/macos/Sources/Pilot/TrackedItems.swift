@@ -263,7 +263,8 @@ enum TrackedItemText {
     /// The new-chat prompt. Ticket text is quoted as untrusted JSON, never as instructions.
     static func chatPrompt(_ item: TrackedItem, prefill: TrackedItemPrefill?) -> String {
         let lead = switch item.kind {
-        case .linear: "Please work on this ticket."
+        case .linear: ["Please work on this ticket.", sizeNote(item.linearSize)].compactMap { $0 }
+            .joined(separator: " ")
         case .slack: SlackTriageText.triage(item).type == .bug
             ? "Please investigate and fix this bug reported in Slack."
             : "Please look into this Slack message and help resolve it."
@@ -411,8 +412,57 @@ final class TrackedItemActions: ObservableObject {
     @Published private(set) var errors: [String: String] = [:]
     @Published private(set) var syncing: Set<String> = []
     @Published private(set) var sourceErrors: [String: String] = [:]
+    /// Size corrections by item, shown until the refreshed item carries them.
+    @Published private(set) var sizeCorrections: [String: SizeCorrection] = [:]
     /// Runs navigation once the hosting sheet, if any, has closed.
     var present: (@escaping () -> Void) -> Void = { $0() }
+
+    struct SizeCorrection: Equatable {
+        let size: LinearSize
+        /// The item's override when the correction was made. Once the item's override changes, the item speaks.
+        let previous: LinearSize?
+        var saving = true
+    }
+
+    /// The size to show: a correction the list has not caught up with yet, else the item's.
+    func size(of item: TrackedItem) -> LinearSize? {
+        if let correction = sizeCorrections[item.id], correction.previous == item.linearSizeOverride {
+            return correction.size
+        }
+        return item.linearSize
+    }
+
+    func isSavingSize(_ item: TrackedItem) -> Bool { sizeCorrections[item.id]?.saving == true }
+
+    /// The user corrected Pilot's estimate, or is correcting it now.
+    func sizeSetByUser(_ item: TrackedItem) -> Bool {
+        item.linearSizeOverride != nil || size(of: item) != item.linearSize
+    }
+
+    /// A separate PATCH with only the size, as pilotd requires. It feeds the project's triage guide.
+    func correctSize(_ item: TrackedItem, to size: LinearSize, client: PilotClient, done: @escaping () -> Void = {}) {
+        guard item.kind == .linear, !isSavingSize(item), size != self.size(of: item) else { return }
+        errors[item.id] = nil
+        sizeCorrections[item.id] = SizeCorrection(size: size, previous: item.linearSizeOverride)
+        Task {
+            do {
+                _ = try await client.updateTrackedItem(item.id, TrackedItemPatch(linearSize: size))
+                sizeCorrections[item.id]?.saving = false
+                done()
+            } catch {
+                sizeCorrections[item.id] = nil
+                errors[item.id] = "Couldn't change the size: \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Forgets a saved correction once the row shows the refreshed item.
+    func settleSize(_ item: TrackedItem) {
+        if let correction = sizeCorrections[item.id], !correction.saving,
+           correction.previous != item.linearSizeOverride {
+            sizeCorrections[item.id] = nil
+        }
+    }
 
     func startChat(_ item: TrackedItem, app: AppModel) {
         prepare(item, app: app, failure: "Couldn't prepare the chat") { prefill in
@@ -503,9 +553,10 @@ struct TrackedStartText: View {
     }
 }
 
-/// One tracked ticket or Slack message. Clicking opens it in its source app. The trailing area shows what the
-/// item started (with Open chat / Open mission) or, on hover, Start chat. Everything is also in the
-/// context menu and as VoiceOver actions.
+/// One tracked ticket or Slack message. Clicking opens it in its source app. A Linear ticket shows its size as a chip
+/// that corrects it. The trailing area shows what the item started (with Open chat / Open mission) or, on hover,
+/// Start chat, or Start mission marked Suggested when the ticket needs planning. Everything is also in the context
+/// menu and as VoiceOver actions.
 struct TrackedItemRow: View {
     let item: TrackedItem
     @ObservedObject var actions: TrackedItemActions
@@ -528,6 +579,9 @@ struct TrackedItemRow: View {
         let subtitle = [context, TrackedItemText.subtitle(item, now: now, group: group)].compactMap { $0 }
             .joined(separator: " · ")
         let startError = TrackedItemText.startError(item)
+        let size = actions.size(of: item)
+        let shownSize = TrackedItemText.shownSize(size, item: item)
+        let suggestsMission = TrackedItemText.suggestsMission(size, item: item)
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {
                 Button(action: openInApp) {
@@ -556,40 +610,73 @@ struct TrackedItemRow: View {
                 .buttonStyle(.plain)
                 .help(TrackedItemText.startErrorHelp(item) ?? item.url)
                 .accessibilityLabel([
-                    "\(TrackedItemText.identifier(item)), \(item.title).", startError.map { "\($0)." }, subtitle,
+                    "\(TrackedItemText.identifier(item)), \(item.title).", startError.map { "\($0)." },
+                    shownSize.map { "\($0.title)." }, subtitle,
                 ].compactMap { $0 }.joined(separator: " "))
                 .accessibilityHint("Opens in the browser")
-                trailing(link: link, hovered: hovered, busy: busy)
+                if let shownSize {
+                    LinearSizeChip(size: shownSize, setByUser: actions.sizeSetByUser(item),
+                                   saving: actions.isSavingSize(item)) { correctSize($0) }
+                }
+                trailing(link: link, hovered: hovered, busy: busy, suggestsMission: suggestsMission,
+                         sized: shownSize != nil)
             }
         }
-        .contextMenu { menu(link: link) }
-        .accessibilityAction(named: "Start chat") { actions.startChat(item, app: model) }
-        .accessibilityAction(named: "Start mission") { actions.startMission(item, app: model) }
+        .contextMenu { menu(link: link, suggestsMission: suggestsMission) }
+        .onChange(of: item.linearSizeOverride) { actions.settleSize(item) }
+        // The suggested start comes first.
+        .accessibilityAction(named: suggestsMission ? "Start mission" : "Start chat") { start(mission: suggestsMission) }
+        .accessibilityAction(named: suggestsMission ? "Start chat" : "Start mission") { start(mission: !suggestsMission) }
     }
 
-    @ViewBuilder private func trailing(link: TrackedItemText.LinkSummary?, hovered: Bool, busy: Bool) -> some View {
+    @ViewBuilder private func trailing(link: TrackedItemText.LinkSummary?, hovered: Bool, busy: Bool,
+                                       suggestsMission: Bool, sized: Bool) -> some View {
         if busy {
             ProgressView().controlSize(.small).frame(width: 20)
         } else if let link {
             TrackedLinkButton(link: link) { openLink(link.target) }
         } else {
             HStack(spacing: 2) {
-                Button { actions.startChat(item, app: model) } label: {
-                    Text("Start chat").font(.pilot(.label, weight: .medium))
-                        .foregroundStyle(Theme.foreground)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .contentShape(Rectangle())
+                // Sized rows keep room for the widest start, so their chips line up down the list.
+                ZStack(alignment: .trailing) {
+                    if sized {
+                        startAction(suggestsMission: true, label: true).hidden().accessibilityHidden(true)
+                    }
+                    startAction(suggestsMission: suggestsMission, label: false)
                 }
-                .buttonStyle(.plain)
-                .help("Open a new chat prefilled from this item. You review it before it starts.")
-                moreMenu(link: nil)
+                moreMenu(link: nil, suggestsMission: suggestsMission)
             }
             .revealed(hovered)
         }
     }
 
-    private func moreMenu(link: TrackedItemText.LinkSummary?) -> some View {
-        Menu { menu(link: link) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
+    /// Start chat, or Start mission after a quiet Suggested. `label` draws it without a button, to reserve room.
+    @ViewBuilder private func startAction(suggestsMission: Bool, label: Bool) -> some View {
+        HStack(spacing: 2) {
+            if suggestsMission {
+                MetaText("Suggested").padding(.trailing, 2).accessibilityHidden(true)
+            }
+            let title = Text(suggestsMission ? "Start mission" : "Start chat").font(.pilot(.label, weight: .medium))
+                .foregroundStyle(Theme.foreground)
+                .padding(.horizontal, 6).padding(.vertical, 2)
+            if label {
+                title
+            } else {
+                Button { start(mission: suggestsMission) } label: { title.contentShape(Rectangle()) }
+                    .buttonStyle(.plain)
+                    .help(suggestsMission
+                        ? "Suggested because this ticket needs planning. Opens a new mission prefilled from it. "
+                            + "You review it before it starts."
+                        : "Open a new chat prefilled from this item. You review it before it starts.")
+                    .accessibilityLabel(suggestsMission ? "Start mission, suggested" : "Start chat")
+            }
+        }
+    }
+
+    private func moreMenu(link: TrackedItemText.LinkSummary?, suggestsMission: Bool) -> some View {
+        Menu { menu(link: link, suggestsMission: suggestsMission) } label: {
+            PilotSymbol(PilotIcon.more, context: .toolbar)
+        }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
             .rowIconButtonStyle()
@@ -598,13 +685,22 @@ struct TrackedItemRow: View {
             .accessibilityLabel("More actions for \(TrackedItemText.identifier(item))")
     }
 
-    @ViewBuilder private func menu(link: TrackedItemText.LinkSummary?) -> some View {
+    @ViewBuilder private func menu(link: TrackedItemText.LinkSummary?, suggestsMission: Bool) -> some View {
         if let link {
             Button(link.action) { openLink(link.target) }
             Divider()
         }
-        Button(link == nil ? "Start Chat" : "Start Another Chat") { actions.startChat(item, app: model) }
-        Button(link == nil ? "Start Mission…" : "Start Another Mission…") { actions.startMission(item, app: model) }
+        let chat = Button(link == nil ? "Start Chat" : "Start Another Chat") { actions.startChat(item, app: model) }
+        let mission = Button(link == nil ? "Start Mission…" : "Start Another Mission…") {
+            actions.startMission(item, app: model)
+        }
+        if suggestsMission {
+            mission
+            chat
+        } else {
+            chat
+            mission
+        }
         let missions = model.client.missions.filter {
             $0.projectId == item.projectId && $0.status == .active && !(item.missionIds ?? []).contains($0.id)
         }
@@ -614,6 +710,14 @@ struct TrackedItemRow: View {
                     Button(mission.title) { actions.link(item, missionId: mission.id, client: model.client, done: changed) }
                 }
             }
+        }
+        if item.kind == .linear {
+            Menu("Size") {
+                LinearSizeOptions(size: actions.size(of: item), setByUser: actions.sizeSetByUser(item)) {
+                    correctSize($0)
+                }
+            }
+            .disabled(actions.isSavingSize(item))
         }
         Divider()
         if let url = trackedBrowserURL(item.url) {
@@ -633,6 +737,14 @@ struct TrackedItemRow: View {
 
     private func openInApp() {
         if let url = trackedBrowserURL(item.url) { BrowserLinkOpener.shared.open(url) }
+    }
+
+    private func start(mission: Bool) {
+        if mission { actions.startMission(item, app: model) } else { actions.startChat(item, app: model) }
+    }
+
+    private func correctSize(_ size: LinearSize) {
+        actions.correctSize(item, to: size, client: model.client, done: changed)
     }
 
     private func openLink(_ target: TrackedItemText.LinkSummary.Target) {

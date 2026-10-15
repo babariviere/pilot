@@ -388,7 +388,10 @@ Linear size classification suggests Quick fix, Needs planning or Unknown from a 
 It runs once per issue update, at most eight attempts per poll and 200 per UTC day across projects, with the
 cheapest scoped model and no tools or thinking. Descriptions are transient; failed attempts remain Unknown
 until the issue changes. User size corrections survive sync and feed the shared guide. This never auto-starts
-work. Size chips and suggested primary actions are a separate UI follow-up.
+work. Open Linear rows in the Inbox, the Overview's current cycle and the full list show Quick fix or Needs
+planning as a chip, which also corrects the size (or use the row's Size menu). Needs planning rows make
+Start mission the hover action, marked Suggested; others keep Start chat. Chats started from a sized ticket
+are told its size and asked to suggest a mission, not start one, if the work needs planning.
 
 Slack common cases group classifier summaries and corrections, never raw thread text. The shared grooming run
 uses the newest 200 bugs within 30 days, preserves case IDs and memberships, and computes counts, severity mix,

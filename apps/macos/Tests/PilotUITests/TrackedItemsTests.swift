@@ -80,6 +80,42 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.linearStartError(slack) == nil)
 }
 
+@Test func linearSizeChipsSuggestMissionsOnlyForOpenTicketsThatNeedPlanning() {
+    func sized(_ size: LinearSize?, statusType: String = "unstarted") -> TrackedItem {
+        let base = linear(statusType: statusType)
+        return TrackedItem(id: base.id, projectId: base.projectId, kind: .linear, externalId: base.externalId,
+                           title: base.title, url: base.url, status: base.status, metadata: base.metadata,
+                           linearSize: size, createdAt: base.createdAt, updatedAt: base.updatedAt)
+    }
+    #expect(LinearSize.choices.map(\.title) == ["Quick fix", "Needs planning", "Unknown"])
+    #expect(TrackedItemText.shownSize(.quickFix, item: sized(.quickFix)) == .quickFix)
+    #expect(TrackedItemText.shownSize(.needsPlanning, item: sized(.needsPlanning)) == .needsPlanning)
+    // Unknown, not yet estimated, Slack and closed tickets show no chip.
+    #expect(TrackedItemText.shownSize(.unknown, item: sized(.unknown)) == nil)
+    #expect(TrackedItemText.shownSize(nil, item: sized(nil)) == nil)
+    #expect(TrackedItemText.shownSize(.quickFix, item: slack) == nil)
+    #expect(TrackedItemText.shownSize(.needsPlanning, item: sized(.needsPlanning, statusType: "completed")) == nil)
+    // A correction shows before the list catches up, so the size passed in wins over the item's.
+    #expect(TrackedItemText.shownSize(.needsPlanning, item: sized(.quickFix)) == .needsPlanning)
+
+    #expect(TrackedItemText.suggestsMission(.needsPlanning, item: sized(.needsPlanning)))
+    #expect(!TrackedItemText.suggestsMission(.quickFix, item: sized(.quickFix)))
+    #expect(!TrackedItemText.suggestsMission(.unknown, item: sized(.unknown)))
+    #expect(!TrackedItemText.suggestsMission(.needsPlanning, item: sized(.needsPlanning, statusType: "canceled")))
+
+    #expect(TrackedItemText.sizeHelp(.quickFix, setByUser: false).hasPrefix("Quick fix, estimated by Pilot"))
+    #expect(TrackedItemText.sizeHelp(.needsPlanning, setByUser: true).hasPrefix("Needs planning, set by you."))
+
+    // Chats are told the size and to propose, never start, a mission. Unknown says nothing.
+    let quick = TrackedItemText.chatPrompt(sized(.quickFix), prefill: nil)
+    #expect(quick.hasPrefix("Please work on this ticket. Estimated size: Quick fix. If it turns out to need planning, "
+        + "suggest a mission before implementing it, and don't start one without my confirmation. The following JSON"))
+    let planning = TrackedItemText.chatPrompt(sized(.needsPlanning), prefill: nil)
+    #expect(planning.hasPrefix("Please work on this ticket. Estimated size: Needs planning. Before you start, suggest"))
+    #expect(TrackedItemText.chatPrompt(sized(.unknown), prefill: nil)
+        .hasPrefix("Please work on this ticket. The following JSON"))
+}
+
 @Test func trackedPromptsQuoteTicketsAsUntrustedContent() throws {
     let prefill = TrackedItemPrefill(itemId: "i1", identifier: "ENG-12", title: "Export crashes on large files",
                                      url: "https://linear.app/acme/issue/ENG-12",
