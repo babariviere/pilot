@@ -135,9 +135,43 @@ export function missionPrompt(mission: MissionContext, ghStack?: boolean): strin
 	return lines.join("\n");
 }
 
-/** Conservative backup to the OS read-only view, including nested shell/codemode commands. */
-export function coordinatorMutation(arguments_: unknown): boolean {
-	const text = strings(arguments_).join("\n");
+/** Literal shell arguments in codemode, not prose in other tool calls. Never evaluate script source. */
+function nestedShellCommands(code: string): unknown[] {
+	const literals = new Map<number, string>();
+	// Mask strings and comments before looking for calls, so examples inside content stay inert.
+	const masked = code.replace(
+		/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\/[^\n]*|\/\*[\s\S]*?\*\//g,
+		(value, offset: number) => {
+			if (value.startsWith("/")) return " ".repeat(value.length);
+			// Preserve quoted argument keys, but replace literal values with an indexed placeholder.
+			if (/^["'](?:action|command|cmd|script)["']$/.test(value) && /^\s*:/.test(code.slice(offset + value.length)))
+				return ` ${value.slice(1, -1)} `;
+			literals.set(offset, value.slice(1, -1));
+			return `@${" ".repeat(value.length - 1)}`;
+		},
+	);
+	const commands: unknown[] = [];
+	for (const call of masked.matchAll(/\btools\.(\w+)\s*\(\s*\{/g)) {
+		const start = call.index + call[0].length;
+		let end = start;
+		let depth = 1;
+		for (; end < masked.length && depth; end++) {
+			if (masked[end] === "{") depth++;
+			if (masked[end] === "}") depth--;
+		}
+		const args: Record<string, unknown> = {};
+		for (const field of masked.slice(start, end - 1).matchAll(/\b(action|command|cmd|script)\s*:\s*@/g)) {
+			args[field[1]!] = literals.get(start + field.index + field[0].length - 1);
+		}
+		commands.push(commandArguments(call[1]!, args));
+	}
+	return commands;
+}
+
+/** Conservative backup to the OS read-only view, including literal nested shell commands. */
+export function coordinatorMutation(arguments_: unknown, codemode = false): boolean {
+	const source = strings(arguments_);
+	const text = (codemode ? source.flatMap((code) => strings(nestedShellCommands(code))) : source).join("\n");
 	for (let command of text.replace(/["'`]/g, "").split(/\n|;|&&|\|\|/)) {
 		// Common metadata reads are not branch/config mutations (also inside a nested tool call).
 		command = command.replace(
@@ -336,7 +370,10 @@ export function withPilotPolicy(
 								block: "Pilot policy: repository writes are unavailable for the coordinator. Use an absolute path inside TMPDIR for scratch files, or delegate code changes to a member chat.",
 							};
 					}
-					if ((mission()?.coordinator === "self" || context.coordinatorView) && coordinatorMutation(commands))
+					if (
+						(mission()?.coordinator === "self" || context.coordinatorView) &&
+						coordinatorMutation(commands, call.name === "codemode")
+					)
 						return {
 							block: "Pilot policy: the coordinator has read-only source access. Delegate code changes, commits, branches, pushes, pull requests and heavy verification to a member chat; use TMPDIR for scratch files.",
 						};

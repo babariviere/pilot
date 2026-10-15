@@ -292,6 +292,14 @@ test("coordinator command policy blocks writes with global flags and nested call
 		"git 'commit' -m change",
 		"gh -R octo/repo pr " + "create --fill",
 		"pnpm install",
+		"make test",
+		"pnpm test",
+		"jj new",
+		"git push",
+		"MODE=ci make test",
+		"cmake --build build",
+		"pytest tests",
+		"xcodebuild test",
 		"apps/macos/scripts/test.sh",
 	];
 	for (const command of mutations) {
@@ -302,6 +310,14 @@ test("coordinator command policy blocks writes with global flags and nested call
 			command,
 		);
 		assert.ok((await check("jobs", { action: "start", command }))?.block, command);
+		assert.ok(
+			(
+				await check("codemode", {
+					code: `await tools.jobs({ action: "start", name: "verify", command: ${JSON.stringify(command)} });`,
+				})
+			)?.block,
+			command,
+		);
 	}
 	for (const command of [
 		"git status",
@@ -326,6 +342,55 @@ test("coordinator command policy blocks writes with global flags and nested call
 	current = { ...mission, coordinator: "other" };
 	assert.equal(await check("bash", { command: "git push origin feat/test" }), undefined);
 	assert.equal(await check("write", { path: "/source/new.ts", content: "code" }), undefined);
+});
+
+test("coordinators can create and update Linear issues and other non-shell content through codemode", async () => {
+	const extension = withPilotPolicy(
+		{ name: "test" },
+		{},
+		() => false,
+		() => ({ ...mission, coordinator: "self" }),
+	);
+	const hook = (extension.hooks![0]!.handlers as Pick<ToolHooks, "beforeTool">).beforeTool;
+	const check = (name: string, args: Parameters<ToolHooks["beforeTool"]>[0]["arguments"]) =>
+		hook({ type: "toolCall", id: "test", name, arguments: args }, undefined as never, undefined as never);
+	const prose = "Please make this clearer; add a git branch note.\nmake cmake pytest xcodebuild\npnpm test; jj new";
+	const issues: Array<Parameters<ToolHooks["beforeTool"]>[0]["arguments"]> = [
+		{ title: "Clarify setup", description: prose, team: "Example" },
+		{ id: "EXAMPLE-123", description: prose },
+	];
+	for (const args of issues) {
+		assert.equal(await check("mcp__linear__save_issue", args), undefined);
+		assert.equal(
+			await check("codemode", { code: `await tools.mcp__linear__save_issue(${JSON.stringify(args)});` }),
+			undefined,
+		);
+	}
+	for (const code of [
+		`await tools.mcp__slack__slack_send_message({ text: ${JSON.stringify(prose)} });`,
+		`await tools.mission({ action: "task", body: ${JSON.stringify(prose)} });`,
+		`await tools.artifact({ action: "create", source: \`${prose}\` });`,
+		'await tools.artifact({ action: "create", source: \'await tools.bash({command: "make test"})\' });',
+		'// await tools.bash({ command: "make test" })\ntext("make");',
+		'/* await tools.bash({ command: "make test" }) */ text("add a git branch note");',
+		'await tools.jobs({ action: "stop", command: "make test" });',
+		'await tools.jobs({ action: "start", command: "git status", name: "make test" });',
+	]) {
+		assert.equal(await check("codemode", { code }), undefined, code);
+	}
+	for (const code of [
+		"await tools.bash({ command: 'make test' });",
+		"await tools.bash({ command: `make test` });",
+		'await tools.bash({ timeout: 10, command: "make test" });',
+		'await tools.bash({ "command": "make test" });',
+		'await tools.bash({ command: /* verify */ "make test" });',
+		'await tools.mcp__ssh__execute_command({ cmd: "make test" });',
+		'await tools.bash({ command: "make test", env: { MODE: "ci" } });',
+		'await tools.bash({ command: "git status" }); await tools.bash({ command: "make test" });',
+		`await tools.mcp__linear__save_issue({ description: ${JSON.stringify(prose)} }); await tools.bash({ command: "make test" });`,
+	]) {
+		assert.ok((await check("codemode", { code }))?.block, code);
+	}
 });
 
 test("content-only calls may mention forbidden commands and internal deliverable names", async () => {
