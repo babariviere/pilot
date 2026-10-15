@@ -1,5 +1,44 @@
 # Changelog
 
+## [1.34.0](https://github.com/babariviere/pilot/compare/v1.33.0...v1.34.0) (2026-10-15)
+
+
+### Features
+
+* **changes:** attach pull requests by number ([854c9bd](https://github.com/babariviere/pilot/commit/854c9bd64e7b074e965abe3c9bec2a32cb3183ee))
+* **inbox:** global Inbox with Ready to merge and a project filter ([47219c5](https://github.com/babariviere/pilot/commit/47219c5292392f6674ea18c954f91dcf87aebcde))
+* **jobs:** show running jobs in the chat working line, with Stop per job ([be77bf2](https://github.com/babariviere/pilot/commit/be77bf261c5c2e9ae670991b2126d92974f4d87c))
+* **jobs:** surface hour-long jobs as user attention ([b2c2a47](https://github.com/babariviere/pilot/commit/b2c2a472dbbc2c9a81dd464bbb6149cb7d192646))
+* **macos:** fold each turn's work into one line, with calmer bubbles and scheduled messages in place ([70c798e](https://github.com/babariviere/pilot/commit/70c798e2e8cef0d808fc36184210c594821a5e62))
+* **macos:** group focused sidebar chats by urgency with Ready to merge ([5d5dab7](https://github.com/babariviere/pilot/commit/5d5dab74d8554267c2428ac079fbb8988da54ab4))
+* **macos:** group the Tasks tab by phase ([f595c78](https://github.com/babariviere/pilot/commit/f595c78a3a71a3bc44697247e25f4de02d1c54cf))
+* **macos:** recede row corners on hover and fade row second lines ([4261e8a](https://github.com/babariviere/pilot/commit/4261e8ae2de7f636917e4084397d5a8044ec4d59))
+* **macos:** redesign Home as a project status overview ([33715e5](https://github.com/babariviere/pilot/commit/33715e5a833446c818890c6a9b7c4540cde4483d))
+* **macos:** show a keyboard focus ring on rows ([1ff408f](https://github.com/babariviere/pilot/commit/1ff408f5082defc0fa56e599cc5723b3bb41c4a0))
+* **macos:** show subscription usage only when it matters ([0267d0d](https://github.com/babariviere/pilot/commit/0267d0d3887484ffd8821735349d0482726889c3))
+* **overview:** lead the project page with Up next ([7caf1d5](https://github.com/babariviere/pilot/commit/7caf1d58e701996cb1084c9c6c24e4bbabd70ac0))
+* **sidebar:** regroup read results when leaving the chat and add a Pinned group ([2ac670e](https://github.com/babariviere/pilot/commit/2ac670e5a48886f7a1ed7383bae582049bc0e759))
+* **tasks:** start one chat on multiple ordered tasks ([2cc1ead](https://github.com/babariviere/pilot/commit/2cc1eadfbb104175e2a0f4b93697043b2e142ab6))
+* **workspaces:** add shared read-only source roles ([bd92aa1](https://github.com/babariviere/pilot/commit/bd92aa1c05cdc03238e7dcbd594e8453d9d2733b))
+
+
+### Bug Fixes
+
+* **daemon:** defer member completion notices through job follow-up ([3029f3b](https://github.com/babariviere/pilot/commit/3029f3b4becf5f357f2f717a48408d08084ce6ee))
+* **deps:** update dependency motion to v14.2.0 ([d063612](https://github.com/babariviere/pilot/commit/d063612edca57d512090e612399c6cf647ff54a4))
+* disambiguate PR links in multi-task chats ([74b588f](https://github.com/babariviere/pilot/commit/74b588f3c512dd3e738387d6f4710353aacd3291))
+* **jobs:** keep live attention hashable and cover badge counts ([d5dedbf](https://github.com/babariviere/pilot/commit/d5dedbf62e500a1568e13c7f9f164c5af0b7e06f))
+* **jobs:** resolve live metadata when attention becomes due ([4cc44c1](https://github.com/babariviere/pilot/commit/4cc44c175b30880718844bbd96281867aafd44d7))
+* **kernel:** tolerate starvation and resume interrupted runs ([3e4d77e](https://github.com/babariviere/pilot/commit/3e4d77e18ac6fc0a66e102f2b557191623bed6ea))
+* **macos:** correct icon tokens after rebasing ([94281aa](https://github.com/babariviere/pilot/commit/94281aaa85700c1d92914ee691778b8f228e5a60))
+* **macos:** use a compatible chat folder symbol ([757d2e0](https://github.com/babariviere/pilot/commit/757d2e0467cba335dbf2cdd72dc82f523a506a03))
+* **memory:** retry invalid compaction summaries ([18d1b52](https://github.com/babariviere/pilot/commit/18d1b525aee09e98e0a4b71495a87066186621c5))
+* **readers:** separate module readiness from snapshot delivery ([50f8893](https://github.com/babariviere/pilot/commit/50f8893c366d34524164a0df10b28a18a3d95daf))
+* **session:** keep interrupted recovery behind idle guards ([3a8ed2b](https://github.com/babariviere/pilot/commit/3a8ed2bd089ba89462845187724ec13555f1f4dc))
+* **tasks:** serialize concurrent chat starts ([45e0f4c](https://github.com/babariviere/pilot/commit/45e0f4c32acb7f7c0fe77e3a678328c98fc3fd7b))
+* **titles:** synchronize planning chat names ([a12561b](https://github.com/babariviere/pilot/commit/a12561b2056a550fca33d07100ae081d9b2f8b3c))
+* **workspaces:** harden source-role startup and scratch ([42d8f71](https://github.com/babariviere/pilot/commit/42d8f7197ba3d81935b733e67a1e87479acd659a))
+
 ## [1.33.0](https://github.com/babariviere/pilot/compare/v1.32.0...v1.33.0) (2026-10-14)
 
 
