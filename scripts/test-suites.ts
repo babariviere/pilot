@@ -73,6 +73,7 @@ const fast = new Set([
 	"daemon/ttl-cache",
 	"daemon/update-gate",
 	"daemon/worker-activity",
+	"daemon/worker-starts",
 	"kernel/artifact-skill",
 	"kernel/artifact-tools",
 	"kernel/attention",

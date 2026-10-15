@@ -193,6 +193,30 @@ module startup from the read budget rather than merely replacing one timeout num
 isolates cold startup of a tiny transcript, not disk-cold OS caches, large-history rendering or GUI
 responsiveness. It does not claim a fixed speedup under arbitrary machine load.
 
+## Worker recovery admission
+
+`packages/daemon/src/worker-starts.test.ts` and `sessions.test.ts` cover a 150-session recovery burst,
+two concurrent cold starts, FIFO admission, per-session coalescing, failure release, queued Stop,
+role changes, archival, sleep and shutdown. The limit lasts through worker readiness, not the agent's
+run. Memory wake failure or its 1.2-second deadline remains nonfatal; the kernel integration fixture
+also checks timer cleanup on success, error and timeout.
+
+On 2026-10-15, macOS arm64/Node 26.10.0, a local offline probe compared `9c221642` with this change in
+five alternating pairs. It seeded 150 initializing sessions with stable pending input IDs and used
+faux workers with 2ms synchronous constructor work and held readiness promises. A 1ms heartbeat ran
+during metadata loading and admission. Medians, with no competing verification commands:
+
+| Metric | Before | After |
+| --- | --- | --- |
+| Workers constructed before releasing readiness | 150 | 2 |
+| Time until `load()` returned and metadata could be listed | 315ms | 13ms |
+| Largest heartbeat gap | 306ms | 5ms |
+
+This isolates admission pressure, not real extension load time, provider streaming, large-history
+rendering, GUI launch latency or total retained worker memory. All admitted agents may still run
+concurrently. Two connected but stalled initializations can hold both slots: elapsed time alone must
+not revoke a live writer's storage lease. No live chats, credentials or model services were used.
+
 ## Workspace fixtures and clocks
 
 Workspace tests are separated into refresh/import/recovery/lifecycle and retention groups. Their real

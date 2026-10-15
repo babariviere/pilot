@@ -240,12 +240,13 @@ export class KernelSession {
 		});
 		let wakePrompt = "";
 		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask) {
+			let wakeTimer: ReturnType<typeof setTimeout> | undefined;
 			try {
 				const wake = await Promise.race([
 					hooks.callMemory("wake", {}),
-					new Promise<never>((_, reject) =>
-						setTimeout(() => reject(new Error("Project memory wake timed out")), 1200),
-					),
+					new Promise<never>((_, reject) => {
+						wakeTimer = setTimeout(() => reject(new Error("Project memory wake timed out")), 1200);
+					}),
 				]);
 				const view = wake as { count?: number; text?: string };
 				if (view.count && view.text)
@@ -254,6 +255,8 @@ export class KernelSession {
 				console.warn(
 					`pilot: project memory wake unavailable: ${error instanceof Error ? error.message : String(error)}`,
 				);
+			} finally {
+				clearTimeout(wakeTimer);
 			}
 		}
 		try {
