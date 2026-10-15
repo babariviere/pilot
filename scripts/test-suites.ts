@@ -28,6 +28,29 @@ export async function discoverTests(root: string): Promise<string[]> {
 }
 
 export type Suite = "fast" | "integration" | "stress";
+export type TestLane = "all" | "portable" | "macos";
+
+// This integration exercises native SwiftUI publication and preview, not just validation.
+const macosOnly = new Set(["packages/kernel/src/ask.integration.test.ts"]);
+
+// Repeat OS-sensitive paths on Darwin while the broad suite runs on Linux.
+const macosCoverage = new Set([
+	"packages/artifacts/src/preview.test.ts",
+	"packages/artifacts/src/swiftui.test.ts",
+	"packages/daemon/src/coordinator-role.test.ts",
+	"packages/daemon/src/main-view.test.ts",
+	"packages/daemon/src/platform.test.ts",
+	"packages/daemon/src/schedule-detection.test.ts",
+	"packages/daemon/src/terminals.test.ts",
+	"packages/kernel/src/bundled-extensions.integration.test.ts",
+	"packages/kernel/src/runtime-environment.test.ts",
+]);
+
+export function testInLane(path: string, lane: TestLane): boolean {
+	if (lane === "all") return true;
+	if (lane === "portable") return !macosOnly.has(path);
+	return macosOnly.has(path) || macosCoverage.has(path);
+}
 
 export function testLimits(env: Record<string, string | undefined>) {
 	const positive = (name: string, fallback: number): number => {
