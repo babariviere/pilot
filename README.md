@@ -83,6 +83,9 @@ so mission task numbers are never mistaken for GitHub issues. Copying preserves 
 3. Let the agent work. Send a follow-up to steer it, or stop it if the direction is wrong.
 4. Review its response, artifacts and, for Build chats, the changes and pull request. You decide what to merge.
 
+Chats keep a readable placeholder title until the first agent turn finishes, then generate a title from
+bounded conversation excerpts. Manual renames always win, and later turns do not automatically retitle the chat.
+
 The app installs `pilotd` as a per-user launchd agent. Closing or quitting Pilot does not stop running
 agents. Chat history is stored locally using [pi-durable](https://www.npmjs.com/package/@earendil-works/pi-durable).
 

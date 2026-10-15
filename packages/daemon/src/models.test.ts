@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { TITLE_CONTEXT_LIMIT } from "./chat-title.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
@@ -425,12 +426,13 @@ test("title completion is bounded, tool-free and runs with no reasoning", async 
 				assert.equal(options?.signal, signal);
 				assert.equal(context.tools, undefined);
 				assert.equal(context.messages.length, 1);
-				assert.equal(context.messages[0]!.content.length, 4000);
+				assert.equal(context.messages[0]!.content.length, TITLE_CONTEXT_LIMIT);
+				assert.ok(context.systemPrompt?.includes("conversation"));
 				return answer('  "Fix branch naming"\nExplanation  ');
 			},
 		},
 		[expensive, cheap],
-		"a".repeat(6000),
+		"a".repeat(TITLE_CONTEXT_LIMIT + 2_000),
 		signal,
 	);
 	assert.equal(title, "Fix branch naming");

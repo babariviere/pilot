@@ -42,13 +42,14 @@ import type {
 	SessionSubagent,
 	SessionSummary,
 	SessionUsage,
-	SubscriptionPause,
 	SpawnRequest,
 	StopResponse,
 	SubagentTranscript,
+	SubscriptionPause,
 	UpdatePreparation,
 } from "@pilot/protocol";
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
+import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
@@ -265,8 +266,8 @@ interface SessionMeta extends OutcomeMeta {
 	title: string;
 	/** Latest attempt list reported by the kernel, kept while it is parked. */
 	attempts?: SessionAttempt[];
-	/** Best-effort title generation resumes after a daemon restart. */
-	titlePending?: { cwd: string; message: string };
+	/** Wait for the first finished turn; a ready generation resumes after a daemon restart. */
+	titlePending?: { cwd: string; message: string; ready?: boolean };
 	cwd: string;
 	mode?: "build" | "ask";
 	ask?: AskContext;
@@ -835,6 +836,7 @@ export class SessionManager {
 	/** Workspaces start by borrowing their project's objects. Copy them in the background, one at a time. */
 	private dissociation: Promise<void> = Promise.resolve();
 	private readonly titleTasks = new Set<Promise<void>>();
+	private readonly titleGenerating = new Set<string>();
 	private readonly shutdownSignal = new AbortController();
 	private readonly updateGate = new UpdateGate();
 	private updatePauseTimer?: ReturnType<typeof setTimeout>;
@@ -3132,13 +3134,15 @@ export class SessionManager {
 		const summary = this.summary(meta);
 		this.emit(meta);
 		void this.start(id, true);
-		if (meta.titlePending) this.generateTitle(meta);
 		return summary;
 	}
 
 	private generateTitle(meta: SessionMeta): void {
 		const pending = meta.titlePending;
-		if (!pending || this.closing) return;
+		if (!pending || this.closing || this.titleGenerating.has(meta.id)) return;
+		// An idle/ready worker alone is not evidence that the first agent turn finished.
+		if (!pending.ready && !((meta.lastCompletionAt ?? -1) > 0)) return;
+		this.titleGenerating.add(meta.id);
 		const signal = AbortSignal.any([this.shutdownSignal.signal, AbortSignal.timeout(15_000)]);
 		const task = (async () => {
 			let changed = false;
@@ -3150,11 +3154,19 @@ export class SessionManager {
 			try {
 				signal.throwIfAborted();
 				const title = await Promise.race([
-					(this.factories.title ?? this.modelCatalog.generateTitle.bind(this.modelCatalog))(
-						pending.cwd,
-						pending.message,
-						signal,
-					),
+					(async () => {
+						const context = await chatTitleContext(
+							pending.message,
+							(before, limit) => this.history(meta.id, before, limit),
+							signal,
+						);
+						if (meta.titlePending !== pending) return undefined;
+						return (this.factories.title ?? this.modelCatalog.generateTitle.bind(this.modelCatalog))(
+							pending.cwd,
+							context,
+							signal,
+						);
+					})(),
 					cancelled,
 				]);
 				// A user rename clears the pending marker; its title wins over a late generated one.
@@ -3174,7 +3186,12 @@ export class SessionManager {
 			if (changed) this.emit(meta);
 		})();
 		this.titleTasks.add(task);
-		void task.finally(() => this.titleTasks.delete(task)).catch(() => undefined);
+		void task
+			.finally(() => {
+				this.titleTasks.delete(task);
+				this.titleGenerating.delete(meta.id);
+			})
+			.catch(() => undefined);
 	}
 
 	/** Idle-only automatic inputs do not reset user activity or the automatic PR-repair budget. */
@@ -4946,6 +4963,17 @@ export class SessionManager {
 			});
 			if (this.applyAttempts(meta, packet.attempts)) void this.save(meta);
 		} else if (packet.type === "ready" || packet.type === "working") {
+			if (
+				this.workers.get(meta.id) === worker &&
+				!packet.working &&
+				packet.completion &&
+				meta.titlePending &&
+				!meta.titlePending.ready
+			) {
+				meta.titlePending.ready = true;
+				void this.save(meta);
+				this.generateTitle(meta);
+			}
 			const wasWorking = Boolean(meta.working);
 			if (
 				!packet.working &&
