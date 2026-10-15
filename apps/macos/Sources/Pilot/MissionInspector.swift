@@ -1,13 +1,12 @@
 import PilotCore
 import SwiftUI
 
-/// Inspector tab for a mission member chat: the mission at a glance, this chat's tasks, other open
-/// tasks and decisions. No cards: sections separated by whitespace, like the mission page.
+/// Inspector tab for a mission member chat: the mission's header, this chat's task and one summary line that opens
+/// the mission page. Everything else (other tasks, decisions, activity) lives on the page.
 struct MissionInspectorPane: View {
     let session: SessionSummary
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
-    @State private var decisionsExpanded = true
 
     var body: some View {
         Group {
@@ -26,11 +25,9 @@ struct MissionInspectorPane: View {
     private func content(_ mission: Mission, detail: MissionDetail?) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                header(mission, detail: detail)
+                header(mission)
                 if let detail {
-                    let ordered = MissionTaskOrdering.sorted(detail.tasks)
-                    let mine = ordered.filter { $0.sessionId == session.id }
-                    let others = ordered.filter { $0.sessionId != session.id && !$0.status.isClosed }
+                    let mine = MissionTaskOrdering.sorted(detail.tasks).filter { $0.sessionId == session.id }
                     VStack(alignment: .leading, spacing: 6) {
                         Text(mine.count > 1 ? "This chat's tasks" : "This chat's task")
                             .font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
@@ -42,59 +39,7 @@ struct MissionInspectorPane: View {
                             ownTask(task, mission: mission, detail: detail)
                         }
                     }
-                    if !others.isEmpty {
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text("Other open tasks").font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
-                                Text("\(others.count)").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
-                            }
-                            .accessibilityAddTraits(.isHeader)
-                            .padding(.bottom, 2)
-                            ForEach(others) { task in
-                                CompactTaskRow(task: task, showsOwner: true)
-                                    .padding(.horizontal, -8)
-                            }
-                        }
-                    }
-                    if !detail.decisions.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Button { decisionsExpanded.toggle() } label: {
-                                HStack(spacing: 6) {
-                                    DisclosureChevron(expanded: decisionsExpanded)
-                                        .frame(width: 10)
-                                    Text("Decisions").font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
-                                    Text("\(detail.decisions.count)").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityValue(decisionsExpanded ? "Expanded" : "Collapsed")
-                            if decisionsExpanded {
-                                ForEach(detail.decisions) { decision in
-                                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                                        Text("D\(decision.number)").font(.pilot(.small))
-                                            .foregroundStyle(Theme.faintForeground).monospacedDigit()
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(decision.text).font(.pilot(.label)).foregroundStyle(Theme.foreground)
-                                                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                                            DecisionAudienceTag(audience: decision.audience)
-                                            if let proposal = detail.decisionProposals?.first(where: { $0.decisionId == decision.id && $0.status == "pending" }) {
-                                                DecisionProposalView(proposal: proposal, oldText: decision.text)
-                                                    .id(proposal.id)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    HStack(spacing: 14) {
-                        Button { model.openMission(mission.id, tab: .brief) } label: { Label("Brief", icon: PilotIcon.document) }
-                        Button { model.openMission(mission.id, tab: .activity) } label: { Label("Activity", icon: PilotIcon.pending) }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.pilot(.caption))
-                    .foregroundStyle(Theme.mutedForeground)
+                    summary(mission, detail: detail)
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
@@ -103,17 +48,18 @@ struct MissionInspectorPane: View {
         }
     }
 
-    private func header(_ mission: Mission, detail: MissionDetail?) -> some View {
+    private func header(_ mission: Mission) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 PilotSymbol(PilotIcon.mission, context: .row).foregroundStyle(Theme.mutedForeground)
                 Text(mission.title).font(.pilot(.body, weight: .semibold)).foregroundStyle(Theme.foreground).lineLimit(2)
                 if mission.status != .active { MissionStatusChip(status: mission.status) }
                 Spacer(minLength: 6)
+                // A chevron: the page opens in this window. The arrow out is kept for the browser.
                 Button { model.openMission(mission.id) } label: {
                     HStack(spacing: 3) {
                         Text("Open")
-                        PilotSymbol(PilotIcon.openExternal)
+                        PilotSymbol(PilotIcon.disclosure)
                     }
                     .font(.pilot(.caption))
                     .foregroundStyle(Theme.mutedForeground)
@@ -135,10 +81,32 @@ struct MissionInspectorPane: View {
                     .lineLimit(3).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     .help(mission.goal)
             }
-            if let detail, !detail.tasks.isEmpty {
-                MissionTaskProgress(counts: MissionTaskCounts(detail.tasks), compact: true)
-            }
         }
+    }
+
+    /// "12 of 18 done · 3 working now · 2 need you", opening the mission's Overview.
+    private func summary(_ mission: Mission, detail: MissionDetail) -> some View {
+        let needs = model.needsYouCount(mission)
+        let counts = MissionTaskCounts(detail.tasks)
+        return Button { model.openMission(mission.id, tab: .overview) } label: {
+            HStack(spacing: 5) {
+                MissionTaskProgress(counts: counts, working: MissionTaskOrdering.inFlight(detail.tasks).count)
+                if needs > 0 {
+                    Text("·")
+                    Text(SidebarScopeCounts.needsYou(needs)).lineLimit(1).fixedSize()
+                }
+                PilotSymbol(PilotIcon.disclosure).foregroundStyle(Theme.faintForeground)
+                Spacer(minLength: 0)
+            }
+            .font(.pilot(.caption))
+            .foregroundStyle(Theme.mutedForeground)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Open the mission's Overview")
+        .accessibilityLabel([counts.summary, needs > 0 ? SidebarScopeCounts.needsYou(needs) : nil]
+            .compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint("Opens the mission's Overview")
     }
 
     private func ownTask(_ task: MissionTask, mission: Mission, detail: MissionDetail) -> some View {
@@ -155,7 +123,7 @@ struct MissionInspectorPane: View {
                 MissionTaskDelegationLabel(task: task, resources: resources)
                 if !resources.isEmpty {
                     ResponsiveControlsLayout(horizontalSpacing: 10, verticalSpacing: 4) {
-                        ForEach(resources) { MissionLinkChip(resource: $0, missionId: mission.id, compact: true) }
+                        ForEach(resources) { MissionLinkChip(resource: $0, missionId: mission.id) }
                     }
                 }
             }

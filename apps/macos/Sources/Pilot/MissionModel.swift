@@ -33,8 +33,8 @@ enum MissionSheet: Identifiable, Hashable {
     case add(sessionId: String)
     case edit(missionId: String)
     case startCoordinator(missionId: String)
-    /// "Start mission…" from a tracked ticket, prefilled and linked once created.
-    case tracked(TrackedMissionDraft)
+    /// "Start mission…" from a Linear issue or Slack message, prefilled and linked once created.
+    case fromSource(SourceMissionDraft)
 
     var id: String {
         switch self {
@@ -43,7 +43,7 @@ enum MissionSheet: Identifiable, Hashable {
         case let .add(sessionId): "add-\(sessionId)"
         case let .edit(missionId): "edit-\(missionId)"
         case let .startCoordinator(missionId): "start-coordinator-\(missionId)"
-        case let .tracked(draft): "tracked-\(draft.itemId)"
+        case let .fromSource(draft): "source-\(draft.itemId)"
         }
     }
 }

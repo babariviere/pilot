@@ -229,68 +229,48 @@ struct MissionStatusChip: View {
     }
 }
 
-/// Tasks by status as a split bar, with a legend that names each part.
+/// Tasks by status as a thin split bar beside the progress in words: "12 of 18 done", or with `working`,
+/// "12 of 18 done · 3 working now" (the Overview's meta line).
 struct MissionTaskProgress: View {
     let counts: MissionTaskCounts
-    var compact = false
+    var working = 0
 
     var body: some View {
-        if compact {
-            HStack(spacing: 8) {
-                SegmentedProgressBar(segments: counts.segments, height: 5)
-                Text(counts.total == 0 ? "No tasks" : "\(counts.done) of \(counts.total)")
-                    .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground).fixedSize()
+        HStack(spacing: 8) {
+            if counts.total > 0 {
+                SegmentedProgressBar(segments: counts.segments, height: 4).frame(width: 96)
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(counts.summary)
-        } else {
-            VStack(alignment: .leading, spacing: 8) {
-                SegmentedProgressBar(segments: counts.segments, height: 6)
-                legend
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(counts.summary)
+            Text(counts.progressLine(working: working))
+                .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
+                .lineLimit(1).fixedSize()
         }
-    }
-
-    private var legend: some View {
-        HStack(spacing: 12) {
-            Text(counts.total == 0 ? "No tasks yet" : "\(counts.done) of \(counts.total) done")
-                .font(.pilot(.label, weight: .medium)).monospacedDigit().foregroundStyle(Theme.foreground)
-            ForEach(MissionTaskCounts.barOrder.dropFirst(), id: \.self) { status in
-                if counts[status] > 0 {
-                    HStack(spacing: 4) {
-                        Circle().fill(status == .todo ? Theme.faintForeground : status.color).frame(width: 6, height: 6)
-                        Text("\(counts[status]) \(status.label.lowercased())")
-                    }
-                    .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
-                }
-            }
-        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(counts.summary)
     }
 }
 
 // MARK: Overview
 
+/// The goal, one meta line, then what needs the user, the tasks being worked on and the links. Phases live in Tasks
+/// and history in Activity.
 struct MissionOverviewTab: View {
     let mission: Mission
     let detail: MissionDetail
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
+    /// Rows a section shows before its "Show all" line, as on a project's Overview.
+    static let rowLimit = 5
+
     var body: some View {
         let counts = MissionTaskCounts(detail.tasks)
         let needs = model.needsYou(mission)
-        let inFlight = MissionTaskOrdering.groups(detail.tasks)
-            .filter { [.inProgress, .inReview, .blocked].contains($0.status) }
-            .flatMap(\.tasks)
-        let waiting = detail.tasks.filter { $0.status == .todo }.count
-        let delegated = MissionTaskOrdering.sorted(detail.tasks).filter { $0.status == .delegated }
+        let working = MissionTaskOrdering.inFlight(detail.tasks)
         let taskLinks = MissionTaskLinkIndex(detail)
         VStack(alignment: .leading, spacing: 28) {
-            summary(counts)
+            summary(counts, working: working.count)
             if drafting {
-                MissionDraftingBanner(mission: mission)
+                MissionDraftingEvent(mission: mission)
             } else if detail.tasks.isEmpty {
                 EmptyStateView(icon: PilotIcon.tasks, title: "Plan the work",
                                message: mission.coordinatorSessionId == nil
@@ -303,62 +283,29 @@ struct MissionOverviewTab: View {
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 6) {
-                PageSectionHeader(title: "Needs you", count: needs.count, countStyle: .attention)
-                if needs.isEmpty {
-                    HStack(spacing: 8) {
-                        PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success).frame(width: 16)
-                        Text("Nothing is waiting on you.").foregroundStyle(Theme.mutedForeground)
-                    }
-                    .font(.pilot(.body))
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                }
-                ForEach(Array(needs.enumerated()), id: \.element.id) { index, item in
-                    if index > 0 { HairlineDivider(leading: 34) }
-                    NeedsYouRow(item: item, mission: mission)
-                }
-            }
-            if !inFlight.isEmpty {
+            if !needs.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    PageSectionHeader(title: "In flight", count: inFlight.count, linkTitle: "All tasks") {
-                        model.missionTab = .tasks
-                    }
-                    ForEach(Array(inFlight.prefix(8).enumerated()), id: \.element.id) { index, task in
-                        if index > 0 { HairlineDivider(leading: 34) }
-                        CompactTaskRow(task: task, resources: taskLinks.resources(of: task.id))
-                    }
-                    if waiting > 0 || inFlight.count > 8 {
-                        Button(waitingText(waiting: waiting, hidden: max(0, inFlight.count - 8))) {
-                            model.missionTab = .tasks
-                        }
-                        .buttonStyle(.plain)
-                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
-                        .padding(.leading, 34)
+                    PageSectionHeader(title: "Needs you", count: needs.count, countStyle: .attention)
+                    ForEach(Array(needs.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 { HairlineDivider(leading: InboxRowLayout.dividerInset) }
+                        MissionNeedsYouRow(item: item)
                     }
                 }
             }
-            if !delegated.isEmpty {
+            if !working.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    PageSectionHeader(title: "Delegated", count: delegated.count, linkTitle: "All tasks") {
+                    PageSectionHeader(title: "Working now", count: working.count, linkTitle: "All tasks") {
                         model.missionTab = .tasks
                     }
-                    ForEach(Array(delegated.prefix(5).enumerated()), id: \.element.id) { index, task in
+                    ForEach(Array(working.prefix(Self.rowLimit).enumerated()), id: \.element.id) { index, task in
                         if index > 0 { HairlineDivider(leading: 34) }
                         CompactTaskRow(task: task, resources: taskLinks.resources(of: task.id))
                     }
-                    if delegated.count > 5 {
-                        Button("\(delegated.count - 5) more delegated") { model.missionTab = .tasks }
+                    if working.count > Self.rowLimit {
+                        Button("Show all \(working.count) working now") { model.missionTab = .tasks }
                             .buttonStyle(.plain)
                             .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
                             .padding(.leading, 34)
-                    }
-                }
-            }
-            if !detail.events.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    PageSectionHeader(title: "Recent activity", linkTitle: "All activity") { model.missionTab = .activity }
-                    ForEach(detail.events.prefix(3)) { event in
-                        MissionEventRow(event: event)
                     }
                 }
             }
@@ -372,16 +319,9 @@ struct MissionOverviewTab: View {
             && detail.tasks.isEmpty && mission.briefRevision == 0
     }
 
-    private func waitingText(waiting: Int, hidden: Int) -> String {
-        var parts: [String] = []
-        if hidden > 0 { parts.append("\(hidden) more in flight") }
-        if waiting > 0 { parts.append("\(waiting) to do") }
-        return parts.joined(separator: " · ")
-    }
-
     @ViewBuilder
-    private func summary(_ counts: MissionTaskCounts) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private func summary(_ counts: MissionTaskCounts, working: Int) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
             if mission.goal.isEmpty {
                 Button("Add a goal…") { model.missionSheet = .edit(missionId: mission.id) }
                     .buttonStyle(.plain)
@@ -395,8 +335,7 @@ struct MissionOverviewTab: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            MissionMetaLine(mission: mission, detail: detail)
-            if counts.total > 0 { MissionTaskProgress(counts: counts) }
+            MissionMetaLine(mission: mission, detail: detail, counts: counts, working: working)
             if counts.total > 0, counts.done == counts.total, mission.status == .active {
                 HStack(spacing: 8) {
                     Text("Every task is done.").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
@@ -408,80 +347,53 @@ struct MissionOverviewTab: View {
                     .controlSize(.small)
                 }
             }
-            let milestones = MissionMilestones.progress(detail.tasks)
-            if !milestones.isEmpty {
-                VStack(alignment: .leading, spacing: 7) {
-                    ForEach(milestones) { milestone in
-                        MissionMilestoneRow(milestone: milestone)
-                    }
-                }
-                .padding(.top, 2)
-            }
         }
     }
 }
 
-/// Coordinator, brief revision and decision count under the goal.
+/// One line under the goal: task progress with its thin bar, who coordinates and the brief revision.
 private struct MissionMetaLine: View {
     let mission: Mission
     let detail: MissionDetail
+    let counts: MissionTaskCounts
+    let working: Int
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
         HStack(spacing: 5) {
+            Button { model.missionTab = .tasks } label: { MissionTaskProgress(counts: counts, working: working) }
+                .buttonStyle(.plain)
+                .help("Open Tasks")
+            Text("·")
             if let coordinator = mission.coordinatorSessionId {
                 MissionCoordinatorIndicator()
-                Text("Coordinated by")
-                Button(client.session(coordinator)?.title ?? "a chat") { model.selectedSessionId = coordinator }
+                Button(client.session(coordinator)?.title ?? "Coordinator") { model.selectedSessionId = coordinator }
                     .buttonStyle(.plain)
-                    .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
                     .help("Open the coordinator chat")
+                    .accessibilityLabel("Coordinated by \(client.session(coordinator)?.title ?? "a chat")")
             } else {
                 Text("You coordinate")
                 if mission.status == .active {
                     Text("·")
                     Button("Start a coordinator…") { model.missionSheet = .startCoordinator(missionId: mission.id) }
                         .buttonStyle(.plain)
-                        .foregroundStyle(Theme.foreground)
                 }
             }
             Text("·")
             Button(detail.brief.map { "Brief revision \($0.revision)" } ?? "No brief yet") { model.missionTab = .brief }
                 .buttonStyle(.plain)
-            if !detail.decisions.isEmpty {
-                Text("·")
-                Text("\(detail.decisions.count) decision\(detail.decisions.count == 1 ? "" : "s")")
-            }
+                .lineLimit(1)
         }
         .font(.pilot(.caption))
         .foregroundStyle(Theme.mutedForeground)
     }
 }
 
-private struct MissionMilestoneRow: View {
-    let milestone: MissionMilestoneProgress
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text(milestone.name ?? "No phase")
-                .font(.pilot(.label))
-                .foregroundStyle(milestone.name == nil ? Theme.mutedForeground : Theme.foreground)
-                .lineLimit(1)
-                .frame(width: 150, alignment: .leading)
-            SegmentedProgressBar(segments: milestone.counts.segments, height: 5)
-            Text("\(milestone.counts.done)/\(milestone.counts.total)")
-                .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
-                .frame(width: 36, alignment: .trailing)
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(milestone.name ?? "No phase"): \(milestone.counts.summary)")
-    }
-}
-
-/// Shown on Overview while a new coordinator drafts the goal, brief and tasks.
-struct MissionDraftingBanner: View {
+/// While a new coordinator drafts the goal, brief and tasks: one line with the working ripple, like a chat's
+/// automatic events, and a quiet link to its chat.
+struct MissionDraftingEvent: View {
     let mission: Mission
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
@@ -489,66 +401,54 @@ struct MissionDraftingBanner: View {
     var body: some View {
         let coordinator = mission.coordinatorSessionId.flatMap { client.session($0) }
         let working = coordinator?.isWorking ?? false
-        HStack(spacing: 10) {
-            if let coordinator { SessionStatusIcon(status: coordinator.status) }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(working ? "The coordinator is drafting the goal, brief and tasks"
-                             : "Waiting for the coordinator to draft the goal, brief and tasks")
-                    .font(.pilot(.body))
-                    .foregroundStyle(Theme.foreground)
-                Text(working ? "They appear here as the coordinator saves them."
-                             : "Open its chat to answer questions or tell it what to plan.")
-                    .font(.pilot(.caption))
-                    .foregroundStyle(Theme.mutedForeground)
+        HStack(spacing: 7) {
+            if working {
+                DitherRipple(background: coordinator?.isWaitingOnJobs == true, markSize: 12)
+            } else {
+                PilotSymbol(PilotIcon.coordinator).foregroundStyle(Theme.faintForeground).accessibilityHidden(true)
             }
-            Spacer(minLength: 8)
+            Text(working ? "The coordinator is drafting the goal, brief and tasks"
+                         : "Waiting for the coordinator to draft the goal, brief and tasks")
+                .foregroundStyle(Theme.mutedForeground)
+                .lineLimit(1)
+                .layoutPriority(1)
             if let id = coordinator?.id {
-                Button("Open Chat") { model.selectedSessionId = id }
+                Button("Open chat") { model.selectedSessionId = id }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.info)
+                    .fixedSize()
             }
+            Spacer(minLength: 0)
         }
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.card).fill(Theme.muted))
+        .font(.pilot(.label))
+        .help(working ? "They appear here as the coordinator saves them."
+                      : "Open its chat to answer questions or tell it what to plan.")
         .accessibilityElement(children: .combine)
     }
 }
 
-private struct NeedsYouRow: View {
+/// A mission's Needs you item in the shared `NeedsYouRow`: an unread or failed chat reads like its sidebar row; a
+/// blocked task, comment or proposed decision change shows its reason. The corner carries the state.
+private struct MissionNeedsYouRow: View {
     let item: MissionNeedsYouItem
-    let mission: Mission
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Button(action: open) {
-            HoverRow(verticalPadding: 7) { hovered in
-                HStack(spacing: 10) {
-                    icon.frame(width: 16)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
-                        Text(subtitle).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(2)
-                    }
-                    Spacer(minLength: 8)
-                    Text(action).font(.pilot(.label, weight: .medium))
-                        .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)
-                    PilotSymbol(PilotIcon.disclosure, context: .disclosure)
-                        .foregroundStyle(Theme.faintForeground)
-                }
-            }
-        }
-        .rowButtonStyle()
-        .help(subtitle)
-        .accessibilityLabel("\(title). \(subtitle)")
-        .accessibilityHint(action)
+        let reason = item.needsYouLabel()
+        let detail = InboxRowDetail(session: session, reason: reason)
+        NeedsYouRow(title: title, action: action, help: reason, accessibilityDetail: detail.accessibilityText,
+                    open: open) { detail }
+            .inboxCorner(signal)
     }
 
-    @ViewBuilder private var icon: some View {
-        switch item {
-        case let .chat(session):
-            if session.isActiveMissionCoordinator { MissionCoordinatorIndicator() }
-            else { SessionStatusIcon(status: session.attentionReason != nil ? .question : session.status) }
-        case .blockedTask: PilotSymbol(MissionTaskStatus.blocked.icon).foregroundStyle(MissionTaskStatus.blocked.color)
-        case .comment: PilotSymbol(PilotIcon.update).foregroundStyle(Theme.info)
-        case .decisionProposal: PilotSymbol(PilotIcon.draft).foregroundStyle(Theme.blocked)
-        }
+    private var session: SessionSummary? {
+        if case let .chat(session) = item { return model.client.session(session.id) ?? session }
+        return nil
+    }
+
+    private var signal: SessionSignal {
+        guard let session else { return .needsYou }
+        return session.signal(unread: model.isUnread(session)) ?? .needsYou
     }
 
     private var title: String {
@@ -558,10 +458,6 @@ private struct NeedsYouRow: View {
         case let .comment(comment): comment.text
         case let .decisionProposal(_, number): "Decision D\(number): proposed change"
         }
-    }
-
-    private var subtitle: String {
-        item.needsYouLabel()
     }
 
     private var action: String {
@@ -576,7 +472,7 @@ private struct NeedsYouRow: View {
     private func open() {
         switch item {
         case let .chat(session): model.selectedSessionId = session.id
-        case .blockedTask: model.missionTab = .tasks
+        case let .blockedTask(task): model.showMissionTask(task.id)
         case .comment, .decisionProposal: model.missionTab = .brief
         }
     }
@@ -619,30 +515,6 @@ struct CompactTaskRow: View {
     }
 }
 
-struct MissionEventRow: View {
-    let event: MissionEvent
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject private var client = AppModel.shared.client
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            PilotSymbol(event.kind.icon).foregroundStyle(Theme.mutedForeground).frame(width: 16)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(event.text).font(.pilot(.body)).foregroundStyle(Theme.foreground)
-                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                MissionEventByline(event: event)
-            }
-            Spacer(minLength: 8)
-            TimelineView(.periodic(from: .now, by: 60)) { context in
-                Text(missionRelativeTime(event.at, now: context.date))
-                    .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
-            }
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-    }
-}
-
 /// Author chat (a link) and health of an activity entry.
 struct MissionEventByline: View {
     let event: MissionEvent
@@ -676,47 +548,24 @@ struct MissionEventByline: View {
 
 // MARK: Links
 
-/// Mission or task links as wrapping chips, with an "Add link" popover at the end.
-struct MissionLinkList: View {
-    let missionId: String
-    let resources: [MissionResource]
-    var taskId: String? = nil
-    var compact = false
-
-    var body: some View {
-        ResponsiveControlsLayout(horizontalSpacing: 6, verticalSpacing: 6) {
-            ForEach(resources) { resource in
-                MissionLinkChip(resource: resource, missionId: missionId, compact: compact)
-            }
-            MissionAddLinkButton(missionId: missionId, taskId: taskId, compact: compact)
-        }
-    }
-}
-
-/// One link: service icon (with PR state), title and a muted detail. Context menu copies or removes it.
+/// A mission or task link as an inline chip: service mark, then the PR number with its readiness or the link's
+/// title, in muted caption text. The one chip style for links inside task rows and the chat inspector; the
+/// Overview lists links as rows (`MissionLinksSection`). The context menu copies or removes it.
 struct MissionLinkChip: View {
     let resource: MissionResource
     let missionId: String
-    var compact = false
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
 
     var body: some View {
         let pr = resource.pullRequest ?? client.sessions.flatMap(\.linkedPullRequests).first { $0.url == resource.url }
         let label = HStack(spacing: 5) {
-            MissionLinkIcon(kind: resource.kind, pullRequestState: pr?.state, size: compact ? 10 : 11)
-            Text(compact ? (pr?.label ?? resource.badgeTitle) : resource.displayTitle)
-                .foregroundStyle(compact ? Theme.mutedForeground : Theme.foreground)
-                .lineLimit(1)
-            if let detail = detail(pr) {
-                Text(detail).foregroundStyle(Theme.mutedForeground).lineLimit(1)
-            }
+            MissionLinkIcon(kind: resource.kind, pullRequestState: pr?.state, size: 10)
+            Text(title(pr)).lineLimit(1)
         }
-        .font(.pilot(compact ? .caption : .label))
-        .padding(.horizontal, compact ? 0 : 8)
-        .padding(.vertical, compact ? 0 : 4)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.control).fill(compact ? Color.clear : Theme.muted))
-        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.control))
+        .font(.pilot(.caption))
+        .foregroundStyle(Theme.mutedForeground)
+        .contentShape(Rectangle())
         Group {
             if let url = URL(string: resource.url), url.scheme != nil {
                 Link(destination: url) { label }.buttonStyle(.plain)
@@ -731,26 +580,21 @@ struct MissionLinkChip: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(resource.url, forType: .string)
             }
-            Button("Remove Link", role: .destructive) {
-                model.missionAction { [client] in
-                    try await client.deleteMissionResource(missionId, resourceId: resource.id)
-                }
-            }
+            Button("Remove Link", role: .destructive, action: remove)
         }
-        .accessibilityAction(named: "Remove link") {
-            model.missionAction { [client] in try await client.deleteMissionResource(missionId, resourceId: resource.id) }
-        }
+        .accessibilityAction(named: "Remove link", remove)
     }
 
-    private func detail(_ pr: SessionPullRequest?) -> String? {
-        if let pr { return [compact ? nil : pr.state.label, pr.stack?.label].compactMap { $0 }.joined(separator: " · ") }
-        if compact { return nil }
-        switch resource.kind {
-        case .linearProject: return "Linear project"
-        case .linearIssue: return "Linear"
-        case .githubIssue: return "Issue"
-        case .slackThread: return "Slack"
-        case .githubPullRequest, .url: return nil
+    /// "Ready to merge #412 · Stack 2/3", "Merged #398" or the link's title.
+    private func title(_ pr: SessionPullRequest?) -> String {
+        guard let pr else { return resource.badgeTitle }
+        let state = pr.state == .open || pr.state == .draft ? PullRequestReadinessStyle(pr).label : pr.state.compactLabel
+        return (["\(state) #\(pr.number)", pr.stack?.label].compactMap { $0 }).joined(separator: " · ")
+    }
+
+    private func remove() {
+        model.missionAction { [client, missionId, id = resource.id] in
+            try await client.deleteMissionResource(missionId, resourceId: id)
         }
     }
 }
@@ -759,19 +603,16 @@ struct MissionLinkChip: View {
 struct MissionAddLinkButton: View {
     let missionId: String
     var taskId: String? = nil
-    var compact = false
     @State private var presented = false
 
     var body: some View {
         Button { presented = true } label: {
-            HStack(spacing: 4) {
-                PilotSymbol(PilotIcon.add, context: .toolbar)
+            HStack(spacing: 3) {
+                PilotSymbol(PilotIcon.add)
                 Text("Add link")
             }
-            .font(.pilot(compact ? .caption : .label))
+            .font(.pilot(.caption))
             .foregroundStyle(Theme.mutedForeground)
-            .padding(.horizontal, compact ? 0 : 6)
-            .padding(.vertical, compact ? 0 : 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -823,3 +664,4 @@ struct MissionAddLinkForm: View {
         }
     }
 }
+

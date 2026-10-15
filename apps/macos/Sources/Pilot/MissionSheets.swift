@@ -22,7 +22,7 @@ struct MissionSheetView: View {
     var body: some View {
         switch sheet {
         case let .create(projectId): CreateMissionSheet(projectId: projectId, sourceSessionId: nil)
-        case let .tracked(draft): CreateMissionSheet(projectId: draft.projectId, sourceSessionId: nil, tracked: draft)
+        case let .fromSource(draft): CreateMissionSheet(projectId: draft.projectId, sourceSessionId: nil, prefill: draft)
         case let .make(sessionId): CreateMissionSheet(projectId: nil, sourceSessionId: sessionId)
         case let .add(sessionId): AddToMissionSheet(sessionId: sessionId)
         case let .edit(missionId): EditMissionSheet(missionId: missionId)
@@ -35,8 +35,8 @@ struct MissionSheetView: View {
 struct CreateMissionSheet: View {
     let projectId: String?
     let sourceSessionId: String?
-    /// Prefill from a tracked ticket. The project is fixed and the mission is linked to the ticket once created.
-    var tracked: TrackedMissionDraft? = nil
+    /// Prefill from a Linear issue or Slack message. The project is fixed and the mission is linked to it once created.
+    var prefill: SourceMissionDraft? = nil
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @State private var form = MissionForm()
@@ -50,7 +50,7 @@ struct CreateMissionSheet: View {
                       width: 500, accessory: {
             if source == nil {
                 projectMenu
-                    .disabled(tracked != nil)
+                    .disabled(prefill != nil)
             } else if let name = client.project(source?.projectId)?.name {
                 Label(name, icon: PilotIcon.project).font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
             }
@@ -59,8 +59,8 @@ struct CreateMissionSheet: View {
                 Text("“\(source.title)” joins the mission. Missions group chats of one project around a shared goal, brief and tasks.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
             }
-            if let tracked {
-                Label("Prefilled from \(tracked.label). Its text is quoted as external content, and the mission is linked to it once created. Pilot never changes the ticket.",
+            if let prefill {
+                Label("Prefilled from \(prefill.label). Its text is quoted as external content, and the mission is linked to it once created. Pilot never changes the ticket.",
                       icon: PilotIcon.link)
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
             }
@@ -136,11 +136,11 @@ struct CreateMissionSheet: View {
         if let source {
             form.title = source.title
             form.projectId = source.projectId
-        } else if let tracked {
-            form.projectId = tracked.projectId
-            form.title = tracked.title
-            form.goal = tracked.goal
-            form.chat.message = tracked.message
+        } else if let prefill {
+            form.projectId = prefill.projectId
+            form.title = prefill.title
+            form.goal = prefill.goal
+            form.chat.message = prefill.message
         } else {
             form.projectId = projectId ?? model.selectedSession?.projectId ?? model.draftProjectId ?? client.projects.first?.id
         }
@@ -166,8 +166,8 @@ struct CreateMissionSheet: View {
             defer { form.saving = false }
             do {
                 let detail = try await client.createMission(request)
-                if let tracked {
-                    await model.bindTrackedItem(tracked.itemId, label: tracked.label, missionId: detail.mission.id)
+                if let prefill {
+                    await model.bindTrackedItem(prefill.itemId, label: prefill.label, missionId: detail.mission.id)
                 }
                 dismiss()
                 // Make a mission keeps the chat in view; it is drafting there.

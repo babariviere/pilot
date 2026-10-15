@@ -26,6 +26,22 @@ public struct MissionLink: Identifiable, Equatable, Sendable {
     public var url: String { resource.url }
     public var kind: MissionResourceKind { resource.kind }
     public var isDraft: Bool { pullRequest?.state == .draft }
+    /// An open pull request GitHub reports no blockers for. Pilot never merges it.
+    public var isReadyToMerge: Bool { pullRequest?.state == .open && pullRequest?.readiness?.state == .ready }
+    /// A row's title: the saved or derived title, else the chip text.
+    public var rowTitle: String { title.isEmpty ? chipTitle : title }
+    /// Where the link points, for a row's second line: "#412", "ENG-123", "Linear project", "Issue #31",
+    /// "Slack thread" or the host of a plain URL.
+    public var reference: String {
+        switch kind {
+        case .githubPullRequest: identifier == "PR" ? "Pull request" : identifier
+        case .linearIssue: identifier
+        case .linearProject: "Linear project"
+        case .githubIssue: identifier == "Issue" ? "Issue" : "Issue \(identifier)"
+        case .slackThread: "Slack thread"
+        case .url: URL(string: url)?.host ?? "Link"
+        }
+    }
 }
 
 public struct MissionLinkGroups: Equatable, Sendable {
@@ -44,6 +60,12 @@ public struct MissionLinkGroups: Equatable, Sendable {
     /// Pull requests shown by default: open plus merged.
     public var pullRequestCount: Int { open.count + merged.count }
     public var hasPullRequests: Bool { pullRequestCount + closed.count > 0 }
+
+    /// The Overview's one Links list: open pull requests (ready to merge first), Linear, other links, then merged
+    /// pull requests. Closed ones follow only under "Show all" (`closed`).
+    public var listed: [MissionLink] {
+        open.filter(\.isReadyToMerge) + open.filter { !$0.isReadyToMerge } + linear + other + merged
+    }
 
     public init(_ input: MissionLinksInput) {
         var order: [String] = []

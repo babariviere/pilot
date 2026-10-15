@@ -991,19 +991,17 @@ enum Snapshot {
         model.missionTab = .overview
         await render(MissionPage(missionId: "ml"), size: CGSize(width: 1000, height: 1500),
                      to: directory.appending(path: "mission-links-overview.png"))
-        func section(_ detail: MissionDetail, width: CGFloat = 720, _ disclosure: MissionLinksDisclosure = MissionLinksDisclosure()) -> some View {
-            MissionLinksSection(mission: detail.mission, detail: detail, disclosure: disclosure)
+        func section(_ detail: MissionDetail, width: CGFloat = 720, expanded: Bool = false) -> some View {
+            MissionLinksSection(mission: detail.mission, detail: detail, expanded: expanded)
                 .padding(24).frame(width: width, alignment: .leading).frame(maxHeight: .infinity, alignment: .top)
                 .background(Theme.background)
         }
-        await render(section(full), size: CGSize(width: 720, height: 980), to: directory.appending(path: "mission-links-default.png"))
-        await render(section(full, MissionLinksDisclosure(expanded: [.linear, .open, .merged, .closed], showClosed: true, otherExpanded: true)),
-                     size: CGSize(width: 720, height: 1700), to: directory.appending(path: "mission-links-expanded.png"))
-        await render(section(full, MissionLinksDisclosure(otherExpanded: false)), size: CGSize(width: 720, height: 900),
-                     to: directory.appending(path: "mission-links-other-collapsed.png"))
+        await render(section(full), size: CGSize(width: 720, height: 520), to: directory.appending(path: "mission-links-default.png"))
+        await render(section(full, expanded: true),
+                     size: CGSize(width: 720, height: 2400), to: directory.appending(path: "mission-links-expanded.png"))
         await render(section(details[2]), size: CGSize(width: 720, height: 380), to: directory.appending(path: "mission-links-few.png"))
         await render(section(details[1]), size: CGSize(width: 720, height: 160), to: directory.appending(path: "mission-links-empty.png"))
-        await render(section(full, width: 440), size: CGSize(width: 440, height: 980), to: directory.appending(path: "mission-links-narrow.png"))
+        await render(section(full, width: 440), size: CGSize(width: 440, height: 520), to: directory.appending(path: "mission-links-narrow.png"))
     }
 
     /// Tracked items inbox, its states, the ticket-prefilled composer and mission sheet, and Tracking settings.
@@ -1266,7 +1264,7 @@ enum Snapshot {
         await render(TaskComposer(form: model.newSessionForm, client: model.client).padding(24),
                      size: CGSize(width: 700, height: 420), to: directory.appending(path: "tracked-start-chat.png"))
         await render(CreateMissionSheet(projectId: "p1", sourceSessionId: nil,
-                                        tracked: TrackedItemText.missionDraft(items[1], prefill: prefill)),
+                                        prefill: TrackedItemText.missionDraft(items[1], prefill: prefill)),
                      size: CGSize(width: 500, height: 640), to: directory.appending(path: "tracked-start-mission.png"))
         print("snapshots written to \(directory.path)")
         exit(0)

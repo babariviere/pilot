@@ -164,3 +164,32 @@ private func groups(_ resources: [MissionResource], tasks: [String: Int] = [:],
     #expect(result.merged.count == 356)
     #expect(result.merged.first?.pullRequest?.number == 400)
 }
+
+@Test func oneListLeadsWithOpenPullRequestsAndKeepsClosedOnesBack() {
+    let ready = SessionPullRequest(number: 7, url: "https://github.com/o/r/pull/7", title: "Ready one", state: .open,
+                                   checkedAt: 10, readiness: PullRequestReadiness(state: .ready, reasons: [], checkedAt: 10))
+    let result = groups([
+        resource("l1", "https://linear.app/a/issue/ENG-1/x", .linearIssue, externalId: "ENG-1"),
+        prResource("p9", 9, .open),
+        resource("p7", ready.url, .githubPullRequest, externalId: "o/r#7", pr: ready),
+        prResource("p3", 3, .merged, merged: 5),
+        prResource("p4", 4, .closed),
+        resource("s1", "https://acme.slack.com/archives/C1/p1111111111111111", .slackThread),
+    ])
+    #expect(result.listed.map(\.id) == ["p7", "p9", "l1", "s1", "p3"], "ready to merge first, merged last")
+    #expect(result.closed.map(\.id) == ["p4"])
+    let byId = Dictionary(uniqueKeysWithValues: (result.listed + result.closed).map { ($0.id, $0) })
+    #expect(byId["p7"]?.isReadyToMerge == true)
+    #expect(byId["p9"]?.isReadyToMerge == false)
+    #expect(byId["p7"]?.reference == "#7")
+    #expect(byId["l1"]?.reference == "ENG-1")
+    #expect(byId["s1"]?.reference == "Slack thread")
+    #expect(byId["s1"]?.rowTitle == "Slack thread", "untitled links fall back to their chip text")
+}
+
+@Test func readinessReasonsReadAsShortPhrases() {
+    #expect(PullRequestReadinessReason(code: "failing_checks", names: ["build", "lint"]).label == "Failing checks: build, lint")
+    #expect(PullRequestReadinessReason(code: "failing_checks").label == "Failing checks")
+    #expect(PullRequestReadinessReason(code: "unresolved_comments", count: 2).label == "2 unresolved review comments")
+    #expect(PullRequestReadinessReason(code: "something_new").label == "something new")
+}
