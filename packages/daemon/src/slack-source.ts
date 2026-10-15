@@ -204,7 +204,11 @@ export function createSlackPoller(
 					message.replies = thread.messages[0]!.replies;
 					classifierContext ??= {
 						labels: context.config.slackLabels ?? [],
-						corrections: await store.corrections(context.project.id),
+						corrections: (await store.corrections(context.project.id)).slice(0, 5),
+						guide:
+							"triageInput" in store
+								? (await (store as TrackedItemStore).triageInput(context.project.id, "slack")).guide.text
+								: "",
 					};
 					classify ??= models.prepareSlackClassifier
 						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)

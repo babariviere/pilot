@@ -342,6 +342,14 @@ export function createDaemonServer(
 		if (parts[1] === "sources" || parts[1] === "tracked-items" || parts[1] === "tracking") {
 			if (!tracking) throw new ServiceUnavailable("Tracking is unavailable");
 			if (parts[1] === "tracking") {
+				if (parts.length === 4 && (parts[2] === "slack" || parts[2] === "linear") && parts[3] === "guide") {
+					const projectId = url.searchParams.get("projectId") ?? "";
+					projects.require(projectId);
+					if (req.method === "GET")
+						return json(res, 200, (await tracking.items.triageInput(projectId, parts[2])).guide);
+					if (req.method === "POST" && tracking.triage)
+						return json(res, 202, await tracking.triage.rebuild(projectId, parts[2]));
+				}
 				if (parts.length === 4 && parts[2] === "slack" && parts[3] === "corrections" && req.method === "GET") {
 					const projectId = url.searchParams.get("projectId");
 					if (!projectId) throw new HttpError(400, "projectId is required");

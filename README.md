@@ -366,6 +366,11 @@ Confirming Start chat or Start mission moves an eligible Linear ticket to that s
 reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
 counts an existing reaction as success, and is never removed automatically. Failures never block the
 work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
+Triage keeps up to 500 corrections per project across sources. A debounced, tool-free worker folds three new
+corrections (or a day with new corrections) into a short read-only guide. Classifiers use that guide and five
+recent examples. Guides contain rules and summaries, not Slack excerpts. Tracking guide APIs support reading
+and queuing a rebuild; the settings guide display is a separate UI follow-up.
+
 Pilot stores a classifier summary for each Slack message, not its text; the triage inspector reads and quotes the
 message from Slack when you select it, without saving it.
 Project labels can do nothing, hide messages from the Inbox, or close them locally. Close labels never replace a

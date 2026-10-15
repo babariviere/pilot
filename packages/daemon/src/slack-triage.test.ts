@@ -67,9 +67,9 @@ test("corrections are bounded, newest first, project-local, and ignore no-op rec
 	try {
 		disk.commit("p", "slack", [input]);
 		const id = disk.list({ projectId: "p" }).items[0]!.id;
-		for (let i = 0; i < 25; i++) disk.patch(id, { slack: { type: i % 2 ? "bug" : "question" } });
+		for (let i = 0; i < 505; i++) disk.patch(id, { slack: { type: i % 2 ? "bug" : "question" } });
 		const corrections = disk.corrections("p");
-		assert.equal(corrections.length, 20);
+		assert.equal(corrections.length, 500);
 		assert.equal(corrections[0]!.values.type, "question");
 		assert.equal(corrections.at(-1)!.values.type, "bug");
 		assert.equal(corrections[0]!.summary, input.title);

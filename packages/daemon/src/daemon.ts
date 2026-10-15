@@ -26,6 +26,7 @@ import { SystemEventsDetection } from "./system-events-detection.ts";
 import { TerminalManager } from "./terminals.ts";
 import { TrackedItemStore } from "./tracked-items.ts";
 import { untrackedStats } from "./untracked-stats.ts";
+import { TriageGroomer, workerTriage } from "./triage-grooming.ts";
 
 const config = loadConfig();
 const capabilities = await detectPlatformCapabilities();
@@ -39,6 +40,7 @@ const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlit
 await trackedItems.load(projects.list().map((project) => project.id));
 const sourceMcp = new PiSourceMcpClient(config.agentDir);
 const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
+tracking.triage = new TriageGroomer(projects, trackedItems, workerTriage(config.agentDir));
 // Shared MCP status for Settings and Needs you. Checks once now, then only when pi's MCP files change.
 const mcpStatus = new McpStatusService({
 	probe: workerProbe(config.agentDir),
@@ -171,6 +173,7 @@ async function stop(): Promise<void> {
 	await mcpStatus.close();
 	await missionLinear.stop();
 	await tracking.stop();
+	await tracking.triage?.stop();
 	await memory.stop();
 	await missionService.notices.stop();
 	await missionService.compaction.stop();

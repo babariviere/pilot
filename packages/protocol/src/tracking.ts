@@ -37,7 +37,20 @@ export interface SlackTriage {
 	/** Why a linked work result marked this message Done. Cleared by an explicit user status. */
 	doneReason?: string;
 }
-/** GET /api/tracking/slack/corrections?projectId=... (newest first, at most 20). */
+/** GET /api/tracking/:kind/guide?projectId=...; POST rebuilds. Untrusted, read-only rules. */
+export interface TriageGuide {
+	kind: TrackedKind;
+	text: string;
+	updatedAt: number;
+	throughSeq: number;
+}
+export interface TriageCorrection {
+	itemId: string;
+	summary: string;
+	correctedAt: number;
+	values: Record<string, TrackingJson | undefined>;
+}
+/** GET /api/tracking/slack/corrections?projectId=... (newest first, at most 500). */
 export interface SlackCorrection {
 	itemId: string;
 	summary: string;
