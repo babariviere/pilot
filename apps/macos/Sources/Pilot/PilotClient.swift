@@ -53,6 +53,11 @@ final class PilotClient: ObservableObject {
     var workingCount: Int { activeSessions.filter(\.isWorking).count }
 
     private var baseURL: URL?
+    private(set) var hostIdentity: HostRef?
+    func bind(_ host: HostRef) throws {
+        guard hostIdentity == nil || hostIdentity == host else { throw HostRoutingError.identityChanged }
+        hostIdentity = host
+    }
     private(set) var connectionGeneration = UUID()
     private var disconnected = false
     private let artifactSession: URLSession

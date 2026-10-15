@@ -11,7 +11,7 @@ public struct HostRef: Codable, Hashable, Sendable {
     }
 
     public func validate(_ hello: DaemonHello) throws {
-        guard hello.isProtocolCompatible else { throw HostRoutingError.incompatible }
+        guard hello.isProtocolCompatible, hello.capabilities.independentExecution else { throw HostRoutingError.incompatible }
         guard hello.daemonId == daemonId, hello.lineageId == lineageId else {
             throw HostRoutingError.identityChanged
         }
@@ -116,4 +116,3 @@ public struct HostedArtifactReference: Codable, Hashable, Sendable {
     public let artifact: ArtifactReference
     public init(host: HostRef, artifact: ArtifactReference) { self.host = host; self.artifact = artifact }
 }
-
