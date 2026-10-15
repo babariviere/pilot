@@ -72,9 +72,9 @@ struct LinkedMessageText: View {
             .environment(\.messageTextSelection, state.selection)
             .task(id: text) {
                 guard state.source != text else { return }
+                state.selection.source = text
                 let prepared = await MarkdownRenderer.shared.preparePlainText(text)
                 guard !Task.isCancelled else { return }
-                state.selection.source = text
                 state.text = prepared
                 state.source = text
             }
