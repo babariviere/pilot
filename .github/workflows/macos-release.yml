@@ -227,10 +227,22 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  release:
+  linux-release:
     needs: [node, node-macos, swift-test, app-bundle, release-please]
-    # always() permits an explicit retry when release-please is intentionally skipped.
     if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
+    uses: ./.github/workflows/linux-package.yml
+    permissions:
+      contents: write
+    with:
+      ref: ${{ inputs.release_tag || needs.release-please.outputs.tag_name }}
+      publish: true
+    secrets:
+      LINUX_RUNTIME_PRIVATE_KEY: ${{ secrets.LINUX_RUNTIME_PRIVATE_KEY }}
+
+  release:
+    needs: [node, node-macos, swift-test, app-bundle, release-please, linux-release]
+    # always() permits an explicit retry when release-please is intentionally skipped.
+    if: always() && needs.node.result == 'success' && needs.node-macos.result == 'success' && needs.swift-test.result == 'success' && needs.app-bundle.result == 'success' && needs.linux-release.result == 'success' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && github.event.repository.fork == false && ((needs.release-please.result == 'success' && needs.release-please.outputs.release_created == 'true') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != ''))
     runs-on: macos-15
     timeout-minutes: 45
     # Serialize stable publishing. Semantic-version ordering protects latest.
@@ -297,6 +309,7 @@ jobs:
         env:
           BUNDLE_RUNTIME: '1'
           SPARKLE_PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_KEY }}
+          LINUX_RUNTIME_PUBLIC_KEY: ${{ vars.LINUX_RUNTIME_PUBLIC_KEY }}
         run: apps/macos/scripts/bundle.sh
       - name: Sign and publish stable release (update ZIP and appcast)
         env:

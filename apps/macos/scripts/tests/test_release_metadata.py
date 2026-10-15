@@ -49,6 +49,14 @@ class ReleaseMetadataTests(unittest.TestCase):
         write_plist(self.source, self.output, "/checkout", env={})
         self.assertEqual(plistlib.loads(self.output.read_bytes())["PilotRepoPath"], "/checkout")
 
+    def test_linux_runtime_key_is_pinned_and_validated(self):
+        self.env["LINUX_RUNTIME_PUBLIC_KEY"] = base64.b64encode(bytes(range(32))).decode()
+        write_plist(self.source, self.output, "/checkout", True, self.env)
+        self.assertEqual(plistlib.loads(self.output.read_bytes())["PilotLinuxRuntimePublicKey"], self.env["LINUX_RUNTIME_PUBLIC_KEY"])
+        self.env["LINUX_RUNTIME_PUBLIC_KEY"] = base64.b64encode(b"short").decode()
+        with self.assertRaises(ValueError):
+            write_plist(self.source, self.output, "/checkout", True, self.env)
+
     def test_bundle_uses_package_version_without_changing_sparkle_build_version(self):
         write_plist(self.source, self.output, "/checkout", True, self.env, app_version="1.2.3")
         info = plistlib.loads(self.output.read_bytes())
