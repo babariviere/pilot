@@ -136,7 +136,7 @@ final class GuardianConnection {
     private let input = Pipe()
     private let output = Pipe()
     private let lock = NSLock()
-    private var buffer = Data()
+    private lazy var replies = PowerReplyReader(input: output.fileHandleForReading)
     init?(onExit: @escaping () -> Void) {
         process.terminationHandler = { _ in DispatchQueue.main.async(execute: onExit) }
         process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
@@ -145,7 +145,7 @@ final class GuardianConnection {
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
-        guard readReply() else { try? input.fileHandleForWriting.close(); return nil }
+        guard replies.readReply() else { try? input.fileHandleForWriting.close(); return nil }
     }
     func send(_ value: [String: Any]) {
         guard var data = try? JSONSerialization.data(withJSONObject: value) else { return }
@@ -154,18 +154,7 @@ final class GuardianConnection {
         try? input.fileHandleForWriting.write(contentsOf: data)
     }
     /// Only the serial work queue reads replies; heartbeats are write-only and may arrive during a command.
-    func setEnabled(_ on: Bool) -> Bool { send(["on": on]); return readReply() }
-    private func readReply() -> Bool {
-        while !buffer.contains(10) {
-            guard let data = try? output.fileHandleForReading.read(upToCount: 4096), !data.isEmpty else { return false }
-            buffer.append(data)
-            if buffer.count > 8192 { return false }
-        }
-        let newline = buffer.firstIndex(of: 10)!
-        let line = buffer.prefix(upTo: newline)
-        buffer.removeSubrange(...newline)
-        return (try? JSONSerialization.jsonObject(with: line) as? [String: Any])?["ok"] as? Bool == true
-    }
+    func setEnabled(_ on: Bool) -> Bool { send(["on": on]); return replies.readReply() }
     func close() { try? input.fileHandleForWriting.close() }
     deinit { close() }
 }
