@@ -13,12 +13,23 @@ public struct SlackCommonCase: Codable, Identifiable, Equatable, Sendable {
     public let lastSeen: Double
     public enum Trend: String, Codable, Sendable { case rising, steady, fading }
     public let trend: Trend
+
+    public init(id: String, name: String, description: String, count: Int, severityMix: [String: Int] = [:],
+                label: String? = nil, firstSeen: Double, lastSeen: Double, trend: Trend = .steady) {
+        self.id = id; self.name = name; self.description = description; self.count = count
+        self.severityMix = severityMix; self.label = label; self.firstSeen = firstSeen; self.lastSeen = lastSeen
+        self.trend = trend
+    }
 }
 public struct SlackCommonCaseList: Codable, Equatable, Sendable {
     public let cases: [SlackCommonCase]
     public let windowDays: Int
     public let windowLimit: Int
     public let truncated: Bool
+
+    public init(cases: [SlackCommonCase], windowDays: Int = 30, windowLimit: Int = 200, truncated: Bool = false) {
+        self.cases = cases; self.windowDays = windowDays; self.windowLimit = windowLimit; self.truncated = truncated
+    }
 }
 public struct SlackCaseEdit: Encodable, Sendable {
     public enum Action: String, Encodable, Sendable { case rename, merge, split }

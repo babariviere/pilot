@@ -26,8 +26,8 @@ struct MainWindow: View {
                         .id(missionId)
                 } else if let projectId = model.selectedProjectId {
                     if model.slackTriageProjectId == projectId {
-                        SlackTriagePage(projectId: projectId)
-                            .id("slack-triage-\(projectId)")
+                        SlackTriagePage(projectId: projectId, openCase: model.slackTriageCaseId)
+                            .id("slack-triage-\(projectId)-\(model.slackTriageCaseId ?? "")")
                     } else if model.memoryProjectId == projectId {
                         MemoryPage(projectId: projectId)
                             .id("memory-\(projectId)")

@@ -15,6 +15,7 @@ struct TrackingFixture {
     var searchChannels = TrackingLookup<SlackChannelOption>(status: .ok)
     var corrections: [SlackCorrection] = []
     var guides: [TrackedKind: TriageGuide] = [:]
+    var cases = SlackCommonCaseList(cases: [])
 
     func guide(_ kind: TrackedKind) -> TriageGuide {
         guides[kind] ?? TriageGuide(kind: kind, text: "", updatedAt: 0, throughSeq: 0)
@@ -29,15 +30,21 @@ struct TrackedItemBinding: Hashable, Codable {
     let label: String
 }
 
-/// The new-mission flow, prefilled from a Linear issue or Slack message.
+/// The new-mission flow, prefilled from a Linear issue, a Slack message or a common Slack case.
 struct SourceMissionDraft: Hashable {
-    let itemId: String
+    /// The item the mission is linked to once created. Nil for a common case, whose messages stay unlinked.
+    let itemId: String?
     let projectId: String
     let label: String
     let title: String
     let goal: String
     /// First message to the coordinator. It drafts the brief and tasks from the quoted ticket.
     let message: String
+    /// The common case the draft quotes, instead of one item.
+    var caseId: String? = nil
+
+    /// Stable per source, so the sheet opens once per item or case.
+    var sourceKey: String { itemId ?? "case-\(caseId ?? label)" }
 }
 
 // MARK: Text
@@ -326,7 +333,7 @@ enum TrackedItemText {
     }
 
     /// A JSON string literal, so quoted ticket text cannot break out of the quote.
-    private static func jsonString(_ value: String) -> String {
+    static func jsonString(_ value: String) -> String {
         let data = try? JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed, .withoutEscapingSlashes])
         return data.map { String(decoding: $0, as: UTF8.self) } ?? "\"\""
     }

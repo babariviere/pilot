@@ -417,7 +417,10 @@ retire after 30 days without a report. Names, merge and split edits are local co
 model runs. The cases API exposes the window limit and truncation, and dashboard data includes the top three.
 Up to 100 case identities are retained per project. The shared groomer admits at most one attempt per
 source/project every five minutes, up to 48 per UTC day, folding at most 64 new corrections per run.
-The Common cases toggle, filtering, case actions and Overview display are a separate Opus UI follow-up.
+Slack triage's Common cases layout lists them by count, then recency. Selecting a case filters the table and
+board to its messages; the inspector shows its severity mix and trend, starts a mission from the quoted case
+summary (reviewed in the new-mission sheet, with its messages left unlinked), and renames, merges or splits it.
+The project Overview shows the top three cases under Slack.
 
 Triage keeps up to 500 corrections per project across sources. A debounced, tool-free worker folds three new
 corrections (or a day with new corrections) into a short read-only guide. Classifiers use that guide and five

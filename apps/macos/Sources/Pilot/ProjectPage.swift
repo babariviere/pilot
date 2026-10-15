@@ -627,6 +627,9 @@ private struct ProjectTrackedSection: View {
             }
             ProjectMoreLine(hidden: max(0, group.total - items.count), total: group.total,
                             noun: kind == .slack ? "messages" : "items", action: openAll)
+            if kind == .slack, let cases = group.commonCases, !cases.isEmpty {
+                ProjectCommonCaseRows(cases: cases, now: now) { model.openSlackTriage(project.id, caseId: $0.id) }
+            }
         }
     }
 }

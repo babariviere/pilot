@@ -60,8 +60,14 @@ extension SlackLocalStatus {
 }
 
 enum SlackTriageLayout: String, CaseIterable {
-    case table, board
-    var title: String { self == .table ? "Table" : "Board" }
+    case table, board, cases
+    var title: String {
+        switch self {
+        case .table: "Table"
+        case .board: "Board"
+        case .cases: "Common cases"
+        }
+    }
 }
 
 // MARK: Text
@@ -73,6 +79,8 @@ enum SlackTriageText {
     }
 
     struct Filter: Equatable {
+        /// A common case: its messages only. Selecting a case in Common cases sets it.
+        var caseId: String?
         var type: SlackMessageType?
         var label: LabelFilter = .all
         /// A configured channel ID.
@@ -81,7 +89,9 @@ enum SlackTriageText {
         /// Messages whose label is set to Hide from Inbox, and the ones a Close label dismissed.
         var showHidden = false
 
-        var isNarrowed: Bool { type != nil || label != .all || channel != nil || !trimmedQuery.isEmpty }
+        var isNarrowed: Bool {
+            caseId != nil || type != nil || label != .all || channel != nil || !trimmedQuery.isEmpty
+        }
         var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
@@ -124,6 +134,7 @@ enum SlackTriageText {
                 return false
             }
             if !filter.showHidden, triage.label.map(hidden.contains) == true { return false }
+            if let caseId = filter.caseId, item.caseId != caseId { return false }
             if let type = filter.type, triage.type != type { return false }
             switch filter.label {
             case .all: break
@@ -172,7 +183,7 @@ enum SlackTriageText {
 
     /// Item ids in keyboard order: one column for the table, one per status for the board.
     static func keyColumns(_ items: [TrackedItem], layout: SlackTriageLayout, showDismissed: Bool) -> [[String]] {
-        layout == .table ? [items.map(\.id)] : board(items, showDismissed: showDismissed).map { $0.items.map(\.id) }
+        layout == .board ? board(items, showDismissed: showDismissed).map { $0.items.map(\.id) } : [items.map(\.id)]
     }
 
     /// Arrow-key moves: up and down within a column, left and right to the nearest row of the next non-empty
@@ -300,6 +311,7 @@ extension TrackedItem {
         TrackedItem(id: id, projectId: projectId, kind: kind, externalId: externalId, title: title, url: url,
                     status: status, metadata: metadata, dismissed: slack.status == .dismissed, sessionId: sessionId,
                     missionId: missionId, sessionIds: sessionIds, missionIds: missionIds, slack: slack,
+                    linearSize: linearSize, linearSizeOverride: linearSizeOverride, caseId: caseId,
                     createdAt: createdAt, updatedAt: updatedAt)
     }
 }
@@ -479,36 +491,48 @@ final class SlackExcerptStore: ObservableObject {
 
 // MARK: Page
 
-/// The triage view in the main window, shown in place of the project page.
+/// The triage view in the main window, shown in place of the project page: messages as a table or a board, or the
+/// project's common cases. A selected case filters the table and board to its messages.
 struct SlackTriagePage: View {
     let projectId: String
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @Environment(\.openSettings) private var openSettings
     @StateObject private var triage: SlackTriageModel
+    @StateObject private var cases: SlackCasesModel
     @StateObject private var actions = TrackedItemActions()
     @StateObject private var excerpts: SlackExcerptStore
     @AppStorage("pilot.slackTriageLayout") private var layout: SlackTriageLayout = .table
     @State private var filter = SlackTriageText.Filter()
     @State private var selection: String?
+    @State private var caseSheet: SlackCaseSheet?
+    @State private var pendingMerge: SlackCaseMerge?
     /// Bumped by the inspector's Try Again, to read the selected message once more.
     @State private var excerptAttempt = 0
     @FocusState private var listFocused: Bool
     private let fixture: Bool
+    /// A case opened from the Overview: shown in Common cases, selected.
+    private let openCase: String?
 
     init(projectId: String, fixture: [TrackedItem]? = nil, layout: SlackTriageLayout? = nil,
          selection: String? = nil, filter: SlackTriageText.Filter = .init(),
-         excerpts: [String: SlackExcerptState] = [:]) {
+         excerpts: [String: SlackExcerptState] = [:], cases: SlackCommonCaseList? = nil, openCase: String? = nil) {
         self.projectId = projectId
         self.fixture = fixture != nil
+        self.openCase = openCase
         let model = SlackTriageModel(projectId: projectId)
         if let fixture { model.loadFixture(fixture) }
         _triage = StateObject(wrappedValue: model)
+        let casesModel = SlackCasesModel(projectId: projectId)
+        if fixture != nil { casesModel.loadFixture(cases ?? SlackCommonCaseList(cases: [])) }
+        _cases = StateObject(wrappedValue: casesModel)
         let store = SlackExcerptStore()
         store.loadFixture(excerpts)
         _excerpts = StateObject(wrappedValue: store)
         if let layout { _layout = AppStorage(wrappedValue: layout, "pilot.slackTriageLayout.snapshot") }
         _selection = State(initialValue: selection)
+        var filter = filter
+        if let openCase { filter.caseId = openCase }
         _filter = State(initialValue: filter)
     }
 
@@ -519,7 +543,8 @@ struct SlackTriagePage: View {
                     .navigationTitle("Slack triage")
                     .navigationSubtitle(project.name)
                     .toolbar { toolbar(project) }
-                    .searchable(text: $filter.query, placement: .toolbar, prompt: "Search messages")
+                    .searchable(text: $filter.query, placement: .toolbar,
+                                prompt: layout == .cases ? "Search cases" : "Search messages")
             } else {
                 EmptyStateView(icon: PilotIcon.project, title: "This project no longer exists",
                                message: "It was removed from Pilot. Its folder is unchanged.")
@@ -527,8 +552,26 @@ struct SlackTriagePage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Theme.background)
-        .onAppear { if !fixture { triage.start(client: client) } }
-        .onDisappear { triage.stop() }
+        .onAppear {
+            if openCase != nil { layout = .cases }
+            if !fixture {
+                triage.start(client: client)
+                cases.start(client: client)
+            }
+        }
+        .onDisappear {
+            triage.stop()
+            cases.stop()
+        }
+        .sheet(item: $caseSheet) { sheet in caseSheetView(sheet) }
+        .confirmationDialog(pendingMerge.map { "Merge “\($0.source.name)” into “\($0.target.name)”?" } ?? "",
+                            isPresented: Binding(get: { pendingMerge != nil }, set: { if !$0 { pendingMerge = nil } }),
+                            presenting: pendingMerge) { merge in
+            Button("Merge") { self.merge(merge) }
+            Button("Cancel", role: .cancel) {}
+        } message: { merge in
+            Text("Its \(SlackCaseText.messages(merge.source.count)) join “\(merge.target.name)”, and Pilot learns from the change.")
+        }
     }
 
     @ToolbarContentBuilder
@@ -574,7 +617,15 @@ struct SlackTriagePage: View {
         }
     }
 
-    private func loaded(_ project: Project, now: Date) -> some View {
+    @ViewBuilder private func loaded(_ project: Project, now: Date) -> some View {
+        if layout == .cases {
+            casesLoaded(project, now: now)
+        } else {
+            messagesLoaded(project, now: now)
+        }
+    }
+
+    private func messagesLoaded(_ project: Project, now: Date) -> some View {
         let labels = project.tracking?.slackLabels ?? []
         let hidden = SlackTriageText.hiddenLabels(labels)
         let visible = SlackTriageText.visible(triage.items, filter: filter, hidden: hidden,
@@ -586,16 +637,12 @@ struct SlackTriagePage: View {
         let selected = selection.flatMap { id in triage.items.first { $0.id == id } }
         return VStack(spacing: 0) {
             SlackTriageFilterBar(project: project, filter: $filter, showDismissed: $triage.showDismissed,
+                                 cases: cases.cases,
                                  hiddenCount: SlackTriageText.hiddenCount(triage.items, hidden: hidden,
                                                                           showDismissed: triage.showDismissed),
                                  shown: visible.count, total: unfiltered)
             HairlineDivider()
-            if let source = client.source(projectId: project.id, kind: .slack),
-               TrackedItemText.sourceLine(source, now: now).tone != .quiet || actions.syncing.contains(source.id) {
-                TrackedSourceStatusLine(source: source, actions: actions, now: now)
-                    .padding(.horizontal, 8).padding(.vertical, 6)
-                HairlineDivider()
-            }
+            sourceStatus(project, now: now)
             if let error = triage.error {
                 ProjectRefreshBanner(receivedAt: nil, error: error, retrying: false) { triage.reload() }
                     .padding(.horizontal, 16).padding(.vertical, 6)
@@ -632,6 +679,149 @@ struct SlackTriagePage: View {
         }
     }
 
+    /// The Slack source's sync, sign-in or error line, only when it says something.
+    @ViewBuilder private func sourceStatus(_ project: Project, now: Date) -> some View {
+        if let source = client.source(projectId: project.id, kind: .slack),
+           TrackedItemText.sourceLine(source, now: now).tone != .quiet || actions.syncing.contains(source.id) {
+            TrackedSourceStatusLine(source: source, actions: actions, now: now)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+            HairlineDivider()
+        }
+    }
+
+    // MARK: Common cases
+
+    /// The cases list with the case inspector. The selected case is the table's case filter.
+    private func casesLoaded(_ project: Project, now: Date) -> some View {
+        let hidden = SlackTriageText.hiddenLabels(project.tracking?.slackLabels ?? [])
+        let all = cases.cases
+        let visible = SlackCaseText.visible(all, query: filter.query)
+        let selected = filter.caseId.flatMap { id in all.first { $0.id == id } }
+        let caseActions = caseActions(project)
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text("Recurring bug reports, most frequent first")
+                    .font(.pilot(.label)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                Spacer(minLength: 8)
+                if cases.loaded {
+                    Text(SlackCaseText.count(shown: visible.count, of: all.count))
+                        .font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.mutedForeground)
+                        .lineLimit(1).fixedSize()
+                }
+            }
+            .frame(minHeight: 22)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            HairlineDivider()
+            sourceStatus(project, now: now)
+            if let error = cases.error {
+                ProjectRefreshBanner(receivedAt: nil, error: error, retrying: false) { cases.reload() }
+                    .padding(.horizontal, 16).padding(.vertical, 6)
+            }
+            HStack(spacing: 0) {
+                casesList(visible: visible, all: all, hidden: hidden, now: now, actions: caseActions)
+                    .frame(minWidth: 360, maxWidth: .infinity, maxHeight: .infinity)
+                    .focusable()
+                    .focused($listFocused)
+                    .focusEffectDisabled()
+                    .onKeyPress(keys: [.upArrow, .downArrow, .return]) { press in
+                        caseKey(press, visible: visible, actions: caseActions)
+                    }
+                Rectangle().fill(Theme.border).frame(width: 1)
+                SlackCaseInspector(entry: selected, cases: all, hidden: hidden, window: SlackCaseText.window(cases.list),
+                                   now: now, error: selected.flatMap { cases.errors[$0.id] }, actions: caseActions)
+                    .frame(width: 300)
+            }
+        }
+        .onAppear { if !fixture { listFocused = true } }
+    }
+
+    @ViewBuilder
+    private func casesList(visible: [SlackCommonCase], all: [SlackCommonCase], hidden: Set<String>, now: Date,
+                           actions: SlackCaseActions) -> some View {
+        if !cases.loaded {
+            ProgressView("Loading cases…").frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if visible.isEmpty {
+            Group {
+                if all.isEmpty {
+                    EmptyStateView(icon: PilotIcon.bug, title: "No common cases yet",
+                                   message: "When several bug reports from the last 30 days look alike, Pilot groups them here.")
+                } else {
+                    EmptyStateView(icon: PilotIcon.filter, title: "No cases match", message: "Try another search.") {
+                        Button("Clear Search") { filter.query = "" }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            SlackCasesTable(cases: visible, all: all, selection: filter.caseId, hidden: hidden, now: now,
+                            actions: actions)
+        }
+    }
+
+    private func caseActions(_ project: Project) -> SlackCaseActions {
+        SlackCaseActions(
+            select: { entry in
+                filter.caseId = entry.id
+                listFocused = true
+            },
+            showMessages: { showMessages($0, project: project) },
+            startMission: { entry in
+                model.missionSheet = .fromSource(SlackCaseText.missionDraft(
+                    entry, projectId: project.id, members: SlackCaseText.members(of: entry.id, in: triage.items)))
+            },
+            rename: { caseSheet = .rename($0) },
+            split: { caseSheet = .split($0) },
+            merge: { pendingMerge = SlackCaseMerge(source: $0, target: $1) })
+    }
+
+    /// The table with only the case's messages, the first one selected. Other filters and the search are cleared,
+    /// so every message of the case shows.
+    private func showMessages(_ entry: SlackCommonCase, project: Project) {
+        filter = SlackTriageText.Filter(caseId: entry.id, showHidden: filter.showHidden)
+        let hidden = SlackTriageText.hiddenLabels(project.tracking?.slackLabels ?? [])
+        selection = SlackTriageText.visible(triage.items, filter: filter, hidden: hidden,
+                                            showDismissed: triage.showDismissed).first?.id
+        layout = .table
+    }
+
+    private func caseKey(_ press: KeyPress, visible: [SlackCommonCase], actions: SlackCaseActions) -> KeyPress.Result {
+        guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+        let ids = [visible.map(\.id)]
+        switch press.key {
+        case .upArrow: filter.caseId = SlackTriageText.move(from: filter.caseId, in: ids, dy: -1)
+        case .downArrow: filter.caseId = SlackTriageText.move(from: filter.caseId, in: ids, dy: 1)
+        case .return:
+            guard let entry = visible.first(where: { $0.id == filter.caseId }) else { return .ignored }
+            actions.showMessages(entry)
+        default: return .ignored
+        }
+        return .handled
+    }
+
+    @ViewBuilder private func caseSheetView(_ sheet: SlackCaseSheet) -> some View {
+        switch sheet {
+        case let .rename(entry):
+            SlackCaseRenameSheet(entry: entry) { name in
+                try await cases.edit(entry.id, SlackCaseEdit(action: .rename, name: name))
+            }
+        case let .split(entry):
+            SlackCaseSplitSheet(entry: entry, members: SlackCaseText.members(of: entry.id, in: triage.items),
+                                now: Date()) { name, itemIds in
+                try await cases.edit(entry.id, SlackCaseEdit(action: .split, name: name, itemIds: itemIds))
+            }
+        }
+    }
+
+    /// Merges after confirmation. The selection follows the messages into the case they joined.
+    private func merge(_ merge: SlackCaseMerge) {
+        Task {
+            if await cases.merge(merge.source.id, into: merge.target.id), filter.caseId == merge.source.id {
+                filter.caseId = merge.target.id
+            }
+        }
+    }
+
     @ViewBuilder
     private func list(visible: [TrackedItem], hidden: Set<String>, columns: [[String]], now: Date) -> some View {
         if visible.isEmpty {
@@ -660,7 +850,8 @@ struct SlackTriagePage: View {
                 chatStatus: { item in (item.sessionIds?.last ?? item.sessionId).flatMap { client.session($0)?.status } })
             VStack(spacing: 0) {
                 switch layout {
-                case .table:
+                // Common cases has its own list; messages stay a table there.
+                case .table, .cases:
                     SlackTriageTable(items: visible, hidden: hidden, selection: selection, now: now, actions: rows)
                 case .board:
                     SlackTriageBoard(columns: SlackTriageText.board(visible, showDismissed: SlackTriageText.showsDismissed(visible, showDismissed: triage.showDismissed)),
@@ -723,7 +914,7 @@ struct SlackTriagePage: View {
     }
 }
 
-/// Table or Board, in the window toolbar.
+/// Table, Board or Common cases, in the window toolbar.
 struct SlackTriageLayoutPicker: View {
     @Binding var layout: SlackTriageLayout
 
@@ -732,7 +923,7 @@ struct SlackTriageLayoutPicker: View {
             ForEach(SlackTriageLayout.allCases, id: \.self) { Text($0.title).tag($0) }
         }
         .pickerStyle(.segmented).labelsHidden().fixedSize()
-        .help("Show messages as a table or as a board by status")
+        .help("Show messages as a table or as a board by status, or recurring bug reports grouped into common cases")
     }
 }
 
@@ -749,11 +940,13 @@ struct SlackTriageRowActions {
 
 // MARK: Filter bar
 
-/// Type, label and channel filters, hidden and dismissed toggles, and the count. Search is in the toolbar.
+/// Case, type, label and channel filters, hidden and dismissed toggles, and the count. Search is in the toolbar.
+/// The case filter shows only while set: cases are chosen in Common cases.
 struct SlackTriageFilterBar: View {
     let project: Project
     @Binding var filter: SlackTriageText.Filter
     @Binding var showDismissed: Bool
+    var cases: [SlackCommonCase] = []
     let hiddenCount: Int
     let shown: Int
     let total: Int
@@ -763,6 +956,23 @@ struct SlackTriageFilterBar: View {
         let channels = project.tracking?.slackChannels ?? []
         let names = project.tracking?.slackChannelNames ?? [:]
         HStack(spacing: 8) {
+            if let caseId = filter.caseId {
+                Menu {
+                    Picker("Case", selection: $filter.caseId) {
+                        Text("All Messages").tag(String?.none)
+                        if !cases.isEmpty { Divider() }
+                        if !cases.contains(where: { $0.id == caseId }) {
+                            Text(SlackCaseText.filterTitle(caseId, in: cases)).tag(String?.some(caseId))
+                        }
+                        ForEach(cases) { entry in Text(entry.name).tag(String?.some(entry.id)) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    ChipLabel(title: SlackCaseText.filterTitle(caseId, in: cases), maxTitleWidth: 220)
+                }
+                .chipMenuStyle().fixedSize()
+                .help("Messages of one common case")
+            }
             Menu {
                 Picker("Type", selection: $filter.type) {
                     Text("All Types").tag(SlackMessageType?.none)

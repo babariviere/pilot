@@ -735,6 +735,21 @@ final class PilotClient: ObservableObject {
                                         query: [URLQueryItem(name: "projectId", value: projectId)])
     }
 
+    /// The project's common Slack cases: recurring bug reports from the last 30 days, by count then recency.
+    func slackCases(projectId: String) async throws -> SlackCommonCaseList {
+        if let fixture = fixtureTracking { return fixture.cases }
+        return try await missionRequest(["tracking", "slack", "cases"],
+                                        query: [URLQueryItem(name: "projectId", value: projectId)])
+    }
+
+    /// Renames, merges or splits a common case. pilotd keeps the edit as a correction and returns the new list.
+    func editSlackCase(projectId: String, id: String, _ edit: SlackCaseEdit) async throws -> SlackCommonCaseList {
+        if let fixture = fixtureTracking { return fixture.cases }
+        return try await call(url: missionURL(["tracking", "slack", "cases", id],
+                                              query: [URLQueryItem(name: "projectId", value: projectId)]),
+                              method: "PATCH", body: edit)
+    }
+
     /// Snapshot data for the Inbox page. Never used by the live app.
     var fixtureInbox: Inbox?
 

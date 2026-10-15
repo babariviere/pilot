@@ -61,7 +61,9 @@ struct CreateMissionSheet: View {
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
             }
             if let prefill {
-                Label("Prefilled from \(prefill.label). Its text is quoted as external content, and the mission is linked to it once created. Pilot never changes the ticket.",
+                Label(prefill.itemId == nil
+                    ? "Prefilled from the common case “\(prefill.label)”. Its summaries are quoted as external content. Its messages stay unlinked, and nothing changes in Slack."
+                    : "Prefilled from \(prefill.label). Its text is quoted as external content, and the mission is linked to it once created. Pilot never changes the ticket.",
                       icon: PilotIcon.link)
                     .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).fixedSize(horizontal: false, vertical: true)
             }
@@ -167,8 +169,8 @@ struct CreateMissionSheet: View {
             defer { form.saving = false }
             do {
                 let detail = try await client.createMission(request)
-                if let prefill {
-                    await model.bindTrackedItem(prefill.itemId, label: prefill.label, missionId: detail.mission.id)
+                if let prefill, let itemId = prefill.itemId {
+                    await model.bindTrackedItem(itemId, label: prefill.label, missionId: detail.mission.id)
                 }
                 dismiss()
                 // Make a mission keeps the chat in view; it is drafting there.
