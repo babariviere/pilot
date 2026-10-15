@@ -8,7 +8,8 @@ export async function oauthFixture() {
 	let issued = 0;
 	const valid = new Set<string>();
 	const grants: string[] = [];
-	const state = { refuseRefresh: false };
+	const refreshTokens = new Set<string>();
+	const state = { refuseRefresh: false, rotatingRefresh: false, dropRefreshReply: false };
 	const server = createServer(async (req, res) => {
 		const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 		const url = new URL(req.url!, origin);
@@ -46,10 +47,22 @@ export async function oauthFixture() {
 		if (url.pathname === "/token") {
 			const form = new URLSearchParams(body);
 			grants.push(form.get("grant_type")!);
+			if (
+				state.rotatingRefresh &&
+				form.get("grant_type") === "refresh_token" &&
+				!refreshTokens.delete(form.get("refresh_token")!)
+			)
+				return send(400, { error: "invalid_grant" });
 			if (state.refuseRefresh && form.get("grant_type") === "refresh_token")
 				return send(400, { error: "invalid_grant" });
 			const token = `token-${++issued}`;
+			if (state.rotatingRefresh && form.get("grant_type") === "refresh_token") valid.clear();
 			valid.add(token);
+			refreshTokens.add(`refresh-${issued}`);
+			if (state.dropRefreshReply && form.get("grant_type") === "refresh_token") {
+				req.socket.destroy();
+				return;
+			}
 			return send(200, {
 				access_token: token,
 				token_type: "Bearer",

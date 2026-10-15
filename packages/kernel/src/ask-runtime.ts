@@ -8,6 +8,7 @@ import {
 	ModelRuntime,
 	SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 
 export function askSettings(settings: SettingsManager): SettingsManager {
 	// Snapshot the merged model settings in memory so reload cannot restore packages or extensions.
@@ -37,6 +38,7 @@ export async function createAskSession(
 		Pick<CreateAgentSessionOptions, "modelRuntime" | "model">,
 ): Promise<AgentSession> {
 	const { settingsManager, sessionManager } = options;
+	await installCredentialBrokerHooks();
 	// Use the canonical runtime unchanged: native credentials, refresh and models.json helpers.
 	const modelRuntime =
 		options.modelRuntime ??

@@ -1,25 +1,13 @@
 /** Linux coordinators require a verified bubblewrap boundary. No binary-presence or chmod fallback. */
 import { type ChildProcess, execFile, fork } from "node:child_process";
-import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import {
-	access,
-	lstat,
-	mkdir,
-	mkdtemp,
-	opendir,
-	readdir,
-	readFile,
-	readlink,
-	realpath,
-	rm,
-	stat,
-	writeFile,
-} from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, opendir, readFile, readlink, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { type CredentialEndpoint, credentialEnvironment } from "@pilot/kernel/credential-client";
+import { credentialRequest } from "@pilot/kernel/credential-rpc";
 
 const guard = fileURLToPath(new URL("./linux-coordinator-guard.ts", import.meta.url));
 const execute = promisify(execFile);
@@ -177,87 +165,36 @@ export async function probeLinuxCoordinatorIsolation(): Promise<LinuxCoordinator
 	}
 }
 
-/** Private same-host auth snapshots. Refreshes persist here, never write back into executable configuration. */
-async function privateAuth(directory: string, agentDir: string): Promise<void> {
-	await mkdir(directory, { recursive: true, mode: 0o700 });
-	const marker = join(directory, ".source-revisions.json");
-	let revisions: Record<string, string> = {};
-	try {
-		const info = await lstat(marker);
-		if (!info.isFile() || info.size > 4096) throw new Error("Invalid coordinator auth revision marker");
-		revisions = JSON.parse(await readFile(marker, "utf8"));
-		if (!revisions || typeof revisions !== "object" || Array.isArray(revisions))
-			throw new Error("Invalid coordinator auth revisions");
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-	}
-	for (const name of ["auth.json", "mcp-auth.json"]) {
-		const info = await stat(join(agentDir, name)).catch((error: NodeJS.ErrnoException) => {
-			if (error.code !== "ENOENT") throw error;
-			return undefined;
-		});
-		if (info && (!info.isFile() || info.size > 4 * 1024 * 1024))
-			throw new Error(`Coordinator auth source must be a bounded regular file: ${name}`);
-		const value = await readFile(join(agentDir, name)).catch((error: NodeJS.ErrnoException) => {
-			if (error.code !== "ENOENT") throw error;
-			return Buffer.from("{}");
-		});
-		const revision = createHash("sha256").update(value).digest("hex");
-		if (revisions[name] !== revision) {
-			const target = join(directory, name);
-			await rm(target, { force: true });
-			await writeFile(target, value, { flag: "wx", mode: 0o600 });
-			revisions[name] = revision;
-		}
-	}
-	await rm(marker, { force: true });
-	await writeFile(marker, JSON.stringify(revisions), { mode: 0o600, flag: "wx" });
-}
-
 export async function forkLinuxCoordinator(
 	entry: string,
 	view: CoordinatorPaths,
-	state: { storageDir: string; agentDir: string },
+	state: { storageDir: string; agentDir: string; credentials?: CredentialEndpoint },
 ): Promise<ChildProcess> {
 	try {
+		if (!state.credentials) throw new Error("Canonical credential broker is required; refusing private snapshots");
+		await credentialRequest(state.credentials, { op: "list", namespace: "pi" });
 		const executable = await bubblewrap();
 		const sessionDir = dirname(state.storageDir);
 		if ((await realpath(sessionDir)) !== resolve(sessionDir))
 			throw new Error("Coordinator session directory is not canonical");
-		const auth = join(sessionDir, "coordinator-auth");
+		await rm(join(sessionDir, "coordinator-auth"), { recursive: true, force: true });
 		const artifacts = join(sessionDir, "artifacts");
-		for (const path of [state.storageDir, artifacts, auth]) await mkdir(path, { recursive: true, mode: 0o700 });
-		// Validate before touching auth contents, then again after materializing the private snapshots.
+		for (const path of [state.storageDir, artifacts]) await mkdir(path, { recursive: true, mode: 0o700 });
 		const writable = await validateCoordinatorWrites(
-			[view.scratch, state.storageDir, artifacts, auth],
+			[view.scratch, state.storageDir, artifacts],
 			view.protectedPaths,
 		);
-		await privateAuth(auth, state.agentDir);
-		await validateCoordinatorWrites([auth], view.protectedPaths);
 		const sentinel = join(sessionDir, "coordinator-isolation-sentinel");
 		await writeFile(sentinel, "protected", { mode: 0o600 });
 		const config = await boundary(writable, view.protectedPaths, sentinel);
 		const args = argumentsFor(writable, view.scratch);
-		// Shadow only this process's agent directory. Canonical config/resources stay read-only;
-		// writable auth/locks live in the private backing directory, not in the global agent directory.
-		const agentDir = await realpath(state.agentDir);
-		const sources = await Promise.all(view.protectedPaths.map((path) => realpath(path)));
-		if ([...writable, ...sources].some((path) => within(agentDir, path) || within(path, agentDir)))
-			throw new Error("Agent directory overlaps protected source or private state");
-		args.push("--bind", auth, agentDir);
-		for (const name of await readdir(agentDir)) {
-			if (["auth.json", "mcp-auth.json", "auth.json.lock", "mcp-auth.json.lock"].includes(name)) continue;
-			args.push("--ro-bind", join(agentDir, name), join(agentDir, name));
-			if (args.length > 8000) throw new Error("Coordinator agent resources exceed the isolation mount limit");
-		}
-		// The shadow agent directory is a second private writable alias, validated by the guard.
-		config.writable.push(agentDir);
 		return fork(entry, [], {
 			cwd: view.scratch,
 			execPath: executable,
 			execArgv: [...args, process.execPath, guard, JSON.stringify(config)],
 			env: {
 				...process.env,
+				...credentialEnvironment(state.credentials),
 				NODE_OPTIONS: "",
 				NODE_COMPILE_CACHE: join(view.scratch, "node-cache"),
 				TMPDIR: view.scratch,

@@ -67,6 +67,7 @@ import { askSettings, createAskSession } from "./ask-runtime.ts";
 import { ASK_TOOL_NAMES, createAskTools } from "./ask-tools.ts";
 import { bundledAskTools, bundledResourceLoader } from "./bundled-extensions.ts";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
+import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { diagnosticFetch, formatFailure, safeFailureText, toolFailureStep } from "./failure.ts";
 import { runningJobs } from "./jobs.ts";
 import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
@@ -362,6 +363,7 @@ export class NativeAdapter {
 	}
 
 	static async open(options: NativeAdapterOptions): Promise<NativeAdapter> {
+		await installCredentialBrokerHooks();
 		const cwd = options.cwd;
 		const hasArtifacts = options.ask
 			? !!options.askArtifacts

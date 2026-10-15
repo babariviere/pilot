@@ -4,6 +4,9 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./credential-rpc": "./src/credential-rpc.ts",
+		"./credential-client": "./src/credential-client.ts",
+		"./credential-hooks": "./src/credential-hooks.ts",
 		".": "./src/index.ts",
 		"./worker": "./src/worker.ts",
 		"./runtime-environment": "./src/runtime-environment.ts"

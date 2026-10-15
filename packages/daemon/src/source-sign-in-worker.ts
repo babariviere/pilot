@@ -5,6 +5,8 @@
 import { join } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@earendil-works/pi-coding-agent";
+import { credentialClient } from "@pilot/kernel/credential-client";
+import { installCredentialBrokerHooks } from "@pilot/kernel/credential-hooks";
 
 type OAuthState = { tokens?: unknown; tokensExpireAt?: number; clientInformation?: { client_id?: string } };
 type OAuthStore = {
@@ -21,6 +23,7 @@ interface Connection {
 	reconnect(): Promise<void>;
 	close(): Promise<void>;
 }
+await installCredentialBrokerHooks();
 const sdk = import.meta.resolve("@earendil-works/pi-coding-agent");
 const paths = (await import(new URL("./config.js", sdk).href)) as { getAgentDir(): string };
 const config = (await import(new URL("./extensions/mcp/config.js", sdk).href)) as {
@@ -104,6 +107,7 @@ try {
 	const { kind, again } = workerData as { kind: string; again: boolean; agentDir?: string };
 	if (typeof kind !== "string" || !kind) throw new Problem("Unknown MCP server.");
 	const agentDir = (workerData.agentDir as string | undefined) ?? paths.getAgentDir();
+	const broker = credentialClient();
 	// Global user config only, like tracking calls. A repository cannot add a server to sign in to.
 	const loaded = config.loadMcpConfig({ agentDir, cwd: agentDir, projectTrusted: false });
 	const entry = loaded.servers.find((entry) => entry.name === kind);
@@ -131,28 +135,34 @@ try {
 		connected = true;
 	} catch {
 		controller.signal.throwIfAborted();
-		if (connection.state !== "needs-auth") throw new Problem("Couldn't reach the server. Check pi mcp list.");
+		if (!broker && connection.state !== "needs-auth")
+			throw new Problem("Couldn't reach the server. Check pi mcp list.");
 	}
 	if (!connected || again) {
 		controller.signal.throwIfAborted();
 		const store = credentials.forServer(entry.name, url);
-		await runtime.signInMcpServer({
-			serverUrl: url,
-			store: again ? withoutStoredTokens(store) : store,
-			settings: connection.oauthSettings(),
-			challenge: connection.challenge,
-			prompt: {
-				showAuthorizationUrl: (authorizationUrl) => parentPort!.postMessage({ open: authorizationUrl.href }),
-				// Only the browser callback finishes the sign-in. Resolving empty cancels the flow.
-				promptForRedirectUrl: (signal) =>
-					new Promise<undefined>((resolve) => {
-						const done = () => resolve(undefined);
-						if (signal.aborted || controller.signal.aborted) return done();
-						signal.addEventListener("abort", done, { once: true });
-						controller.signal.addEventListener("abort", done, { once: true });
-					}),
-			},
-		});
+		const settings = connection.oauthSettings(),
+			challenge = connection.challenge;
+		const signIn = () =>
+			runtime.signInMcpServer({
+				serverUrl: url,
+				store: again || broker ? withoutStoredTokens(store) : store,
+				settings,
+				challenge,
+				prompt: {
+					showAuthorizationUrl: (authorizationUrl) => parentPort!.postMessage({ open: authorizationUrl.href }),
+					// Only the browser callback finishes the sign-in. Resolving empty cancels the flow.
+					promptForRedirectUrl: (signal) =>
+						new Promise<undefined>((resolve) => {
+							const done = () => resolve(undefined);
+							if (signal.aborted || controller.signal.aborted) return done();
+							signal.addEventListener("abort", done, { once: true });
+							controller.signal.addEventListener("abort", done, { once: true });
+						}),
+				},
+			});
+		if (broker) await broker.transaction("mcp", broker.mcpKey(entry.name, url), "login", signIn);
+		else await signIn();
 		connection.challenge = undefined;
 		try {
 			await connection.reconnect();

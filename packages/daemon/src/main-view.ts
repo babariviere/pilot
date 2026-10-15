@@ -3,6 +3,7 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { chmod, lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { type CredentialEndpoint, credentialEnvironment } from "@pilot/kernel/credential-client";
 import { forkLinuxCoordinator } from "./linux-coordinator.ts";
 import { type Runner, run } from "./workspaces.ts";
 
@@ -98,7 +99,7 @@ export function mainViewSandbox(paths: string[]): string {
 export async function forkMainViewWorker(
 	entry: string,
 	view: { scratch: string; protectedPaths: string[] },
-	state?: { storageDir: string; agentDir: string },
+	state?: { storageDir: string; agentDir: string; credentials?: CredentialEndpoint },
 ): Promise<ChildProcess> {
 	if (process.platform === "linux" && state) return forkLinuxCoordinator(entry, view, state);
 	if (process.platform !== "darwin")
@@ -107,7 +108,14 @@ export async function forkMainViewWorker(
 		cwd: view.scratch,
 		execPath: "/usr/bin/sandbox-exec",
 		execArgv: ["-p", mainViewSandbox(view.protectedPaths), process.execPath],
-		env: { ...process.env, TMPDIR: view.scratch, TMP: view.scratch, TEMP: view.scratch, GIT_OPTIONAL_LOCKS: "0" },
+		env: {
+			...process.env,
+			...credentialEnvironment(state?.credentials),
+			TMPDIR: view.scratch,
+			TMP: view.scratch,
+			TEMP: view.scratch,
+			GIT_OPTIONAL_LOCKS: "0",
+		},
 		serialization: "advanced",
 		stdio: ["ignore", "inherit", "inherit", "ipc"],
 	});

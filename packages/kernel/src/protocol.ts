@@ -12,6 +12,7 @@ import type {
 	SessionJob,
 	SessionSubagent,
 } from "@pilot/protocol";
+import type { CredentialEndpoint } from "./credential-rpc.ts";
 import type { MissionAction } from "./mission-tools.ts";
 import type { MissionContext, PilotContext, WorkspaceContext } from "./policy.ts";
 import type { KernelUsage } from "./usage.ts";
@@ -27,6 +28,8 @@ export interface KernelSubagent extends SessionSubagent {
 }
 
 export interface KernelSpec {
+	/** Ephemeral capability, never stored in session metadata or transcripts. Inherited by descendants. */
+	credentials?: CredentialEndpoint;
 	/** Pilot session ID, reused as the native session ID. */
 	sessionId: string;
 	/** Project identity attached to published artifacts. */

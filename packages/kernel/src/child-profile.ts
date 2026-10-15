@@ -4,11 +4,13 @@ import { PILOT_CHILD_PROFILE_PATH } from "@babariviere/pi-extensions/profile";
 import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
+import { installCredentialBrokerHooks } from "./credential-hooks.ts";
 import { subscriptionRecovery } from "./subscription-limit.ts";
 import { callParentSubscriptionLimit, callParentTodo } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
 
 export default async function childProfile(pi: ExtensionAPI): Promise<void> {
+	await installCredentialBrokerHooks();
 	for (const name of ["sandbox", "apply-patch", "web", "browser"]) {
 		const path = fileURLToPath(new URL(`../extensions/${name}/index.ts`, pathToFileURL(PILOT_CHILD_PROFILE_PATH)));
 		const { default: factory } = await import(path);
