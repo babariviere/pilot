@@ -108,6 +108,9 @@ import Testing
     let tests = [SessionJob(id: "t", name: "Tests", startedAt: 0, outputPath: "/tmp/t.log")]
     // The agent's own run: the full working ripple, with or without jobs.
     #expect(ComposerCorner(agentWorking: true, session: nil) == ComposerCorner(signal: .working))
+    var offline = chat(state: "working", working: false)
+    offline.offlinePaused = true
+    #expect(ComposerCorner(agentWorking: true, session: offline).signal == nil)
     #expect(ComposerCorner(agentWorking: true, session: chat(state: "working", working: true, jobs: tests))
         == ComposerCorner(signal: .working))
     // Idle agent, background jobs running: the background ripple.

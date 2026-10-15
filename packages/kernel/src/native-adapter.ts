@@ -286,8 +286,17 @@ export class NativeAdapter {
 			get: (target, key) => {
 				if (key === "fetchDeferred")
 					return async (...args: Parameters<Models["fetchDeferred"]>) => {
-						await this.waitForRequestBarrier(args[2]?.signal);
-						return target.fetchDeferred(...args);
+						const [model, handle, options] = args;
+						return offlineRequestStream(
+							async (signal) => {
+								await this.waitForRequestBarrier(signal);
+								await this.#subscriptionGate.wait(model.provider, signal);
+								return target.fetchDeferred(model, handle, { ...options, signal });
+							},
+							model,
+							this.#offlineGate,
+							options?.signal,
+						).result();
 					};
 				if (key === "streamSimple")
 					return (

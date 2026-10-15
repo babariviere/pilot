@@ -54,42 +54,48 @@ async function fixture(t: TestContext) {
 	let effects = 0;
 	const entered = deferred();
 	const finish = deferred();
+	let adapter: NativeAdapter | undefined;
 	const openAdapter = NativeAdapter.open;
 	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
-		openAdapter.call(NativeAdapter, {
-			...options,
-			bundledExtensions: false,
-			projectTrusted: false,
-			settingsManager: SettingsManager.inMemory({ defaultTools: ["effect"] }),
-			sessionOptions: {
-				modelRuntime: runtime,
-				model: faux.getModel(),
-				customTools: [
-					{
-						name: "effect",
-						label: "effect",
-						description: "Test side effect",
-						parameters: Type.Object({}),
-						execute: async (_id, _args, signal) => {
-							effects++;
-							entered.resolve();
-							await finish.promise;
-							assert.equal(signal?.aborted, false, "offline does not kill a running native tool");
-							return { content: [{ type: "text", text: "saved" }], details: {} };
+		openAdapter
+			.call(NativeAdapter, {
+				...options,
+				bundledExtensions: false,
+				projectTrusted: false,
+				settingsManager: SettingsManager.inMemory({ defaultTools: ["effect"] }),
+				sessionOptions: {
+					modelRuntime: runtime,
+					model: faux.getModel(),
+					customTools: [
+						{
+							name: "effect",
+							label: "effect",
+							description: "Test side effect",
+							parameters: Type.Object({}),
+							execute: async (_id, _args, signal) => {
+								effects++;
+								entered.resolve();
+								await finish.promise;
+								assert.equal(signal?.aborted, false, "offline does not kill a running native tool");
+								return { content: [{ type: "text", text: "saved" }], details: {} };
+							},
 						},
-					},
-				],
-			},
-			loaderOptions: {
-				cwd: root,
-				agentDir: join(root, "agent"),
-				noExtensions: true,
-				noSkills: true,
-				noPromptTemplates: true,
-				noThemes: true,
-				noContextFiles: true,
-			},
-		}),
+					],
+				},
+				loaderOptions: {
+					cwd: root,
+					agentDir: join(root, "agent"),
+					noExtensions: true,
+					noSkills: true,
+					noPromptTemplates: true,
+					noThemes: true,
+					noContextFiles: true,
+				},
+			})
+			.then((opened) => {
+				adapter = opened;
+				return opened;
+			}),
 	);
 	let session: KernelSession | undefined;
 	const open = async () =>
@@ -109,7 +115,7 @@ async function fixture(t: TestContext) {
 		await session?.close();
 		await rm(root, { recursive: true, force: true });
 	});
-	return { root, policy, quota, faux, online, open, entered, finish, effects: () => effects };
+	return { root, policy, quota, faux, online, open, entered, finish, effects: () => effects, adapter: () => adapter! };
 }
 
 test("offline queued input survives kernel restart, is admitted once, and completed effects are not replayed", {
@@ -218,4 +224,27 @@ test("loss during a provider request holds its checkpoint and queued input throu
 	assert.equal(entries.filter((entry) => entry.kind === "pi.user").length, 2);
 	assert.equal(f.faux.state.callCount, 3);
 	assert.ok(!JSON.stringify(entries).includes("discarded"));
+});
+
+test("deferred provider retrieval waits offline without submitting a second generation", {
+	timeout: 20_000,
+}, async (t) => {
+	const f = await fixture(t);
+	await f.open();
+	await f.online(true);
+	f.faux.setResponses([fauxAssistantMessage("deferred answer")]);
+	const adapter = f.adapter(),
+		model = f.faux.getModel();
+	const pending = await adapter.models
+		.streamSimple(model, { messages: [{ role: "user", content: "work", timestamp: Date.now() }] }, { deferred: true })
+		.result();
+	assert.ok(pending.deferred);
+	await f.online(false);
+	const result = adapter.models.fetchDeferred(model, pending.deferred);
+	await delay(25);
+	assert.equal(f.faux.state.deferredFetchCount, 0);
+	await f.online(true);
+	assert.equal((await result).stopReason, "stop");
+	assert.equal(f.faux.state.callCount, 1);
+	assert.equal(f.faux.state.deferredFetchCount, 1);
 });
