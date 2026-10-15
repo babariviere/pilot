@@ -52,6 +52,14 @@ parentPort!.on("message", ({ id, method, args }) => {
 				disk.linearStartResult(args.id, args.outcome);
 				projectId = disk.require(args.id).projectId;
 				break;
+			case "reserveSlackStart":
+				value = disk.reserveSlackStart(args.id);
+				projectId = disk.require(args.id).projectId;
+				break;
+			case "slackStartResult":
+				disk.slackStartResult(args.id, args.outcome);
+				projectId = disk.require(args.id).projectId;
+				break;
 			case "patch":
 				value = disk.patch(args.id, args.patch);
 				projectId = disk.require(args.id).projectId;

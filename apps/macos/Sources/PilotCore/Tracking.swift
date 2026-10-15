@@ -167,6 +167,8 @@ public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let title: String
     public let url: String
     public let status: String
+    /// Local linearStart (moved/skipped/error) and slackStart (reacted/skipped/error) outcomes,
+    /// with attemptedAt and an optional safe error. Source sync preserves them.
     public let metadata: [String: JSONValue]
     public let dismissed: Bool
     public let slack: SlackTriage?

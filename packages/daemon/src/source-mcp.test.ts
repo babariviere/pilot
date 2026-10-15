@@ -11,9 +11,10 @@ import {
 	decodeMcpResult,
 	dedicatedSourceTool,
 	PiSourceMcpClient,
-	sourceRateLimit,
 	SourceRateLimited,
 	SourceSignInRequired,
+	sourceRateLimit,
+	validSourceArguments,
 } from "./source-mcp.ts";
 
 test("MCP decoding accepts structured data or JSON envelopes, not markdown or error results", () => {
@@ -50,6 +51,42 @@ test("Linear exposes fixed read tools and exactly one narrow state write and pre
 			decodeMcpResult({ isError: true, content: [{ type: "text", text: "Rate limited; retry-after: 90; secret" }] }),
 		(error) =>
 			error instanceof SourceRateLimited && error.retryAfterMs === 90_000 && !error.message.includes("secret"),
+	);
+});
+
+test("Slack start exposes only the fixed eyes reaction and normalizes success without leaking provider text", () => {
+	assert.equal(dedicatedSourceTool("slack", "startSlack"), "slack_add_reaction");
+	assert.equal(dedicatedSourceTool("linear", "startSlack"), undefined);
+	for (const tool of ["slack_add_reaction", "slack_remove_reaction", "slack_send_message", "slack_reply_to_thread"])
+		assert.equal(dedicatedSourceTool("slack", tool), undefined);
+	const args = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", name: "eyes" };
+	assert.equal(validSourceArguments("startSlack", args), true);
+	for (const invalid of [
+		{ ...args, name: "white_check_mark" },
+		{ ...args, name: ":eyes:" },
+		{ ...args, text: "not allowed" },
+		{ ...args, channel_id: "#bugs" },
+		{ ...args, message_ts: "no" },
+		{ ...args, name: undefined },
+	])
+		assert.equal(validSourceArguments("startSlack", invalid), false);
+	for (const response of [
+		{ structuredContent: { ok: true, private: "do not retain" } },
+		{ content: [{ type: "text", text: '{"success":true}' }] },
+		{ content: [{ type: "text", text: "Reaction :eyes: added to message (private detail)." }] },
+	])
+		assert.deepEqual(decodeMcpResult(response, "startSlack"), { ok: true });
+	for (const response of [
+		{ structuredContent: { ok: false, error: "missing_scope" } },
+		{ isError: true, content: [{ type: "text", text: "Error: reaction could not be added (private)" }] },
+		{ content: [{ type: "text", text: "unexpected response" }] },
+		{ content: [{ type: "text", text: "Error: not_already_reacted" }] },
+	])
+		assert.throws(() => decodeMcpResult(response, "startSlack"), /Couldn't add Slack reaction/);
+	assert.throws(
+		() => decodeMcpResult({ isError: true, structuredContent: { error: "already_reacted" } }),
+		/error/,
+		"the exception never applies to other tools",
 	);
 });
 
@@ -136,6 +173,8 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		writes = false,
 		hanging = false,
 		limited = false;
+	let reactionResponse: Parameters<typeof decodeMcpResult>[0] | undefined;
+	let reactionThrows = false;
 	let called!: () => void;
 	const server = createServer(async (req, res) => {
 		if (needsAuth) {
@@ -175,20 +214,38 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 					"save_issue",
 					"slack_read_channel",
 					"slack_read_thread",
+					"slack_add_reaction",
 				].map((name) => ({
 					name,
 					inputSchema: { type: "object" },
-					annotations: { readOnlyHint: name !== "save_issue" && !writes },
+					annotations: { readOnlyHint: name !== "save_issue" && name !== "slack_add_reaction" && !writes },
 				})),
 			};
 		if (message.method === "tools/call" && hanging) {
 			called();
 			return;
 		}
+		if (message.method === "tools/call" && message.params.name === "slack_add_reaction" && reactionThrows) {
+			res.writeHead(200, { "content-type": "application/json" });
+			res.end(
+				JSON.stringify({
+					jsonrpc: "2.0",
+					id: message.id,
+					error: { code: -32000, message: "Slack API error: already_reacted (private detail)" },
+				}),
+			);
+			return;
+		}
 		if (message.method === "tools/call")
-			result = limited
-				? { isError: true, content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }] }
-				: { content: [{ type: "text", text: '{"issues":[]}' }] };
+			result =
+				message.params.name === "slack_add_reaction" && reactionResponse
+					? reactionResponse
+					: limited
+						? {
+								isError: true,
+								content: [{ type: "text", text: "Rate limit exceeded; retry-after: 120; secret" }],
+							}
+						: { content: [{ type: "text", text: '{"issues":[]}' }] };
 		res.writeHead(200, { "content-type": "application/json" });
 		res.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
 	});
@@ -283,11 +340,40 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		for (const tool of ["save_issue", "update_issue", "create_issue", "save_comment", "delete_issue"])
 			await assert.rejects(client.call("linear", tool, {}, signal), /Unknown dedicated MCP/);
 		assert.equal(seen.length, beforeInvalid, "invalid writes never connect");
+		const reactionArgs = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", name: "eyes" };
+		for (const response of [
+			{ structuredContent: { ok: true } },
+			{ isError: true, structuredContent: { ok: false, error: "already_reacted" } },
+			{ isError: true, content: [{ type: "text", text: "Slack API error: already_reacted (private detail)" }] },
+		]) {
+			reactionResponse = response;
+			assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true });
+			assert.deepEqual(seen.filter((request) => request.method === "tools/call").at(-1)?.params, {
+				name: "slack_add_reaction",
+				arguments: reactionArgs,
+			});
+		}
+		reactionResponse = { isError: true, content: [{ type: "text", text: "missing_scope: private detail" }] };
+		reactionThrows = true;
+		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true });
+		reactionThrows = false;
+		await assert.rejects(
+			client.call("slack", "startSlack", reactionArgs, signal),
+			(error: Error) => /Couldn't add Slack reaction/.test(error.message) && !error.message.includes("private"),
+		);
+		const beforeInvalidSlack = seen.length;
+		await assert.rejects(client.call("slack", "startSlack", { ...reactionArgs, name: "other" }, signal), /Invalid/);
+		await assert.rejects(
+			client.call("slack", "startSlack", { ...reactionArgs, text: "no messages" }, signal),
+			/Invalid/,
+		);
+		assert.equal(seen.length, beforeInvalidSlack);
 
 		writes = false;
 		const requestsBeforeMissing = seen.length;
 		await writeFile(join(home, "mcp.json"), JSON.stringify({ mcpServers: { alternative: { url } } }));
 		await assert.rejects(client.call("linear", "issues", {}, signal), /MCP request failed/);
+		await assert.rejects(client.call("slack", "startSlack", reactionArgs, signal), /MCP request failed/);
 		assert.equal(seen.length, requestsBeforeMissing, "a different server is never a fallback");
 		await writeFile(
 			join(home, "mcp.json"),

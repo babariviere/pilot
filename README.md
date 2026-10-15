@@ -217,6 +217,10 @@ child workers and daemon model calls, without modifying personal settings.
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
+Confirming Start chat or Start mission moves an eligible Linear ticket to In progress, or adds an `eyes`
+reaction to a Slack thread's parent message as you. The Slack reaction is attempted once per item,
+counts an existing reaction as success, and is never removed automatically. Failures never block the
+work and appear quietly on the item. These are the only tracking writes, never Slack messages or replies.
 Pilot stores a classifier summary for each Slack message, not its text; the triage inspector reads and quotes the
 message from Slack when you select it, without saving it.
 Project labels can do nothing, hide messages from the Inbox, or close them locally. Close labels never replace a

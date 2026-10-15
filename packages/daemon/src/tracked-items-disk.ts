@@ -41,6 +41,7 @@ type Row = {
 	mission_id: string | null;
 	links: string | null;
 	linear_start: string | null;
+	slack_start: string | null;
 	slack_overrides: string;
 	slack_status: SlackTriage["status"];
 	closed_by_label: string | null;
@@ -128,6 +129,18 @@ export class TrackedItemDisk {
 				.some((column) => column.name === "linear_start")
 		)
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN linear_start TEXT");
+		if (
+			!this.db
+				.prepare("PRAGMA table_info(tracked_items)")
+				.all()
+				.some((column) => column.name === "slack_start")
+		)
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_start TEXT");
+		// A prior process may have exited after admission but before the remote result was durable.
+		this.db
+			.prepare(`UPDATE tracked_items SET slack_start=json_set(slack_start, '$.outcome', 'error',
+			'$.error', ?) WHERE slack_start IS NOT NULL AND json_extract(slack_start, '$.outcome') IS NULL`)
+			.run("Couldn't add eyes reaction in Slack.");
 		const columns = this.db.prepare("PRAGMA table_info(tracked_items)").all();
 		if (!columns.some((column) => column.name === "slack_overrides"))
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_overrides TEXT NOT NULL DEFAULT '{}'");
@@ -528,6 +541,36 @@ export class TrackedItemDisk {
 		this.emit(item.projectId);
 	}
 
+	/** Reserve before MCP. An interrupted attempt stays a quiet error and is never retried automatically. */
+	reserveSlackStart(id: string): boolean {
+		const item = this.require(id);
+		if (item.kind !== "slack") return false;
+		// No outcome while in flight. The reservation is private, so a pending request never flashes an error.
+		const result = { attemptedAt: Date.now() };
+		const changed = this.db
+			.prepare("UPDATE tracked_items SET slack_start=? WHERE id=? AND slack_start IS NULL")
+			.run(JSON.stringify(result), id).changes;
+		if (changed) this.emit(item.projectId);
+		return !!changed;
+	}
+	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): void {
+		if (!["reacted", "skipped", "error"].includes(outcome)) throw new Error("Invalid Slack start outcome");
+		const item = this.require(id);
+		const row = this.db.prepare("SELECT slack_start FROM tracked_items WHERE id=?").get(id) as Pick<
+			Row,
+			"slack_start"
+		>;
+		if (item.kind !== "slack" || !row.slack_start) return;
+		const prior = JSON.parse(row.slack_start);
+		const result = {
+			outcome,
+			attemptedAt: prior.attemptedAt,
+			...(outcome === "error" ? { error: "Couldn't add eyes reaction in Slack." } : {}),
+		};
+		this.db.prepare("UPDATE tracked_items SET slack_start=? WHERE id=?").run(JSON.stringify(result), id);
+		this.emit(item.projectId);
+	}
+
 	patch(id: string, patch: TrackedItemPatch): TrackedItem {
 		validatePatch(patch);
 		const item = this.require(id);
@@ -659,6 +702,7 @@ function decode(row: Row): TrackedItem {
 	const sessionIds = links.sessions ?? (row.session_id ? [row.session_id] : []),
 		missionIds = links.missions ?? (row.mission_id ? [row.mission_id] : []);
 	const metadata = JSON.parse(row.metadata);
+	const slackStart = row.slack_start ? JSON.parse(row.slack_start) : undefined;
 	const overrides: SlackOverrides = JSON.parse(row.slack_overrides);
 	const slack: SlackTriage | undefined =
 		row.kind === "slack"
@@ -681,7 +725,13 @@ function decode(row: Row): TrackedItem {
 		url: row.url,
 		status: slack?.status ?? row.status,
 		metadata: slack
-			? { ...metadata, type: slack.type, label: slack.label, severity: slack.severity }
+			? {
+					...metadata,
+					type: slack.type,
+					label: slack.label,
+					severity: slack.severity,
+					...(slackStart?.outcome ? { slackStart } : {}),
+				}
 			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
 		...(slack ? { slack } : {}),
 		dismissed: !!row.dismissed,

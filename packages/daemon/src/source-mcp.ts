@@ -2,7 +2,7 @@ import { Worker } from "node:worker_threads";
 import type { TrackedKind, TrackingJson } from "@pilot/protocol";
 import { SourceSignInCancelled, SourceSignInFailed } from "./source-sign-in.ts";
 
-/** Fixed tools on the dedicated server named by kind. startIssue is the sole write exception. No overrides or fallback. */
+/** Fixed dedicated tools. Only confirmed starts can write (Linear state and Slack eyes). No overrides or fallback. */
 export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | undefined {
 	if (kind === "linear" && tool === "issues") return "list_issues";
 	if (kind === "linear" && tool === "cycles") return "list_cycles";
@@ -13,13 +13,23 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	if (kind === "linear" && tool === "teams") return "list_teams";
 	if (kind === "slack" && tool === "history") return "slack_read_channel";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
+	if (kind === "slack" && tool === "startSlack") return "slack_add_reaction";
 	if (kind === "slack" && tool === "searchChannels") return "slack_search_channels";
 	if (kind === "slack" && tool === "myChannels") return "slack_list_user_channels";
 	return undefined;
 }
 
-/** Even the sole write capability cannot create issues or edit any field other than state. */
+/** Start capabilities cannot edit other fields or add any other reaction. */
 export function validSourceArguments(tool: string, args: Record<string, unknown>): boolean {
+	if (tool === "startSlack")
+		return (
+			Object.keys(args).length === 3 &&
+			args.name === "eyes" &&
+			typeof args.channel_id === "string" &&
+			/^[CDG][A-Z0-9]{1,199}$/.test(args.channel_id) &&
+			typeof args.message_ts === "string" &&
+			/^\d{1,12}\.\d{6}$/.test(args.message_ts)
+		);
 	return (
 		tool !== "startIssue" ||
 		(Object.keys(args).length === 2 &&
@@ -162,7 +172,7 @@ export class PiSourceMcpClient implements SourceMcpClient {
 		if (Buffer.byteLength(JSON.stringify(args)) > 256 * 1024)
 			return Promise.reject(new Error("MCP arguments exceed 256 KiB"));
 		if (this.running.size >= 2) return Promise.reject(new Error("MCP client busy, retry shortly"));
-		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear state update"));
+		if (!validSourceArguments(tool, args)) return Promise.reject(new Error("Invalid Linear or Slack start update"));
 		if (!dedicatedSourceTool(kind, tool)) return Promise.reject(new Error("Unknown dedicated MCP source tool"));
 		const worker = new Worker(new URL("./source-mcp-worker.ts", import.meta.url), {
 			workerData: { agentDir: this.agentDir, kind, tool, args },
@@ -224,11 +234,15 @@ export class PiSourceMcpClient implements SourceMcpClient {
 }
 
 /** Accept structuredContent or JSON text only. Markdown fields stay text for source-specific parsing. */
-export function decodeMcpResult(result: {
-	structuredContent?: unknown;
-	content?: Array<{ type: string; text?: string }>;
-	isError?: boolean;
-}): TrackingJson {
+export function decodeMcpResult(
+	result: {
+		structuredContent?: unknown;
+		content?: Array<{ type: string; text?: string }>;
+		isError?: boolean;
+	},
+	tool?: string,
+): TrackingJson {
+	if (tool === "startSlack") return decodeSlackReaction(result);
 	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("MCP tool returned an error");
 	const value =
 		result.structuredContent ??
@@ -242,4 +256,49 @@ export function decodeMcpResult(result: {
 	const json = JSON.stringify(value);
 	if (!json || Buffer.byteLength(json) > 512 * 1024) throw new Error("MCP response exceeds 512 KiB or is empty");
 	return JSON.parse(json) as TrackingJson;
+}
+
+/** Normalize before generic error redaction: already_reacted is success only for this fixed write.
+ * No provider text (including successful responses) leaves the worker. */
+function decodeSlackReaction(result: Parameters<typeof decodeMcpResult>[0]): TrackingJson {
+	const text = (result.content ?? [])
+		.filter((block) => block.type === "text")
+		.map((block) => block.text ?? "")
+		.join("\n");
+	if (Buffer.byteLength(text) > 512 * 1024) throw new SourceToolError("Invalid Slack reaction response");
+	let value = result.structuredContent;
+	if (value === undefined) {
+		try {
+			value = JSON.parse(text);
+		} catch {
+			/* This tool can also return a plain confirmation. */
+		}
+	}
+	const data =
+		value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+	const error = data?.error;
+	const code = error && typeof error === "object" ? (error as Record<string, unknown>).code : (error ?? data?.code);
+	if (code === "already_reacted" || (!data && slackAlreadyReacted(new Error(text)))) return { ok: true };
+	if (result.isError) throw sourceRateLimit(result) ?? new SourceToolError("Couldn't add Slack reaction");
+	if (data && !error && (data.ok === true || data.success === true)) return { ok: true };
+	if (
+		!data &&
+		!/\b(?:error|failed|failure)\b/i.test(text) &&
+		/\b(?:added\b[^\n]*\breaction|reaction\b[^\n]*\badded)\b/i.test(text)
+	)
+		return { ok: true };
+	throw sourceRateLimit(result) ?? new SourceToolError("Couldn't add Slack reaction");
+}
+
+/** Some MCP transports throw tool errors instead of returning an isError envelope. Extract only this code. */
+export function slackAlreadyReacted(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const value = error as Record<string, unknown>;
+	const data = value.data && typeof value.data === "object" ? (value.data as Record<string, unknown>) : undefined;
+	return (
+		value.code === "already_reacted" ||
+		value.error === "already_reacted" ||
+		data?.error === "already_reacted" ||
+		(typeof value.message === "string" && /\balready_reacted\b/.test(value.message.slice(0, 8192)))
+	);
 }

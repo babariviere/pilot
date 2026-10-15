@@ -140,6 +140,12 @@ export class TrackedItemStore {
 	linearStartResult(id: string, outcome: "moved" | "skipped" | "error"): Promise<void> {
 		return this.rpc("linearStartResult", { id, outcome });
 	}
+	reserveSlackStart(id: string): Promise<boolean> {
+		return this.rpc("reserveSlackStart", { id });
+	}
+	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
+		return this.rpc("slackStartResult", { id, outcome });
+	}
 	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		return this.rpc("patch", { id, patch });
 	}

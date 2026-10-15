@@ -92,6 +92,24 @@ private let slack = TrackedItem(
     #expect(draft.label == "ENG-12")
 }
 
+@Test func slackStartErrorsAreQuietAndDoNotAffectSuccessfulOrSkippedReactions() {
+    for outcome in ["reacted", "skipped", "error"] {
+        let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",
+                               title: "Sample question", url: "https://example.com", status: "in_progress",
+                               metadata: ["slackStart": .object(["outcome": .string(outcome), "attemptedAt": .number(ms),
+                                                                "error": .string("untrusted detail")])],
+                               sessionId: "chat", createdAt: ms, updatedAt: ms)
+        #expect(TrackedItemText.startError(item) == (outcome == "error" ? "Couldn't add eyes reaction in Slack" : nil))
+        #expect((TrackedItemText.startErrorHelp(item) != nil) == (outcome == "error"))
+        #expect(!SlackTriageText.accessibilityLabel(item, now: now).contains("untrusted detail"))
+        if outcome == "error" {
+            #expect(SlackTriageText.accessibilityLabel(item, now: now).contains("Couldn't add eyes reaction"))
+        }
+    }
+    #expect(TrackedItemText.startError(slack) == nil)
+    #expect(TrackedItemText.startError(linear(statusType: "unstarted", startOutcome: "error")) == "Couldn't move to In progress")
+}
+
 @Test func trackedLinkShowsTheLatestChatOrMissionWithACount() {
     func session(_ id: String, state: String = "idle", outcome: SessionOutcome? = nil, created: Double,
                  pr: SessionPullRequest? = nil) -> SessionSummary {
