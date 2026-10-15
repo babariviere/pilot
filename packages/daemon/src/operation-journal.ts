@@ -72,11 +72,28 @@ export class OperationJournal {
 	private async init(): Promise<void> {
 		this.initialized ??= (async () => {
 			await mkdir(this.directory, { recursive: true, mode: 0o700 });
+			const parent = await open(join(this.directory, ".."), "r");
 			try {
+				await parent.sync();
+			} finally {
+				await parent.close();
+			}
+			try {
+				if ((await stat(join(this.directory, "floors.json"))).size > 128 * 1024)
+					throw new Error("Oversized replay floors");
 				this.floors = JSON.parse(await readFile(join(this.directory, "floors.json"), "utf8"));
 			} catch (e) {
 				if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
 			}
+			if (
+				!this.floors ||
+				Array.isArray(this.floors) ||
+				Object.keys(this.floors).length > MAX_STREAMS ||
+				Object.entries(this.floors).some(
+					([key, value]) => !/^[0-9a-f]{64}$/.test(key) || !Number.isSafeInteger(value) || value < 1,
+				)
+			)
+				throw new Error("Invalid replay floors");
 			const files = await readdir(this.directory);
 			if (files.filter((f) => f.endsWith(".json") && f !== "floors.json").length > MAX_RECORDS)
 				throw new Error("Operation journal capacity exceeded");
@@ -87,11 +104,22 @@ export class OperationJournal {
 				const record = JSON.parse(await readFile(join(this.directory, file), "utf8")) as StoredOperation;
 				this.validate(record.operation);
 				const op = record.operation;
+				if (
+					file !== `${payloadHash(op.operationId)}.json` ||
+					record.receipt.operationId !== op.operationId ||
+					record.receipt.payloadHash !== op.payloadHash ||
+					record.receipt.targetId !== op.targetId ||
+					canonicalJSON(record.receipt.destination) !== canonicalJSON(op.destination) ||
+					!["pending", "accepted", "rejected"].includes(record.receipt.state)
+				)
+					throw new Error("Corrupt operation receipt");
 				if (op.sequence <= (this.floors[streamKey(op)] ?? 0)) {
 					// A crash can interrupt GC after publishing its floor. Finish that deletion on recovery.
 					await unlink(join(this.directory, file));
 					continue;
 				}
+				if (this.records.has(op.operationId) || this.sequences.has(`${streamKey(op)}:${op.sequence}`))
+					throw new Error("Duplicate operation reservation");
 				this.records.set(op.operationId, record);
 				this.sequences.set(`${streamKey(op)}:${op.sequence}`, op.operationId);
 			}
@@ -163,12 +191,14 @@ export class OperationJournal {
 		return record;
 	}
 	async lookup(op: DurableOperation): Promise<OperationReceipt | undefined> {
+		op = structuredClone(op);
 		return this.serial(async () => {
 			await this.init();
 			return structuredClone(this.checked(op)?.receipt);
 		});
 	}
 	async reserve(op: DurableOperation): Promise<OperationReceipt> {
+		op = structuredClone(op);
 		return this.serial(async () => {
 			await this.init();
 			const existing = this.checked(op);
@@ -191,6 +221,7 @@ export class OperationJournal {
 		});
 	}
 	async execute(op: DurableOperation, handler: (op: DurableOperation) => Promise<unknown>): Promise<OperationReceipt> {
+		op = structuredClone(op);
 		const receipt = await this.reserve(op);
 		if (receipt.state !== "pending") return receipt;
 		const running = this.running.get(op.operationId);

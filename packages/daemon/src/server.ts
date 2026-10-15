@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { getLibraryAsset, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
+	AttachmentChatPayload,
+	AttachmentUpload,
 	BindPullRequestRequest,
 	ChangeModelRequest,
 	ClientMessage,
@@ -50,6 +52,7 @@ import type {
 	UpdateMissionRequest,
 } from "@pilot/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
+import { AttachmentStore } from "./attachment-store.ts";
 import { boundedSender } from "./backpressure.ts";
 import { RepositoryChanges } from "./changes.ts";
 import { ChatStreams } from "./chat-streams.ts";
@@ -282,6 +285,7 @@ export function createDaemonServer(
 	});
 	const repositoryChanges = new RepositoryChanges();
 	const repositories = new RepositoryBrowser(projects);
+	const attachments = new AttachmentStore(_config.home);
 	const journal = hello?.lineageId
 		? new OperationJournal(join(_config.home, "operations"), {
 				hostId: "daemon",
@@ -298,14 +302,26 @@ export function createDaemonServer(
 		}
 		if (!payload || typeof payload !== "object" || Array.isArray(payload))
 			throw new OperationRejected("Expected operation object");
-		if (op.kind === "chat-create") {
+		const attached = op.kind === "chat-create-attached" || op.kind === "chat-send-attached";
+		if (attached) {
+			const body = payload as AttachmentChatPayload<SpawnRequest | SendRequest>;
+			if (!body.request || typeof body.request.message !== "string")
+				throw new OperationRejected("Invalid attached message");
+			const paths = await attachments.adopt(op, body.attachments);
+			const suffix = paths.length
+				? "\n\nAttached images (use the read tool to view these files):\n" +
+					paths.map((path) => `- \`${path}\``).join("\n")
+				: "";
+			payload = { ...body.request, message: body.request.message + suffix };
+		}
+		if (op.kind === "chat-create" || op.kind === "chat-create-attached") {
 			const request = payload as SpawnRequest;
 			if (typeof request.message !== "string" || !request.message.trim())
 				throw new OperationRejected("message is required");
 			const session = await sessions.spawnDurable(request, op.targetId, op.operationId);
 			return { sessionId: session.id };
 		}
-		if (op.kind === "chat-send") {
+		if (op.kind === "chat-send" || op.kind === "chat-send-attached") {
 			const request = payload as SendRequest;
 			if (
 				typeof request.message !== "string" ||
@@ -326,6 +342,23 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "attachments" && parts.length === 3) {
+			if (req.method === "PUT") {
+				const header = req.headers["x-pilot-attachment"];
+				if (typeof header !== "string" || header.length > 2048)
+					throw new HttpError(400, "Missing attachment metadata");
+				const metadata = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as AttachmentUpload;
+				if (metadata.uploadId !== parts[2] || Number(req.headers["content-length"]) !== metadata.bytes)
+					throw new HttpError(400, "Attachment resource/length mismatch");
+				const result = await attachments.stage(metadata, req);
+				req.resume();
+				return json(res, 201, result);
+			}
+			if (req.method === "DELETE") {
+				await attachments.discard(parts[2]!);
+				return json(res, 200, { ok: true });
+			}
+		}
 		if (parts[1] === "repositories" && parts.length === 3) {
 			if (parts[2] === "directories" && req.method === "GET") {
 				return json(
@@ -353,6 +386,16 @@ export function createDaemonServer(
 		}
 		if (parts[1] === "operations" && req.method === "POST" && parts.length <= 3) {
 			if (!journal) throw new ServiceUnavailable("Durable operation domain unavailable");
+			if (parts[2] === "release-attachments") {
+				const body = await readJson<{
+					operation: DurableOperation;
+					attachments: import("@pilot/protocol").StagedAttachmentRef[];
+				}>(req);
+				const receipt = await journal.lookup(body.operation);
+				if (receipt?.state !== "rejected") throw new Conflict("Only rejected receipts can release attachments");
+				await attachments.releaseRejected(body.operation, body.attachments);
+				return json(res, 200, { ok: true });
+			}
 			const operation = await readJson<DurableOperation>(req);
 			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
 			const receipt =

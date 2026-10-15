@@ -1422,3 +1422,4 @@ export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./repositories.ts";
 export type * from "./schedules.ts";
 export type * from "./tracking.ts";
+export type * from "./transfers.ts";

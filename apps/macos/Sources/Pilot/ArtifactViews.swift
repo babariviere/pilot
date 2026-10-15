@@ -189,6 +189,7 @@ struct ArtifactViewer: View {
 struct ArtifactViewerHeader: View {
     let reference: ArtifactReference
     let latest: Bool
+    var host: HostRef? = nil
     @ObservedObject var state: ArtifactViewState
     @ObservedObject var render: ArtifactRenderState
     let close: () -> Void
@@ -223,7 +224,7 @@ struct ArtifactViewerHeader: View {
             }
             Spacer(minLength: 12)
             if let revision = state.revision {
-                ArtifactShareMenu(revision: revision, state: state, render: render)
+                ArtifactShareMenu(revision: revision, host: host, state: state, render: render)
             }
         }
         .padding(14)
@@ -274,6 +275,7 @@ private struct ArtifactContent: View {
 
 private struct ArtifactShareMenu: View {
     let revision: ArtifactRevision
+    var host: HostRef? = nil
     @ObservedObject var state: ArtifactViewState
     @ObservedObject var render: ArtifactRenderState
 
@@ -284,14 +286,14 @@ private struct ArtifactShareMenu: View {
                 return "Content copied"
             } }
             Button("Copy full path") { performExport {
-                ArtifactExport.copy(try ArtifactExport.materialize(revision).path)
+                ArtifactExport.copy(try ArtifactExport.materialize(revision, host: host).path)
                 return "Local file path copied"
             } }
             Button("Save file…") { performExport {
                 try ArtifactExport.save(ArtifactExport.file(for: revision)) ? "File saved" : nil
             } }
             Button("Reveal in Finder") { performExport {
-                NSWorkspace.shared.activateFileViewerSelecting([try ArtifactExport.materialize(revision)])
+                NSWorkspace.shared.activateFileViewerSelecting([try ArtifactExport.materialize(revision, host: host)])
                 return nil
             } }
             Divider()
@@ -346,7 +348,7 @@ private struct ArtifactPreview: View {
     @ObservedObject var state: ArtifactRenderState
 
     var body: some View {
-        ArtifactWebView(revision: revision, inline: inline, state: state)
+        ArtifactWebView(revision: revision, client: AppModel.shared.client, inline: inline, state: state)
             .overlay {
                 if let error = state.error {
                     Text(error).font(.callout).foregroundStyle(.secondary).padding()

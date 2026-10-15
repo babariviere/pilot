@@ -6327,7 +6327,7 @@ export class SessionManager {
 			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600, flush: durable });
 			await rename(temp, file);
 			if (durable) {
-				for (const path of [this.dir(meta.id), this.sessionsDir]) {
+				for (const path of [this.dir(meta.id), this.sessionsDir, this.home]) {
 					const directory = await open(path, "r");
 					try {
 						await directory.sync();

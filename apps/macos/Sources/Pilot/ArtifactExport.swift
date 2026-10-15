@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import PilotCore
 import UniformTypeIdentifiers
 
@@ -37,14 +38,20 @@ enum ArtifactExport {
         }
     }
 
-    static func materialize(_ revision: ArtifactRevision, directory: URL? = nil) throws -> URL {
+    static func materialize(_ revision: ArtifactRevision, host: HostRef? = nil, directory: URL? = nil) throws -> URL {
         let file = try file(for: revision)
         let root = try directory ?? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask,
                                                             appropriateFor: nil, create: true)
             .appendingPathComponent("Pilot/ArtifactExports", isDirectory: true)
         // Encode IDs rather than trusting server-provided path components.
         func component(_ value: String) -> String { value.utf8.map { String(format: "%02x", $0) }.joined() }
-        let folder = root.appendingPathComponent(component(revision.sessionId), isDirectory: true)
+        let scopedRoot: URL
+        if let host {
+            let key = HostResourceRef(host: host, kind: .artifact, localId: "exports").storageKey
+            let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+            scopedRoot = root.appendingPathComponent(digest, isDirectory: true)
+        } else { scopedRoot = root }
+        let folder = scopedRoot.appendingPathComponent(component(revision.sessionId), isDirectory: true)
             .appendingPathComponent(component(revision.id), isDirectory: true)
             .appendingPathComponent("r\(revision.revision)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

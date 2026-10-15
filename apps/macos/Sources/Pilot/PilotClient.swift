@@ -61,6 +61,7 @@ final class PilotClient: ObservableObject {
     private(set) var connectionGeneration = UUID()
     private var disconnected = false
     private let artifactSession: URLSession
+    private var activeReads = 0
     private let repositoryRequests = RepositoryRequestLimiter(limit: 4)
     private let summaryCache = AsyncReadCache<String, SessionChangeSummary>(ttl: 10)
     private let branchCache = AsyncReadCache<String, SessionBranch>(ttl: 10)
@@ -138,6 +139,26 @@ final class PilotClient: ObservableObject {
         let receipt = try response.decode(OperationReceipt.self)
         try receipt.validate(operation)
         return .receipt(receipt)
+    }
+
+    func upload(_ metadata: AttachmentUpload, file: URL) async throws -> StagedAttachmentRef {
+        guard !disconnected else { throw HostRoutingError.disconnected }
+        let generation = connectionGeneration
+        var request = URLRequest(url: try artifactURL(["attachments", metadata.uploadId]))
+        request.httpMethod = "PUT"
+        request.setValue("image/png", forHTTPHeaderField: "Content-Type")
+        request.setValue(String(metadata.bytes), forHTTPHeaderField: "Content-Length")
+        request.setValue(try JSONEncoder().encode(metadata).base64EncodedString(), forHTTPHeaderField: "X-Pilot-Attachment")
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4096, uploadFile: file)
+        guard !disconnected, generation == connectionGeneration else { throw HostRoutingError.staleGeneration }
+        guard response.statusCode == 201 else {
+            throw ClientError("Attachment upload was not accepted")
+        }
+        let result = try JSONDecoder().decode(StagedAttachmentRef.self, from: data)
+        guard result.uploadId == metadata.uploadId, result.sha256 == metadata.sha256, result.bytes == metadata.bytes else {
+            throw HostRoutingError.invalidReference
+        }
+        return result
     }
 
     func session(_ id: String) -> SessionSummary? {
@@ -846,7 +867,8 @@ final class PilotClient: ObservableObject {
 
     /// Called only by the allowlisted scheme handler, never with a web-supplied path.
     func artifactLibraryURL(_ library: ArtifactLibrary) throws -> URL {
-        try artifactURL(["artifact-libraries", library.rawValue])
+        guard !disconnected else { throw HostRoutingError.disconnected }
+        return try artifactURL(["artifact-libraries", library.rawValue])
     }
 
     private func artifactURL(_ components: [String]) throws -> URL {
@@ -863,10 +885,14 @@ final class PilotClient: ObservableObject {
 
     private func get<Response: Decodable & Sendable>(_ url: URL) async throws -> Response {
         guard !disconnected else { throw HostRoutingError.disconnected }
+        guard activeReads < 4 else { throw ClientError("Host reads are busy") }
+        activeReads += 1
+        defer { activeReads -= 1 }
         let generation = connectionGeneration
-        let (data, response) = try await artifactSession.data(from: url)
+        let (data, response) = try await BoundedHTTPData.read(URLRequest(url: url), maximumBytes: 48 * 1024 * 1024,
+                                                            configuration: artifactSession.configuration)
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let status = response.statusCode
         guard (200 ..< 300).contains(status) else {
             let error = (try? JSONDecoder().decode(APIError.self, from: data))?.error
             // Older running daemons can serve chats but have no artifact routes. Do not
@@ -876,9 +902,11 @@ final class PilotClient: ObservableObject {
             }
             throw ClientError(error ?? "HTTP \(status)")
         }
-        return try await Task.detached(priority: .userInitiated) {
+        let value = try await Task.detached(priority: .userInitiated) {
             try JSONDecoder().decode(Response.self, from: data)
         }.value
+        guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
+        return value
     }
 
     private struct Ack: Decodable {}
@@ -915,9 +943,9 @@ final class PilotClient: ObservableObject {
     private func call<Response: Decodable>(_ request: URLRequest) async throws -> Response {
         guard !disconnected else { throw HostRoutingError.disconnected }
         let generation = connectionGeneration
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await BoundedHTTPData.read(request, maximumBytes: 4 * 1024 * 1024)
         guard generation == connectionGeneration, !disconnected else { throw HostRoutingError.staleGeneration }
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        let status = response.statusCode
         guard (200 ..< 300).contains(status) else {
             throw ClientError((try? JSONDecoder().decode(APIError.self, from: data))?.error ?? "HTTP \(status)", status: status)
         }
