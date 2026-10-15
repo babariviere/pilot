@@ -178,7 +178,7 @@ private struct DitherCornerClocked: View {
     }
 }
 
-/// Redraws `content` on each shared clock frame while it is on screen. Also drives `DitherRipple`.
+/// Redraws `content` on each shared clock frame while it is on screen. Also drives `DotGridSpinner`.
 struct DitherCornerTicking<Content: View>: View {
     @ViewBuilder let content: (Int) -> Content
     @ObservedObject private var clock = DitherCornerClock.shared
@@ -249,7 +249,8 @@ struct DitherCornerRequest: Hashable {
 enum DitherCornerRenderer {
     /// Bounded by construction: four signals times `frameCount` frames, plus `backgroundFrameCount` for the
     /// background ripple, at rest and fully receded, per extent in use, about 5 KB each for rows (the question tray's larger corner is about
-    /// 30 KB per frame, and only needs you).
+    /// 30 KB per frame, and only needs you; the composer's working corner, `ComposerCorner.extent`, about 11 KB per
+    /// frame, working only, never receded).
     private static var cache: [DitherCornerRequest: CGImage] = [:]
 
     static func image(for request: DitherCornerRequest) -> CGImage? {

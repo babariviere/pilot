@@ -73,8 +73,10 @@ dissolve cell by cell. Under the pointer the corner recedes toward the trailing 
 the row's revealed buttons use the space it frees: rows with a corner draw no hover fill and nothing cuts holes in
 the corner. Reduce Motion keeps it still and recedes it without animating.
 An agent that is idle while its background jobs run is still Working, drawn with a fainter, half-speed ripple so it
-reads as work in the background. Live work inside a view, such as a chat's working line, uses the same ripple as a
-small strip (`DitherRipple`) instead of a spinner or shimmer.
+reads as work in the background. While a chat works, its composer wears the same working corner in its bottom-right,
+behind the editor and controls, and draws nothing when idle. Live work inside a view (a running tool step, the chat's
+working line) uses the dot grid spinner (`DotGridSpinner`): a fixed 4×4 grid of grey dots that turn indigo as a wave
+passes diagonally, fainter and half speed while only background jobs run, and still under Reduce Motion.
 
 ## Sidebar
 

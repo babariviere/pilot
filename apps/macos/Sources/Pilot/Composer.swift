@@ -134,6 +134,8 @@ final class ComposerState: ObservableObject {
 /// same keys, so Return saves it as steering and Option-Return as a follow-up. Submitting an
 /// empty queue edit removes the message instead. Waiting system messages sit above the queue as one
 /// read-only line (`SystemMessagesStrip`).
+/// While the chat works, the tray wears the sidebar row's dithered working corner in its bottom-right
+/// (`ComposerCorner`): the same ripple, fainter and half as fast while only background jobs run, nothing when idle.
 struct Composer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var state: ComposerState
@@ -196,6 +198,8 @@ struct Composer: View {
     }
 
     private var remainingQueuedMessages: [QueuedMessage] { state.remainingQueuedMessages(queuedMessages) }
+
+    private var corner: ComposerCorner { ComposerCorner(agentWorking: working, session: session) }
 
     private var showsQueue: Bool {
         !remainingQueuedMessages.isEmpty || state.queueEditing.selected != nil || state.queueRemovalError != nil
@@ -264,9 +268,15 @@ struct Composer: View {
                 editor
                 controls
             }
+            // Strips inside keep their own hover fills; the corner below is the tray's, not a row's.
+            .environment(\.rowHasDitherCorner, false)
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsQueue)
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: systemMessages.isEmpty)
             .animation(Theme.Motion.standard(reduceMotion: reduceMotion), value: showsStatusLines)
+            // Behind the opaque editor card, so it shows only in the tray's margin and beside the controls, and
+            // clipped to the tray's rounded shape.
+            .ditherCorner(corner.signal, background: corner.background, outset: EdgeInsets(),
+                          cornerRadius: Theme.Radius.tray, extent: ComposerCorner.extent, recedes: false)
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.tray)
                     .fill(Theme.tray)
@@ -462,6 +472,32 @@ private struct KeyHints: View {
             if working { KeyHint(key: "⌥↩", label: "follow up") }
             KeyHint(key: "⇧↩", label: "new line")
             if queued { KeyHint(key: "⌥↑↓", label: "edit queue") }
+        }
+    }
+}
+
+/// The composer's working corner: the sidebar row's `DitherCorner` signal, limited to work. The agent's own run is
+/// the full working ripple; a chat that still counts as working while its agent is idle (background jobs) uses the
+/// background ripple, as its sidebar row does. Anything else, including needs-you states, draws nothing here.
+struct ComposerCorner: Equatable {
+    /// A tray is wider and taller than a row: more cells, the same 2 pt pixels.
+    static let extent = 1.5
+
+    var signal: SessionSignal?
+    var background = false
+
+    init(signal: SessionSignal?, background: Bool = false) {
+        self.signal = signal
+        self.background = background && signal == .working
+    }
+
+    init(agentWorking: Bool, session: SessionSummary?) {
+        if agentWorking {
+            self.init(signal: .working)
+        } else if let session, session.isWorking {
+            self.init(signal: .working, background: session.isWaitingOnJobs)
+        } else {
+            self.init(signal: nil)
         }
     }
 }

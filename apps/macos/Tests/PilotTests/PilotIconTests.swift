@@ -78,26 +78,6 @@ import Testing
     #expect(PilotIcon.selectedOption.systemName != PilotIcon.done.systemName)
 }
 
-@Test @MainActor func workingRippleFramesAreBoundedHardPixelsAndActuallyChange() throws {
-    let frames = try (0..<DitherCorner.frameCount).map {
-        try #require(DitherRippleRenderer.image(frame: $0, background: false, compact: true))
-    }
-    #expect(frames.count == DitherCorner.frameCount)
-    var patterns = Set<Data>()
-    for frame in frames {
-        #expect(frame.width == 8 && frame.height == 8)
-        #expect(!frame.shouldInterpolate)
-        let data = try #require(frame.dataProvider?.data) as Data
-        #expect(data.count == 8 * 8 * 4)
-        let alpha = stride(from: 3, to: data.count, by: 4).map { data[$0] }
-        #expect(Set(alpha) == [0, UInt8(0.85 * 255)], "One flat working opacity, no blurred edges")
-        patterns.insert(data)
-    }
-    #expect(patterns.count >= 12)
-    #expect(DitherRippleRenderer.image(frame: DitherCorner.frameCount, background: false, compact: true) === frames[0])
-    #expect(DitherRippleRenderer.cachedCount <= 2 * (DitherCorner.frameCount + DitherCorner.backgroundFrameCount))
-}
-
 @Test func sfSymbolConstructionStaysInTheVocabulary() throws {
     let sources = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
@@ -111,6 +91,7 @@ import Testing
         #expect(!source.contains("systemSymbolName:"), "Keep SF name resolution in PilotIcon.swift: \(file.lastPathComponent)")
         #expect(!source.contains("MissionSymbol"))
         #expect(!source.contains("ArtifactSymbol"))
-        #expect(!source.contains("WorkingRipple"), "Use the shared DitherRipple: \(file.lastPathComponent)")
+        #expect(!source.contains("WorkingRipple"), "Use the shared DotGridSpinner: \(file.lastPathComponent)")
+        #expect(!source.contains("DitherRipple"), "Use the shared DotGridSpinner: \(file.lastPathComponent)")
     }
 }
