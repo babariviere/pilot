@@ -1180,10 +1180,16 @@ test("renames persist, broadcast, keep activity and win over a pending generated
 		await assert.rejects(sessions.rename(randomUUID(), "Other"), NotFound);
 
 		let release!: (title: string) => void;
-		sessions["factories"].title = () => new Promise<string>((resolve) => (release = resolve));
+		const started = deferred();
+		sessions["factories"].title = () =>
+			new Promise<string>((resolve) => {
+				release = resolve;
+				started.resolve();
+			});
 		const meta = sessions["metas"].get(ids[1]!)!;
 		meta.titlePending = { cwd: meta.cwd, message: "task" };
 		sessions["generateTitle"](meta);
+		await started.promise;
 		await sessions.rename(ids[1]!, "Chosen");
 		release("Generated");
 		await Promise.allSettled([...sessions["titleTasks"]]);

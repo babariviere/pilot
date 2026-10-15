@@ -514,6 +514,11 @@ class FakeWorker implements SessionWorker {
 		this.onPacket({ type: "subagents", subagents });
 	}
 
+	finish(completion?: SessionCompletion): void {
+		this.state = "idle";
+		this.onPacket({ type: "working", working: false, ...(completion ? { completion } : {}) });
+	}
+
 	send(command: KernelCommand): void {
 		this.sent.push(command);
 		if (command.type === "watch") this.onPacket({ type: "events", watchId: command.watchId, events: [snapshot] });
@@ -748,14 +753,30 @@ test("PR observers receive persisted full chat heads and startup baselines, neve
 	assert.equal(recovered[0]?.pending, true);
 });
 
-test("generated title updates and persists without delaying startup", async (t) => {
+test("title waits for a completed turn, uses the thread and generates only once", async (t) => {
 	const f = await fixture(t);
 	const gate = deferred();
 	const task = "Please fix the branch naming and describe the result";
+	let calls = 0;
 	const sessions = await f.manager({
+		historyRead: async () => ({
+			entries: [
+				{ id: 1, kind: "pi.user", model: [{ role: "user", content: task }] },
+				{ id: 2, kind: "pi.user", model: [{ role: "user", content: "Use conventional prefixes" }] },
+				{
+					id: 3,
+					kind: "pi.message",
+					model: [{ role: "assistant", content: [{ type: "text", text: "Fixed branch naming" }] }],
+				},
+			] as never,
+			more: false,
+		}),
 		title: async (cwd, message, signal) => {
+			calls++;
 			assert.equal(cwd, f.source);
-			assert.equal(message, task);
+			assert.ok(message.includes(task));
+			assert.ok(message.includes("user: Use conventional prefixes"));
+			assert.ok(message.includes("assistant: Fixed branch naming"));
 			assert.equal(signal.aborted, false);
 			await gate.promise;
 			return "Fix branch naming";
@@ -767,11 +788,21 @@ test("generated title updates and persists without delaying startup", async (t) 
 	assert.equal(created.title, task);
 	await until(() => sessions.get(created.id)?.state === "working");
 	assert.equal(sessions.get(created.id)?.title, task);
+	assert.equal(calls, 0, "startup and active work do not start title generation");
+	f.workers[0]!.finish();
+	await Promise.resolve();
+	assert.equal(calls, 0, "an idle transition without a completion is not a finished turn");
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: 100 });
+	await until(() => calls === 1);
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: 100 });
 	gate.resolve();
 	await until(() => sessions.get(created.id)?.title === "Fix branch naming");
 	await until(async () => (await f.stored(created.id)).title === "Fix branch naming");
 	assert.ok(titles.includes("Fix branch naming"));
 	assert.equal((await f.stored(created.id)).titlePending, undefined);
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: 200 });
+	await Promise.resolve();
+	assert.equal(calls, 1, "replayed completions and later turns do not retitle");
 });
 
 test("stack-only PR updates publish, persist and leave chat activity unchanged", async (t) => {
@@ -817,13 +848,45 @@ test("explicit titles bypass generation and provider failures keep the fallback"
 	assert.equal(explicit.title, "My title");
 	assert.equal(calls, 0);
 	const fallback = await sessions.spawn({ cwd: f.source, message: "Fallback task\nDetails" });
+	await until(() => f.workers.length === 2 && f.workers[1]!.state === "working");
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: 100 });
+	f.workers[1]!.finish({ outcome: "question", outcomeAt: 100 });
 	await until(async () => (await f.stored(fallback.id)).titlePending === undefined);
 	assert.equal(calls, 1);
 	assert.equal(sessions.get(fallback.id)?.title, "Fallback task");
 	assert.equal(sessions.get(explicit.id)?.title, "My title");
 });
 
-test("pending titles resume on load without waking an idle kernel", async (t) => {
+for (const pending of [{ titlePending: { ready: true } }, { lastCompletionAt: 100, titlePending: {} }])
+	test("completed pending titles resume on load without waking an idle kernel", async (t) => {
+		const f = await fixture(t);
+		const id = randomUUID();
+		await mkdir(join(f.home, "sessions", id), { recursive: true });
+		await writeFile(
+			join(f.home, "sessions", id, "meta.json"),
+			JSON.stringify({
+				id,
+				cwd: f.source,
+				title: "Fallback",
+				createdAt: 1,
+				updatedAt: 1,
+				...pending,
+				titlePending: { ...pending.titlePending, cwd: f.source, message: "Task details" },
+			}),
+		);
+		const sessions = await f.manager({
+			title: async (cwd, message) => {
+				assert.equal(cwd, f.source);
+				assert.ok(message.includes("Task details"));
+				return "Recovered title";
+			},
+		});
+		await until(async () => (await f.stored(id)).titlePending === undefined);
+		assert.equal(sessions.get(id)?.title, "Recovered title");
+		assert.equal(f.workers.length, 0);
+	});
+
+test("restart keeps uncompleted titles pending and a manual rename prevents later generation", async (t) => {
 	const f = await fixture(t);
 	const id = randomUUID();
 	await mkdir(join(f.home, "sessions", id), { recursive: true });
@@ -838,16 +901,24 @@ test("pending titles resume on load without waking an idle kernel", async (t) =>
 			titlePending: { cwd: f.source, message: "Task details" },
 		}),
 	);
+	let calls = 0;
 	const sessions = await f.manager({
-		title: async (cwd, message) => {
-			assert.equal(cwd, f.source);
-			assert.equal(message, "Task details");
-			return "Recovered title";
+		title: async () => {
+			calls++;
+			return "Should not be used";
 		},
 	});
-	await until(async () => (await f.stored(id)).titlePending === undefined);
-	assert.equal(sessions.get(id)?.title, "Recovered title");
+	assert.equal(calls, 0);
+	assert.equal(sessions["titleTasks"].size, 0);
 	assert.equal(f.workers.length, 0);
+	assert.ok((await f.stored(id)).titlePending);
+	await sessions.send(id, "Continue");
+	await until(() => f.workers[0]?.state === "working");
+	assert.equal(calls, 0, "opening and starting a turn still do not generate a title");
+	await sessions.rename(id, "My chosen title");
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: 100 });
+	assert.equal(calls, 0);
+	assert.equal(sessions.get(id)?.title, "My chosen title");
 });
 
 test("shutdown aborts title generation and leaves a durable retry", async (t) => {
@@ -861,6 +932,8 @@ test("shutdown aborts title generation and leaves a durable retry", async (t) =>
 		},
 	});
 	const created = await sessions.spawn({ cwd: f.source, message: "Fallback" });
+	await until(() => f.workers[0]?.state === "working");
+	f.workers[0]!.finish({ outcome: "done", outcomeAt: 100 });
 	await until(() => started);
 	await sessions.shutdown();
 	assert.equal(sessions.get(created.id)?.title, "Fallback");
@@ -2231,6 +2304,7 @@ for (const phase of ["runtime", "initializing"] as const) {
 			);
 		} else {
 			await sessions.send(created.id, "invalid", "followUp", "invalid-id");
+			await until(() => f.workers.length === 1);
 			f.workers[0]!.open();
 			await until(
 				() =>
