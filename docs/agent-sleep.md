@@ -9,6 +9,11 @@ closed-lid work only when external power **and** a usable Wi-Fi path are present
 either while the lid remains closed pauses agents, restores normal sleep and requests sleep.
 Without that option, ordinary lid sleep still pauses work for the next wake.
 
+While Pilot's closed-lid sleep override is active, closing the lid also immediately locks the Mac.
+This does not stop agents, hold the display awake, or change macOS password/lock-delay settings.
+It locks once per lid closure, so unlocking at a dock does not repeatedly lock you out. Enabling
+the override while the lid is already closed (including helper startup) also requests a lock.
+
 Pausing closes kernels without sending Stop/abort. The durable Harness retains its pending work.
 Native commands and background jobs interrupted by teardown are not automatically rerun. Their
 handles/results report interruption; agents can inspect what happened when they resume. This is
@@ -37,6 +42,11 @@ a kernel. A paused chat can be archived to opt out of automatic resume.
   [Vorssaint](https://github.com/vorssaint/vorssaint-utils). This implementation is independent, not
   copied from its GPL source. The setting is **system-wide and persistent**, not a process assertion.
   While enabled it can affect other system-sleep requests too. Keep ventilation clear.
+- Because suppressing lid sleep also bypasses its normal locking path, `PilotPower` explicitly
+  requests a session lock using login.framework's private `SACLockScreenImmediate` entry point,
+  resolved dynamically. No Accessibility or Automation permission is required. If it is unavailable
+  or returns failure, the helper shuts down and the guardian restores normal sleep rather than
+  silently continuing unlocked. Physical lock behavior must be smoke-tested on supported macOS versions.
 - A one-time, explicit administrator dialog installs `/etc/sudoers.d/pilot-power`, granting the
   current numeric uid only `/usr/bin/pmset disablesleep 1` and `0`. Subsequent calls use `sudo -n`.
   Neither Pilot nor its daemon runs as root. No administrator password is retained.
@@ -58,7 +68,7 @@ grant, first turn closed-lid work off, then remove `/etc/sudoers.d/pilot-power` 
 ## Verification
 
 Automated tests use synthetic state, temporary stores and injected override writers. They do not
-install sudoers entries, alter this Mac's power settings, call sleep APIs, or use model accounts.
+install sudoers entries, alter this Mac's power settings, call sleep/lock APIs, or use model accounts.
 The 10,000-update streaming regression verifies unchanged activity generates no additional native
 writes. Activity updates track active IDs without scanning the entire session registry, with one
 evaluator and at most eight pending native requests. Native sensors are event-driven; the only periodic work is the five-second safety lease.
@@ -67,6 +77,9 @@ Physical hardware still needs an opt-in smoke check on a test Mac:
 
 1. Run a faux-provider chat, lock the screen, and allow display sleep. Confirm work continues.
 2. Approve closed-lid mode, connect AC and Wi-Fi, close the lid and confirm progress without a display.
+   Reopen and confirm macOS requires authentication. Repeat with an external display attached;
+   unlock while docked and confirm sensor updates do not repeatedly lock the session. Open and
+   close the lid again and confirm it locks again.
 3. Repeat unplugging AC, then disconnecting Wi-Fi. Confirm pause precedes override restoration and sleep.
 4. Open on a new wake while offline. Confirm no resume until a connection returns. Confirm dark wakes,
    display wake and same-wake daemon restart do not resume work.

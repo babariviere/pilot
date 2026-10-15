@@ -4,16 +4,19 @@ import IOKit
 import IOKit.ps
 import IOKit.pwr_mgt
 import Network
+import PilotPowerSupport
 
-/// Event-driven sensors and a process-scoped idle assertion. Screen locking and display sleep are untouched.
+/// Event-driven sensors and a process-scoped idle assertion. No display assertion is held.
 final class PowerRuntime {
     private let work = DispatchQueue(label: "pilot.power.operations", qos: .utility)
+    private let locks = DispatchQueue(label: "pilot.power.lock", qos: .userInitiated)
     private let wifi = NWPathMonitor(requiredInterfaceType: .wifi)
     private let network = NWPathMonitor()
     private var wifiConnected = false
     private var online = false
     private var sleeping = false
     private var closedLidActive = false
+    private var lidLock = LidLockPolicy()
     private var authorized = false
     private var guardian: GuardianConnection?
     private var assertion: IOPMAssertionID = 0
@@ -209,6 +212,19 @@ final class PowerRuntime {
         let capabilities = suppliedCapabilities ?? (property("System Capabilities") as? NSNumber)?.uint32Value ?? 0
         let ac = connectedToPower()
         let closed = property("AppleClamshellState") as? Bool
+        if !stopping, lidLock.shouldLock(lidClosed: closed, overrideActive: closedLidActive) {
+            locks.async { [weak self] in
+                // Skip obsolete requests if the lid opened or normal sleep was restored while queued.
+                let needed = DispatchQueue.main.sync {
+                    guard let self else { return false }
+                    return !self.stopping && self.closedLidActive && self.property("AppleClamshellState") as? Bool == true
+                }
+                if needed, !lockSession() {
+                    // Never silently keep the machine awake and unlocked if the native lock API fails.
+                    DispatchQueue.main.async { self?.shutdown() }
+                }
+            }
+        }
         let unsafe = closedLidActive && closed == true && (!ac || !wifiConnected)
         if unsafe, unsafeCutoff == nil {
             // A live heartbeat is not proof that pilotd finished its durable pause. Bound that wait too.

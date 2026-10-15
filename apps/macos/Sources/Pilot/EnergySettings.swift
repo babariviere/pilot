@@ -56,7 +56,7 @@ struct EnergySettingsContent: View {
                 set: { update(PowerSettings(keepAwake: status.settings.keepAwake, closedLid: $0)) }
             )) {
                 Text("Keep going with the lid closed")
-                Text("Only while on power and Wi-Fi. If either disconnects, Pilot pauses agents and lets this Mac sleep.")
+                Text("Locks this Mac when you close the lid. Requires power and Wi-Fi; if either disconnects, Pilot pauses agents and lets this Mac sleep.")
             }
             .disabled(busy || (!status.available && !status.settings.closedLid) || !status.settings.keepAwake)
         } header: {

@@ -61,6 +61,17 @@ func authorize() -> Bool {
     ], timeout: 115).0 && permissionReady()
 }
 
+/// macOS has no public immediate-lock API. Resolve the login framework entry point at runtime so
+/// an OS change fails closed instead of breaking helper launch. No Accessibility/Automation grant,
+/// simulated keystroke, screensaver/password preference change, or administrator command is needed.
+func lockSession() -> Bool {
+    guard let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/login", RTLD_NOW) else { return false }
+    defer { dlclose(handle) }
+    guard let symbol = dlsym(handle, "SACLockScreenImmediate") else { return false }
+    typealias Lock = @convention(c) () -> Int32
+    return unsafeBitCast(symbol, to: Lock.self)() == 0
+}
+
 /// Fixed, per-user state, independent of PILOT_HOME. Development daemons cannot fight over a global override.
 func overrideDirectory() -> URL {
     FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Pilot/Power", isDirectory: true)

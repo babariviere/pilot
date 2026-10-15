@@ -25,8 +25,9 @@ See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
   request number), pages, missions and tasks (`#25`), project scopes, Linear and Slack Inbox items, and actions such
   as new chat, pin, archive, stop, retry or opening the pull request on GitHub.
 - **Let the display rest while agents work.** Keep the Mac awake without keeping the display on.
-  Optional closed-lid work requires power and Wi-Fi; otherwise agents pause and resume on the next full wake
-  with connectivity. See [agent-aware sleep](docs/agent-sleep.md) for authorization and interruption limits.
+  Optional closed-lid work locks the Mac on lid closure and requires power and Wi-Fi; otherwise agents pause
+  and resume on the next full wake with connectivity. See [agent-aware sleep](docs/agent-sleep.md) for
+  authorization and interruption limits.
 - **Answer questions quickly.** When an agent needs a decision, its question replaces the message box with
   suggested answers. Pick one with the number keys and Return, or reply in your own words. The chat shows as
   needing you until you answer.
