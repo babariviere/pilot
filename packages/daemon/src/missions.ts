@@ -486,6 +486,8 @@ export class MissionStore {
 			});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "pr_sync_disabled"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN pr_sync_disabled INTEGER NOT NULL DEFAULT 0");
+		this.db.exec(`CREATE INDEX IF NOT EXISTS resources_by_owned_pr ON resources(mission_id, created_at, id)
+			WHERE kind = 'github.pr' AND relationship = 'ownership'`);
 		if (!this.all("PRAGMA table_info(events)").some((row) => row.name === "is_user_note"))
 			this.transaction(() => {
 				this.db.exec("ALTER TABLE events ADD COLUMN is_user_note INTEGER NOT NULL DEFAULT 0");
@@ -1052,6 +1054,24 @@ export class MissionStore {
 			? this.all(`${MISSION_SELECT} WHERE project_id = ? ORDER BY updated_at DESC`, projectId)
 			: this.all(`${MISSION_SELECT} ORDER BY updated_at DESC`);
 		return rows.map(missionFrom);
+	}
+
+	/** PR synchronization needs neither attention counts nor mission content. */
+	pullRequestMissions(): Array<Pick<Mission, "id" | "projectId">> {
+		return this.all("SELECT id, project_id FROM missions WHERE status = 'active' ORDER BY updated_at DESC").map(
+			(row) => ({ id: str(row.id!), projectId: str(row.project_id!) }),
+		);
+	}
+
+	ownedPullRequestResources(id: string): Array<Pick<MissionResource, "url" | "pullRequest">> {
+		return this.all(
+			`SELECT url, pull_request FROM resources
+			WHERE mission_id = ? AND kind = 'github.pr' AND relationship = 'ownership' ORDER BY created_at, id`,
+			id,
+		).map((row) => ({
+			url: str(row.url!),
+			...(row.pull_request ? { pullRequest: JSON.parse(str(row.pull_request)) as SessionPullRequest } : {}),
+		}));
 	}
 
 	get(id: string): Mission | undefined {

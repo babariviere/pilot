@@ -93,3 +93,46 @@ The native app builds. Its offline streaming check rendered 1,001 rows with 201 
 check, not a before/after CPU claim. No installed-app session was restarted or rewritten. A static
 SwiftUI mock documents unchanged metadata presentation, not a real-view visual check. Packaged-app
 device I/O and battery life remain unverified. Existing unrelated repository lint warnings remain.
+
+## Background metadata under load (2026-10-15)
+
+A read-only observation of installed Pilot 1.35.0 found machine load averages around 60–70 on
+11 logical CPUs, concurrent agent-owned Go builds/tests/hooks, and substantial OrbStack activity.
+In one ten-minute log window, pilotd recorded 41 watchdog gaps above one second (maximum 16.2 s);
+34 included pending repository-summary requests. Pending requests identify affected work, not proof
+that those requests caused the gaps. Watchdog gaps can also include scheduling delays or sleep.
+No live agents, jobs or services were stopped or restarted.
+
+Two bounded changes reduce avoidable work, without imposing new agent/build concurrency policy:
+
+- PR polling reads active mission IDs/project IDs and indexed ownership PR resources, not full
+  mission details or attention aggregates. Task bodies, brief, comments, decisions and events are
+  not materialized. Chat-only bindings, reference exclusion and durable PR caches are preserved.
+- Visible sidebar rows poll `GET /api/sessions/:id/changes/branch`, which resolves the branch or
+  jj bookmark without diff metadata or untracked-file scans. File/line counts load only while a
+  row's tooltip is hovered. Both loops retain visibility gating, idle backoff, single-flight caches,
+  bounded admission and cancellation. The Changes pane and the existing summary API are unchanged.
+
+Repeat the offline probe with:
+
+```sh
+node scripts/bench/background-metadata.ts
+```
+
+It uses temporary SQLite/Git fixtures, not accounts, providers or live workspaces. The PR comparison
+alternates the previous `list()`/`detail()` projection with the narrow reads, discards one warmup pair
+and reports medians of five samples. The fixture has 1,001 tasks and 8 MB of task bodies. Twenty
+projections measured **461.44 ms wall / 454.42 ms CPU before**, and **0.28 ms wall / 0.28 ms CPU
+after** in one local run. This isolates synchronous projection work, not end-to-end daemon latency.
+
+With 1,000 untracked text files, a row refresh used **8 Git commands before and 1 after**, with no
+file-content reads on the branch path. Warm alternating samples measured 145–328 ms for summaries
+and 20–61 ms for branch reads. The first summary scanned 512 KB; subsequent summaries reused their
+file-content metadata. Cache and host scheduling affect timings; operation counts are the stronger
+comparison. This is not a live streaming/UI benchmark, leak test or claim that host pressure is solved.
+
+Targeted regressions cover projection isolation/index use, reference and inactive-mission exclusion,
+PR cache behavior, branch cache expiry/invalidation, detached heads, endpoint guards and client
+on-demand/cancellation behavior. Local checks are limited to affected Node tests, TypeScript checking,
+Swift parsing and PilotCore typechecking; full Swift builds/tests and full Node suites run in CI.
+No layout changed, and the installed UI was not rebuilt or visually rechecked for these changes.

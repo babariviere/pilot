@@ -652,6 +652,12 @@ public struct RemoveQueuedMessageResponse: Codable, Sendable {
     public let ok: Bool
 }
 
+/// GET /api/sessions/:id/changes/branch. No changed files or line counts are read.
+public struct SessionBranch: Codable, Equatable, Sendable {
+    public let branch: String?
+    public init(branch: String? = nil) { self.branch = branch }
+}
+
 /// GET /api/sessions/:id/changes/summary. No patch content is generated or transferred.
 public struct SessionChangeSummary: Codable, Equatable, Sendable {
     public let base: String

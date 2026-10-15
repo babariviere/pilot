@@ -25,6 +25,7 @@ import Testing
     app.toggleInspector(.changes)
     #expect(!app.inspectorVisible)
     await metadata.load(coordinator, client: app.client)
+    await metadata.loadBranch(coordinator, client: app.client)
     #expect(metadata.summary == nil && metadata.error == nil)
     #expect(metadata.branch(for: coordinator) == nil)
     let member = chat(coordinator: false)

@@ -137,35 +137,27 @@ export class MissionService {
 				store.validatePullRequestBinding(sessionId, url, taskId),
 			applyPullRequestBinding: (operation) => store.applyPullRequestBinding(operation),
 			linkedPullRequests: () =>
-				store
-					.list()
-					.filter((mission) => mission.status === "active")
-					.flatMap((mission) => {
-						const project = projects.get(mission.projectId);
-						if (!project) return [];
-						const linked = store
-							.detail(mission.id)
-							.resources.filter(
-								(resource) => resource.kind === "github.pr" && resource.relationship === "ownership",
-							)
-							.map((resource) => ({ url: resource.url, cwd: project.path, pullRequest: resource.pullRequest }));
-						const owned = store.members(mission.id).flatMap((id) => {
-							const prs = sessions.ownedPullRequests(id);
-							return [
-								...new Set([...prs.map((pr) => pr.url), ...(sessions.get(id)?.boundPullRequests ?? [])]),
-							].map((url) => {
+				store.pullRequestMissions().flatMap((mission) => {
+					const project = projects.get(mission.projectId);
+					if (!project) return [];
+					const linked = store
+						.ownedPullRequestResources(mission.id)
+						.map((resource) => ({ url: resource.url, cwd: project.path, pullRequest: resource.pullRequest }));
+					const owned = store.members(mission.id).flatMap((id) => {
+						const prs = sessions.ownedPullRequests(id);
+						return [...new Set([...prs.map((pr) => pr.url), ...(sessions.get(id)?.boundPullRequests ?? [])])].map(
+							(url) => {
 								const pr = prs.find((pr) => pr.url.toLowerCase() === url.toLowerCase());
 								return {
 									url,
 									cwd: project.path,
 									pullRequest: pr ? store.memberPullRequest(mission.id, pr) : undefined,
 								};
-							});
-						});
-						return [
-							...new Map([...owned, ...linked].map((target) => [target.url.toLowerCase(), target])).values(),
-						];
-					}),
+							},
+						);
+					});
+					return [...new Map([...owned, ...linked].map((target) => [target.url.toLowerCase(), target])).values()];
+				}),
 			systemMessageState: (sessionId, event) => store.recordSystemMessageState(sessionId, event),
 			workspaceBehind: (sessionId, text) => {
 				const id = store.missionOf(sessionId);

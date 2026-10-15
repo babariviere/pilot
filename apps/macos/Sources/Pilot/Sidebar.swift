@@ -606,7 +606,7 @@ struct SessionRow: View {
                 }
                 .revealed(hovered)
             }
-            SessionRepositoryMetadata(session: session) { branch in
+            SessionRepositoryMetadata(session: session, hovered: hovered) { branch in
                 RowLine(segments: RowLineSegments.shown(RowLineSegments.session(
                     session, projectName: projectName, missionId: session.missionId, missionTitle: missionTitle,
                     reason: reason, branch: branch, coordinatorDetail: coordinatorDetail), draft: draft)) {

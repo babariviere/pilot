@@ -17,11 +17,12 @@ private final class RepositoryHTTPStub: URLProtocol {
         let url = request.url!
         Self.lock.withLock { Self.requests[url.host! + url.path, default: 0] += 1 }
         let full = url.path == "/api/sessions/task/changes"
-        let success = (full || url.path == "/api/sessions/task/changes/summary") && url.host != "failed.invalid"
+        let branch = url.path == "/api/sessions/task/changes/branch"
+        let success = (full || branch || url.path == "/api/sessions/task/changes/summary") && url.host != "failed.invalid"
         let response = HTTPURLResponse(url: url, statusCode: success ? 200 : 404, httpVersion: nil,
                                        headerFields: ["Content-Type": "application/json"])!
         let body = success
-            ? (full ? #"{"base":"HEAD","files":[],"diff":"","truncated":false}"#
+            ? (branch ? #"{"branch":"pilot/task"}"# : full ? #"{"base":"HEAD","files":[],"diff":"","truncated":false}"#
                     : #"{"base":"origin/main","branch":"pilot/task","fileCount":3,"additions":13,"deletions":2}"#)
             : #"{"error":"Not a git repository"}"#
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
@@ -48,6 +49,66 @@ private func repositorySession(_ state: String = "idle") -> SessionSummary {
     await model.load(repositorySession(), client: client)
     #expect(model.summary == SessionChangeSummary(base: "origin/main", branch: "pilot/task", fileCount: 3, additions: 13, deletions: 2))
     #expect(model.error == nil)
+}
+
+@Test @MainActor func sidebarPollsOnlyBranchesAndLoadsCountsOnDemand() async {
+    let host = "\(UUID().uuidString.lowercased()).invalid"
+    let client = repositoryClient(host)
+    let model = SessionRepositoryModel()
+    await model.loadBranch(repositorySession(), client: client)
+    await model.loadBranch(repositorySession(), client: client)
+    #expect(model.branch(for: repositorySession()) == "pilot/task")
+    #expect(model.summary == nil)
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes/branch") == 1)
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes/summary") == 0)
+    await model.load(repositorySession(), client: client)
+    #expect(model.summary?.fileCount == 3)
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes/summary") == 1)
+    model.clearSummary()
+    #expect(model.summary == nil)
+    #expect(model.branch(for: repositorySession()) == "pilot/task")
+    client.refreshRepositoryCaches()
+    await model.loadBranch(repositorySession(), client: client)
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes/branch") == 2)
+    client.handle(.session(SessionSummary(id: "task", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 3, state: "idle")))
+    await model.loadBranch(repositorySession(), client: client)
+    #expect(RepositoryHTTPStub.count(host, path: "/api/sessions/task/changes/branch") == 3)
+}
+
+@Test @MainActor func branchRefreshHandlesDetachedHeadsErrorsAndStartingWorkspaces() async {
+    let client = PilotClient()
+    let model = SessionRepositoryModel()
+    client.fixtureChangeSummaries["task"] = SessionChangeSummary(base: "HEAD", fileCount: 0)
+    await model.loadBranch(repositorySession("starting"), client: client)
+    #expect(model.branchSnapshot == nil)
+    await model.loadBranch(repositorySession(), client: client)
+    #expect(model.branchSnapshot == SessionBranch())
+    #expect(model.branch(for: repositorySession()) == nil)
+    await model.loadBranch(repositorySession(), client: repositoryClient("failed.invalid"))
+    #expect(model.branchSnapshot == nil)
+    #expect(model.error == "Not a git repository")
+}
+
+@Test @MainActor func branchSuccessDoesNotHideADiffSummaryError() async {
+    let model = SessionRepositoryModel()
+    await model.load(repositorySession(), client: repositoryClient("failed.invalid"))
+    await model.loadBranch(repositorySession(), client: repositoryClient())
+    #expect(model.error == "Not a git repository")
+    model.clearSummary()
+    #expect(model.error == nil)
+}
+
+@Test @MainActor func cancelledBranchRefreshDoesNotPublish() async {
+    let client = PilotClient()
+    client.fixtureChangeSummaries["task"] = SessionChangeSummary(base: "HEAD", branch: "fix/new", fileCount: 0)
+    let model = SessionRepositoryModel()
+    let refresh = Task { @MainActor in
+        await Task.yield()
+        await model.loadBranch(repositorySession(), client: client)
+    }
+    refresh.cancel()
+    await refresh.value
+    #expect(model.branchSnapshot == nil && model.summary == nil && model.error == nil)
 }
 
 @Test @MainActor func fullDiffReadsCoalesceAndActivityInvalidatesTheirCache() async throws {

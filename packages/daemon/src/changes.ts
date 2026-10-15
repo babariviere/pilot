@@ -1,5 +1,5 @@
 /** What a session changed: its working copy against the point it branched from. */
-import type { ChangedFile, SessionChangeSummary, SessionChanges } from "@pilot/protocol";
+import type { ChangedFile, SessionBranch, SessionChangeSummary, SessionChanges } from "@pilot/protocol";
 import { ProcessFailed, subprocesses } from "./subprocess.ts";
 import { TtlCache } from "./ttl-cache.ts";
 import { type LineStat, type UntrackedFile, untrackedStats } from "./untracked-stats.ts";
@@ -71,7 +71,7 @@ export class RepositoryChanges {
 		busyMessage: "Repository changes are busy. Retry shortly.",
 		weight: (value) => Buffer.byteLength(JSON.stringify(value)),
 	});
-	private readonly cache = new TtlCache<SessionChanges | SessionChangeSummary>({
+	private readonly cache = new TtlCache<SessionChanges | SessionChangeSummary | SessionBranch>({
 		ttlMs: 1000,
 		maxEntries: 128,
 		maxBytes: 16 * 1024 * 1024,
@@ -79,6 +79,14 @@ export class RepositoryChanges {
 		busyMessage: "Repository changes are busy. Retry shortly.",
 		weight: (value) => Buffer.byteLength(JSON.stringify(value)),
 	});
+
+	/** Shares bounded admission with diff reads, but never computes a base, paths or line counts. */
+	branch(cwd: string): Promise<SessionBranch> {
+		return this.cache.get(JSON.stringify([cwd, null, null, "branch"]), async () => {
+			const branch = await workspaceBranch(cwd);
+			return branch ? { branch } : {};
+		}) as Promise<SessionBranch>;
+	}
 
 	changes(cwd: string, base = "HEAD", baseBranch?: string): Promise<SessionChanges> {
 		return this.cache.get(JSON.stringify([cwd, base, baseBranch ?? null, "full"]), () =>

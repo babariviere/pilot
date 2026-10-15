@@ -20,6 +20,37 @@ const git = (cwd: string, ...args: string[]) =>
 		},
 	});
 
+test("branch polling coalesces, expires and invalidates without reading diffs or untracked files", async (t) => {
+	const root = mkdtempSync(join(tmpdir(), "pilot-branch-cache-"));
+	t.after(() => rmSync(root, { recursive: true, force: true }));
+	t.mock.timers.enable({ apis: ["Date"], now: 0 });
+	git(root, "init", "--quiet", "-b", "main");
+	writeFileSync(join(root, "file"), "base\n");
+	git(root, "add", ".");
+	git(root, "commit", "--quiet", "-m", "base");
+	writeFileSync(join(root, "untracked"), "not read\n");
+	const run = subprocesses.run.bind(subprocesses);
+	const commands = t.mock.method(subprocesses, "run", (file: string, args: string[], options: ProcessOptions) => {
+		assert.equal(file, "git");
+		assert.deepEqual(args, ["branch", "--show-current"]);
+		return run(file, args, options);
+	});
+	const cache = new RepositoryChanges();
+	const first = cache.branch(root);
+	assert.equal(cache.branch(root), first);
+	assert.deepEqual(await first, { branch: "main" });
+	assert.equal(commands.mock.callCount(), 1);
+	git(root, "switch", "--quiet", "-c", "fix/external");
+	assert.deepEqual(await cache.branch(root), { branch: "main" });
+	t.mock.timers.tick(1000);
+	assert.deepEqual(await cache.branch(root), { branch: "fix/external" });
+	git(root, "switch", "--quiet", "--detach", "main");
+	cache.invalidate(root);
+	assert.deepEqual(await cache.branch(root), {}, "a successful detached HEAD is not a stale branch");
+	await assert.rejects(cache.branch(join(root, "missing")));
+	assert.equal(commands.mock.callCount(), 4);
+});
+
 test("untracked stats match Git attributes, drivers, thresholds and symlinks without per-file Git", async (t) => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-untracked-git-parity-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
