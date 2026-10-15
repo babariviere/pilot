@@ -267,6 +267,10 @@ test("ordinary member declarations omit privileged actions and their guidance", 
 	assert.doesNotMatch(tool.description, /task order|For claim or group/);
 	assert.doesNotMatch(tool.description, /subscriptionUsage|window percent\/reset/);
 	assert.match(tool.description, /status "dropped"/);
+	assert.match(tool.description, /status "delegated"/);
+	assert.ok(
+		(tool.parameters as { properties: { status: { enum: string[] } } }).properties.status.enum.includes("delegated"),
+	);
 	assert.equal(schema.properties.model, undefined);
 	assert.equal(schema.properties.thinking, undefined);
 	assert.equal((schema.properties as Record<string, unknown>).artifacts, undefined);

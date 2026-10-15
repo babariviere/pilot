@@ -53,7 +53,15 @@ export interface MissionActivityQuery {
 
 const USER: MissionActor = {};
 const STATUSES: MissionStatus[] = ["active", "done", "archived"];
-const TASK_STATUSES: MissionTaskStatus[] = ["todo", "in_progress", "blocked", "in_review", "done", "dropped"];
+const TASK_STATUSES: MissionTaskStatus[] = [
+	"todo",
+	"in_progress",
+	"blocked",
+	"in_review",
+	"delegated",
+	"done",
+	"dropped",
+];
 const HEALTH: MissionHealth[] = ["on_track", "at_risk", "off_track"];
 const MAX_TITLE = 200;
 const MAX_TEXT = 8_000;
@@ -418,6 +426,13 @@ export class MissionStore {
 		});
 		if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === "decision_ids"))
 			this.db.exec("ALTER TABLE tasks ADD COLUMN decision_ids TEXT");
+		for (const column of ["delegated_to", "delegated_from_status", "delegated_resource_id"])
+			if (!this.all("PRAGMA table_info(tasks)").some((row) => row.name === column))
+				this.db.exec(`ALTER TABLE tasks ADD COLUMN ${column} TEXT`);
+		this.db.exec(`CREATE TABLE IF NOT EXISTS linear_task_assignees (
+			resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+			assignee_id TEXT
+		)`);
 		// Upgrade already queued events without losing their stable event IDs.
 		this.db.exec(`INSERT OR IGNORE INTO pending_notice_summaries (event_id, group_key, text, state)
 			SELECT p.event_id, COALESCE('task:' || e.task_id, 'task:' || t.id,
@@ -456,6 +471,9 @@ export class MissionStore {
 		);
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "task_id"))
 			this.db.exec("ALTER TABLE resources ADD COLUMN task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL");
+		this.db.exec(
+			"CREATE INDEX IF NOT EXISTS resources_by_linear_task ON resources(mission_id, task_id) WHERE kind = 'linear.issue'",
+		);
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "pull_request"))
 			this.db.exec("ALTER TABLE resources ADD COLUMN pull_request TEXT");
 		if (!this.all("PRAGMA table_info(resources)").some((row) => row.name === "relationship"))
@@ -1247,6 +1265,86 @@ export class MissionStore {
 
 	// Tasks
 
+	/** Lightweight, bounded linked-issue reads, including automatic delegations awaiting return. */
+	linearTaskLinks(
+		projectId?: string,
+		after = "",
+		limit = 25,
+	): { resourceId: string; issueId: string; projectId: string }[] {
+		return this.all(
+			`
+			SELECT r.id, r.external_id, m.project_id FROM missions m
+			JOIN resources r ON r.mission_id = m.id AND r.kind = 'linear.issue'
+			JOIN tasks t ON t.id = r.task_id
+			WHERE (? IS NULL OR m.project_id = ?) AND m.status = 'active' AND r.id > ?
+			AND (t.status IN ('todo', 'in_progress', 'blocked', 'in_review')
+				OR (t.status = 'delegated' AND t.delegated_from_status IS NOT NULL))
+			ORDER BY r.id LIMIT ?`,
+			projectId ?? null,
+			projectId ?? null,
+			after,
+			Math.min(25, Math.max(1, limit)),
+		).map((row) => ({ resourceId: str(row.id!), issueId: str(row.external_id!), projectId: str(row.project_id!) }));
+	}
+
+	/** Only an assignee transition can override a manual status. All state and its notice commit together. */
+	observeLinearAssignee(
+		projectId: string,
+		resourceId: string,
+		assignee: { id: string; name: string } | null,
+		me: string,
+	): void {
+		let changed: { missionId: string; sessionId?: string } | undefined;
+		this.transaction(() => {
+			const row = this.one(
+				`SELECT t.*, r.mission_id FROM resources r
+				JOIN missions m ON m.id = r.mission_id JOIN tasks t ON t.id = r.task_id
+				WHERE r.id = ? AND r.kind = 'linear.issue' AND m.project_id = ? AND m.status = 'active'`,
+				resourceId,
+				projectId,
+			);
+			if (!row || !["todo", "in_progress", "blocked", "in_review", "delegated"].includes(str(row.status!))) return;
+			const prior = this.one("SELECT assignee_id FROM linear_task_assignees WHERE resource_id = ?", resourceId);
+			if (prior && prior.assignee_id === (assignee?.id ?? null)) return;
+			this.run(
+				`INSERT INTO linear_task_assignees (resource_id, assignee_id) VALUES (?, ?)
+				ON CONFLICT(resource_id) DO UPDATE SET assignee_id = excluded.assignee_id`,
+				resourceId,
+				assignee?.id ?? null,
+			);
+			// Unassignment is not a return to the user.
+			if (!assignee) return;
+			const before = taskFrom(row);
+			const mine = assignee.id === me;
+			if (before.status === "delegated" && !row.delegated_from_status) return;
+			if (mine && (before.status !== "delegated" || row.delegated_resource_id !== resourceId)) return;
+			const status = mine ? str(row.delegated_from_status!) : "delegated";
+			const now = Date.now();
+			this.run(
+				`UPDATE tasks SET status = ?, delegated_to = ?, delegated_from_status = ?,
+				delegated_resource_id = ?, updated_at = ?, completed_at = NULL WHERE id = ?`,
+				status,
+				mine ? null : assignee.name,
+				mine ? null : (row.delegated_from_status ?? before.status),
+				mine ? null : resourceId,
+				now,
+				before.id,
+			);
+			const missionId = str(row.mission_id!);
+			this.event(
+				missionId,
+				"task",
+				mine
+					? `Returned to you in Linear (restored ${statusLabel(status as MissionTaskStatus)}): #${before.number} ${before.title}`
+					: `Delegated to ${assignee.name} in Linear: #${before.number} ${before.title}`,
+				{},
+				{ taskId: before.id, at: now, wake: true },
+			);
+			changed = { missionId, sessionId: before.sessionId };
+		});
+		if (changed) this.changed(changed.missionId, changed.sessionId ? [changed.sessionId] : []);
+	}
+
 	tasks(id: string): MissionTask[] {
 		return this.all("SELECT * FROM tasks WHERE mission_id = ? ORDER BY sort, number", id).map(taskFrom);
 	}
@@ -1359,6 +1457,12 @@ export class MissionStore {
 		this.transaction(() => {
 			if (fields.decisionIds !== undefined)
 				this.run("UPDATE tasks SET decision_ids = ? WHERE id = ?", JSON.stringify(fields.decisionIds), before.id);
+			// An explicit status, including the same one, opts out until the next assignment change.
+			if (fields.status !== undefined)
+				this.run(
+					"UPDATE tasks SET delegated_to = NULL, delegated_from_status = NULL, delegated_resource_id = NULL WHERE id = ?",
+					before.id,
+				);
 			// A user moving work back opts out permanently, across restarts and new links.
 			const rank = (state: MissionTaskStatus) =>
 				state === "todo" ? 0 : state === "in_review" ? 2 : state === "done" || state === "dropped" ? 3 : 1;
@@ -1489,7 +1593,7 @@ export class MissionStore {
 			if (starting?.has(`${id}:${task.id}`))
 				reasons.push(`Task #${task.number} is already starting in another chat`);
 			if (task.sessionId) reasons.push(`Task #${task.number} is already claimed by a chat`);
-			if (task.status === "done" || task.status === "dropped")
+			if (task.status === "done" || task.status === "dropped" || task.status === "delegated")
 				reasons.push(`Task #${task.number} is ${task.status}`);
 			for (const depId of task.dependsOn ?? []) {
 				if (selected.has(depId)) continue;
@@ -2366,6 +2470,7 @@ export class MissionStore {
 		if (
 			task.status === "done" ||
 			task.status === "dropped" ||
+			task.status === "delegated" ||
 			(!handoffActor && this.one("SELECT pr_sync_disabled FROM tasks WHERE id = ?", taskId)?.pr_sync_disabled)
 		)
 			return false;
@@ -2811,6 +2916,7 @@ function taskFrom(row: Row): MissionTask {
 		title: str(row.title!),
 		...(row.body ? { body: str(row.body) } : {}),
 		status: str(row.status!) as MissionTaskStatus,
+		...(row.delegated_to ? { delegatedTo: str(row.delegated_to) } : {}),
 		order: num(row.sort!),
 		...(row.milestone ? { milestone: str(row.milestone) } : {}),
 		...(dependsOn?.length ? { dependsOn } : {}),

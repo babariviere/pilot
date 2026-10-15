@@ -483,7 +483,7 @@ export interface ProjectRequest {
 
 /** Missions: a goal spanning several chats of one project. State is daemon-owned. */
 export type MissionStatus = "active" | "done" | "archived";
-export type MissionTaskStatus = "todo" | "in_progress" | "blocked" | "in_review" | "done" | "dropped";
+export type MissionTaskStatus = "todo" | "in_progress" | "blocked" | "in_review" | "delegated" | "done" | "dropped";
 export type MissionHealth = "on_track" | "at_risk" | "off_track";
 export type MissionResourceKind =
 	| "linear.project"
@@ -606,6 +606,8 @@ export interface MissionTask {
 	title: string;
 	body?: string;
 	status: MissionTaskStatus;
+	/** Linear assignee display name for automatically delegated work. */
+	delegatedTo?: string;
 	/** Sort key within the mission. */
 	order: number;
 	milestone?: string;

@@ -2,17 +2,17 @@
 import { join } from "node:path";
 import { loadConfig } from "./config.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
-import { pollLinear } from "./linear-source.ts";
+import { MissionLinearSource, pollLinear } from "./linear-source.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
 import { ScheduleDetection } from "./schedule-detection.ts";
 import { ScheduleStore } from "./schedule-store.ts";
 import { ScheduleService } from "./schedules.ts";
 import { createDaemonServer } from "./server.ts";
-import { PowerService } from "./power.ts";
 import { SessionManager } from "./sessions.ts";
 import { createSlackPoller } from "./slack-source.ts";
 import { PiSourceMcpClient } from "./source-mcp.ts";
@@ -30,7 +30,8 @@ const projects = new ProjectStore(config.home);
 await projects.load();
 const trackedItems = new TrackedItemStore(join(config.home, "tracked-items.sqlite"));
 await trackedItems.load(projects.list().map((project) => project.id));
-const tracking = new SourceRegistry(projects, trackedItems, new PiSourceMcpClient(config.agentDir));
+const sourceMcp = new PiSourceMcpClient(config.agentDir);
+const tracking = new SourceRegistry(projects, trackedItems, sourceMcp);
 tracking.register("linear", pollLinear);
 tracking.startPolling("linear");
 const models = new ModelCatalog(config.agentDir);
@@ -75,6 +76,8 @@ const sessions = new SessionManager(
 sessions.setProjectMemory(memory);
 // Membership is read while sessions load (auto-archiving, worker specs), so the bridge comes first.
 const missionStore = new MissionStore(join(config.home, "missions.sqlite"));
+const missionLinear = new MissionLinearSource(missionStore, sourceMcp);
+missionLinear.start();
 const missionService = new MissionService(missionStore, sessions, projects);
 const power = new PowerService(config.home, sessions);
 // Recover global sleep overrides before any interrupted agent can reopen.
@@ -127,6 +130,7 @@ async function stop(): Promise<void> {
 	systemEventsDetection.stop();
 	await scheduleStore.close();
 	stopMemoryProjects();
+	await missionLinear.stop();
 	await tracking.stop();
 	await trackedItems.close();
 	await memory.stop();

@@ -26,6 +26,7 @@ public enum MissionTaskStatus: String, LenientStringEnum, CaseIterable {
     case inProgress = "in_progress"
     case blocked
     case inReview = "in_review"
+    case delegated
     case done
     case dropped
     public static let fallback = MissionTaskStatus.todo
@@ -36,6 +37,7 @@ public enum MissionTaskStatus: String, LenientStringEnum, CaseIterable {
         case .inProgress: "In progress"
         case .blocked: "Blocked"
         case .inReview: "In review"
+        case .delegated: "Delegated"
         case .done: "Done"
         case .dropped: "Dropped"
         }
@@ -215,6 +217,7 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public let title: String
     public let body: String?
     public let status: MissionTaskStatus
+    public let delegatedTo: String?
     public let order: Double
     public let milestone: String?
     public let dependsOn: [String]?
@@ -228,13 +231,14 @@ public struct MissionTask: Codable, Identifiable, Equatable, Hashable, Sendable 
     public init(
         id: String, number: Int, title: String, body: String? = nil, status: MissionTaskStatus = .todo,
         order: Double = 0, milestone: String? = nil, dependsOn: [String]? = nil, decisionIds: [String]? = nil, sessionId: String? = nil,
-        createdAt: Double = 0, updatedAt: Double = 0, completedAt: Double? = nil
+        createdAt: Double = 0, updatedAt: Double = 0, completedAt: Double? = nil, delegatedTo: String? = nil
     ) {
         self.id = id
         self.number = number
         self.title = title
         self.body = body
         self.status = status
+        self.delegatedTo = delegatedTo
         self.order = order
         self.milestone = milestone
         self.dependsOn = dependsOn

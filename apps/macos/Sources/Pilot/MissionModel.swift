@@ -175,6 +175,7 @@ extension MissionTaskStatus {
         case .inProgress: PilotIcon.inProgress
         case .blocked: PilotIcon.blocked
         case .inReview: PilotIcon.inReview
+        case .delegated: PilotIcon.handoff
         case .done: PilotIcon.complete
         case .dropped: PilotIcon.cancelled
         }
@@ -186,6 +187,7 @@ extension MissionTaskStatus {
         case .inProgress: Theme.info
         case .blocked: Theme.destructive
         case .inReview: Theme.warning
+        case .delegated: Theme.mutedForeground
         case .done: Theme.success
         case .dropped: Theme.faintForeground
         }
