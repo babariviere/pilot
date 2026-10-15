@@ -194,11 +194,18 @@ struct SessionInspectorControls: View {
             InspectorToggle(tab: .terminal, icon: PilotIcon.terminal, help: "Terminal (⌘J)")
         }
         if !session.isAsk {
-            if !(session.subagents ?? []).isEmpty {
+            // Also while the Agents tab is open, so the toggle that closes it never disappears.
+            if !(session.subagents ?? []).isEmpty || (model.inspectorVisible && model.inspectorTab == .agents) {
                 InspectorToggle(tab: .agents, icon: PilotIcon.subagents, help: "Subagents")
                     .overlay(alignment: .topTrailing) {
-                        if model.unreadSubagents(in: session) > 0 {
-                            Circle().fill(Theme.success).frame(width: 6, height: 6).offset(x: -3, y: 3)
+                        let unread = model.unreadSubagents(in: session)
+                        if unread > 0 {
+                            // New answers are not something the user must act on: a neutral count, not a signal.
+                            CountBadge(count: unread)
+                                .background(Capsule().fill(Theme.background))
+                                .offset(x: 6, y: -4)
+                                .allowsHitTesting(false)
+                                .accessibilityLabel(unread == 1 ? "1 new answer" : "\(unread) new answers")
                         }
                     }
             }
@@ -267,7 +274,8 @@ struct InspectorToggle: View {
     }
 }
 
-/// Right-hand pane with tabs. The terminal stays mounted once opened to keep its surface.
+/// Right-hand pane. The toolbar's inspector toggles are its only picker (each pane has its own header), so the
+/// selected tab never shows in two places. The terminal stays mounted once opened to keep its surface.
 struct Inspector: View {
     let session: SessionSummary
     /// The chat's feed for the Links tab. Nil uses the cached feed the transcript shares.
@@ -275,88 +283,38 @@ struct Inspector: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 2) {
-                if session.missionId != nil {
-                    tab("Mission", .mission)
-                }
-                if !session.isAsk {
-                    if session.supportsChanges { tab("Changes", .changes) }
-                    if session.supportsChanges { tab("Terminal", .terminal) }
-                    tab("Agents", .agents, badge: model.unreadSubagents(in: session))
-                }
-                tab("Artifacts", .artifacts)
-                tab("Links", .links)
-                Spacer()
-                Button { model.inspectorVisible = false } label: {
-                    PilotSymbol(PilotIcon.inspector, context: .toolbar)
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(Theme.mutedForeground)
-                .help("Hide inspector")
+        ZStack {
+            if session.supportsChanges {
+                ChangesPane(session: session, isVisible: model.inspectorTab == .changes)
+                    .opacity(model.inspectorTab == .changes ? 1 : 0)
+                    .allowsHitTesting(model.inspectorTab == .changes)
+                    .accessibilityHidden(model.inspectorTab != .changes)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .background(Theme.sidebar)
-            Rectangle().fill(Theme.border).frame(height: 1)
-            ZStack {
-                if session.supportsChanges {
-                    ChangesPane(session: session, isVisible: model.inspectorTab == .changes)
-                        .opacity(model.inspectorTab == .changes ? 1 : 0)
-                        .allowsHitTesting(model.inspectorTab == .changes)
-                        .accessibilityHidden(model.inspectorTab != .changes)
-                }
-                // Mounted once opened, so browsing other tabs never starts a shell.
-                if session.supportsChanges && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
-                    TerminalPane(store: model.terminals, session: session, isVisible: model.inspectorTab == .terminal)
-                        .opacity(model.inspectorTab == .terminal ? 1 : 0)
-                        .allowsHitTesting(model.inspectorTab == .terminal)
-                        .accessibilityHidden(model.inspectorTab != .terminal)
-                }
-                if model.inspectorTab == .artifacts {
-                    SessionArtifactsPane(sessionId: session.id, client: model.client)
-                        .id(session.id)
-                }
-                if !session.isAsk && model.inspectorTab == .agents {
-                    SubagentsPane(session: session)
-                        .id(session.id)
-                }
-                if model.inspectorTab == .mission, session.missionId != nil {
-                    MissionInspectorPane(session: session)
-                        .id(session.id)
-                }
-                if model.inspectorTab == .links {
-                    SessionLinksPane(feed: feed ?? model.feeds.feed(sessionId: session.id, client: model.client))
-                        .id(session.id)
-                }
+            // Mounted once opened, so browsing other tabs never starts a shell.
+            if session.supportsChanges && (model.inspectorTab == .terminal || model.terminals.order.contains(session.id)) {
+                TerminalPane(store: model.terminals, session: session, isVisible: model.inspectorTab == .terminal)
+                    .opacity(model.inspectorTab == .terminal ? 1 : 0)
+                    .allowsHitTesting(model.inspectorTab == .terminal)
+                    .accessibilityHidden(model.inspectorTab != .terminal)
+            }
+            if model.inspectorTab == .artifacts {
+                SessionArtifactsPane(sessionId: session.id, client: model.client)
+                    .id(session.id)
+            }
+            if !session.isAsk && model.inspectorTab == .agents {
+                SubagentsPane(session: session)
+                    .id(session.id)
+            }
+            if model.inspectorTab == .mission, session.missionId != nil {
+                MissionInspectorPane(session: session)
+                    .id(session.id)
+            }
+            if model.inspectorTab == .links {
+                SessionLinksPane(feed: feed ?? model.feeds.feed(sessionId: session.id, client: model.client))
+                    .id(session.id)
             }
         }
         .background(Theme.background)
-    }
-
-    private func tab(_ title: String, _ value: InspectorTab, badge: Int = 0) -> some View {
-        Button { model.inspectorTab = value } label: {
-            HStack(spacing: 5) {
-                Text(title)
-                    .font(.system(size: 12, weight: model.inspectorTab == value ? .semibold : .regular))
-                    .foregroundStyle(model.inspectorTab == value ? Theme.foreground : Theme.mutedForeground)
-                if badge > 0 {
-                    Text("\(badge)")
-                        .font(.system(size: 9, weight: .bold))
-                        .monospacedDigit()
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Theme.success))
-                        .accessibilityLabel("\(badge) new answers")
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(model.inspectorTab == value ? Theme.card : .clear))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.row).strokeBorder(model.inspectorTab == value ? Theme.border : .clear))
-        }
-        .buttonStyle(.plain)
     }
 }
 

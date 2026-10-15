@@ -9,7 +9,6 @@ ComposerUsage.swift 4
 HomeView.swift 7
 ImageAttachments.swift 1
 InlineDiagramView.swift 2
-MainWindow.swift 2
 MarkdownView.swift 1
 MissionTabs.swift 3
 MissionTaskDescription.swift 1
