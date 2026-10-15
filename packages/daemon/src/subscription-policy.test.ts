@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SubscriptionUsage } from "@pilot/protocol";
-import { refreshSubscriptionPolicy, subscriptionWindowKey, type SubscriptionPolicy } from "./subscription-policy.ts";
+import {
+	recordSubscriptionLimit,
+	refreshSubscriptionPolicy,
+	type SubscriptionPolicy,
+	subscriptionWindowKey,
+} from "./subscription-policy.ts";
 import type { SubscriptionUsageSource } from "./subscription-usage.ts";
 
 const now = Date.parse("2026-10-15T12:00:00Z");
@@ -76,4 +81,35 @@ test("the durable policy preserves missing-reset pauses and independent provider
 		["anthropic", "openai"],
 	);
 	assert.equal(refreshSubscriptionPolicy(both, source(), now + 120_000).windows.length, 1);
+});
+
+test("provider exhaustion pauses despite a lower cache until newer evidence, force or an authoritative reset", () => {
+	const low = source(usage(10));
+	const reported = recordSubscriptionLimit(undefined, low, { provider: "openai" }, now);
+	assert.deepEqual(reported.windows, [{ provider: "openai", label: "Usage limit", usedPercent: 100 }]);
+	assert.deepEqual(
+		refreshSubscriptionPolicy(reported, low, now),
+		reported,
+		"the pre-error cache cannot release the pause",
+	);
+	assert.deepEqual(refreshSubscriptionPolicy(reported, source(), now + 1), reported);
+	assert.equal(refreshSubscriptionPolicy(reported, source(usage(10, now + 1)), now + 1).windows.length, 0);
+	reported.forced = reported.windows.map(subscriptionWindowKey);
+	assert.equal(refreshSubscriptionPolicy(reported, low, now).forced.length, 1, "explicit force remains available");
+	const rejectedAgain = recordSubscriptionLimit(reported, low, { provider: "openai" }, now);
+	assert.deepEqual(rejectedAgain.forced, [], "a real rejection supersedes a force override");
+	assert.equal(rejectedAgain.windows.length, 1, "reports cannot accumulate synthetic windows");
+	const timed = recordSubscriptionLimit(reported, low, { provider: "openai", resetsAt: reset }, now);
+	assert.equal(timed.windows[0]?.resetsAt, reset);
+	assert.equal(refreshSubscriptionPolicy(timed, source(), now + 60_000).windows.length, 0);
+});
+
+test("provider rejection reuses known windows and leaves the other provider's force independent", () => {
+	const policy = refreshSubscriptionPolicy(undefined, source(usage(96)), now);
+	policy.windows.push({ provider: "anthropic", label: "Week", usedPercent: 95 });
+	policy.forced = policy.windows.map(subscriptionWindowKey);
+	const reported = recordSubscriptionLimit(policy, source(usage(96)), { provider: "openai" }, now);
+	assert.equal(reported.windows.length, 2, "known reset windows need no indefinite synthetic hold");
+	assert.equal(reported.windows.find((window) => window.provider === "openai")?.resetsAt, reset);
+	assert.deepEqual(reported.forced, [policy.forced[1]]);
 });

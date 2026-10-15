@@ -5,7 +5,7 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
-import type { KernelPacket, KernelUsage } from "@pilot/kernel";
+import type { KernelCommand, KernelPacket, KernelUsage } from "@pilot/kernel";
 import type { SessionState, SessionSummary } from "@pilot/protocol";
 import { ProjectStore } from "./projects.ts";
 import { SessionManager, type SessionWorker } from "./sessions.ts";
@@ -272,4 +272,47 @@ test("a known pause and its per-chat force survive daemon restart when provider 
 	const policy = JSON.parse(await readFile(join(f.home, "sessions", id, "subscription-policy.json"), "utf8"));
 	assert.equal(policy.windows[0]?.usedPercent, 97);
 	assert.deepEqual(policy.forced, []);
+});
+
+test("provider-reported limits acknowledge only a persisted resumable pause, and survive a daemon restart", async (t) => {
+	const f = await fixture(t, { chat: "openai-codex/gpt-5" });
+	const id = f.ids.chat!;
+	await f.sessions["start"](id);
+	const worker = f.sessions["workers"].get(id)!;
+	worker.state = "working";
+	const meta = f.sessions["metas"].get(id)!;
+	meta.working = true;
+	const ack = new Promise<KernelCommand>((resolve) =>
+		t.mock.method(worker, "send", (command: KernelCommand) => {
+			if (command.type === "subscription.limit.result") resolve(command);
+		}),
+	);
+	f.sessions["onPacket"](meta, worker, { type: "subscription.limit", callId: "limit", limit: { provider: "openai" } });
+	assert.deepEqual(await ack, { type: "subscription.limit.result", callId: "limit" });
+	assert.equal(f.sessions.get(id)?.state, "working");
+	assert.equal(f.sessions.get(id)?.working, false);
+	assert.equal(f.sessions.get(id)?.outcome, undefined, "no failure or completion is synthesized");
+	assert.equal(f.sessions.subscriptionPaused(id), true);
+	const file = join(f.home, "sessions", id);
+	const policy = JSON.parse(await readFile(join(file, "subscription-policy.json"), "utf8"));
+	assert.equal(policy.windows[0].label, "Usage limit");
+	assert.deepEqual(JSON.parse(await readFile(join(file, "meta.json"), "utf8")).subscriptionPolicy, policy);
+	await f.sessions.forceSubscription(id, true);
+	assert.equal(f.sessions.subscriptionPaused(id), false);
+	await f.sessions.forceSubscription(id, false);
+	await f.sessions.shutdown();
+	const reopened = new SessionManager(
+		f.home,
+		new ProjectStore(f.home),
+		f.agentDir,
+		{ worker: () => new FakeWorker({ provider: "openai-codex" }) },
+		{},
+		{
+			subscriptionUsage: () => ({ get: () => undefined, start: async () => {}, close() {} }),
+		},
+	);
+	t.after(() => reopened.shutdown());
+	await reopened.load();
+	assert.equal(reopened.subscriptionPaused(id), true);
+	await Promise.allSettled(reopened["starting"].values());
 });

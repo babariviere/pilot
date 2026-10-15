@@ -311,6 +311,7 @@ export function runKernelWorker(): void {
 		if (
 			command.type === "mission.result" ||
 			command.type === "memory.result" ||
+			command.type === "subscription.limit.result" ||
 			command.type === "artifact.reference.result"
 		) {
 			const call = daemonCalls.get(command.callId);
@@ -318,7 +319,7 @@ export function runKernelWorker(): void {
 			if (command.error !== undefined) call?.reject(new Error(command.error));
 			else
 				call?.resolve(
-					command.result ??
+					("result" in command ? command.result : undefined) ??
 						(command.type === "mission.result" || command.type === "memory.result" ? null : undefined),
 				);
 			return;
@@ -353,6 +354,8 @@ export function runKernelWorker(): void {
 					onJobsChanged: (jobs) => notify({ type: "jobs.changed", jobs }),
 					onTodosChanged: (openCount) => notify({ type: "todos.changed", openCount }),
 					onUsageChanged: (usage) => notify({ type: "usage", usage }),
+					reportSubscriptionLimit: (limit) =>
+						callDaemon<void>((callId) => ({ type: "subscription.limit", callId, limit })),
 					onArtifactsChanged: () => notify({ type: "artifacts.changed" }),
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
 					onRefsChanged: () => notify({ type: "refs.changed" }),

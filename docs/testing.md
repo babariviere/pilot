@@ -268,6 +268,9 @@ not revoke a live writer's storage lease. No live chats, credentials or model se
 blocking, fresh lower readings, reset timers, unknown/error/stale readings, per-chat force expiry and
 restart persistence, and children using another provider. `subscription-pause.integration.test.ts`
 checks the real parent Harness/native adapter, safe tool drainage and SQLite recovery without replay.
+`subscription-limit.test.ts` and `subscription-limit.integration.test.ts` cover provider-reported
+exhaustion, persisted admission acknowledgement, request-only recovery after a committed tool result,
+restart recovery and Stop. They exclude transient throttling, authentication and API billing failures.
 The pinned pi-extensions gate tests cover child admission, direct model/compaction calls and aborts.
 Continuation tests cover provider-neutral handoffs, same-provider model changes, ownership transfer,
 read-only originals and journal recovery. All providers and cache data in these checks are synthetic.

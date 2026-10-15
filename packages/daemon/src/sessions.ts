@@ -83,6 +83,7 @@ import {
 import { SharedWorkspaceStore, type WorkspaceRecovery } from "./shared-workspaces.ts";
 import { SubagentWatches, type SubagentWatchListener, type SubagentWatchStarter } from "./subagent-watches.ts";
 import {
+	recordSubscriptionLimit,
 	refreshSubscriptionPolicy,
 	type SubscriptionPolicy,
 	subscriptionWindowKey,
@@ -90,6 +91,7 @@ import {
 } from "./subscription-policy.ts";
 import {
 	modelProvider,
+	SUBSCRIPTION_PROVIDERS,
 	type SubscriptionProvider,
 	SubscriptionUsageCache,
 	type SubscriptionUsageSource,
@@ -4994,6 +4996,41 @@ export class SessionManager {
 			void call.then(
 				(result) => reply({ result }),
 				(error: unknown) => reply({ error: formatFailure(error, "Tool artifact") }),
+			);
+			return;
+		}
+		if (packet.type === "subscription.limit") {
+			if (this.workers.get(meta.id) !== worker) return;
+			const persist = async () => {
+				const { provider, resetsAt } = packet.limit;
+				if (
+					!SUBSCRIPTION_PROVIDERS.includes(provider) ||
+					(resetsAt !== undefined && (typeof resetsAt !== "string" || !Number.isFinite(Date.parse(resetsAt))))
+				)
+					throw new Error("Invalid subscription limit");
+				meta.subscriptionPolicy = recordSubscriptionLimit(
+					meta.subscriptionPolicy,
+					this.subscriptionUsage,
+					packet.limit,
+				);
+				await Promise.all([this.save(meta), this.syncSubscriptionPolicy(meta)]);
+				this.scheduleSubscriptionReset();
+				this.emit(meta);
+			};
+			void persist().then(
+				() => {
+					if (this.workers.get(meta.id) === worker)
+						worker.send({ type: "subscription.limit.result", callId: packet.callId });
+				},
+				(error: unknown) => {
+					this.subscriptionPolicyFailed(meta, error);
+					if (this.workers.get(meta.id) === worker)
+						worker.send({
+							type: "subscription.limit.result",
+							callId: packet.callId,
+							error: "Could not save usage pause",
+						});
+				},
 			);
 			return;
 		}

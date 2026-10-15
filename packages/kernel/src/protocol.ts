@@ -100,6 +100,7 @@ export type KernelCommand =
 	| { type: "mission.context"; context?: MissionContext }
 	| { type: "mission.result"; callId: string; result?: JsonValue; error?: string }
 	| { type: "memory.result"; callId: string; result?: JsonValue; error?: string }
+	| { type: "subscription.limit.result"; callId: string; error?: string }
 	| { type: "artifact.reference.result"; callId: string; result?: Omit<ArtifactRevision, "html">; error?: string }
 	| { type: "workspace.prepared"; callId: string; workspace?: WorkspaceContext }
 	| { type: "update.pause"; id: string }
@@ -126,6 +127,8 @@ export type KernelPacket =
 	| { type: "jobs.changed"; jobs: SessionJob[] }
 	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
+	/** Confirm a provider-reported usage hold before retrying only its pending request. */
+	| { type: "subscription.limit"; callId: string; limit: import("./subscription-limit.ts").SubscriptionLimitReport }
 	| { type: "children"; requestId: string; hasChildren: boolean }
 	| { type: "jobs"; requestId: string; jobs: SessionJob[] }
 	/** Full replacement, after every change reported by the subagents extension. */

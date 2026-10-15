@@ -73,6 +73,7 @@ import { MEMORY_TOOL_NAMES } from "./memory-tools.ts";
 import { type PerformanceSink, type PreparationMark, RequestTiming } from "./performance.ts";
 import type { AskContext } from "./policy.ts";
 import type { SubagentBridge } from "./subagents.ts";
+import { type ReportSubscriptionLimit, subscriptionRecovery } from "./subscription-limit.ts";
 import { contextUsage, type KernelUsage, UsageTracker } from "./usage.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
@@ -87,6 +88,7 @@ export interface ExtensionInput {
 
 export interface NativeAdapterOptions {
 	subscriptionPolicy?: string;
+	reportSubscriptionLimit?: ReportSubscriptionLimit;
 	connectivityPolicy?: string;
 	/** Host-enforced read-only source or pinned object tree. Overrides all resource/tool configuration. */
 	ask?: AskContext;
@@ -258,6 +260,7 @@ export class NativeAdapter {
 	readonly #preparations = new WeakMap<AbortSignal, PreparationMark>();
 	readonly #subscriptionGate: SubscriptionGate;
 	readonly #offlineGate: OfflineGate;
+	readonly #reportSubscriptionLimit?: ReportSubscriptionLimit;
 	#physicalSubscriptionProvider?: string;
 
 	readonly session: AgentSession;
@@ -272,8 +275,10 @@ export class NativeAdapter {
 		timings?: PerformanceSink,
 		subscriptionPolicy?: string,
 		connectivityPolicy?: string,
+		reportSubscriptionLimit?: ReportSubscriptionLimit,
 	) {
 		this.#subscriptionGate = new SubscriptionGate(subscriptionPolicy);
+		this.#reportSubscriptionLimit = reportSubscriptionLimit;
 		this.#offlineGate = new OfflineGate(connectivityPolicy);
 		this.infrastructure = infrastructure;
 		this.session = session;
@@ -296,6 +301,7 @@ export class NativeAdapter {
 							model,
 							this.#offlineGate,
 							options?.signal,
+							subscriptionRecovery(() => model.provider, this.#subscriptionGate, this.#reportSubscriptionLimit),
 						).result();
 					};
 				if (key === "streamSimple")
@@ -306,13 +312,13 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							(observe, timing, signal) =>
+							(observe, timing, signal, onProvider) =>
 								session.extensionRunner
 									.getModelRegistry()
 									.streamSimple(
 										model,
 										context,
-										this.requestOptions({ ...options, signal }, observe, model.api, timing),
+										this.requestOptions({ ...options, signal }, observe, model.api, timing, onProvider),
 									),
 							model,
 							options?.signal,
@@ -326,7 +332,7 @@ export class NativeAdapter {
 					) => {
 						this.assertOpen();
 						return this.requestStream(
-							(observe, timing, signal) =>
+							(observe, timing, signal, onProvider) =>
 								// Instrument shared fields; the spread preserves provider-specific options unchanged.
 								session.extensionRunner
 									.getModelRegistry()
@@ -338,6 +344,7 @@ export class NativeAdapter {
 											observe,
 											model.api,
 											timing,
+											onProvider,
 										),
 									),
 							model,
@@ -484,6 +491,7 @@ export class NativeAdapter {
 			options.performance,
 			options.subscriptionPolicy,
 			options.connectivityPolicy,
+			options.reportSubscriptionLimit,
 		);
 		// The SDK loop never runs here. Its default getter would report idle throughout
 		// Harness model/tool work, causing extensions (notably jobs) to notify too early.
@@ -1096,11 +1104,14 @@ export class NativeAdapter {
 			observe: (error: unknown) => void,
 			timing?: RequestTiming,
 			signal?: AbortSignal,
+			onProvider?: (provider: string) => void,
 		) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
 	): AssistantMessageEventStream {
-		if (!this.#offlineGate.path) return this.rawRequestStream(dispatch, model, signal);
+		if (!this.#offlineGate.path && !this.#reportSubscriptionLimit)
+			return this.rawRequestStream(dispatch, model, signal);
+		let provider = model.provider;
 		return offlineRequestStream(
 			(attemptSignal) => {
 				if (signal) {
@@ -1108,11 +1119,14 @@ export class NativeAdapter {
 					if (preparation) this.#preparations.set(attemptSignal, preparation);
 					this.#preparations.delete(signal);
 				}
-				return this.rawRequestStream(dispatch, model, attemptSignal);
+				return this.rawRequestStream(dispatch, model, attemptSignal, (physical) => {
+					provider = physical;
+				});
 			},
 			model,
 			this.#offlineGate,
 			signal,
+			subscriptionRecovery(() => provider, this.#subscriptionGate, this.#reportSubscriptionLimit),
 		);
 	}
 
@@ -1121,9 +1135,11 @@ export class NativeAdapter {
 			observe: (error: unknown) => void,
 			timing?: RequestTiming,
 			signal?: AbortSignal,
+			onProvider?: (provider: string) => void,
 		) => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
 		signal?: AbortSignal,
+		onProvider?: (provider: string) => void,
 	): AssistantMessageEventStream {
 		const stream = createAssistantMessageEventStream();
 		const preparation = signal ? this.#preparations.get(signal) : undefined;
@@ -1164,6 +1180,7 @@ export class NativeAdapter {
 					},
 					timing,
 					signal,
+					onProvider,
 				);
 				for await (const event of source) {
 					if (
@@ -1219,6 +1236,7 @@ export class NativeAdapter {
 		observe: (error: unknown) => void,
 		api: string,
 		timing?: RequestTiming,
+		onProvider?: (provider: string) => void,
 	): ModelsSimpleStreamOptions {
 		const runner = this.session.extensionRunner;
 		const settings = this.session.settingsManager;
@@ -1248,6 +1266,7 @@ export class NativeAdapter {
 				model: Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1],
 			) => {
 				this.#physicalSubscriptionProvider = model.provider;
+				onProvider?.(model.provider);
 				this.usage.set(this.usage.current.context, model.provider);
 				await this.#subscriptionGate.wait(model.provider, options.signal);
 				await this.#offlineGate.wait(options.signal);
