@@ -60,7 +60,7 @@ struct MissionInspectorPane: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Button { decisionsExpanded.toggle() } label: {
                                 HStack(spacing: 6) {
-                                    PilotSymbol(decisionsExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).foregroundStyle(Theme.faintForeground)
+                                    DisclosureChevron(expanded: decisionsExpanded)
                                         .frame(width: 10)
                                     Text("Decisions").font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
                                     Text("\(detail.decisions.count)").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)

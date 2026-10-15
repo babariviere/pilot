@@ -34,9 +34,7 @@ struct WorkGroupView: View {
         VStack(alignment: .leading, spacing: 0) {
             Button(action: toggle) {
                 HStack(spacing: 6) {
-                    PilotSymbol(PilotIcon.disclosure, context: .disclosure)
-                        .foregroundStyle(Theme.faintForeground)
-                        .rotationEffect(.degrees(open ? 90 : 0))
+                    DisclosureChevron(expanded: open)
                         .frame(width: 10)
                     Text(summary.lead)
                         .foregroundStyle(hovered ? Theme.foreground : Theme.mutedForeground)

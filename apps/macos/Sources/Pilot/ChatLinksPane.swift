@@ -71,27 +71,16 @@ struct SessionLinksPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("\(model.links.count) link\(model.links.count == 1 ? "" : "s")")
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            Rectangle().fill(Theme.border).frame(height: 1)
+            InspectorPaneHeader("\(model.links.count) link\(model.links.count == 1 ? "" : "s")")
             if !model.ready {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.links.isEmpty {
-                VStack(spacing: 8) {
-                    PilotSymbol(PilotIcon.link, context: .emptyState).foregroundStyle(Theme.faintForeground)
-                    Text("No links yet").font(.callout).foregroundStyle(Theme.mutedForeground)
-                    Text("Links mentioned in this chat appear here.")
-                        .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
-                    if model.hasEarlier { earlierNote }
-                }
-                .multilineTextAlignment(.center)
-                .padding()
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                EmptyStateView(icon: PilotIcon.link, title: "No links yet",
+                               message: model.hasEarlier
+                                   ? "Links mentioned in this chat appear here. Links in earlier messages appear once they are loaded in the chat."
+                                   : "Links mentioned in this chat appear here.")
+                    .padding(.horizontal, 16)
+                    .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {

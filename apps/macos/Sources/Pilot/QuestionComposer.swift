@@ -73,12 +73,7 @@ struct QuestionComposer: View {
             }
             Spacer(minLength: 8)
             if question.multiSelect {
-                Text("Pick any")
-                    .font(.pilot(.small, weight: .medium))
-                    .foregroundStyle(Theme.mutedForeground)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Capsule().fill(Theme.muted))
+                MetaText("Pick any")
             }
         }
         .padding(.horizontal, 14)
@@ -270,12 +265,7 @@ private struct QuestionOptionRow: View {
                             .foregroundStyle(Theme.foreground)
                             .fixedSize(horizontal: false, vertical: true)
                         if option.suggested {
-                            Text("Suggested")
-                                .font(.pilot(.small, weight: .medium))
-                                .foregroundStyle(Theme.mutedForeground)
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(Theme.muted))
+                            MetaText("Suggested")
                         }
                     }
                     if let detail = option.detail {

@@ -41,12 +41,11 @@ struct SessionSidebar: View {
         .background(Theme.sidebar)
         .overlay {
             if client.projects.isEmpty, client.sessions.isEmpty, model.projectFolders.folders.isEmpty {
-                VStack(spacing: 10) {
-                    PilotSymbol(PilotIcon.newProject, context: .emptyState).foregroundStyle(.secondary)
-                    Text("Add a project to get started").font(.pilot(.label)).foregroundStyle(.secondary)
+                EmptyStateView(icon: PilotIcon.newProject, title: "No projects yet",
+                               message: "Add a project to get started.") {
                     Button("Add Project…") { model.addProject() }
                 }
-                .padding()
+                .padding(.horizontal, 12)
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -358,7 +357,7 @@ struct SessionSidebar: View {
             .padding(.leading, indented ? 20 : 0)
             .selectionDisabled(true)
         } else if !searching, showingAll, collapsed.hidden > 0 {
-            SidebarDisclosureRow(title: "Show less", expanded: true) {
+            SidebarDisclosureRow(title: "Show fewer", expanded: true) {
                 model.expandedSessionLists.remove(listId)
             }
             .padding(.leading, indented ? 20 : 0)
@@ -405,7 +404,7 @@ struct SidebarDisclosureRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                PilotSymbol(expanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure).frame(width: 14)
+                DisclosureChevron(expanded: expanded, tint: Theme.mutedForeground).frame(width: 14)
                 Text(title).font(.pilot(.small))
                 Spacer(minLength: 0)
             }
@@ -487,10 +486,10 @@ private struct ProjectHeader: View {
             }
             .revealed(hovered)
             Button { isExpanded.toggle() } label: {
-                PilotSymbol(isExpanded ? PilotIcon.disclosureOpen : PilotIcon.disclosure, context: .disclosure)
-                    // Faint at rest, never hidden: SwiftUI does not hit-test fully transparent views, and the
-                    // chevron must stay clickable before hover tracking catches up. A folded project shows it fully.
-                    .foregroundStyle(hovered || !isExpanded ? Theme.mutedForeground : Theme.faintForeground.opacity(0.6))
+                // Faint at rest, never hidden: SwiftUI does not hit-test fully transparent views, and the
+                // chevron must stay clickable before hover tracking catches up. A folded project shows it fully.
+                DisclosureChevron(expanded: isExpanded,
+                                  tint: hovered || !isExpanded ? Theme.mutedForeground : Theme.faintForeground.opacity(0.6))
                     .frame(width: 16, height: 16)
                     .contentShape(Rectangle())
             }

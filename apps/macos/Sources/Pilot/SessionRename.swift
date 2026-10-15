@@ -38,24 +38,12 @@ struct SessionRenameSheet: View {
     private var valid: Bool { !trimmed.isEmpty && trimmed != target.title }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Rename Chat")
-                .font(.headline)
+        SheetScaffold("Rename chat", primary: SheetPrimaryAction(title: "Rename", enabled: valid, action: save), width: 360) {
             TextField("Chat title", text: $title)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Chat title")
                 .onSubmit { if valid { save() } }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button("Rename", action: save)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!valid)
-            }
         }
-        .padding(20)
-        .frame(width: 360)
     }
 
     private func save() {

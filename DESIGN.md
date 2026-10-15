@@ -105,6 +105,20 @@ Home, Inbox and Overview rows use the same line and may wrap it once.
   toolbar and composer buttons.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
+- Pages, sheets and panes share their chrome (`PageComponents.swift`): `PageHeader` for page titles,
+  `InspectorPaneHeader` for inspector panes (no per-pane close button), `EmptyStateView` for empty or failed
+  panes, `DisclosureChevron`, `ListToggle` ("Show all N" / "Show fewer") and `MetaText` for quiet metadata
+  instead of capsule tags.
+- Errors use `InlineProblem` (a `Theme.error` triangle, muted text and "Retry") beside what failed. Amber stays
+  for things the user can act on, so errors never use `warning`, `blocked` or orange.
+
+## Sheets
+
+Every sheet uses `SheetScaffold`: a sentence-case title ("Edit schedule", "Rename chat") with an optional subtitle
+and accessory, the content, an inline error slot, and a footer pinned to the bottom with Cancel and the primary action
+on the right (a sheet with nothing to confirm has a single Done). Esc cancels. Return confirms a form of single-line
+fields; a form with a multi-line editor confirms with Command-Return, because Return inserts a newline there, and its
+button shows ⌘↩.
 - Check every change with long content and with loading, empty, error and disabled states. Keep keyboard access
   and readable contrast.
 

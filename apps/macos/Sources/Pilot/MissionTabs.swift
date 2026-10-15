@@ -300,7 +300,7 @@ struct MissionBriefTab: View {
                 .font(.pilot(.caption)).foregroundStyle(Theme.warning)
         }
         if let error = editor.error {
-            Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive)
+            InlineProblem(error)
         }
     }
 
@@ -693,7 +693,7 @@ struct MissionTasksTab: View {
             folds.toggle(group)
         } label: {
             HStack(spacing: 6) {
-                PilotSymbol(folded ? PilotIcon.disclosure : PilotIcon.disclosureOpen, context: .disclosure).foregroundStyle(Theme.faintForeground).frame(width: 12)
+                DisclosureChevron(expanded: !folded).frame(width: 12)
                 Text(group.title).font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
                     .lineLimit(1)
                 Text("·").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)

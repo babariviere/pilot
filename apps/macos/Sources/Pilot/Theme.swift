@@ -30,6 +30,9 @@ enum Theme {
     static let success = Color(hex: 0x10B981)
     static let warning = Color(hex: 0xF59E0B)
     static let destructive = Color(hex: 0xEF4444)
+    /// Errors: failed loads, saves and lookups (`InlineProblem`'s triangle, an error's own text). Text-weight red,
+    /// readable on white. Errors never use `warning` or `blocked` amber, which stay for things the user can act on.
+    static let error = Color(hex: 0xDC2626)
     /// Soft indigo for live work in the sidebar's dithered corners (`DitherCorner`). Distinct from the attention
     /// colors, so working rows read as activity without asking for the user.
     static let working = Color(hex: 0x6366F1)

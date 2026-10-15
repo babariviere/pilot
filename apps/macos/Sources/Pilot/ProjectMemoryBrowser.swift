@@ -10,11 +10,10 @@ struct MemoryCompactionLine: View {
                 PilotSymbol(PilotIcon.working, context: .row).frame(width: 16)
             } else {
                 PilotSymbol(compaction.state == .backoff ? PilotIcon.warning : PilotIcon.complete)
-                    .foregroundStyle(compaction.state == .backoff ? Theme.warning : Theme.faintForeground)
+                    .foregroundStyle(compaction.state == .backoff ? Theme.error : Theme.faintForeground)
                     .frame(width: 16)
             }
-            Text(message).font(.pilot(.caption))
-                .foregroundStyle(compaction.state == .backoff ? Theme.warning : Theme.mutedForeground)
+            Text(message).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .lineLimit(2)
             Spacer(minLength: 0)
         }
@@ -35,7 +34,6 @@ struct MemoryCompactionLine: View {
 struct ProjectMemoryBrowser: View {
     let project: Project
     @StateObject private var state: ProjectMemoryBrowserModel
-    @Environment(\.dismiss) private var dismiss
 
     init(project: Project, client: PilotClient) {
         self.project = project
@@ -43,15 +41,7 @@ struct ProjectMemoryBrowser: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Browse memory").font(.pilot(.title))
-                    Text(project.name).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
-                }
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
+        SheetScaffold("Browse memory", subtitle: project.name, error: state.error, width: nil, fillsHeight: true) {
             HStack(spacing: 8) {
                 TextField("Search memories (regular expression)", text: $state.query)
                     .textFieldStyle(.roundedBorder)
@@ -60,10 +50,6 @@ struct ProjectMemoryBrowser: View {
                 Button("Search") { Task { await state.search() } }
                     .disabled(state.busy || state.query.isEmpty)
                     .keyboardShortcut(.return, modifiers: [.command])
-            }
-            if let error = state.error {
-                Label(error, icon: PilotIcon.warning)
-                    .font(.pilot(.caption)).foregroundStyle(Theme.warning).textSelection(.enabled)
             }
             if let resultCount = state.resultCount {
                 if state.results.isEmpty {
@@ -92,9 +78,7 @@ struct ProjectMemoryBrowser: View {
                 }
             }
         }
-        .padding(24)
         .frame(minWidth: 520, minHeight: 440)
-        .background(Theme.background)
         .task { await state.load() }
         .confirmationDialog("Forget this summary?", isPresented: Binding(
             get: { state.forgetting != nil }, set: { if !$0 { state.cancelForget() } }

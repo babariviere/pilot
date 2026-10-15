@@ -18,34 +18,25 @@ struct ArchiveView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Label("Archived chats", icon: PilotIcon.archive)
-                    .font(.title2.weight(.semibold))
-                Spacer()
-            }
+            PageHeader("Archived chats", subtitle: "History and workspaces are kept. Restore a chat to send messages again.")
             ResponsiveControlsLayout(horizontalSpacing: 16, verticalSpacing: 8) { filters }
-            Text("History and workspaces are kept. Restore a chat to send messages again.")
-                .font(.callout)
-                .foregroundStyle(Theme.mutedForeground)
             TextField("Search archived chats", text: $browser.query)
                 .textFieldStyle(.roundedBorder)
             if browser.loading {
                 ProgressView("Loading archived chats…")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = browser.error {
-                VStack(spacing: 8) {
-                    Text("Could not load archived chats").font(.headline)
-                    Text(error).foregroundStyle(Theme.mutedForeground).textSelection(.enabled)
+                EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load archived chats", message: error) {
                     Button("Retry") { browser.reloadRevision += 1 }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxHeight: .infinity)
             } else if sessions.isEmpty {
-                VStack(spacing: 8) {
-                    PilotSymbol(PilotIcon.archive, context: .emptyState)
-                    Text(browser.query.isEmpty ? "No archived chats" : "No matching archived chats")
-                }
-                .foregroundStyle(Theme.mutedForeground)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                EmptyStateView(icon: PilotIcon.archive,
+                               title: browser.query.isEmpty ? "No archived chats" : "No matching archived chats",
+                               message: browser.query.isEmpty
+                                   ? "Chats you archive appear here, with their history."
+                                   : "Try another search, project or mission.")
+                    .frame(maxHeight: .infinity)
             } else {
                 archiveList
             }

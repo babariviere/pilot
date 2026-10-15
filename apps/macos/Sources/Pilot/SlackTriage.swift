@@ -1213,8 +1213,7 @@ struct SlackTriageInspector: View {
                 }
             }
             if let message = error ?? actions.errors[item.id] {
-                Text(message).font(.pilot(.caption)).foregroundStyle(Theme.blocked)
-                    .fixedSize(horizontal: false, vertical: true)
+                InlineProblem(message)
             }
             HairlineDivider()
             VStack(alignment: .leading, spacing: 8) {
@@ -1262,7 +1261,7 @@ struct SlackTriageInspector: View {
             case let .unavailable(reason):
                 Text(reason).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("Try Again", action: retryExcerpt)
+                Button("Retry", action: retryExcerpt)
                     .buttonStyle(.link).font(.pilot(.caption))
             }
         }

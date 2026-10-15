@@ -130,9 +130,7 @@ struct SystemMessagesStrip: View {
     }
 
     private var chevron: some View {
-        PilotSymbol(PilotIcon.disclosure, context: .disclosure)
-            .rotationEffect(.degrees(expanded ? 90 : 0))
-            .foregroundStyle(Theme.faintForeground)
+        DisclosureChevron(expanded: expanded)
             .frame(width: 16, height: 16)
             .contentShape(Rectangle())
     }

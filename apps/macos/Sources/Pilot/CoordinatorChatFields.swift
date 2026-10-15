@@ -50,10 +50,7 @@ struct CoordinatorChatFields: View {
                 Spacer()
             }
             if let error = form.error {
-                HStack(spacing: 8) {
-                    Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled)
-                    Button("Retry") { Task { await load() } }.controlSize(.small)
-                }
+                InlineProblem(error) { Task { await load() } }
             }
             if !form.loading && form.error == nil && form.models.models.isEmpty {
                 Text("No models available in this project's scope and price cap.")
@@ -122,27 +119,21 @@ struct StartCoordinatorSheet: View {
     @State private var error: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Start a coordinator").font(.pilot(.body, weight: .semibold))
-                Text(client.mission(missionId)?.title ?? "Mission").font(.pilot(.label)).foregroundStyle(Theme.mutedForeground)
-            }
+        SheetScaffold("Start a coordinator", subtitle: client.mission(missionId)?.title ?? "Mission", error: error,
+                      primary: SheetPrimaryAction(title: saving ? "Starting…" : "Start Coordinator", key: .commandReturn,
+                                                  enabled: canStart, action: start),
+                      width: 500) {
             Text("It drafts the brief and tasks for your review, and can start and message mission chats. It does not implement tasks itself.")
                 .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .fixedSize(horizontal: false, vertical: true)
-            CoordinatorChatFields(projectId: client.mission(missionId)?.projectId, form: $form)
+            CoordinatorChatFields(projectId: client.mission(missionId)?.projectId, form: $form) { if canStart { start() } }
                 .disabled(saving)
-            if let error { Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive).textSelection(.enabled) }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button(saving ? "Starting…" : "Start Coordinator", action: start)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(saving || !form.canStart || client.mission(missionId)?.status != .active
-                              || client.mission(missionId)?.coordinatorSessionId != nil)
-            }
         }
-        .padding(20).frame(width: 500)
+    }
+
+    private var canStart: Bool {
+        !saving && form.canStart && client.mission(missionId)?.status == .active
+            && client.mission(missionId)?.coordinatorSessionId == nil
     }
 
     private func start() {

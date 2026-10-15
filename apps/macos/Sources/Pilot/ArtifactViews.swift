@@ -216,7 +216,7 @@ struct ArtifactViewerHeader: View {
                 }
                 .font(.caption).foregroundStyle(.secondary)
                 if let error = state.exportError {
-                    Text(error).font(.caption).foregroundStyle(.red).lineLimit(2).textSelection(.enabled)
+                    InlineProblem(error).lineLimit(2)
                 } else if let message = state.exportMessage {
                     Text(message).font(.caption).foregroundStyle(.secondary)
                 }
@@ -243,8 +243,7 @@ private struct ArtifactContent: View {
             if state.loading {
                 ProgressView("Loading artifact…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = state.error {
-                VStack(spacing: 8) {
-                    Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                EmptyStateView(icon: PilotIcon.warning, title: "Couldn't load this artifact", message: error) {
                     Button("Retry") { Task { await state.load(reference, latest: latest) } }
                 }
                 .padding().frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -368,38 +367,35 @@ struct SessionArtifactsPane: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text("\(artifacts.count) artifact\(artifacts.count == 1 ? "" : "s")")
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
+            InspectorPaneHeader("\(artifacts.count) artifact\(artifacts.count == 1 ? "" : "s")", trailing: {
                 if state.loading { ProgressView().controlSize(.mini) }
                 Button { Task { await load() } } label: {
                     PilotSymbol(PilotIcon.refresh, context: .toolbar)
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(QuietIconButtonStyle())
                 .disabled(state.loading)
                 .help("Refresh artifacts")
                 .accessibilityLabel("Refresh artifacts")
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            Rectangle().fill(Theme.border).frame(height: 1)
-            if let error = state.error {
-                VStack(spacing: 8) {
-                    Text(error).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                    Button("Retry") { Task { await load() } }.disabled(state.loading)
-                }
-                .padding()
+            })
+            if let error = state.error, !artifacts.isEmpty {
+                InlineProblem(error, retrying: state.loading) { Task { await load() } }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             if state.loading, artifacts.isEmpty {
                 ProgressView("Loading artifacts…").frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if artifacts.isEmpty {
-                VStack(spacing: 8) {
-                    PilotSymbol(PilotIcon.artifact, context: .emptyState).foregroundStyle(Theme.faintForeground)
-                    Text(state.error == nil ? "No artifacts yet" : "Artifacts unavailable")
-                        .font(.callout).foregroundStyle(Theme.mutedForeground)
+            } else if artifacts.isEmpty, let error = state.error {
+                EmptyStateView(icon: PilotIcon.warning, title: "Artifacts unavailable", message: error) {
+                    Button("Retry") { Task { await load() } }.disabled(state.loading)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, 16)
+                .frame(maxHeight: .infinity)
+            } else if artifacts.isEmpty {
+                EmptyStateView(icon: PilotIcon.artifact, title: "No artifacts yet",
+                               message: "Pages, diagrams and images the agent publishes in this chat appear here.")
+                    .padding(.horizontal, 16)
+                    .frame(maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
@@ -408,10 +404,10 @@ struct SessionArtifactsPane: View {
                                 HStack(spacing: 10) {
                                     PilotSymbol(artifact.kind == .image ? PilotIcon.image : PilotIcon.artifact)
                                         .foregroundStyle(Theme.mutedForeground)
-                                    Text(artifact.title).font(.callout).lineLimit(1)
+                                    Text(artifact.title).font(.pilot(.body)).lineLimit(1)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     Text("\(artifact.kind.rawValue.uppercased()) · r\(artifact.revision)")
-                                        .font(.caption.monospaced()).foregroundStyle(Theme.mutedForeground)
+                                        .font(.pilot(.caption, design: .monospaced)).foregroundStyle(Theme.mutedForeground)
                                 }
                                 .padding(12)
                                 .contentShape(Rectangle())
@@ -481,41 +477,47 @@ struct ProjectArtifactsBrowser: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("\(project.name) artifacts").font(.headline)
-                Spacer()
-                Button("Refresh") { Task { await load() } }
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }.padding()
-            Divider()
-            if state.loading { ProgressView("Loading artifacts…").padding() }
-            if let error = state.error { Text(error).foregroundStyle(.secondary).padding() }
-            if !state.loading, state.error == nil, state.artifacts.isEmpty { Text("No artifacts yet").foregroundStyle(.secondary).padding() }
-            List(state.artifacts) { artifact in
-                HStack {
-                    Button { state.selected = artifact.reference } label: {
-                        HStack {
-                            Label(artifact.title, icon: PilotIcon.artifact)
-                            Spacer()
-                            Text("r\(artifact.revision)").font(.caption.monospaced()).foregroundStyle(.secondary)
-                        }
-                    }.buttonStyle(.plain)
-                    Button {
-                        AppModel.shared.selectedSessionId = artifact.sessionId
-                        dismiss()
-                    } label: {
-                        Label(client.session(artifact.sessionId)?.title ?? "Open chat", icon: PilotIcon.message)
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Open originating chat: \(client.session(artifact.sessionId)?.title ?? artifact.sessionId)")
-                }
+        SheetScaffold("Artifacts", subtitle: project.name, width: nil, fillsHeight: true, accessory: {
+            Button("Refresh") { Task { await load() } }.disabled(state.loading)
+        }) {
+            if state.loading { ProgressView("Loading artifacts…").frame(maxWidth: .infinity) }
+            if let error = state.error { InlineProblem(error, retrying: state.loading) { Task { await load() } } }
+            if !state.loading, state.error == nil, state.artifacts.isEmpty {
+                EmptyStateView(icon: PilotIcon.artifact, title: "No artifacts yet",
+                               message: "Pages, diagrams and images agents publish in this project appear here.")
+                    .frame(maxHeight: .infinity)
+            } else {
+                artifactList
             }
         }
         .frame(minWidth: 580, minHeight: 400)
         .task { await load() }
         .sheet(item: $state.selected) { ArtifactViewer(reference: $0, latest: true) }
+    }
+
+    private var artifactList: some View {
+        List(state.artifacts) { artifact in
+            HStack {
+                Button { state.selected = artifact.reference } label: {
+                    HStack {
+                        Label(artifact.title, icon: PilotIcon.artifact)
+                        Spacer()
+                        Text("r\(artifact.revision)").font(.pilot(.caption, design: .monospaced))
+                            .foregroundStyle(Theme.mutedForeground)
+                    }
+                }.buttonStyle(.plain)
+                Button {
+                    AppModel.shared.selectedSessionId = artifact.sessionId
+                    dismiss()
+                } label: {
+                    Label(client.session(artifact.sessionId)?.title ?? "Open chat", icon: PilotIcon.message)
+                        .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                }
+                .buttonStyle(.borderless)
+                .help("Open originating chat: \(client.session(artifact.sessionId)?.title ?? artifact.sessionId)")
+            }
+        }
+        .listStyle(.plain)
     }
 
     private func load() async {

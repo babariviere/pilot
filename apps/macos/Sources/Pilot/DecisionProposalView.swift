@@ -45,7 +45,7 @@ struct DecisionProposalView: View {
                 }
                 .controlSize(.small)
             }
-            if let error { Text(error).font(.pilot(.caption)).foregroundStyle(Theme.destructive) }
+            if let error { InlineProblem(error) }
         }
         .font(.pilot(.label))
         .padding(10)

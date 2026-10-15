@@ -24,12 +24,7 @@ struct DecisionAudienceTag: View {
     let audience: MissionDecisionAudience
 
     var body: some View {
-        Text(audience.label)
-            .font(.pilot(.small))
-            .foregroundStyle(Theme.mutedForeground)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Capsule().fill(Theme.muted))
-            .fixedSize()
+        MetaText(audience.label)
             .help(audience.explanation)
             .accessibilityLabel("Audience: \(audience.label)")
     }

@@ -338,16 +338,8 @@ private struct TrackingLookupProblem<Item: Codable & Equatable & Sendable>: View
     let retry: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            PilotSymbol(PilotIcon.warning)
-                .foregroundStyle(Theme.blocked)
-                .accessibilityHidden(true)
-            Text(lookup.error ?? "Couldn't reach \(service).").foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 8)
-            Button("Retry", action: retry).controlSize(.small)
-        }
-        .font(.caption)
+        InlineProblem(lookup.error ?? "Couldn't reach \(service).", retry: retry)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -426,7 +418,7 @@ private struct SlackLabelRow: View {
                     .textFieldStyle(.plain).labelsHidden()
                     .font(.caption).foregroundStyle(.secondary)
                 if duplicate {
-                    Text("Another label has this name.").font(.caption).foregroundStyle(Theme.blocked)
+                    Text("Another label has this name.").font(.pilot(.caption)).foregroundStyle(Theme.error)
                 }
             }
             Spacer(minLength: 8)

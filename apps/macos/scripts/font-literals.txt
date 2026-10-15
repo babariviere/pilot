@@ -1,29 +1,22 @@
 # Files that still use .system(size:) fonts or SwiftUI text styles, with how many uses remain.
 # check-font-roles.py fails when a file exceeds its count or a file not listed gains one.
 # Lower or remove an entry after converting a file to .pilot roles; never raise one.
-ArchiveView.swift 9
-ArtifactViews.swift 17
-ChangesPane.swift 1
-ChatLinksPane.swift 3
+ArchiveView.swift 5
+ArtifactViews.swift 4
 ChatView.swift 1
-CollapsibleMessage.swift 3
+CollapsibleMessage.swift 1
 Composer.swift 1
 ComposerUsage.swift 4
 HomeView.swift 7
 ImageAttachments.swift 1
 InlineDiagramView.swift 2
-MainWindow.swift 4
-MarkdownView.swift 2
-MissionSheets.swift 5
+MainWindow.swift 2
+MarkdownView.swift 1
 MissionTabs.swift 3
 MissionTaskDescription.swift 1
 ProjectPage.swift 2
 QuestionComposer.swift 1
-ScheduleUI.swift 2
-SessionRename.swift 1
 Snapshot.swift 8
-TerminalPane.swift 6
-ToolViews.swift 3
-TrackingSettings.swift 17
+TrackingSettings.swift 14
 TranscriptRewind.swift 1
 WorkingIndicator.swift 1
