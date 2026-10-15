@@ -568,6 +568,7 @@ test("the Inbox lists ready PRs across projects, leaving out chats that work or 
 	assert.deepEqual(
 		inbox.readyToMerge.items.map((item) => [item.projectId, item.sessionId, item.number, item.missionId]),
 		[
+			["p1", "unread", 6, undefined],
 			["p2", "b", 2, "m"],
 			["p1", "a", 1, undefined],
 		],
@@ -576,14 +577,14 @@ test("the Inbox lists ready PRs across projects, leaving out chats that work or 
 	assert.equal(inbox.readyToMerge.items[0]?.readiness?.state, "ready");
 	assert.deepEqual(
 		inbox.needsYou.items.map((item) => item.sessionId),
-		["unread"],
+		[],
 	);
 	assert.deepEqual(
 		f.service.inbox("p1", 50).readyToMerge.items.map((item) => item.number),
-		[1],
+		[6, 1],
 	);
 	const capped = f.service.inbox(undefined, 1).readyToMerge;
-	assert.equal(capped.total, 2);
+	assert.equal(capped.total, 3);
 	assert.equal(capped.items.length, 1);
 	// Ready PRs never add to the badge counts.
 	assert.equal(f.service.counts().projects.p2, undefined);
@@ -611,11 +612,11 @@ test("the Inbox lists ready PRs across projects, leaving out chats that work or 
 	const kinds = () => f.service.inbox(undefined, 50).needsYou.items.map((item) => item.sessionId);
 	assert.deepEqual(f.service.counts().projects.p1, {
 		working: 0,
-		needsYou: 4,
-		needsYouReasons: { failed: 1, asks: 1, not_reviewed: 2 },
+		needsYou: 3,
+		needsYouReasons: { failed: 1, asks: 1, not_reviewed: 1 },
 	});
-	assert.deepEqual(kinds(), ["failed", "question", "ready", "done"]);
-	assert.deepEqual(f.service.inbox(undefined, 50).readyToMerge.total, 0);
+	assert.deepEqual(kinds(), ["failed", "question", "done"]);
+	assert.deepEqual(f.service.inbox(undefined, 50).readyToMerge.total, 1);
 	for (const id of ["done", "ready", "failed", "question"]) read.add(id);
 	assert.deepEqual(f.service.counts().projects.p1, {
 		working: 0,
@@ -627,6 +628,36 @@ test("the Inbox lists ready PRs across projects, leaving out chats that work or 
 		f.service.inbox(undefined, 50).readyToMerge.items.map((item) => item.sessionId),
 		["ready"],
 	);
+});
+
+test("ready PRs clear only unread attention and regroup without a review mark", () => {
+	const ready = { state: "ready" as const, reasons: [], checkedAt: 1 };
+	const chat = session({ id: "ready", missionId: "m", outcome: "done", outcomeAt: 1 });
+	const f = service([chat]);
+	assert.equal(f.service.inbox(undefined, 50).needsYou.total, 1);
+	chat.pullRequest = pr(1, { readiness: ready });
+	assert.equal(f.service.inbox(undefined, 50).needsYou.total, 0);
+	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 1);
+	assert.equal(f.service.counts().projects.p1, undefined);
+	assert.equal(build({ sessions: [chat], missions: [mission({ id: "m" })] }).missions.items[0]?.needsYou, 0);
+	for (const overrides of [
+		{ outcome: "failed" as const },
+		{ outcome: "question" as const },
+		{ attentionReason: { kind: "long_job" as const } },
+		{ attentionReason: { kind: "pr_stuck" as const } },
+		{ missionCoordinator: true },
+		{ activeMissionCoordinator: true },
+		{ pullRequest: pr(1, { state: "draft", readiness: ready }) },
+		{ pullRequest: pr(1, { readiness: { ...ready, state: "pending" as const } }) },
+		{ pullRequest: pr(1) },
+		{ pullRequest: undefined, pullRequests: [pr(1, { readiness: ready })] },
+	]) {
+		assert.equal(build({ sessions: [{ ...chat, ...overrides }] }).needsYou.total, 1);
+	}
+	// Becoming blocked again must not pretend that the result was read.
+	chat.pullRequest = pr(1, { readiness: { ...ready, state: "blocked" } });
+	assert.equal(f.service.inbox(undefined, 50).needsYou.total, 1);
+	assert.equal(f.service.inbox(undefined, 50).readyToMerge.total, 0);
 });
 
 test("providers feed scheduled and tracked sections and report changes", () => {

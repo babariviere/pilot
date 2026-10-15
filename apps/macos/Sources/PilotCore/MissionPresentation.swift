@@ -34,7 +34,11 @@ public enum MissionNeedsYou {
     ) -> [SessionSummary] {
         members
             .filter { $0.missionId == mission.id && !$0.isArchived }
-            .filter { $0.attentionReason?.kind == .longJob || $0.attentionReason?.kind == .prStuck || (!$0.isWorking && ($0.outcome == .done || $0.outcome == .failed) && isUnread($0)) }
+            .filter { session in
+                session.attentionReason?.kind == .longJob || session.attentionReason?.kind == .prStuck
+                    || (!session.isWorking && (session.outcome == .done || session.outcome == .failed)
+                        && isUnread(session) && session.signal(unread: true)?.needsUser == true)
+            }
     }
 
     /// Member chats come from the session list; `detail` is nil until the mission's detail is loaded.

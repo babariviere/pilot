@@ -1,8 +1,7 @@
 import Foundation
 
 /// The one state a sidebar row signals, drawn as its dithered corner. nil rows are quiet and draw nothing.
-/// Order of precedence follows DESIGN.md's attention budget: live work, then failures, then unread results,
-/// then pull requests ready to merge.
+/// Live work and actionable problems take precedence; a ready PR supersedes an unreviewed result.
 public enum SessionSignal: String, CaseIterable, Hashable, Sendable {
     case working
     case failed
@@ -37,8 +36,9 @@ extension SessionSummary {
         if isWorking { return .working }
         if status == .failed && !hasTerminalPullRequest { return .failed }
         // A question waits on the user until answered, even once viewed or after its PRs settled.
-        if unread || status == .question || attentionReason?.kind == .prStuck { return .needsYou }
+        if status == .question || attentionReason?.kind == .prStuck { return .needsYou }
         if isReadyToMerge { return .readyToMerge }
+        if unread { return .needsYou }
         return nil
     }
 
@@ -60,7 +60,7 @@ public enum SidebarUrgency {
         /// Failed chats first, then agent questions, then unread results (and read ones whose chat is still
         /// open), each in list order.
         public var needsYou: [SessionSummary] = []
-        /// Reviewed chats whose PR is ready to merge, in list order. Waits on the user without badging.
+        /// Chats whose PR is ready to merge, reviewed or not, in list order. Never badges.
         public var readyToMerge: [SessionSummary] = []
         public var working: [SessionSummary] = []
         /// Everything else, in list order.
@@ -81,7 +81,7 @@ public enum SidebarUrgency {
     }
 
     /// One pass over `sessions`, which are already in sidebar list order. `held` keeps a result read in the open
-    /// chat under Needs you until the user leaves it (`SessionAttention.isHeld`), so reading never moves the row.
+    /// chat under Needs you until the user leaves it (`SessionAttention.isHeld`), unless its PR is ready to merge.
     /// Working wins over a ready PR, so a chat still pushing to its PR stays under Working. With `separatingPinned`
     /// false, pinned chats join the group of their state, for counts that must match pilotd's.
     public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool,
@@ -101,8 +101,7 @@ public enum SidebarUrgency {
             case .failed: failed.append(session)
             case .needsYou where session.status == .question: questions.append(session)
             case .needsYou: waiting.append(session)
-            case .readyToMerge:
-                if held(session) { waiting.append(session) } else { groups.readyToMerge.append(session) }
+            case .readyToMerge: groups.readyToMerge.append(session)
             case nil:
                 if held(session) { waiting.append(session) } else { groups.recent.append(session) }
             }

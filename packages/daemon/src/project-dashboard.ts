@@ -83,7 +83,7 @@ function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | un
 /**
  * A finished chat that has not been reviewed, a failure or one waiting for an answer: it still waits on the user.
  * Reading a result is enough to clear it (the app keeps the open chat's row in place until the user leaves it);
- * failures stay until retried and questions until answered, as in the app's sidebar.
+ * a ready current PR supersedes an unreviewed result. Failures stay until retried and questions until answered.
  */
 function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread"]): boolean {
 	if (session.attentionReason?.kind === "long_job") return true;
@@ -94,6 +94,13 @@ function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread
 	if (hasTerminalPullRequest(session)) return false;
 	// A failure waits until it is retried, not until the chat is viewed.
 	if (failed(session)) return true;
+	// Mirror SessionSummary.isReadyToMerge: coordinators never represent their PR as ready chat work.
+	if (
+		!(session.missionCoordinator ?? session.activeMissionCoordinator) &&
+		session.pullRequest?.state === "open" &&
+		session.pullRequest.readiness?.state === "ready"
+	)
+		return false;
 	if (session.outcomeAt !== undefined && Number.isFinite(session.outcomeAt))
 		return session.outcome !== undefined && isUnread(session.id, session.outcomeAt);
 	return false;

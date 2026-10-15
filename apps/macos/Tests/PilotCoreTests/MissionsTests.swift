@@ -263,6 +263,17 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
                   resources: [], events: [])
 }
 
+@Test func readyPullRequestClearsMissionUnreadAttention() {
+    let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", createdAt: 1, updatedAt: 1)
+    let pr = SessionPullRequest(number: 1, url: "https://github.com/o/r/pull/1", title: "PR", state: .open,
+                                checkedAt: 1, readiness: .init(state: .ready, reasons: [], checkedAt: 1))
+    let ready = session("ready", pullRequest: pr)
+    #expect(MissionNeedsYou.count(mission: mission, members: [ready], isUnread: { _ in true }) == 0)
+    #expect(MissionNeedsYou.items(mission: mission, detail: nil, members: [ready], isUnread: { _ in true }).isEmpty)
+    let failed = session("failed", outcome: .failed, pullRequest: pr)
+    #expect(MissionNeedsYou.count(mission: mission, members: [failed], isUnread: { _ in true }) == 1)
+}
+
 @Test func needsYouCountsUnreadChatsBlockedTasksAndUnaddressedAgentComments() throws {
     let mission = Mission(id: "m1", projectId: "p1", title: "API", goal: "g", createdAt: 1, updatedAt: 1)
     let members = [

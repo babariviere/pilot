@@ -271,7 +271,7 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
     }
 }
 
-@Test func readResultWithReadyPullRequestMovesToReadyToMergeOnLeave() {
+@Test func readyPullRequestSupersedesUnreadAndHeldResultsWithoutMarkingThemReviewed() {
     withDefaults { defaults in
         let attention = SessionAttention(defaults: defaults)
         let pr = SessionPullRequest(number: 1, url: "https://github.com/o/r/pull/1", title: "PR", state: .open,
@@ -279,9 +279,12 @@ private func withDefaults(_ test: (UserDefaults) throws -> Void) rethrows {
         let ready = SessionSummary(id: "r", title: "Task", cwd: "/tmp", createdAt: 1, updatedAt: 200, state: "idle",
                                    outcome: .done, outcomeAt: 100, pullRequest: pr, pullRequests: [pr])
         let group = { SidebarUrgency.groups([ready], unread: attention.isUnread, held: attention.isHeld) }
-        #expect(group().needsYou == [ready])
+        #expect(attention.isUnread(ready))
+        #expect(group().needsYou.isEmpty)
+        #expect(group().readyToMerge == [ready])
         #expect(attention.review(ready, chatVisible: true, appActive: true))
-        #expect(group().needsYou == [ready])
+        #expect(group().needsYou.isEmpty)
+        #expect(group().readyToMerge == [ready])
         #expect(attention.leave(keeping: nil))
         #expect(group().readyToMerge == [ready])
         #expect(group().needsYou.isEmpty)
