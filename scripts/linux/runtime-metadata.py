@@ -51,6 +51,9 @@ def audit(root):
             if header[4:6] != b"\x02\x01" or int.from_bytes(header[18:20], "little") != 62:
                 raise ValueError(f"Not little-endian ELF64 x86-64: {path}")
             dynamic = subprocess.run(["readelf", "-d", str(path)], check=True, capture_output=True, text=True).stdout
+            for dependency in re.findall(r"\(NEEDED\).*?\[(.*?)\]", dynamic):
+                if "/" in dependency:
+                    raise ValueError(f"Non-relocatable native dependency: {path}: {dependency}")
             for entry in re.findall(r"\((?:RPATH|RUNPATH)\).*?\[(.*?)\]", dynamic):
                 for part in entry.split(":"):
                     if part != "$ORIGIN" and not part.startswith("$ORIGIN/"):

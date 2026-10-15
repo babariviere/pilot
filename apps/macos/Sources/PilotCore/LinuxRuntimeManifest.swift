@@ -23,6 +23,7 @@ public struct LinuxRuntimeManifest: Decodable, Sendable {
     public let protocolVersion: Int
     public let minimumClientProtocolVersion: Int
     public let minimumGlibc: String
+    public let minimumGlibcxx: String
     public let node: Node
     public let archive: Archive
 
@@ -51,6 +52,7 @@ public struct LinuxRuntimeManifest: Decodable, Sendable {
               value.node.version.range(of: #"^24\.\d+\.\d+$"#, options: .regularExpression) != nil,
               value.node.modules.range(of: #"^\d+$"#, options: .regularExpression) != nil,
               value.minimumGlibc.range(of: #"^2\.\d+$"#, options: .regularExpression) != nil,
+              value.minimumGlibcxx.range(of: #"^(?:3\.4\.\d+|0\.0\.0)$"#, options: .regularExpression) != nil,
               value.archive.name == "Pilot-linux-x64.tar.gz", value.archive.size > 0, value.archive.size <= 536_870_912,
               value.archive.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil
         else { throw ValidationError.incompatible }
@@ -60,6 +62,21 @@ public struct LinuxRuntimeManifest: Decodable, Sendable {
     public func verifyArchive(_ data: Data) throws {
         let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
         guard data.count == archive.size, hash == archive.sha256 else { throw ValidationError.archive }
+    }
+
+    /// For downloaded runtime files, call off the UI actor. Memory stays bounded to one MiB.
+    public func verifyArchive(at url: URL) throws {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        var digest = SHA256()
+        var count = 0
+        while let chunk = try file.read(upToCount: 1_048_576), !chunk.isEmpty {
+            count += chunk.count
+            guard count <= archive.size else { throw ValidationError.archive }
+            digest.update(data: chunk)
+        }
+        let hash = digest.finalize().map { String(format: "%02x", $0) }.joined()
+        guard count == archive.size, hash == archive.sha256 else { throw ValidationError.archive }
     }
 }
 

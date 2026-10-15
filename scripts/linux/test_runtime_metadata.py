@@ -39,6 +39,7 @@ class MetadataTests(unittest.TestCase):
         for kwargs in [dict(version="GLIBC_2.35"), dict(version="GLIBCXX_3.4.32"),
                        dict(dependencies="libmissing.so => not found"),
                        dict(dynamic="(RUNPATH) Library runpath: [/source/lib]"),
+                       dict(dynamic="(NEEDED) Shared library: [/source/libexternal.so]"),
                        dict(dynamic="(RPATH) Library rpath: [$ORIGIN/../../../../outside]")]:
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 self.audit(**kwargs)
