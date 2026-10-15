@@ -1,14 +1,16 @@
 import { requiredAuthRegistration } from "./testing/required-auth.ts";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
+import { setTimeout as delay } from "node:timers/promises";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { SlackClassifierContext } from "./slack-classifier.ts";
 import { ServiceUnavailable } from "./errors.ts";
 import { cheapestTitleModel, generateChatTitle, ModelCatalog } from "./models.ts";
+import { ProjectMemoryService } from "./project-memory.ts";
 
 type Model = Parameters<ModelRuntime["completeSimple"]>[0];
 const model = (id: string, input: number, output: number): Model => ({
@@ -155,22 +157,72 @@ for (const scenario of [
 		feedback: /was empty/,
 	},
 	{
+		name: "shortens the latest attempt rather than the original overshoot",
+		outputs: ["first ".repeat(74), "second ".repeat(50), "Keep the condition."],
+		expected: "Keep the condition.",
+		feedback: /UTF-8 bytes/,
+	},
+	{
 		name: "rewrites NUL output",
 		outputs: ["bad\0summary", "Valid summary."],
 		expected: "Valid summary.",
 		feedback: /NUL character/,
 	},
 	{
-		name: "stops after two corrective attempts",
+		name: "trims persistent overshoot after two corrective attempts",
 		outputs: ["é".repeat(141), "é".repeat(141), "é".repeat(141)],
-		error: /282 UTF-8 bytes \(limit 280\) after 3 attempts/,
+		expected: "é".repeat(140),
+		trimmed: true,
 		feedback: /282 UTF-8 bytes/,
 	},
+	...[
+		{ name: "does not split a three-byte code point", text: "界".repeat(94), expected: "界".repeat(93) },
+		{ name: "does not split a four-byte code point", text: `a${"🛫".repeat(70)}`, expected: `a${"🛫".repeat(69)}` },
+		{ name: "recognizes clauses without spaces", text: `条件を保持。${"界".repeat(100)}`, expected: "条件を保持。" },
+		{
+			name: "prefers a complete clause with its condition",
+			text: `Work with the lid closed only on AC power and Wi-Fi; ${"lower priority ".repeat(30)}`,
+			expected: "Work with the lid closed only on AC power and Wi-Fi;",
+		},
+		{
+			name: "cuts at a word boundary when no clause fits",
+			text: `Keep ${"important ".repeat(30)}`,
+			expected: `Keep ${"important ".repeat(27)}`.trim(),
+		},
+		{
+			name: "keeps a whole word ending exactly at 280 bytes",
+			text: `${"a".repeat(280)} more`,
+			expected: "a".repeat(280),
+		},
+		{
+			name: "keeps a clause ending exactly at 280 bytes",
+			text: `${"a".repeat(279)}; more`,
+			expected: `${"a".repeat(279)};`,
+		},
+	].map(({ name, text, expected }) => ({
+		name,
+		outputs: [text, text, text],
+		expected,
+		trimmed: true,
+		feedback: /UTF-8 bytes/,
+	})),
 	{
 		name: "reports persistently empty output",
 		outputs: ["", "", ""],
 		error: /was empty after 3 attempts/,
 		feedback: /was empty/,
+	},
+	{
+		name: "reports persistently invalid output without trimming it",
+		outputs: ["bad\0summary", "bad\0summary", "bad\0summary"],
+		error: /NUL character after 3 attempts/,
+		feedback: /NUL character/,
+	},
+	{
+		name: "does not mask a final invalid response with earlier oversized output",
+		outputs: ["x".repeat(281), "x".repeat(281), ""],
+		error: /was empty after 3 attempts/,
+		feedback: /281 UTF-8 bytes/,
 	},
 ]) {
 	test(`memory compaction ${scenario.name}`, async (t) => {
@@ -179,6 +231,8 @@ for (const scenario of [
 		const luna = { ...cheap, id: "gpt-6-luna", provider: "openai-codex" };
 		const controller = new AbortController();
 		let calls = 0;
+		const warnings: string[] = [];
+		t.mock.method(console, "warn", (message: string) => warnings.push(message));
 		t.mock.method(
 			ModelRuntime,
 			"create",
@@ -196,8 +250,16 @@ for (const scenario of [
 						assert.equal(options?.signal, controller.signal);
 						assert.equal(options?.maxRetries, 0);
 						assert.equal(options?.reasoning, undefined);
-						assert.equal(context.messages.length, 1, "rejected output is not replayed or accumulated");
-						assert.equal(context.messages[0]!.content, "original memories");
+						assert.equal(context.messages.length, 1, "attempts do not accumulate history");
+						const previous = scenario.outputs[calls - 1]?.replace(/\s+/gu, " ").trim();
+						if (previous && !previous.includes("\0") && Buffer.byteLength(previous) > 280) {
+							assert.deepEqual(JSON.parse(context.messages[0]!.content as string), {
+								previousSummary: previous,
+								utf8Bytes: Buffer.byteLength(previous),
+								targetBytes: 220,
+							});
+							assert.match(context.systemPrompt!, /Shorten the supplied previous summary/);
+						} else assert.equal(context.messages[0]!.content, "original memories");
 						if (calls) {
 							assert.match(context.systemPrompt!, scenario.feedback!);
 							assert.match(context.systemPrompt!, /preserve important conditions/);
@@ -211,14 +273,35 @@ for (const scenario of [
 		if (scenario.error) await assert.rejects(result, scenario.error);
 		else assert.equal(await result, scenario.expected);
 		assert.equal(calls, scenario.outputs.length);
+		assert.equal(warnings.length, scenario.trimmed ? 1 : 0);
+		if (scenario.trimmed) {
+			assert.ok(Buffer.byteLength(scenario.expected!) <= 280);
+			assert.match(warnings[0]!, /^pilotd: trimmed memory summary from \d+ to \d+ UTF-8 bytes after 3 attempts$/);
+		}
 	});
 }
 
-test("memory compaction does not start a corrective attempt after cancellation", async (t) => {
+test("paused memory recovers after restart and stores summaries even when every model attempt overshoots", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
 	t.after(() => rm(root, { recursive: true, force: true }));
-	const controller = new AbortController();
+	const waitFor = async (check: () => boolean) => {
+		const end = performance.now() + 5000;
+		while (!check()) {
+			assert.ok(performance.now() < end, "compaction state timed out");
+			await delay(5);
+		}
+	};
+	const paused = new ProjectMemoryService(root, async () => {
+		throw new Error("Memory summary was 444 UTF-8 bytes (limit 280) after 3 attempts; will retry automatically");
+	});
+	t.after(() => paused.stop());
+	for (let i = 0; i < 4; i++) await paused.note("p", `condition ${i} ${"é".repeat(130)}`, "chat");
+	await waitFor(() => paused.summary("p").compaction.state === "backoff");
+	const log = await readFile(join(root, "memory", "p", "log"));
+	await paused.stop();
+
 	let calls = 0;
+	t.mock.method(console, "warn", () => {});
 	t.mock.method(
 		ModelRuntime,
 		"create",
@@ -228,14 +311,59 @@ test("memory compaction does not start a corrective attempt after cancellation",
 				getAvailable: async () => [{ ...cheap, id: "gpt-6-luna", provider: "openai-codex" }],
 				completeSimple: async () => {
 					calls++;
-					controller.abort();
-					return answer("x".repeat(281));
+					return answer(`Keep lasting conditions; ${"évidence ".repeat(42)}`);
 				},
 			}) as unknown as ModelRuntime,
 	);
-	await assert.rejects(new ModelCatalog(root).summarizeMemory("memories", controller.signal), { name: "AbortError" });
-	assert.equal(calls, 1);
+	const catalog = new ModelCatalog(root);
+	const resumed = new ProjectMemoryService(root, (prompt, signal) => catalog.summarizeMemory(prompt, signal));
+	t.after(() => resumed.stop());
+	await resumed.load("p");
+	await waitFor(() => resumed.summary("p").compaction.state === "idle");
+	assert.equal(resumed.summary("p").compaction.pending, 0);
+	assert.equal(resumed.summary("p").compaction.error, undefined);
+	assert.equal(calls, 9, "three blocks progress after three bounded attempts each");
+	const stored = (await resumed.wake("p", 1)).nodes[0]!;
+	assert.deepEqual([stored.lo, stored.hi], [0, 3]);
+	assert.equal(stored.text, "Keep lasting conditions;");
+	for (const node of [stored, ...(await resumed.zoom("p", 0, 3))]) {
+		assert.ok(node.text && Buffer.byteLength(node.text) <= 280);
+		assert.equal(node.pending, undefined);
+	}
+	assert.deepEqual(await readFile(join(root, "memory", "p", "log")), log, "source notes are never trimmed");
+	await resumed.stop();
+	const reopened = new ProjectMemoryService(root);
+	t.after(() => reopened.stop());
+	assert.equal((await reopened.load("p")).compaction.pending, 0);
+	assert.deepEqual((await reopened.wake("p", 1)).nodes[0], stored, "trimmed summaries survive restart");
 });
+
+for (const abortAt of [1, 3]) {
+	test(`memory compaction honors cancellation on attempt ${abortAt} before correcting or trimming`, async (t) => {
+		const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
+		t.after(() => rm(root, { recursive: true, force: true }));
+		const controller = new AbortController();
+		let calls = 0;
+		t.mock.method(
+			ModelRuntime,
+			"create",
+			async () =>
+				({
+					...requiredAuthRegistration,
+					getAvailable: async () => [{ ...cheap, id: "gpt-6-luna", provider: "openai-codex" }],
+					completeSimple: async () => {
+						calls++;
+						if (calls === abortAt) controller.abort();
+						return answer("x".repeat(281));
+					},
+				}) as unknown as ModelRuntime,
+		);
+		await assert.rejects(new ModelCatalog(root).summarizeMemory("memories", controller.signal), {
+			name: "AbortError",
+		});
+		assert.equal(calls, abortAt);
+	});
+}
 
 test("memory compaction never falls back to another model when luna is unavailable", async (t) => {
 	const root = await mkdtemp(join(tmpdir(), "pilot-memory-model-"));
