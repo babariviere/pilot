@@ -73,7 +73,7 @@ import Testing
     let counts = MissionTaskCounts(tasks)
     #expect(counts.done == 1 && counts.total == 2)
     #expect(MissionTaskCounts.barOrder.reduce(0) { $0 + counts[$1] } == counts.total)
-    let progress = MissionMilestones.progress(tasks)[0].counts
+    let progress = MissionTaskPhases(tasks, showDropped: false).progressRows[0].counts
     #expect(progress.done == 1 && progress.total == 2)
     let onlyDelegated = MissionTaskPhases([tasks[2]], showDropped: false).groups[0]
     #expect(!onlyDelegated.isFinished)

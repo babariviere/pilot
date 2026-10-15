@@ -179,3 +179,23 @@ test("gating derives blocked state, follows ordering and requires user override 
 		[first.id, later.id],
 	);
 });
+
+test("summaries carry the first unfinished phase and its progress", (t) => {
+	const store = new MissionStore(":memory:");
+	t.after(() => store.close());
+	const { id } = store.create({ projectId: "p", title: "M" });
+	assert.equal(store.get(id)!.currentPhase, undefined, "no phases");
+	const build = store.addPhase(id, { name: "Build" });
+	const ship = store.addPhase(id, { name: "Ship" });
+	assert.equal(store.get(id)!.currentPhase, undefined, "empty phases are complete");
+	const a = store.addTask(id, { title: "A", phaseId: build.id, status: "done" });
+	store.addTask(id, { title: "B", phaseId: build.id, status: "dropped" });
+	store.addTask(id, { title: "C", phaseId: ship.id });
+	store.addTask(id, { title: "D", phaseId: ship.id, status: "done" });
+	store.addTask(id, { title: "Unphased" });
+	assert.deepEqual(store.get(id)!.currentPhase, { id: ship.id, name: "Ship", done: 1, total: 2 });
+	store.updateTask(id, a.id, { status: "todo" });
+	assert.deepEqual(store.list("p")[0]!.currentPhase, { id: build.id, name: "Build", done: 0, total: 1 });
+	store.updatePhase(id, build.id, { name: "Foundations" });
+	assert.equal(store.get(id)!.currentPhase?.name, "Foundations");
+});

@@ -54,9 +54,9 @@ public enum MissionTaskListItem: Identifiable, Equatable, Sendable {
                 if folded { continue }
             }
             var byStatus: [MissionTaskStatus: [MissionTask]] = [:]
-            for task in group.tasks { byStatus[task.status, default: []].append(task) }
+            for task in group.tasks { byStatus[task.workStatus, default: []].append(task) }
             for (index, task) in group.tasks.enumerated() {
-                items.append(.task(task, index: index, siblings: byStatus[task.status] ?? []))
+                items.append(.task(task, index: index, siblings: byStatus[task.workStatus] ?? []))
             }
         }
         return items

@@ -418,21 +418,25 @@ enum Snapshot {
             """
             // Task phases, loaded only for their own captures so the other mission screens stay unchanged.
             let phasesJSON = """
-            [{"mission":{"id":"m5","projectId":"p1","title":"Mission pages","goal":"Track shared work by phase.","status":"active","briefRevision":1,"createdAt":\(now - 172_800_000),"updatedAt":\(now)},
+            [{"mission":{"id":"m5","projectId":"p1","title":"Mission pages","goal":"Track shared work by phase.","status":"active","phaseGating":true,"currentPhase":{"id":"ph2","name":"Phase 1 polish","done":2,"total":6},"tasksDone":7,"tasksTotal":13,"briefRevision":1,"createdAt":\(now - 172_800_000),"updatedAt":\(now)},
               "decisions":[],"comments":[],"artifacts":[],"resources":[],"events":[],
-              "tasks":[{"id":"p1","number":1,"title":"Mission store and API","status":"done","order":1,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
-                       {"id":"p2","number":2,"title":"Mission page with tabs","status":"done","order":2,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
-                       {"id":"p3","number":3,"title":"Mission tool for chats","status":"done","order":3,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
-                       {"id":"p4","number":4,"title":"Kanban board","status":"dropped","order":4,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
-                       {"id":"p5","number":5,"title":"Group tasks by phase","status":"in_progress","order":5,"milestone":"Phase 1 polish","sessionId":"auth","createdAt":1,"updatedAt":1},
-                       {"id":"p6","number":6,"title":"Calmer link chips","status":"done","order":6,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
-                       {"id":"p7","number":7,"title":"Show task from a link","status":"in_review","order":7,"milestone":"Phase 1 polish","sessionId":"pagination","createdAt":1,"updatedAt":1},
-                       {"id":"p8","number":8,"title":"Task descriptions fold past two lines","body":"Long descriptions fold with Show more.","status":"todo","order":8,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
-                       {"id":"p9","number":9,"title":"Sidebar progress line","status":"done","order":9,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
-                       {"id":"p10","number":10,"title":"Archive view for missions","status":"blocked","body":"Waiting on the archive API.","order":10,"milestone":"Phase 1 polish","sessionId":"errors","createdAt":1,"updatedAt":1},
-                       {"id":"p11","number":11,"title":"Inline status picker","status":"dropped","order":11,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
-                       {"id":"p12","number":12,"title":"Coordinator starts ready tasks","status":"todo","order":12,"milestone":"Coordinator automation","createdAt":1,"updatedAt":1},
-                       {"id":"p13","number":13,"title":"Wake the coordinator on merged PRs","status":"todo","order":13,"milestone":"Coordinator automation","dependsOn":["p12"],"createdAt":1,"updatedAt":1},
+              "phases":[{"id":"ph1","missionId":"m5","name":"Phase 1","order":1,"completedAt":1},
+                        {"id":"ph2","missionId":"m5","name":"Phase 1 polish","goal":"Make the mission page calm and fast.","order":2},
+                        {"id":"ph3","missionId":"m5","name":"Coordinator automation","goal":"The coordinator starts ready work on its own.","order":3},
+                        {"id":"ph4","missionId":"m5","name":"Later","order":4,"completedAt":1}],
+              "tasks":[{"id":"p1","number":1,"title":"Mission store and API","status":"done","order":1,"milestone":"Phase 1","phaseId":"ph1","createdAt":1,"updatedAt":1},
+                       {"id":"p2","number":2,"title":"Mission page with tabs","status":"done","order":2,"milestone":"Phase 1","phaseId":"ph1","createdAt":1,"updatedAt":1},
+                       {"id":"p3","number":3,"title":"Mission tool for chats","status":"done","order":3,"milestone":"Phase 1","phaseId":"ph1","createdAt":1,"updatedAt":1},
+                       {"id":"p4","number":4,"title":"Kanban board","status":"dropped","order":4,"milestone":"Phase 1","phaseId":"ph1","createdAt":1,"updatedAt":1},
+                       {"id":"p5","number":5,"title":"Group tasks by phase","status":"in_progress","order":5,"milestone":"Phase 1 polish","phaseId":"ph2","sessionId":"auth","createdAt":1,"updatedAt":1},
+                       {"id":"p6","number":6,"title":"Calmer link chips","status":"done","order":6,"milestone":"Phase 1 polish","phaseId":"ph2","createdAt":1,"updatedAt":1},
+                       {"id":"p7","number":7,"title":"Show task from a link","status":"in_review","order":7,"milestone":"Phase 1 polish","phaseId":"ph2","sessionId":"pagination","createdAt":1,"updatedAt":1},
+                       {"id":"p8","number":8,"title":"Task descriptions fold past two lines","body":"Long descriptions fold with Show more.","status":"todo","order":8,"milestone":"Phase 1 polish","phaseId":"ph2","createdAt":1,"updatedAt":1},
+                       {"id":"p9","number":9,"title":"Sidebar progress line","status":"done","order":9,"milestone":"Phase 1 polish","phaseId":"ph2","createdAt":1,"updatedAt":1},
+                       {"id":"p10","number":10,"title":"Archive view for missions","status":"blocked","body":"Waiting on the archive API.","order":10,"milestone":"Phase 1 polish","phaseId":"ph2","sessionId":"errors","createdAt":1,"updatedAt":1},
+                       {"id":"p11","number":11,"title":"Inline status picker","status":"dropped","order":11,"milestone":"Phase 1 polish","phaseId":"ph2","createdAt":1,"updatedAt":1},
+                       {"id":"p12","number":12,"title":"Coordinator starts ready tasks","status":"blocked","storedStatus":"todo","blockedByPhases":["ph2"],"order":12,"milestone":"Coordinator automation","phaseId":"ph3","createdAt":1,"updatedAt":1},
+                       {"id":"p13","number":13,"title":"Wake the coordinator on merged PRs","status":"blocked","storedStatus":"todo","blockedByPhases":["ph2"],"order":13,"milestone":"Coordinator automation","phaseId":"ph3","dependsOn":["p12"],"createdAt":1,"updatedAt":1},
                        {"id":"p14","number":14,"title":"Spike: coordinator memory","status":"todo","order":14,"createdAt":1,"updatedAt":1},
                        {"id":"p15","number":15,"title":"Rename milestones to phases in the tool","status":"done","order":15,"createdAt":1,"updatedAt":1}]},
              {"mission":{"id":"m6","projectId":"p1","title":"Small fixes","goal":"No phases.","status":"active","briefRevision":1,"createdAt":\(now - 172_800_000),"updatedAt":\(now)},
@@ -459,11 +463,21 @@ enum Snapshot {
                 await render(MissionPage(missionId: "m1"), size: CGSize(width: 1000, height: 900),
                              to: directory.appending(path: "mission-\(tab.rawValue).png"))
             }
-            // Phases: a finished phase folded, active work first, "No phase" last and dropped tasks hidden.
+            // Phases: a finished phase folded, active work first, gated tasks naming the phase they wait for, an
+            // empty phase, "No phase" last and dropped tasks hidden.
             model.client.loadMissionFixture(details + phaseDetails)
             model.openMission("m5", tab: .tasks)
-            await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 1000),
+            await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 1100),
                          to: directory.appending(path: "mission-tasks-phases.png"))
+            // One progress row per phase, the current one highlighted.
+            model.openMission("m5", tab: .overview)
+            await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 560),
+                         to: directory.appending(path: "mission-overview-phases.png"))
+            // The sidebar row names the current phase and its progress.
+            model.selectedMissionId = nil
+            await render(SessionSidebar(model: model, client: model.client), size: CGSize(width: 300, height: 680),
+                         to: directory.appending(path: "missions-sidebar-phases.png"))
+            model.openMission("m5", tab: .tasks)
             // "Show task" on a dropped task in the folded phase unfolds it and shows dropped tasks.
             model.revealedMissionTaskId = "p4"
             await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 1200),

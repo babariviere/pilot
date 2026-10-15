@@ -564,13 +564,16 @@ struct MissionTasksTab: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let phases = MissionTaskPhases(detail.tasks, showDropped: showDropped)
+        let index = MissionPhaseIndex(detail)
+        let phases = MissionTaskPhases(detail.tasks, phases: index, showDropped: showDropped)
         let counts = MissionTaskCounts(detail.tasks)
         // One id lookup, one dependents index, one link index and one member list per update, shared by
         // every row. The list is lazy: only rows on screen are created, so switching here stays fast.
         let dependencies = MissionTaskDependencyIndex(tasks: detail.tasks)
         let links = MissionTaskLinkIndex(detail)
         let members = model.members(of: mission).filter { !$0.isArchived }
+        // Only first-class phases take moved tasks; milestone stand-ins from an older daemon are read-only.
+        let choices = index.isEditable ? index.phases : []
         LazyVStack(alignment: .leading, spacing: 0) {
             if counts.total > 0 || phases.dropped > 0 {
                 HStack(alignment: .top, spacing: 12) {
@@ -604,8 +607,11 @@ struct MissionTasksTab: View {
             ForEach(MissionTaskListItem.items(phases, folds: folds)) { item in
                 switch item {
                 case let .header(group, folded):
-                    phaseHeader(group, folded: folded)
+                    MissionPhaseHeader(group: group, folded: folded, mission: mission, phases: index,
+                                       onToggle: { folds.toggle(group) },
+                                       onDropTask: index.isEditable ? { moveTask($0, to: group.phase?.id, index: index) } : nil)
                 case let .task(task, index, siblings):
+                    let phaseId = phases.index.phaseId(of: task)
                     VStack(alignment: .leading, spacing: 0) {
                         if index > 0 { HairlineDivider(leading: 58) }
                         MissionTaskRow(task: task, mission: mission, siblings: siblings,
@@ -614,13 +620,31 @@ struct MissionTasksTab: View {
                                        resources: links.resources(of: task.id),
                                        artifactLinks: links.artifacts(of: task.id),
                                        members: members,
-                                       onShowTask: { show($0, scroll) })
+                                       phaseId: phaseId,
+                                       phaseChoices: choices,
+                                       gating: MissionPhaseGating.text(phases.index.gatingPhases(of: task)),
+                                       onShowTask: { show($0, scroll) },
+                                       onDropTask: choices.isEmpty ? nil : { moveTask($0, to: phaseId, index: phases.index) })
                     }
                 }
+            }
+            if index.isEditable {
+                MissionAddPhaseButton(mission: mission, phases: index)
+                    .padding(.leading, 8)
+                    .padding(.top, 20)
             }
         }
         .onAppear { reveal(scroll) }
         .onChange(of: model.revealedMissionTaskId) { _, _ in reveal(scroll) }
+    }
+
+    /// Moves a dropped task into a phase (nil: no phase) and opens that phase so the task stays in view.
+    private func moveTask(_ taskId: String, to phaseId: String?, index: MissionPhaseIndex) {
+        guard let task = detail.tasks.first(where: { $0.id == taskId }), index.phaseId(of: task) != phaseId else { return }
+        folds.unfold(MissionPhaseGroup.id(phaseId))
+        model.missionAction { [client, id = mission.id] in
+            try await client.updateMissionTask(id, taskId: taskId, MissionTaskWrite(phaseId: phaseId.map { .set($0) } ?? .clear))
+        }
     }
 
     /// Unfolds the phase of the task named by "Show task", scrolls to it and highlights it briefly.
@@ -632,8 +656,8 @@ struct MissionTasksTab: View {
 
     private func show(_ id: String, _ proxy: ScrollViewProxy) {
         guard let task = detail.tasks.first(where: { $0.id == id }) else { return }
-        folds.unfold(MissionPhaseGroup.id(of: task))
-        if task.status == .dropped { showDropped = true }
+        folds.unfold(MissionPhaseGroup.id(MissionPhaseIndex(detail).phaseId(of: task)))
+        if task.workStatus == .dropped { showDropped = true }
         highlighted = id
         Task { @MainActor in
             // Let the unfolded phase lay out before scrolling.
@@ -672,30 +696,6 @@ struct MissionTasksTab: View {
             .accessibilityHint("Tasks that were retired without being done")
     }
 
-    /// "Phase 1 polish · 12/18 done", folding like a disclosure.
-    private func phaseHeader(_ group: MissionPhaseGroup, folded: Bool) -> some View {
-        Button {
-            folds.toggle(group)
-        } label: {
-            HStack(spacing: 6) {
-                DisclosureChevron(expanded: !folded).frame(width: 12)
-                Text(group.title).font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
-                    .lineLimit(1)
-                Text("·").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
-                Text(group.progress).font(.pilot(.label)).monospacedDigit().foregroundStyle(Theme.faintForeground)
-                    .fixedSize()
-                Spacer()
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .padding(.top, 20)
-        .padding(.bottom, 4)
-        .accessibilityLabel("\(group.title), \(group.progress)")
-        .accessibilityValue(folded ? "Collapsed" : "Expanded")
-        .accessibilityAddTraits(.isHeader)
-    }
-
     private func add() {
         let title = input.trimmed(input.text)
         guard !title.isEmpty, !input.busy else { return }
@@ -729,14 +729,22 @@ struct MissionTaskRow: View {
     var resources: [MissionResource] = []
     var artifactLinks: [MissionArtifactLink] = []
     var members: [SessionSummary] = []
+    /// The task's phase, and the phases it can move to (empty without first-class phases).
+    var phaseId: String? = nil
+    var phaseChoices: [MissionPhase] = []
+    /// Why phase gating holds the task ("Waits for phase Build"), or nil.
+    var gating: String? = nil
     /// Scrolls to a task and highlights it.
     var onShowTask: (String) -> Void = { _ in }
+    /// Takes a task dropped on this row. Nil when the row takes no drops.
+    var onDropTask: ((String) -> Void)? = nil
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var client = AppModel.shared.client
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @State private var choosingModel = false
     @State private var startingChat = false
+    @State private var dropTargeted = false
     @StateObject private var artifacts = MissionArtifactsState()
     /// Rows built, so the tab-switch check can confirm the list stays lazy.
     static var bodyEvaluations = 0
@@ -744,7 +752,8 @@ struct MissionTaskRow: View {
     init(task: MissionTask, mission: Mission, siblings: [MissionTask], highlighted: Bool = false,
          dependencies: MissionTaskDependencies = .none, resources: [MissionResource] = [],
          artifactLinks: [MissionArtifactLink] = [], members: [SessionSummary] = [],
-         onShowTask: @escaping (String) -> Void = { _ in }) {
+         phaseId: String? = nil, phaseChoices: [MissionPhase] = [], gating: String? = nil,
+         onShowTask: @escaping (String) -> Void = { _ in }, onDropTask: ((String) -> Void)? = nil) {
         self.task = task
         self.mission = mission
         self.siblings = siblings
@@ -753,28 +762,34 @@ struct MissionTaskRow: View {
         self.resources = resources
         self.artifactLinks = artifactLinks
         self.members = members
+        self.phaseId = phaseId
+        self.phaseChoices = phaseChoices
+        self.gating = gating
         self.onShowTask = onShowTask
+        self.onDropTask = onDropTask
         _title = StateObject(wrappedValue: TaskTitleState(task.title))
     }
 
     var body: some View {
         let _ = Self.bodyEvaluations &+= 1
+        let waiting = dependencies.isWaiting || gating != nil
         HoverRow(verticalPadding: 7) { hovered in
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 // Menus are AppKit pop-up buttons and costly to create, so rows build them only on hover.
                 // The context menu offers the same actions without hovering.
-                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: dependencies.isWaiting, interactive: hovered)
+                MissionTaskStatusMenu(task: task, missionId: mission.id, subdued: waiting, interactive: hovered)
                 Text("#\(task.number)").font(.pilot(.caption)).monospacedDigit().foregroundStyle(Theme.faintForeground)
                     .frame(minWidth: 20, alignment: .leading)
-                    .help(dependencies.helpText ?? "")
+                    .help([gating, dependencies.helpText].compactMap { $0 }.joined(separator: "\n"))
                 VStack(alignment: .leading, spacing: 3) {
                     TextField("Title", text: $title.title)
                         .textFieldStyle(.plain)
                         .font(.pilot(.body))
-                        .strikethrough(task.status.isClosed)
-                        .foregroundStyle(task.status.isClosed || dependencies.isWaiting ? Theme.mutedForeground : Theme.foreground)
+                        .strikethrough(task.workStatus.isClosed)
+                        .foregroundStyle(task.workStatus.isClosed || waiting ? Theme.mutedForeground : Theme.foreground)
                         .onSubmit(saveTitle)
                         .accessibilityLabel("Task \(task.number) title")
+                    if let gating { MissionTaskPhaseLine(gating: gating).help(gating) }
                     if dependencies.isWaiting { waitingLine }
                     MissionTaskDelegationLabel(task: task, resources: resources)
                     if let preferred = task.preferredModel { modelLine(preferred) }
@@ -811,7 +826,8 @@ struct MissionTaskRow: View {
                     .help(MissionTaskOwnerLabel.help(chatTitle: chat))
                 }
                 HStack(spacing: 4) {
-                    if task.sessionId == nil, task.status.canStart {
+                    // Phase gating holds the task; the menu still offers Start Chat Anyway.
+                    if task.sessionId == nil, task.status.canStart, gating == nil {
                         MissionTaskStartButton(status: mission.status) { startingChat = true }
                     }
                     // The fixed slot sets the layout and baseline; the menu is an overlay so building it on
@@ -835,8 +851,10 @@ struct MissionTaskRow: View {
         .onChange(of: task.title) { _, value in title.title = value }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilitySummary)
-        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(highlighted ? Theme.selected : .clear))
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.row).fill(highlighted || dropTargeted ? Theme.selected : .clear))
         .animation(Theme.Motion.quick, value: highlighted)
+        .onDrag { MissionTaskDrag.provider(task.id) }
+        .modifier(MissionTaskDropTarget(enabled: onDropTask != nil, targeted: $dropTargeted) { onDropTask?($0) })
         .contextMenu { menuItems }
         .popover(isPresented: $addingLink, arrowEdge: .bottom) {
             MissionAddLinkForm(missionId: mission.id, taskId: task.id, title: "Link to task #\(task.number)") {
@@ -887,7 +905,8 @@ struct MissionTaskRow: View {
     }
 
     private var accessibilitySummary: String {
-        var parts = ["Task \(task.number)", title.title, task.delegationLabel ?? task.status.label]
+        var parts = ["Task \(task.number)", title.title, task.delegationLabel ?? task.workStatus.label]
+        if let gating { parts.append(gating.lowercased()) }
         if let waiting = dependencies.accessibilityText { parts.append(waiting) }
         return parts.joined(separator: ", ")
     }
@@ -897,7 +916,7 @@ struct MissionTaskRow: View {
         if let sessionId = task.sessionId {
             Button("Open Chat") { model.selectedSessionId = sessionId }
         } else if task.status.canStart {
-            Button("Start Chat…") { startingChat = true }
+            Button(gating == nil ? "Start Chat…" : "Start Chat Anyway…") { startingChat = true }
                 .disabled(mission.status != .active)
         }
         Menu("Assign To") {
@@ -912,7 +931,16 @@ struct MissionTaskRow: View {
         Menu("Status") {
             ForEach(MissionTaskStatus.allCases, id: \.self) { status in
                 Button { setStatus(status) } label: { Label(status.label, icon: status.icon) }
-                    .disabled(status == task.status)
+                    .disabled(status == task.workStatus)
+            }
+        }
+        if !phaseChoices.isEmpty {
+            Menu("Move to Phase") {
+                ForEach(phaseChoices) { phase in
+                    Button(phase.name) { movePhase(phase.id) }.disabled(phase.id == phaseId)
+                }
+                Divider()
+                Button("No Phase") { movePhase(nil) }.disabled(phaseId == nil)
             }
         }
         Button(task.preferredModel == nil ? "Set Preferred Model…" : "Change Preferred Model…") { choosingModel = true }
@@ -956,9 +984,18 @@ struct MissionTaskRow: View {
     }
 
     private func assign(_ sessionId: String?) {
+        // Assigning is the user's choice, so it overrides phase gating like Start Chat Anyway.
+        let override = sessionId != nil && task.isPhaseGated ? true : nil
+        model.missionAction { [client, id = mission.id] in
+            try await client.updateMissionTask(id, taskId: task.id, MissionTaskWrite(
+                sessionId: sessionId.map { .set($0) } ?? .clear, overridePhaseGating: override))
+        }
+    }
+
+    private func movePhase(_ phaseId: String?) {
         model.missionAction { [client, id = mission.id] in
             try await client.updateMissionTask(id, taskId: task.id,
-                                               MissionTaskWrite(sessionId: sessionId.map { .set($0) } ?? .clear))
+                                               MissionTaskWrite(phaseId: phaseId.map { .set($0) } ?? .clear))
         }
     }
 
@@ -1007,7 +1044,7 @@ struct MissionTaskStatusMenu: View {
                     Menu {
                         ForEach(MissionTaskStatus.allCases, id: \.self) { status in
                             Button { set(status) } label: { Label(status.label, icon: status.icon) }
-                                .disabled(status == task.status)
+                                .disabled(status == task.workStatus)
                         }
                     } label: {
                         icon
@@ -1017,13 +1054,14 @@ struct MissionTaskStatusMenu: View {
                 }
             }
             .fixedSize()
-            .help("Status: \(task.delegationLabel ?? task.status.label)")
-            .accessibilityLabel("Status \(task.delegationLabel ?? task.status.label)")
+            .help("Status: \(task.delegationLabel ?? task.workStatus.label)")
+            .accessibilityLabel("Status \(task.delegationLabel ?? task.workStatus.label)")
     }
 
     private var icon: some View {
-        PilotSymbol(task.status.icon, context: .row)
-            .foregroundStyle(subdued ? Theme.faintForeground : task.status.color)
+        // Gated tasks show their own status, subdued like tasks waiting on dependencies.
+        PilotSymbol(task.workStatus.icon, context: .row)
+            .foregroundStyle(subdued || task.isPhaseGated ? Theme.faintForeground : task.workStatus.color)
             .frame(width: 16)
             .contentShape(Rectangle())
     }

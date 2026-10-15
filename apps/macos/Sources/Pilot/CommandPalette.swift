@@ -74,7 +74,7 @@ struct CommandPaletteCatalog {
                     item: CommandPaletteItem(id: "task:\(mission.id):\(task.id)", kind: .task, title: task.title,
                                              keywords: ["#\(task.number)", mission.title],
                                              pullRequestNumbers: pullRequests, taskNumber: task.number),
-                    icon: .tasks, prefix: "#\(task.number)", detail: "\(mission.title) · \(task.status.label)"
+                    icon: .tasks, prefix: "#\(task.number)", detail: "\(mission.title) · \(task.workStatus.label)"
                 ) { [model] in model.showMissionTask(task.id, in: mission) }
             }
         }

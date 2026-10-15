@@ -320,6 +320,11 @@ const MISSION_SELECT = `SELECT missions.*,
 	(SELECT COUNT(*) FROM decision_proposals WHERE mission_id = missions.id AND status = 'pending') AS needs_you_count,
 	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status = 'done') AS tasks_done,
 	(SELECT COUNT(*) FROM tasks WHERE mission_id = missions.id AND status != 'dropped') AS tasks_total,
+	(SELECT json_object('id', p.id, 'name', p.name,
+		'done', (SELECT COUNT(*) FROM tasks t WHERE t.phase_id = p.id AND t.status = 'done'),
+		'total', (SELECT COUNT(*) FROM tasks t WHERE t.phase_id = p.id AND t.status != 'dropped'))
+		FROM phases p WHERE p.mission_id = missions.id AND p.completed_at IS NULL ORDER BY p.sort, p.id LIMIT 1
+	) AS current_phase,
 	COALESCE(
 		(SELECT substr('Blocked: ' || title, 1, 201) FROM tasks
 			WHERE mission_id = missions.id AND status = 'blocked' ORDER BY sort, number LIMIT 1),
@@ -3354,6 +3359,7 @@ function missionFrom(row: Row): Mission {
 		...(row.coordinator_session_id ? { coordinatorSessionId: str(row.coordinator_session_id) } : {}),
 		...(row.autopilot ? { autopilot: true } : {}),
 		phaseGating: row.phase_gating === 1,
+		...(typeof row.current_phase === "string" ? { currentPhase: JSON.parse(row.current_phase) } : {}),
 		briefRevision: num(row.brief_revision!),
 		needsYouCount: num(row.needs_you_count!),
 		tasksDone: num(row.tasks_done!),

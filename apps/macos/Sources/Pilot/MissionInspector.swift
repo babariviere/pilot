@@ -28,6 +28,7 @@ struct MissionInspectorPane: View {
                 header(mission)
                 if let detail {
                     let mine = MissionTaskOrdering.sorted(detail.tasks).filter { $0.sessionId == session.id }
+                    let phases = MissionPhaseIndex(detail)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(mine.count > 1 ? "This chat's tasks" : "This chat's task")
                             .font(.pilot(.label, weight: .semibold)).foregroundStyle(Theme.foreground)
@@ -36,7 +37,7 @@ struct MissionInspectorPane: View {
                             Text("No task claimed").font(.pilot(.label)).foregroundStyle(Theme.faintForeground)
                         }
                         ForEach(mine) { task in
-                            ownTask(task, mission: mission, detail: detail)
+                            ownTask(task, mission: mission, detail: detail, phases: phases)
                         }
                     }
                     summary(mission, detail: detail)
@@ -113,7 +114,8 @@ struct MissionInspectorPane: View {
         .accessibilityHint("Opens the mission's Overview")
     }
 
-    private func ownTask(_ task: MissionTask, mission: Mission, detail: MissionDetail) -> some View {
+    /// The task with its phase, or why phase gating holds it, under the title.
+    private func ownTask(_ task: MissionTask, mission: Mission, detail: MissionDetail, phases: MissionPhaseIndex) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             MissionTaskStatusMenu(task: task, missionId: mission.id)
             VStack(alignment: .leading, spacing: 3) {
@@ -122,6 +124,8 @@ struct MissionInspectorPane: View {
                     Text(task.title).font(.pilot(.body)).foregroundStyle(Theme.foreground)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                MissionTaskPhaseLine(phase: phases.phase(of: task)?.name,
+                                     gating: MissionPhaseGating.text(phases.gatingPhases(of: task)))
                 MissionTaskDescription(task: task, collapsedLineLimit: 4)
                 let resources = detail.resources.filter { $0.taskId == task.id }
                 MissionTaskDelegationLabel(task: task, resources: resources)

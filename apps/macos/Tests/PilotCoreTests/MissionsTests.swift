@@ -479,15 +479,15 @@ private func detail(_ mission: Mission, tasks: [MissionTask] = [], comments: [Mi
         MissionTask(id: "e", number: 5, title: "E", status: .dropped, order: 5, milestone: "Release"),
         MissionTask(id: "f", number: 6, title: "F", status: .todo, order: 6, milestone: "  "),
     ]
-    let progress = MissionMilestones.progress(tasks)
+    let progress = MissionTaskPhases(tasks, showDropped: false).progressRows
     #expect(progress.map(\.name) == ["Foundations", "Endpoints", nil], "dropped-only milestones are omitted")
     #expect(progress[0].counts.done == 1)
     #expect(progress[0].counts.total == 2)
     #expect(progress[0].counts[.blocked] == 1)
     #expect(progress[2].counts.total == 2, "blank milestones count as unnamed")
-    #expect(MissionMilestones.progress(tasks.map {
+    #expect(MissionTaskPhases(tasks.map {
         MissionTask(id: $0.id, number: $0.number, title: $0.title, status: $0.status, order: $0.order)
-    }).isEmpty, "no milestones, no phase lines")
+    }, showDropped: false).progressRows.isEmpty, "no milestones, no phase lines")
     let counts = MissionTaskCounts(tasks)
     #expect(counts.total == 5)
     #expect(counts[.todo] == 2)

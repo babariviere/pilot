@@ -43,7 +43,7 @@ enum PilotIcon: String, CaseIterable {
     // MARK: Conversation and mission
 
     case chats, message, update, resolvedComment, quote, recipient, handoff, proposal, steer, queued, unsentDraft,
-        tasks, status, decision, claim, addMember, skill
+        tasks, phase, status, decision, claim, addMember, skill
 
     // MARK: Agents, tools and workspaces
 
@@ -131,6 +131,7 @@ extension PilotIcon {
         case .queued: "clock.arrow.circlepath"
         case .unsentDraft: "pencil.line"
         case .tasks: "checklist"
+        case .phase: "signpost.right"
         case .status: "flag"
         case .decision: "checkmark.seal"
         case .claim: "hand.raised"
@@ -293,6 +294,7 @@ extension PilotIcon {
         case .queued: "A queued follow-up."
         case .unsentDraft: "A chat's unsent composer text, leading its list rows' second line. Never a badge or a colour."
         case .tasks: "Mission tasks or the agent's todo list."
+        case .phase: "A mission phase: the stage a task belongs to."
         case .status: "A mission status change."
         case .decision: "A recorded decision."
         case .claim: "A claimed task, or a Slack request."
