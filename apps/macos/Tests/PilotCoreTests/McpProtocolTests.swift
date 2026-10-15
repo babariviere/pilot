@@ -30,6 +30,24 @@ struct McpProtocolTests {
         #expect(McpStatusText.signInProblem(failedThenConnected) == nil, "an old failure stops mattering once connected")
     }
 
+    @Test func checkResultSaysWhetherEverythingWorks() {
+        func result(_ states: [McpServerState]) -> String {
+            let servers = states.enumerated().map { McpServerStatus(name: "s\($0.offset)", transport: .http, state: $0.element) }
+            return McpStatusText.checkResult(McpStatus(servers: servers)).text
+        }
+        #expect(result([]) == "No servers to check")
+        #expect(result([.connected]) == "Connected")
+        #expect(result([.connected, .connected, .disabled]) == "All 2 connected")
+        #expect(result([.connected, .unknown]) == "1 of 2 connected")
+        #expect(result([.connected, .failed]) == "1 server needs you")
+        let both = McpStatusText.checkResult(McpStatus(servers: [
+            McpServerStatus(name: "a", transport: .http, state: .needsSignIn),
+            McpServerStatus(name: "b", transport: .stdio, state: .failed),
+        ]))
+        #expect(both.text == "2 servers need you")
+        #expect(both.attention)
+    }
+
     @Test func chatsBlockedOnAServerNeedYouWhileWorkingAndNameTheServer() throws {
         let json = #"{"id":"chat","title":"Logs","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"working","working":true,"attentionReason":{"kind":"mcp","detail":"datadog needs sign-in","server":"datadog"},"attentionAt":2}"#
         let chat = try JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
