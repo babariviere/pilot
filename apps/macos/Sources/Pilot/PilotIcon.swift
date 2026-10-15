@@ -263,7 +263,7 @@ extension PilotIcon {
         case .popUp: "Trailing mark of a pop-up chip or switcher."
         case .selectedOption: "The chosen option in a menu or picker. Filled selection circle, not a completion checkmark."
         case .done: "Copy confirmation and fired schedules only. Finished tool steps have no symbol."
-        case .complete: "Success that matters: ready to merge, all clear. May fill for terminal success, never as a badge."
+        case .complete: "Success that matters: ready to merge, all clear, a connected MCP server. May fill for terminal success, never as a badge."
         case .warning: "A warning, an error banner or an invalid item. Fills when something failed."
         case .blocked: "Blocked work: a blocked task or a pull request blocked from merging."
         case .info: "Neutral information."

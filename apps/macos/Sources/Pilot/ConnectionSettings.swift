@@ -99,26 +99,62 @@ struct McpSignInFooter: View {
     }
 }
 
-/// The header accessory: checks every server again.
+/// The header accessory: checks every server again, then says how it went until the next check.
 struct McpCheckButton: View {
     @ObservedObject private var store = AppModel.shared.client.mcp
     @State private var busy = false
+    /// The user asked for a check and waits for its result.
+    @State private var awaiting = false
+    /// The last check the user asked for finished; its result shows beside the button.
+    @State private var finished = false
 
     var body: some View {
         let checking = store.status?.checking ?? true
-        HStack(spacing: 6) {
-            if checking { ProgressView().controlSize(.small) }
+        HStack(spacing: 8) {
+            if checking {
+                ProgressView().controlSize(.small)
+                if awaiting { Text("Checking…").font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground) }
+            } else if finished, store.actionError == nil, let status = store.status {
+                let result = McpStatusText.checkResult(status)
+                HStack(spacing: 4) {
+                    if result.attention { PilotSymbol(PilotIcon.warning).accessibilityHidden(true) }
+                    Text(result.text)
+                }
+                .font(.pilot(.caption))
+                .foregroundStyle(result.attention ? Theme.blocked : Theme.mutedForeground)
+                .help(checkedAt(status).map { "Checked \(RelativeDate.exact($0))" } ?? "")
+            }
             Button("Check Now") {
                 busy = true
+                awaiting = true
+                finished = false
                 Task {
                     defer { busy = false }
                     await AppModel.shared.client.checkMcp()
+                    // A failed request, or a check that ended before its reply, never flips `checking` here.
+                    if store.actionError != nil { awaiting = false } else if store.status?.checking == false { finish() }
                 }
             }
             .controlSize(.small)
             .disabled(busy || checking)
             .help("Connect to every MCP server again")
         }
+        .onChange(of: checking) { _, now in
+            if !now { finish() }
+        }
+    }
+
+    private func finish() {
+        guard awaiting else { return }
+        awaiting = false
+        finished = true
+        if let status = store.status {
+            AccessibilityNotification.Announcement(McpStatusText.checkResult(status).text).post()
+        }
+    }
+
+    private func checkedAt(_ status: McpStatus) -> Double? {
+        status.servers.compactMap(\.checkedAt).max()
     }
 }
 
@@ -136,6 +172,8 @@ struct McpServerRow: View {
                     if text.attention {
                         PilotSymbol(server.state == .needsSignIn ? PilotIcon.signInRequired : PilotIcon.warning)
                             .accessibilityHidden(true)
+                    } else if server.state == .connected, !text.waiting {
+                        PilotSymbol(PilotIcon.complete).foregroundStyle(Theme.success).accessibilityHidden(true)
                     }
                     Text(text.text).fixedSize(horizontal: false, vertical: true)
                 }

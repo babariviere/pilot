@@ -91,4 +91,17 @@ public enum McpStatusText {
         guard let signIn = server.signIn, signIn.state == .failed, server.state != .connected else { return nil }
         return signIn.error ?? "Sign-in didn't finish. Try again."
     }
+
+    /// The outcome of a check the user asked for, shown beside Check Now once it finishes.
+    public static func checkResult(_ status: McpStatus) -> (text: String, attention: Bool) {
+        let needing = status.needingUser.count
+        if needing > 0 { return ("\(needing) \(needing == 1 ? "server needs" : "servers need") you", true) }
+        let checked = status.servers.filter { $0.state != .disabled }
+        if checked.isEmpty { return ("No servers to check", false) }
+        let connected = checked.filter { $0.state == .connected }.count
+        if connected == checked.count {
+            return (connected == 1 ? "Connected" : "All \(connected) connected", false)
+        }
+        return ("\(connected) of \(checked.count) connected", false)
+    }
 }
