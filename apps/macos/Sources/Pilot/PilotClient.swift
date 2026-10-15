@@ -132,6 +132,14 @@ final class PilotClient: ObservableObject {
         try await call("api/hello", method: "GET")
     }
 
+    func operation(_ operation: DurableOperation, lookup: Bool) async throws -> OperationDelivery {
+        let response: JSONValue = try await call(lookup ? "api/operations/receipt" : "api/operations", body: operation)
+        if response["state"]?.string == "unknown" { return .unknown }
+        let receipt = try response.decode(OperationReceipt.self)
+        try receipt.validate(operation)
+        return .receipt(receipt)
+    }
+
     func session(_ id: String) -> SessionSummary? {
         sessions.first { $0.id == id }
     }

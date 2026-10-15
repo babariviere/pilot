@@ -1,5 +1,6 @@
 /** HTTP API and WebSocket event streams. */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { getLibraryAsset, isArtifactLibrary } from "@pilot/artifacts";
 import type {
 	ArtifactLibrary,
@@ -9,6 +10,7 @@ import type {
 	CompactRequest,
 	CreateMissionRequest,
 	DaemonHello,
+	DurableOperation,
 	EditQueuedMessageRequest,
 	Inbox,
 	JoinMissionRequest,
@@ -57,6 +59,7 @@ import type { MissionService } from "./mission-service.ts";
 import type { MissionStore } from "./missions.ts";
 import type { ModelCatalog } from "./models.ts";
 import { isAllowedOrigin } from "./origin.ts";
+import { OperationJournal, OperationRejected } from "./operation-journal.ts";
 import type { PowerService } from "./power.ts";
 import { type DashboardProviders, ProjectDashboardService } from "./project-dashboard.ts";
 import type { ProjectMemoryService } from "./project-memory.ts";
@@ -275,11 +278,59 @@ export function createDaemonServer(
 		},
 	});
 	const repositoryChanges = new RepositoryChanges();
+	const journal = hello?.lineageId
+		? new OperationJournal(join(_config.home, "operations"), {
+				hostId: "daemon",
+				daemonId: hello.daemonId,
+				lineageId: hello.lineageId,
+			})
+		: undefined;
+	const admitOperation = async (op: DurableOperation): Promise<unknown> => {
+		let payload: unknown;
+		try {
+			payload = JSON.parse(op.payload);
+		} catch {
+			throw new OperationRejected("Invalid payload JSON");
+		}
+		if (!payload || typeof payload !== "object" || Array.isArray(payload))
+			throw new OperationRejected("Expected operation object");
+		if (op.kind === "chat-create") {
+			const request = payload as SpawnRequest;
+			if (typeof request.message !== "string" || !request.message.trim())
+				throw new OperationRejected("message is required");
+			const session = await sessions.spawnDurable(request, op.targetId, op.operationId);
+			return { sessionId: session.id };
+		}
+		if (op.kind === "chat-send") {
+			const request = payload as SendRequest;
+			if (
+				typeof request.message !== "string" ||
+				!request.message.trim() ||
+				(request.mode !== undefined && request.mode !== "steer" && request.mode !== "followUp")
+			)
+				throw new OperationRejected("Invalid message");
+			await sessions.sendDurable(op.targetId, request.message, request.mode ?? "followUp", op.operationId);
+			return { sessionId: op.targetId };
+		}
+		throw new OperationRejected("Unsupported operation kind");
+	};
+	// Only registered idempotent handlers resume. An interrupted handler always retains the same target.
+	if (journal)
+		void journal.recover(admitOperation).catch((error) => console.warn("pilotd: operation recovery", error));
 	const route = async (req: IncomingMessage, res: ServerResponse) => {
 		if (!isAllowedOrigin(req.headers.origin)) throw new HttpError(403, "Browser requests are not allowed");
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "operations" && req.method === "POST" && parts.length <= 3) {
+			if (!journal) throw new ServiceUnavailable("Durable operation domain unavailable");
+			const operation = await readJson<DurableOperation>(req);
+			if (parts.length === 3 && parts[2] !== "receipt") throw new HttpError(404, "Not found");
+			const receipt =
+				parts[2] === "receipt" ? await journal.lookup(operation) : await journal.execute(operation, admitOperation);
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, receipt ?? { state: "unknown" });
+		}
 		if (parts[1] === "hello" && parts.length === 2) {
 			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
 			if (!hello) throw new ServiceUnavailable("Daemon handshake is unavailable");

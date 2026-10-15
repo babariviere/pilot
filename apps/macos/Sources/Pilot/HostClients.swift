@@ -55,6 +55,33 @@ final class HostClients: ObservableObject {
             else { self.refresh(host, token: entry.token) }
         }
     }
+    private let operations = OperationOutbox(directory: FileManager.default.urls(
+        for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Pilot/Operations"))
+
+    /// Return the original intent with a conclusive or uncertain delivery state. No draft is cleared here.
+    func deliver<Payload: Encodable & Sendable>(host: HostRef, kind: String, targetId: String?,
+        payload: Payload, origin: HostRef) async throws -> (DurableOperation, OperationDelivery) {
+        let client = try endpoint(host)
+        let fence = try token(for: host)
+        let operation = try await operations.reserve(kind: kind, targetId: targetId, payload: payload,
+                                                     origin: origin, destination: host)
+        do {
+            // Receipt first. An unknown receipt may only be retried through this immutable endpoint.
+            let known = try await client.operation(operation, lookup: true)
+            try validate(fence)
+            if case let .receipt(receipt) = known, receipt.state != .pending { return (operation, known) }
+            let delivery = try await client.operation(operation, lookup: false)
+            try validate(fence)
+            return (operation, delivery)
+        } catch {
+            // The request may have been accepted. Keep original intent, draft and attachments.
+            return (operation, .unknown)
+        }
+    }
+
+    func acknowledge(_ operation: DurableOperation, receipt: OperationReceipt) async throws {
+        try await operations.acknowledge(operation, receipt: receipt)
+    }
 
     func install(_ client: PilotClient, host: HostRef) throws {
         try client.bind(host)

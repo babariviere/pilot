@@ -2,7 +2,7 @@
 import { type ChildProcess, fork } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ArtifactNotFound, ArtifactStore } from "@pilot/artifacts";
@@ -252,6 +252,9 @@ export interface SessionFactories {
 }
 
 interface SessionMeta extends OutcomeMeta {
+	/** Stable create reservation. Never reuse this session ID for another operation. */
+	createOperationId?: string;
+	createMissionId?: string;
 	/** Durable known limits and window-scoped user exemptions, shared with child admission gates. */
 	subscriptionPolicy?: SubscriptionPolicy;
 	continuationOf?: string;
@@ -1121,6 +1124,15 @@ export class SessionManager {
 		for (const meta of this.metas.values())
 			for (const url of meta.boundPullRequests ?? [])
 				if (!this.excludedPullRequest(meta, url)) this.boundPullRequestOwners.set(url.toLowerCase(), meta.id);
+		for (const meta of this.metas.values()) {
+			if (!meta.createMissionId) continue;
+			try {
+				this.recoverCreateMembership(meta);
+			} catch (error) {
+				meta.failure = `Create membership recovery: ${error}`;
+				await this.save(meta);
+			}
+		}
 		await this.recoverPullRequestBinding();
 		await this.recoverContinuations();
 		// Read limits before any recovery kernel can dispatch a request.
@@ -3034,6 +3046,37 @@ export class SessionManager {
 		}
 	}
 
+	/** Called only after durable operation reservation. Crash recovery uses this exact target/input ID. */
+	async spawnDurable(request: SpawnRequest, targetId: string, operationId: string): Promise<SessionSummary> {
+		if (!ID_PATTERN.test(targetId)) throw new Conflict("Invalid reserved session ID");
+		const end = this.updateGate.begin();
+		try {
+			const existing = this.metas.get(targetId);
+			if (existing) {
+				if (existing.createOperationId !== operationId)
+					throw new Conflict("Reserved session belongs to another operation");
+				await this.saving.get(targetId);
+				// Do not acknowledge metadata that was put in memory by a failed disk write.
+				const persisted = JSON.parse(await readFile(join(this.dir(targetId), "meta.json"), "utf8")) as SessionMeta;
+				if (persisted.createOperationId !== operationId) throw new Conflict("Create metadata is not committed");
+				this.recoverCreateMembership(existing);
+				return this.summary(existing);
+			}
+			return await this.spawnAdmitted(request, false, undefined, { targetId, operationId });
+		} finally {
+			end();
+		}
+	}
+
+	private recoverCreateMembership(meta: SessionMeta): void {
+		if (!meta.createMissionId) return;
+		if (!this.missions) throw new Conflict("Create requires its original mission store");
+		const membership = this.missions.membership(meta.id);
+		if (membership?.missionId === meta.createMissionId) return;
+		if (membership) throw new Conflict("Create membership changed");
+		this.missions.joinSpawn(meta.id, meta.createMissionId);
+	}
+
 	/** Acquire a bounded update lease only after every durable and in-memory admission settles. */
 	prepareUpdate(): UpdatePreparation {
 		const busy =
@@ -3119,6 +3162,7 @@ export class SessionManager {
 		request: SpawnRequest,
 		coordinator: boolean,
 		taskId?: string | string[],
+		admission?: { targetId: string; operationId: string },
 	): Promise<SessionSummary> {
 		if (typeof request.message !== "string" || !request.message.trim()) throw new Error("message is required");
 		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
@@ -3156,7 +3200,7 @@ export class SessionManager {
 		let cwd = await requireDirectory(directory);
 		const model = request.model?.trim() || project?.model;
 		const now = Date.now();
-		const id = randomUUID();
+		const id = admission?.targetId ?? randomUUID();
 		const title = request.title?.trim() || titleFrom(request.message);
 		const titlePending = request.title?.trim() ? undefined : { cwd, message: request.message };
 		await mkdir(this.dir(id), { recursive: true, mode: 0o700 });
@@ -3178,6 +3222,8 @@ export class SessionManager {
 		}
 		const meta: SessionMeta = {
 			id,
+			...(admission ? { createOperationId: admission.operationId } : {}),
+			...(admission && request.missionId ? { createMissionId: request.missionId } : {}),
 			mode,
 			...(ask ? { ask } : {}),
 			title,
@@ -3186,7 +3232,14 @@ export class SessionManager {
 			...(project ? { projectId: project.id } : {}),
 			...(preparing ? { preparing } : {}),
 			initializing: true,
-			pending: [{ type: "input", requestId: randomUUID(), content: request.message, mode: "followUp" }],
+			pending: [
+				{
+					type: "input",
+					requestId: admission?.operationId ?? randomUUID(),
+					content: request.message,
+					mode: "followUp",
+				},
+			],
 			createdAt: now,
 			updatedAt: now,
 			lastUserMessageAt: now,
@@ -3194,7 +3247,7 @@ export class SessionManager {
 			...(request.thinking ? { thinking: request.thinking } : {}),
 		};
 		try {
-			await this.save(meta);
+			await this.save(meta, undefined, undefined, Boolean(admission));
 			if (request.missionId !== undefined) {
 				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId);
 				// The new chat may act on its membership as soon as it starts.
@@ -3407,12 +3460,22 @@ export class SessionManager {
 		}
 	}
 
+	async sendDurable(id: string, message: string, mode: DeliveryMode, operationId: string): Promise<void> {
+		const end = this.updateGate.begin();
+		try {
+			await this.sendAdmitted(id, message, mode, operationId, false, true);
+		} finally {
+			end();
+		}
+	}
+
 	private async sendAdmitted(
 		id: string,
 		message: string,
 		mode: DeliveryMode,
 		requestId: string,
 		report = false,
+		durable = false,
 	): Promise<void> {
 		const meta = this.require(id);
 		this.assertNotContinued(meta);
@@ -3446,7 +3509,7 @@ export class SessionManager {
 				meta.prFollowUpResetRequests.push(requestId);
 				meta.prFollowUp = { attempts: 0, nextAttemptAt: 0, generation: (meta.prFollowUp?.generation ?? 0) + 1 };
 			}
-			await this.save(meta);
+			await this.save(meta, undefined, undefined, durable);
 			this.emit(meta);
 			const starting = meta.initializing;
 			const admission = this.start(id, true);
@@ -6193,6 +6256,7 @@ export class SessionManager {
 		meta: SessionMeta,
 		archive?: { timestamp?: number; restoredAt?: number; autoArchivedPullRequest?: string },
 		pin?: { value: boolean },
+		durable = false,
 	): Promise<void> {
 		this.metas.set(meta.id, meta);
 		// Capture before joining the queue. The live meta can change while an earlier write awaits I/O.
@@ -6260,8 +6324,18 @@ export class SessionManager {
 			else delete persisted.workspaceReclaimedAt;
 			if (meta.workspaceCleanupError) persisted.workspaceCleanupError = meta.workspaceCleanupError;
 			else delete persisted.workspaceCleanupError;
-			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600 });
+			await writeFile(temp, `${JSON.stringify(persisted, null, "\t")}\n`, { mode: 0o600, flush: durable });
 			await rename(temp, file);
+			if (durable) {
+				for (const path of [this.dir(meta.id), this.sessionsDir]) {
+					const directory = await open(path, "r");
+					try {
+						await directory.sync();
+					} finally {
+						await directory.close();
+					}
+				}
+			}
 			if (pin) {
 				if (pin.value) meta.pinned = true;
 				else delete meta.pinned;

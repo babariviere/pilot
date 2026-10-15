@@ -1388,3 +1388,4 @@ export type * from "./memory.ts";
 export type { PowerSettings, PowerStatus } from "./power.ts";
 export type * from "./schedules.ts";
 export type * from "./tracking.ts";
+export * from "./operations.ts";
