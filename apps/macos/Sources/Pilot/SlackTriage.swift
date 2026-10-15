@@ -282,6 +282,7 @@ enum SlackTriageText {
         if let label = triage.label { parts.append("label \(label)") }
         parts.append(statusTitle(triage))
         parts.append(meta(item, now: now))
+        if let error = TrackedItemText.startError(item) { parts.append(error) }
         return parts.joined(separator: ", ")
     }
 }
@@ -925,7 +926,7 @@ private struct SlackTriageTableRow: View {
         let triage = SlackTriageText.triage(item)
         HStack(spacing: SlackTriageColumns.spacing) {
             SlackSeverityDot(severity: triage.severity).frame(width: SlackTriageColumns.severity)
-            Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
+            TrackedStartText(item: item, text: item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                 .frame(maxWidth: .infinity, alignment: .leading)
             SlackTypeLabel(type: triage.type).frame(width: SlackTriageColumns.type, alignment: .leading)
             SlackLabelTag(name: triage.label, hidden: triage.label.map(hidden.contains) ?? false)
@@ -1031,7 +1032,7 @@ private struct SlackTriageCard: View {
             }
             Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+            TrackedStartText(item: item, text: SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                 .lineLimit(1)
             if triage.closedByLabel != nil {
                 Text(SlackTriageText.statusTitle(triage)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
@@ -1176,7 +1177,7 @@ struct SlackTriageInspector: View {
             session: { client.session($0) }, mission: { client.mission($0) }, unread: { model.isUnread($0) })
         return VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 6) {
-                Text(SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
+                TrackedStartText(item: item, text: SlackTriageText.meta(item, now: now)).font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground)
                     .lineLimit(1)
                 Text(item.title).font(.pilot(.headline, weight: .semibold)).foregroundStyle(Theme.foreground)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1256,7 +1257,7 @@ struct SlackTriageInspector: View {
                     KeyHint(key: "↩", label: "start chat")
                     KeyHint(key: "D", label: "dismiss")
                 }
-                Text("Your changes stay in Pilot and teach this project's classifier. Nothing is written to Slack.")
+                Text("Your triage changes stay in Pilot and teach this project's classifier. Starting work adds an eyes reaction in Slack, never a message or reply.")
                     .font(.pilot(.caption)).foregroundStyle(Theme.faintForeground)
                     .fixedSize(horizontal: false, vertical: true)
             }

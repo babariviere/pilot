@@ -24,6 +24,7 @@ import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
 import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
+import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
 import { SourceSignIns } from "./source-sign-in.ts";
 import type { SourceCheckpoint, TrackedInput, TrackedItemStore, TrackedQuery } from "./tracked-items.ts";
@@ -76,7 +77,7 @@ export class SourceRegistry {
 	/** Confirmed starts, coalesced per item and sharing the two MCP slots. */
 	private readonly starts = new Map<
 		string,
-		{ sourceId: string; key: string; controller: AbortController; promise: Promise<void> }
+		{ sourceId: string; key: string; controller: AbortController; promise: Promise<void>; allowed?: () => boolean }
 	>();
 	/** Settings lookups, at most one per kind, sharing slots with polls and prefills. */
 	private readonly lookups = new Map<TrackedKind, { controller: AbortController; promise: Promise<unknown> }>();
@@ -131,7 +132,7 @@ export class SourceRegistry {
 				for (const [id, run] of this.running)
 					if (this.currentKey(id) !== run.key) run.controller.abort(new Error("Tracking configuration changed"));
 				for (const run of [...this.details.values(), ...this.starts.values()])
-					if (this.currentKey(run.sourceId) !== run.key)
+					if (this.currentKey(run.sourceId) !== run.key || ("allowed" in run && run.allowed && !run.allowed()))
 						run.controller.abort(new Conflict("Tracking configuration changed"));
 				for (const id of this.health.keys())
 					if (this.currentKey(id) !== this.health.get(id)?.key) this.health.delete(id);
@@ -471,6 +472,7 @@ export class SourceRegistry {
 			(patch.sessionId && !before.sessionIds?.includes(patch.sessionId)) ||
 			(patch.missionId && !before.missionIds?.includes(patch.missionId));
 		if (patch.start && newLink && item.kind === "linear") void this.startLinear(item).catch(() => {});
+		if (patch.start && newLink && item.kind === "slack") void this.startSlack(item).catch(() => {});
 		return item;
 	}
 	/** Best effort, single flight per item, bounded with all other MCP work, no retry queue. */
@@ -515,13 +517,75 @@ export class SourceRegistry {
 		this.starts.set(item.id, { sourceId, key, controller, promise });
 		return promise;
 	}
+	/** Single durable attempt per Slack item, independent of how many chats or missions it starts. */
+	startSlack(item: TrackedItem): Promise<void> {
+		if (item.kind !== "slack") return Promise.resolve();
+		const existing = this.starts.get(item.id);
+		if (existing) return existing.promise;
+		if (this.stopped || this.busy() >= 2)
+			return this.items.reserveSlackStart(item.id).then(async (reserved) => {
+				if (reserved) await this.items.slackStartResult(item.id, "error");
+			});
+		const sourceId = `${item.projectId}:slack`;
+		const key = this.currentKey(sourceId) ?? "";
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(new Error("Slack start timed out")), 60_000);
+		const work = Promise.resolve().then(async () => {
+			if (!(await this.items.reserveSlackStart(item.id))) return;
+			// Read the durable parent identity, not a stale caller snapshot.
+			const current = await this.items.require(item.id);
+			let outcome: "reacted" | "skipped" | "error" = "error";
+			try {
+				controller.signal.throwIfAborted();
+				if (!key || this.items.checkpoint(sourceId)?.configKey !== key)
+					throw new Conflict("Sync Slack before starting");
+				const health = this.health.get(sourceId);
+				if (health && health.status !== "ok" && health.nextPollAt > Date.now())
+					throw new Conflict("Source is backing off");
+				const project = structuredClone(this.projects.require(item.projectId));
+				outcome = await abortable(
+					slackStart(
+						{
+							project,
+							config: project.tracking!,
+							signal: controller.signal,
+							call: (tool, args) => {
+								controller.signal.throwIfAborted();
+								if (this.currentKey(sourceId) !== key) throw new Conflict("Tracking configuration changed");
+								return this.mcp.call("slack", tool, args, controller.signal);
+							},
+						},
+						current,
+					),
+					controller.signal,
+				);
+			} catch {
+				/* The chat is already linked. Never expose provider errors or retry this write. */
+			}
+			await this.items.slackStartResult(item.id, outcome);
+		});
+		const promise = work.finally(() => {
+			clearTimeout(timer);
+			this.starts.delete(item.id);
+			this.schedule();
+		});
+		this.starts.set(item.id, {
+			sourceId,
+			key,
+			controller,
+			promise,
+			// Slack's poll key deliberately ignores the channel list. Starts must still cancel on removal.
+			allowed: () => slackStartAllowed(this.projects.require(item.projectId).tracking?.slackChannels ?? [], item),
+		});
+		return promise;
+	}
 	private readCall(
 		kind: TrackedKind,
 		tool: string,
 		args: Record<string, unknown>,
 		signal: AbortSignal,
 	): Promise<TrackingJson> {
-		if (tool === "startIssue") return Promise.reject(new Error("Source reads cannot write"));
+		if (tool === "startIssue" || tool === "startSlack") return Promise.reject(new Error("Source reads cannot write"));
 		return this.mcp.call(kind, tool, args, signal);
 	}
 

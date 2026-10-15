@@ -61,7 +61,9 @@ export interface TrackedItem {
 	title: string;
 	url: string;
 	status: string;
-	/** metadata.linearStart: local { outcome: moved|skipped|error, attemptedAt, error? }, preserved by sync. */
+	/** Local start results, preserved by sync:
+	 * linearStart { outcome: moved|skipped|error, attemptedAt, error? };
+	 * slackStart { outcome: reacted|skipped|error, attemptedAt, error? }, once per item. */
 	metadata: Record<string, TrackingJson>;
 	dismissed: boolean;
 	slack?: SlackTriage;
@@ -74,7 +76,7 @@ export interface TrackedItem {
 	createdAt: number;
 	updatedAt: number;
 }
-/** Local actions, except the explicit Linear start below. A link adds to the item's bound chats or missions; null clears them all.
+/** Local actions, except confirmed starts (Linear state or Slack eyes). A link adds to the item's bound chats or missions; null clears them all.
  * Source refreshes never overwrite these fields. */
 export interface TrackedItemPatch {
 	/** Only on confirmed Start chat/mission, with exactly one new link. Never for ordinary linking. */

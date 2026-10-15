@@ -8,10 +8,11 @@ import type { LoadedMcpConfig, McpServerEntry, McpTransportFactory } from "@eare
 import {
 	decodeMcpResult,
 	dedicatedSourceTool,
-	validSourceArguments,
-	sourceRateLimit,
 	SourceRateLimited,
 	SourceToolError,
+	slackAlreadyReacted,
+	sourceRateLimit,
+	validSourceArguments,
 } from "./source-mcp.ts";
 
 interface Connection {
@@ -71,7 +72,7 @@ let reply: {
 try {
 	const { kind, tool: logicalTool, args } = workerData;
 	const name = dedicatedSourceTool(kind, logicalTool);
-	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear state update");
+	if (!validSourceArguments(logicalTool, args)) throw new SetupError("Invalid Linear or Slack start update");
 	if (!name) throw new SetupError("Unknown dedicated MCP source tool");
 	const agentDir = workerData.agentDir ?? paths.getAgentDir();
 	// Global user config only. A repository cannot execute a new MCP server through tracking settings.
@@ -98,29 +99,33 @@ try {
 	if (
 		!tool ||
 		(logicalTool !== "startIssue" &&
+			logicalTool !== "startSlack" &&
 			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
 	)
 		throw new SetupError("Tracking tool is missing or advertises writes");
 	const result = await connection.callTool(name, args, { signal: controller.signal, timeoutMs: 30_000 });
-	reply = { value: decodeMcpResult(result) };
+	reply = { value: decodeMcpResult(result, logicalTool) };
 } catch (error) {
 	const limited = error instanceof SourceRateLimited ? error : sourceRateLimit(error);
 	// Never forward external tool text, config values, or transport errors that can contain secrets.
-	reply = {
-		error:
-			connection?.state === "needs-auth"
-				? "Sign in required"
-				: `MCP request failed: ${
-						error instanceof SetupError || error instanceof SourceToolError
-							? error.message
-							: error instanceof SyntaxError
-								? "invalid JSON"
-								: "connection or transport error"
-					}`,
-		signIn: connection?.state === "needs-auth",
-		...(limited ? { retryAfterMs: limited.retryAfterMs } : {}),
-		...(!limited && error instanceof SourceToolError ? { toolError: true } : {}),
-	};
+	reply =
+		workerData.kind === "slack" && workerData.tool === "startSlack" && slackAlreadyReacted(error)
+			? { value: { ok: true } }
+			: {
+					error:
+						connection?.state === "needs-auth"
+							? "Sign in required"
+							: `MCP request failed: ${
+									error instanceof SetupError || error instanceof SourceToolError
+										? error.message
+										: error instanceof SyntaxError
+											? "invalid JSON"
+											: "connection or transport error"
+								}`,
+					signIn: connection?.state === "needs-auth",
+					...(limited ? { retryAfterMs: limited.retryAfterMs } : {}),
+					...(!limited && error instanceof SourceToolError ? { toolError: true } : {}),
+				};
 } finally {
 	await close();
 }

@@ -207,4 +207,12 @@ import Testing
     """#.utf8))
     #expect(item.metadata["linearStart"]?["outcome"]?.string == "error")
     #expect(item.sessionId == "chat")
+    let slack = try JSONDecoder().decode(TrackedItem.self, from: Data(#"""
+    {"id":"s","projectId":"p","kind":"slack","externalId":"CEXAMPLE/1.000001","title":"Sample",
+     "url":"https://example.com","status":"in_progress","metadata":{"slackStart":{"outcome":"error",
+     "attemptedAt":1,"error":"Couldn't add eyes reaction in Slack."}},"dismissed":false,"missionId":"mission",
+     "createdAt":1,"updatedAt":2}
+    """#.utf8))
+    #expect(slack.metadata["slackStart"]?["outcome"]?.string == "error")
+    #expect(slack.missionId == "mission")
 }

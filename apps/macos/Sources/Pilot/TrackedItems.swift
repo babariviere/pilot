@@ -94,6 +94,21 @@ enum TrackedItemText {
         }
     }
 
+    static func startError(_ item: TrackedItem) -> String? {
+        if item.kind == .slack {
+            return item.metadata["slackStart"]?["outcome"]?.string == "error"
+                ? "Couldn't add eyes reaction in Slack" : nil
+        }
+        return linearStartError(item)
+    }
+
+    static func startErrorHelp(_ item: TrackedItem) -> String? {
+        guard startError(item) != nil else { return nil }
+        return item.kind == .slack
+            ? "The work started, but Pilot couldn't add the eyes reaction. Open the thread in Slack to add it."
+            : "Pilot couldn't move this ticket to In progress when the work started. Open it in Linear to update it."
+    }
+
     static func severity(_ item: TrackedItem) -> String? {
         if item.kind == .slack { return "\(SlackTriageText.triage(item).severity.title) severity" }
         guard let severity = item.metadata["severity"]?.string, !severity.isEmpty else { return nil }
@@ -454,7 +469,24 @@ final class TrackedItemActions: ObservableObject {
 
 // MARK: Rows
 
-/// One tracked ticket or Slack message. Clicking opens it in the browser. The trailing area shows what the
+/// Keeps a best-effort start failure at the front of the existing line, without a banner or extra row.
+struct TrackedStartText: View {
+    let item: TrackedItem
+    let text: String
+
+    var body: some View {
+        Group {
+            if let error = TrackedItemText.startError(item) {
+                Text("\(Text(verbatim: "\(error) · ").font(.pilot(.caption)).foregroundColor(Theme.error))\(text)")
+            } else {
+                Text(verbatim: text)
+            }
+        }
+        .help(TrackedItemText.startErrorHelp(item) ?? "")
+    }
+}
+
+/// One tracked ticket or Slack message. Clicking opens it in its source app. The trailing area shows what the
 /// item started (with Open chat / Open mission) or, on hover, Start chat. Everything is also in the
 /// context menu and as VoiceOver actions.
 struct TrackedItemRow: View {
@@ -478,7 +510,7 @@ struct TrackedItemRow: View {
         let busy = actions.busy.contains(item.id)
         let subtitle = [context, TrackedItemText.subtitle(item, now: now, group: group)].compactMap { $0 }
             .joined(separator: " · ")
-        let startError = TrackedItemText.linearStartError(item)
+        let startError = TrackedItemText.startError(item)
         HoverRow(verticalPadding: 6) { hovered in
             HStack(spacing: 10) {
                 Button(action: openInApp) {
@@ -493,14 +525,8 @@ struct TrackedItemRow: View {
                                 Text(item.title).font(.pilot(.body)).foregroundStyle(Theme.foreground).lineLimit(1)
                             }
                             // A start error leads the meta line, so it never truncates away or shifts the row.
-                            Group {
-                                if let startError {
-                                    Text("\(Text(verbatim: "\(startError) · ").foregroundColor(Theme.error))\(subtitle)")
-                                } else {
-                                    Text(verbatim: subtitle)
-                                }
-                            }
-                            .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
+                            TrackedStartText(item: item, text: subtitle)
+                                .font(.pilot(.caption)).foregroundStyle(Theme.mutedForeground).lineLimit(1)
                             if let error = actions.errors[item.id] {
                                 Text(error).font(.pilot(.caption)).foregroundStyle(Theme.error).lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -511,8 +537,7 @@ struct TrackedItemRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(startError == nil ? item.url
-                    : "Pilot couldn't move this ticket to In progress when the work started. Open it in Linear to update it.")
+                .help(TrackedItemText.startErrorHelp(item) ?? item.url)
                 .accessibilityLabel([
                     "\(TrackedItemText.identifier(item)), \(item.title).", startError.map { "\($0)." }, subtitle,
                 ].compactMap { $0 }.joined(separator: " "))
