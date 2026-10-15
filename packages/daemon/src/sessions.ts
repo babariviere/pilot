@@ -191,6 +191,8 @@ export interface SessionWorker {
 	/** Stop one running job for the user. The kernel tells the agent, whose follow-up turn ends the wait. */
 	stopJob?(jobId: string): Promise<void>;
 	runningJobs?: SessionJob[];
+	/** Committed chat todo count, supplied on ready and after every mutation. */
+	openTodoCount?: number;
 	/** Live-worker work continues between the last job ending and its result turn completing. */
 	awaitingJobFollowUp?: boolean;
 }
@@ -468,6 +470,7 @@ export class Worker implements SessionWorker {
 	/** Ephemeral context estimate and physical provider, reported by the live kernel. */
 	usage?: KernelUsage;
 	runningJobs?: SessionJob[];
+	openTodoCount?: number;
 	awaitingJobFollowUp?: boolean;
 	private readonly pending = new Map<
 		string,
@@ -537,9 +540,12 @@ export class Worker implements SessionWorker {
 			if (packet.type === "ready") {
 				clearTimeout(this.startupTimer);
 				this.usage = packet.usage;
+				this.openTodoCount = packet.openTodoCount;
 				this.initialized = true;
 				this.state = packet.working ? "working" : "idle";
 				markReady();
+			} else if (packet.type === "todos.changed") {
+				this.openTodoCount = packet.openCount;
 			} else if (packet.type === "usage") {
 				this.usage = packet.usage;
 			} else if (packet.type === "working") {
@@ -3231,6 +3237,17 @@ export class SessionManager {
 		return (await worker.jobs?.()) ?? [];
 	}
 
+	/** Cheap committed TODO count. Never starts an agent or reads transcript entries/bodies. */
+	async openTodoCount(id: string): Promise<number> {
+		const meta = this.require(id);
+		if (meta.mode === "ask") return 0;
+		if (this.closing) throw new Error("pilotd is shutting down");
+		const worker = this.workers.get(id);
+		if (worker && worker.state !== "failed" && worker.state !== "starting" && worker.openTodoCount !== undefined)
+			return worker.openTodoCount;
+		return this.coldReader.readTodoCount(join(this.dir(id), "durable"));
+	}
+
 	/** Stop one of a live worker's running jobs. Never reopens a parked worker, which has none. */
 	async stopJob(id: string, jobId: string): Promise<void> {
 		const meta = this.require(id);
@@ -4395,6 +4412,7 @@ export class SessionManager {
 		if (
 			packet.type !== "usage" &&
 			packet.type !== "jobs.changed" &&
+			packet.type !== "todos.changed" &&
 			packet.type !== "artifacts.changed" &&
 			packet.type !== "children" &&
 			this.workers.get(meta.id) === worker
@@ -4533,6 +4551,10 @@ export class SessionManager {
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
 			return;
 		}
+		if (packet.type === "todos.changed") {
+			if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openCount;
+			return;
+		}
 		if (packet.type === "jobs.changed") {
 			if (this.workers.get(meta.id) !== worker) return;
 			worker.runningJobs = packet.jobs;
@@ -4576,6 +4598,7 @@ export class SessionManager {
 				worker.awaitingJobFollowUp = false;
 			const changed = applyActivity(meta, packet.working, packet.completion, this.backgroundWorking(meta, worker));
 			if (packet.type === "ready") {
+				if (this.workers.get(meta.id) === worker) worker.openTodoCount = packet.openTodoCount;
 				if (this.workers.get(meta.id) === worker) delete meta.kernelRestartPending;
 				// Opening a transcript or restarting its worker is not new chat activity.
 				meta.model = packet.model;

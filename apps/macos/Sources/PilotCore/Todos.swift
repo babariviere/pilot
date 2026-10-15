@@ -1,6 +1,6 @@
 import Foundation
 
-/// Mirrors packages/protocol's read-only SessionTodo projection.
+/// Mirrors packages/protocol's read-only projection of chat-scoped durable todos.
 public struct SessionTodo: Codable, Identifiable, Equatable, Sendable {
     public let id: String
     public let title: String

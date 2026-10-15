@@ -78,7 +78,18 @@ import {
 import { refActivity } from "./ref-activity.ts";
 import { openSessionStorage } from "./storage.ts";
 import { SubagentBridge, type SubagentCommand } from "./subagents.ts";
-import { TodosWatch, todosDirectory } from "./todos.ts";
+import { startTodoBridge } from "./todo-bridge.ts";
+import { createTodoTool } from "./todo-tool.ts";
+import {
+	applyTodo,
+	type TodoCall,
+	TodoProgressDoc,
+	TodosDoc,
+	todoProgress,
+	todoRead,
+	todosUpdate,
+	validateTodoArgs,
+} from "./todos.ts";
 import type { KernelUsage } from "./usage.ts";
 
 const context: Context = BACKGROUND_CONTEXT;
@@ -111,6 +122,7 @@ export interface KernelSessionHooks {
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(working: boolean, completion?: SessionCompletion): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
+	onTodosChanged?(openCount: number): void;
 	onUsageChanged?(usage: KernelUsage): void;
 	/** Called after an artifact revision has been committed to the session store. */
 	onArtifactsChanged?(): void;
@@ -159,7 +171,12 @@ export class KernelSession {
 	private readonly release: () => void;
 	private readonly status: AgentEventStream;
 	private jobsMonitor?: JobsMonitor;
-	private readonly todos: TodosWatch;
+	private todoBridge?: { close(): Promise<void> };
+	#openTodoCount = 0;
+
+	get openTodoCount(): number {
+		return this.#openTodoCount;
+	}
 	private readonly subagents: SubagentBridge;
 	private readonly callMission?: MissionCall;
 	private readonly callMemory?: MemoryCall;
@@ -182,7 +199,6 @@ export class KernelSession {
 		adapter: NativeAdapter,
 		release: () => void,
 		status: AgentEventStream,
-		todos: TodosWatch,
 		subagents: SubagentBridge,
 		ask: boolean,
 		mission: { current?: MissionContext },
@@ -194,7 +210,6 @@ export class KernelSession {
 		this.adapter = adapter;
 		this.release = release;
 		this.status = status;
-		this.todos = todos;
 		this.subagents = subagents;
 		this.#ask = ask;
 		this.#mission = mission;
@@ -210,6 +225,9 @@ export class KernelSession {
 				: new PerformanceLog(join(spec.storageDir, "performance.jsonl"));
 		let adapter: NativeAdapter | undefined;
 		let harness: Harness | undefined;
+		let todoBridge: { close(): Promise<void> } | undefined;
+		let openedSession: KernelSession | undefined;
+		let openTodoCount = 0;
 		const jobs = new JobsMonitor(
 			() => adapter?.jobs() ?? Promise.resolve([]),
 			(value) => hooks.onJobsChanged?.(value),
@@ -238,6 +256,27 @@ export class KernelSession {
 				context,
 			);
 		});
+		const callTodo: TodoCall = async (args, actor) => {
+			validateTodoArgs(args, actor);
+			if (!artifactConversation || !harness) throw new Error("Todos require a bound chat");
+			if (todoRead(args.action)) {
+				const state = await harness.snapshot(TodosDoc, context);
+				return applyTodo(structuredClone(state?.items ?? []), args, actor);
+			}
+			const result = await artifactConversation.commit(async (tx) => {
+				const state = await tx.doc(TodosDoc);
+				const items = state.items.map((item) => ({ ...item, tags: [...item.tags] }));
+				const result = applyTodo(items, args, actor);
+				state.items = items;
+				const progress = todoProgress(items);
+				Object.assign(await tx.doc(TodoProgressDoc), progress);
+				return { result, openCount: progress.openCount };
+			}, context);
+			openTodoCount = result.openCount;
+			if (openedSession) openedSession.#openTodoCount = openTodoCount;
+			hooks.onTodosChanged?.(openTodoCount);
+			return result.result;
+		};
 		let wakePrompt = "";
 		if (spec.projectId && hooks.callMemory && !spec.pilot?.ask) {
 			let wakeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -325,6 +364,7 @@ export class KernelSession {
 					);
 				},
 			};
+			if (!spec.pilot?.ask) todoBridge = await startTodoBridge(callTodo);
 			adapter = await NativeAdapter.open({
 				cwd: spec.cwd,
 				ask: spec.pilot?.ask,
@@ -341,7 +381,11 @@ export class KernelSession {
 					...(audit ? [audit.native] : []),
 				],
 				subagents,
-				hostTools: [...missionTools, questionTool],
+				hostTools: [
+					...missionTools,
+					questionTool,
+					...(!spec.pilot?.ask ? [createTodoTool(callTodo, () => spec.sessionId)] : []),
+				],
 				...(spec.pilot?.ask
 					? { askArtifacts: artifactOptions }
 					: {
@@ -411,6 +455,13 @@ export class KernelSession {
 					: ((await harness.conversation(active, context)) ?? (await root()));
 			adapter.onToolsChanged = (extension) => registry.install(prepare(extension));
 			artifactConversation = conversation;
+			if (!spec.pilot?.ask) {
+				await conversation.commit(async (tx) => {
+					await tx.doc(TodosDoc);
+					await tx.doc(TodoProgressDoc);
+				}, context);
+				openTodoCount = (await harness.snapshot(TodoProgressDoc, context))?.openCount ?? 0;
+			}
 			if (audit) {
 				// Install the document before a viewer subscribes, including chats with no writes yet.
 				await conversation.commit(async (tx) => {
@@ -432,13 +483,15 @@ export class KernelSession {
 				adapter,
 				owned.release,
 				status,
-				new TodosWatch(todosDirectory(spec.cwd)),
 				subagents,
 				!!spec.pilot?.ask,
 				mission,
 				callMission,
 				hooks.callMemory,
 			);
+			openedSession = session;
+			session.todoBridge = todoBridge;
+			session.#openTodoCount = openTodoCount;
 			session.jobsMonitor = jobs;
 			await jobs.refresh();
 			session.#reportedWorking = status.snapshot.run !== undefined;
@@ -524,6 +577,7 @@ export class KernelSession {
 			return session;
 		} catch (error) {
 			await jobs.close();
+			await todoBridge?.close().catch(() => undefined);
 			if (harness) await harness.close(context).catch(() => undefined);
 			else await owned.storage.close(context).catch(() => undefined);
 			await adapter?.close().catch(() => undefined);
@@ -999,12 +1053,14 @@ export class KernelSession {
 		let queue: DocumentWatch<InboxState>;
 		let heldQueue: Awaited<ReturnType<typeof this.harness.watchDoc>> | undefined;
 		let audit: DocumentWatch<{ actions: GitHubAction[] }> | undefined;
+		let todos: DocumentWatch<import("./todos.ts").TodoProgress> | undefined;
 		try {
 			heldQueue = (await this.harness.watchDoc(HeldInputsDoc, this.conversation.id, context)) ?? undefined;
 			audit = (await this.harness.watchDoc(GitHubActionsDoc, context)) ?? undefined;
+			if (includeTodos && !this.#ask) todos = (await this.harness.watchDoc(TodoProgressDoc, context)) ?? undefined;
 			queue = await watchQueue(this.harness, this.conversation.id, context);
 		} catch (error) {
-			await Promise.all([heldQueue?.stop(), audit?.stop()]);
+			await Promise.all([heldQueue?.stop(), audit?.stop(), todos?.stop()]);
 			await stream.stop();
 			throw error;
 		}
@@ -1014,23 +1070,16 @@ export class KernelSession {
 				await displayQueue(queue.value),
 			]);
 			await listener([{ type: "github_actions_update", actions: [...(audit?.value?.actions ?? [])] }]);
-			// Ask has no TODO extension. A pinned snapshot must not display live checkout TODOs.
-			if (includeTodos && this.#ask) await listener([{ type: "todos_update", items: [] }]);
+			if (includeTodos) await listener([todosUpdate(todos?.value)]);
 		} catch (error) {
-			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop()]);
+			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop(), todos?.stop()]);
 			throw error;
 		}
-		const stopTodos =
-			includeTodos && !this.#ask
-				? this.todos.subscribe((event) => {
-						void Promise.resolve(listener([event])).catch((error) =>
-							console.warn("pilot: TODO listener failed", error),
-						);
-					})
-				: () => {};
 		this.#watches.set(watchId, async () => {
-			stopTodos();
-			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop()]);
+			await Promise.all([stream.stop(), queue.stop(), heldQueue?.stop(), audit?.stop(), todos?.stop()]);
+		});
+		todos?.start(async (state) => {
+			await listener([todosUpdate(state)]);
 		});
 		stream.start(async (events) => {
 			await listener(await chatEvents(this.harness, await this.#origins.events(events), context));
@@ -1059,6 +1108,7 @@ export class KernelSession {
 			for (const id of [...this.#watches.keys()]) await this.unwatch(id).catch(() => undefined);
 			await this.status.stop().catch(() => undefined);
 			try {
+				await this.todoBridge?.close();
 				await this.harness.close(context);
 			} finally {
 				try {

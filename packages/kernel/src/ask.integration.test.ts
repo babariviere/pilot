@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { after, test, type TestContext } from "node:test";
+import { after, type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
 	fauxAssistantMessage,
@@ -18,11 +18,10 @@ import {
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { ArtifactStore, closePreviewBrowser } from "@pilot/artifacts";
 import type { AgentEvent, SessionCompletion } from "@pilot/protocol";
-import { ASK_TOOL_NAMES } from "./ask-tools.ts";
 import { ARTIFACT_SKILL_PATH } from "./artifact-skill.ts";
+import { ASK_TOOL_NAMES } from "./ask-tools.ts";
 import { NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import { KernelSession } from "./session.ts";
-import { TodosWatch } from "./todos.ts";
 
 // Previews keep a browser warm for a minute. Close it so the test process exits promptly.
 after(() => closePreviewBrowser());
@@ -259,7 +258,6 @@ test("Ask exposes only codemode and publishes nested artifacts while direct tool
 		},
 	);
 	f.cleanup.push(() => session.close());
-	t.mock.method(TodosWatch.prototype, "subscribe", () => assert.fail("Ask must not read live checkout TODOs"));
 	await session.watch("ask-watch", () => {});
 	const activityEvents: AgentEvent[] = [];
 	await session.watch("ask-activity", (events) => activityEvents.push(...events), true, true);

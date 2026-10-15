@@ -1,22 +1,25 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
+import { type TestContext, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { PILOT_CHILD_PROFILE_PATH } from "@babariviere/pi-extensions/profile";
 import {
+	fauxAssistantMessage,
+	fauxProvider,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
-	fauxProvider,
-	fauxAssistantMessage,
 } from "@earendil-works/pi-ai";
 import { getPackageDir, ModelRuntime, SettingsManager, wrapRegisteredTool } from "@earendil-works/pi-coding-agent";
 import type { JsonObject } from "@earendil-works/pi-durable";
-import { ANTHROPIC_AUTH_PATH, installBundledAnthropicAuth } from "./bundled-extensions.ts";
+import { ANTHROPIC_AUTH_PATH, CHILD_PROFILE_PATH, installBundledAnthropicAuth } from "./bundled-extensions.ts";
 import { NativeAdapter } from "./native-adapter.ts";
+import { startTodoBridge } from "./todo-bridge.ts";
+import { createTodoTool } from "./todo-tool.ts";
+import { applyTodo, type TodoRecord } from "./todos.ts";
 
 type ChildPacket = {
 	type: string;
@@ -69,6 +72,12 @@ async function fixture(t: TestContext) {
 			agentDir,
 			sessionFile: join(root, "parent.jsonl"),
 			sessionId: "bundled-test",
+			hostTools: [
+				createTodoTool(
+					async () => [],
+					() => "bundled-test",
+				),
+			],
 			projectTrusted: false,
 			settingsManager: SettingsManager.inMemory({ defaultTools: ["+codemode"], codemode: { mode: "only" } }),
 			sessionOptions: { modelRuntime: runtime, model: faux.getModel() },
@@ -107,6 +116,11 @@ test("personal profile and auth copies never evaluate, while unrelated extension
 	await writeFile(
 		join(pkg, "package.json"),
 		JSON.stringify({ name: "@babariviere/pi-extensions", pi: { extensions: ["extensions/*/index.ts"] } }),
+	);
+	await mkdir(join(pkg, "extensions", "todos"), { recursive: true });
+	await writeFile(
+		join(pkg, "extensions", "todos", "index.ts"),
+		"throw new Error('File-backed todos must not import'); export default () => {};",
 	);
 	const duplicate = join(pkg, "extensions", "jobs", "index.ts");
 	await writeFile(
@@ -177,6 +191,9 @@ test("real subagent worker inherits the bundled child profile and required auth,
 }, async (t) => {
 	const f = await fixture(t);
 	const marker = join(f.root, "child-profile.json");
+	const todos: TodoRecord[] = [];
+	const bridge = await startTodoBridge(async (args, actor) => applyTodo(todos, args, actor));
+	t.after(() => bridge.close());
 	const installed = fileURLToPath(
 		new URL("../extensions/subagents/worker-bootstrap.mjs", `file://${PILOT_CHILD_PROFILE_PATH}`),
 	);
@@ -188,7 +205,10 @@ import { writeFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 export default pi => {
  const faux = fauxProvider();
- faux.setResponses([fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")]);
+ faux.setResponses([
+  fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
+ ]);
  pi.registerProvider(faux.provider);
  pi.on('session_start', (_event, ctx) => writeFileSync(${JSON.stringify(marker)}, JSON.stringify({tools: pi.getAllTools().map(t => t.name), auth: typeof ctx.modelRegistry.getRegisteredProviderConfig('anthropic')?.streamSimple})));
 };`,
@@ -199,6 +219,8 @@ export default pi => {
 			extensions: [fixturePath, await obsoleteAuth(f.root)],
 			defaultProvider: "faux",
 			defaultModel: "faux-1",
+			defaultTools: ["+codemode"],
+			codemode: { mode: "only" },
 		}),
 	);
 	const child = spawn(process.execPath, [installed], {
@@ -209,7 +231,7 @@ export default pi => {
 			PI_OFFLINE: "1",
 			PI_CODE_MODE_SUBAGENT: "1",
 			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
-			PILOT_PI_EXTENSIONS_PROFILE: PILOT_CHILD_PROFILE_PATH,
+			PILOT_PI_EXTENSIONS_PROFILE: CHILD_PROFILE_PATH,
 			PILOT_ANTHROPIC_AUTH_EXTENSION: ANTHROPIC_AUTH_PATH,
 		},
 	});
@@ -279,6 +301,9 @@ export default pi => {
 		assert.match(answer.result?.answer?.text ?? "", /CHILD_(?:PROFILE|FOLLOWUP)_OK/);
 	}
 	child.send({ type: "stop", id: "stop" });
+	assert.equal(todos.length, 1, "child's tool writes to the parent list, not workspace files");
+	assert.equal(todos[0].title, "From real child");
+	assert.ok(todos[0].assigned_to_session);
 	await packet("stopped", "stop");
 	child.send({ type: "pause" });
 	await packet("paused");

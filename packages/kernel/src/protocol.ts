@@ -105,6 +105,8 @@ export type KernelPacket =
 			thinking?: string;
 			working: boolean;
 			usage: KernelUsage;
+			/** All statuses except done/closed; absent on older kernels. */
+			openTodoCount?: number;
 			completion?: SessionCompletion;
 			/** Prompt templates and skill commands the native kernel expands on input. */
 			commands?: SessionCommand[];
@@ -112,6 +114,7 @@ export type KernelPacket =
 			attempts?: SessionAttempt[];
 	  }
 	| { type: "jobs.changed"; jobs: SessionJob[] }
+	| { type: "todos.changed"; openCount: number }
 	| { type: "usage"; usage: KernelUsage }
 	| { type: "children"; requestId: string; hasChildren: boolean }
 	| { type: "jobs"; requestId: string; jobs: SessionJob[] }

@@ -20,7 +20,7 @@ import { HeldInputsDoc } from "./held-inputs.ts";
 import { InputOrigins } from "./input-origin.ts";
 import { queueUpdate, queueUpdateForDisplay } from "./queue.ts";
 import { openSessionReader } from "./storage.ts";
-import { TodosWatch, todosDirectory } from "./todos.ts";
+import { TodoProgressDoc, todosUpdate } from "./todos.ts";
 
 export interface PersistedSessionView {
 	events: AgentEvent[];
@@ -34,6 +34,7 @@ const context = BACKGROUND_CONTEXT;
 async function conversationView(
 	storage: Storage,
 	id: ConversationId,
+	includeTodos = false,
 ): Promise<{ events: AgentEvent[]; completion?: SessionCompletion }> {
 	const session = createSession(storage);
 	try {
@@ -78,6 +79,7 @@ async function conversationView(
 			usage: usage ?? { models: {}, tools: {} },
 		};
 		const audit = await session.snapshot(GitHubActionsDoc, context);
+		const todos = includeTodos ? await session.snapshot(TodoProgressDoc, context) : undefined;
 		const events: AgentEvent[] = [
 			snapshot,
 			await queueUpdateForDisplay(
@@ -88,6 +90,7 @@ async function conversationView(
 				(await session.snapshot(HeldInputsDoc, id, context)) ?? null,
 			),
 			{ type: "github_actions_update", actions: [...(audit?.actions ?? [])] },
+			...(includeTodos ? [todosUpdate(todos)] : []),
 		];
 		if (!live?.run && attention?.completion) {
 			const { outcome, outcomeAt, outcomeReason } = normalizeCompletion(attention.completion);
@@ -234,7 +237,7 @@ export async function readEarlierEntries(
 
 export async function readSessionSnapshot(
 	directory: string,
-	cwd: string,
+	_cwd: string,
 	includeTodos = true,
 ): Promise<PersistedSessionView> {
 	const storage = await openSessionReader(directory);
@@ -253,20 +256,25 @@ export async function readSessionSnapshot(
 			},
 			queueUpdate(null),
 			{ type: "github_actions_update", actions: [] },
+			todosUpdate(undefined),
 		];
 	} else {
-		const view = await conversationView(storage, await activeConversation(storage, context));
+		const view = await conversationView(storage, await activeConversation(storage, context), includeTodos);
 		events = view.events;
 		completion = view.completion;
 	}
-	// Ask must not display live checkout extension TODOs, especially for pinned branch snapshots.
-	if (includeTodos) {
-		// Read display-only extension files, never load or execute extension code.
-		const todos = new TodosWatch(todosDirectory(cwd));
-		await todos.refresh();
-		events.push(todos.current);
-	} else {
-		events.push({ type: "todos_update", items: [] });
-	}
+	if (!includeTodos && storage) events.push(todosUpdate(undefined));
 	return { events, ...(completion ? { completion } : {}) };
+}
+
+/** Cheap cold count, independent of transcript size or TODO bodies. No writer lease or migrations. */
+export async function readSessionTodoCount(directory: string): Promise<number> {
+	const storage = await openSessionReader(directory);
+	if (!storage) return 0;
+	const session = createSession(storage);
+	try {
+		return (await session.snapshot(TodoProgressDoc, context))?.openCount ?? 0;
+	} finally {
+		await session.close(context);
+	}
 }
