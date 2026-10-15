@@ -9,7 +9,7 @@ import Testing
             #expect(NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil,
                     "Missing symbol for \(icon): \(name)")
         } else {
-            #expect([PilotIcon.working, .branch, .pullRequest, .inReview].contains(icon))
+            #expect([PilotIcon.working, .branch, .pullRequest, .inProgress, .inReview].contains(icon))
         }
         #expect(!icon.usage.isEmpty)
         if let fill = icon.stateFillName {
@@ -45,41 +45,49 @@ import Testing
     let alwaysFilled = Set(PilotIcon.allCases.filter {
         ($0.systemName?.contains(".fill") ?? false) || ($0.systemName?.contains("filled") ?? false)
     })
-    // The three-quarter review mark is custom-drawn, so it has no symbol name to inspect.
-    #expect(alwaysFilled.union([.inReview]) == PilotIcon.alwaysFilledIcons)
+    // The progress pies are custom-drawn, so they have no symbol names to inspect.
+    #expect(alwaysFilled.union([.inProgress, .inReview]) == PilotIcon.alwaysFilledIcons)
     #expect(stateful.isDisjoint(with: alwaysFilled))
 }
 
-@Test @MainActor func statusLadderEndsWithAThreeQuarterReviewMark() {
+@Test @MainActor func statusLadderUsesOneThirdAndTwoThirdsPies() {
     #expect(PilotIcon.todo.systemName == "circle")
-    #expect(PilotIcon.inProgress.systemName == "circle.lefthalf.filled")
+    #expect(PilotIcon.inProgress.systemName == nil)
     #expect(PilotIcon.inReview.systemName == nil)
+    #expect(PilotIcon.inProgress.taskProgressFill == .oneThird)
+    #expect(PilotIcon.inReview.taskProgressFill == .twoThirds)
+    #expect(MissionTaskStatus.inProgress.icon == .inProgress)
     #expect(MissionTaskStatus.inReview.icon == .inReview)
-    for context in PilotIcon.Context.allCases {
-        let mark = ReviewQuarterGlyph.image(context)
-        #expect(mark.isTemplate)
-        #expect(mark.size.width > 0 && mark.size.height > 0)
-        #expect(ReviewQuarterGlyph.image(context) === mark)
+    for fill in TaskProgressGlyph.Fill.allCases {
+        for context in PilotIcon.Context.allCases {
+            let mark = TaskProgressGlyph.image(fill, context: context)
+            #expect(mark.isTemplate)
+            #expect(mark.size.width > 0 && mark.size.height > 0)
+            #expect(TaskProgressGlyph.image(fill, context: context) === mark)
+            let outline = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: context.role.size, weight: context.nsWeight))
+            #expect(mark.size == outline?.size)
+        }
     }
-    // Same frame as the outline it is drawn from, so it lines up with todo and inProgress.
-    let outline = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)?
-        .withSymbolConfiguration(.init(pointSize: Theme.TextRole.label.size, weight: .regular))
-    #expect(ReviewQuarterGlyph.image(.row).size == outline?.size)
 }
 
-@Test @MainActor func reviewQuarterLeavesOnlyTheTopRightQuarterEmpty() throws {
-    let mark = ReviewQuarterGlyph.draw(pointSize: 64, weight: .regular)
-    let tiff = try #require(mark.tiffRepresentation)
-    let bitmap = try #require(NSBitmapImageRep(data: tiff))
-    let (width, height) = (bitmap.pixelsWide, bitmap.pixelsHigh)
-    func alpha(_ x: Double, _ y: Double) -> CGFloat {
-        // Bitmap rows run top to bottom.
-        bitmap.colorAt(x: Int(Double(width) * x), y: Int(Double(height) * y))?.alphaComponent ?? 0
+@Test @MainActor func progressPiesFillExactlyOneAndTwoThirdsClockwiseFromTheTop() throws {
+    for fill in TaskProgressGlyph.Fill.allCases {
+        let mark = TaskProgressGlyph.draw(fill, pointSize: 64, weight: .regular)
+        let tiff = try #require(mark.tiffRepresentation)
+        let bitmap = try #require(NSBitmapImageRep(data: tiff))
+        // Probe on both sides of each 120° boundary, away from the outline and antialiasing.
+        for degrees in [15.0, 105, 135, 225, 255, 345] {
+            let radians = degrees * .pi / 180
+            // Bitmap rows run top to bottom. Zero is 12 o'clock, increasing clockwise.
+            let x = Int(Double(bitmap.pixelsWide) * (0.5 + sin(radians) * 0.2))
+            let y = Int(Double(bitmap.pixelsHigh) * (0.5 - cos(radians) * 0.2))
+            let color = try #require(bitmap.colorAt(x: x, y: y))
+            let filled = degrees < Double(fill.rawValue) * 120
+            #expect(filled ? color.alphaComponent > 0.9 : color.alphaComponent < 0.1,
+                    "Unexpected coverage at \(degrees)° for \(fill)")
+        }
     }
-    #expect(alpha(0.35, 0.35) > 0.9, "top-left quarter is filled")
-    #expect(alpha(0.65, 0.35) < 0.1, "top-right quarter is empty")
-    #expect(alpha(0.65, 0.65) > 0.9, "bottom-right quarter is filled")
-    #expect(alpha(0.35, 0.65) > 0.9, "bottom-left quarter is filled")
 }
 
 @Test func vocabularyContextSizesFollowThemeScale() {

@@ -13,9 +13,9 @@ import SwiftUI
 /// - Outline by default. Only the cases with a `stateFillName` fill, and only while their state holds
 ///   (selected navigation, a pinned chat, a terminal success, a failure, an open question).
 /// - `alwaysFilledIcons` are the deliberate exceptions whose one symbol is filled (a platform clear button,
-///   the stop glyph on a filled control, the half and three-quarter progress marks).
-/// - Status ladder for Linear tickets and mission tasks: `todo` (empty), `inProgress` (half), `inReview`
-///   (three quarters, drawn by `ReviewQuarterGlyph`), then `complete`.
+///   the stop glyph on a filled control, the one-third and two-thirds progress marks).
+/// - Status ladder for Linear tickets and mission tasks: `todo` (empty), `inProgress` (one third), `inReview`
+///   (two thirds, both drawn by `TaskProgressGlyph`), then `complete`.
 /// - Each concept has its own symbol. `sharedSymbols` lists the only intended overlaps.
 /// - Brand and Git marks are not SF Symbols; use `PilotMark` so services stay recognisable.
 ///
@@ -113,10 +113,9 @@ extension PilotIcon {
         case .cancelled: "xmark.circle"
         case .pending: "clock"
         case .todo: "circle"
-        case .inProgress: "circle.lefthalf.filled"
         case .draft: "pencil.circle"
         case .unset: "circle.dotted"
-        case .working, .pullRequest, .branch, .inReview: nil
+        case .working, .pullRequest, .branch, .inProgress, .inReview: nil
         case .scheduled: "calendar.badge.clock"
         case .scheduleFailed: "calendar.badge.exclamationmark"
         case .chats: "bubble.left.and.bubble.right"
@@ -275,8 +274,8 @@ extension PilotIcon {
         case .cancelled: "Cancelled or dropped: a cancelled schedule, a dropped task, a canceled issue."
         case .pending: "Waiting on time: pending checks, durations and timelines."
         case .todo: "Not started yet."
-        case .inProgress: "Started work. The half fill is the meaning, not a state toggle."
-        case .inReview: "Waiting on review. Three quarters filled, between inProgress and complete; drawn by ReviewQuarterGlyph."
+        case .inProgress: "Started work. One third filled; drawn by TaskProgressGlyph, not a state toggle."
+        case .inReview: "Waiting on review. Two thirds filled, between inProgress and complete; drawn by TaskProgressGlyph."
         case .draft: "A draft pull request or a decision proposal."
         case .unset: "No state yet: a running tool, an unknown event, no mission health."
         case .working: "Live work uses the shared EllipsisSpinner (three dots), never an SF Symbol or a braille spinner."
@@ -371,7 +370,7 @@ extension PilotIcon {
             }
         }
 
-        /// `weight` for AppKit symbol images, such as `ReviewQuarterGlyph`.
+        /// `weight` for AppKit symbol images, such as `TaskProgressGlyph`.
         var nsWeight: NSFont.Weight {
             switch self {
             case .toolbar: .medium
@@ -423,32 +422,42 @@ struct PilotSymbol: View {
                 .accessibilityLabel("Working").accessibilityHidden(false)
         } else if icon == .branch || icon == .pullRequest {
             PilotMarkIcon(mark: .gitBranch, context: context)
-        } else if icon == .inReview {
-            Image(nsImage: ReviewQuarterGlyph.image(context))
+        } else if let fill = icon.taskProgressFill {
+            Image(nsImage: TaskProgressGlyph.image(fill, context: context))
                 .renderingMode(.template)
-                .accessibilityLabel("In review")
+                .accessibilityLabel(icon == .inProgress ? "In progress" : "In review")
         } else if let name = icon.systemName(filled: filled) {
             Image(systemName: name).font(context.font)
         }
     }
 }
 
-/// The in-review step of the status ladder: the `circle` outline filled counterclockwise from 12 o'clock to 3 o'clock,
-/// leaving the top-right quarter empty. SF Symbols has no three-quarter circle, so this composes `circle` and
-/// `circle.fill` at the context's size and weight, matching `todo` and `inProgress` stroke for stroke.
+/// The middle steps of the status ladder fill clockwise from 12 o'clock: one third in progress, two thirds in review.
+/// SF Symbols has no matching thirds, so this composes `circle` and `circle.fill` at the context's size
+/// and weight, matching the to-do outline's stroke and bounds.
 /// It is an image rather than a view so it also shows in menus.
-@MainActor enum ReviewQuarterGlyph {
-    private static var cache: [PilotIcon.Context: NSImage] = [:]
+@MainActor enum TaskProgressGlyph {
+    enum Fill: Int, CaseIterable {
+        case oneThird = 1, twoThirds = 2
+    }
 
-    static func image(_ context: PilotIcon.Context) -> NSImage {
-        if let image = cache[context] { return image }
-        let image = draw(pointSize: context.role.size, weight: context.nsWeight)
-        cache[context] = image
+    private struct Key: Hashable {
+        let fill: Fill
+        let context: PilotIcon.Context
+    }
+
+    private static var cache: [Key: NSImage] = [:]
+
+    static func image(_ fill: Fill, context: PilotIcon.Context) -> NSImage {
+        let key = Key(fill: fill, context: context)
+        if let image = cache[key] { return image }
+        let image = draw(fill, pointSize: context.role.size, weight: context.nsWeight)
+        cache[key] = image
         return image
     }
 
     /// Nonisolated so the drawing handler, which AppKit may call off the main thread, carries no actor.
-    nonisolated static func draw(pointSize: CGFloat, weight: NSFont.Weight) -> NSImage {
+    nonisolated static func draw(_ fill: Fill, pointSize: CGFloat, weight: NSFont.Weight) -> NSImage {
         let configuration = NSImage.SymbolConfiguration(pointSize: pointSize, weight: weight)
             .applying(NSImage.SymbolConfiguration(paletteColors: [.black]))
         guard let outline = NSImage(systemSymbolName: "circle", accessibilityDescription: nil)?
@@ -459,9 +468,15 @@ struct PilotSymbol: View {
         let image = NSImage(size: outline.size, flipped: false) { rect in
             outline.draw(in: rect)
             NSGraphicsContext.saveGraphicsState()
-            // The left half plus the bottom-right quarter continues the left-filled in-progress mark.
-            let pie = NSBezierPath(rect: NSRect(x: rect.minX, y: rect.minY, width: rect.width / 2, height: rect.height))
-            pie.append(NSBezierPath(rect: NSRect(x: rect.midX, y: rect.minY, width: rect.width / 2, height: rect.height / 2)))
+            let center = NSPoint(x: rect.midX, y: rect.midY)
+            // Extend past the disc so only the radial edges clip it, not this arc's radius.
+            let radius = max(rect.width, rect.height)
+            let pie = NSBezierPath()
+            pie.move(to: center)
+            pie.line(to: NSPoint(x: center.x, y: center.y + radius))
+            pie.appendArc(withCenter: center, radius: radius, startAngle: 90,
+                          endAngle: 90 - CGFloat(fill.rawValue) * 120, clockwise: true)
+            pie.close()
             pie.addClip()
             disc.draw(in: NSRect(x: rect.midX - disc.size.width / 2, y: rect.midY - disc.size.height / 2,
                                  width: disc.size.width, height: disc.size.height))
@@ -473,10 +488,42 @@ struct PilotSymbol: View {
     }
 }
 
+extension PilotIcon {
+    var taskProgressFill: TaskProgressGlyph.Fill? {
+        switch self {
+        case .inProgress: .oneThird
+        case .inReview: .twoThirds
+        default: nil
+        }
+    }
+}
+
 extension Label where Title == Text, Icon == PilotSymbol {
     /// Labels share the row icon size; the label's text keeps its own typography.
     @MainActor init<S: StringProtocol>(_ title: S, icon: PilotIcon) {
         self.init { Text(String(title)) } icon: { PilotSymbol(icon, context: .row) }
+    }
+}
+
+/// Native menus extract images from their labels rather than rendering arbitrary SwiftUI icon views.
+/// Keep SF Symbols and task pies as direct images, without the row-specific styling in PilotSymbol.
+struct PilotMenuLabel: View {
+    let title: String
+    let icon: PilotIcon
+
+    init(_ title: String, icon: PilotIcon) {
+        self.title = title
+        self.icon = icon
+    }
+
+    var body: some View {
+        if let name = icon.systemName {
+            Label(title, systemImage: name)
+        } else if let fill = icon.taskProgressFill {
+            Label { Text(title) } icon: { Image(nsImage: TaskProgressGlyph.image(fill, context: .row)) }
+        } else {
+            Label(title, icon: icon)
+        }
     }
 }
 

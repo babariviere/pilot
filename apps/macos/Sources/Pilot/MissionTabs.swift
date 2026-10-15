@@ -960,10 +960,7 @@ struct MissionTaskRow: View {
             Button("Release Claim") { assign(nil) }
         }
         Menu("Status") {
-            ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-                Button { setStatus(status) } label: { Label(status.label, icon: status.icon) }
-                    .disabled(status == task.workStatus)
-            }
+            MissionTaskStatusMenuItems(selected: task.workStatus, setStatus: setStatus)
         }
         if !phaseChoices.isEmpty {
             Menu("Move to Phase") {
@@ -1052,6 +1049,19 @@ struct MissionTaskStartButton: View {
     }
 }
 
+/// Shared by the inline picker and the row's context menu so their native menu icons stay identical.
+struct MissionTaskStatusMenuItems: View {
+    let selected: MissionTaskStatus
+    let setStatus: (MissionTaskStatus) -> Void
+
+    var body: some View {
+        ForEach(MissionTaskStatus.allCases, id: \.self) { status in
+            Button { setStatus(status) } label: { PilotMenuLabel(status.label, icon: status.icon) }
+                .disabled(status == selected)
+        }
+    }
+}
+
 /// The task's status icon, in its colour, opening a status menu. A plain menu style keeps the colour
 /// (borderless pop-ups redraw the label as a template image).
 struct MissionTaskStatusMenu: View {
@@ -1071,10 +1081,7 @@ struct MissionTaskStatusMenu: View {
             .overlay {
                 if interactive {
                     Menu {
-                        ForEach(MissionTaskStatus.allCases, id: \.self) { status in
-                            Button { set(status) } label: { Label(status.label, icon: status.icon) }
-                                .disabled(status == task.workStatus)
-                        }
+                        MissionTaskStatusMenuItems(selected: task.workStatus, setStatus: set)
                     } label: {
                         icon
                     }
