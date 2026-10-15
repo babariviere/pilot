@@ -186,7 +186,7 @@ per-chat scratch folder (also TMPDIR), retained across turns and removed on arch
 unbinds its PRs and explains that they can be bound to a member chat. Demotion restores its isolated
 workspace, but does not rebind those PRs automatically.
 
-![A mission task list grouped by status, with linked chats, pull requests and progress](docs/screenshots/readme-mission.png)
+![A mission task list grouped by phase, with linked chats, pull requests and progress](docs/screenshots/readme-mission.png)
 
 ### Artifacts and integrations
 

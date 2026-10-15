@@ -397,7 +397,34 @@ enum Snapshot {
              {"mission":{"id":"m4","projectId":"p1","title":"Docs refresh","goal":"Rewrite the getting-started guide for v2.","status":"active","briefRevision":0,"createdAt":\(now - 120_000),"updatedAt":\(now)},
               "decisions":[],"comments":[],"tasks":[],"artifacts":[],"resources":[],"events":[]}]
             """
-            guard let details = try? JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8)) else {
+            // Task phases, loaded only for their own captures so the other mission screens stay unchanged.
+            let phasesJSON = """
+            [{"mission":{"id":"m5","projectId":"p1","title":"Mission pages","goal":"Track shared work by phase.","status":"active","briefRevision":1,"createdAt":\(now - 172_800_000),"updatedAt":\(now)},
+              "decisions":[],"comments":[],"artifacts":[],"resources":[],"events":[],
+              "tasks":[{"id":"p1","number":1,"title":"Mission store and API","status":"done","order":1,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
+                       {"id":"p2","number":2,"title":"Mission page with tabs","status":"done","order":2,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
+                       {"id":"p3","number":3,"title":"Mission tool for chats","status":"done","order":3,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
+                       {"id":"p4","number":4,"title":"Kanban board","status":"dropped","order":4,"milestone":"Phase 1","createdAt":1,"updatedAt":1},
+                       {"id":"p5","number":5,"title":"Group tasks by phase","status":"in_progress","order":5,"milestone":"Phase 1 polish","sessionId":"auth","createdAt":1,"updatedAt":1},
+                       {"id":"p6","number":6,"title":"Calmer link chips","status":"done","order":6,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
+                       {"id":"p7","number":7,"title":"Show task from a link","status":"in_review","order":7,"milestone":"Phase 1 polish","sessionId":"pagination","createdAt":1,"updatedAt":1},
+                       {"id":"p8","number":8,"title":"Task descriptions fold past two lines","body":"Long descriptions fold with Show more.","status":"todo","order":8,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
+                       {"id":"p9","number":9,"title":"Sidebar progress line","status":"done","order":9,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
+                       {"id":"p10","number":10,"title":"Archive view for missions","status":"blocked","body":"Waiting on the archive API.","order":10,"milestone":"Phase 1 polish","sessionId":"errors","createdAt":1,"updatedAt":1},
+                       {"id":"p11","number":11,"title":"Inline status picker","status":"dropped","order":11,"milestone":"Phase 1 polish","createdAt":1,"updatedAt":1},
+                       {"id":"p12","number":12,"title":"Coordinator starts ready tasks","status":"todo","order":12,"milestone":"Coordinator automation","createdAt":1,"updatedAt":1},
+                       {"id":"p13","number":13,"title":"Wake the coordinator on merged PRs","status":"todo","order":13,"milestone":"Coordinator automation","dependsOn":["p12"],"createdAt":1,"updatedAt":1},
+                       {"id":"p14","number":14,"title":"Spike: coordinator memory","status":"todo","order":14,"createdAt":1,"updatedAt":1},
+                       {"id":"p15","number":15,"title":"Rename milestones to phases in the tool","status":"done","order":15,"createdAt":1,"updatedAt":1}]},
+             {"mission":{"id":"m6","projectId":"p1","title":"Small fixes","goal":"No phases.","status":"active","briefRevision":1,"createdAt":\(now - 172_800_000),"updatedAt":\(now)},
+              "decisions":[],"comments":[],"artifacts":[],"resources":[],"events":[],
+              "tasks":[{"id":"f1","number":1,"title":"Fix toolbar spacing","status":"done","order":1,"createdAt":1,"updatedAt":1},
+                       {"id":"f2","number":2,"title":"Trim long chat titles","status":"todo","order":2,"createdAt":1,"updatedAt":1},
+                       {"id":"f3","number":3,"title":"Faster tab switches","status":"in_progress","order":3,"createdAt":1,"updatedAt":1},
+                       {"id":"f4","number":4,"title":"Old idea","status":"dropped","order":4,"createdAt":1,"updatedAt":1}]}]
+            """
+            guard let details = try? JSONDecoder().decode([MissionDetail].self, from: Data(json.utf8)),
+                  let phaseDetails = try? JSONDecoder().decode([MissionDetail].self, from: Data(phasesJSON.utf8)) else {
                 print("Invalid mission fixture")
                 exit(1)
             }
@@ -413,6 +440,20 @@ enum Snapshot {
                 await render(MissionPage(missionId: "m1"), size: CGSize(width: 1000, height: 900),
                              to: directory.appending(path: "mission-\(tab.rawValue).png"))
             }
+            // Phases: a finished phase folded, active work first, "No phase" last and dropped tasks hidden.
+            model.client.loadMissionFixture(details + phaseDetails)
+            model.openMission("m5", tab: .tasks)
+            await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 1000),
+                         to: directory.appending(path: "mission-tasks-phases.png"))
+            // "Show task" on a dropped task in the folded phase unfolds it and shows dropped tasks.
+            model.revealedMissionTaskId = "p4"
+            await render(MissionPage(missionId: "m5"), size: CGSize(width: 1000, height: 1200),
+                         to: directory.appending(path: "mission-tasks-phases-reveal.png"))
+            // Without milestones, one flat list.
+            model.openMission("m6", tab: .tasks)
+            await render(MissionPage(missionId: "m6"), size: CGSize(width: 1000, height: 520),
+                         to: directory.appending(path: "mission-tasks-flat.png"))
+            model.client.loadMissionFixture(details)
             // Drafting: a new coordinator has not saved a goal, brief or task yet.
             model.openMission("m3")
             await render(MissionPage(missionId: "m3"), size: CGSize(width: 1000, height: 560),
