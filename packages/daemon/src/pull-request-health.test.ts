@@ -29,7 +29,13 @@ function view(statusCheckRollup: unknown = [], mergeable: unknown = "MERGEABLE")
 }
 
 function thread(id: string, overrides: Record<string, unknown> = {}) {
-	return { id, isResolved: false, isOutdated: false, comments: { totalCount: 1 }, ...overrides };
+	return {
+		id,
+		isResolved: false,
+		isOutdated: false,
+		comments: { totalCount: 1, nodes: [{ id: "comment-1", updatedAt: "2026-01-01T00:00:00Z" }] },
+		...overrides,
+	};
 }
 
 function page(nodes: unknown[] = [], hasNextPage = false, endCursor: string | null = null) {
@@ -64,7 +70,12 @@ test("open and draft PR health uses explicit repository, hostname and typed Grap
 			calls.push(args);
 			return JSON.stringify(args[0] === "pr" ? view([check("CI")], "CONFLICTING") : page([thread("T1")]));
 		});
-		assert.deepEqual(result, { failedChecks: ["CI"], reviewComments: 1, mergeConflicts: true });
+		assert.deepEqual(result, {
+			failedChecks: ["CI"],
+			reviewComments: 1,
+			reviewThreads: [{ id: "T1", commentId: "comment-1", updatedAt: Date.parse("2026-01-01T00:00:00Z") }],
+			mergeConflicts: true,
+		});
 		assert.deepEqual(target, before, "discovery cannot mutate cached metadata");
 		assert.deepEqual(calls[0], [
 			"pr",
@@ -81,7 +92,7 @@ test("open and draft PR health uses explicit repository, hostname and typed Grap
 		assert.ok(!graphql.some((arg) => arg.startsWith("cursor=")));
 		const query = graphql.find((arg) => arg.startsWith("query="))!;
 		assert.match(query, /reviewThreads\(first: 100, after: \$cursor\)/);
-		assert.match(query, /comments\(first: 1\) \{ totalCount \}/);
+		assert.match(query, /comments\(last: 1\) \{ totalCount nodes \{ id updatedAt \} \}/);
 		assert.doesNotMatch(query, /\bmutation\b|\bbody\b/);
 		assert.equal(calls.length, 2);
 	}
@@ -283,7 +294,9 @@ test("counts current unresolved threads with comments across explicit cursor pag
 		page(
 			[
 				thread("one"),
-				thread("many", { comments: { totalCount: 50 } }),
+				thread("many", {
+					comments: { totalCount: 50, nodes: [{ id: "comment-1", updatedAt: "2026-01-01T00:00:00Z" }] },
+				}),
 				thread("resolved", { isResolved: true }),
 				thread("outdated", { isOutdated: true }),
 				thread("both", { isResolved: true, isOutdated: true }),
@@ -306,7 +319,15 @@ test("counts current unresolved threads with comments across explicit cursor pag
 		}
 		return runner(...args);
 	});
-	assert.deepEqual(result, { ...healthy, reviewComments: 3 });
+	assert.deepEqual(result, {
+		...healthy,
+		reviewComments: 3,
+		reviewThreads: ["one", "many", "last"].map((id) => ({
+			id,
+			commentId: "comment-1",
+			updatedAt: Date.parse("2026-01-01T00:00:00Z"),
+		})),
+	});
 	assert.equal(count, 2);
 });
 
@@ -387,6 +408,9 @@ test("malformed and partial GraphQL responses fail closed, never returning parti
 		thread("T", { comments: { totalCount: 1.5 } }),
 		thread("T", { comments: { totalCount: "1" } }),
 		thread("T", { isResolved: true, comments: { totalCount: -1 } }),
+		thread("T", { comments: { totalCount: 1 } }),
+		thread("T", { comments: { totalCount: 1, nodes: [] } }),
+		thread("T", { comments: { totalCount: 1, nodes: [{ id: "comment-1", updatedAt: "invalid" }] } }),
 	];
 	const malformed: unknown[] = [
 		null,
@@ -441,6 +465,11 @@ test("pagination stops at a bounded page limit rather than silently truncating r
 	assert.deepEqual(await discoverPullRequestProblems(session(), responses(view(), pages)), {
 		...healthy,
 		reviewComments: 20,
+		reviewThreads: Array.from({ length: 20 }, (_, index) => ({
+			id: `T${index}`,
+			commentId: "comment-1",
+			updatedAt: Date.parse("2026-01-01T00:00:00Z"),
+		})),
 	});
 });
 

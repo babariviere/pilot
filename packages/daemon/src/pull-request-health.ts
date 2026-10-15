@@ -5,14 +5,15 @@
  */
 import type { SessionPullRequest } from "@pilot/protocol";
 import {
-	failedChecks,
 	checksPending,
+	failedChecks,
 	githubRepository,
 	type HealthResult,
 	type PullRequestProblems,
+	readinessFields,
+	reviewCommentVersion,
 	stackBaseFields,
 	stackDivergence,
-	readinessFields,
 	unsupportedReadinessField,
 } from "./github.ts";
 import { mergeReadiness } from "./pull-request-readiness.ts";
@@ -55,12 +56,12 @@ function parse(output: string): Record<string, unknown> {
 	return object(JSON.parse(output));
 }
 
-// Only existence/count metadata is needed. Never fetch comment bodies or perform mutations.
+// Only identity/version metadata is needed. Never fetch comment bodies or perform mutations.
 const reviewQuery = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
 	repository(owner: $owner, name: $name) {
 		pullRequest(number: $number) {
 			reviewThreads(first: ${pageSize}, after: $cursor) {
-				nodes { id isResolved isOutdated comments(first: 1) { totalCount } }
+				nodes { id isResolved isOutdated comments(last: 1) { totalCount nodes { id updatedAt } } }
 				pageInfo { hasNextPage endCursor }
 			}
 		}
@@ -179,9 +180,11 @@ export async function discoverPullRequestHealth(
 		failedChecks: checks,
 		reviewComments,
 		mergeConflicts,
+		...(reviewThreads.length ? { reviewThreads } : {}),
 		...(divergedFrom ? { divergedFrom } : {}),
 	});
 	let reviewComments = 0;
+	const reviewThreads: NonNullable<PullRequestProblems["reviewThreads"]> = [];
 	let cursor: string | undefined;
 	const cursors = new Set<string>();
 	const threads = new Set<string>();
@@ -214,7 +217,10 @@ export async function discoverPullRequestHealth(
 			threads.add(id);
 			const comments = object(thread.comments);
 			if (!Number.isSafeInteger(comments.totalCount) || (comments.totalCount as number) < 0) invalid();
-			if (!thread.isResolved && !thread.isOutdated && (comments.totalCount as number) > 0) reviewComments++;
+			if (!thread.isResolved && !thread.isOutdated && (comments.totalCount as number) > 0) {
+				reviewComments++;
+				reviewThreads.push({ id, ...reviewCommentVersion(comments) });
+			}
 		}
 		const pageInfo = object(connection.pageInfo);
 		if (typeof pageInfo.hasNextPage !== "boolean") invalid();

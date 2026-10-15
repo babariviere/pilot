@@ -476,6 +476,8 @@ export interface PullRequestProblems {
 	failedChecks: string[];
 	/** Unresolved, current review threads with at least one comment, not individual comments. */
 	reviewComments: number;
+	/** Identity and latest-comment modification time, without fetching review text. */
+	reviewThreads?: { id: string; commentId: string; updatedAt: number }[];
 	mergeConflicts: boolean;
 	/**
 	 * Set for a stacked PR whose head no longer contains its base branch (the PR below it in the stack, or the
@@ -565,7 +567,7 @@ const healthFields = [
 	"commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) {",
 	"nodes { __typename ... on CheckRun { name status conclusion } ... on StatusContext { context state } }",
 	"pageInfo { hasNextPage } } } } } }",
-	"reviewThreads(first: 100) { nodes { id isResolved isOutdated comments(first: 1) { totalCount } } pageInfo { hasNextPage } }",
+	"reviewThreads(first: 100) { nodes { id isResolved isOutdated comments(last: 1) { totalCount nodes { id updatedAt } } } pageInfo { hasNextPage } }",
 ].join(" ");
 
 export const noProblems = (): PullRequestProblems => ({ failedChecks: [], reviewComments: 0, mergeConflicts: false });
@@ -619,6 +621,7 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 	if (typeof hasNextPage !== "boolean") invalid(healthWhat);
 	if (hasNextPage) return { overflow: true };
 	let reviewComments = 0;
+	const reviewThreads: NonNullable<PullRequestProblems["reviewThreads"]> = [];
 	const ids = new Set<string>();
 	for (const node of threads.nodes) {
 		const thread = object(node, healthWhat);
@@ -628,17 +631,30 @@ function parseHealth(value: unknown, request: HealthRequest): HealthResult {
 		ids.add(id);
 		const comments = object(thread.comments, healthWhat);
 		if (!Number.isSafeInteger(comments.totalCount) || (comments.totalCount as number) < 0) invalid(healthWhat);
-		if (!thread.isResolved && !thread.isOutdated && (comments.totalCount as number) > 0) reviewComments++;
+		if (!thread.isResolved && !thread.isOutdated && (comments.totalCount as number) > 0) {
+			reviewComments++;
+			reviewThreads.push({ id, ...reviewCommentVersion(comments) });
+		}
 	}
 	const divergedFrom = stackedHead(request) ? stackDivergence(pr) : undefined;
 	// UNKNOWN (and future mergeability values) are not evidence of a conflict.
 	const problems = {
 		failedChecks: checks,
 		reviewComments,
+		...(reviewThreads.length ? { reviewThreads } : {}),
 		mergeConflicts: pr.mergeable === "CONFLICTING",
 		...(divergedFrom ? { divergedFrom } : {}),
 	};
 	return { problems, readiness: mergeReadiness({ state: pr.state, ...pr }, problems, pending) };
+}
+
+/** Validate the one newest comment's version. Missing metadata must not silently suppress feedback. */
+export function reviewCommentVersion(comments: Record<string, unknown>): { commentId: string; updatedAt: number } {
+	if (!Array.isArray(comments.nodes) || comments.nodes.length !== 1) invalid(healthWhat);
+	const comment = object(comments.nodes[0], healthWhat);
+	const updatedAt = Date.parse(text(comment.updatedAt, healthWhat));
+	if (!Number.isFinite(updatedAt)) invalid(healthWhat);
+	return { commentId: text(comment.id, healthWhat), updatedAt };
 }
 
 /**

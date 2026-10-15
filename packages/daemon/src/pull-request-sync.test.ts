@@ -374,7 +374,15 @@ test("busy PR readiness uses one paginated fallback shared by session and missio
 						pullRequest: {
 							reviewThreads: {
 								nodes: [
-									{ id: `t${pages}`, isResolved: pages === 1, isOutdated: false, comments: { totalCount: 1 } },
+									{
+										id: `t${pages}`,
+										isResolved: pages === 1,
+										isOutdated: false,
+										comments: {
+											totalCount: 1,
+											nodes: [{ id: "comment-1", updatedAt: "2026-01-01T00:00:00Z" }],
+										},
+									},
 								],
 								pageInfo: { hasNextPage: pages === 1, endCursor: pages === 1 ? "next" : null },
 							},
