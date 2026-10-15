@@ -53,6 +53,7 @@ import type {
 import { prepareAskSnapshot } from "./ask-snapshots.ts";
 import { chatTitleContext } from "./chat-title.ts";
 import { ColdViewReader } from "./cold-view-reader.ts";
+import { coordinatorTrust } from "./coordinator-trust.ts";
 import type { CredentialBroker } from "./credential-broker.ts";
 import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
@@ -4813,6 +4814,12 @@ export class SessionManager {
 				spec.credentials = this.credentials?.grant();
 				const view = spec.pilot?.coordinatorView;
 				try {
+					if (view && process.platform === "linux")
+						spec.projectTrusted = await coordinatorTrust(
+							spec.cwd,
+							spec.agentDir ?? getAgentDir(),
+							spec.trustDirectory,
+						);
 					const child = view
 						? await forkMainViewWorker(fileURLToPath(workerEntry), view, {
 								storageDir: spec.storageDir,

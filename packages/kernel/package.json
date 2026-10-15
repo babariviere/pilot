@@ -4,6 +4,7 @@
 	"private": true,
 	"type": "module",
 	"exports": {
+		"./bundled-extensions": "./src/bundled-extensions.ts",
 		"./credential-rpc": "./src/credential-rpc.ts",
 		"./credential-client": "./src/credential-client.ts",
 		"./credential-hooks": "./src/credential-hooks.ts",
