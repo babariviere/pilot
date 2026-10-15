@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.38.0](https://github.com/babariviere/pilot/compare/v1.37.0...v1.38.0) (2026-10-15)
+
+
+### Features
+
+* **slack:** filter tracked threads by personal mentions ([8edbdfd](https://github.com/babariviere/pilot/commit/8edbdfd0925d401ffd950ddaa7745540529d3b81))
+
+
+### Bug Fixes
+
+* **daemon:** avoid repeating automatic PR review feedback ([8e769af](https://github.com/babariviere/pilot/commit/8e769af59c77847ca6f8be145d4fbc25964878de))
+* **macos:** let user bubbles hug short messages ([7b09404](https://github.com/babariviere/pilot/commit/7b094049bff6ec9e0c1af78cd3e35282d51cdab2))
+* **macos:** target Slack messages with native timestamp links ([60453b0](https://github.com/babariviere/pilot/commit/60453b09ffa9bb48180092d044a57aab43c5c5a5))
+* **memory:** validate summaries and retain private diagnostics ([7e45587](https://github.com/babariviere/pilot/commit/7e455877af0fe9b4eafdcc4ade704fcafb6a42b7))
+* **sessions:** accept Stop during sleep pauses ([3239ed3](https://github.com/babariviere/pilot/commit/3239ed39051c0f431b395f6f8cf51286ffac4a3c))
+
 ## [1.37.0](https://github.com/babariviere/pilot/compare/v1.36.1...v1.37.0) (2026-10-15)
 
 
