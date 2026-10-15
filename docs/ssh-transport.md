@@ -84,6 +84,9 @@ allocation/launch failure, cancellation, disconnect during startup/backoff, owne
 hello responses, redirects, startup/control/HTTP hangs, discarded noisy diagnostics, private socket
 cleanup and rejected hello validation. It needs Python 3, already used by the macOS verification scripts.
 No SSH host, credentials, remote service or provider is used by these tests.
+The process-fixture suite is serialized to avoid multiplying child startup load in the full native
+suite. Individual cases still connect multiple tunnels/callers concurrently. Normal startup uses the
+production-sized deadline; deliberate timeout cases assert that the intended failure stage was reached.
 
 Local verification can use `xcrun swiftc -parse`, PilotCore-only typechecking, and an interpreted focused
 test runner. Do not run local Swift build/test/bundle scripts or the full Node suite for this change.
