@@ -4,7 +4,8 @@ import Testing
 
 @Test func serviceLinkLabelsUseNamesAndKeepRepositoryContext() throws {
     func link(_ value: String, _ label: String? = nil) throws -> ServiceLink {
-        try #require(ServiceLink(url: #require(URL(string: value)), label: label))
+        let url = try #require(URL(string: value))
+        return try #require(ServiceLink(url: url, label: label))
     }
     #expect(try link("https://github.com/acme/api/pull/42?tab=files#diff").title == "acme/api#42")
     #expect(try link("https://GitHub.com/acme/api/issues/9").service == .github)
@@ -26,7 +27,8 @@ import Testing
                   "https://slack.com.evil.test/archives/C123", "file://github.com/acme/api/pull/42",
                   "https://user@github.com/acme/api/pull/42", "https://github.com:8080/acme/api/pull/42",
                   "https://example.com", "#42"] {
-        #expect(ServiceLink(url: try #require(URL(string: value))) == nil)
+        let url = try #require(URL(string: value))
+        #expect(ServiceLink(url: url) == nil)
     }
     let url = try #require(URL(string: "https://github.com/acme/api/pull/42"))
     let link = try #require(ServiceLink(url: url, label: "  Long\n" + String(repeating: "title ", count: 100)))
