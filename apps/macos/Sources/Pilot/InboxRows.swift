@@ -113,7 +113,7 @@ struct InboxRowDetail: View {
                 }
             }
         }
-        .font(.system(size: 10))
+        .font(.pilot(.small))
         .foregroundStyle(Theme.mutedForeground)
         .lineLimit(1)
     }
@@ -161,7 +161,7 @@ struct InboxMissionLabel: View {
             PilotSymbol(PilotIcon.mission)
             Text(title).lineLimit(1).truncationMode(.tail)
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(.pilot(.small, weight: .medium))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Mission \(title)")
     }
@@ -177,7 +177,7 @@ struct InboxPullRequestMark: View {
             PilotMarkIcon(mark: .gitBranch)
             Text(verbatim: "#\(pr.number)").monospacedDigit()
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(.pilot(.small, weight: .medium))
         .foregroundStyle(readiness.color)
         .fixedSize()
         .help("Pull request #\(pr.number), \(readiness.label)")

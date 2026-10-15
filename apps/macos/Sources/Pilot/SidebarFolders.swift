@@ -26,13 +26,13 @@ struct ProjectFolderEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(editor.folderId == nil ? "New Folder" : "Rename Folder")
-                .font(.headline)
+                .font(.pilot(.body, weight: .bold))
             TextField("Folder name", text: $editor.name)
                 .textFieldStyle(.roundedBorder)
                 .accessibilityLabel("Folder name")
                 .onSubmit { if editor.valid { onSave() } }
             Text("Folders organize projects in Pilot only. Repositories stay where they are.")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.pilot(.small)).foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Cancel") { editor.presented = false }
@@ -65,7 +65,7 @@ struct ProjectFolderHeader: View {
                     Text("\(count)").foregroundStyle(Theme.faintForeground)
                     Spacer(minLength: 0)
                 }
-                .font(.system(size: 11, weight: .semibold))
+                .font(.pilot(.caption, weight: .semibold))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

@@ -42,7 +42,7 @@ struct SessionRepositoryMetadata: View {
     var body: some View {
         if session.isAsk {
             Label("Ask · \(session.sourceLabel)", icon: PilotIcon.askMode)
-                .font(.system(size: 10, weight: .medium))
+                .font(.pilot(.small, weight: .medium))
                 .foregroundStyle(Theme.mutedForeground).lineLimit(1)
                 .help("Read-only · no isolated workspace" + (session.sourceCommit.map { "\nSource commit: \($0)" } ?? ""))
         } else if !session.isMissionCoordinator {
@@ -97,7 +97,7 @@ struct SessionRepositoryMetadataContent: View {
                 }
             }
             .lineLimit(1)
-            .font(.system(size: 10, weight: .medium))
+            .font(.pilot(.small, weight: .medium))
             .foregroundStyle(Theme.mutedForeground)
         }
     }

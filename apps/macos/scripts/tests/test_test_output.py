@@ -40,7 +40,7 @@ class TestOutputTests(unittest.TestCase):
             (root / "scripts").mkdir()
             shutil.copy2(SCRIPTS.parents[2] / "scripts/verification-slot.py",
                          root / "scripts/verification-slot.py")
-            for name in [wrapper, "check-test-output.py"]:
+            for name in [wrapper, "check-test-output.py", "check-font-roles.py", "font-literals.txt"]:
                 shutil.copy2(SCRIPTS / name, scripts / name)
             (scripts / "swift-env.sh").write_text("")
             for name in ["vendor-ghostty.sh", "share-artifacts.sh"]:

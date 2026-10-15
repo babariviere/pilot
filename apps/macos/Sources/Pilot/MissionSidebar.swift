@@ -35,7 +35,7 @@ struct MissionSidebarRow: View {
                     }
                     if let progress {
                         Text(progress)
-                            .font(.system(size: 10, weight: .medium))
+                            .font(.pilot(.small, weight: .medium))
                             .foregroundStyle(Theme.mutedForeground)
                             .monospacedDigit()
                             .lineLimit(1)
@@ -149,7 +149,7 @@ struct SessionMissionLabel: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .font(.system(size: 10, weight: .medium))
+        .font(.pilot(.small, weight: .medium))
         .foregroundStyle(Theme.mutedForeground)
         .help("Open mission: \(title)")
         .accessibilityLabel("Open mission \(title)")
@@ -177,7 +177,7 @@ struct SessionCoordinatorLine: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .font(.system(size: 10, weight: .medium))
+        .font(.pilot(.small, weight: .medium))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Coordinator, \(detail)")
     }
