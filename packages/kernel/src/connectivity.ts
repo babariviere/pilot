@@ -155,12 +155,13 @@ export class OfflineGate {
 	}
 }
 
-/** Only a failed provider request is repeated. Its durable request checkpoint and input ID stay unchanged. */
+/** Recover only failed provider requests (offline or a host-confirmed usage hold), never native tools. */
 export function offlineRequestStream(
 	dispatch: (signal: AbortSignal) => AssistantMessageEventStream | Promise<AssistantMessage>,
 	model: Model<Api>,
 	gate: OfflineGate,
 	signal?: AbortSignal,
+	recoverProviderError?: (error: unknown, signal?: AbortSignal) => Promise<boolean>,
 ): AssistantMessageEventStream {
 	const stream = createAssistantMessageEventStream();
 	void (async () => {
@@ -192,6 +193,7 @@ export function offlineRequestStream(
 					}
 				} catch (error) {
 					if (offline && !signal?.aborted && !providerFailure(error)) continue;
+					if (await recoverProviderError?.(error, signal)) continue;
 					if (await gate.recover(error, signal)) continue;
 					throw error;
 				} finally {
@@ -206,6 +208,8 @@ export function offlineRequestStream(
 				)
 					continue;
 				if (message.stopReason === "error" && (await gate.recover(message.errorMessage, signal))) continue;
+				if (message.stopReason === "error" && (await recoverProviderError?.(message.errorMessage, signal)))
+					continue;
 				if (message.stopReason === "error" || message.stopReason === "aborted")
 					stream.push({ type: "error", reason: message.stopReason, error: message });
 				else {

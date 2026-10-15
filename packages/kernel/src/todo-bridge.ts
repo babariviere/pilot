@@ -4,13 +4,17 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { ReportSubscriptionLimit } from "./subscription-limit.ts";
 import type { TodoArgs, TodoCall, TodoResult } from "./todos.ts";
 
 const MAX_REQUEST_BYTES = 512 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const BRIDGE_ENV = "PILOT_TODO_BRIDGE";
 
-export async function startTodoBridge(call: TodoCall): Promise<{ close(): Promise<void> }> {
+export async function startTodoBridge(
+	call: TodoCall,
+	reportLimit?: ReportSubscriptionLimit,
+): Promise<{ close(): Promise<void> }> {
 	const directory = await mkdtemp(join(tmpdir(), "pt-"));
 	await chmod(directory, 0o700);
 	const socketPath = join(directory, "s");
@@ -20,7 +24,11 @@ export async function startTodoBridge(call: TodoCall): Promise<{ close(): Promis
 	let drained: (() => void) | undefined;
 	const server = createServer(async (req, res) => {
 		res.setHeader("content-type", "application/json");
-		if (req.method !== "POST" || req.url !== "/todo" || req.headers.authorization !== `Bearer ${token}`) {
+		if (
+			req.method !== "POST" ||
+			(req.url !== "/todo" && (req.url !== "/subscription-limit" || !reportLimit)) ||
+			req.headers.authorization !== `Bearer ${token}`
+		) {
 			res.writeHead(403).end(JSON.stringify({ error: "Todo bridge unavailable" }));
 			req.resume();
 			return;
@@ -39,8 +47,18 @@ export async function startTodoBridge(call: TodoCall): Promise<{ close(): Promis
 				if (bytes > MAX_REQUEST_BYTES) throw new Error("Todo request too large");
 				chunks.push(chunk);
 			}
-			const { args, actor } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-			const result = await call(args, actor);
+			const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+			let result: unknown;
+			if (req.url === "/subscription-limit") {
+				if (
+					!body ||
+					!["anthropic", "openai"].includes(body.provider) ||
+					(body.resetsAt !== undefined &&
+						(typeof body.resetsAt !== "string" || !Number.isFinite(Date.parse(body.resetsAt))))
+				)
+					throw new Error("Invalid subscription limit");
+				await reportLimit!({ provider: body.provider, ...(body.resetsAt ? { resetsAt: body.resetsAt } : {}) });
+			} else result = await call(body.args, body.actor);
 			res.end(JSON.stringify({ result }));
 		} catch (error) {
 			res.writeHead(400).end(
@@ -99,14 +117,20 @@ export async function startTodoBridge(call: TodoCall): Promise<{ close(): Promis
 
 /** No fallback to checkout files or a second SQLite writer when a parent is unavailable. */
 export function callParentTodo(args: TodoArgs, actor: string): Promise<TodoResult> {
+	return callParent("/todo", { args, actor });
+}
+
+export const callParentSubscriptionLimit: ReportSubscriptionLimit = (limit) => callParent("/subscription-limit", limit);
+
+function callParent<T>(path: string, body: unknown): Promise<T> {
 	const config = process.env[BRIDGE_ENV];
-	if (!config) return Promise.reject(new Error("Parent chat todos are unavailable"));
+	if (!config) return Promise.reject(new Error("Parent chat bridge is unavailable"));
 	const { socketPath, token } = JSON.parse(config);
 	return new Promise((resolve, reject) => {
 		const req = request(
 			{
 				socketPath,
-				path: "/todo",
+				path,
 				method: "POST",
 				headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
 			},
@@ -132,6 +156,6 @@ export function callParentTodo(args: TodoArgs, actor: string): Promise<TodoResul
 		);
 		req.on("error", reject);
 		req.setTimeout(30_000, () => req.destroy(new Error("Parent todo request timed out")));
-		req.end(JSON.stringify({ args, actor }));
+		req.end(JSON.stringify(body));
 	});
 }

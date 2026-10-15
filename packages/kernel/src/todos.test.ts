@@ -225,7 +225,14 @@ test("parent tools and concurrent child writes share a durable list, events and 
 	assert.equal(await readSessionTodoCount(storageDir), 4, "the first chat's list is untouched");
 });
 
-test("a child cannot fall back to checkout storage when its parent bridge closes", async () => {
+test("a child cannot fall back to checkout storage when its parent bridge closes", async (t) => {
+	// The test runner itself can be launched by a Pilot chat. Never fall through to its live bridge.
+	const previous = process.env.PILOT_TODO_BRIDGE;
+	delete process.env.PILOT_TODO_BRIDGE;
+	t.after(() => {
+		if (previous === undefined) delete process.env.PILOT_TODO_BRIDGE;
+		else process.env.PILOT_TODO_BRIDGE = previous;
+	});
 	const bridge = await startTodoBridge(async () => []);
 	assert.deepEqual(await callParentTodo({ action: "list" }, "child"), []);
 	await bridge.close();

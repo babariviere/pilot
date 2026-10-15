@@ -122,6 +122,7 @@ async function pinnedAgent(
 }
 
 export interface KernelSessionHooks {
+	reportSubscriptionLimit?: import("./subscription-limit.ts").ReportSubscriptionLimit;
 	onSystemMessageState?(event: SystemMessageStateEvent): void;
 	onWorking(working: boolean, completion?: SessionCompletion): void;
 	onJobsChanged?(jobs: SessionJob[]): void;
@@ -372,9 +373,10 @@ export class KernelSession {
 					);
 				},
 			};
-			if (!spec.pilot?.ask) todoBridge = await startTodoBridge(callTodo);
+			if (!spec.pilot?.ask) todoBridge = await startTodoBridge(callTodo, hooks.reportSubscriptionLimit);
 			adapter = await NativeAdapter.open({
 				subscriptionPolicy: spec.subscriptionPolicy,
+				reportSubscriptionLimit: hooks.reportSubscriptionLimit,
 				connectivityPolicy: spec.connectivityPolicy,
 				cwd: spec.cwd,
 				ask: spec.pilot?.ask,

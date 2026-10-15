@@ -168,6 +168,11 @@ Work resumes automatically when the blocked windows reset or a fresh usage readi
 Known pauses survive restarts and unavailable readings. Usage comes from pi's shared cache, without
 additional provider polling; unknown usage cannot predict a limit, and in-flight requests may still use tokens.
 
+If the provider reports a subscription usage limit before the cache catches up, the pending model request
+pauses instead of failing the chat. Completed tool results stay saved and are never replayed. The pause
+uses a known reset time when available; otherwise it waits for a fresh lower reading or **Force work**.
+Transient rate limits, authentication and billing errors retain their normal error/retry behavior.
+
 Beside the usage warning, **Force work** lets that chat and its subagents continue past the current
 windows. The override ends when those windows reset or clear. **Pause at limit** restores the guard early.
 

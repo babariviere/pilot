@@ -192,7 +192,30 @@ test("real subagent worker inherits the bundled child profile and required auth,
 	const f = await fixture(t);
 	const marker = join(f.root, "child-profile.json");
 	const todos: TodoRecord[] = [];
-	const bridge = await startTodoBridge(async (args, actor) => applyTodo(todos, args, actor));
+	const policy = join(f.root, "subscription-policy.json");
+	const savePolicy = (blocked: boolean) =>
+		writeFile(
+			policy,
+			JSON.stringify({
+				version: 1,
+				windows: blocked ? [{ provider: "openai", label: "Usage limit", usedPercent: 100 }] : [],
+				forced: [],
+			}),
+		);
+	await savePolicy(false);
+	let reported!: () => void;
+	const limitReported = new Promise<void>((resolve) => {
+		reported = resolve;
+	});
+	const bridge = await startTodoBridge(
+		async (args, actor) => applyTodo(todos, args, actor),
+		async (limit) => {
+			assert.equal(limit.provider, "openai");
+			assert.equal(todos.length, 1, "the child's preceding tool completed before its usage pause");
+			await savePolicy(true);
+			reported();
+		},
+	);
 	t.after(() => bridge.close());
 	const installed = fileURLToPath(
 		new URL("../extensions/subagents/worker-bootstrap.mjs", `file://${PILOT_CHILD_PROFILE_PATH}`),
@@ -204,9 +227,10 @@ test("real subagent worker inherits the bundled child profile and required auth,
 import { writeFileSync } from 'node:fs';
 import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(import.meta.resolve("@earendil-works/pi-ai/providers/faux"))};
 export default pi => {
- const faux = fauxProvider();
+ const faux = fauxProvider({provider:'openai-codex',models:[{id:'offline'}]});
  faux.setResponses([
   fauxAssistantMessage({type:'toolCall',id:'child-todo',name:'codemode',arguments:{code:'const item = await tools.todo({action:"create",title:"From real child"}); await tools.todo({action:"claim",id:item.id}); return item;'}}, {stopReason:'toolUse'}),
+  fauxAssistantMessage("", {stopReason:'error',errorMessage:'usage_limit_reached'}),
   fauxAssistantMessage("CHILD_PROFILE_OK"), fauxAssistantMessage("CHILD_FOLLOWUP_OK")
  ]);
  pi.registerProvider(faux.provider);
@@ -217,8 +241,8 @@ export default pi => {
 		join(f.agentDir, "settings.json"),
 		JSON.stringify({
 			extensions: [fixturePath, await obsoleteAuth(f.root)],
-			defaultProvider: "faux",
-			defaultModel: "faux-1",
+			defaultProvider: "openai-codex",
+			defaultModel: "offline",
 			defaultTools: ["+codemode"],
 			codemode: { mode: "only" },
 		}),
@@ -233,6 +257,7 @@ export default pi => {
 			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
 			PILOT_PI_EXTENSIONS_PROFILE: CHILD_PROFILE_PATH,
 			PILOT_ANTHROPIC_AUTH_EXTENSION: ANTHROPIC_AUTH_PATH,
+			PILOT_SUBSCRIPTION_POLICY: policy,
 		},
 	});
 	const closed = once(child, "exit");
@@ -277,7 +302,7 @@ export default pi => {
 				agent: { config: { name: "task" }, systemPrompt: "", sourcePath: "<builtin>", scope: "builtin" },
 				task: "Synthetic request",
 				index: 0,
-				overrides: { model: "faux/faux-1" },
+				overrides: { model: "openai-codex/offline" },
 			},
 			context: {
 				cwd: f.root,
@@ -296,6 +321,11 @@ export default pi => {
 	for (const name of ["jobs", "subagent"]) assert.ok(!observed.tools.includes(name), name);
 	for (const id of ["first", "second"]) {
 		child.send({ type: "input", id, message: "Reply", followUp: false });
+		if (id === "first") {
+			await limitReported;
+			assert.ok(!packets.some((packet) => packet.type === "answer"), "the child remains pending, not failed");
+			await savePolicy(false);
+		}
 		const answer = await packet("answer", id);
 		assert.equal(answer.result?.ok, true, answer.result?.error ?? stderr);
 		assert.match(answer.result?.answer?.text ?? "", /CHILD_(?:PROFILE|FOLLOWUP)_OK/);

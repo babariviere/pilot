@@ -1,9 +1,11 @@
 /** Host-owned child composition. Never import upstream child.ts, which imports file-backed todos. */
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { PILOT_CHILD_PROFILE_PATH } from "@babariviere/pi-extensions/profile";
+import { SubscriptionGate } from "@babariviere/pi-extensions/subscription-gate";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { OfflineGate, offlineRequestStream } from "./connectivity.ts";
-import { callParentTodo } from "./todo-bridge.ts";
+import { subscriptionRecovery } from "./subscription-limit.ts";
+import { callParentSubscriptionLimit, callParentTodo } from "./todo-bridge.ts";
 import { createTodoTool } from "./todo-tool.ts";
 
 export default async function childProfile(pi: ExtensionAPI): Promise<void> {
@@ -19,18 +21,47 @@ export default async function childProfile(pi: ExtensionAPI): Promise<void> {
 		// extension dependency unchanged, and gate only requests, not native tool execution.
 		const registry = ctx.modelRegistry;
 		const gate = new OfflineGate();
-		if (!gate.path) return;
+		const subscription = new SubscriptionGate();
+		const reportLimit = process.env.PILOT_TODO_BRIDGE ? callParentSubscriptionLimit : undefined;
+		if (!gate.path && !reportLimit) return;
 		const stream = registry.stream.bind(registry);
 		const simple = registry.streamSimple.bind(registry);
-		registry.stream = (model, context, options) =>
-			offlineRequestStream(
-				(signal) => stream(model, context, { ...options, signal } as typeof options),
+		registry.stream = (model, context, options) => {
+			let provider = model.provider;
+			return offlineRequestStream(
+				(signal) =>
+					stream(model, context, {
+						...options,
+						signal,
+						onPayload: async (payload, physical) => {
+							provider = physical.provider;
+							return (await options?.onPayload?.(payload, physical)) ?? payload;
+						},
+					} as typeof options),
 				model,
 				gate,
 				options?.signal,
+				subscriptionRecovery(() => provider, subscription, reportLimit),
 			);
-		registry.streamSimple = (model, context, options) =>
-			offlineRequestStream((signal) => simple(model, context, { ...options, signal }), model, gate, options?.signal);
+		};
+		registry.streamSimple = (model, context, options) => {
+			let provider = model.provider;
+			return offlineRequestStream(
+				(signal) =>
+					simple(model, context, {
+						...options,
+						signal,
+						onPayload: async (payload, physical) => {
+							provider = physical.provider;
+							return (await options?.onPayload?.(payload, physical)) ?? payload;
+						},
+					}),
+				model,
+				gate,
+				options?.signal,
+				subscriptionRecovery(() => provider, subscription, reportLimit),
+			);
+		};
 	});
 	pi.registerTool(
 		createTodoTool(callParentTodo, () => {

@@ -25,6 +25,34 @@ export function windowUnexpired(window: SubscriptionPauseWindow, now = Date.now(
 	return !Number.isFinite(reset) || reset > now;
 }
 
+/** A provider rejection is newer evidence than the cache, including an already-forced window. */
+export function recordSubscriptionLimit(
+	previous: SubscriptionPolicy | undefined,
+	source: SubscriptionUsageSource | undefined,
+	limit: Pick<SubscriptionPauseWindow, "provider" | "resetsAt">,
+	now = Date.now(),
+): SubscriptionPolicy {
+	const next = refreshSubscriptionPolicy(previous, source, now);
+	const blocked = next.windows.filter((window) => window.provider === limit.provider);
+	const reset = Date.parse(limit.resetsAt ?? "");
+	if (!blocked.length || (Number.isFinite(reset) && reset > now)) {
+		next.windows = next.windows.filter(
+			(window) => window.provider !== limit.provider || window.label !== "Usage limit",
+		);
+		next.windows.push({
+			provider: limit.provider,
+			label: "Usage limit",
+			usedPercent: 100,
+			...(Number.isFinite(reset) && reset > now ? { resetsAt: new Date(reset).toISOString() } : {}),
+		});
+	}
+	const keys = new Set(next.windows.filter((window) => window.provider === limit.provider).map(subscriptionWindowKey));
+	next.forced = next.forced.filter((key) => !keys.has(key));
+	// Re-reading the snapshot that preceded the rejection cannot immediately release this hold.
+	next.observed = { ...next.observed, [limit.provider]: Math.max(now + 1, next.observed?.[limit.provider] ?? 0) };
+	return next;
+}
+
 /** Unknown/error readings never thaw a known pause. A reset does not require a provider round trip. */
 export function refreshSubscriptionPolicy(
 	previous: SubscriptionPolicy | undefined,
