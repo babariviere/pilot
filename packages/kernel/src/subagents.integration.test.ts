@@ -4,21 +4,80 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Harness, InboxDoc } from "@earendil-works/pi-durable";
-import type { QueueUpdateEvent } from "@pilot/protocol";
 import {
 	fauxAssistantMessage,
 	fauxProvider,
+	fauxToolCall,
 	InMemoryCredentialStore,
 	InMemoryModelsStore,
+	Type,
 } from "@earendil-works/pi-ai";
 import { createEventBus, type ExtensionFactory, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { AssistantEntry, Harness, InboxDoc, ToolTask } from "@earendil-works/pi-durable";
+import type { QueueUpdateEvent } from "@pilot/protocol";
 import { type ExtensionInput, NativeAdapter, type NativeAdapterOptions } from "./native-adapter.ts";
 import type { KernelSubagent } from "./protocol.ts";
 import { KernelSession } from "./session.ts";
 import { SubagentBridge } from "./subagents.ts";
 
 const context = BACKGROUND_CONTEXT;
+
+test("a queued Stop fences parked recovery until abort, preserving drafts and held automatic input", async (t) => {
+	let effects = 0;
+	const f = await fixture(t, [
+		(pi) => {
+			pi.registerTool({
+				name: "stop_effect",
+				label: "Offline effect",
+				description: "Must not run during cancellation",
+				parameters: Type.Object({}),
+				async execute() {
+					effects++;
+					return { content: [{ type: "text", text: "effect" }], details: {} };
+				},
+			});
+			pi.on("session_start", () => {
+				pi.setActiveTools(["stop_effect"]);
+			});
+		},
+	]);
+	const openAdapter = NativeAdapter.open;
+	t.mock.method(NativeAdapter, "open", (options: NativeAdapterOptions) =>
+		openAdapter.call(NativeAdapter, { ...options, ...f.options }),
+	);
+	f.faux.setResponses([fauxAssistantMessage("New work only")]);
+	const spec = { sessionId: "stopped-recovery", cwd: f.root, storageDir: join(f.root, "storage") };
+	let session = await KernelSession.open(spec, { onWorking: () => {} });
+	f.cleanup.push(() => session.close());
+	await session.pauseForUpdate();
+	await session.submit("first", "Unfinished work", "followUp");
+	await session.submit("queued", "My unsent message", "followUp");
+	await session.submit("mission:send:held", "Automatic work", "followUp");
+	await session.conversation.commit(async (tx) => {
+		const call = fauxToolCall("stop_effect", {});
+		const entry = await tx.appendEntry(AssistantEntry, session.conversation.id, {
+			model: [fauxAssistantMessage([call], { stopReason: "toolUse" })],
+		});
+		await tx.createTask(ToolTask, { assistant: entry.id, callId: call.id }, { ownership: { kind: "conversation" } });
+	}, context);
+	assert.equal(f.faux.state.callCount, 0);
+	await session.close();
+	session = await KernelSession.open({ ...spec, stopOnOpen: true }, { onWorking: () => {} });
+	assert.equal((await session.harness.inspect(context)).scheduling, "paused");
+	await session.pauseForUpdate();
+	session.resumeAfterUpdate();
+	assert.equal(f.faux.state.callCount, 0);
+	await session.pauseForUpdate();
+	assert.deepEqual(await session.abort(), [{ requestId: "queued", content: "My unsent message" }]);
+	assert.equal(f.faux.state.callCount, 0, "cancellation cannot dispatch a recovered model request");
+	assert.equal(effects, 0, "cancellation cannot execute a recovered tool");
+	await session.submit("next", "Explicit new work", "followUp");
+	await session.harness.inspect(context);
+	assert.equal(f.faux.state.callCount, 0, "Stop cannot release an independent update pause");
+	session.resumeAfterUpdate();
+	await session.harness.waitForIdle(context);
+	assert.equal(f.faux.state.callCount, 1, "Stop releases its fences for the next user input");
+});
 
 for (const paused of [false, true]) {
 	test(`follow-up delivery starts an ${paused ? "initially paused" : "idle"} kernel and busy input is queued`, async (t) => {

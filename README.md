@@ -128,6 +128,8 @@ Stop ends the current run and returns your undelivered queued messages to the co
 from background jobs, PR follow-ups and other chats stay held, without restarting the chat. Use **Send now**
 to start one run with them, **Discard** to remove all or an individual held message, or send your next
 message to carry them along. Waiting system messages are read-only.
+Stop also works during a sleep pause. Cancellation is saved without waking other chats and drains
+before the paused run can recover at the next eligible wake.
 
 ### Subscription limits
 

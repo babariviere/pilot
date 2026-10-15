@@ -57,13 +57,13 @@ import { detectGhStack } from "./gh-stack.ts";
 import { appendGitHubAction, GitHubActionsDoc, githubActions } from "./github-actions.ts";
 import { admitWithHeld, discardHeld, HeldInputsDoc, holdOnStop, type SystemMessageStateEvent } from "./held-inputs.ts";
 import { submitIdleInput } from "./idle-input.ts";
-import { continueModelInPlace } from "./model-continuation.ts";
 import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
-import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { mcpActivity } from "./mcp-activity.ts";
+import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
+import { continueModelInPlace } from "./model-continuation.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { PerformanceLog } from "./performance.ts";
 import type { WorkspaceContext } from "./policy.ts";
@@ -160,7 +160,9 @@ export class KernelSession {
 	#completion?: SessionCompletion;
 	#closing?: Promise<void>;
 	#updateRevision = 0;
+	#updateToolsPaused = false;
 	#toolDrain!: ToolDrain;
+	#releaseStoppedRequests?: () => void;
 	#changingModel = false;
 	#admissions = 0;
 	/** Retry, edit, restore or an attempt switch is stopping work and moving the session to another conversation. */
@@ -480,6 +482,13 @@ export class KernelSession {
 				active === ROOT_CONVERSATION_ID
 					? await root()
 					: ((await harness.conversation(active, context)) ?? (await root()));
+			// Stop may have arrived while sleep kept the kernel closed. abort() itself starts
+			// scheduling, so fence recovered requests/tools before committing cancellation.
+			let releaseStoppedRequests: (() => void) | undefined;
+			if (spec.stopOnOpen) {
+				releaseStoppedRequests = adapter.holdModelRequests();
+				await toolDrain.pause(harness, context);
+			}
 			let resumeContinuation: (() => Promise<void>) | undefined;
 			if (spec.continuationModel) {
 				// Never reinterpret another provider's compacted context or live generation.
@@ -625,7 +634,13 @@ export class KernelSession {
 					.catch((error: unknown) => console.warn("pilot: could not admit extension input", error));
 			};
 			await resumeContinuation?.();
-			harness.resume();
+			if (spec.stopOnOpen) {
+				// The outbox's ordinary abort still owns queued-message withdrawal and holds.
+				// Leave the barriers closed until that command arrives, rather than racing it.
+				session.#releaseStoppedRequests = releaseStoppedRequests;
+			} else {
+				harness.resume();
+			}
 			return session;
 		} catch (error) {
 			await jobs.close();
@@ -642,13 +657,15 @@ export class KernelSession {
 	/** Freeze before unsafe tool intent, then join committed results and child tool drains. */
 	async pauseForUpdate(): Promise<void> {
 		const revision = ++this.#updateRevision;
+		this.#updateToolsPaused = true;
 		await this.#toolDrain.pause(this.harness, context);
 		if (revision === this.#updateRevision) await this.subagents.lifecycle("quiesce");
 	}
 
 	resumeAfterUpdate(): void {
 		this.#updateRevision++;
-		this.#toolDrain.resume();
+		this.#updateToolsPaused = false;
+		if (!this.#releaseStoppedRequests) this.#toolDrain.resume();
 		void this.subagents
 			.lifecycle("resumeTools")
 			.catch((error) => console.warn("pilot: could not resume subagents", error));
@@ -932,6 +949,11 @@ export class KernelSession {
 		);
 		await this.publishSystemMessageStates();
 		await this.conversation.abort(context, { background: true });
+		if (this.#releaseStoppedRequests) {
+			if (!this.#updateToolsPaused) this.#toolDrain.resume();
+			this.#releaseStoppedRequests();
+			this.#releaseStoppedRequests = undefined;
+		}
 		return withdrawn;
 	}
 
