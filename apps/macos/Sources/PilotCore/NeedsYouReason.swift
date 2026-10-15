@@ -7,7 +7,12 @@ public enum NeedsYouReasonKind: String, LenientStringEnum {
     case couldntStart = "couldnt_start"
     case longJob = "long_job"
     case prStuck = "pr_stuck"
+    /// The chat reached for an MCP server that needs the user (sign-in, or it fails to connect). Live-only.
+    case mcp
     public static let fallback = NeedsYouReasonKind.notReviewed
+
+    /// Live attention that holds while the chat works and outranks its outcome until it clears.
+    public var isLive: Bool { self == .longJob || self == .mcp }
 }
 
 public struct NeedsYouReason: Codable, Hashable, Sendable {
@@ -15,11 +20,14 @@ public struct NeedsYouReason: Codable, Hashable, Sendable {
     public let detail: String?
     /// `limit`: epoch milliseconds when the used-up subscription window resets, when known.
     public let resumesAt: Double?
+    /// `mcp`: the server to fix, by its mcp.json name.
+    public let server: String?
 
-    public init(kind: NeedsYouReasonKind, detail: String? = nil, resumesAt: Double? = nil) {
+    public init(kind: NeedsYouReasonKind, detail: String? = nil, resumesAt: Double? = nil, server: String? = nil) {
         self.kind = kind
         self.detail = Self.firstLine(detail)
         self.resumesAt = resumesAt
+        self.server = server
     }
 
     public func label(at: Double, now: Date = Date()) -> String {
@@ -29,6 +37,7 @@ public struct NeedsYouReason: Codable, Hashable, Sendable {
         case .asks: return "Asks: \(detail ?? "A question is waiting for your answer")"
         case .couldntStart: return "Couldn't start: \(detail ?? "The scheduled chat could not start")"
         case .longJob: return "Long job: \(detail ?? "A background job has run for over an hour")"
+        case .mcp: return "MCP: \(detail ?? "A server this chat uses needs you")"
         case .prStuck: return detail ?? "A pull request needs your help"
         case .mission: return "Mission: \(detail ?? "A question or blocked task is waiting on you")"
         case .limit:
@@ -60,6 +69,7 @@ extension DashboardNeedsYouItem {
         case .scheduledFailed: return NeedsYouReason(kind: .couldntStart, detail: reason)
         case .unread: return NeedsYouReason(kind: .notReviewed)
         case .longJob: return NeedsYouReason(kind: .longJob, detail: reason)
+        case .mcp: return NeedsYouReason(kind: .mcp, detail: reason)
         case .prStuck: return NeedsYouReason(kind: .prStuck, detail: reason)
         }
     }
@@ -71,7 +81,7 @@ extension SessionSummary {
     /// Derive sidebar reasons from the same outcome fields pilotd uses. `unread` includes awaiting-reply rows.
     public func needsYouReason(unread: Bool, now: Date = Date()) -> NeedsYouReason? {
         guard signal(unread: unread)?.needsUser == true else { return nil }
-        if let attentionReason, attentionReason.kind == .longJob { return attentionReason }
+        if let attentionReason, attentionReason.kind.isLive { return attentionReason }
         if status == .failed {
             if let limit = subscriptionLimit(now: now) { return limit }
             return NeedsYouReason(kind: .failed, detail: NeedsYouReason.firstLine(outcomeReason) ?? error)
@@ -125,7 +135,8 @@ extension InboxText {
         for count in counts {
             for (kind, number) in count.needsYouReasons ?? [:] { reasons[kind, default: 0] += number }
         }
-        let vocabulary = [("long_job", "long job", "long jobs"), ("asks", "question", "questions"), ("failed", "failed", "failed"),
+        let vocabulary = [("long_job", "long job", "long jobs"), ("mcp", "MCP sign-in", "MCP sign-ins"),
+                          ("asks", "question", "questions"), ("failed", "failed", "failed"),
                           ("pr_stuck", "stuck PR", "stuck PRs"),
                           ("not_reviewed", "not reviewed", "not reviewed"),
                           ("couldnt_start", "couldn't start", "couldn't start"),

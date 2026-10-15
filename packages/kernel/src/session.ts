@@ -62,6 +62,7 @@ import { InputOrigins, inputOrigin } from "./input-origin.ts";
 import { JobsMonitor } from "./jobs.ts";
 import { createManualCompaction, queueDuringCompaction } from "./manual-compaction.ts";
 import { createMemoryTools, type MemoryCall } from "./memory-tools.ts";
+import { mcpActivity } from "./mcp-activity.ts";
 import { createMissionTool, MISSION_TOOL, type MissionCall } from "./mission-tools.ts";
 import { NativeAdapter } from "./native-adapter.ts";
 import { PerformanceLog } from "./performance.ts";
@@ -133,6 +134,8 @@ export interface KernelSessionHooks {
 	/** A tool call may have changed branches or bookmarks. Hint only; may repeat. */
 	onRefsChanged?(): void;
 	onGitHubAction?(action: GitHubAction): void;
+	/** A top-level tool call reached for these MCP namespaces. Hint only; repeats at most once a minute. */
+	onMcpUsed?(namespaces: string[], failed: boolean): void;
 	/** Full replacement whenever the subagents extension reports a change. */
 	onSubagentsChanged?(subagents: KernelSubagent[]): void;
 	/** Executes a `mission` tool call in pilotd. Without it, the tool is not registered. */
@@ -383,6 +386,7 @@ export class KernelSession {
 					...(provenance ? [provenance.native] : []),
 					...(refs ? [refs.native] : []),
 					...(audit ? [audit.native] : []),
+					...(hooks.onMcpUsed && !spec.pilot?.ask ? [mcpActivity(hooks.onMcpUsed)] : []),
 				],
 				subagents,
 				hostTools: [

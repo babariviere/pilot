@@ -54,6 +54,7 @@ import { Conflict, NotFound, ServiceUnavailable } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { githubRepository, linkedPullRequest, type PullRequestProblems } from "./github.ts";
 import { LongJobTimers, longJobAttention } from "./long-jobs.ts";
+import { McpChatAttention, type McpStatusSource } from "./mcp-attention.ts";
 import { forkMainViewWorker, MainViewStore } from "./main-view.ts";
 import { ModelCatalog } from "./models.ts";
 import { stuckPullRequestReason } from "./needs-you-reason.ts";
@@ -892,6 +893,8 @@ export class SessionManager {
 	private readonly projectMainOperations = new Map<string, Promise<void>>();
 	private mainRefreshTimer?: ReturnType<typeof setTimeout>;
 	private readonly longJobTimers = new LongJobTimers();
+	/** Live-only: chats that reached for an MCP server needing the user. Set by setMcpStatus. */
+	private mcpAttention?: McpChatAttention;
 	private readonly mainHeads = new Map<string, string>();
 	private readonly mainRepositories = new Map<string, string>();
 	private readonly mainListeners = new Set<(event: MainMoved) => unknown>();
@@ -1008,6 +1011,15 @@ export class SessionManager {
 
 	setProjectMemory(memory: ProjectMemoryService): void {
 		this.memory = memory;
+	}
+
+	/** Chats that reach for an MCP server needing sign-in (or failing) show under Needs you until it works. */
+	setMcpStatus(mcp: McpStatusSource): void {
+		this.mcpAttention?.close();
+		this.mcpAttention = new McpChatAttention(mcp, (id) => {
+			const meta = this.metas.get(id);
+			if (meta && !this.closing) this.emit(meta);
+		});
 	}
 
 	private get sessionsDir(): string {
@@ -2381,6 +2393,7 @@ export class SessionManager {
 	async archive(id: string): Promise<SessionSummary> {
 		const end = this.updateGate.begin();
 		try {
+			this.mcpAttention?.clear(id);
 			return await this.setArchived(id, true);
 		} finally {
 			end();
@@ -3341,6 +3354,8 @@ export class SessionManager {
 			}
 			meta.updatedAt = Date.now();
 			meta.lastUserMessageAt = meta.updatedAt;
+			// The user saw the chat; a server it could not reach stays in Settings › Connections.
+			this.mcpAttention?.clear(meta.id);
 			if (!meta.prFollowUpResetRequests?.includes(requestId)) {
 				meta.prFollowUpResetRequests ??= [];
 				meta.prFollowUpResetRequests.push(requestId);
@@ -4904,6 +4919,16 @@ export class SessionManager {
 				this.missions?.githubAction?.(meta.id, packet.action);
 			return;
 		}
+		if (packet.type === "mcp.used") {
+			if (
+				this.workers.get(meta.id) === worker &&
+				meta.mode !== "ask" &&
+				Array.isArray(packet.namespaces) &&
+				packet.namespaces.every((namespace) => typeof namespace === "string")
+			)
+				this.mcpAttention?.report(meta.id, packet.namespaces.slice(0, 16), packet.failed === true);
+			return;
+		}
 		if (packet.type === "events") {
 			if (this.workers.get(meta.id) !== worker) return;
 			this.watchers.get(meta.id)?.get(packet.watchId)?.(packet.events);
@@ -5052,6 +5077,7 @@ export class SessionManager {
 		const working = !paused && ((!mainQuotaPaused && mainBusy) || runnableChildren || !!worker?.runningJobs?.length);
 		const heldAtQuota = quotaPaused && !working && (mainBusy || childrenWorking);
 		const state = heldAtQuota && kernelState !== "failed" ? "working" : kernelState;
+		const longJob = meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : undefined;
 		const sourceBranch =
 			meta.mode === "ask"
 				? meta.ask?.branch
@@ -5091,8 +5117,10 @@ export class SessionManager {
 			state,
 			working,
 			...(worker?.runningJobs?.length ? { runningJobs: worker.runningJobs } : {}),
-			...(meta.archivedAt === undefined ? longJobAttention(worker?.runningJobs ?? []) : {}),
+			...longJob,
 			...(!working ? this.stuckPullRequestAttention(meta) : {}),
+			// After stuck PRs, so an MCP server to fix wins. Long jobs keep their own reason.
+			...(meta.archivedAt === undefined && !longJob ? this.mcpAttention?.attention(meta.id) : {}),
 			...(meta.model ? { model: meta.model } : {}),
 			...(meta.thinking ? { thinking: meta.thinking } : {}),
 			...(usage ? { usage } : {}),

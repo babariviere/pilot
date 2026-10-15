@@ -10,7 +10,14 @@ import { join } from "node:path";
 import { mock, type TestContext, test } from "node:test";
 import { setTimeout as delay } from "node:timers/promises";
 import type { KernelCommand, KernelPacket, KernelSubagent, KernelUsage } from "@pilot/kernel";
-import type { AgentEvent, SessionCompletion, SessionPullRequest, SessionState, SessionSummary } from "@pilot/protocol";
+import type {
+	AgentEvent,
+	McpStatus,
+	SessionCompletion,
+	SessionPullRequest,
+	SessionState,
+	SessionSummary,
+} from "@pilot/protocol";
 import { WebSocket } from "ws";
 import { Conflict, NotFound } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
@@ -2568,6 +2575,49 @@ test("long jobs emit live user attention at one hour and clear on job end or wor
 		t.mock.timers.tick(3_600_000);
 		assert.equal(changes.length, count, "shutdown releases live deadlines");
 		t.mock.timers.reset();
+	});
+});
+
+test("chats that reach for an MCP server needing sign-in ask for it until it works or the chat is archived", async () => {
+	await outcomeFixture(async (manager, meta) => {
+		let status: McpStatus = {
+			checking: false,
+			servers: [{ name: "datadog", transport: "http", state: "needs_sign_in", canSignIn: true }],
+		};
+		const listeners = new Set<(status: McpStatus) => void>();
+		manager.setMcpStatus({
+			status: () => status,
+			check: () => {},
+			onChange: (listener) => {
+				listeners.add(listener);
+				return () => listeners.delete(listener);
+			},
+		});
+		const worker = fakeWorker();
+		manager["workers"].set(meta.id, worker);
+		const changes: SessionSummary[] = [];
+		manager.onChange((summary) => changes.push(summary));
+		const packet = { type: "mcp.used" as const, namespaces: ["datadog"], failed: true };
+		manager["onPacket"](meta, fakeWorker(), packet);
+		assert.equal(manager.get(meta.id)?.attentionReason, undefined, "a replaced worker's hint is ignored");
+		manager["onPacket"](meta, worker, packet);
+		assert.deepEqual(changes.at(-1)?.attentionReason, {
+			kind: "mcp",
+			detail: "datadog needs sign-in",
+			server: "datadog",
+		});
+		assert.equal(typeof changes.at(-1)?.attentionAt, "number");
+		assert.equal(meta.outcome, undefined, "never an agent outcome");
+
+		status = { checking: false, servers: [{ ...status.servers[0]!, state: "connected", tools: 2 }] };
+		for (const listener of listeners) listener(status);
+		assert.equal(changes.at(-1)?.attentionReason, undefined, "signing in releases the chat at once");
+
+		status = { checking: false, servers: [{ ...status.servers[0]!, state: "needs_sign_in" }] };
+		manager["onPacket"](meta, worker, packet);
+		assert.equal(manager.get(meta.id)?.attentionReason?.kind, "mcp");
+		await manager.archive(meta.id);
+		assert.equal(manager.get(meta.id)?.attentionReason, undefined);
 	});
 });
 

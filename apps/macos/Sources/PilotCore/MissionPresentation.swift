@@ -35,7 +35,7 @@ public enum MissionNeedsYou {
         members
             .filter { $0.missionId == mission.id && !$0.isArchived }
             .filter { session in
-                session.attentionReason?.kind == .longJob || session.attentionReason?.kind == .prStuck
+                session.attentionReason?.kind.isLive == true || session.attentionReason?.kind == .prStuck
                     || (!session.isWorking && (session.outcome == .done || session.outcome == .failed)
                         && isUnread(session) && session.signal(unread: true)?.needsUser == true)
             }
@@ -182,7 +182,7 @@ public enum MissionSidebarSummary {
 /// The second line of a coordinator's sidebar row: "Coordinator", then its reason or state.
 public enum MissionCoordinatorStatus {
     public static func detail(_ session: SessionSummary, unread: Bool) -> String {
-        if let reason = session.needsYouReason(unread: unread), reason.kind == .longJob {
+        if let reason = session.needsYouReason(unread: unread), reason.kind.isLive {
             return reason.label(at: session.attentionAt ?? session.updatedAt)
         }
         switch session.status {

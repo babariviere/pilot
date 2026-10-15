@@ -29,4 +29,16 @@ struct McpProtocolTests {
                                                   signIn: McpSignInState(state: .failed, startedAt: 1, expiresAt: 2))
         #expect(McpStatusText.signInProblem(failedThenConnected) == nil, "an old failure stops mattering once connected")
     }
+
+    @Test func chatsBlockedOnAServerNeedYouWhileWorkingAndNameTheServer() throws {
+        let json = #"{"id":"chat","title":"Logs","cwd":"/tmp","createdAt":1,"updatedAt":2,"state":"working","working":true,"attentionReason":{"kind":"mcp","detail":"datadog needs sign-in","server":"datadog"},"attentionAt":2}"#
+        let chat = try JSONDecoder().decode(SessionSummary.self, from: Data(json.utf8))
+        #expect(chat.attentionReason?.server == "datadog")
+        #expect(chat.attentionReason?.kind.isLive == true)
+        #expect(chat.signal(unread: false) == .needsYou)
+        #expect(chat.needsYouReason(unread: false)?.label(at: 2) == "MCP: datadog needs sign-in")
+        let summary = InboxText.needsYouSummary([ProjectDashboardCount(working: 0, needsYou: 2,
+                                                                        needsYouReasons: ["mcp": 1, "failed": 1])])
+        #expect(summary == "2 need you: 1 MCP sign-in, 1 failed")
+    }
 }

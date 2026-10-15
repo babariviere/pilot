@@ -24,4 +24,17 @@ struct ConnectionSettingsTests {
         #expect(McpServerRowText.footer(["datadog"]) == "datadog needs sign-in")
         #expect(McpServerRowText.footer(["datadog", "notion"]) == "2 MCP servers need sign-in")
     }
+
+    @Test func blockedChatsSignInWhenPiCanAndOtherwiseOpenConnections() {
+        #expect(McpServerRowText.attentionAction(nil) == .openSettings)
+        let signIn = McpServerStatus(name: "datadog", transport: .http, state: .needsSignIn, canSignIn: true)
+        #expect(McpServerRowText.attentionAction(signIn) == .signIn)
+        #expect(McpServerRowText.title(.signIn) == "Sign in")
+        let waiting = McpServerStatus(name: "datadog", transport: .http, state: .needsSignIn, canSignIn: true,
+                                      signIn: McpSignInState(state: .waiting, startedAt: 1, expiresAt: 2))
+        #expect(McpServerRowText.attentionAction(waiting) == .cancel)
+        let failing = McpServerStatus(name: "local", transport: .stdio, state: .failed)
+        #expect(McpServerRowText.attentionAction(failing) == .openSettings)
+        #expect(McpServerRowText.title(.openSettings) == "Open Connections")
+    }
 }

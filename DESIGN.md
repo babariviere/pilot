@@ -61,7 +61,7 @@ the project page. Do not restyle a state for a single screen.
 | State | Meaning | Interrupts |
 | --- | --- | --- |
 | Working | An agent is running | No |
-| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start. A read result keeps its place while its chat is open and leaves once the user leaves the chat; failures and questions stay until retried or answered | Yes |
+| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start, a chat blocked on an MCP server that needs sign-in. A read result keeps its place while its chat is open and leaves once the user leaves the chat; failures and questions stay until retried or answered; an MCP block clears once the server works or the user writes in the chat | Yes |
 | Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |

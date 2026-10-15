@@ -186,6 +186,74 @@ enum McpServerRowText {
         default: "\(names.count) MCP servers need sign-in"
         }
     }
+
+    enum AttentionAction: Equatable { case signIn, cancel, openSettings }
+
+    /// What a chat blocked on a server offers: pi's browser sign-in when the server uses it, otherwise
+    /// Settings › Connections, which says what to run.
+    static func attentionAction(_ server: McpServerStatus?) -> AttentionAction {
+        guard let server else { return .openSettings }
+        if server.signIn?.state == .waiting { return .cancel }
+        return server.canSignIn == true && server.state == .needsSignIn ? .signIn : .openSettings
+    }
+
+    static func title(_ action: AttentionAction) -> String {
+        switch action {
+        case .signIn: "Sign in"
+        case .cancel: "Cancel"
+        case .openSettings: "Open Connections"
+        }
+    }
+}
+
+extension PilotClient {
+    /// Runs a chat's MCP attention action. Opening settings is left to the caller's environment.
+    func performMcpAttention(_ action: McpServerRowText.AttentionAction, server: String?,
+                             openSettings: () -> Void) async {
+        switch action {
+        case .signIn: if let server { await startMcpSignIn(server) }
+        case .cancel: if let server { await cancelMcpSignIn(server) }
+        case .openSettings:
+            AppModel.shared.settingsTab = .connections
+            openSettings()
+        }
+    }
+}
+
+/// One quiet line above the composer while this chat waits on an MCP server, with its one action.
+/// Clears once the server works again or the user writes in the chat.
+struct McpChatNotice: View {
+    let reason: NeedsYouReason
+    @ObservedObject private var store = AppModel.shared.client.mcp
+    @Environment(\.openSettings) private var openSettings
+    @State private var busy = false
+
+    var body: some View {
+        let server = reason.server.flatMap { store.status?.server(named: $0) }
+        let action = McpServerRowText.attentionAction(server)
+        let waiting = action == .cancel
+        HStack(spacing: 6) {
+            PilotSymbol(PilotIcon.signInRequired).foregroundStyle(Theme.blocked).accessibilityHidden(true)
+            Text(waiting ? "Waiting for sign-in in your browser…" : reason.detail ?? "An MCP server needs you")
+                .foregroundStyle(Theme.mutedForeground)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            if waiting { ProgressView().controlSize(.small) }
+            Button(McpServerRowText.title(action)) {
+                busy = true
+                Task {
+                    defer { busy = false }
+                    await AppModel.shared.client.performMcpAttention(action, server: reason.server) { openSettings() }
+                }
+            }
+            .buttonStyle(.link)
+            .disabled(busy)
+            .help(action == .signIn ? "Opens your browser to sign in. The chat picks it up on its next turn."
+                : action == .cancel ? "Stop waiting for the browser" : "See MCP servers and what they need")
+        }
+        .font(.pilot(.caption))
+        .accessibilityElement(children: .contain)
+    }
 }
 
 private struct McpServerAction: View {

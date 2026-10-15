@@ -86,6 +86,7 @@ enum SidebarScopeCounts {
         }
         let parts = [
             reasons.longJobs > 0 ? "\(reasons.longJobs) \(reasons.longJobs == 1 ? "long job" : "long jobs")" : nil,
+            reasons.mcp > 0 ? "\(reasons.mcp) \(reasons.mcp == 1 ? "MCP sign-in" : "MCP sign-ins")" : nil,
             reasons.questions > 0 ? "\(reasons.questions) \(reasons.questions == 1 ? "question" : "questions")" : nil,
             reasons.failed > 0 ? "\(reasons.failed) failed" : nil,
             reasons.limited > 0 ? "\(reasons.limited) \(reasons.limited == 1 ? "limit" : "limits") reached" : nil,
@@ -106,8 +107,10 @@ struct NeedsYouReasons: Equatable {
     var limited = 0
     var longJobs = 0
     var stuckPRs = 0
+    /// Chats blocked on an MCP server that needs the user.
+    var mcp = 0
 
-    var total: Int { questions + failed + notReviewed + limited + longJobs + stuckPRs }
+    var total: Int { questions + failed + notReviewed + limited + longJobs + stuckPRs + mcp }
 
     init(questions: Int = 0, failed: Int = 0, notReviewed: Int = 0, limited: Int = 0) {
         self.questions = questions
@@ -120,6 +123,7 @@ struct NeedsYouReasons: Equatable {
     init(_ needsYou: [SessionSummary], unread: (SessionSummary) -> Bool) {
         for session in needsYou {
             if session.attentionReason?.kind == .longJob { longJobs += 1; continue }
+            if session.attentionReason?.kind == .mcp { mcp += 1; continue }
             if session.needsYouReason(unread: unread(session))?.kind == .prStuck { stuckPRs += 1; continue }
             switch session.signal(unread: unread(session)) {
             case .failed:

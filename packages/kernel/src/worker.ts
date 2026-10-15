@@ -354,6 +354,7 @@ export function runKernelWorker(): void {
 					onPullRequestCreated: (url) => notify({ type: "pullRequest.created", url }),
 					onRefsChanged: () => notify({ type: "refs.changed" }),
 					onGitHubAction: (action) => notify({ type: "github.action", action }),
+					onMcpUsed: (namespaces, failed) => notify({ type: "mcp.used", namespaces, failed }),
 					onSubagentsChanged: (subagents) => notify({ type: "subagents", subagents }),
 					callMission,
 					callMemory,

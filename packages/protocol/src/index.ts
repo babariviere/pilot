@@ -836,7 +836,14 @@ export interface DashboardSection<T> {
  * - `long_job`: a live job has run for at least one hour. User-only, even inside a mission.
  * - `unread`: a chat finished or stopped and its result has not been reviewed.
  */
-export type DashboardNeedsYouKind = "failed" | "question" | "scheduled_failed" | "long_job" | "pr_stuck" | "unread";
+export type DashboardNeedsYouKind =
+	| "failed"
+	| "question"
+	| "scheduled_failed"
+	| "long_job"
+	| "mcp"
+	| "pr_stuck"
+	| "unread";
 
 export type NeedsYouReasonKind =
 	| "failed"
@@ -846,11 +853,13 @@ export type NeedsYouReasonKind =
 	| "mission"
 	| "limit"
 	| "pr_stuck"
-	| "long_job";
+	| "long_job"
+	| "mcp";
 
 /**
  * One reason per row. Not-reviewed age is formatted by clients from the row's `at`.
  * `limit`: a failed chat stopped by a subscription limit ("Limit reached · resumes at 18:00").
+ * `mcp`: the chat reached for an MCP server that needs the user ("datadog needs sign-in"); live-only.
  */
 export interface NeedsYouReason {
 	kind: NeedsYouReasonKind;
@@ -858,6 +867,8 @@ export interface NeedsYouReason {
 	detail?: string;
 	/** `limit`: epoch ms when the exhausted subscription window resets, when known. */
 	resumesAt?: number;
+	/** `mcp`: the server to fix, by its mcp.json name (see McpStatus). */
+	server?: string;
 }
 
 export interface DashboardNeedsYouItem {
