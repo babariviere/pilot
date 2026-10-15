@@ -39,6 +39,38 @@ private func transcript(_ entries: [String], working: Bool = false) throws -> Tr
     #expect(try transcript([userInput, askCall, askResult, questionEntry, after]).pendingQuestion?.entryID == 4)
 }
 
+@Test func backgroundJobsDoNotHideTheQuestionComposer() throws {
+    let presentation = try TranscriptPresentation(transcript: transcript([userInput, askCall, askResult, questionEntry]))
+    let question = try #require(presentation.pendingQuestion)
+    let jobs = [SessionJob(id: "tests", name: "Tests", startedAt: 1, outputPath: "/tmp/tests.log")]
+    // Both current summaries and legacy summaries without the derived working flag report busy jobs.
+    for working: Bool? in [true, nil] {
+        let session = SessionSummary(id: "chat", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1,
+                                     state: "idle", runningJobs: jobs, working: working)
+        #expect(session.isWorking)
+        #expect(presentation.questionForComposer(session: session, hasSnapshot: true) == question)
+        #expect(presentation.questionForComposer(session: session, hasSnapshot: false) == nil)
+
+        var active = presentation
+        active.working = true
+        #expect(active.questionForComposer(session: session, hasSnapshot: true) == nil)
+
+        let reply = #"{"id":5,"kind":"pi.user","model":[{"role":"user","content":"Sync worker"}]}"#
+        let answered = try TranscriptPresentation(transcript: transcript([questionEntry, reply]))
+        #expect(answered.questionForComposer(session: session, hasSnapshot: true) == nil)
+    }
+}
+
+@Test func questionComposerWaitsForTheActiveTurnAcrossBothFeeds() throws {
+    let presentation = try TranscriptPresentation(transcript: transcript([questionEntry]))
+    for state in ["starting", "working", "idle", "parked"] {
+        let session = SessionSummary(id: "chat", title: "Chat", cwd: "/tmp", createdAt: 1, updatedAt: 1,
+                                     state: state, working: true)
+        let expected = state == "idle" || state == "parked" ? presentation.pendingQuestion : nil
+        #expect(presentation.questionForComposer(session: session, hasSnapshot: true) == expected)
+    }
+}
+
 @Test func compactionDoesNotAnswerAPendingQuestion() async throws {
     let entries = [askCall, askResult, questionEntry]
     let expected = try #require(transcript(entries).pendingQuestion)

@@ -74,3 +74,12 @@ extension Transcript {
         return nil
     }
 }
+
+extension TranscriptPresentation {
+    /// Wait for the agent's turn to end, not for background jobs or subagents to finish.
+    /// Check both feeds because session summaries and transcript events arrive independently.
+    public func questionForComposer(session: SessionSummary, hasSnapshot: Bool) -> AgentQuestion? {
+        guard hasSnapshot, !working, session.state != "starting", session.state != "working" else { return nil }
+        return pendingQuestion
+    }
+}

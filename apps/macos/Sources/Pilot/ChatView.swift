@@ -370,8 +370,7 @@ struct ChatView: View {
 
     /// The agent's question replaces the composer once its run has ended.
     private func pendingQuestion(_ transcript: TranscriptPresentation) -> AgentQuestion? {
-        guard feed.hasSnapshot, !transcript.working, session.state != "starting", !session.isWorking else { return nil }
-        return transcript.pendingQuestion
+        transcript.questionForComposer(session: session, hasSnapshot: feed.hasSnapshot)
     }
 
     private func answer(_ message: String) async throws {
