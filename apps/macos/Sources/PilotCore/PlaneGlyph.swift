@@ -1,21 +1,14 @@
 import CoreGraphics
 
-/// The plane from `Resources/AppIcon.svg`, nose up and centered near the origin, in SVG units.
-/// Keep `svgPath` identical to the icon's `#plane` path (a test checks it).
+/// The app icon's plane as a flat top-down silhouette (fuselage, wings and tailplane), level, nose up and
+/// centered near the origin, in SVG units. `scripts/icon-svg.mjs` derives it from the icon's 3D model and
+/// writes it to `Resources/AppIcon.svg` as `#plane`; keep `svgPath` identical to that path (a test checks it).
 public enum PlaneGlyph {
     public static let svgPath =
-        "M 24 -52 L 282 66 Q 290 70 290 78 L 290 86 Q 290 94 282 93 L 104 54 L 24 54 Z M -24 -52 L -24 54 L -104 54 L -282 93 Q -290 94 -290 86 L -290 78 Q -290 70 -282 66 Z M 10 200 L 112 248 Q 118 251 118 257 L 118 264 Q 118 270 112 270 L 10 266 Z M -10 200 L -10 266 L -112 270 Q -118 270 -118 264 L -118 257 Q -118 251 -112 248 Z M 0 -300 C 17 -300 27 -280 27 -244 L 27 140 C 27 200 14 260 6 292 Q 0 304 -6 292 C -14 260 -27 200 -27 140 L -27 -244 C -27 -280 -17 -300 0 -300 Z"
+        "M 0 -300 L 8 -298 L 13 -292 L 20 -282 L 25 -269 L 31 -252 L 35 -232 L 38 -209 L 39 -183 L 39 173 L 38 202 L 34 227 L 29 250 L 23 270 L 18 287 L 13 300 L 10 310 L 6 316 L 0 318 L -6 316 L -10 310 L -13 300 L -18 287 L -23 270 L -29 250 L -34 227 L -38 202 L -39 173 L -39 -183 L -38 -209 L -35 -232 L -31 -252 L -25 -269 L -20 -282 L -13 -292 L -8 -298 Z M 28 -70 L 294 62 L 308 84 L 297 101 L 101 50 L 28 50 Z M -28 50 L -101 50 L -297 101 L -308 84 L -294 62 L -28 -70 Z M 17 218 L 123 274 L 123 297 L 17 286 Z M -17 286 L -123 297 L -123 274 L -17 218 Z"
 
-    /// The contrail behind the tail, in the same units. It widens and fades away from the plane.
-    public static func trail(length: CGFloat) -> CGPath {
-        let path = CGMutablePath()
-        path.addLines(between: [
-            CGPoint(x: -8, y: 262), CGPoint(x: 8, y: 262),
-            CGPoint(x: 8 + 38 * length / 888, y: 262 + length), CGPoint(x: -8 - 38 * length / 888, y: 262 + length),
-        ])
-        path.closeSubpath()
-        return path
-    }
+    /// The end of the tail cone, where a contrail starts.
+    public static let tail = CGPoint(x: 0, y: 318)
 
     public static var path: CGPath { SVGPath.cgPath(svgPath) }
 }

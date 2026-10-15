@@ -30,6 +30,28 @@ import Testing
     #expect(idle.tiffRepresentation != working.tiffRepresentation)
 }
 
+@Test func menuBarContrailStepsAwayFromTheTailWithoutTouchingThePlane() throws {
+    var transform = PlaneImage.planeTransform
+    let plane = try #require(PlaneGlyph.path.copy(using: &transform))
+    // Heading to the top right, inside the 18 pt image.
+    #expect(CGRect(x: 0, y: 0, width: 18, height: 18).insetBy(dx: 0.4, dy: 0.4).contains(plane.boundingBoxOfPath))
+    let nose = CGPoint(x: 0, y: -300).applying(PlaneImage.planeTransform)
+    let tail = PlaneGlyph.tail.applying(PlaneImage.planeTransform)
+    #expect(nose.x > tail.x && nose.y < tail.y)
+    var previous = CGRect(origin: tail, size: .zero)
+    for square in PlaneImage.contrail {
+        // Behind the tail toward the bottom left, smaller each step, on the half-point grid, clear of the plane.
+        #expect(square.maxX <= previous.minX + 0.01 && square.minY >= previous.maxY - 0.01)
+        #expect(square.width == square.height && (previous.width == 0 || square.width < previous.width))
+        #expect((square.minX * 2).rounded() == square.minX * 2 && (square.minY * 2).rounded() == square.minY * 2)
+        #expect(square.minX >= 0 && square.maxY <= 18)
+        for corner in [CGPoint(x: square.maxX, y: square.minY), CGPoint(x: square.midX, y: square.midY)] {
+            #expect(!plane.contains(corner))
+        }
+        previous = square
+    }
+}
+
 @Test @MainActor func menuBarIconOnlyPublishesIdleWorkingTransitionsAsynchronously() async {
     let client = PilotClient()
     let icon = MenuBarIconModel(client: client)
