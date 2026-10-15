@@ -85,6 +85,8 @@ struct MainWindow: View {
         .onDisappear {
             // SwiftUI owns the window lifecycle; scene IDs need not be NSWindow identifiers.
             model.flushDrafts()
+            // Closing the window leaves the open chat, so a result read there leaves Needs you.
+            model.leaveOpenChat()
             // The window is gone; stay available from the menu bar only.
             NSApp.setActivationPolicy(.accessory)
         }

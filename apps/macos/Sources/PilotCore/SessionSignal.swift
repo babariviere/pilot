@@ -50,47 +50,60 @@ extension SessionSummary {
 }
 
 /// The sidebar's chat groups by urgency: always for a focused project, and for All projects unless the user groups
-/// by project and folder instead.
+/// by project and folder instead. Pinned chats lead in their own group, above Needs you.
 public enum SidebarUrgency {
     public struct Groups: Equatable, Sendable {
-        /// Failed chats first, then agent questions, then unread or unanswered results, each in list order.
+        /// Pinned chats in list order, whatever their state. A pinned chat is listed only here; its corner still
+        /// shows its state.
+        public var pinned: [SessionSummary] = []
+        /// Failed chats first, then agent questions, then unread results (and read ones whose chat is still
+        /// open), each in list order.
         public var needsYou: [SessionSummary] = []
         /// Reviewed chats whose PR is ready to merge, in list order. Waits on the user without badging.
         public var readyToMerge: [SessionSummary] = []
         public var working: [SessionSummary] = []
-        /// Everything else, in list order (pinned first).
+        /// Everything else, in list order.
         public var recent: [SessionSummary] = []
 
-        public init(needsYou: [SessionSummary] = [], readyToMerge: [SessionSummary] = [],
+        public init(pinned: [SessionSummary] = [], needsYou: [SessionSummary] = [], readyToMerge: [SessionSummary] = [],
                     working: [SessionSummary] = [], recent: [SessionSummary] = []) {
+            self.pinned = pinned
             self.needsYou = needsYou
             self.readyToMerge = readyToMerge
             self.working = working
             self.recent = recent
         }
 
-        public var isEmpty: Bool { needsYou.isEmpty && readyToMerge.isEmpty && working.isEmpty && recent.isEmpty }
+        public var isEmpty: Bool {
+            pinned.isEmpty && needsYou.isEmpty && readyToMerge.isEmpty && working.isEmpty && recent.isEmpty
+        }
     }
 
-    /// One pass over `sessions`, which are already in sidebar list order. `awaitingReply` keeps a viewed result
-    /// under Needs you, so opening a chat does not move it to Ready to merge or Recent. Working wins over a ready
-    /// PR, so a chat still pushing to its PR stays under Working.
+    /// One pass over `sessions`, which are already in sidebar list order. `held` keeps a result read in the open
+    /// chat under Needs you until the user leaves it (`SessionAttention.isHeld`), so reading never moves the row.
+    /// Working wins over a ready PR, so a chat still pushing to its PR stays under Working. With `separatingPinned`
+    /// false, pinned chats join the group of their state, for counts that must match pilotd's.
     public static func groups(_ sessions: [SessionSummary], unread: (SessionSummary) -> Bool,
-                              awaitingReply: (SessionSummary) -> Bool = { _ in false }) -> Groups {
+                              held: (SessionSummary) -> Bool = { _ in false },
+                              separatingPinned: Bool = true) -> Groups {
         var failed: [SessionSummary] = []
         var questions: [SessionSummary] = []
         var waiting: [SessionSummary] = []
         var groups = Groups()
         for session in sessions {
+            if separatingPinned, session.isPinned {
+                groups.pinned.append(session)
+                continue
+            }
             switch session.signal(unread: unread(session)) {
             case .working: groups.working.append(session)
             case .failed: failed.append(session)
             case .needsYou where session.status == .question: questions.append(session)
             case .needsYou: waiting.append(session)
             case .readyToMerge:
-                if awaitingReply(session) { waiting.append(session) } else { groups.readyToMerge.append(session) }
+                if held(session) { waiting.append(session) } else { groups.readyToMerge.append(session) }
             case nil:
-                if awaitingReply(session) { waiting.append(session) } else { groups.recent.append(session) }
+                if held(session) { waiting.append(session) } else { groups.recent.append(session) }
             }
         }
         groups.needsYou = failed + questions + waiting

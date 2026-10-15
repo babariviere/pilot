@@ -34,8 +34,7 @@ struct InboxRowDetail: View {
                 if hasMore(afterProject: true) { dot }
             }
             if let session, session.isActiveMissionCoordinator {
-                SessionCoordinatorLine(session: session,
-                                       unread: model.isUnread(session) || model.isAwaitingReply(session))
+                SessionCoordinatorLine(session: session, unread: model.isUnread(session))
             } else {
                 if let missionTitle {
                     InboxMissionLabel(title: missionTitle)

@@ -3,14 +3,15 @@ import Testing
 @testable import PilotCore
 
 private func session(_ id: String, state: String = "idle", outcome: SessionOutcome? = nil,
-                     pr: PullRequestState? = nil, readiness: PullRequestReadiness.State? = nil) -> SessionSummary {
+                     pr: PullRequestState? = nil, readiness: PullRequestReadiness.State? = nil,
+                     pinned: Bool? = nil) -> SessionSummary {
     let request = pr.map { state in
         SessionPullRequest(number: 1, url: "https://github.com/example/repo/pull/1", title: "PR", state: state,
                            checkedAt: 1, readiness: readiness.map { .init(state: $0, reasons: [], checkedAt: 1) })
     }
     return SessionSummary(id: id, title: id, cwd: "/tmp", createdAt: 1, updatedAt: 1, state: state,
                           outcome: outcome, outcomeAt: outcome == nil ? nil : 2,
-                          pullRequest: request, pullRequests: request.map { [$0] } ?? [])
+                          pullRequest: request, pullRequests: request.map { [$0] } ?? [], pinned: pinned)
 }
 
 @Test func signalsFollowTheAttentionBudget() {
@@ -57,8 +58,8 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
         session("ready-2", outcome: .done, pr: .open, readiness: .ready),
     ]
     let groups = SidebarUrgency.groups(sessions, unread: { $0.id == "ready-unread" },
-                                       awaitingReply: { $0.id == "ready-viewed" })
-    // Unread or unanswered results need the user first; live work stays under Working.
+                                       held: { $0.id == "ready-viewed" })
+    // Unread results, and read ones whose chat is still open, need the user first; live work stays under Working.
     #expect(groups.needsYou.map(\.id) == ["ready-unread", "ready-viewed"])
     #expect(groups.readyToMerge.map(\.id) == ["ready", "ready-2"])
     #expect(groups.working.map(\.id) == ["ready-working"])
@@ -86,9 +87,37 @@ private func session(_ id: String, state: String = "idle", outcome: SessionOutco
     #expect(!session("failed", outcome: .failed).isQuiet)
 }
 
-@Test func viewedResultsAwaitingReplyStayUnderNeedsYou() {
+@Test func resultsReadInTheOpenChatStayUnderNeedsYou() {
     let sessions = [session("quiet", outcome: .done), session("viewed", outcome: .done), session("unread", outcome: .done)]
-    let groups = SidebarUrgency.groups(sessions, unread: { $0.id == "unread" }, awaitingReply: { $0.id == "viewed" })
+    let groups = SidebarUrgency.groups(sessions, unread: { $0.id == "unread" }, held: { $0.id == "viewed" })
     #expect(groups.needsYou.map(\.id) == ["viewed", "unread"])
     #expect(groups.recent.map(\.id) == ["quiet"])
+}
+
+@Test func pinnedChatsLeadInTheirOwnGroupWhateverTheirState() {
+    let sessions = [
+        session("pinned-failed", outcome: .failed, pinned: true),
+        session("pinned-working", state: "working", pinned: true),
+        session("pinned-unread", outcome: .done, pinned: true),
+        session("pinned-ready", outcome: .done, pr: .open, readiness: .ready, pinned: true),
+        session("failed", outcome: .failed),
+        session("unread", outcome: .done),
+        session("quiet", outcome: .done),
+    ]
+    let unread = { (session: SessionSummary) in session.id.hasSuffix("unread") }
+    let groups = SidebarUrgency.groups(sessions, unread: unread, held: { $0.id == "pinned-failed" })
+    // A pinned chat is listed only in Pinned, in list order; its corner still carries its state.
+    #expect(groups.pinned.map(\.id) == ["pinned-failed", "pinned-working", "pinned-unread", "pinned-ready"])
+    #expect(groups.needsYou.map(\.id) == ["failed", "unread"])
+    #expect(groups.working.isEmpty)
+    #expect(groups.readyToMerge.isEmpty)
+    #expect(groups.recent.map(\.id) == ["quiet"])
+    #expect(groups.pinned.map { $0.signal(unread: unread($0)) } == [.failed, .working, .needsYou, .readyToMerge])
+    #expect(!SidebarUrgency.Groups(pinned: [sessions[0]]).isEmpty)
+
+    // Counts that must match pilotd's keep pinned chats in the group of their state.
+    let counted = SidebarUrgency.groups(sessions, unread: unread, separatingPinned: false)
+    #expect(counted.pinned.isEmpty)
+    #expect(counted.needsYou.map(\.id) == ["pinned-failed", "failed", "pinned-unread", "unread"])
+    #expect(counted.working.map(\.id) == ["pinned-working"])
 }

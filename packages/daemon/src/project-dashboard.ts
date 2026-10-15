@@ -80,17 +80,22 @@ function readinessOf(pr: SessionPullRequest): DashboardPullRequestReadiness | un
 		: undefined;
 }
 
-/** A finished chat that has not been reviewed, or one waiting for an answer: it still waits on the user. */
+/**
+ * A finished chat that has not been reviewed, a failure or one waiting for an answer: it still waits on the user.
+ * Reading a result is enough to clear it (the app keeps the open chat's row in place until the user leaves it);
+ * failures stay until retried and questions until answered, as in the app's sidebar.
+ */
 function needsReview(session: SessionSummary, isUnread: DashboardInput["isUnread"]): boolean {
 	if (session.attentionReason?.kind === "long_job") return true;
 	if (isWorking(session)) return false;
 	// A question waits until it is answered, not until the chat is viewed.
 	if (session.outcome === "question") return true;
 	if (hasTerminalPullRequest(session)) return false;
+	// A failure waits until it is retried, not until the chat is viewed.
+	if (failed(session)) return true;
 	if (session.outcomeAt !== undefined && Number.isFinite(session.outcomeAt))
 		return session.outcome !== undefined && isUnread(session.id, session.outcomeAt);
-	// A failure without a completion version cannot be reviewed away.
-	return session.state === "failed";
+	return false;
 }
 
 const failed = (session: SessionSummary) =>

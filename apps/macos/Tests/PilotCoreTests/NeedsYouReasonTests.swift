@@ -109,7 +109,7 @@ private let reasonNow = Date(timeIntervalSince1970: 1_000)
     #expect(MissionCoordinatorStatus.detail(chat, unread: false) == "Long job: Tests has run for 1h")
     let defaults = UserDefaults(suiteName: UUID().uuidString)!
     let attention = SessionAttention(defaults: defaults)
-    #expect(!attention.review(chat, chatVisible: true, appActive: true, explicit: true))
+    #expect(!attention.review(chat, chatVisible: true, appActive: true))
     #expect(attention.observe([chat], snapshot: true).isEmpty)
     #expect(attention.observe([chat], snapshot: false).isEmpty)
     #expect(chat.signal(unread: false) == .needsYou)

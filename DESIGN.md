@@ -60,7 +60,7 @@ the project page. Do not restyle a state for a single screen.
 | State | Meaning | Interrupts |
 | --- | --- | --- |
 | Working | An agent is running | No |
-| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start. A viewed result stays until answered, archived or removed | Yes |
+| Needs you | Failed, unreviewed result, agent or mission question, scheduled item that could not start. A read result keeps its place while its chat is open and leaves once the user leaves the chat; failures and questions stay until retried or answered | Yes |
 | Ready to merge | Open PR with no blockers (Pilot never merges) | Optional notification |
 | Blocked or pending | PR waiting on checks, reviews or conflicts | No |
 | Done | Finished and reviewed | No |
@@ -78,7 +78,7 @@ small strip (`DitherRipple`) instead of a spinner or shimmer.
 
 The sidebar answers "what needs me" before "where is it". One header row holds the scope switcher, Home (badged with
 what needs the user) and compose; archived chats, search (⌘F) and grouping live in the switcher's menu. All
-projects groups chats by urgency (Needs you, Working, Recent) with each row naming its project; a focused project
+projects groups chats by urgency (Pinned, Needs you, Ready to merge, Working, Recent) with each row naming its project; a focused project
 lists its own missions and chats. Rows are a title and one metadata line. Time, pin and mission marks, and project
 header actions, appear under the pointer. Quiet chats fold past the first few, and the footer appears only while
 pilotd is unreachable.
