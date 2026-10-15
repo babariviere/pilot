@@ -48,6 +48,7 @@ jobs:
       - name: Verify real coordinator isolation, descendants, aliases and denied capabilities
         env:
           PILOT_REQUIRE_LINUX_ISOLATION: "1"
+          PILOT_LINUX_BIND_FIXTURES: "1"
         run: node --test --test-force-exit packages/daemon/src/linux-coordinator.integration.test.ts
       - name: Verify selected native dependencies and ABI
         run: node --test --test-force-exit packages/daemon/src/native-runtime.test.ts
