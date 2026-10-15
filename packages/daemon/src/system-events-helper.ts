@@ -7,15 +7,20 @@ import { fileURLToPath } from "node:url";
 import type { SystemEventsHelperFactory } from "./system-events-detection.ts";
 import { parseSystemPowerState } from "./system-power.ts";
 
-/** LaunchServices gives the helper an independent application lifetime from pilotd. */
-export const openSystemEventsHelper: SystemEventsHelperFactory = async (onPower, onClose) => {
-	if (process.platform !== "darwin") throw new Error("macOS required");
+export function systemEventsHelperPath(): string {
 	const source = dirname(fileURLToPath(import.meta.url));
-	const app =
+	return (
 		process.env.PILOT_SYSTEM_EVENTS_HELPER_APP ??
 		(source.includes("/Contents/Resources/runtime/")
 			? resolve(source.split("/Contents/Resources/runtime/")[0], "Contents/Helpers/PilotSystemEvents.app")
-			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotSystemEvents.app"));
+			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotSystemEvents.app"))
+	);
+}
+
+/** LaunchServices gives the helper an independent application lifetime from pilotd. */
+export const openSystemEventsHelper: SystemEventsHelperFactory = async (onPower, onClose) => {
+	if (process.platform !== "darwin") throw new Error("macOS required");
+	const app = systemEventsHelperPath();
 	await access(app);
 	const token = randomBytes(32).toString("hex");
 	let socket: Socket | undefined;

@@ -8,6 +8,7 @@ import type {
 	ClientMessage,
 	CompactRequest,
 	CreateMissionRequest,
+	DaemonHello,
 	EditQueuedMessageRequest,
 	Inbox,
 	JoinMissionRequest,
@@ -227,6 +228,7 @@ export function createDaemonServer(
 	tracking?: SourceRegistry,
 	power?: PowerService,
 	mcp?: McpStatusService,
+	hello?: DaemonHello,
 ): Server {
 	sessions.setWorkspaceProcessGuard((id) => terminals.isRunning(id));
 	const reviews = new ReviewStore(_config.home);
@@ -260,6 +262,12 @@ export function createDaemonServer(
 		const url = new URL(req.url ?? "/", "http://localhost");
 		const parts = url.pathname.split("/").filter(Boolean);
 		if (parts[0] !== "api") throw new HttpError(404, "Not found");
+		if (parts[1] === "hello" && parts.length === 2) {
+			if (req.method !== "GET") throw new HttpError(405, "Method not allowed");
+			if (!hello) throw new ServiceUnavailable("Daemon handshake is unavailable");
+			res.setHeader("cache-control", "no-store");
+			return json(res, 200, hello);
+		}
 		if (parts[1] === "power" && parts.length === 2) {
 			if (!power) throw new ServiceUnavailable("Energy management is unavailable");
 			if (req.method === "GET") return json(res, 200, power.status());

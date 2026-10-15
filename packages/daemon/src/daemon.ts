@@ -4,11 +4,13 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { loadConfig } from "./config.ts";
 import { ConnectivityService } from "./connectivity.ts";
 import { EventLoopWatchdog } from "./event-loop-watchdog.ts";
+import { daemonHello } from "./hello.ts";
 import { MissionLinearSource, pollLinear } from "./linear-source.ts";
 import { McpStatusService, workerProbe } from "./mcp-status.ts";
 import { MissionService } from "./mission-service.ts";
 import { MissionStore } from "./missions.ts";
 import { ModelCatalog } from "./models.ts";
+import { detectPlatformCapabilities } from "./platform.ts";
 import { PowerService } from "./power.ts";
 import { ProjectMemoryService } from "./project-memory.ts";
 import { ProjectStore } from "./projects.ts";
@@ -26,6 +28,8 @@ import { TrackedItemStore } from "./tracked-items.ts";
 import { untrackedStats } from "./untracked-stats.ts";
 
 const config = loadConfig();
+const capabilities = await detectPlatformCapabilities();
+const hello = await daemonHello(config.home, capabilities);
 // Log long timer delays with context, without assuming sleep or descheduling is synchronous CPU work.
 const watchdog = new EventLoopWatchdog();
 watchdog.start();
@@ -105,8 +109,8 @@ for (const mission of missionStore.list())
 	if (mission.status === "done" && mission.completedAt !== undefined)
 		await trackedItems.completeSlackMission(mission.projectId, mission.id, mission.completedAt);
 const missionService = new MissionService(missionStore, sessions, projects);
-const power = new PowerService(config.home, sessions);
-const systemEventsDetection = new SystemEventsDetection();
+const power = capabilities.powerManagement ? new PowerService(config.home, sessions) : undefined;
+const systemEventsDetection = capabilities.systemSleepEvents ? new SystemEventsDetection() : undefined;
 const scheduleDetection = new ScheduleDetection({ power: systemEventsDetection });
 const connectivity = new ConnectivityService(join(config.home, "connectivity.json"), scheduleDetection, (online) =>
 	sessions.setConnectivity(online),
@@ -114,9 +118,9 @@ const connectivity = new ConnectivityService(join(config.home, "connectivity.jso
 // Persist unknown/offline before interrupted work can reopen, even with no app or pending schedule.
 await connectivity.start();
 // Recover global sleep overrides before any interrupted agent can reopen.
-await power.start();
+await power?.start();
 await sessions.load();
-power.refresh();
+power?.refresh();
 missionService.notices.start();
 missionService.compaction.start();
 const terminals = new TerminalManager();
@@ -146,6 +150,7 @@ const server = createDaemonServer(
 	tracking,
 	power,
 	mcpStatus,
+	hello,
 );
 server.listen(config.port, config.host, () => {
 	console.log(`pilotd listening on http://${config.host}:${config.port} (data: ${config.home})`);
@@ -160,7 +165,7 @@ async function stop(): Promise<void> {
 	server.close();
 	await schedules.stop();
 	await connectivity.stop();
-	systemEventsDetection.stop();
+	systemEventsDetection?.stop();
 	await scheduleStore.close();
 	stopMemoryProjects();
 	await mcpStatus.close();
@@ -173,7 +178,7 @@ async function stop(): Promise<void> {
 	stopSlackCompletions();
 	await Promise.all(completionWrites);
 	await trackedItems.close();
-	await power.stop();
+	await power?.stop();
 	await untrackedStats.close();
 	missionStore.close();
 	process.exit(0);

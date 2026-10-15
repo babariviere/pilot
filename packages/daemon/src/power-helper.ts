@@ -48,14 +48,19 @@ export function parsePowerSample(value: unknown): PowerSample | undefined {
 	return v;
 }
 
-export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {
-	if (process.platform !== "darwin") throw new ServiceUnavailable("Energy management requires macOS");
+export function powerHelperPath(): string {
 	const source = dirname(fileURLToPath(import.meta.url));
-	const binary =
+	return (
 		process.env.PILOT_POWER_HELPER ??
 		(source.includes("/Contents/Resources/runtime/")
 			? resolve(source.split("/Contents/Resources/runtime/")[0]!, "Contents/Helpers/PilotPower")
-			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotPower"));
+			: resolve(source, "../../../apps/macos/build/Pilot.app/Contents/Helpers/PilotPower"))
+	);
+}
+
+export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {
+	if (process.platform !== "darwin") throw new ServiceUnavailable("Energy management requires macOS");
+	const binary = powerHelperPath();
 	const child: ChildProcessWithoutNullStreams = spawn(binary, [], { stdio: ["pipe", "pipe", "pipe"] });
 	let readyResolve!: () => void;
 	let readyReject!: (error: Error) => void;
