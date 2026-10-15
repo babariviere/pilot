@@ -12,7 +12,7 @@ final class BrowserLinkOpener {
     private let focus: (String) async -> Bool
     private let openNormally: (URL) -> Void
     private let openDesktop: (URL) -> Bool
-    private let openArtifact: (ArtifactLink) -> Void
+    private let openArtifact: @MainActor (ArtifactLink) -> Void
     private var pending: URL?
     private var openingKey: String?
     private var requestVersion = 0
@@ -27,7 +27,7 @@ final class BrowserLinkOpener {
          openDesktop: @escaping (URL) -> Bool = { url in
              guard NSWorkspace.shared.urlForApplication(toOpen: url) != nil else { return false }
              return NSWorkspace.shared.open(url)
-         }, openArtifact: @escaping (ArtifactLink) -> Void = { AppModel.shared.artifactLink = $0 }) {
+         }, openArtifact: @escaping @MainActor (ArtifactLink) -> Void = { AppModel.shared.artifactLink = $0 }) {
         self.canLookup = canLookup
         self.focus = focus
         self.openNormally = openNormally
