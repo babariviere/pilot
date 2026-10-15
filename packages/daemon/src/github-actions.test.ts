@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { MissionStore } from "./missions.ts";
 
-test("GitHub mission activity attributes the execution-time chat, survives reopen and bounds retention", () => {
+test("GitHub mission activity attributes the execution-time chat, survives reopen and bounds retention", async () => {
 	const root = mkdtempSync(join(tmpdir(), "pilot-github-audit-"));
 	const file = join(root, "missions.sqlite");
 	let store = new MissionStore(file);
@@ -40,6 +40,7 @@ test("GitHub mission activity attributes the execution-time chat, survives reope
 		for (let i = 0; i < 1005; i++)
 			store.recordGitHubAction("other", { ...action, id: String(i), at: 100 + i }, "Other chat");
 		store.recordGitHubAction("chat", action, "Replay of evicted action");
+		await store.durable();
 		const db = new DatabaseSync(file, { readOnly: true });
 		try {
 			assert.equal(db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = 'github'").get()!.n, 1000);
