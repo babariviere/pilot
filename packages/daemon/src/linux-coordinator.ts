@@ -177,7 +177,6 @@ export async function forkLinuxCoordinator(
 		const sessionDir = dirname(state.storageDir);
 		if ((await realpath(sessionDir)) !== resolve(sessionDir))
 			throw new Error("Coordinator session directory is not canonical");
-		await rm(join(sessionDir, "coordinator-auth"), { recursive: true, force: true });
 		const artifacts = join(sessionDir, "artifacts");
 		for (const path of [state.storageDir, artifacts]) await mkdir(path, { recursive: true, mode: 0o700 });
 		const writable = await validateCoordinatorWrites(

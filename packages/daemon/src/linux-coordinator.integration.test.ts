@@ -207,6 +207,20 @@ assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
 		);
 	}
 	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") await bindFixture(mounted, driver);
+	// Never recursively clean a legacy auth path on the host before isolation: it could itself
+	// be a bind alias. These unreleased snapshots are unused, not a reason to traverse host state.
+	if (process.env.PILOT_LINUX_BIND_FIXTURES === "1") {
+		const legacy = join(root, "session", "coordinator-auth"),
+			legacyEntry = join(root, "legacy.cjs");
+		await mkdir(legacy);
+		await writeFile(legacyEntry, "process.disconnect();");
+		await bindFixture(
+			legacy,
+			`import {forkLinuxCoordinator} from ${JSON.stringify(module)};import {readFile} from 'node:fs/promises';import {once} from 'node:events';import assert from 'node:assert/strict';
+const credentials=JSON.parse(await readFile(${JSON.stringify(capabilityFile)},'utf8'));
+const child=await forkLinuxCoordinator(${JSON.stringify(legacyEntry)},${JSON.stringify(view)},{...${JSON.stringify({ storageDir, agentDir })},credentials});const [code]=await once(child,'exit');assert.equal(code,0);assert.equal(await readFile(${JSON.stringify(file)},'utf8'),'protected');`,
+		);
+	}
 	// Writable exceptions must reject nested bind mounts, otherwise an alias inside scratch would
 	// make protected inodes writable despite the read-only source mount and nlink==1 checks.
 	const scratchMount = join(scratch, "mounted-source");
