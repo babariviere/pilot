@@ -167,6 +167,16 @@ struct ArtifactWebView: NSViewRepresentable {
             startMeasuring(webView)
         }
 
+        /// A single isolated-world sample, also used by native geometry regression checks.
+        func readContentSize(_ view: WKWebView, kind: ArtifactKind) async throws -> CGSize? {
+            let result = try await view.callAsyncJavaScript(Self.contentMeasurementScript,
+                arguments: ["image": kind == .image || kind == .swiftui, "swiftui": kind == .swiftui,
+                            "mermaid": awaitingMermaid],
+                in: nil, contentWorld: .defaultClient) as? [Double]
+            guard let result, result.count == 2 else { return nil }
+            return CGSize(width: result[0], height: result[1])
+        }
+
         /// Inspect DOM geometry in an isolated JS world. No message handler or native
         /// capability is exposed to the artifact, and offscreen renderers stop polling.
         func startMeasuring(_ view: WKWebView) {
@@ -175,7 +185,7 @@ struct ArtifactWebView: NSViewRepresentable {
             measurementTask = Task { [weak self, weak view] in
                 // Poll quickly while content settles, then slowly once it has been stable for a few
                 // seconds. Asynchronous changes are still picked up, at a fraction of the JS calls.
-                var previous: [Double]?
+                var previous: CGSize?
                 var previousViewport: CGSize?
                 var stableReads = 0
                 while !Task.isCancelled {
@@ -189,52 +199,7 @@ struct ArtifactWebView: NSViewRepresentable {
                             continue
                         }
                         let intrinsic = measurementKind == .image || measurementKind == .swiftui
-                        let result = try await view.callAsyncJavaScript("""
-                        if (image) {
-                          const img = document.images[0];
-                          if (!img || !img.naturalWidth || !img.naturalHeight) return null;
-                          const scale = swiftui ? (img.dataset.pilotScale === '2' ? 0.5 :
-                            Math.min(1, 800 / img.naturalWidth, 600 / img.naturalHeight)) : 1;
-                          return [img.naturalWidth * scale, img.naturalHeight * scale];
-                        }
-                        const body = document.body, root = document.documentElement;
-                        if (!body || !root) return null;
-                        // A slow Mermaid render can leave its short source visible for several
-                        // polls. It is not the saved diagram's geometry, however stable it looks.
-                        if (mermaid && Array.from(document.querySelectorAll('.mermaid')).slice(0, 128)
-                          .some(node => !node.querySelector('svg'))) return null;
-                        let width = Math.max(body.scrollWidth, root.scrollWidth);
-                        const css = getComputedStyle(body);
-                        // document scrollHeight is at least the viewport height, so it cannot
-                        // shrink a short inline card. The sandbox uses standards mode, where
-                        // the body's own scrollHeight includes nested flow overflow without the
-                        // document's viewport floor. Range bounds also catch absolute content
-                        // whose containing block is outside body, without a JavaScript DOM walk.
-                        const bounds = body.getBoundingClientRect();
-                        const range = document.createRange();
-                        range.selectNodeContents(body);
-                        const contentBounds = range.getBoundingClientRect();
-                        const paddingX = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight);
-                        const paddingBottom = parseFloat(css.paddingBottom);
-                        const height = Math.max(1,
-                          bounds.bottom + scrollY + parseFloat(css.marginBottom),
-                          bounds.top + scrollY + body.scrollHeight + parseFloat(css.borderTopWidth) + parseFloat(css.marginBottom),
-                          contentBounds.bottom + scrollY + paddingBottom);
-                        let preferredWidth = width, preferredHeight = height;
-                        // Mermaid and inline SVGs often shrink to max-width:100%. Preserve their
-                        // natural drawing size as a width request, with a height fitted to this viewport.
-                        for (const svg of Array.from(document.querySelectorAll('svg')).slice(0, 128)) {
-                          const bounds = svg.getBoundingClientRect();
-                          const box = svg.viewBox.baseVal;
-                          if (bounds.width <= 0 || bounds.height <= 0 || box.width <= bounds.width || box.height <= 0) continue;
-                          preferredWidth = Math.max(preferredWidth, box.width + paddingX);
-                          preferredHeight = Math.max(preferredHeight, bounds.top + scrollY +
-                            box.height * Math.min(1, Math.max(0, innerWidth - paddingX) / box.width) + paddingBottom);
-                        }
-                        return [preferredWidth, preferredHeight];
-                        """, arguments: ["image": intrinsic, "swiftui": measurementKind == .swiftui,
-                                         "mermaid": self.awaitingMermaid],
-                            in: nil, contentWorld: .defaultClient) as? [Double]
+                        let result = try await self.readContentSize(view, kind: measurementKind)
                         guard self.active, !Task.isCancelled else { return }
                         guard view.window != nil, view.bounds.size == viewport else {
                             try await Task.sleep(for: .milliseconds(500))
@@ -243,9 +208,8 @@ struct ArtifactWebView: NSViewRepresentable {
                         if result == previous, viewport == previousViewport { stableReads += 1 } else { stableReads = 0 }
                         previous = result
                         previousViewport = viewport
-                        if let result, result.count == 2,
-                           let size = self.measurement.record(content: CGSize(width: result[0], height: result[1]),
-                                                              viewport: viewport, intrinsicImage: intrinsic),
+                        if let result,
+                           let size = self.measurement.record(content: result, viewport: viewport, intrinsicImage: intrinsic),
                            self.state.contentSize != size {
                             self.state.contentSize = size
                         }
@@ -256,6 +220,70 @@ struct ArtifactWebView: NSViewRepresentable {
                 }
             }
         }
+
+        private static let contentMeasurementScript = """
+            if (image) {
+              const img = document.images[0];
+              if (!img || !img.naturalWidth || !img.naturalHeight) return null;
+              const scale = swiftui ? (img.dataset.pilotScale === '2' ? 0.5 :
+                Math.min(1, 800 / img.naturalWidth, 600 / img.naturalHeight)) : 1;
+              return [img.naturalWidth * scale, img.naturalHeight * scale];
+            }
+            const body = document.body, root = document.documentElement;
+            if (!body || !root) return null;
+            // A slow Mermaid render can leave its short source visible for several
+            // polls. It is not the saved diagram's geometry, however stable it looks.
+            if (mermaid && Array.from(document.querySelectorAll('.mermaid')).slice(0, 128)
+              .some(node => !node.querySelector('svg'))) return null;
+            let width = Math.max(body.scrollWidth, root.scrollWidth);
+            const css = getComputedStyle(body);
+            // document scrollHeight is at least the viewport height, so it cannot
+            // shrink a short inline card. The sandbox uses standards mode, where
+            // the body's own scrollHeight includes visible flow overflow and respects
+            // nested scroll/clip containers. A Range over the body does NOT respect
+            // those clips: expanding or scrolling a tree would resize the whole card.
+            const bounds = body.getBoundingClientRect();
+            const paddingX = parseFloat(css.paddingLeft) + parseFloat(css.paddingRight);
+            const paddingBottom = parseFloat(css.paddingBottom);
+            let height = Math.max(1,
+              bounds.bottom + scrollY + parseFloat(css.marginBottom),
+              bounds.top + scrollY + body.scrollHeight + parseFloat(css.borderTopWidth) + parseFloat(css.marginBottom));
+            let preferredWidth = width;
+            // Body scrollHeight misses positioned descendants whose containing block
+            // is outside body. Inspect only unclipped branches, with a hard work bound.
+            // Treat SVGs as leaves: their paths do not request host space. This also
+            // keeps icons inside a scrolling tree out of the natural SVG size request.
+            let node = body.firstElementChild, visited = 0;
+            while (node && visited++ < 4096) {
+              const style = getComputedStyle(node);
+              const svg = node instanceof SVGSVGElement;
+              const hidden = style.display === 'none';
+              if (!hidden) {
+                if (style.position === 'absolute' || style.position === 'fixed' || svg) {
+                  const rect = node.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    height = Math.max(height, rect.bottom + scrollY + paddingBottom);
+                    // Preserve a responsive drawing's natural width, fitting its height.
+                    const box = svg ? node.viewBox.baseVal : null;
+                    if (box && box.width > rect.width && box.height > 0) {
+                      preferredWidth = Math.max(preferredWidth, box.width + paddingX);
+                      height = Math.max(height, rect.top + scrollY + box.height *
+                        Math.min(1, Math.max(0, innerWidth - paddingX) / box.width) + paddingBottom);
+                    }
+                  }
+                }
+              }
+              const clips = style.overflowY !== 'visible' ||
+                style.contain.split(' ').some(value => ['paint', 'strict', 'content'].includes(value));
+              if (!hidden && !svg && !clips && node.firstElementChild) {
+                node = node.firstElementChild;
+              } else {
+                while (node !== body && !node.nextElementSibling) node = node.parentElement;
+                node = node === body ? null : node.nextElementSibling;
+              }
+            }
+            return [preferredWidth, height];
+            """
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { fail(error) }
         func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
