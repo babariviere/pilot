@@ -2,7 +2,7 @@
 // Generates the app icon SVGs from a small 3D model of the plane:
 // - Resources/AppIcon.svg: the full drawing, for 128 pt and up.
 // - Resources/AppIconSmall.svg: a simplified drawing (flat shapes, outline, indigo fin), for 16 and 32 pt.
-// AppIcon.svg also carries the flat top-down outline (#plane) that PlaneGlyph.swift draws in the menu bar.
+// AppIcon.svg also carries the simplified top-down plane (#plane) that PlaneGlyph.swift draws in the menu bar.
 // Everything is hard 4x4 Bayer dithering in square cells: no blur, no gradients.
 // Usage: node scripts/icon-svg.mjs (scripts/icon.sh runs it before building AppIcon.icns).
 import { writeFileSync } from "node:fs";
@@ -349,50 +349,30 @@ function small() {
 	return d;
 }
 
-/** The flat top-down outline for the menu bar: nose up, centred near the origin, in SVG units. */
+/**
+ * The menu bar plane: a simplified flat top-down silhouette (rounded fuselage, straight swept wings and
+ * tailplane), level, nose up and centred near the origin, in SVG units. Every part winds the same way, so
+ * the nonzero fill joins the overlaps. Keep it identical to PlaneGlyph.svgPath (a test checks it).
+ */
 function glyph() {
-	const S = 280;
-	const circles = [];
-	for (let i = 0; i <= 60; i++) circles.push([stationY(i / 60), fuselageRadius(i / 60)]);
-	const half = (y) => max(0, ...circles.map(([cy, r]) => (abs(y - cy) < r ? sqrt(r * r - (y - cy) ** 2) : 0)));
-	const top = max(...circles.map(([cy, r]) => cy + r));
-	const bottom = min(...circles.map(([cy, r]) => cy - r));
-	const n = 28;
-	const ys = [];
-	for (let k = 0; k <= n; k++) ys.push((top + bottom) / 2 + ((top - bottom) / 2) * cos((PI * k) / n));
-	const fuselage = [...ys.map((y) => [half(y), y]), ...ys.slice(1, -1).reverse().map((y) => [-half(y), y])];
 	const wing = [
-		[0.1, 0.25],
-		[1.05, -0.22],
-		[1.1, -0.3],
-		[1.06, -0.36],
-		[0.36, -0.18],
-		[0.1, -0.18],
+		[30, -60],
+		[300, 80],
+		[300, 125],
+		[30, 50],
 	];
-	const stabilizer = [
-		[0.06, -0.78],
-		[0.44, -0.98],
-		[0.44, -1.06],
-		[0.06, -1.02],
+	const tailplane = [
+		[20, 215],
+		[125, 275],
+		[125, 305],
+		[20, 280],
 	];
 	const flip = (points) => points.map(([x, y]) => [-x, y]).reverse();
-	const area = (points) => points.reduce((sum, [x, y], i) => {
-		const [nx, ny] = points[(i + 1) % points.length];
-		return sum + x * ny - nx * y;
-	}, 0);
-	const parts = [fuselage, wing, flip(wing), stabilizer, flip(stabilizer)].map((points) => {
-		const svg = points.map(([x, y]) => [Math.round(x * S), Math.round(-y * S)]);
-		const unique = svg.filter(([x, y], i) => i === 0 || x !== svg[i - 1][0] || y !== svg[i - 1][1]);
-		// Drop points in the middle of straight runs (the fuselage's parallel sides).
-		const corners = unique.filter(([x, y], i) => {
-			const [px, py] = unique[(i + unique.length - 1) % unique.length];
-			const [nx, ny] = unique[(i + 1) % unique.length];
-			return (x - px) * (ny - y) - (y - py) * (nx - x) !== 0;
-		});
-		// One winding for every part, so the nonzero fill joins overlaps instead of cutting holes.
-		return area(corners) < 0 ? corners.reverse() : corners;
-	});
-	return parts.map((points) => "M " + points.map(([x, y]) => x + " " + y).join(" L ") + " Z").join(" ");
+	const part = (points) => "M " + points.map(([x, y]) => x + " " + y).join(" L ") + " Z";
+	const fuselage =
+		"M 0 -300 C 25 -300 42 -266 42 -216 L 42 135 C 42 225 19 285 13 305 Q 0 315 -13 305 " +
+		"C -19 285 -42 225 -42 135 L -42 -216 C -42 -266 -25 -300 0 -300 Z";
+	return [fuselage, ...[wing, flip(wing), tailplane, flip(tailplane)].map(part)].join(" ");
 }
 
 const planePath = glyph();
