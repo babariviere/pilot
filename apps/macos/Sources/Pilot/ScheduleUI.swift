@@ -296,7 +296,7 @@ struct ScheduledItemRow: View {
                         .help(when)
                 }
                 Button(action: remove) { PilotSymbol(PilotIcon.dismiss) }
-                    .buttonStyle(QuietIconButtonStyle(hoverTint: Theme.destructive))
+                    .rowIconButtonStyle(hoverTint: Theme.destructive)
                     .revealed(hovered)
                     .help(pending ? "Cancel this scheduled item" : "Dismiss")
                     .accessibilityLabel(pending ? "Cancel schedule" : "Dismiss")

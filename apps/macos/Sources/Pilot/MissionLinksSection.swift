@@ -294,7 +294,7 @@ struct MissionLinkRow: View, Equatable {
                 }
                 Menu { MissionLinkMenuItems(link: link, missionId: missionId) } label: { PilotSymbol(PilotIcon.more, context: .toolbar) }
                     .menuStyle(.button)
-                    .buttonStyle(QuietIconButtonStyle())
+                    .rowIconButtonStyle()
                     .menuIndicator(.hidden)
                     .fixedSize()
                     .revealed(hovered)
