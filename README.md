@@ -107,7 +107,7 @@ correct the narrowly scoped policy, not global host security. There is no unrest
 The coordinator sees a read-only host filesystem, including repository aliases and symlink targets, with
 only private session scratch, durable storage, artifacts and auth backing writable. It cannot create
 nested user namespaces, acquire capabilities or see host processes through `/proc`. Pre-existing hardlinks
-or shared writable private-state roots are rejected. Normal network access remains available for model
+or shared writable private-state roots, including pre-existing nested bind mounts, are rejected. Normal network access remains available for model
 providers and integrations; this is process/filesystem isolation, not a network or credential trust boundary.
 Coordinator authentication uses private same-host copies of `auth.json` and `mcp-auth.json`, with canonical
 configuration/resources read-only. Refreshes persist privately, never overwrite global credentials, and

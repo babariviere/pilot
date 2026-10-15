@@ -97,7 +97,7 @@ for(const path of [file,${JSON.stringify(join(alias, "file"))},${JSON.stringify(
  '/proc/self/root'+file,${JSON.stringify(join(source, "external-link"))}]) {
  assert.equal(typeof fs.readFileSync(path,'utf8'),'string');
  denied(()=>fs.writeFileSync(path,'escape')); denied(()=>fs.chmodSync(path,0o777));
- denied(()=>fs.unlinkSync(path)); denied(()=>fs.renameSync(path,scratch+'/stolen'));
+ if(path!==scratch+'/source-link') { denied(()=>fs.unlinkSync(path)); denied(()=>fs.renameSync(path,scratch+'/stolen')); }
 }
 denied(()=>fs.linkSync(file,scratch+'/hardlink'));
 denied(()=>fs.writeFileSync(${JSON.stringify(outside)},'escape'));
@@ -139,6 +139,63 @@ const mount=cp.spawnSync('/bin/mount',['-o','remount,rw','/']);assert.notEqual(m
 		'{"credential":"refreshed"}',
 	);
 	assert.equal(await readFile(join(storageDir, "state"), "utf8"), "durable");
+	// A second host bind-mount path to the source must also be readonly, not just a symlink alias.
+	const mounted = join(root, "mounted-source");
+	await mkdir(mounted);
+	const bindEntry = join(root, "bind-child.cjs");
+	await writeFile(
+		bindEntry,
+		`const fs=require('node:fs'),assert=require('node:assert/strict');
+assert.equal(fs.readFileSync(${JSON.stringify(join(mounted, "file"))},'utf8'),'protected');
+assert.throws(()=>fs.writeFileSync(${JSON.stringify(join(mounted, "file"))},'escape'),{code:'EROFS'});
+process.send('bind-verified');process.disconnect();`,
+	);
+	const module = new URL("./linux-coordinator.ts", import.meta.url).href;
+	const driver = `import {forkLinuxCoordinator} from ${JSON.stringify(module)};
+import {once} from 'node:events';import assert from 'node:assert/strict';
+const child=await forkLinuxCoordinator(${JSON.stringify(bindEntry)},${JSON.stringify(view)},${JSON.stringify({ storageDir, agentDir })});
+const exit=once(child,'exit');const message=await Promise.race([once(child,'message'),exit.then(()=>{throw Error('guard rejected bind alias')})]);
+assert.equal(message[0],'bind-verified');assert.equal((await exit)[0],0);`;
+	const outer = [
+		"--unshare-user",
+		"--unshare-pid",
+		"--ro-bind",
+		"/",
+		"/",
+		"--proc",
+		"/proc",
+		"--dev",
+		"/dev",
+		"--bind",
+		root,
+		root,
+	];
+	await promisify(execFile)(
+		"/usr/bin/bwrap",
+		[...outer, "--bind", source, mounted, process.execPath, "--input-type=module", "-e", driver],
+		{ timeout: 15_000 },
+	);
+	// Writable exceptions must reject nested bind mounts, otherwise an alias inside scratch would
+	// make protected inodes writable despite the read-only source mount and nlink==1 checks.
+	const scratchMount = join(scratch, "mounted-source");
+	await mkdir(scratchMount);
+	await promisify(execFile)(
+		"/usr/bin/bwrap",
+		[
+			...outer,
+			"--bind",
+			source,
+			scratchMount,
+			process.execPath,
+			"--input-type=module",
+			"-e",
+			`
+import {validateCoordinatorWrites} from ${JSON.stringify(module)};import assert from 'node:assert/strict';
+await assert.rejects(validateCoordinatorWrites([${JSON.stringify(scratch)}],[${JSON.stringify(source)}]),/mount point/);
+`,
+		],
+		{ timeout: 15_000 },
+	);
 	await link(file, join(scratch, "preexisting-hardlink"));
 	await assert.rejects(forkLinuxCoordinator(entry, view, { storageDir, agentDir }), /hardlink/);
 });
