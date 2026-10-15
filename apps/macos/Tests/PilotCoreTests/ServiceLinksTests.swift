@@ -48,8 +48,9 @@ import Testing
     let detected = ServiceLinks.detecting(in: parsed)
     #expect(String(detected.characters) == String(parsed.characters))
     let links = detected.runs.compactMap(\.link).map(\.absoluteString)
+    // Foundation also auto-links the bare generic URL. Preserve both generic destinations.
     #expect(links == ["https://github.com/acme/api/pull/42", "https://linear.app/acme/issue/ENG-1/fix-it",
-                      "https://github.com/acme/api/issues/2", "https://example.com"])
+                      "https://github.com/acme/api/issues/2", "https://example.com", "https://example.com"])
     let code = try #require(detected.runs.first { ($0.inlinePresentationIntent ?? []).contains(.code) })
     #expect(code.link == nil)
     #expect(ServiceLinks.detecting(in: detected) == detected)
