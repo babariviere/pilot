@@ -63,10 +63,12 @@ public struct AgentQuestion: Equatable, Sendable {
 
 extension Transcript {
     /// The latest question, unless a user message followed it. Automatic input counts as a reply too: the agent has
-    /// moved on. Scans back only to the latest user message.
+    /// moved on. Compaction summaries use the user role too, but are not replies.
+    /// Scans back only to the latest actual user input.
     public var pendingQuestion: AgentQuestion? {
         for entry in entries.reversed() {
             if let question = entry.question { return question }
+            if entry.kind == "pi.compaction" { continue }
             if entry.messages.contains(where: { $0.role == "user" }) { return nil }
         }
         return nil
