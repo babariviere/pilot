@@ -23,6 +23,7 @@ import { linearPrefill, linearStart } from "./linear-source.ts";
 import type { ProjectStore } from "./projects.ts";
 import { SlackModelUnavailable } from "./slack-classifier.ts";
 import { SlackFormatChanged } from "./slack-format.ts";
+import { addSlackDone, refreshSlackReactions } from "./slack-reactions.ts";
 import { slackChannelProgress, slackExcerpt } from "./slack-source.ts";
 import { slackStart, slackStartAllowed } from "./slack-start.ts";
 import { type SourceMcpClient, SourceRateLimited, SourceSignInRequired } from "./source-mcp.ts";
@@ -48,11 +49,12 @@ export interface SourcePollResult {
 }
 export type SourcePoller = (context: SourcePollContext) => Promise<SourcePollResult>;
 export type TrackingChange = { type: "sources" | "items"; projectId: string };
-type Run = { key: string; controller: AbortController; promise: Promise<TrackingSource> };
+type Run = { key: string; controller: AbortController; promise: Promise<TrackingSource>; allowed?: () => boolean };
 type Health = {
 	key: string;
 	status: "ok" | "sign_in_required" | "error";
 	error?: string;
+	localBudget?: boolean;
 	failures: number;
 	nextPollAt: number;
 };
@@ -79,6 +81,20 @@ export class SourceRegistry {
 		string,
 		{ sourceId: string; key: string; controller: AbortController; promise: Promise<void>; allowed?: () => boolean }
 	>();
+	/** At most one done write per project, sharing the two MCP slots. The durable store is the backlog. */
+	private readonly doneRuns = new Map<
+		string,
+		{
+			sourceId: string;
+			key: string;
+			controller: AbortController;
+			promise: Promise<void>;
+			allowed: () => boolean;
+			itemId: () => string | undefined;
+		}
+	>();
+	private readonly doneDue = new Set<string>();
+	private doneScheduled = false;
 	/** Settings lookups, at most one per kind, sharing slots with polls and prefills. */
 	private readonly lookups = new Map<TrackedKind, { controller: AbortController; promise: Promise<unknown> }>();
 	/** The triage inspector's excerpt: latest selection wins, at most one, sharing the two MCP slots. */
@@ -115,7 +131,10 @@ export class SourceRegistry {
 		);
 		this.syncLabelEffects();
 		this.disposers = [
-			items.onChange((projectId) => this.emit({ type: "items", projectId })),
+			items.onChange((projectId) => {
+				this.emit({ type: "items", projectId });
+				this.queueSlackDone(projectId);
+			}),
 			projects.onChange(() => {
 				const current = new Set(projects.list().map((project) => project.id));
 				for (const id of this.knownProjects) if (!current.has(id)) items.unload(id);
@@ -130,8 +149,9 @@ export class SourceRegistry {
 					void items.retainSlack(project.id, channels).catch(() => {});
 				}
 				for (const [id, run] of this.running)
-					if (this.currentKey(id) !== run.key) run.controller.abort(new Error("Tracking configuration changed"));
-				for (const run of [...this.details.values(), ...this.starts.values()])
+					if (this.currentKey(id) !== run.key || run.allowed?.() === false)
+						run.controller.abort(new Error("Tracking configuration changed"));
+				for (const run of [...this.details.values(), ...this.starts.values(), ...this.doneRuns.values()])
 					if (this.currentKey(run.sourceId) !== run.key || ("allowed" in run && run.allowed && !run.allowed()))
 						run.controller.abort(new Conflict("Tracking configuration changed"));
 				for (const id of this.health.keys())
@@ -140,6 +160,7 @@ export class SourceRegistry {
 				this.schedule();
 			}),
 		];
+		for (const project of projects.list()) this.queueSlackDone(project.id);
 	}
 	register(kind: TrackedKind, poller: SourcePoller): void {
 		if (this.pollers.has(kind)) throw new Error(`Source ${kind} is already registered`);
@@ -169,6 +190,7 @@ export class SourceRegistry {
 		this.schedule();
 	}
 	private schedule(): void {
+		this.pumpSlackDone();
 		clearTimeout(this.timer);
 		this.timer = undefined;
 		if (this.stopped) return;
@@ -234,7 +256,19 @@ export class SourceRegistry {
 		const controller = new AbortController();
 		const timer = setTimeout(() => controller.abort(new Error("Poll timed out")), 90_000);
 		const checkpoint = this.items.checkpoint(id);
-		const run: Run = { key, controller, promise: Promise.resolve(source) };
+		const run: Run = {
+			key,
+			controller,
+			promise: Promise.resolve(source),
+			...(source.kind === "slack"
+				? {
+						allowed: () =>
+							this.knownProjects.has(project.id) &&
+							JSON.stringify(this.projects.require(project.id).tracking?.slackChannels ?? []) ===
+								JSON.stringify(project.tracking?.slackChannels ?? []),
+					}
+				: {}),
+		};
 		this.running.set(id, run);
 		const work = Promise.resolve().then(() =>
 			poller({
@@ -260,6 +294,15 @@ export class SourceRegistry {
 						project.id,
 						this.projects.require(project.id).tracking?.slackChannels ?? [],
 					);
+				if (source.kind === "slack") {
+					const budget = await refreshSlackReactions(this.items, {
+						project,
+						config: project.tracking!,
+						signal: controller.signal,
+						call: (tool, args) => this.readCall("slack", tool, args, controller.signal),
+					});
+					if (budget) result.issue = "slack_budget";
+				}
 				const nextPollAt =
 					result.issue === "slack_budget"
 						? (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000
@@ -269,11 +312,12 @@ export class SourceRegistry {
 					failures: 0,
 					nextPollAt,
 					status: result.issue ? "error" : "ok",
+					...(result.issue === "slack_budget" ? { localBudget: true } : {}),
 					...(result.issue
 						? {
 								error:
 									result.issue === "slack_budget"
-										? "Slack classification daily budget reached. Remaining threads will resume tomorrow."
+										? "Slack daily budget reached. Remaining threads and reaction checks resume tomorrow."
 										: result.issue === "slack_channel"
 											? "A Slack channel could not be read. Check its access in project settings."
 											: "Some Slack threads could not be classified. Failed or interrupted attempts are cached and never retried.",
@@ -468,6 +512,10 @@ export class SourceRegistry {
 	async patch(itemId: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		const before = await this.items.require(itemId);
 		const item = await this.items.patch(itemId, patch);
+		if (item.kind === "slack" && item.slack?.status !== "done") {
+			const run = this.doneRuns.get(item.projectId);
+			if (run?.itemId() === item.id) run.controller.abort(new Error("Slack item reopened"));
+		}
 		const newLink =
 			(patch.sessionId && !before.sessionIds?.includes(patch.sessionId)) ||
 			(patch.missionId && !before.missionIds?.includes(patch.missionId));
@@ -579,24 +627,117 @@ export class SourceRegistry {
 		});
 		return promise;
 	}
+	private queueSlackDone(projectId: string): void {
+		if (
+			this.stopped ||
+			!this.knownProjects.has(projectId) ||
+			!this.projects.require(projectId).tracking?.slackChannels.length
+		)
+			return;
+		this.doneDue.add(projectId);
+		if (this.doneScheduled) return;
+		this.doneScheduled = true;
+		queueMicrotask(() => {
+			this.doneScheduled = false;
+			this.pumpSlackDone();
+		});
+	}
+	private pumpSlackDone(): void {
+		if (this.stopped) return;
+		for (const projectId of this.doneDue) {
+			if (this.busy() >= 2) break;
+			if (this.doneRuns.has(projectId)) continue;
+			this.doneDue.delete(projectId);
+			if (!this.knownProjects.has(projectId)) continue;
+			const sourceId = `${projectId}:slack`,
+				key = this.currentKey(sourceId);
+			if (!key) continue;
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(new Error("Slack done reaction timed out")), 60_000);
+			let admitted: TrackedItem | undefined;
+			const work = Promise.resolve()
+				.then(async () => {
+					admitted = await this.items.reserveSlackDone(projectId);
+					if (!admitted) return;
+					let outcome: "reacted" | "skipped" | "error" = "error";
+					try {
+						controller.signal.throwIfAborted();
+						const current = await this.items.require(admitted.id);
+						if (this.currentKey(sourceId) !== key || this.items.checkpoint(sourceId)?.configKey !== key)
+							throw new Conflict("Sync Slack first");
+						const health = this.health.get(sourceId);
+						if (health && !health.localBudget && health.status !== "ok" && health.nextPollAt > Date.now())
+							throw new Conflict("Source is backing off");
+						const project = structuredClone(this.projects.require(projectId));
+						outcome = await abortable(
+							addSlackDone(
+								{
+									project,
+									config: project.tracking!,
+									signal: controller.signal,
+									call: (tool, args) => {
+										controller.signal.throwIfAborted();
+										if (
+											this.currentKey(sourceId) !== key ||
+											!slackStartAllowed(
+												this.projects.require(projectId).tracking?.slackChannels ?? [],
+												current,
+											)
+										)
+											throw new Conflict("Tracking configuration changed");
+										return this.mcp.call("slack", tool, args, controller.signal);
+									},
+								},
+								current,
+							),
+							controller.signal,
+						);
+					} catch {
+						/* Done is local and never rolled back by a reaction failure. */
+					}
+					await this.items.slackDoneResult(admitted.id, outcome);
+				})
+				.catch((error: unknown) => console.warn(`pilotd: Slack done reaction failed: ${logCause(error)}`))
+				.finally(() => {
+					clearTimeout(timer);
+					this.doneRuns.delete(projectId);
+					if (admitted) this.queueSlackDone(projectId);
+					this.schedule();
+				});
+			this.doneRuns.set(projectId, {
+				sourceId,
+				key,
+				controller,
+				promise: work,
+				itemId: () => admitted?.id,
+				allowed: () =>
+					this.knownProjects.has(projectId) &&
+					(!admitted ||
+						slackStartAllowed(this.projects.require(projectId).tracking?.slackChannels ?? [], admitted)),
+			});
+		}
+	}
 	private readCall(
 		kind: TrackedKind,
 		tool: string,
 		args: Record<string, unknown>,
 		signal: AbortSignal,
 	): Promise<TrackingJson> {
-		if (tool === "startIssue" || tool === "startSlack") return Promise.reject(new Error("Source reads cannot write"));
+		if (tool === "startIssue" || tool === "startSlack" || tool === "doneSlack")
+			return Promise.reject(new Error("Source reads cannot write"));
 		return this.mcp.call(kind, tool, args, signal);
 	}
 
 	async stop(): Promise<void> {
 		this.stopped = true;
+		this.doneDue.clear();
 		clearTimeout(this.timer);
 		for (const dispose of this.disposers) dispose();
 		const signIns = this.signIns.stop();
 		for (const run of this.running.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.details.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.starts.values()) run.controller.abort(new Error("Tracking stopped"));
+		for (const run of this.doneRuns.values()) run.controller.abort(new Error("Tracking stopped"));
 		for (const run of this.lookups.values()) run.controller.abort(new Error("Tracking stopped"));
 		const excerpt = this.excerptRun;
 		excerpt?.controller.abort(new Error("Tracking stopped"));
@@ -604,6 +745,7 @@ export class SourceRegistry {
 		await Promise.allSettled([...this.details.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.lookups.values()].map((run) => run.promise));
 		await Promise.allSettled([...this.starts.values()].map((run) => run.promise));
+		await Promise.allSettled([...this.doneRuns.values()].map((run) => run.promise));
 		await excerpt?.promise.catch(() => {});
 		await signIns;
 		await this.mcp.close?.();
@@ -694,7 +836,14 @@ export class SourceRegistry {
 		return promise;
 	}
 	private busy(): number {
-		return this.running.size + this.details.size + this.lookups.size + this.starts.size + (this.excerptRun ? 1 : 0);
+		return (
+			this.running.size +
+			this.details.size +
+			this.lookups.size +
+			this.starts.size +
+			this.doneRuns.size +
+			(this.excerptRun ? 1 : 0)
+		);
 	}
 	private failed(id: string, key: string, error: unknown): void {
 		if (this.currentKey(id) !== key || this.stopped) return;

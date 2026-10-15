@@ -110,6 +110,19 @@ private let slack = TrackedItem(
     #expect(TrackedItemText.startError(linear(statusType: "unstarted", startOutcome: "error")) == "Couldn't move to In progress")
 }
 
+@Test func slackDoneReactionErrorsAreQuietAndKeepTheDoneReason() {
+    let item = TrackedItem(id: "s", projectId: "p", kind: .slack, externalId: "CEXAMPLE/1.000001",
+                          title: "Sample question", url: "https://example.com", status: "done",
+                          metadata: ["slackDone": .object(["outcome": .string("error"), "error": .string("private detail")])],
+                          createdAt: ms, updatedAt: ms,
+                          slack: SlackTriage(type: .question, severity: .low, status: .done, doneReason: "Done · ✅ in Slack"))
+    #expect(TrackedItemText.startError(item) == "Couldn't add done reaction in Slack")
+    #expect(TrackedItemText.startErrorHelp(item)?.contains("local status") == true)
+    #expect(!SlackTriageText.accessibilityLabel(item, now: now).contains("private detail"))
+    #expect(SlackTriageText.accessibilityLabel(item, now: now).contains("Couldn't add done reaction"))
+    #expect(item.slack?.doneReason == "Done · ✅ in Slack")
+}
+
 @Test func trackedLinkShowsTheLatestChatOrMissionWithACount() {
     func session(_ id: String, state: String = "idle", outcome: SessionOutcome? = nil, created: Double,
                  pr: SessionPullRequest? = nil) -> SessionSummary {

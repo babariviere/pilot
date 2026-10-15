@@ -59,15 +59,15 @@ test("Slack start exposes only the fixed eyes reaction and normalizes success wi
 	assert.equal(dedicatedSourceTool("linear", "startSlack"), undefined);
 	for (const tool of ["slack_add_reaction", "slack_remove_reaction", "slack_send_message", "slack_reply_to_thread"])
 		assert.equal(dedicatedSourceTool("slack", tool), undefined);
-	const args = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", name: "eyes" };
+	const args = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", emoji: "eyes" };
 	assert.equal(validSourceArguments("startSlack", args), true);
 	for (const invalid of [
-		{ ...args, name: "white_check_mark" },
-		{ ...args, name: ":eyes:" },
+		{ ...args, emoji: "white_check_mark" },
+		{ ...args, emoji: ":eyes:" },
 		{ ...args, text: "not allowed" },
 		{ ...args, channel_id: "#bugs" },
 		{ ...args, message_ts: "no" },
-		{ ...args, name: undefined },
+		{ ...args, emoji: undefined },
 	])
 		assert.equal(validSourceArguments("startSlack", invalid), false);
 	for (const response of [
@@ -88,6 +88,52 @@ test("Slack start exposes only the fixed eyes reaction and normalizes success wi
 		/error/,
 		"the exception never applies to other tools",
 	);
+});
+
+test("check reads expose only reaction metadata and Done writes are fixed to white_check_mark", () => {
+	assert.equal(dedicatedSourceTool("slack", "reactions"), "slack_get_reactions");
+	assert.equal(dedicatedSourceTool("slack", "doneSlack"), "slack_add_reaction");
+	assert.equal(dedicatedSourceTool("linear", "doneSlack"), undefined);
+	const args = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", emoji: "white_check_mark" };
+	assert.equal(validSourceArguments("doneSlack", args), true);
+	for (const invalid of [
+		{ ...args, emoji: "eyes" },
+		{ ...args, name: "white_check_mark" },
+		{ ...args, emoji: ":white_check_mark:" },
+	])
+		assert.equal(validSourceArguments("doneSlack", invalid), false);
+	const { emoji: _, ...readArgs } = args;
+	assert.equal(validSourceArguments("reactions", readArgs), true);
+	assert.equal(validSourceArguments("reactions", args), false);
+	for (const response of [
+		{ structuredContent: { reactions: [{ name: "white_check_mark", count: 2, users: ["private-name"] }] } },
+		{ content: [{ type: "text", text: '{"reactions":[{"name":"white_check_mark","count":1}]}' }] },
+		{ content: [{ type: "text", text: "Reactions:\n:white_check_mark: (2)\nUsers: private-name" }] },
+	])
+		assert.deepEqual(decodeMcpResult(response, "reactions"), { present: true });
+	for (const reactions of [
+		[],
+		[{ name: "eyes", count: 2 }],
+		[{ name: "white_check_mark", count: 0 }],
+		"No reactions on this message.",
+	])
+		assert.deepEqual(decodeMcpResult({ structuredContent: { reactions } }, "reactions"), { present: false });
+	assert.deepEqual(
+		decodeMcpResult(
+			{ structuredContent: { message: { text: "Reactions: white_check_mark (1)", reactions: [] } } },
+			"reactions",
+		),
+		{ present: false },
+	);
+	for (const response of [
+		{ structuredContent: { reactions: [{ name: "white_check_mark", count: -1 }] } },
+		{ content: [{ type: "text", text: "white_check_mark" }] },
+		{ structuredContent: { ok: false, error: "private" } },
+	])
+		assert.throws(() => decodeMcpResult(response, "reactions"), /Slack reactions response|read Slack reactions/);
+	assert.deepEqual(decodeMcpResult({ isError: true, structuredContent: { error: "already_reacted" } }, "doneSlack"), {
+		ok: true,
+	});
 });
 
 test("in-flight stdio cancellation waits for process-group shutdown before returning", async () => {
@@ -214,6 +260,7 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 					"save_issue",
 					"slack_read_channel",
 					"slack_read_thread",
+					"slack_get_reactions",
 					"slack_add_reaction",
 				].map((name) => ({
 					name,
@@ -340,7 +387,7 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 		for (const tool of ["save_issue", "update_issue", "create_issue", "save_comment", "delete_issue"])
 			await assert.rejects(client.call("linear", tool, {}, signal), /Unknown dedicated MCP/);
 		assert.equal(seen.length, beforeInvalid, "invalid writes never connect");
-		const reactionArgs = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", name: "eyes" };
+		const reactionArgs = { channel_id: "CEXAMPLE", message_ts: "1780000000.123456", emoji: "eyes" };
 		for (const response of [
 			{ structuredContent: { ok: true } },
 			{ isError: true, structuredContent: { ok: false, error: "already_reacted" } },
@@ -353,6 +400,12 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 				arguments: reactionArgs,
 			});
 		}
+		const doneArgs = { ...reactionArgs, emoji: "white_check_mark" };
+		assert.deepEqual(await client.call("slack", "doneSlack", doneArgs, signal), { ok: true });
+		assert.deepEqual(seen.filter((request) => request.method === "tools/call").at(-1)?.params, {
+			name: "slack_add_reaction",
+			arguments: doneArgs,
+		});
 		reactionResponse = { isError: true, content: [{ type: "text", text: "missing_scope: private detail" }] };
 		reactionThrows = true;
 		assert.deepEqual(await client.call("slack", "startSlack", reactionArgs, signal), { ok: true });
@@ -362,7 +415,7 @@ test("pinned SDK wrapper calls fixed dedicated tools, reuses OAuth and detects r
 			(error: Error) => /Couldn't add Slack reaction/.test(error.message) && !error.message.includes("private"),
 		);
 		const beforeInvalidSlack = seen.length;
-		await assert.rejects(client.call("slack", "startSlack", { ...reactionArgs, name: "other" }, signal), /Invalid/);
+		await assert.rejects(client.call("slack", "startSlack", { ...reactionArgs, emoji: "other" }, signal), /Invalid/);
 		await assert.rejects(
 			client.call("slack", "startSlack", { ...reactionArgs, text: "no messages" }, signal),
 			/Invalid/,

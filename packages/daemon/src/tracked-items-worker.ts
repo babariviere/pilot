@@ -56,6 +56,21 @@ parentPort!.on("message", ({ id, method, args }) => {
 				value = disk.reserveSlackStart(args.id);
 				projectId = disk.require(args.id).projectId;
 				break;
+			case "reserveSlackReactions":
+				value = disk.reserveSlackReactions(args.projectId, args.now);
+				break;
+			case "recordSlackReaction":
+				disk.recordSlackReaction(args.id, args.present, args.version);
+				if (changed) projectId = disk.require(args.id).projectId;
+				break;
+			case "reserveSlackDone":
+				value = disk.reserveSlackDone(args.projectId);
+				if (changed) projectId = args.projectId;
+				break;
+			case "slackDoneResult":
+				disk.slackDoneResult(args.id, args.outcome);
+				if (changed) projectId = disk.require(args.id).projectId;
+				break;
 			case "slackStartResult":
 				disk.slackStartResult(args.id, args.outcome);
 				projectId = disk.require(args.id).projectId;

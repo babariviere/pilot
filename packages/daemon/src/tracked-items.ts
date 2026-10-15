@@ -15,6 +15,7 @@ import type {
 	InboxTracked,
 	SlackCache,
 	SlackPullRequestObservation,
+	SlackReactionBatch,
 	SlackReservation,
 	SourceCheckpoint,
 	TrackedInput,
@@ -146,6 +147,18 @@ export class TrackedItemStore {
 	}
 	slackStartResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
 		return this.rpc("slackStartResult", { id, outcome });
+	}
+	reserveSlackReactions(projectId: string, now: number): Promise<SlackReactionBatch> {
+		return this.rpc("reserveSlackReactions", { projectId, now });
+	}
+	recordSlackReaction(id: string, present: boolean, version: number): Promise<void> {
+		return this.rpc("recordSlackReaction", { id, present, version });
+	}
+	reserveSlackDone(projectId: string): Promise<TrackedItem | undefined> {
+		return this.rpc("reserveSlackDone", { projectId });
+	}
+	slackDoneResult(id: string, outcome: "reacted" | "skipped" | "error"): Promise<void> {
+		return this.rpc("slackDoneResult", { id, outcome });
 	}
 	patch(id: string, patch: TrackedItemPatch): Promise<TrackedItem> {
 		return this.rpc("patch", { id, patch });

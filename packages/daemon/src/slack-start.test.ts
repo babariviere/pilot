@@ -34,9 +34,10 @@ async function fixture(t: TestContext) {
 	const tracking = new SourceRegistry(projects, items, {
 		async call(kind, tool, args, signal) {
 			assert.equal(kind, "slack", "only the dedicated Slack source");
+			if (tool === "reactions") return { present: false };
 			assert.equal(dedicatedSourceTool(kind, tool), "slack_add_reaction");
 			assert.ok(validSourceArguments(tool, args));
-			assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parentTs, name: "eyes" });
+			assert.deepEqual(args, { channel_id: "CEXAMPLE", message_ts: parentTs, emoji: "eyes" });
 			calls.push({ tool, args });
 			await beforeWrite(signal);
 			signal.throwIfAborted();
@@ -176,7 +177,8 @@ test("ordinary/replayed links, Linear starts, invalid confirmation and polling n
 		assert.throws(() => validatePatch(patch));
 	await f.tracking.startSlack({ ...f.item, kind: "linear" });
 	f.tracking.register("linear", async (context) => {
-		for (const tool of ["startSlack", "startIssue"]) await assert.rejects(context.call(tool, {}), /cannot write/);
+		for (const tool of ["startSlack", "startIssue", "doneSlack"])
+			await assert.rejects(context.call(tool, {}), /cannot write/);
 		return { items: [] };
 	});
 	await f.projects.update(f.project.id, { tracking: { linearTeam: "example", slackChannels: ["CEXAMPLE"] } });
