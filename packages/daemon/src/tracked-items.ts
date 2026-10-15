@@ -115,6 +115,10 @@ export class TrackedItemStore {
 	reserveSlack(channel: string, ts: string, now: number, projectId: string): Promise<SlackReservation> {
 		return this.rpc("reserveSlack", { channel, ts, now, projectId });
 	}
+	/** Mention discovery reads share the classification/reaction daily budget. */
+	reserveSlackRead(now: number): Promise<boolean> {
+		return this.rpc("reserveSlackRead", { now });
+	}
 	finishSlack(channel: string, ts: string, result: SlackClassification | undefined, projectId: string): Promise<void> {
 		return this.rpc("finishSlack", { channel, ts, result, projectId });
 	}

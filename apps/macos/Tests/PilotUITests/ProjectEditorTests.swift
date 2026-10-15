@@ -2,6 +2,28 @@ import PilotCore
 import Testing
 @testable import Pilot
 
+@Test @MainActor func projectEditorPreservesMentionFiltersAndGroups() {
+    let editor = ProjectEditor()
+    editor.load(Project(id: "p", name: "Repo", path: "/repo",
+                        tracking: .init(slackChannels: ["C1", "C2"],
+                                        slackMentionOnlyChannels: ["C1"], slackGroupHandles: ["oncall"]), createdAt: 1))
+    #expect(!editor.hasChanges)
+    #expect(editor.slackMentionOnlyChannels == ["C1"])
+    #expect(editor.slackGroupHandles == "oncall")
+    editor.slackMentionOnlyChannels.insert("C2")
+    #expect(editor.hasChanges)
+    editor.slackGroupHandles = "@oncall, @client-team"
+    #expect(editor.request.tracking?.slackMentionOnlyChannels == ["C1", "C2"])
+    #expect(editor.request.tracking?.slackGroupHandles == ["@oncall", "@client-team"])
+    editor.removeChannel("C1")
+    #expect(editor.request.tracking?.slackMentionOnlyChannels == ["C2"])
+    editor.load(Project(id: "q", name: "Other", path: "/other", createdAt: 1))
+    #expect(editor.slackMentionOnlyChannels.isEmpty)
+    #expect(editor.slackGroupHandles.isEmpty)
+    #expect(editor.request.tracking?.slackMentionOnlyChannels == nil)
+    #expect(editor.request.tracking?.slackGroupHandles == nil)
+}
+
 @Test @MainActor func projectEditorPreservesSlackLabelsWithoutAnEditor() {
     let labels = [SlackProjectLabel(name: "Client", description: "App support", effect: .hide)]
     let editor = ProjectEditor()

@@ -2,19 +2,20 @@ import { createHash } from "node:crypto";
 import type { SlackExcerpt, TrackedItem, TrackingJson } from "@pilot/protocol";
 import { Conflict } from "./errors.ts";
 import type { ModelCatalog } from "./models.ts";
+import { parseSlackClassification, type SlackClassification, type SlackClassifierContext } from "./slack-classifier.ts";
 import {
 	parseSlackPage,
 	parseSlackThread,
 	parseSlackThreadParent,
+	SlackFormatChanged,
 	slackExcerptText,
 	slackTimestamp,
-	SlackFormatChanged,
 } from "./slack-format.ts";
+import { mentionsMe, parseSlackIdentity, parseSlackMentions, type SlackIdentity } from "./slack-mentions.ts";
 import { SourceToolError } from "./source-mcp.ts";
 import type { SourcePollContext, SourcePoller, SourcePollResult } from "./sources.ts";
 import type { TrackedInput, TrackedItemStore } from "./tracked-items.ts";
 import type { SlackCache } from "./tracked-items-disk.ts";
-import { parseSlackClassification, type SlackClassifierContext, type SlackClassification } from "./slack-classifier.ts";
 
 export const SLACK_CONFIDENCE_THRESHOLD = 0.8;
 export const SLACK_BATCH_SIZE = 8;
@@ -32,8 +33,17 @@ type ChannelCursor = [
 	pulledAt: number | null,
 	failedAt: number | null,
 ];
-type Cursor = { version: 2; last: string | null; channels: Record<string, ChannelCursor> };
-type CacheStore = Pick<TrackedItemStore, "slackCached" | "reserveSlack" | "finishSlack" | "corrections">;
+type Cursor = {
+	version: 2;
+	last: string | null;
+	channels: Record<string, ChannelCursor>;
+	mentions?: Record<string, [scope: string, term: number, privateSearch?: boolean]>;
+};
+type CacheStore = Pick<
+	TrackedItemStore,
+	"slackCached" | "reserveSlack" | "reserveSlackRead" | "finishSlack" | "corrections"
+>;
+class SlackReadBudget extends Error {}
 
 /** Per-channel progress for source status. Old or foreign checkpoints report nothing. */
 export function slackChannelProgress(
@@ -63,6 +73,7 @@ export function createSlackPoller(
 	now = Date.now,
 ): SourcePoller {
 	const active = new Map<string, Promise<SlackCache>>();
+	let identity: { value: SlackIdentity; at: number } | undefined;
 	return async (context) => {
 		const names = context.config.slackChannels;
 		if (!names.length) return { items: [] };
@@ -72,6 +83,17 @@ export function createSlackPoller(
 		const last = cursor.last === null ? -1 : names.findIndex((name) => channelKey(name) === cursor.last);
 		const name = names[(last + 1) % names.length]!;
 		const key = channelKey(name);
+		const filtered = context.config.slackMentionOnlyChannels?.includes(name) ?? false;
+		const groups = context.config.slackGroupHandles ?? [];
+		// Filter edits reset only this channel's discovery, never the classification cache or existing items.
+		const scope = channelKey(JSON.stringify(groups));
+		const priorMention = cursor.mentions?.[key];
+		if ((filtered && priorMention?.[0] !== scope) || (!filtered && priorMention)) {
+			cursor.channels[key] = [timestamp(now() - INITIAL_LOOKBACK_MS), null, null, null, null];
+			cursor.mentions ??= {};
+			if (filtered) cursor.mentions[key] = [scope, 0];
+			else delete cursor.mentions[key];
+		}
 		const [oldest, savedLatest, next, pulledAt] = cursor.channels[key]!;
 		const latest = savedLatest ?? timestamp(now());
 		cursor.last = key;
@@ -79,30 +101,107 @@ export function createSlackPoller(
 		const items: TrackedInput[] = [];
 		let issue: SourcePollResult["issue"],
 			deferred = false;
+		const read = async (tool: string, args: Record<string, unknown>) => {
+			if (!(await store.reserveSlackRead(now()))) throw new SlackReadBudget();
+			context.signal.throwIfAborted();
+			return context.call(tool, args);
+		};
 		try {
-			page = parseSlackPage(
-				await context.call("history", {
-					channel_id: name,
-					oldest,
-					latest,
+			let me: SlackIdentity | undefined;
+			if (filtered) {
+				if (!identity || now() - identity.at >= 3_600_000) {
+					const value = parseSlackIdentity(await read("profile", { response_format: "detailed" }));
+					identity = { value, at: now() };
+				}
+				me = identity.value;
+				const mentionState = cursor.mentions![key]!;
+				const term = mentionState[1];
+				const mention = term === 0 ? `<@${me.id}>` : `@${groups[term - 1]}`;
+				const args = {
+					keywords: term === 0 ? [] : [mention],
+					filters: `${/^[CDG][A-Z0-9]+$/.test(name) ? `in:<#${name}>` : `in:${name.replace(/^#/, "")}`}${term === 0 ? ` with:${mention}` : ""}`,
+					natural_language_query: "",
+					content_types: "messages",
+					include_context: false,
+					include_bots: true,
+					sort: "timestamp",
+					sort_dir: "asc",
+					after: oldest,
+					before: latest,
 					...(next ? { cursor: next } : {}),
 					limit: SLACK_BATCH_SIZE,
 					response_format: "detailed",
-				}),
-				SLACK_BATCH_SIZE,
-			);
+				};
+				const search = async (privateSearch: boolean) =>
+					parseSlackMentions(
+						await read(privateSearch ? "mentionsPrivate" : "mentions", {
+							...args,
+							...(privateSearch ? { channel_types: "public_channel,private_channel" } : {}),
+						}),
+						name,
+						context.config.slackChannelNames?.[name] ?? name.replace(/^#/, ""),
+						SLACK_BATCH_SIZE,
+					);
+				if (mentionState[2]) page = await search(true);
+				else {
+					// Public search omits private channels, including modern private channels with C IDs.
+					// Try it first, then remember the channel-scoped private-capable engine and its cursor.
+					let publicPage: typeof page | undefined;
+					try {
+						publicPage = await search(false);
+					} catch (error) {
+						if (!(error instanceof SourceToolError)) throw error;
+					}
+					if (publicPage && (publicPage.messages.length || publicPage.next || next)) page = publicPage;
+					else {
+						mentionState[2] = true;
+						page = await search(true);
+					}
+				}
+			} else
+				page = parseSlackPage(
+					await context.call("history", {
+						channel_id: name,
+						oldest,
+						latest,
+						...(next ? { cursor: next } : {}),
+						limit: SLACK_BATCH_SIZE,
+						response_format: "detailed",
+					}),
+					SLACK_BATCH_SIZE,
+				);
 			if (/^[CDG][A-Z0-9]+$/.test(name) && name !== page.channel) throw new SlackFormatChanged();
 			if (!/^[CDG][A-Z0-9]+$/.test(name) && name.replace(/^#/, "") !== page.name) throw new SlackFormatChanged();
 			let classifierContext: SlackClassifierContext | undefined;
 			let classify: ((text: string) => Promise<SlackClassification>) | undefined;
+			const seen = new Set<string>();
 			for (const message of page.messages) {
 				context.signal.throwIfAborted();
+				if (filtered && !mentionsMe(message.text, me!, groups)) continue;
+				if (seen.has(message.threadTs)) continue;
+				seen.add(message.threadTs);
 				const threadKey = `${context.project.id}/${page.channel}/${message.threadTs}`;
 				let cached = await store.slackCached(page.channel, message.threadTs, context.project.id);
 				if (cached?.state === "pending") {
 					cached = active.has(threadKey) ? await active.get(threadKey)! : { state: "error" };
 				}
 				if (!cached) {
+					// Search discovers mentions in replies without re-reading every thread. Read the bounded full
+					// context only for a new qualifying parent, even when the mention lies beyond that prefix.
+					const thread =
+						filtered || message.replies
+							? parseSlackThread(
+									await (filtered ? read : context.call)("thread", {
+										channel_id: page.channel,
+										message_ts: message.threadTs,
+										limit: THREAD_LIMIT,
+										response_format: "detailed",
+									}),
+									message.threadTs,
+									THREAD_LIMIT,
+								)
+							: { messages: [message] };
+					message.replies = thread.messages[0]!.replies;
 					classifierContext ??= {
 						labels: context.config.slackLabels ?? [],
 						corrections: await store.corrections(context.project.id),
@@ -110,19 +209,6 @@ export function createSlackPoller(
 					classify ??= models.prepareSlackClassifier
 						? await models.prepareSlackClassifier(context.project.path, context.signal, classifierContext)
 						: (text) => models.classifySlack(context.project.path, text, context.signal, classifierContext);
-					// Read only a bounded prefix, once. Later replies never cause reclassification.
-					const thread = message.replies
-						? parseSlackThread(
-								await context.call("thread", {
-									channel_id: page.channel,
-									message_ts: message.threadTs,
-									limit: THREAD_LIMIT,
-									response_format: "detailed",
-								}),
-								message.threadTs,
-								THREAD_LIMIT,
-							)
-						: { messages: [message] };
 					context.signal.throwIfAborted();
 					const reservation = await store.reserveSlack(page.channel, message.threadTs, now(), context.project.id);
 					if (reservation.state === "budget") {
@@ -162,7 +248,7 @@ export function createSlackPoller(
 								: reservation;
 				}
 				context.signal.throwIfAborted();
-				if (!cached || cached.state !== "done") {
+				if (cached?.state !== "done") {
 					issue ??= "slack_classification";
 					continue;
 				}
@@ -189,16 +275,22 @@ export function createSlackPoller(
 				});
 			}
 		} catch (error) {
+			if (error instanceof SlackReadBudget) {
+				cursor.channels[key] = [oldest, latest, next, pulledAt, null];
+				return { items, cursor: cursor as unknown as TrackingJson, issue: "slack_budget" };
+			}
 			// Only the tool's own refusal is channel-specific. Sign-in, limits and format changes stop the source.
 			if (!(error instanceof SourceToolError) || context.signal.aborted) throw error;
 			cursor.channels[key] = [oldest, savedLatest, next, pulledAt, now()];
 			return { items: [], cursor: cursor as unknown as TrackingJson, issue: "slack_channel" };
 		}
 		const pulled = now();
+		const nextTerm = filtered && !page.next && cursor.mentions![key]![1] < groups.length;
+		if (filtered && !deferred && !page.next) cursor.mentions![key]![1] = nextTerm ? cursor.mentions![key]![1] + 1 : 0;
 		cursor.channels[key] = deferred
 			? [oldest, latest, next, pulled, null]
-			: page.next
-				? [oldest, latest, page.next, pulled, null]
+			: page.next || nextTerm
+				? [oldest, latest, page.next ?? null, pulled, null]
 				: [latest, null, null, pulled, null];
 		return { items, cursor: cursor as unknown as TrackingJson, ...(issue ? { issue } : {}) };
 	};
@@ -260,9 +352,41 @@ function readCursor(value: TrackingJson | undefined, names: string[], now: numbe
 	)
 		throw new Error("Invalid Slack checkpoint");
 	const channels = previous.channels;
+	const mentions = previous.mentions;
+	if (
+		mentions !== undefined &&
+		(!mentions ||
+			typeof mentions !== "object" ||
+			Array.isArray(mentions) ||
+			Object.keys(mentions).length > 100 ||
+			Object.values(mentions).some(
+				(entry) =>
+					!Array.isArray(entry) ||
+					(entry.length !== 2 && entry.length !== 3) ||
+					(entry[2] !== undefined && typeof entry[2] !== "boolean") ||
+					typeof entry[0] !== "string" ||
+					!/^[\w-]{12}$/.test(entry[0]) ||
+					!Number.isInteger(entry[1]) ||
+					entry[1] < 0 ||
+					entry[1] > 30,
+			))
+	)
+		throw new Error("Invalid Slack checkpoint");
 	return {
 		version: 2,
 		last: previous.last ?? null,
+		...(mentions
+			? {
+					mentions: Object.fromEntries(
+						names.flatMap((name) => {
+							const key = channelKey(name);
+							return Object.hasOwn(mentions, key)
+								? [[key, [...mentions[key]!] as [string, number, boolean?]]]
+								: [];
+						}),
+					),
+				}
+			: {}),
 		channels: Object.fromEntries(
 			names.map((name) => {
 				const key = channelKey(name);

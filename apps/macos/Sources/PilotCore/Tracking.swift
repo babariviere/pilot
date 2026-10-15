@@ -150,6 +150,8 @@ public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     /// Channel IDs from the picker. Older configs may hold names.
     public var slackLabels: [SlackProjectLabel]?
     public var slackChannels: [String]
+    public var slackMentionOnlyChannels: [String]?
+    public var slackGroupHandles: [String]?
     /// Display names by channel ID. Never part of the poll scope.
     public var slackChannelNames: [String: String]?
     /// Team ID from list_teams. An empty string in a request clears the team.
@@ -159,10 +161,12 @@ public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     public var linearStateMappings: [String: LinearStateMapping]?
     public init(slackChannels: [String] = [], slackChannelNames: [String: String]? = nil,
                 linearTeam: String? = nil, linearTeamName: String? = nil, slackLabels: [SlackProjectLabel]? = nil,
-                linearStateMappings: [String: LinearStateMapping]? = nil) {
+                linearStateMappings: [String: LinearStateMapping]? = nil,
+                slackMentionOnlyChannels: [String]? = nil, slackGroupHandles: [String]? = nil) {
         self.slackChannels = slackChannels; self.slackChannelNames = slackChannelNames
         self.linearTeam = linearTeam; self.linearTeamName = linearTeamName; self.slackLabels = slackLabels
         self.linearStateMappings = linearStateMappings
+        self.slackMentionOnlyChannels = slackMentionOnlyChannels; self.slackGroupHandles = slackGroupHandles
     }
 }
 

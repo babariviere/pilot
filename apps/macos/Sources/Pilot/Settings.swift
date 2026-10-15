@@ -597,6 +597,8 @@ final class ProjectEditor: ObservableObject {
     @Published var privateClones = true
     @Published var requirePullRequest = true
     @Published var slackChannels: [TrackedChannelRef] = []
+    @Published var slackMentionOnlyChannels: Set<String> = []
+    @Published var slackGroupHandles = ""
     @Published var slackLabels: [EditableSlackLabel] = []
     @Published var linearTeam: TrackedTeamRef?
     @Published var linearStateMappings: [String: LinearStateMapping] = [:]
@@ -610,6 +612,8 @@ final class ProjectEditor: ObservableObject {
         var privateClones: Bool
         var requirePullRequest: Bool
         var channels: [String]
+        var mentionOnlyChannels: Set<String>
+        var groupHandles: String
         var team: String?
         var stateMappings: [String: LinearStateMapping]
         var labels: [SlackProjectLabel]
@@ -617,7 +621,8 @@ final class ProjectEditor: ObservableObject {
 
     private var fields: Fields {
         Fields(name: name, model: model, privateClones: privateClones, requirePullRequest: requirePullRequest,
-               channels: slackChannels.map(\.id), team: linearTeam?.id, stateMappings: linearStateMappings, labels: savedLabels)
+               channels: slackChannels.map(\.id), mentionOnlyChannels: slackMentionOnlyChannels,
+               groupHandles: slackGroupHandles, team: linearTeam?.id, stateMappings: linearStateMappings, labels: savedLabels)
     }
 
     /// Labels as saved. Unnamed labels are drafts and are left out.
@@ -635,6 +640,8 @@ final class ProjectEditor: ObservableObject {
         let tracking = project.tracking
         slackLabels = (tracking?.slackLabels ?? []).map(EditableSlackLabel.init)
         slackChannels = (tracking?.slackChannels ?? []).map { TrackedChannelRef(id: $0, name: tracking?.slackChannelNames?[$0]) }
+        slackMentionOnlyChannels = Set(tracking?.slackMentionOnlyChannels ?? [])
+        slackGroupHandles = (tracking?.slackGroupHandles ?? []).joined(separator: ", ")
         linearTeam = tracking?.linearTeam.flatMap { $0.isEmpty ? nil : TrackedTeamRef(id: $0, name: tracking?.linearTeamName) }
         linearStateMappings = tracking?.linearStateMappings ?? [:]
         error = nil
@@ -648,6 +655,7 @@ final class ProjectEditor: ObservableObject {
 
     func removeChannel(_ id: String) {
         slackChannels.removeAll { $0.id == id }
+        slackMentionOnlyChannels.remove(id)
     }
 
     func addLabel() {
@@ -662,6 +670,8 @@ final class ProjectEditor: ObservableObject {
         let names = Dictionary(slackChannels.compactMap { channel in channel.name.map { (channel.id, $0) } },
                                uniquingKeysWith: { first, _ in first })
         let labels = savedLabels
+        let groups = slackGroupHandles.split { $0 == "," || $0.isWhitespace }.map(String.init)
+        let mentionOnly = slackChannels.map(\.id).filter { slackMentionOnlyChannels.contains($0) }
         return ProjectRequest(
             name: name, model: model, workspace: privateClones ? "clone" : "direct",
             requirePullRequest: requirePullRequest,
@@ -671,7 +681,9 @@ final class ProjectEditor: ObservableObject {
                 linearTeam: linearTeam?.id ?? "",
                 linearTeamName: linearTeam?.name,
                 slackLabels: labels.isEmpty ? nil : labels,
-                linearStateMappings: linearTeam == nil || linearStateMappings.isEmpty ? nil : linearStateMappings
+                linearStateMappings: linearTeam == nil || linearStateMappings.isEmpty ? nil : linearStateMappings,
+                slackMentionOnlyChannels: mentionOnly.isEmpty ? nil : mentionOnly,
+                slackGroupHandles: groups.isEmpty ? nil : groups
             )
         )
     }

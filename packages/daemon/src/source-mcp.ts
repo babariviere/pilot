@@ -12,6 +12,9 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 	if (kind === "linear" && tool === "startIssue") return "save_issue";
 	if (kind === "linear" && tool === "teams") return "list_teams";
 	if (kind === "slack" && tool === "history") return "slack_read_channel";
+	if (kind === "slack" && tool === "profile") return "slack_read_user_profile";
+	if (kind === "slack" && tool === "mentions") return "slack_search_public";
+	if (kind === "slack" && tool === "mentionsPrivate") return "slack_search_public_and_private";
 	if (kind === "slack" && tool === "thread") return "slack_read_thread";
 	if (kind === "slack" && tool === "startSlack") return "slack_add_reaction";
 	if (kind === "slack" && tool === "doneSlack") return "slack_add_reaction";
@@ -23,6 +26,13 @@ export function dedicatedSourceTool(kind: TrackedKind, tool: string): string | u
 
 /** Start capabilities cannot edit other fields or add any other reaction. */
 export function validSourceArguments(tool: string, args: Record<string, unknown>): boolean {
+	if (tool === "profile") return Object.keys(args).length === 1 && args.response_format === "detailed";
+	if (tool === "mentions" || tool === "mentionsPrivate")
+		return (
+			typeof args.filters === "string" &&
+			/^in:(?:<#[CG][A-Z0-9]{1,199}>|[a-z0-9_-]{1,200})(?: with:<@[UW][A-Z0-9]{1,39}>)?$/i.test(args.filters) &&
+			(tool !== "mentionsPrivate" || args.channel_types === "public_channel,private_channel")
+		);
 	if (tool === "startSlack" || tool === "doneSlack" || tool === "reactions")
 		return (
 			Object.keys(args).length === (tool === "reactions" ? 2 : 3) &&

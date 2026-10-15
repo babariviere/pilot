@@ -308,6 +308,15 @@ clears once the server works again, you write in the chat, or you archive it.
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
+
+Each Slack channel can optionally track only new threads that mention you, directly or through one of
+your groups. Add your own group handles in Tracking settings because the dedicated Slack MCP does not
+expose memberships. A mention in any reply qualifies the parent thread, which is classified with its
+usual bounded thread context and label effects. Existing items are unchanged. Mention discovery uses
+channel-scoped Slack search, shares the daily Slack budget, and never searches other channels.
+Public search is preferred; a private-capable search, still restricted to that configured channel,
+also finds mentions in private-channel replies without re-reading unchanged threads.
+
 Project settings provides per-team Linear state mappings for Todo, In progress, In review, Merged and
 Deployed, including separate choices for sub-teams. Only In progress is applied when work starts;
 the other four mappings are saved for future use and do not trigger automatic transitions.

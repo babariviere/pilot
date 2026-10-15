@@ -48,6 +48,10 @@ export interface ProjectTrackingConfig {
 	slackLabels?: SlackProjectLabel[];
 	/** Slack channel IDs from the channel picker. Older configs may hold names. */
 	slackChannels: string[];
+	/** Configured channels admitting only new threads with a personal or configured group mention. */
+	slackMentionOnlyChannels?: string[];
+	/** My Slack user-group handles. The dedicated MCP has no membership lookup. */
+	slackGroupHandles?: string[];
 	/** Display names by channel ID, for settings and rows. Never part of the poll scope. */
 	slackChannelNames?: Record<string, string>;
 	/** Linear team ID from list_teams. Empty string in a settings request clears the team. */
