@@ -24,6 +24,7 @@ import { parseTaskRefs } from "./mission-task-refs.ts";
 import { type MissionActivityQuery, type MissionActor, type MissionStore, normalizeResourceWrite } from "./missions.ts";
 import type { ProjectStore } from "./projects.ts";
 import type { SessionManager } from "./sessions.ts";
+import { validateBaseBranch } from "./workspaces.ts";
 
 /** Sent to a chat that just became a mission, so it drafts the shared state from its own conversation. */
 export function draftMessage(title: string): string {
@@ -503,9 +504,18 @@ export class MissionService {
 		let tasks = this.store.prepareTaskStart(missionId, taskIds);
 		if (request.message !== undefined && typeof request.message !== "string")
 			throw new Error("message must be a string");
+		// Workspace options are checked again at spawn, but references must not be saved for a start that cannot run.
+		if (request.mode !== undefined && request.mode !== "build" && request.mode !== "ask")
+			throw new Error("mode must be build or ask");
+		const project = this.projects.require(mission.projectId);
+		if (request.baseBranch !== undefined) {
+			if ((request.mode ?? "build") === "build" && project.workspace === "direct")
+				throw new Error("baseBranch requires a private-clone project");
+			await validateBaseBranch(request.baseBranch, project.path);
+		}
 		const choice = taskModelChoice(tasks, request, by);
 		const selection = await this.sessions
-			.selectTaskModel(this.projects.require(mission.projectId).path, choice.model, choice.thinking)
+			.selectTaskModel(project.path, choice.model, choice.thinking)
 			.catch((error: unknown) => {
 				if (!choice.preferredBy) throw error;
 				throw new Error(

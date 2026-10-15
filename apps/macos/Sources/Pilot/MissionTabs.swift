@@ -736,6 +736,7 @@ struct MissionTaskRow: View {
     @StateObject private var title: TaskTitleState
     @State private var addingLink = false
     @State private var choosingModel = false
+    @State private var startingChat = false
     @StateObject private var artifacts = MissionArtifactsState()
     /// Rows built, so the tab-switch check can confirm the list stays lazy.
     static var bodyEvaluations = 0
@@ -811,7 +812,7 @@ struct MissionTaskRow: View {
                 }
                 HStack(spacing: 4) {
                     if task.sessionId == nil, task.status.canStart {
-                        MissionTaskStartButton(status: mission.status) { model.startChat(for: task, missionId: mission.id) }
+                        MissionTaskStartButton(status: mission.status) { startingChat = true }
                     }
                     // The fixed slot sets the layout and baseline; the menu is an overlay so building it on
                     // hover cannot move the row.
@@ -843,6 +844,7 @@ struct MissionTaskRow: View {
             }
         }
         .sheet(isPresented: $choosingModel) { MissionTaskModelSheet(task: task, mission: mission) }
+        .sheet(isPresented: $startingChat) { MissionTaskStartSheet(task: task, mission: mission) }
         .sheet(item: $artifacts.selected) { selection in
             ArtifactViewer(reference: selection.reference, latest: selection.latest)
         }
@@ -895,7 +897,7 @@ struct MissionTaskRow: View {
         if let sessionId = task.sessionId {
             Button("Open Chat") { model.selectedSessionId = sessionId }
         } else if task.status.canStart {
-            Button("Start Chat") { model.startChat(for: task, missionId: mission.id) }
+            Button("Start Chat…") { startingChat = true }
                 .disabled(mission.status != .active)
         }
         Menu("Assign To") {
@@ -975,11 +977,11 @@ struct MissionTaskStartButton: View {
     let action: () -> Void
 
     var body: some View {
-        Button("Start chat", action: action)
+        Button("Start chat…", action: action)
             .controlSize(.small)
             .disabled(status != .active)
             .help(status == .active
-                  ? "Start a new chat in this project that joins the mission and claims this task"
+                  ? "Choose options and start a new chat in this project that joins the mission and claims this task"
                   : "Reopen the mission before starting a new chat")
     }
 }

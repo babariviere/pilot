@@ -3283,6 +3283,28 @@ test("preferred task models are validated, kept from the coordinator and used by
 	assert.equal(f.store.resolveTask(mission.id, "4").sessionId, undefined);
 });
 
+test("app task starts validate mode and base branch before saving references", async (t) => {
+	const f = await fixture(t);
+	const mission = f.store.create({ projectId: f.project.id, title: "M", tasks: [{ title: "Task" }] });
+	const links = [{ url: "https://example.com/spec" }];
+	for (const [request, error] of [
+		[{ mode: "plan" }, /mode must be build or ask/],
+		[{ baseBranch: "main" }, /baseBranch requires a private-clone project/],
+		[{ mode: "ask", baseBranch: "HEAD" }, /baseBranch must be a valid exact origin branch name/],
+	] as const) {
+		await assert.rejects(f.service.startTask(mission.id, "1", { ...request, links } as never), error);
+		assert.equal(f.sessions.list().length, 0);
+		assert.deepEqual(f.store.detail(mission.id).resources, [], "a rejected start saves no references");
+	}
+	const ask = await f.service.startTask(mission.id, "1", { mode: "ask", message: "Only investigate", links });
+	assert.equal(ask.mode, "ask");
+	assert.equal(f.store.resolveTask(mission.id, "1").sessionId, ask.id);
+	assert.deepEqual(
+		f.store.detail(mission.id).resources.map((item) => item.url),
+		["https://example.com/spec"],
+	);
+});
+
 test("coordinator actions check the current role on every call before causing side effects", async (t) => {
 	const f = await fixture(t);
 	const coordinator = await f.spawn();
