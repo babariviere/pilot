@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.35.0](https://github.com/babariviere/pilot/compare/v1.34.0...v1.35.0) (2026-10-15)
+
+
+### Features
+
+* **macos:** new app icon and menu bar glyph ([40492bb](https://github.com/babariviere/pilot/commit/40492bbde197549e938dec77ba9dd4a2a0e39351))
+* **macos:** share page headers, sheets, pane headers, empty states and inline problems ([65cf640](https://github.com/babariviere/pilot/commit/65cf6405ca4e847306aadaad18ed999b62a9234e))
+* **macos:** show automatic messages as one-line events and tray rows as single lines ([16dc9ed](https://github.com/babariviere/pilot/commit/16dc9edd042a9e23856afbef3620218ef1fd5415))
+* **macos:** simplify the menu bar plane and drop its working state ([9c22164](https://github.com/babariviere/pilot/commit/9c221642fe10e9e6b69bdbfa8d003c73a996d355))
+
+
+### Bug Fixes
+
+* **daemon:** bound concurrent worker startups ([cc83f1b](https://github.com/babariviere/pilot/commit/cc83f1bb833290810a96b921fc44023d861aef3e))
+* **daemon:** leave absent migration metadata untouched ([7c7288b](https://github.com/babariviere/pilot/commit/7c7288b1491ed4fb19c4921d8cb6d6c3a5300a58))
+* **daemon:** refresh idle workspaces only before new input ([88f717f](https://github.com/babariviere/pilot/commit/88f717fb2b611b1caaf49b625021597a44babdbc))
+* **kernel:** avoid coordinator policy false positives in prose ([87ae28e](https://github.com/babariviere/pilot/commit/87ae28ec93190e0c536003f359aaa515670477df))
+
 ## [1.34.0](https://github.com/babariviere/pilot/compare/v1.33.0...v1.34.0) (2026-10-15)
 
 
