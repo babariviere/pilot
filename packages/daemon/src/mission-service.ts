@@ -128,7 +128,15 @@ export class MissionService {
 				if (membership?.coordinator && store.require(membership.missionId).title !== title)
 					store.update(membership.missionId, { title });
 			},
-			call: (sessionId, call) => this.call(sessionId, call.action, call.args as Record<string, unknown>),
+			call: async (sessionId, call) => {
+				try {
+					return await this.call(sessionId, call.action, call.args as Record<string, unknown>);
+				} finally {
+					// The model sees the result only after its writes are on disk.
+					await store.whenDurable();
+				}
+			},
+			whenDurable: () => store.whenDurable(),
 			readArtifactReference: (sessionId, id, revision) => this.readArtifactReference(sessionId, id, revision),
 			pullRequestCreated: (sessionId, url) => this.linkPullRequests(sessionId, [url]),
 			githubAction: (sessionId, action) =>

@@ -160,6 +160,9 @@ export class MissionNotices {
 			const notice = this.store.prepareNotice(missionId, id, now);
 			if (!notice) continue;
 			try {
+				// A delivered notice must never be forgotten by a store that lost power.
+				const durable = this.store.whenDurable();
+				if (durable) await durable;
 				if (await this.sessions.sendNotice(id, notice.content, notice.requestId, notice.event))
 					this.store.acknowledgeNotice(notice, now);
 			} catch (error) {

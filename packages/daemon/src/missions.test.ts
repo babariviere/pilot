@@ -767,8 +767,9 @@ test("binding rollback includes both sides' links, activity and durable replay m
 			actor: {},
 		};
 		const before = [missions.detail(source.id), missions.detail(target.id)];
-		const db = new DatabaseSync(file);
-		try {
+		// The store runs in memory and saves to the file in the background, so inject the failure in memory.
+		const db = (missions as unknown as { db: DatabaseSync }).db;
+		{
 			db.exec(`CREATE TRIGGER fail_binding BEFORE INSERT ON events
 				WHEN NEW.text LIKE 'Pull request bound to%' BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
 			let notifications = 0;
@@ -781,8 +782,6 @@ test("binding rollback includes both sides' links, activity and durable replay m
 			missions.applyPullRequestBinding(operation);
 			assert.equal(notifications, 2);
 			unsubscribe();
-		} finally {
-			db.close();
 		}
 		const applied = [missions.detail(source.id), missions.detail(target.id)];
 		missions.close();

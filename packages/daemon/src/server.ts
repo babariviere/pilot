@@ -97,6 +97,24 @@ class HttpError extends Error {
 	}
 }
 
+/**
+ * Mission writes commit without waiting for the disk, which a worker thread syncs. Hold a mutating request's
+ * response until they are durable, so no client sees a write acknowledged that a power loss could undo.
+ */
+export function acknowledgeWhenDurable(res: ServerResponse, store: Pick<MissionStore, "durable">): void {
+	const end = res.end.bind(res) as (...args: unknown[]) => ServerResponse;
+	res.end = ((...args: unknown[]) => {
+		store.durable().then(
+			() => end(...args),
+			(error: unknown) => {
+				console.warn(`pilotd: response withheld, mission store not durable: ${error}`);
+				res.destroy(error instanceof Error ? error : new Error(String(error)));
+			},
+		);
+		return res;
+	}) as typeof res.end;
+}
+
 function json(res: ServerResponse, status: number, body: unknown): void {
 	jsonText(res, status, JSON.stringify(body));
 }
@@ -793,6 +811,7 @@ export function createDaemonServer(
 		// Requests still open when the event loop stalls are reported with it. IDs stay local to the log.
 		const done = operations.begin(`${req.method} ${(req.url ?? "/").split("?")[0]}`);
 		res.once("close", done);
+		if (missions && req.method !== "GET" && req.method !== "HEAD") acknowledgeWhenDurable(res, missions.store);
 		route(req, res).catch((error: unknown) => {
 			const status =
 				error instanceof HttpError

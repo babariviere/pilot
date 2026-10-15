@@ -2,7 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { DatabaseSync, type Session, type SQLInputValue } from "node:sqlite";
 import type {
 	ArtifactKind,
 	GitHubAction,
@@ -34,6 +34,7 @@ import { Conflict, NotFound } from "./errors.ts";
 import { operations } from "./event-loop-watchdog.ts";
 import { reasonLine } from "./needs-you-reason.ts";
 import type { PullRequestBinding } from "./sessions.ts";
+import { MissionReplica } from "./mission-replica.ts";
 
 /** Who changed mission state. Omitted sessionId means the user (or pilotd itself). */
 export interface MissionActor {
@@ -148,6 +149,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	UNIQUE (mission_id, number)
 );
 CREATE TABLE IF NOT EXISTS artifact_links (
+	id INTEGER PRIMARY KEY,
 	mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
 	artifact_id TEXT NOT NULL,
 	session_id TEXT NOT NULL,
@@ -402,18 +404,37 @@ export function parseResourceUrl(raw: string): { url: string; kind: MissionResou
 }
 
 export class MissionStore {
-	private readonly db: DatabaseSync;
+	private db: DatabaseSync;
 	private readonly listeners = new Set<(missionId: string) => void>();
 	private readonly completionListeners = new Set<(projectId: string, missionId: string, at: number) => void>();
 	private readonly memberListeners = new Set<(sessionId: string) => void>();
 	private writing = false;
 	private referenceBatch?: string;
+	/** Saves each commit to missions.sqlite off the event loop. Absent for ":memory:" stores. */
+	private replica?: MissionReplica;
+	/** Records the changes of the current commit, for the replica. */
+	private session?: Session;
 
 	/** ":memory:" keeps state in memory, for tests. */
 	constructor(file: string) {
 		if (file !== ":memory:") mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
 		this.db = new DatabaseSync(file);
-		this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+		this.migrate();
+		if (file !== ":memory:") {
+			// SQLite is synchronous and pilotd has one event loop, so a disk-backed connection made every read and
+			// commit wait for a busy disk. The store now runs in memory; a worker thread saves each commit to disk,
+			// and callers acknowledge writes to clients and chats only after durable().
+			this.db.close();
+			this.db = loadInMemory(file);
+			this.replica = new MissionReplica(file, (error) => console.warn(`pilotd: ${error.message}`));
+			this.session = this.db.createSession();
+		}
+	}
+
+	/** Schema creation and upgrades, on the disk file at startup. */
+	private migrate(): void {
+		// The previous store's replica thread may still be closing its connection.
+		this.db.exec("PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
 		const migratePrTransitions = !this.one("SELECT 1 FROM sqlite_master WHERE name = 'pull_request_transitions'");
 		this.db.exec(SCHEMA);
 		this.db.exec(
@@ -479,6 +500,23 @@ export class MissionStore {
 				DROP TABLE artifact_links_legacy;
 				COMMIT;`);
 		}
+		// Replication records changes by primary key, so the old rowid-only table gains an explicit one.
+		if (!this.all("PRAGMA table_info(artifact_links)").some((row) => row.name === "id")) {
+			const columns =
+				"mission_id, artifact_id, session_id, title, kind, revision, linked_by_session_id, linked_at, task_id";
+			this.db.exec(`BEGIN;
+				ALTER TABLE artifact_links RENAME TO artifact_links_rowid;
+				CREATE TABLE artifact_links (
+					id INTEGER PRIMARY KEY,
+					mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+					artifact_id TEXT NOT NULL, session_id TEXT NOT NULL, title TEXT NOT NULL,
+					kind TEXT NOT NULL, revision INTEGER, linked_by_session_id TEXT, linked_at INTEGER NOT NULL,
+					task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE
+				);
+				INSERT INTO artifact_links (id, ${columns}) SELECT rowid, ${columns} FROM artifact_links_rowid;
+				DROP TABLE artifact_links_rowid;
+				COMMIT;`);
+		}
 		if (!this.all("PRAGMA table_info(notices)").some((row) => row.name === "chat_event"))
 			this.db.exec("ALTER TABLE notices ADD COLUMN chat_event TEXT");
 		this.db.exec(
@@ -514,8 +552,33 @@ export class MissionStore {
 			WHERE is_user_note = 1`);
 	}
 
+	/** Resolves once every committed change so far is on disk. Await before acknowledging a write. */
+	durable(): Promise<void> {
+		return this.replica?.durable() ?? Promise.resolve();
+	}
+
+	/** Like durable(), but undefined when nothing is waiting for the disk, so callers can stay synchronous. */
+	whenDurable(): Promise<void> | undefined {
+		return this.replica?.pending ? this.replica.durable() : undefined;
+	}
+
+	/** Waits (bounded) for unsaved commits; pilotd only closes the store at shutdown. */
 	close(): void {
+		this.session?.close();
+		this.session = undefined;
+		this.replica?.close();
+		this.replica = undefined;
 		this.db.close();
+	}
+
+	/** Ships the changes committed since the last call to the replica. */
+	private replicate(): void {
+		if (!this.session || !this.replica) return;
+		const changes = this.session.changeset();
+		if (!changes.length) return;
+		this.session.close();
+		this.session = this.db.createSession();
+		this.replica.push(changes);
 	}
 
 	/** Called after every committed change of a mission, including membership and deletion. */
@@ -542,12 +605,15 @@ export class MissionStore {
 	}
 
 	/**
-	 * SQLite runs synchronously on pilotd's event loop, and a commit waits for the disk. Attribute slow
-	 * statements outside transactions, and whole transactions, in event-loop stall reports.
+	 * SQLite runs synchronously on pilotd's event loop (in memory for disk-backed stores). Attribute slow statements
+	 * outside transactions, and whole transactions, in event-loop stall reports.
 	 */
 	private timed<T>(sql: string, work: () => T): T {
 		if (this.writing) return work();
-		return operations.time(() => `missions.sqlite ${sql.replace(/\s+/g, " ").trim().slice(0, 48)}`, work);
+		const result = operations.time(() => `missions.sqlite ${sql.replace(/\s+/g, " ").trim().slice(0, 48)}`, work);
+		// An autocommit write. A no-op produces an empty changeset, which is not shipped.
+		if (this.session && !/^\s*(SELECT|PRAGMA)\b/i.test(sql)) this.replicate();
+		return result;
 	}
 
 	private all(sql: string, ...params: SQLInputValue[]): Row[] {
@@ -577,6 +643,8 @@ export class MissionStore {
 				throw error;
 			} finally {
 				this.writing = false;
+				// After a rollback the changeset is empty, or a no-op for rows the session saw change back.
+				this.replicate();
 			}
 		});
 	}
@@ -3042,6 +3110,43 @@ function taskFrom(row: Row): MissionTask {
 		updatedAt: num(row.updated_at!),
 		...(optional(row.completed_at, num) !== undefined ? { completedAt: num(row.completed_at!) } : {}),
 	};
+}
+
+/** Quotes an SQLite identifier read from sqlite_master. */
+function identifier(name: string): string {
+	return `"${name.replaceAll('"', '""')}"`;
+}
+
+/**
+ * Copies a migrated missions.sqlite into an in-memory database with the same schema, rows and AUTOINCREMENT
+ * counters. Indexes are created after the rows. Foreign keys are enforced from then on.
+ */
+function loadInMemory(file: string): DatabaseSync {
+	const db = new DatabaseSync(":memory:");
+	db.exec("PRAGMA foreign_keys = OFF");
+	db.prepare("ATTACH DATABASE ? AS disk").run(file);
+	try {
+		const objects = db
+			.prepare(
+				`SELECT type, name, sql FROM disk.sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+				ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END, rowid`,
+			)
+			.all() as { type: string; name: string; sql: string }[];
+		db.exec("BEGIN");
+		for (const object of objects) {
+			db.exec(object.sql);
+			if (object.type === "table")
+				db.exec(`INSERT INTO main.${identifier(object.name)} SELECT * FROM disk.${identifier(object.name)}`);
+		}
+		const sequence = "SELECT 1 FROM %s.sqlite_master WHERE name = 'sqlite_sequence'";
+		if (db.prepare(sequence.replace("%s", "disk")).get() && db.prepare(sequence.replace("%s", "main")).get())
+			db.exec("INSERT INTO main.sqlite_sequence SELECT * FROM disk.sqlite_sequence");
+		db.exec("COMMIT");
+	} finally {
+		db.exec("DETACH DATABASE disk");
+	}
+	db.exec("PRAGMA foreign_keys = ON");
+	return db;
 }
 
 function artifactFrom(row: Row): MissionArtifactLink {

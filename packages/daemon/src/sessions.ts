@@ -162,6 +162,8 @@ export interface SessionMissionBridge {
 	applyPullRequestBinding?(operation: PullRequestBinding): { changed: boolean; taskLinkRemoved: boolean } | void;
 	workspaceBehind?(sessionId: string, text: string): void;
 	systemMessageState?(sessionId: string, event: import("@pilot/kernel").SystemMessageStateEvent): void;
+	/** Resolves once mission writes so far are on disk; undefined if they already are. Await before acknowledging. */
+	whenDurable?(): Promise<void> | undefined;
 }
 
 /** An explicit kernel rejection, unlike a disconnect with uncertain durable admission. */
@@ -3150,6 +3152,8 @@ export class SessionManager {
 			await this.save(meta);
 			if (request.missionId !== undefined) {
 				this.missions!.joinSpawn(id, request.missionId, coordinator, taskId);
+				// The new chat may act on its membership as soon as it starts.
+				await this.missions!.whenDurable?.();
 			}
 		} catch (error) {
 			// Admission may lose a coordinator/task claim or race a closed mission.
@@ -4821,7 +4825,14 @@ export class SessionManager {
 			try {
 				if (!this.missions?.systemMessageState) return;
 				this.missions.systemMessageState(meta.id, packet.event);
-				worker.send({ type: "systemMessageState.ack", id: packet.event.id });
+				const id = packet.event.id;
+				const durable = this.missions.whenDurable?.();
+				if (!durable) worker.send({ type: "systemMessageState.ack", id });
+				else
+					void durable.then(
+						() => worker.send({ type: "systemMessageState.ack", id }),
+						(error: unknown) => console.warn("pilotd: could not record system message state", error),
+					);
 			} catch (error) {
 				console.warn("pilotd: could not record system message state", error);
 			}
