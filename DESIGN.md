@@ -30,7 +30,7 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
 - **Polish in the details.** Consistent corner radii, optical alignment, crisp icons from one family, smooth
   hover and focus states. Small imperfections add up to a restless app.
 - **Native first.** Use system materials, SF Symbols, system fonts and platform conventions. The app should look
-  at home on macOS, in light and dark appearance, and at any window size.
+  at home on macOS, in its light appearance, and at any window size. Dark mode is out of scope.
 - **Typography carries the page.** Weight and size separate headline, section and row. Use secondary and
   tertiary text colors for meta information, and keep line lengths comfortable.
 - **Delight without noise.** Motion and effects are subtle and purposeful (a soft transition, a gentle highlight).
@@ -41,7 +41,7 @@ Calm is not plain. The app should look sleek and feel pleasant to the eye, like 
   set the tone. Use it for
   atmosphere and state, with a soft palette and quiet motion (a slow ripple, a breath, a dissolve from cell to
   cell), and keep text readable over it.
-- **Check it by eye.** Beauty is reviewed, not assumed. Look at the real result in light and dark, with real
+- **Check it by eye.** Beauty is reviewed, not assumed. Look at the real result with real
   and long content, before calling a UI change done.
 
 ## Attention budget
@@ -104,7 +104,7 @@ each. Sections added later follow the same rules.
 
 ## UI review checklist
 
-- Looks calm and polished in light and dark, checked by eye (attach a SwiftUI artifact for new layouts).
+- Looks calm and polished, checked by eye (attach a SwiftUI artifact for new layouts).
 - Long content, and loading, empty, error and disabled states.
 - Narrow and wide windows.
 - Keyboard access, readable contrast, reduced motion, and VoiceOver labels (color is never the only signal).
