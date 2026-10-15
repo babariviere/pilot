@@ -100,6 +100,7 @@ try {
 		!tool ||
 		(logicalTool !== "startIssue" &&
 			logicalTool !== "startSlack" &&
+			logicalTool !== "doneSlack" &&
 			(tool.annotations?.readOnlyHint === false || tool.annotations?.destructiveHint === true))
 	)
 		throw new SetupError("Tracking tool is missing or advertises writes");
@@ -109,7 +110,7 @@ try {
 	const limited = error instanceof SourceRateLimited ? error : sourceRateLimit(error);
 	// Never forward external tool text, config values, or transport errors that can contain secrets.
 	reply =
-		workerData.kind === "slack" && workerData.tool === "startSlack" && slackAlreadyReacted(error)
+		workerData.kind === "slack" && ["startSlack", "doneSlack"].includes(workerData.tool) && slackAlreadyReacted(error)
 			? { value: { ok: true } }
 			: {
 					error:

@@ -20,6 +20,15 @@ import { parseSlackClassification, type SlackClassification } from "./slack-clas
 export type SlackCache = { state: "pending" | "error" } | { state: "done"; result: SlackClassification };
 export type SlackReservation = SlackCache | { state: "reserved" } | { state: "budget" };
 export const SLACK_DAILY_BUDGET = 100;
+export const SLACK_REACTION_BATCH = 8;
+export interface SlackReactionRead {
+	item: TrackedItem;
+	version: number;
+}
+export interface SlackReactionBatch {
+	reads: SlackReactionRead[];
+	budget: boolean;
+}
 
 export type TrackedInput = Pick<TrackedItem, "externalId" | "title" | "url" | "status" | "metadata" | "updatedAt">;
 export interface SlackPullRequestObservation {
@@ -36,6 +45,7 @@ export interface SourceCheckpoint {
 	linear?: LinearSourceSummary;
 }
 type Row = {
+	active: number;
 	id: string;
 	project_id: string;
 	kind: TrackedKind;
@@ -54,6 +64,10 @@ type Row = {
 	slack_status: SlackTriage["status"];
 	closed_by_label: string | null;
 	slack_completion: string;
+	slack_done: string | null;
+	slack_reaction_seen: number;
+	slack_reaction_checked: number;
+	slack_status_version: number;
 	created_at: number;
 	updated_at: number;
 };
@@ -164,6 +178,20 @@ export class TrackedItemDisk {
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN closed_by_label TEXT");
 		if (!columns.some((column) => column.name === "slack_completion"))
 			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_completion TEXT NOT NULL DEFAULT '{}'");
+		if (!columns.some((column) => column.name === "slack_done"))
+			this.db.exec("ALTER TABLE tracked_items ADD COLUMN slack_done TEXT");
+		for (const column of ["slack_reaction_seen", "slack_reaction_checked", "slack_status_version"])
+			if (!columns.some((entry) => entry.name === column))
+				this.db.exec(`ALTER TABLE tracked_items ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+		this.db
+			.prepare(`UPDATE tracked_items SET slack_done=json_set(slack_done, '$.outcome', 'error', '$.error', ?)
+			WHERE slack_done IS NOT NULL AND json_extract(slack_done, '$.outcome') IS NULL`)
+			.run("Couldn't add done reaction in Slack.");
+		this.db.exec(`CREATE INDEX IF NOT EXISTS slack_reaction_reads ON tracked_items(project_id, slack_reaction_checked, id)
+			WHERE kind='slack' AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress');
+			CREATE INDEX IF NOT EXISTS slack_done_pending ON tracked_items(project_id, id)
+			WHERE kind='slack' AND active=1 AND slack_status='done' AND slack_done IS NULL
+			AND json_extract(slack_start, '$.outcome')='reacted';`);
 		this.db.exec(`
 			CREATE TABLE IF NOT EXISTS slack_pr_observations (
 			 session_id TEXT NOT NULL, url TEXT NOT NULL, state TEXT NOT NULL, checked_at INTEGER NOT NULL,
@@ -606,6 +634,111 @@ export class TrackedItemDisk {
 		this.emit(item.projectId);
 	}
 
+	/** Fair, capped reads share the classification budget, reserved durably before any network call. */
+	reserveSlackReactions(projectId: string, now: number): SlackReactionBatch {
+		this.db.exec("BEGIN IMMEDIATE");
+		try {
+			const rows = this.db
+				.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack'
+				AND active=1 AND dismissed=0 AND slack_status IN ('open','in_progress')
+				ORDER BY slack_reaction_checked, id LIMIT ?`)
+				.all(projectId, SLACK_REACTION_BATCH) as Row[];
+			const day = new Date(now).toISOString().slice(0, 10);
+			const used = Number(this.db.prepare("SELECT used FROM slack_budget WHERE day=?").get(day)?.used ?? 0);
+			const picked = rows.slice(0, Math.max(0, SLACK_DAILY_BUDGET - used));
+			if (picked.length) {
+				this.db
+					.prepare(`INSERT INTO slack_budget VALUES (?, ?) ON CONFLICT(day) DO UPDATE SET used=used+excluded.used`)
+					.run(day, picked.length);
+				for (const row of picked)
+					this.db.prepare("UPDATE tracked_items SET slack_reaction_checked=? WHERE id=?").run(now, row.id);
+			}
+			this.db.exec("COMMIT");
+			return {
+				reads: picked.map((row) => ({ item: decode(row), version: row.slack_status_version })),
+				budget: picked.length < rows.length,
+			};
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+	}
+
+	/** A user's reopen fences in-flight reads. Counts/users changing do not turn the same emoji into a new event. */
+	recordSlackReaction(id: string, present: boolean, version: number): void {
+		this.db.exec("BEGIN IMMEDIATE");
+		let projectId: string | undefined;
+		try {
+			const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
+			if (row?.kind === "slack") {
+				if (present || (row.slack_status_version === version && ["open", "in_progress"].includes(row.slack_status)))
+					this.db.prepare("UPDATE tracked_items SET slack_reaction_seen=? WHERE id=?").run(present ? 1 : 0, id);
+				if (
+					present &&
+					!row.slack_reaction_seen &&
+					row.slack_status_version === version &&
+					row.active &&
+					!row.dismissed &&
+					["open", "in_progress"].includes(row.slack_status)
+				) {
+					const completion = {
+						...JSON.parse(row.slack_completion),
+						reason: "Done · ✅ in Slack",
+						reactionDone: { at: Date.now() },
+					};
+					this.db
+						.prepare(
+							"UPDATE tracked_items SET slack_status='done', closed_by_label=NULL, slack_completion=? WHERE id=?",
+						)
+						.run(JSON.stringify(completion), id);
+					projectId = row.project_id;
+				}
+			}
+			this.db.exec("COMMIT");
+		} catch (error) {
+			this.db.exec("ROLLBACK");
+			throw error;
+		}
+		if (projectId) this.emit(projectId);
+	}
+
+	/** Durable once-per-item admission. Reopen never schedules a reaction or clears the outcome. */
+	reserveSlackDone(projectId: string): TrackedItem | undefined {
+		const row = this.db
+			.prepare(`SELECT * FROM tracked_items WHERE project_id=? AND kind='slack' AND active=1
+			AND slack_status='done' AND slack_done IS NULL AND json_extract(slack_start, '$.outcome')='reacted'
+			ORDER BY id LIMIT 1`)
+			.get(projectId) as Row | undefined;
+		if (!row) return;
+		const admitted = this.db
+			.prepare("UPDATE tracked_items SET slack_done=? WHERE id=? AND slack_done IS NULL")
+			.run(JSON.stringify({ attemptedAt: Date.now() }), row.id);
+		if (!admitted.changes) return;
+		this.emit(projectId);
+		return this.require(row.id);
+	}
+	slackDoneResult(id: string, outcome: "reacted" | "skipped" | "error"): void {
+		if (!["reacted", "skipped", "error"].includes(outcome)) throw new Error("Invalid Slack done outcome");
+		const row = this.db.prepare("SELECT * FROM tracked_items WHERE id=?").get(id) as Row | undefined;
+		if (row?.kind !== "slack" || !row.slack_done) return;
+		const prior = JSON.parse(row.slack_done);
+		if (prior.outcome) return;
+		this.db
+			.prepare(
+				"UPDATE tracked_items SET slack_done=?, slack_reaction_seen=CASE WHEN ?='reacted' THEN 1 ELSE slack_reaction_seen END WHERE id=?",
+			)
+			.run(
+				JSON.stringify({
+					...prior,
+					outcome,
+					...(outcome === "error" ? { error: "Couldn't add done reaction in Slack." } : {}),
+				}),
+				outcome,
+				id,
+			);
+		this.emit(row.project_id);
+	}
+
 	/** Fresh observations and the status change share one transaction. Initial terminal observations are silent. */
 	observeSlackPullRequests(observation: SlackPullRequestObservation): void {
 		const { projectId, sessionId, prs, pending } = observation;
@@ -729,11 +862,17 @@ export class TrackedItemDisk {
 			status === (item.slack?.status ?? "open") &&
 			closedByLabel === item.slack?.closedByLabel &&
 			links === JSON.stringify({ sessions: item.sessionIds ?? [], missions: item.missionIds ?? [] }) &&
-			JSON.stringify(overrides) === JSON.stringify(item.slack?.overrides ?? {})
+			JSON.stringify(overrides) === JSON.stringify(item.slack?.overrides ?? {}) &&
+			!userStatus
 		)
 			return item;
 		this.db.exec("BEGIN");
 		try {
+			if (userStatus)
+				this.db
+					.prepare(`UPDATE tracked_items SET slack_status_version=slack_status_version+1,
+					slack_reaction_seen=CASE WHEN ? IN ('open','in_progress') THEN 1 ELSE slack_reaction_seen END WHERE id=?`)
+					.run(patch.dismissed !== undefined || patch.slack?.status !== undefined ? status : "", id);
 			if (userStatus)
 				this.db
 					.prepare(
@@ -839,6 +978,7 @@ function decode(row: Row): TrackedItem {
 		missionIds = links.missions ?? (row.mission_id ? [row.mission_id] : []);
 	const metadata = JSON.parse(row.metadata);
 	const slackStart = row.slack_start ? JSON.parse(row.slack_start) : undefined;
+	const slackDone = row.slack_done ? JSON.parse(row.slack_done) : undefined;
 	const completion = JSON.parse(row.slack_completion);
 	const overrides: SlackOverrides = JSON.parse(row.slack_overrides);
 	const slack: SlackTriage | undefined =
@@ -870,6 +1010,7 @@ function decode(row: Row): TrackedItem {
 					label: slack.label,
 					severity: slack.severity,
 					...(slackStart?.outcome ? { slackStart } : {}),
+					...(slackDone?.outcome ? { slackDone } : {}),
 				}
 			: { ...metadata, ...(row.linear_start ? { linearStart: JSON.parse(row.linear_start) } : {}) },
 		...(slack ? { slack } : {}),

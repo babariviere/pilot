@@ -96,6 +96,9 @@ enum TrackedItemText {
 
     static func startError(_ item: TrackedItem) -> String? {
         if item.kind == .slack {
+            if item.metadata["slackDone"]?["outcome"]?.string == "error" {
+                return "Couldn't add done reaction in Slack"
+            }
             return item.metadata["slackStart"]?["outcome"]?.string == "error"
                 ? "Couldn't add eyes reaction in Slack" : nil
         }
@@ -104,6 +107,9 @@ enum TrackedItemText {
 
     static func startErrorHelp(_ item: TrackedItem) -> String? {
         guard startError(item) != nil else { return nil }
+        if item.kind == .slack, item.metadata["slackDone"]?["outcome"]?.string == "error" {
+            return "Adding the reaction failed without changing the item's local status. Open the thread in Slack to add it."
+        }
         return item.kind == .slack
             ? "The work started, but Pilot couldn't add the eyes reaction. Open the thread in Slack to add it."
             : "Pilot couldn't move this ticket to In progress when the work started. Open it in Linear to update it."

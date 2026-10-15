@@ -235,7 +235,14 @@ status you chose. Show hidden in Slack triage includes label-closed messages; re
 Slack items become Done locally when every PR of a linked chat has merged, or a linked mission completes.
 The row explains why, for example “Done · PR #42 merged”. Closed unmerged PRs change nothing. Already Done or
 Dismissed items stay untouched, startup PR baselines do not close old items, and reopening is never undone by
-the same merge or completion. This makes no Slack writes.
+the same merge or completion.
+During normal Slack refreshes, up to eight Open/In progress parents are checked for a ✅ reaction, sharing the
+daily Slack budget. A ✅ from anyone marks the item Done with “Done · ✅ in Slack”. Reopening keeps it open while
+that reaction remains present, even if its count changes. Removing it and adding it again is a new reaction.
+When an item with a successful eyes reaction becomes Done (manually, from a merge, or from Slack), Pilot adds ✅
+once. Already reacted counts as success; failures show a quiet row error without changing Done. Reopening never
+writes reactions. The dedicated Slack server has no remove-reaction tool, so eyes stays in place. No alternate
+API, messages or replies are used.
 Slack messages and Linear issue or project links open in their desktop apps when installed, with a
 browser fallback when the app is unavailable. Copied links remain web URLs.
 Slack links without a workspace ID use Slack's active workspace.
