@@ -216,6 +216,49 @@ test("tracking HTTP, WS invalidation and DashboardProviders.tracked share projec
 	assert.deepEqual(await (await api(`/tracking/slack/corrections?projectId=${other.id}`)).json(), []);
 	assert.equal((await api("/tracking/slack/corrections")).status, 400);
 	assert.equal((await api("/tracking/slack/corrections?projectId=missing")).status, 404);
+	await items.saveGuide(project.id, "slack", "Export failures are bugs.", 0, 0, Date.now());
+	assert.equal(
+		(await (await api(`/tracking/slack/guide?projectId=${project.id}`)).json()).text,
+		"Export failures are bugs.",
+	);
+	await items.commit(project.id, "slack", [
+		{
+			externalId: "case-report",
+			title: "Invented export failure",
+			url: "https://example.test/report",
+			status: "open",
+			updatedAt: Date.now(),
+			metadata: { channel: "C1", type: "bug", severity: "high", label: null },
+		},
+	]);
+	const caseInput = await items.caseInput(project.id, Date.now());
+	await items.saveCases(
+		project.id,
+		caseInput,
+		[{ caseId: null, name: "Exports", description: "Exports fail to complete.", itemIds: ["0"] }],
+		Date.now(),
+	);
+	const caseList = await (await api(`/tracking/slack/cases?projectId=${project.id}`)).json();
+	assert.equal(caseList.cases.length, 1);
+	assert.equal(caseList.windowDays, 30);
+	const caseId = caseList.cases[0].id;
+	assert.equal(
+		(await (await api(`/tracked-items?projectId=${project.id}&caseId=${caseId}`)).json()).items[0].caseId,
+		caseId,
+	);
+	assert.equal(
+		tracking.dashboard(project.id).find((source) => source.source === "slack")?.commonCases?.[0]?.id,
+		caseId,
+	);
+	assert.deepEqual((await (await api(`/tracking/slack/cases?projectId=${other.id}`)).json()).cases, []);
+	const renamed = await (
+		await api(
+			`/tracking/slack/cases/${caseId}?projectId=${project.id}`,
+			{ action: "rename", name: "Export timeouts" },
+			"PATCH",
+		)
+	).json();
+	assert.equal(renamed.cases[0].name, "Export timeouts");
 	const saved = await (
 		await api(
 			`/projects/${project.id}`,

@@ -344,7 +344,7 @@ export class SourceRegistry {
 			.filter((source) => source.configured)
 			.map((source) => {
 				const checkpoint = this.items.checkpoint(source.id);
-				const { items, total, done } =
+				const { items, total, done, commonCases } =
 					checkpoint && checkpoint.configKey !== this.currentKey(source.id)
 						? { items: [], total: 0, done: undefined }
 						: this.items.preview(projectId, source.kind);
@@ -356,9 +356,17 @@ export class SourceRegistry {
 					total,
 					items,
 					...(done ? { done } : {}),
+					...(commonCases ? { commonCases } : {}),
 					...(source.linear ? { linear: source.linear } : {}),
 				};
 			});
+	}
+	async commonCases(projectId: string): Promise<import("@pilot/protocol").SlackCommonCaseList> {
+		const source = this.require(`${projectId}:slack`),
+			checkpoint = this.items.checkpoint(source.id);
+		if (!source.configured || (checkpoint && checkpoint.configKey !== this.currentKey(source.id)))
+			return { cases: [], windowDays: 30, windowLimit: 200, truncated: false };
+		return this.items.commonCases(projectId);
 	}
 	async listItems(query: TrackedQuery): Promise<import("@pilot/protocol").TrackedItemList> {
 		// A team setting change must not leak rows from the previously attached team.

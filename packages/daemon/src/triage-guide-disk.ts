@@ -6,6 +6,9 @@ export class TriageGuideDisk {
 	private db: DatabaseSync;
 	constructor(db: DatabaseSync) {
 		this.db = db;
+		db.exec(
+			`CREATE TABLE IF NOT EXISTS triage_attempts(project_id TEXT,kind TEXT,day TEXT,used INTEGER,last_at INTEGER,PRIMARY KEY(project_id,kind));`,
+		);
 		db.exec(`CREATE TABLE IF NOT EXISTS triage_corrections (
 		 seq INTEGER PRIMARY KEY AUTOINCREMENT, project_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL);
 		 CREATE INDEX IF NOT EXISTS triage_corrections_scope ON triage_corrections(project_id, kind, seq DESC);
@@ -28,11 +31,34 @@ export class TriageGuideDisk {
 		 (SELECT seq FROM triage_corrections WHERE project_id=? ORDER BY seq DESC LIMIT 500)`)
 			.run(projectId, projectId);
 	}
+	reserve(projectId: string, kind: TrackedKind, now: number): number {
+		const day = new Date(now).toISOString().slice(0, 10);
+		const previous = this.db
+			.prepare("SELECT * FROM triage_attempts WHERE project_id=? AND kind=?")
+			.get(projectId, kind);
+		if (previous && now < Number(previous.last_at) + 300_000) return Number(previous.last_at) + 300_000;
+		if (previous?.day === day && Number(previous.used) >= 48) return Date.parse(`${day}T00:00:00Z`) + 86_400_000;
+		this.db
+			.prepare(
+				`INSERT INTO triage_attempts VALUES (?,?,?,1,?) ON CONFLICT(project_id,kind) DO UPDATE SET day=excluded.day,used=CASE WHEN day=excluded.day THEN used+1 ELSE 1 END,last_at=excluded.last_at`,
+			)
+			.run(projectId, kind, day, now);
+		return 0;
+	}
 	corrections(projectId: string, kind: TrackedKind): TriageCorrection[] {
 		return this.db
 			.prepare("SELECT value FROM triage_corrections WHERE project_id=? AND kind=? ORDER BY seq DESC LIMIT 500")
 			.all(projectId, kind)
 			.map((row) => JSON.parse(String(row.value)));
+	}
+	context(projectId: string, kind: TrackedKind) {
+		return {
+			guide: this.guide(projectId, kind),
+			corrections: this.db
+				.prepare("SELECT value FROM triage_corrections WHERE project_id=? AND kind=? ORDER BY seq DESC LIMIT 5")
+				.all(projectId, kind)
+				.map((row) => JSON.parse(String(row.value)) as TriageCorrection),
+		};
 	}
 	guide(projectId: string, kind: TrackedKind): TriageGuide {
 		const row = this.db.prepare("SELECT * FROM triage_guides WHERE project_id=? AND kind=?").get(projectId, kind);
@@ -47,7 +73,7 @@ export class TriageGuideDisk {
 		const guide = this.guide(projectId, kind);
 		const rows = this.db
 			.prepare(
-				"SELECT seq,value FROM triage_corrections WHERE project_id=? AND kind=? AND seq>? ORDER BY seq LIMIT 500",
+				"SELECT seq,value FROM triage_corrections WHERE project_id=? AND kind=? AND seq>? ORDER BY seq LIMIT 64",
 			)
 			.all(projectId, kind, guide.throughSeq);
 		return {

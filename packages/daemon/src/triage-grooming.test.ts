@@ -24,7 +24,12 @@ test("generic correction store migrates legacy history once and keeps 500 per pr
 	store.save("p", "linear", "Small export repairs are quick fixes.", input.throughSeq, 0, 100);
 	store.save("p", "linear", "stale", input.throughSeq, 0, 200);
 	assert.equal(store.guide("p", "linear").updatedAt, 100);
-	assert.equal(store.input("p", "linear").corrections.length, 0);
+	assert.equal(
+		store.input("p", "linear").corrections.length,
+		64,
+		"grooming consumes bounded batches, not the whole retained history",
+	);
+	assert.equal(store.context("p", "linear").corrections.length, 5);
 	db.close();
 });
 
@@ -38,6 +43,61 @@ test("guide output is strict bounded plain text", () => {
 		JSON.stringify({ rules: ["x\ny"] }),
 	])
 		assert.throws(() => parseGuide(value));
+});
+
+test("grooming admission persists five-minute spacing and 48-attempt UTC day cap", () => {
+	const disk = new TrackedItemDisk(":memory:");
+	try {
+		const start = Date.parse("2026-10-15T00:00:00Z");
+		assert.equal(disk.triage.reserve("p", "slack", start), 0);
+		assert.equal(disk.triage.reserve("p", "slack", start + 1), start + 300_000);
+		for (let i = 1; i < 48; i++) assert.equal(disk.triage.reserve("p", "slack", start + i * 300_000), 0);
+		assert.equal(disk.triage.reserve("p", "slack", start + 48 * 300_000), start + 86_400_000);
+		assert.equal(disk.triage.reserve("p", "linear", start), 0);
+		assert.equal(disk.triage.reserve("p", "slack", start + 86_400_000), 0);
+	} finally {
+		disk.close();
+	}
+});
+
+test("one new correction runs daily without requiring further store events", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: 100_000 });
+	const disk = new TrackedItemDisk(":memory:");
+	t.after(() => disk.close());
+	disk.triage.append("p", "linear", {
+		itemId: "invented",
+		summary: "Repair export",
+		correctedAt: 100_000,
+		values: { size: "quick_fix" },
+	});
+	const items = {
+		onChange: () => () => {},
+		triageInput: async (id: string, kind: "slack" | "linear") => disk.triage.input(id, kind),
+		saveGuide: async (...args: Parameters<TriageGuideDisk["save"]>) => disk.triage.save(...args),
+	} as unknown as TrackedItemStore;
+	const projects = {
+		list: () => [{ id: "p", path: "/invented" }],
+		require: () => ({ id: "p", path: "/invented" }),
+		onChange: () => () => {},
+	};
+	let calls = 0;
+	const groomer = new TriageGroomer(projects as never, items, async () => {
+		calls++;
+		return '{"rules":["Localized repairs are quick fixes."]}';
+	});
+	const drain = async () => {
+		for (let i = 0; i < 20; i++) await Promise.resolve();
+	};
+	t.mock.timers.tick(2000);
+	await drain();
+	t.mock.timers.tick(0);
+	await drain();
+	assert.equal(calls, 0);
+	t.mock.timers.tick(86_400_000);
+	await drain();
+	assert.equal(calls, 1);
+	assert.equal(disk.triage.input("p", "linear").corrections.length, 0);
+	await groomer.stop();
 });
 
 test("debounced grooming uses only corrections, folds guide and leaves new corrections pending", async (t) => {

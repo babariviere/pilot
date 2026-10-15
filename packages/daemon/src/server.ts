@@ -342,6 +342,20 @@ export function createDaemonServer(
 		if (parts[1] === "sources" || parts[1] === "tracked-items" || parts[1] === "tracking") {
 			if (!tracking) throw new ServiceUnavailable("Tracking is unavailable");
 			if (parts[1] === "tracking") {
+				if (parts[2] === "slack" && parts[3] === "cases") {
+					const projectId = url.searchParams.get("projectId") ?? "";
+					projects.require(projectId);
+					if (parts.length === 4 && req.method === "GET")
+						return json(res, 200, await tracking.commonCases(projectId));
+					if (parts.length === 5 && req.method === "PATCH") {
+						await tracking.items.editCase(
+							projectId,
+							decodeURIComponent(parts[4]!),
+							await readJson<import("@pilot/protocol").SlackCaseEdit>(req),
+						);
+						return json(res, 200, await tracking.commonCases(projectId));
+					}
+				}
 				if (parts.length === 4 && (parts[2] === "slack" || parts[2] === "linear") && parts[3] === "guide") {
 					const projectId = url.searchParams.get("projectId") ?? "";
 					projects.require(projectId);
@@ -404,6 +418,7 @@ export function createDaemonServer(
 						await tracking.listItems({
 							projectId,
 							kind,
+							caseId: url.searchParams.get("caseId") ?? undefined,
 							dismissed: dismissed === "true",
 							...(closedByLabel === "true" ? { closedByLabel: true } : {}),
 							limit: url.searchParams.has("limit") ? Number(url.searchParams.get("limit")) : 100,

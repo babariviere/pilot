@@ -2,6 +2,7 @@ import { Worker } from "node:worker_threads";
 import type { TrackedKind, TriageGuide } from "@pilot/protocol";
 import type { ProjectStore } from "./projects.ts";
 import type { TrackedItemStore } from "./tracked-items.ts";
+import { CASE_SCHEMA, parseCases } from "./slack-cases.ts";
 
 export const GUIDE_SCHEMA = {
 	type: "object",
@@ -40,7 +41,10 @@ export function workerTriage(agentDir?: string): TriageComplete {
 			const worker = new Worker(new URL("./triage-model-worker.ts", import.meta.url), {
 				workerData: { agentDir, cwd, prompt, schema },
 			});
+			let settled = false;
 			const finish = (error?: Error, text?: string) => {
+				if (settled) return;
+				settled = true;
 				clearTimeout(timer);
 				signal.removeEventListener("abort", abort);
 				void worker.terminate();
@@ -118,7 +122,10 @@ export class TriageGroomer {
 					this.schedule();
 				});
 			},
-			Math.max(0, Math.min(...[...this.pending.values()].map((value) => value.at)) - this.now()),
+			Math.min(
+				2_147_483_647,
+				Math.max(0, Math.min(...[...this.pending.values()].map((value) => value.at)) - this.now()),
+			),
 		);
 		this.timer.unref();
 	}
@@ -130,18 +137,59 @@ export class TriageGroomer {
 		try {
 			const project = this.projects.require(job.projectId);
 			const input = await this.items.triageInput(job.projectId, job.kind);
-			if (!input.corrections.length && !job.force) return;
+			const caseInput =
+				job.kind === "slack" && "caseInput" in this.items
+					? await this.items.caseInput(job.projectId, this.now())
+					: undefined;
+			const newCases = caseInput?.items.some((item) => !item.caseId) ?? false;
+			if (!input.corrections.length && !job.force && !newCases) {
+				const expiry = caseInput?.cases
+					.map((entry) => entry.lastSeen + 30 * 86_400_000 + 1)
+					.filter((at) => at > this.now());
+				if (expiry?.length) this.pending.set(key, { ...job, at: Math.min(...expiry) });
+				return;
+			}
 			const due = (input.guide.updatedAt || input.corrections[0]?.correctedAt || this.now()) + 86_400_000;
-			if (!job.force && input.corrections.length < 3 && this.now() < due) {
+			if (!job.force && !newCases && input.corrections.length < 3 && this.now() < due) {
 				this.pending.set(key, { ...job, at: due });
 				return;
 			}
-			const prompt =
+			const retryAt =
+				"reserveGrooming" in this.items ? await this.items.reserveGrooming(job.projectId, job.kind, this.now()) : 0;
+			if (retryAt) {
+				this.pending.set(key, { ...job, at: retryAt });
+				return;
+			}
+			let prompt =
 				"Rebuild a short triage guide from the previous guide plus corrections only. Return rules and summaries, never verbatim external text, quotations, URLs, personal names or message excerpts. At most 40 short rules. Data: " +
 				JSON.stringify({ kind: job.kind, previousGuide: input.guide.text, corrections: input.corrections });
-			const text = parseGuide(await this.complete(project.path, prompt, GUIDE_SCHEMA, this.controller.signal));
+			let schema: Record<string, unknown> = GUIDE_SCHEMA;
+			if (caseInput) {
+				prompt +=
+					" Also group recent bug summaries into stable common cases. Return cases alongside rules. Each group has caseId (existing identity or null for a new case), short name, one-line description and itemIds (local ordinal strings). Cover every input item exactly once. Preserve all existing memberships and respect user rename/merge/split corrections. Never use raw Slack text. Guide rules must be shaped ONLY by corrections, not by case summaries. Data: " +
+					JSON.stringify({
+						cases: caseInput.cases,
+						items: caseInput.items.map((item, index) => ({ ...item, id: String(index) })),
+					});
+				schema = {
+					type: "object",
+					additionalProperties: false,
+					required: ["rules", "cases"],
+					properties: { rules: GUIDE_SCHEMA.properties.rules, cases: CASE_SCHEMA },
+				};
+			}
+			const raw = await this.complete(project.path, prompt, schema, this.controller.signal);
+			if (Buffer.byteLength(raw) > 100_000) throw new Error("Invalid grooming output");
+			const output = JSON.parse(raw);
+			if (caseInput && (!output || Object.keys(output).sort().join() !== "cases,rules"))
+				throw new Error("Invalid grooming output");
+			const proposedText = caseInput ? parseGuide(JSON.stringify({ rules: output.rules })) : parseGuide(raw);
+			const text = input.corrections.length ? proposedText : input.guide.text;
+			const groups = caseInput ? parseCases(output.cases, caseInput) : undefined;
 			if (this.controller.signal.aborted) return;
 			this.projects.require(job.projectId);
+			if (caseInput && groups) await this.items.saveCases(job.projectId, caseInput, groups, this.now());
+			if (!job.force && (!input.corrections.length || (input.corrections.length < 3 && this.now() < due))) return;
 			await this.items.saveGuide(
 				job.projectId,
 				job.kind,

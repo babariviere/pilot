@@ -13,6 +13,7 @@ import type {
 import { NotFound, ServiceUnavailable } from "./errors.ts";
 import type { SlackClassification } from "./slack-classifier.ts";
 import type { SizeReservation } from "./linear-size.ts";
+import type { CaseInput, CaseGroup } from "./slack-cases.ts";
 import type {
 	InboxQuery,
 	InboxTracked,
@@ -127,6 +128,32 @@ export class TrackedItemStore {
 	}
 	corrections(projectId: string): Promise<SlackCorrection[]> {
 		return this.rpc("corrections", { projectId });
+	}
+	triageContext(
+		projectId: string,
+		kind: TrackedKind,
+	): Promise<{ guide: TriageGuide; corrections: TriageCorrection[] }> {
+		return this.rpc("triageContext", { projectId, kind });
+	}
+	reserveGrooming(projectId: string, kind: TrackedKind, now: number): Promise<number> {
+		return this.rpc("reserveGrooming", { projectId, kind, now });
+	}
+	caseInput(projectId: string, now: number): Promise<CaseInput> {
+		return this.rpc("caseInput", { projectId, now });
+	}
+	commonCases(projectId: string, now = Date.now()): Promise<import("@pilot/protocol").SlackCommonCaseList> {
+		return this.rpc("commonCases", { projectId, now });
+	}
+	saveCases(projectId: string, input: CaseInput, groups: CaseGroup[], now: number): Promise<void> {
+		return this.rpc("saveCases", { projectId, input, groups, now });
+	}
+	editCase(
+		projectId: string,
+		caseId: string,
+		edit: import("@pilot/protocol").SlackCaseEdit,
+		now = Date.now(),
+	): Promise<void> {
+		return this.rpc("editCase", { projectId, caseId, edit, now });
 	}
 	reserveLinearSize(projectId: string, externalId: string, version: number, now: number): Promise<SizeReservation> {
 		return this.rpc("reserveLinearSize", { projectId, externalId, version, now });
