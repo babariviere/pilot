@@ -442,6 +442,7 @@ export interface RemoteBranchList {
 export type ArtifactLibrary = "react" | "react-dom" | "mermaid" | "echarts" | "motion" | "d3" | "three";
 export type ArtifactKind = "html" | "react" | "image" | "swiftui";
 
+/** GET /api/artifacts/:id resolves an unpinned artifact link to its owning session and latest metadata. */
 export interface ArtifactSummary {
 	id: string;
 	sessionId: string;

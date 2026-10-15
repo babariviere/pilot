@@ -273,6 +273,8 @@ workspace, but does not rebind those PRs automatically.
 Artifacts open in an isolated, offline WebKit viewer. HTML and React previews can use bundled libraries
 such as Mermaid, ECharts and Motion, with D3 and Three.js available on request. Published revisions are
 retained: a chat card opens the revision sent there, while the sidebar opens the latest version.
+Inline `artifact://<id>` links open the latest revision directly in the artifact popup, with an artifact
+icon beside the label. They work across chats, including archived artifact owners.
 SwiftUI artifacts are static renders, not live app views.
 
 Pilot bundles a pinned subset of [pi-extensions](https://github.com/babariviere/pi-extensions): sandbox,

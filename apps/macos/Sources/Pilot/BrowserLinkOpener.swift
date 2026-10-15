@@ -1,4 +1,5 @@
 import AppKit
+import PilotCore
 import SwiftUI
 
 /// Service links prefer desktop apps; PR links reuse Helium tabs. Never changes browser defaults.
@@ -11,6 +12,7 @@ final class BrowserLinkOpener {
     private let focus: (String) async -> Bool
     private let openNormally: (URL) -> Void
     private let openDesktop: (URL) -> Bool
+    private let openArtifact: (ArtifactLink) -> Void
     private var pending: URL?
     private var openingKey: String?
     private var requestVersion = 0
@@ -25,14 +27,22 @@ final class BrowserLinkOpener {
          openDesktop: @escaping (URL) -> Bool = { url in
              guard NSWorkspace.shared.urlForApplication(toOpen: url) != nil else { return false }
              return NSWorkspace.shared.open(url)
-         }) {
+         }, openArtifact: @escaping (ArtifactLink) -> Void = { AppModel.shared.artifactLink = $0 }) {
         self.canLookup = canLookup
         self.focus = focus
         self.openNormally = openNormally
         self.openDesktop = openDesktop
+        self.openArtifact = openArtifact
     }
 
     func open(_ url: URL) {
+        if url.scheme?.lowercased() == "artifact" {
+            // Invalid internal links must never escape to a browser or an OS scheme handler.
+            pending = nil
+            requestVersion += 1
+            if let link = ArtifactLink(url: url) { openArtifact(link) }
+            return
+        }
         guard let key = Self.pullRequestKey(url), canLookup(url) else {
             pending = nil
             requestVersion += 1
@@ -77,7 +87,7 @@ final class BrowserLinkOpener {
     }
 
     nonisolated static func handles(_ url: URL) -> Bool {
-        pullRequestKey(url) != nil || DesktopAppLink.url(for: url) != nil
+        url.scheme?.lowercased() == "artifact" || pullRequestKey(url) != nil || DesktopAppLink.url(for: url) != nil
     }
 }
 

@@ -2324,6 +2324,29 @@ export class SessionManager {
 		}
 	}
 
+	/** Resolve an artifact:// ID across parked and archived owners, only when a link is opened.
+	 * Probe one small latest pointer per owner, with bounded I/O and no transcript/body reads. */
+	async resolveArtifact(artifactId: string): Promise<ArtifactSummary> {
+		if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(artifactId))
+			throw new NotFound("Unknown artifact");
+		const ids = [...this.metas.keys()];
+		for (let offset = 0; offset < ids.length; offset += 4) {
+			const batch = await Promise.all(
+				ids.slice(offset, offset + 4).map(async (id) => {
+					try {
+						return await this.artifactStore(id).summary(artifactId);
+					} catch (error) {
+						if (error instanceof ArtifactNotFound || error instanceof NotFound) return undefined;
+						throw error;
+					}
+				}),
+			);
+			const found = batch.find((item) => item !== undefined);
+			if (found) return found;
+		}
+		throw new NotFound("Unknown artifact");
+	}
+
 	async projectArtifacts(projectId: string): Promise<ArtifactSummary[]> {
 		this.projects.require(projectId);
 		const lists = await Promise.all(

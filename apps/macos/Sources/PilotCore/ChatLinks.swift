@@ -65,12 +65,14 @@ public enum ChatLinks {
     /// Punctuation that ends a sentence rather than a URL.
     private static let trailing: Set<Character> = [".", ",", ";", ":", "!", "?", "*", "_", "~"]
 
-    /// Absolute http(s) URLs, written with their scheme. Bare domains are skipped: "README.md" is not a link.
-    public static func mentions(in text: String) -> [ChatLinkMention] {
-        guard text.contains("http") else { return [] }
+    /// Absolute http(s) URLs, optionally including artifact links for inline rendering.
+    /// Bare domains are skipped: "README.md" is not a link. The inspector remains web-only.
+    public static func mentions(in text: String, includingArtifacts: Bool = false) -> [ChatLinkMention] {
+        guard text.localizedCaseInsensitiveContains("http")
+            || (includingArtifacts && text.localizedCaseInsensitiveContains("artifact://")) else { return [] }
         var result: [ChatLinkMention] = []
         var searchStart = text.startIndex
-        while let match = nextScheme(in: text, from: searchStart) {
+        while let match = nextScheme(in: text, from: searchStart, includingArtifacts: includingArtifacts) {
             var end = match
             while end < text.endIndex, !terminators.contains(text[end]) { end = text.index(after: end) }
             var candidate = Substring(text[match..<end])
@@ -78,6 +80,7 @@ public enum ChatLinks {
             searchStart = end
             let url = String(candidate)
             guard let parts = URLComponents(string: url), let host = parts.host, !host.isEmpty else { continue }
+            if parts.scheme?.lowercased() == "artifact", parts.url.flatMap({ ArtifactLink(url: $0) }) == nil { continue }
             result.append(ChatLinkMention(url: url, label: label(before: match, in: text, url: url)))
         }
         return result
@@ -152,15 +155,14 @@ public enum ChatLinks {
         return String(text)
     }
 
-    private static func nextScheme(in text: String, from start: String.Index) -> String.Index? {
+    private static func nextScheme(in text: String, from start: String.Index, includingArtifacts: Bool) -> String.Index? {
         var cursor = start
-        while let range = text.range(of: "http", options: [.caseInsensitive], range: cursor..<text.endIndex) {
-            let rest = text[range.upperBound...]
-            let isScheme = rest.hasPrefix("://") || ((rest.first == "s" || rest.first == "S") && rest.dropFirst().hasPrefix("://"))
+        let pattern = includingArtifacts ? #"(?:https?|artifact)://"# : #"https?://"#
+        while let range = text.range(of: pattern, options: [.regularExpression, .caseInsensitive], range: cursor..<text.endIndex) {
             // "xhttp://" is not a link; the scheme must start a word.
             let startsWord = range.lowerBound == text.startIndex
                 || !(text[text.index(before: range.lowerBound)].isLetter || text[text.index(before: range.lowerBound)].isNumber)
-            if isScheme, startsWord { return range.lowerBound }
+            if startsWord { return range.lowerBound }
             cursor = range.upperBound
         }
         return nil

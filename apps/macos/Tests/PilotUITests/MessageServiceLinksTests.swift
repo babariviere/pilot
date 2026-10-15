@@ -24,10 +24,12 @@ struct MessageServiceLinksTests {
 
     @Test func serviceTitlesAloneHaveSoftUnderlines() async throws {
         for url in ["https://github.com/acme/api/pull/42", "https://linear.app/acme/issue/ENG-42/fix-chat-links",
-                    "https://acme.slack.com/archives/C123/p1234567890123456"] {
+                    "https://acme.slack.com/archives/C123/p1234567890123456",
+                    "artifact://abee494b-d1a8-484c-a57b-669148815d37"] {
             let parsed = await MarkdownRenderer.shared.preparePlainText(url)
             let rich = SelectableMessageText.attributed(parsed, style: style)
-            #expect(rich.attribute(.attachment, at: 0, effectiveRange: nil) is NSTextAttachment)
+            let attachment = try #require(rich.attribute(.attachment, at: 0, effectiveRange: nil) as? NSTextAttachment)
+            #expect(attachment.image != nil)
             #expect((rich.string as NSString).substring(with: NSRange(location: 1, length: 1)) == "\u{00A0}")
             for index in 0..<2 {
                 #expect(rich.attribute(.underlineStyle, at: index, effectiveRange: nil) == nil)
@@ -38,6 +40,17 @@ struct MessageServiceLinksTests {
             expectTitleStyle(rich, range: NSRange(location: 2, length: rich.length - 2), url: url)
             #expect(MessageServiceLinks.copiedText(rich, range: NSRange(location: 0, length: rich.length)) == url)
         }
+    }
+
+    @Test func labelledArtifactLinksKeepTheirTitleDestinationAndCopyText() async throws {
+        let url = "artifact://abee494b-d1a8-484c-a57b-669148815d37"
+        let blocks = try await MarkdownRenderer.shared.prepare("Open [Layout preview](\(url)).")
+        let parsed = try #require(blocks.first?.inline)
+        let rich = SelectableMessageText.attributed(parsed, style: style)
+        #expect(rich.string.contains("\u{FFFC}\u{00A0}Layout preview"))
+        let range = (rich.string as NSString).range(of: "Layout preview")
+        #expect(rich.attribute(.link, at: range.location, effectiveRange: nil) as? URL == URL(string: url))
+        #expect(MessageServiceLinks.copiedText(rich, range: NSRange(location: 0, length: rich.length)) == "Open Layout preview.")
     }
 
     @Test func plainLinksShareTheServiceTitleStyleInUserAndAgentText() async throws {

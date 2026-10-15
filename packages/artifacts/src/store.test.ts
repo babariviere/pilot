@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -25,6 +25,8 @@ test("artifacts persist project/session ownership and immutable revisions", asyn
 		assert.equal((await reopened.get(first.id)).source, second.source);
 		assert.equal((await reopened.list())[0]?.revision, 2);
 		assert.ok(!("html" in (await reopened.list())[0]!));
+		assert.deepEqual(await reopened.summary(first.id), (await reopened.list())[0]);
+		await assert.rejects(new ArtifactStore(dir, { sessionId: "other" }).summary(first.id), ArtifactNotFound);
 		await assert.rejects(reopened.update(first.id, document, 1), /revision conflict/);
 		await assert.rejects(reopened.get(first.id, 3), ArtifactNotFound);
 		await assert.rejects(new ArtifactStore(dir, { sessionId: "other" }).get(first.id), ArtifactNotFound);
@@ -56,11 +58,13 @@ test("path traversal and uncommitted revisions are not readable", async () => {
 	try {
 		const store = new ArtifactStore(dir, { sessionId: "session" });
 		await assert.rejects(store.get("../../meta"), ArtifactNotFound);
+		await assert.rejects(store.summary("../../meta"), ArtifactNotFound);
 		const id = "11111111-1111-1111-1111-111111111111";
 		await mkdir(join(dir, "artifacts", id), { recursive: true });
 		await writeFile(join(dir, "artifacts", id, "1.json"), "{}");
 		assert.deepEqual(await store.list(), []);
 		await assert.rejects(store.get(id, 1), ArtifactNotFound);
+		await assert.rejects(store.summary(id), ArtifactNotFound);
 		await assert.rejects(
 			store.create({ ...document, libraries: ["constructor" as never] }),
 			/Unknown artifact library/,

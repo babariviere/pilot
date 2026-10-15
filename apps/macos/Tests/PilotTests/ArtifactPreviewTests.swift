@@ -23,6 +23,8 @@ private final class ArtifactHTTPStub: URLProtocol {
             body = "[]"
         case "invalid-list.invalid":
             body = #"[{"id":"wrong","sessionId":"other","title":"Other chat","kind":"html","revision":1,"createdAt":1,"updatedAt":2}]"#
+        case "invalid-artifact.invalid":
+            body = #"{"id":"wrong","sessionId":"session","title":"Preview","kind":"html","revision":1,"createdAt":1,"updatedAt":2}"#
         default:
             // Incorrect routes must fail rather than silently accepting a bad client URL.
             if url.path == "/api/sessions/session/artifacts/artifact" {
@@ -32,6 +34,8 @@ private final class ArtifactHTTPStub: URLProtocol {
                  "revision":\(revision),"createdAt":1,"updatedAt":2,"source":"<h1>Saved</h1>",
                  "html":"<h1>Saved</h1>","libraries":[]}
                 """
+            } else if url.path == "/api/artifacts/abee494b-d1a8-484c-a57b-669148815d37" {
+                body = #"{"id":"abee494b-d1a8-484c-a57b-669148815d37","sessionId":"other","title":"Linked preview","kind":"html","revision":2,"createdAt":1,"updatedAt":4}"#
             } else if url.path == "/api/sessions/session/artifacts" {
                 body = """
                 [{"id":"artifact","sessionId":"session","title":"Preview","kind":"html",
@@ -65,6 +69,21 @@ private final class ArtifactHTTPStub: URLProtocol {
 }
 
 private let previewReference = ArtifactReference(id: "artifact", sessionId: "session", title: "Preview", revision: 1)
+
+@Test @MainActor func artifactLinkPopupResolvesTheOwnerAndRecoversOnRetry() async throws {
+    let url = try #require(URL(string: "artifact://abee494b-d1a8-484c-a57b-669148815d37"))
+    let link = try #require(ArtifactLink(url: url))
+    let state = ArtifactLinkViewState()
+    await state.load(link, client: artifactClient("missing.invalid"))
+    #expect(state.reference == nil)
+    #expect(state.error == "Unknown artifact or revision")
+    await state.load(link, client: artifactClient("invalid-artifact.invalid"))
+    #expect(state.reference == nil)
+    #expect(state.error == "Invalid artifact reference")
+    await state.load(link, client: artifactClient("current.invalid"))
+    #expect(state.error == nil)
+    #expect(state.reference == ArtifactReference(id: link.id, sessionId: "other", title: "Linked preview", revision: 2))
+}
 
 @Test @MainActor func artifactCardsStartWithPreviewInsteadOfSource() {
     let state = ArtifactViewState()

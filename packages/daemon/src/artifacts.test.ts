@@ -135,6 +135,36 @@ test("empty parked sessions have an empty artifact list", async (t) => {
 	assert.equal(sessions.get(sessionId)?.state, "parked");
 });
 
+test("artifact ID lookup bounds pointer probes and stops after a matching batch", async (t) => {
+	const { sessions } = await registry(t);
+	const meta = sessions["metas"].get(sessionId)!;
+	for (let index = 0; index < 1_000; index++) {
+		const id = `lookup-${index}`;
+		sessions["metas"].set(id, { ...meta, id });
+	}
+	let active = 0;
+	let peak = 0;
+	let found = false;
+	const pointers = t.mock.method(ArtifactStore.prototype, "summary", async () => {
+		active++;
+		peak = Math.max(peak, active);
+		await nextTurn();
+		active--;
+		if (found) return summary;
+		throw new ArtifactNotFound("Unknown artifact");
+	});
+	await assert.rejects(sessions.resolveArtifact(artifactId), NotFound);
+	assert.equal(peak, 4);
+	assert.equal(pointers.mock.callCount(), 1_002);
+	found = true;
+	assert.deepEqual(await sessions.resolveArtifact(artifactId), summary);
+	assert.equal(pointers.mock.callCount(), 1_006);
+	await assert.rejects(sessions.resolveArtifact("invalid"), NotFound);
+	assert.equal(pointers.mock.callCount(), 1_006);
+	// These synthetic entries are not persisted session fixtures.
+	for (let index = 0; index < 1_000; index++) sessions["metas"].delete(`lookup-${index}`);
+});
+
 test("artifacts.changed reads committed lists and notifies listeners", { timeout: 2_000 }, async (t) => {
 	const { home, sessions, launch, runner } = await registry(t);
 	const before = sessions.get(sessionId);
@@ -337,6 +367,7 @@ test("archived owners retain project-visible artifacts and pinned revisions acro
 	assert.equal(ownerItems.length, 1);
 	assert.equal(ownerItems[0]!.revision, 2);
 	assert.deepEqual(await read(`/api/projects/${project.id}/artifacts`), ownerItems);
+	assert.deepEqual(await read(`/api/artifacts/${initial.id}`), ownerItems[0]);
 	assert.ok(ownerItems.every((item) => item.projectId === project.id));
 	assert.ok(!sessions.list().some((session) => session.id === sessionId));
 	assert.deepEqual(sessions.list({ archived: "true", projectId: project.id }), [archived]);
@@ -352,6 +383,7 @@ test("archived owners retain project-visible artifacts and pinned revisions acro
 	const reopenedRestore = t.mock.method(reopened, "restore");
 	assert.deepEqual(await reopened.artifacts(sessionId), ownerItems);
 	assert.deepEqual(await reopened.projectArtifacts(project.id), ownerItems);
+	assert.deepEqual(await reopened.resolveArtifact(initial.id), ownerItems[0]);
 	assert.deepEqual(await reopened.artifact(sessionId, initial.id), latest);
 	assert.deepEqual(await reopened.artifact(sessionId, initial.id, 1), initial);
 	assert.deepEqual(reopened.get(sessionId), archived);
@@ -382,6 +414,25 @@ test("HTTP artifact routes return lists, latest and pinned revisions, and 404s",
 		"/api/projects/missing/artifacts",
 	])
 		assert.equal((await fetch(`${base}${missing}`)).status, 404, missing);
+});
+
+test("artifact ID lookup returns only committed metadata and never reads bodies or wakes owners", async (t) => {
+	const { base, home, sessions, launch } = await api(t, false);
+	const store = new ArtifactStore(join(home, "sessions", sessionId), { sessionId });
+	const created = await store.create({ title: "Linked preview", kind: "html", source: "<p>Preview</p>" });
+	const expected = (await store.list())[0];
+	const bodies = t.mock.method(ArtifactStore.prototype, "get", async () => {
+		throw new Error("ID lookup must not read artifact bodies");
+	});
+	const response = await fetch(`${base}/api/artifacts/${created.id}`);
+	assert.equal(response.status, 200);
+	assert.deepEqual(await response.json(), expected);
+	assert.equal((await fetch(`${base}/api/artifacts/${randomUUID()}`)).status, 404);
+	assert.equal((await fetch(`${base}/api/artifacts/invalid`)).status, 404);
+	assert.equal((await fetch(`${base}/api/artifacts/${created.id}`, { headers: { origin: "null" } })).status, 403);
+	assert.equal(bodies.mock.callCount(), 0);
+	assert.equal(launch.mock.callCount(), 0);
+	assert.equal(sessions["workers"].size, 0);
 });
 
 test("library assets are JavaScript for native requests only", async (t) => {
