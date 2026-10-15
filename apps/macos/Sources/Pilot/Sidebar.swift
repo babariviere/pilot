@@ -13,6 +13,7 @@ struct SessionSidebar: View {
     @StateObject private var folderEditor = ProjectFolderEditorState()
 
     @FocusState private var searchFocused: Bool
+    @FocusState private var chatListFocused: Bool
 
     var body: some View {
         let known = Set(client.projects.map(\.id))
@@ -37,6 +38,8 @@ struct SessionSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        .focused($chatListFocused)
+        .focusEffectDisabled()
         .scrollContentBackground(.hidden)
         .background(Theme.sidebar)
         .overlay {
@@ -149,7 +152,8 @@ struct SessionSidebar: View {
         if !groups.pinned.isEmpty {
             Section {
                 ForEach(groups.pinned) { session in
-                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                        .tag(session.id)
                 }
             } header: {
                 SidebarSectionHeader(title: "Pinned")
@@ -158,7 +162,8 @@ struct SessionSidebar: View {
         if !groups.needsYou.isEmpty {
             Section {
                 ForEach(groups.needsYou) { session in
-                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                        .tag(session.id)
                 }
             } header: {
                 SidebarSectionHeader(title: "Needs you", count: groups.needsYou.count, attention: true)
@@ -167,7 +172,8 @@ struct SessionSidebar: View {
         if !groups.readyToMerge.isEmpty {
             Section {
                 ForEach(groups.readyToMerge) { session in
-                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                        .tag(session.id)
                 }
             } header: {
                 SidebarSectionHeader(title: "Ready to merge")
@@ -176,7 +182,8 @@ struct SessionSidebar: View {
         if !groups.working.isEmpty {
             Section {
                 ForEach(groups.working) { session in
-                    SessionRow(session: session, projectName: projectName(session, names)).tag(session.id)
+                    SessionRow(session: session, projectName: projectName(session, names), listFocused: chatListFocused)
+                        .tag(session.id)
                 }
             } header: {
                 SidebarSectionHeader(title: "Working", count: groups.working.count)
@@ -342,7 +349,7 @@ struct SessionSidebar: View {
         }
         let list = showingAll ? (shown: sessions, hidden: 0) : collapsed
         ForEach(list.shown) { session in
-            SessionRow(session: session, projectName: projectName(session, projectNames))
+            SessionRow(session: session, projectName: projectName(session, projectNames), listFocused: chatListFocused)
                 .padding(.leading, indented ? 20 : 0).tag(session.id)
         }
         if sessions.isEmpty {
@@ -559,6 +566,7 @@ struct SessionRow: View {
     let session: SessionSummary
     /// Shown before the repository metadata in lists that mix projects.
     var projectName: String?
+    var listFocused = false
     @EnvironmentObject private var model: AppModel
     @State private var hovered = false
     @State private var repositoryHelp: String?
@@ -567,6 +575,8 @@ struct SessionRow: View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
             row(now: context.date)
         }
+        .listRowBackground(SidebarSelectionBackground(selected: model.selectedSessionId == session.id,
+                                                      focused: listFocused))
     }
 
     @ViewBuilder private func row(now: Date) -> some View {
@@ -587,6 +597,7 @@ struct SessionRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(session.title)
                     .font(.pilot(.body, weight: unread ? .semibold : .regular))
+                    .foregroundStyle(Theme.foreground)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 HStack(alignment: .firstTextBaseline, spacing: 6) {

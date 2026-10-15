@@ -116,6 +116,8 @@ as "1 needs you · 2 working". pilotd's controls sit in their own submenu.
 - A row's selection is its only fill. Actions inside rows use `rowIconButtonStyle` (no background) and whole-row
   buttons `rowButtonStyle`, which both draw the keyboard focus ring; `QuietIconButtonStyle` is for standalone
   toolbar and composer buttons.
+  Sidebar chat selection stays neutral grey whether or not the list has focus, keeping the normal text and
+  status colours. A focus ring on the selected row shows when keyboard navigation belongs to the list.
 - Follow existing layouts, terminology and visual hierarchy. Pages such as missions and projects share one
   reading column, section headers and hairline rows (`PageComponents.swift`).
 - Pages, sheets and panes share their chrome (`PageComponents.swift`): `PageHeader` for page titles,
