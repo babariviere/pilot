@@ -5,28 +5,36 @@
 The main README uses three captures rendered from the current production SwiftUI views with synthetic
 fixtures, without connecting to a daemon or using live conversations:
 
-- `readme-build.png`: a Build chat, its task checklist and the Changes inspector.
+- `readme-build.png`: a Build chat, grouped tool activity, compact task progress and the Changes inspector,
+  cropped to omit the sidebar.
 - `readme-ask.png`: a read-only Ask chat with an implementation plan.
-- `readme-mission.png`: a mission's Tasks page in the native window.
+- `readme-mission.png`: a mission's Tasks page, cropped to the task list.
 
-The chat captures use the snapshot renderer's stand-in window header. The mission capture includes the
-real native toolbar. These are view-layout snapshots, not end-to-end agent or scrolling tests.
+The chat captures use the snapshot renderer's stand-in window header. The mission capture is content-only.
+These are view-layout snapshots, not end-to-end agent or scrolling tests. The crops avoid native selection
+and toolbar compositing artifacts in offscreen captures.
 
-Regenerate on macOS from the repository root:
+Regenerate on macOS from the repository root with an up-to-date installed app and ImageMagick (`magick`).
+No local build or live daemon is needed. Use `PILOT_APP` to select a different app bundle:
 
 ```sh
-apps/macos/scripts/build.sh
+pilot_app="${PILOT_APP:-/Applications/Pilot.app}"
 captures="$(mktemp -d /tmp/pilot-readme-screenshots.XXXXXX)"
 fixture_home="$(mktemp -d /tmp/pilot-readme-home.XXXXXX)"
-HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/.build/debug/Pilot --snapshot "$captures"
-HOME="$fixture_home" CFFIXED_USER_HOME="$fixture_home" apps/macos/.build/debug/Pilot --snapshot "$captures" --missions-only
-cp "$captures/session-changes.png" docs/screenshots/readme-build.png
+open -n -W --env "HOME=$fixture_home" --env "CFFIXED_USER_HOME=$fixture_home" \
+  "$pilot_app" --args --snapshot "$captures"
+open -n -W --env "HOME=$fixture_home" --env "CFFIXED_USER_HOME=$fixture_home" \
+  "$pilot_app" --args --snapshot "$captures" --missions-only
+magick "$captures/session-changes.png" -crop 1220x860+280+0 +repage docs/screenshots/readme-build.png
 cp "$captures/ask-chat.png" docs/screenshots/readme-ask.png
-cp "$captures/mission-window-tasks-1360.png" docs/screenshots/readme-mission.png
+magick "$captures/mission-tasks.png" -crop 1000x560+0+0 +repage docs/screenshots/readme-mission.png
 ```
 
 Inspect all three images before publishing. Copy only these demo captures, never a live window capture
 containing private projects, conversations or credentials.
+
+Use `open` for the bundled app so SwiftUI creates its native window. Running the executable directly
+can render the offscreen chats but fail the mission window capture with "No native toolbar window available".
 
 ## Mission task phases
 

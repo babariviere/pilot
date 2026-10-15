@@ -11,10 +11,11 @@ daemon managing sessions independently of the SwiftUI app.
 
 [Get started](#get-started) · [Working with Pilot](#working-with-pilot) · [Development](#development)
 
-![A Build chat with its task checklist and code changes side by side](docs/screenshots/readme-build.png)
+![A Build chat with grouped tool activity, task progress and code changes side by side](docs/screenshots/readme-build.png)
 
-*Screenshots are rendered from current native views with demo data, not live conversations. Chat captures
-use a stand-in window header. See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
+*Screenshots are rendered from native views with demo data, not live conversations. Chat captures use a
+stand-in window header; Build and mission captures are cropped to their working areas.
+See [screenshot notes](docs/screenshots/README.md) to regenerate them.*
 
 ## What you can do
 
