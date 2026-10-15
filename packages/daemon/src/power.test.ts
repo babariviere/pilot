@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test, type TestContext } from "node:test";
+import { type TestContext, test } from "node:test";
 import type { SessionSummary } from "@pilot/protocol";
 import { closedLidAllowed, laterWake, PowerService, type PowerSessions } from "./power.ts";
-import { parsePowerSample, type PowerCommand, type PowerSample } from "./power-helper.ts";
+import { type PowerCommand, type PowerSample, parsePowerSample } from "./power-helper.ts";
 
 const sample: PowerSample = {
 	available: true,
@@ -17,6 +17,7 @@ const sample: PowerSample = {
 	sleeping: false,
 	fullWake: true,
 	wakeToken: "100:1",
+	sleepGeneration: 1,
 	closedLidActive: false,
 };
 const session = (id: string, state: SessionSummary["state"] = "working"): SessionSummary => ({
@@ -33,6 +34,7 @@ class Sessions implements PowerSessions {
 	resumes = 0;
 	pauses = 0;
 	pauseWait?: Promise<void>;
+	sleepPrepared: Promise<void> = Promise.resolve();
 	list() {
 		return [session("working"), session("idle", "idle")];
 	}
@@ -179,9 +181,43 @@ test("natural lid sleep and explicit sleep pause before acknowledging the native
 	await f.emit({ sleeping: true, wifiConnected: false, lidClosed: true, fullWake: false });
 	assert.equal(f.sessions.pauses, 1);
 	assert.deepEqual(f.commands.slice(-2), [
+		{ action: "allowSleep", generation: 1 },
 		{ action: "activity", awake: false, closedLid: false },
-		{ action: "allowSleep" },
 	]);
+});
+
+test("sleep acknowledgement waits for durable preparation, not kernel teardown or override restoration", async (t) => {
+	const f = await fixture(t);
+	let prepare!: () => void;
+	let close!: () => void;
+	f.sessions.sleepPrepared = new Promise<void>((resolve) => {
+		prepare = resolve;
+	});
+	f.sessions.pauseWait = new Promise<void>((resolve) => {
+		close = resolve;
+	});
+	try {
+		f.send({ sleeping: true, fullWake: false, sleepGeneration: 7 });
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.equal(f.sessions.pauses, 1);
+		assert.equal(
+			f.commands.some((command) => command.action === "allowSleep"),
+			false,
+		);
+		prepare();
+		await new Promise<void>((resolve) => setImmediate(resolve));
+		assert.deepEqual(f.commands.at(-1), { action: "allowSleep", generation: 7 });
+		assert.equal(
+			f.commands.some((command) => command.action === "activity" && !command.awake),
+			false,
+		);
+		close();
+		await f.service.settled();
+		assert.deepEqual(f.commands.at(-1), { action: "activity", awake: false, closedLid: false });
+	} finally {
+		prepare();
+		close();
+	}
 });
 
 test("permission is requested only by explicit setup; denial preserves settings", async (t) => {
@@ -262,6 +298,9 @@ test("native frames are bounded typed state, not SSIDs or location authorization
 		{ wifiConnected: null },
 		{ wakeToken: "bad" },
 		{ sleeping: undefined },
+		{ sleepGeneration: -1 },
+		{ sleepGeneration: 1.5 },
+		{ sleepGeneration: undefined },
 	])
 		assert.equal(parsePowerSample({ type: "state", ...sample, ...patch }), undefined);
 });

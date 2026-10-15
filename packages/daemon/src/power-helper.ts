@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ServiceUnavailable } from "./errors.ts";
@@ -14,13 +14,14 @@ export interface PowerSample {
 	sleeping: boolean;
 	fullWake: boolean;
 	wakeToken: string;
+	sleepGeneration: number;
 	closedLidActive: boolean;
 }
 export type PowerCommand =
 	| { action: "activity"; awake: boolean; closedLid: boolean }
 	| { action: "authorize" }
 	| { action: "sleep" }
-	| { action: "allowSleep" };
+	| { action: "allowSleep"; generation: number };
 export interface PowerHelper {
 	request(command: PowerCommand): Promise<void>;
 	close(): Promise<void>;
@@ -31,6 +32,7 @@ export function parsePowerSample(value: unknown): PowerSample | undefined {
 	if (!value || typeof value !== "object") return;
 	const v = value as PowerSample & { type: string };
 	if (v.type !== "state" || !/^\d+:\d{1,6}$/.test(v.wakeToken)) return;
+	if (!Number.isSafeInteger(v.sleepGeneration) || v.sleepGeneration < 0) return;
 	for (const key of [
 		"available",
 		"authorized",
@@ -101,8 +103,8 @@ export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {
 		if (ended) return;
 		buffer += chunk;
 		if (Buffer.byteLength(buffer) > 65_536) return lost();
-		let end: number;
-		while ((end = buffer.indexOf("\n")) >= 0) {
+		let end = buffer.indexOf("\n");
+		while (end >= 0) {
 			const line = buffer.slice(0, end);
 			buffer = buffer.slice(end + 1);
 			try {
@@ -130,6 +132,7 @@ export const openPowerHelper: PowerHelperFactory = async (sample, failed) => {
 			} catch {
 				lost();
 			}
+			end = buffer.indexOf("\n");
 		}
 	});
 	await ready;

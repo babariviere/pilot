@@ -36,12 +36,19 @@ opt out of automatic resume.
 - `PowerService` in `packages/daemon/src/power.ts` serializes and coalesces policy decisions.
 - `SessionManager` commits `power-pause.json` before detaching/closing kernels. Kernel admission,
   mission notices, PR follow-ups and subscription reopening respect this latch. It is cleared only
-  at a qualifying wake, or when the user explicitly disables the policy.
+  at a qualifying wake, or when the user explicitly disables the policy. Every detached chat's recovery
+  marker is saved before sleep preparation completes. OS sleep acknowledgement waits for this durable
+  preparation, not the serial batches of process exits. Wake and update readiness still wait for full
+  teardown, so a suspended old worker cannot race its replacement for storage.
 - `PilotPower` is a pipe-connected native executable, independent of the GUI. IOKit supplies AC/lid
   and sleep notifications. Network.framework supplies Wi-Fi and connectivity booleans, without
   SSIDs, scans, location access or provider requests. It holds only a system-idle assertion, never
-  a display assertion. Requested system sleep gets a bounded 20-second preparation window, not an
-  indefinite veto. A slow/failing teardown cannot prevent macOS from sleeping indefinitely.
+  a display assertion. Requested system sleep gets a five-second fallback on the native notification
+  queue, independent of daemon responsiveness, process teardown and guardian commands. Normally the
+  daemon acknowledges as soon as durable preparation finishes, before releasing activity assertions.
+  Replies carry a sleep generation, so an old reply or timer cannot release a later sleep. The fallback
+  permits OS suspension even if persistence stalls; preparation/recovery continues after wake, with
+  admissions still fenced. This is not a guarantee against power loss during a failed disk write.
 - Closed-lid work uses `pmset disablesleep 1/0`, the same mechanism documented by
   [Vorssaint](https://github.com/vorssaint/vorssaint-utils). This implementation is independent, not
   copied from its GPL source. The setting is **system-wide and persistent**, not a process assertion.
@@ -92,3 +99,23 @@ Physical hardware still needs an opt-in smoke check on a test Mac:
 6. Check a docked external display, permission cancellation/revocation, and helper relaunch recovery.
 
 Do not perform these destructive power/lifecycle checks on a Mac running real work.
+
+### Sleep acknowledgement investigation (2026-10-15)
+
+Installed 1.36.1 (953.1) observed will-sleep at 18:01:05 CEST, entered software sleep at
+18:01:25, and woke at 18:04:04. `pmset -g log` attributes a 20,174 ms sleep-notification
+delay to PilotPower. Main `60453b09` still had the release's 20-second native fallback and
+byte-identical daemon power policy. The newer session-lock change did not alter acknowledgement.
+
+The old daemon awaited all worker exits (four at a time, with an eight-second forced-exit
+deadline per batch), then the activity/guardian reply, before acknowledging sleep. Synthetic
+blocked-worker tests reproduce that acknowledgement dependency without sleeping the host. The
+recorded duration is consistent with exhausting the fallback, but the historical evidence does
+not identify which teardown/guardian operation consumed the window. No host sleep, network,
+daemon lifecycle or power-setting changes were performed for this investigation.
+
+Regression tests now hold nine synthetic worker exits indefinitely: all recovery markers become
+durable before acknowledgement is eligible, while wake still waits for every exit. Native policy
+tests cover one-shot acknowledgement, wake cancellation and stale generations. A user-operated
+hardware retest should compare the next sleep's notification delay in `pmset -g log`; the synthetic
+checks do not establish real-device latency or a hard real-time scheduling guarantee.
