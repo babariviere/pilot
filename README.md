@@ -282,7 +282,7 @@ mise local configs saved for recovery. Track any other files you need to retain.
 Use a mission when one goal needs several chats. Its shared brief and decisions give agents a common
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
-The mission's Overview shows overall task progress and a compact progress bar for each phase.
+The mission's Overview shows a compact progress bar for each phase, or one overall bar for work without phases.
 
 Task status icons fill clockwise from the top: empty for To do, one third for In progress and two thirds
 for In review. Both task status menus show the same icons as the rows.
