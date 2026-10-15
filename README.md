@@ -255,6 +255,7 @@ mise local configs saved for recovery. Track any other files you need to retain.
 Use a mission when one goal needs several chats. Its shared brief and decisions give agents a common
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
+The mission's Overview shows overall task progress and a compact progress bar for each phase.
 
 Tasks can belong to ordered phases, each with a name and optional goal. The Tasks tab groups tasks by
 phase, folds finished phases, and lets you add, edit, reorder and delete phases. Drag tasks to reorder them
