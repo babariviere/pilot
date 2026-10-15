@@ -256,6 +256,9 @@ Use a mission when one goal needs several chats. Its shared brief and decisions 
 starting point, while tasks record ownership, dependencies and progress. You can coordinate the work
 yourself or use a coordinator chat, and review linked pull requests and artifacts in one place.
 
+Task status icons fill clockwise from the top: empty for To do, one third for In progress and two thirds
+for In review. Both task status menus show the same icons as the rows.
+
 Tasks can belong to ordered phases, each with a name and optional goal. The Tasks tab groups tasks by
 phase, folds finished phases, and lets you add, edit, reorder and delete phases. Drag tasks to reorder them
 or move them between phases, and edit a task's dependencies from its menu.

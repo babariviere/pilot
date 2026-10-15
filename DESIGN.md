@@ -84,7 +84,8 @@ Each top-level view has one role. Keep new content in the view whose role it ser
 
 Each state has one label and one icon and color token in `Theme`, used the same way in the sidebar, Home and
 the project page. Do not restyle a state for a single screen. Linear tickets and mission tasks share one status
-ladder: empty circle to do, half-filled in progress, three-quarter circle in review, then done.
+ladder: empty circle to do, one-third filled in progress, two-thirds filled in review, then done.
+The progress pies fill clockwise from 12 o'clock.
 
 | State | Meaning | Interrupts |
 | --- | --- | --- |
