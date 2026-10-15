@@ -120,14 +120,14 @@ struct InboxRowDetail: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        let draft = draft
+        let draft = draft(using: model)
         let line = RowLine(segments: RowLineSegments.shown(segments(unread: session.map { model.isUnread($0) } ?? false),
                                                            draft: draft), maxLines: 2)
         // The row's own tooltip stays on the rest of the row; the line names the whole draft.
         if let draft { line.help(draft.help) } else { line }
     }
 
-    private var draft: RowDraft? {
+    private func draft(using model: AppModel) -> RowDraft? {
         pullRequest == nil ? model.chatDraft(session?.id) : nil
     }
 
@@ -140,11 +140,13 @@ struct InboxRowDetail: View {
     }
 
     /// The same line as plain text, for VoiceOver, with every segment the line has no room for.
-    var accessibilityText: String {
+    /// Parents read this before SwiftUI mounts the detail view. Use their resolved model, not this view's environment.
+    func accessibilityText(using model: AppModel) -> String {
         let coordinator = session.flatMap { $0.isActiveMissionCoordinator ? $0 : nil }
         return RowLineSegments.described(RowLineSegments.session(
             session, projectName: projectName, missionTitle: missionTitle, reason: reason, branch: session?.branch,
-            coordinatorDetail: coordinator == nil ? nil : "", pullRequest: pullRequest), draft: draft).accessibilityText
+            coordinatorDetail: coordinator == nil ? nil : "", pullRequest: pullRequest),
+            draft: draft(using: model)).accessibilityText
     }
 }
 
@@ -206,7 +208,7 @@ struct InboxReadyToMergeRow: View {
         }
         .rowButtonStyle()
         .help("Pull request #\(pr.number) is ready to merge. Pilot will not merge it. Chat: \(pr.sessionTitle)")
-        .accessibilityLabel("\(pr.title). Ready to merge. \(detail.accessibilityText)")
+        .accessibilityLabel("\(pr.title). Ready to merge. \(detail.accessibilityText(using: model))")
         .accessibilityHint(url == nil ? "Opens the chat" : "Opens the pull request in the browser")
         .accessibilityAction(named: "Open chat", openChat)
         .contextMenu {

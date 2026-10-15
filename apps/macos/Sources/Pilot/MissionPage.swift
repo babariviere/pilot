@@ -436,7 +436,7 @@ private struct MissionNeedsYouRow: View {
     var body: some View {
         let reason = item.needsYouLabel()
         let detail = InboxRowDetail(session: session, reason: reason)
-        NeedsYouRow(title: title, action: action, help: reason, accessibilityDetail: detail.accessibilityText,
+        NeedsYouRow(title: title, action: action, help: reason, accessibilityDetail: detail.accessibilityText(using: model),
                     open: open) { detail }
             .inboxCorner(signal)
     }

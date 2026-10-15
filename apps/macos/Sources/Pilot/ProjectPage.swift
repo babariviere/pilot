@@ -668,7 +668,7 @@ struct ProjectNeedsYouRow: View {
         let action = ProjectPageText.needsAction(item)
         let detail = detail
         NeedsYouRow(title: item.title, action: action, help: item.needsYouLabel(now: now),
-                    accessibilityDetail: detail.accessibilityText, open: open) { detail }
+                    accessibilityDetail: detail.accessibilityText(using: model), open: open) { detail }
         .modifier(NeedsYouRowActions(item: item, chatId: chatId))
     }
 
@@ -770,7 +770,7 @@ private struct ProjectWorkingRow: View {
         .rowButtonStyle()
         .inboxCorner(session.map { $0.signal(unread: model.isUnread($0)) } ?? .working,
                      background: session?.isWaitingOnJobs == true)
-        .accessibilityLabel([item.title, session == nil ? ProjectPageText.workingMeta(item) : detail.accessibilityText,
+        .accessibilityLabel([item.title, session == nil ? ProjectPageText.workingMeta(item) : detail.accessibilityText(using: model),
                              "working for \(elapsed)"]
             .filter { !$0.isEmpty }.joined(separator: ", "))
         .contextMenu {
@@ -916,7 +916,7 @@ private struct ProjectPullRequestRow: View {
         .rowButtonStyle()
         .inboxCorner(pr.isReady ? .readyToMerge : nil)
         .help(url == nil ? "Open the chat that owns this pull request" : "\(pr.url)\nChat: \(pr.sessionTitle)")
-        .accessibilityLabel("\(pr.title). \(detail.accessibilityText). Chat: \(pr.sessionTitle)")
+        .accessibilityLabel("\(pr.title). \(detail.accessibilityText(using: model)). Chat: \(pr.sessionTitle)")
         .accessibilityHint(url == nil ? "Opens the chat" : "Opens in the browser")
         .accessibilityAction(named: "Open chat", openChat)
         .contextMenu {
@@ -1034,7 +1034,7 @@ private struct ProjectRecentRow: View {
     var body: some View {
         let session = model.client.session(item.sessionId)
         let detail = InboxRowDetail(session: session, missionTitle: missionTitle)
-        let meta = session == nil ? fallbackMeta : detail.accessibilityText
+        let meta = session == nil ? fallbackMeta : detail.accessibilityText(using: model)
         let time = SessionTimeFormatting.relative(item.outcomeAt, now: now)
         Button { model.selectedSessionId = item.sessionId } label: {
             HoverRow(verticalPadding: 5) { _ in
