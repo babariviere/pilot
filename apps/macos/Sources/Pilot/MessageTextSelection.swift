@@ -148,7 +148,9 @@ final class MessageTextSelection: ObservableObject {
             guard range.length > 0 else { continue }
             if let previous { result += previous.block == view.selectionKey.block ? "\n" : "\n\n" }
             if range.location == 0 { result += view.copyPrefix }
-            result += (view.string as NSString).substring(with: range)
+            if let storage = view.textStorage {
+                result += MessageServiceLinks.copiedText(storage, range: range)
+            }
             previous = view.selectionKey
         }
         return result
@@ -189,6 +191,7 @@ struct SelectableMessageText: NSViewRepresentable {
     var lineSpacing: CGFloat = 3
     var item = 0
     var unwrapped = false
+    var hugsContent = false
     var copyPrefix = ""
     @Environment(\.messageTextSelection) private var selection
     @Environment(\.messageSelectionBlock) private var block
@@ -199,6 +202,8 @@ struct SelectableMessageText: NSViewRepresentable {
         view.isEditable = false
         view.isSelectable = true
         view.drawsBackground = false
+        // Individual runs own their styling: branded references are quiet, ordinary links stay blue.
+        view.linkTextAttributes = [.cursor: NSCursor.pointingHand]
         view.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
         view.textContainerInset = .zero
         view.textContainer?.lineFragmentPadding = 0
@@ -237,7 +242,7 @@ struct SelectableMessageText: NSViewRepresentable {
 
     func sizeThatFits(_ proposal: ProposedViewSize, nsView view: MessageSelectionTextView, context: Context) -> CGSize? {
         let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? Theme.column
-        return view.measure(width: unwrapped ? 1_000_000 : max(1, width), unwrapped: unwrapped)
+        return view.measure(width: unwrapped ? 1_000_000 : max(1, width), unwrapped: unwrapped, hugsContent: hugsContent)
     }
 
     static func attributed(_ text: AttributedString, style: MessageSelectionTextView.Style) -> NSAttributedString {
@@ -253,10 +258,15 @@ struct SelectableMessageText: NSViewRepresentable {
                 .font: font, .foregroundColor: run.foregroundColor.map { NSColor($0) } ?? style.color,
                 .paragraphStyle: paragraph,
             ]
-            if let link = run.link { attributes[.link] = link }
+            if let link = run.link {
+                attributes[.link] = link
+                attributes[.foregroundColor] = NSColor.linkColor
+                attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            }
             if intent.contains(.strikethrough) { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
             result.append(NSAttributedString(string: String(text[run.range].characters), attributes: attributes))
         }
+        MessageServiceLinks.decorate(result, font: style.font)
         return result
     }
 }
@@ -277,7 +287,7 @@ final class MessageSelectionTextView: NSTextView {
     var unwrapped = false
     private var measuring = false
     /// Sizes for the few widths SwiftUI probes per layout pass, so alternating probes do not relayout.
-    private var measurements: [(width: CGFloat, size: CGSize)] = []
+    private var measurements: [(width: CGFloat, hugsContent: Bool, size: CGSize)] = []
     /// The text view does not own a TextKit 1 stack it was given, so it retains the root here.
     private var ownedStorage: NSTextStorage?
 
@@ -297,8 +307,8 @@ final class MessageSelectionTextView: NSTextView {
         measurements.removeAll(keepingCapacity: true)
     }
 
-    func measure(width: CGFloat, unwrapped: Bool) -> CGSize {
-        if let cached = measurements.first(where: { $0.width == width }) { return cached.size }
+    func measure(width: CGFloat, unwrapped: Bool, hugsContent: Bool = false) -> CGSize {
+        if let cached = measurements.first(where: { $0.width == width && $0.hugsContent == hugsContent }) { return cached.size }
         guard let container = textContainer, let layout = layoutManager else { return .zero }
         // Resizable text views can resize themselves during layout. Keep the probe width meanwhile.
         measuring = true
@@ -306,9 +316,9 @@ final class MessageSelectionTextView: NSTextView {
         layout.ensureLayout(for: container)
         let used = layout.usedRect(for: container)
         measuring = false
-        let size = CGSize(width: unwrapped ? ceil(used.width) : width, height: ceil(used.height))
+        let size = CGSize(width: unwrapped || hugsContent ? ceil(used.width) : width, height: ceil(used.height))
         if measurements.count >= 4 { measurements.removeFirst() }
-        measurements.append((width, size))
+        measurements.append((width, hugsContent, size))
         // A sizing probe must not change how the placed text wraps. Otherwise the drawn text
         // follows whichever width SwiftUI probed last and reflows on every streamed update.
         if !unwrapped, frame.width > 0, frame.width != width { matchContainerToFrame() }
@@ -382,7 +392,12 @@ final class MessageSelectionTextView: NSTextView {
     }
 
     override func copy(_ sender: Any?) {
-        guard let selectionOwner else { super.copy(sender); return }
+        guard let selectionOwner else {
+            if let storage = textStorage {
+                copySelection(MessageServiceLinks.copiedText(storage, range: selectedRange()), to: .general)
+            }
+            return
+        }
         copySelection(selectionOwner.selectedText, to: .general)
     }
 
@@ -408,7 +423,13 @@ final class MessageSelectionTextView: NSTextView {
     ]
 
     override func writeSelection(to pasteboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        guard let selectionOwner else { return super.writeSelection(to: pasteboard, type: type) }
+        guard let selectionOwner else {
+            if type == .string, let storage = textStorage {
+                let selected = MessageServiceLinks.copiedText(storage, range: selectedRange())
+                return !selected.isEmpty && pasteboard.setString(selected, forType: .string)
+            }
+            return super.writeSelection(to: pasteboard, type: type)
+        }
         if Self.linkPasteboardTypes.contains(type) { return super.writeSelection(to: pasteboard, type: type) }
         guard type == .string else { return false }
         let selected = selectionOwner.selectedText

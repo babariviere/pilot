@@ -69,6 +69,10 @@ Pending child work also reopens automatically after a daemon restart or a sleep 
 
 ### Start your first chat
 
+Chat messages render Linear, Slack and GitHub URLs as compact links with the service mark and a short name.
+Names come from Markdown labels or the URL, without fetching private pages. Bare `#123` references stay literal
+so mission task numbers are never mistaken for GitHub issues. Copying preserves the original text and URLs.
+
 1. Open Pilot and **Add Project** to select a local repository.
 2. Create a chat, choose **Build** or **Ask**, select a model and describe the task.
 3. Let the agent work. Send a follow-up to steer it, or stop it if the direction is wrong.

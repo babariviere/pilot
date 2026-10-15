@@ -567,7 +567,6 @@ struct RowView: View, Equatable {
 }
 
 struct UserMessage: View {
-    @Environment(\.pilotFonts) private var fonts
     let text: String
     var expansion: ExpansionState? = nil
     var timestamp: Double? = nil
@@ -578,10 +577,7 @@ struct UserMessage: View {
             HStack {
                 Spacer(minLength: 72)
                 CollapsibleMessage(text: text, userBubble: true, expansion: expansion) {
-                    Text(text)
-                        .font(fonts.body)
-                        .lineSpacing(3)
-                        .textSelection(.enabled)
+                    LinkedMessageText(text: text)
                 }
             }
         }
