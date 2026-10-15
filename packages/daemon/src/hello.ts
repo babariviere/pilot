@@ -11,8 +11,16 @@ import release from "../../../package.json" with { type: "json" };
 
 /** Publish a complete identity atomically. Concurrent starts agree; corruption never silently re-pairs a host. */
 export async function daemonIdentity(home: string): Promise<string> {
+	return persistentIdentity(home, "daemon-id");
+}
+
+export async function daemonLineage(home: string): Promise<string> {
+	return persistentIdentity(home, "storage-lineage");
+}
+
+async function persistentIdentity(home: string, name: string): Promise<string> {
 	await mkdir(home, { recursive: true, mode: 0o700 });
-	const file = join(home, "daemon-id");
+	const file = join(home, name);
 	try {
 		await readFile(file, "utf8");
 	} catch (error) {
@@ -39,6 +47,7 @@ export async function daemonIdentity(home: string): Promise<string> {
 export async function daemonHello(home: string, capabilities: DaemonCapabilities): Promise<DaemonHello> {
 	return {
 		daemonId: await daemonIdentity(home),
+		lineageId: await daemonLineage(home),
 		daemonVersion: release.version,
 		protocolVersion: DAEMON_PROTOCOL_VERSION,
 		minimumClientProtocolVersion: MINIMUM_CLIENT_PROTOCOL_VERSION,

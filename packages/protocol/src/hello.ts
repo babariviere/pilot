@@ -6,6 +6,8 @@ export const MINIMUM_CLIENT_PROTOCOL_VERSION = 1;
 export interface DaemonHello {
 	/** Stable for this data home, across daemon restarts and runtime updates. Pin on first pairing. */
 	daemonId: string;
+	/** Storage-history fence, distinct from installation and transient connection identity. */
+	lineageId?: string;
 	daemonVersion: string;
 	protocolVersion: number;
 	minimumClientProtocolVersion: number;
