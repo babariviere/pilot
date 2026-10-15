@@ -341,7 +341,7 @@ export async function linearStart(context: SourcePollContext, item: TrackedItem)
 	if (!member) return "skipped";
 	const team = string(member.teamId, 200);
 	const started = startedWorkflowStates(await context.call("states", { team }));
-	const configured = context.config.linearStartStates?.[team];
+	const configured = context.config.linearStateMappings?.[team]?.inProgress;
 	const candidates = configured
 		? started.filter((state) => state.id === configured.id)
 		: started.filter(

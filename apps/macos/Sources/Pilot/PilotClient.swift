@@ -551,9 +551,15 @@ final class PilotClient: ObservableObject {
                                         query: query.map { [URLQueryItem(name: "query", value: $0)] } ?? [])
     }
 
-    func linearStates(team: String) async throws -> TrackingLookup<LinearWorkflowState> {
+    func linearStates(team: String) async throws -> TrackingLookup<LinearWorkflowStateOption> {
         if fixtureTracking != nil {
-            return TrackingLookup(status: .ok, items: [LinearWorkflowState(id: "in-progress", name: "In progress")])
+            return TrackingLookup(status: .ok, items: [
+                LinearWorkflowStateOption(id: "todo", name: "Todo", type: "unstarted"),
+                LinearWorkflowStateOption(id: "in-progress", name: "In progress", type: "started"),
+                LinearWorkflowStateOption(id: "in-review", name: "In review", type: "started"),
+                LinearWorkflowStateOption(id: "merged", name: "Merged", type: "completed"),
+                LinearWorkflowStateOption(id: "deployed", name: "Deployed", type: "completed"),
+            ])
         }
         return try await missionRequest(["tracking", "linear", "states"],
                                         query: [URLQueryItem(name: "team", value: team)])

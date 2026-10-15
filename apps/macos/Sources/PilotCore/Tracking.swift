@@ -155,14 +155,14 @@ public struct ProjectTrackingConfig: Codable, Equatable, Hashable, Sendable {
     /// Team ID from list_teams. An empty string in a request clears the team.
     public var linearTeam: String?
     public var linearTeamName: String?
-    /// Start target by actual issue team, including sub-teams. Missing entries use In progress.
-    public var linearStartStates: [String: LinearWorkflowState]?
+    /// Workflow mappings by actual issue team, including sub-teams. Only In progress is automated today.
+    public var linearStateMappings: [String: LinearStateMapping]?
     public init(slackChannels: [String] = [], slackChannelNames: [String: String]? = nil,
                 linearTeam: String? = nil, linearTeamName: String? = nil, slackLabels: [SlackProjectLabel]? = nil,
-                linearStartStates: [String: LinearWorkflowState]? = nil) {
+                linearStateMappings: [String: LinearStateMapping]? = nil) {
         self.slackChannels = slackChannels; self.slackChannelNames = slackChannelNames
         self.linearTeam = linearTeam; self.linearTeamName = linearTeamName; self.slackLabels = slackLabels
-        self.linearStartStates = linearStartStates
+        self.linearStateMappings = linearStateMappings
     }
 }
 
@@ -170,6 +170,62 @@ public struct LinearWorkflowState: Codable, Identifiable, Equatable, Hashable, S
     public let id: String
     public let name: String
     public init(id: String, name: String) { self.id = id; self.name = name }
+}
+
+public struct LinearWorkflowStateOption: Codable, Identifiable, Equatable, Hashable, Sendable {
+    public let id: String
+    public let name: String
+    public let type: String
+    public init(id: String, name: String, type: String) { self.id = id; self.name = name; self.type = type }
+    public var reference: LinearWorkflowState { LinearWorkflowState(id: id, name: name) }
+}
+
+public enum LinearWorkflowStage: String, CaseIterable, Identifiable, Sendable {
+    case todo, inProgress, inReview, merged, deployed
+    public var id: String { rawValue }
+    public var title: String {
+        switch self {
+        case .todo: "Todo"
+        case .inProgress: "In progress"
+        case .inReview: "In review"
+        case .merged: "Merged"
+        case .deployed: "Deployed"
+        }
+    }
+}
+
+public struct LinearStateMapping: Codable, Equatable, Hashable, Sendable {
+    public var todo: LinearWorkflowState?
+    public var inProgress: LinearWorkflowState?
+    public var inReview: LinearWorkflowState?
+    public var merged: LinearWorkflowState?
+    public var deployed: LinearWorkflowState?
+    public init(todo: LinearWorkflowState? = nil, inProgress: LinearWorkflowState? = nil,
+                inReview: LinearWorkflowState? = nil, merged: LinearWorkflowState? = nil,
+                deployed: LinearWorkflowState? = nil) {
+        self.todo = todo; self.inProgress = inProgress; self.inReview = inReview
+        self.merged = merged; self.deployed = deployed
+    }
+    public subscript(stage: LinearWorkflowStage) -> LinearWorkflowState? {
+        get {
+            switch stage {
+            case .todo: todo
+            case .inProgress: inProgress
+            case .inReview: inReview
+            case .merged: merged
+            case .deployed: deployed
+            }
+        }
+        set {
+            switch stage {
+            case .todo: todo = newValue
+            case .inProgress: inProgress = newValue
+            case .inReview: inReview = newValue
+            case .merged: merged = newValue
+            case .deployed: deployed = newValue
+            }
+        }
+    }
 }
 public struct TrackedItem: Codable, Identifiable, Equatable, Sendable {
     public let id: String

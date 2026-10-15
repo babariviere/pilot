@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { type TestContext, test } from "node:test";
 import type { Project, TrackedItem, TrackingJson } from "@pilot/protocol";
 import { linearStart, pollLinear } from "./linear-source.ts";
-import { startedWorkflowStates } from "./linear-workflow.ts";
+import { startedWorkflowStates, workflowStates } from "./linear-workflow.ts";
 import { ProjectStore, validateTrackingConfig } from "./projects.ts";
 import { type SourcePollContext, SourceRegistry } from "./sources.ts";
 import { TrackedItemStore, validatePatch } from "./tracked-items.ts";
@@ -39,7 +39,7 @@ function fake() {
 		config: {
 			linearTeam: "team-root",
 			slackChannels: [],
-			linearStartStates: { "team-child": { id: "active", name: "Building" } },
+			linearStateMappings: { "team-child": { inProgress: { id: "active", name: "Building" } } },
 		},
 		signal: new AbortController().signal,
 		async call(tool, args) {
@@ -120,7 +120,7 @@ test("only my unstarted/backlog/triage ticket moves to its actual team's configu
 test("automatic finds In progress, never Merged or Review regardless of position or response order", async () => {
 	for (const name of ["In progress", "In Progress", " in-progress "]) {
 		const f = fake();
-		delete f.ctx.config.linearStartStates;
+		delete f.ctx.config.linearStateMappings;
 		f.setStates([
 			{ id: "merged", type: "started", name: "Merged", position: -100 },
 			{ id: "review", type: "started", name: "Review", position: 0 },
@@ -148,7 +148,7 @@ test("missing, ambiguous, foreign-team or recategorized targets fail without fal
 		],
 	]) {
 		const f = fake();
-		f.ctx.config.linearStartStates = { "team-root": { id: "merged", name: "Merged" } };
+		f.ctx.config.linearStateMappings = { "team-root": { inProgress: { id: "merged", name: "Merged" } } };
 		f.setStates(states);
 		await assert.rejects(linearStart(f.ctx, f.item), /Choose a start state/);
 		assert.ok(!f.calls.some((call) => call.tool === "startIssue"));
@@ -167,6 +167,10 @@ test("workflow lookup accepts both MCP shapes and returns only valid started cho
 	];
 	assert.deepEqual(startedWorkflowStates(states), expected);
 	assert.deepEqual(startedWorkflowStates({ statuses: states }), expected);
+	assert.deepEqual(
+		workflowStates(states),
+		[...states].sort((a, b) => a.name.localeCompare(b.name)),
+	);
 	for (const response of [
 		null,
 		{},
@@ -180,12 +184,12 @@ test("workflow lookup accepts both MCP shapes and returns only valid started cho
 
 test("start state config is strictly bounded, normalized and cleared with the attached team", () => {
 	const base = { slackChannels: [], linearTeam: "root" };
-	const states = { child: { id: " active ", name: " Building " } };
-	assert.deepEqual(validateTrackingConfig({ ...base, linearStartStates: states }).linearStartStates, {
-		child: { id: "active", name: "Building" },
+	const states = { child: { inProgress: { id: " active ", name: " Building " } } };
+	assert.deepEqual(validateTrackingConfig({ ...base, linearStateMappings: states }).linearStateMappings, {
+		child: { inProgress: { id: "active", name: "Building" } },
 	});
 	assert.equal(
-		validateTrackingConfig({ ...base, linearTeam: "", linearStartStates: states }).linearStartStates,
+		validateTrackingConfig({ ...base, linearTeam: "", linearStateMappings: states }).linearStateMappings,
 		undefined,
 	);
 	for (const invalid of [
@@ -193,12 +197,15 @@ test("start state config is strictly bounded, normalized and cleared with the at
 		[],
 		"active",
 		{ child: null },
-		{ child: { id: "", name: "Building" } },
-		{ child: { id: "a", name: "b", type: "started" } },
-		{ " ": { id: "a", name: "b" } },
-		Object.fromEntries(Array.from({ length: 251 }, (_, i) => [`team-${i}`, { id: "a", name: "b" }])),
+		{ child: { inProgress: { id: "", name: "Building" } } },
+		{ child: { inProgress: { id: "a", name: "b", type: "started" } } },
+		{ child: { unknownStage: { id: "a", name: "b" } } },
+		{ child: { inReview: null } },
+		{ child: [] },
+		{ " ": { todo: { id: "a", name: "b" } } },
+		Object.fromEntries(Array.from({ length: 251 }, (_, i) => [`team-${i}`, { inProgress: { id: "a", name: "b" } }])),
 	])
-		assert.throws(() => validateTrackingConfig({ ...base, linearStartStates: invalid }), /linearStartStates/);
+		assert.throws(() => validateTrackingConfig({ ...base, linearStateMappings: invalid }), /linearStateMappings/);
 });
 
 test("reassigned, out-of-scope, already started and terminal tickets never write", async () => {
@@ -250,7 +257,7 @@ async function registry(t: TestContext) {
 		tracking: {
 			linearTeam: "team-root",
 			slackChannels: [],
-			linearStartStates: { "team-child": { id: "active", name: "Building" } },
+			linearStateMappings: { "team-child": { inProgress: { id: "active", name: "Building" } } },
 		},
 	});
 	const path = join(home, "tracked.sqlite");
@@ -275,6 +282,31 @@ async function registry(t: TestContext) {
 	});
 	return { ...f, item, tracking, items, project, projects, path };
 }
+
+test("all five mappings persist without writes; starting work applies only In progress", async (t) => {
+	const f = await registry(t);
+	const mapping = {
+		todo: { id: "todo", name: "Todo" },
+		inProgress: { id: "active", name: "Building" },
+		inReview: { id: "review", name: "Review" },
+		merged: { id: "merged", name: "Merged" },
+		deployed: { id: "deployed", name: "Deployed" },
+	};
+	await f.projects.update(f.project.id, {
+		tracking: { ...f.project.tracking!, linearStateMappings: { "team-child": mapping } },
+	});
+	assert.equal(f.calls.length, 0, "saving mappings is local only");
+	const reopened = new ProjectStore(f.project.path);
+	await reopened.load();
+	assert.deepEqual(reopened.require(f.project.id).tracking?.linearStateMappings, { "team-child": mapping });
+	await f.tracking.poll(`${f.project.id}:linear`);
+	assert.ok(!f.calls.some((call) => call.tool === "startIssue"), "polling never applies saved lifecycle mappings");
+	await f.tracking.startLinear(f.item);
+	assert.deepEqual(
+		f.calls.filter((call) => call.tool === "startIssue"),
+		[{ tool: "startIssue", args: { id: "issue-7", state: "active" } }],
+	);
+});
 
 test("confirmed chat/mission binding does not await MCP; duplicate starts coalesce and sync reflects state", async (t) => {
 	for (const link of [{ sessionId: "chat-1" }, { missionId: "mission-1" }]) {
@@ -404,7 +436,10 @@ test("editing only the start target fences an in-flight write without invalidati
 	const pending = f.tracking.startLinear(f.item);
 	await reading;
 	await f.projects.update(f.project.id, {
-		tracking: { ...f.project.tracking!, linearStartStates: { "team-child": { id: "review", name: "Review" } } },
+		tracking: {
+			...f.project.tracking!,
+			linearStateMappings: { "team-child": { inProgress: { id: "review", name: "Review" } } },
+		},
 	});
 	release();
 	await pending;
@@ -412,8 +447,8 @@ test("editing only the start target fences an in-flight write without invalidati
 	assert.deepEqual(f.items.checkpoint(`${f.project.id}:linear`), checkpoint);
 	const reopened = new ProjectStore(f.project.path);
 	await reopened.load();
-	assert.deepEqual(reopened.require(f.project.id).tracking?.linearStartStates, {
-		"team-child": { id: "review", name: "Review" },
+	assert.deepEqual(reopened.require(f.project.id).tracking?.linearStateMappings, {
+		"team-child": { inProgress: { id: "review", name: "Review" } },
 	});
 });
 

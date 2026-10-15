@@ -45,7 +45,7 @@ struct TrackingSettingsSection: View {
     var body: some View {
         Section {
             LinearTeamPicker(selection: $editor.linearTeam,
-                             startStates: $editor.linearStartStates,
+                             stateMappings: $editor.linearStateMappings,
                              source: client.source(projectId: project.id, kind: .linear),
                              saved: project.tracking?.linearTeam)
             SlackChannelsEditor(editor: editor,
@@ -54,7 +54,7 @@ struct TrackingSettingsSection: View {
         } header: {
             Text("Linear and Slack")
         } footer: {
-            SettingsFooter("Pilot reads Linear and Slack through your pi MCP servers. Confirming Start chat or Start mission updates the Linear state chosen above, or adds an eyes reaction on Slack. It never posts messages or comments, and never starts work on its own.")
+            SettingsFooter("Pilot reads Linear and Slack through your pi MCP servers. Confirming Start chat or Start mission applies the In progress mapping, or adds an eyes reaction on Slack. The other Linear mappings are saved only. Pilot never posts messages or comments, and never starts work on its own.")
         }
         if !editor.slackChannels.isEmpty || !editor.slackLabels.isEmpty {
             SlackLabelsSection(project: project, editor: editor)
@@ -66,7 +66,7 @@ struct TrackingSettingsSection: View {
 /// current cycle on the project page.
 struct LinearTeamPicker: View {
     @Binding var selection: TrackedTeamRef?
-    @Binding var startStates: [String: LinearWorkflowState]
+    @Binding var stateMappings: [String: LinearStateMapping]
     let source: TrackingSource?
     let saved: String?
     @ObservedObject private var client = AppModel.shared.client
@@ -109,13 +109,13 @@ struct LinearTeamPicker: View {
                          connected: lookup?.status == .ok || source?.status == .ok || source?.status == .syncing,
                          purpose: "Sign in to pick a team and read your issues.")
         if let selection, lookup?.status == .ok, !loading {
-            LinearStartStateSettings(root: selection, teams: teams, selections: $startStates)
+            LinearStateMappingSettings(root: selection, teams: teams, selections: $stateMappings)
         }
     }
 
     private var binding: Binding<String> {
         Binding(get: { selection?.id ?? "" }, set: { id in
-            if id != selection?.id { startStates = [:] }
+            if id != selection?.id { stateMappings = [:] }
             selection = id.isEmpty ? nil
                 : TrackedTeamRef(id: id, name: teams.first { $0.id == id }?.name ?? selection?.name)
         })

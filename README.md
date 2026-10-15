@@ -264,8 +264,11 @@ child workers and daemon model calls, without modifying personal settings.
 Linear and Slack tracking use the configured
 pi MCP servers named `linear` and `slack` and their existing OAuth sign-in, not separate Pilot API tokens.
 Configure sources in project settings. Tracking is not a blanket promise of autonomous fixes or replies.
-In Project settings, “When work starts” chooses a Linear started state separately for the attached team
-and its sub-teams. Automatic selects the state named In progress, never the first state in workflow order.
+Project settings provides per-team Linear state mappings for Todo, In progress, In review, Merged and
+Deployed, including separate choices for sub-teams. Only In progress is applied when work starts;
+the other four mappings are saved for future use and do not trigger automatic transitions.
+In progress must map to a started-category state. Its Automatic option selects the state named
+In progress, never the first state in workflow order. Other mappings may use any workflow state.
 If a target is missing, ambiguous or no longer a started state, Pilot leaves the ticket unchanged and shows
 a quiet error. Starting work still proceeds. Saved choices are rechecked against the issue's actual team.
 Confirming Start chat or Start mission moves an eligible Linear ticket to that state, or adds an `eyes`
