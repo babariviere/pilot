@@ -20,9 +20,10 @@ home and binding generation distinct. Socket reconnects do not advance a binding
 transfer execution ownership. Actual shared-context replication is a separate protocol.
 
 `HostKeyMigration.local` migrates legacy bare keys using only an explicitly identified
-Local host, preserves qualified keys and refuses collisions. Remote UI consumers must
-use qualified keys in their navigation/draft stores. Existing local-only screens retain
-their legacy keys until the unified host-selection UI adopts the facade. Remote enrollment,
+Local host, preserves qualified keys and refuses collisions. AppModel migrates legacy chat
+drafts after identifying Local, persists that identity for offline relaunch, and bridges local
+composer calls to qualified keys. Remote composers/navigation use explicit resource refs.
+Subscriptions reattach to replacement endpoint clients after verified tunnel reconnects.
+Remote enrollment,
 persistent offline summaries and visible disconnected presentation are not enabled by
 this routing layer alone.
-

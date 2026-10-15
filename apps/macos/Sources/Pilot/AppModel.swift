@@ -35,6 +35,7 @@ final class AppModel: ObservableObject {
     let client = PilotClient()
     /// Host-qualified facade for remote surfaces. The existing client remains Local only.
     let hosts = HostClients()
+    @Published private(set) var localHost: HostRef?
     let feeds = SessionFeedCache()
     let subagentFeeds = SubagentFeeds()
     let settings = AppSettings.shared
@@ -61,6 +62,9 @@ final class AppModel: ObservableObject {
 
     @Published var selectedSessionId: String? {
         didSet {
+            if let id = selectedSessionId, let localHost {
+                hosts.selection = HostResourceRef(host: localHost, kind: .session, localId: id)
+            } else if hosts.selection?.host == localHost { hosts.selection = nil }
             // Leaving a chat lets the results read there regroup (Recent or Ready to merge).
             if oldValue != selectedSessionId, attention.leave(keeping: selectedSessionId) { reviewRevision += 1 }
             guard selectedSessionId != nil else { return }
@@ -190,6 +194,20 @@ final class AppModel: ObservableObject {
     }
 
     func composer(for sessionId: String) -> ComposerState {
+        composer(key: composerKey(sessionId))
+    }
+
+    func composer(for ref: HostResourceRef) throws -> ComposerState {
+        guard ref.kind == .session else { throw HostRoutingError.invalidReference }
+        return composer(key: ref.storageKey)
+    }
+
+    private func composerKey(_ id: String) -> String {
+        if id.hasPrefix("hostref1:") { return id }
+        return localHost.map { HostResourceRef(host: $0, kind: .session, localId: id).storageKey } ?? id
+    }
+
+    private func composer(key sessionId: String) -> ComposerState {
         if let composer = chatComposers[sessionId] { return composer }
         let composer = ComposerState()
         chatComposers[sessionId] = composer
@@ -205,32 +223,58 @@ final class AppModel: ObservableObject {
 
     /// The draft row for a chat, or nil while its composer has focus or holds nothing worth sending.
     func chatDraft(_ sessionId: String?) -> RowDraft? {
-        sessionId.flatMap { chatDrafts[$0] }
+        sessionId.flatMap { chatDrafts[composerKey($0)] }
+    }
+
+    func chatDraft(for ref: HostResourceRef) -> RowDraft? { chatDrafts[ref.storageKey] }
+
+    /// Confirm only the Local installation. Qualified remote/old-lineage drafts are never reassigned.
+    func registerLocal(_ host: HostRef) throws {
+        guard host.hostId == "local" else { throw HostRoutingError.invalidReference }
+        let composers = try HostKeyMigration.local(chatComposers, host: host, kind: .session)
+        let drafts = try HostKeyMigration.local(chatDrafts, host: host, kind: .session)
+        localHost = host
+        chatComposers = composers
+        chatDrafts = drafts
+        if let editingComposerId { self.editingComposerId = composerKey(editingComposerId) }
+        if let id = selectedSessionId { hosts.selection = HostResourceRef(host: host, kind: .session, localId: id) }
+        saveDrafts()
+    }
+
+    func selectSession(_ ref: HostResourceRef) throws {
+        guard ref.kind == .session else { throw HostRoutingError.invalidReference }
+        hosts.selection = ref
+        selectedSessionId = ref.host == localHost ? ref.localId : nil
+        saveDrafts()
     }
 
     private func refreshChatDraft(_ sessionId: String) {
-        guard editingComposerId != sessionId else { return }
-        let draft = chatComposers[sessionId].flatMap {
+        let key = composerKey(sessionId)
+        guard editingComposerId != key else { return }
+        let draft = chatComposers[key].flatMap {
             RowDraft(text: $0.draft, imageCount: $0.attachments.items.count)
         }
-        if chatDrafts[sessionId] != draft { chatDrafts[sessionId] = draft }
+        if chatDrafts[key] != draft { chatDrafts[key] = draft }
     }
 
     private func setComposerEditing(_ editing: Bool, sessionId: String) {
+        let key = composerKey(sessionId)
         if editing {
-            if let previous = editingComposerId, previous != sessionId {
+            if let previous = editingComposerId, previous != key {
                 editingComposerId = nil
                 refreshChatDraft(previous)
             }
-            editingComposerId = sessionId
-            if chatDrafts[sessionId] != nil { chatDrafts[sessionId] = nil }
-        } else if editingComposerId == sessionId {
+            editingComposerId = key
+            if chatDrafts[key] != nil { chatDrafts[key] = nil }
+        } else if editingComposerId == key {
             editingComposerId = nil
-            refreshChatDraft(sessionId)
+            refreshChatDraft(key)
         }
     }
 
     private func restoreDrafts(_ drafts: StoredDrafts, from store: DraftStore) {
+        localHost = drafts.localHost
+        hosts.selection = drafts.selection
         for (id, saved) in drafts.chats {
             let composer = composer(for: id)
             composer.draft = saved.text
@@ -279,6 +323,8 @@ final class AppModel: ObservableObject {
         // attachment must not delete a file still needed by that snapshot or the last durable one.
         draftImages.reserve(images, revision: revision)
         var drafts = StoredDrafts()
+        drafts.localHost = localHost
+        drafts.selection = hosts.selection
         for (id, composer) in chatComposers {
             guard !composer.draft.isEmpty || !composer.attachments.items.isEmpty
                 || composer.queueEditing != QueuedMessageEditing() else { continue }
@@ -378,7 +424,11 @@ final class AppModel: ObservableObject {
             Task {
                 guard let hello = try? await client.hello(), hello.isProtocolCompatible,
                       let lineage = hello.lineageId else { return }
-                try? hosts.install(client, host: HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage))
+                let host = HostRef(hostId: "local", daemonId: hello.daemonId, lineageId: lineage)
+                do {
+                    try registerLocal(host)
+                    try hosts.install(client, host: host)
+                } catch { reportDraftError(error) }
             }
         }
     }
